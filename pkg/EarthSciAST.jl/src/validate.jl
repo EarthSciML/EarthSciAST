@@ -64,6 +64,12 @@ struct SchemaValidationError <: Exception
     errors::Vector{SchemaError}
 end
 
+# `message` is already the fully rendered multi-line diagnostic
+# (`_format_schema_errors`), so the standard "TypeName: message" layout is all
+# that is added here.
+Base.showerror(io::IO, e::SchemaValidationError) =
+    print(io, "SchemaValidationError: ", e.message)
+
 # Load schema at module initialization from bundled package data
 const SCHEMA_PATH = joinpath(pkgdir(@__MODULE__), "data", "esm-schema.json")
 # Track data file so precompile cache invalidates when schema changes.
@@ -97,12 +103,13 @@ end
     validate_schema(data::Any) -> Vector{SchemaError}
 
 Validate data against the ESM schema.
-Returns empty vector if valid, otherwise returns validation errors.
-Each error contains the path, message, and keyword for debugging.
-
-Note: JSONSchema.jl reports only the *first* failing issue it encounters, so
-at most one `SchemaError` is returned per call; its path (JSON-Pointer style)
-and keyword are extracted from that issue.
+Returns an empty vector if valid; otherwise a vector holding AT MOST ONE
+`SchemaError` — JSONSchema.jl reports only the *first* failing issue it
+encounters, so the result is never longer than one entry today. The `Vector`
+return type is kept (it is the public contract, and leaves room for a
+multi-error validator later); callers must not assume an exhaustive error
+list. Each error carries the path (JSON-Pointer style), message, and keyword
+extracted from that issue.
 """
 function validate_schema(data::Any)::Vector{SchemaError}
     if ESM_SCHEMA === nothing
@@ -173,11 +180,15 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
 
     # 6. Conflicting derivative detection (§4.7.5 item E). A species cannot
     # have both an explicit D(X, t) = ... equation and a reaction contribution.
-    # `_find_conflicting_derivatives` is defined in flatten.jl.
+    # `_find_conflicting_derivatives` is defined in flatten.jl. The conflict
+    # spans TWO top-level blocks (a model equation AND a reaction), so there is
+    # no single JSON location; per this function's JSON-Pointer path contract
+    # the root pointer "/" is used as the documented sentinel (the offending
+    # species name is in the message).
     conflicting = _find_conflicting_derivatives(file)
     for name in conflicting
         push!(errors, StructuralError(
-            "models/reaction_systems",
+            "/",
             "Species '$name' has both an explicit derivative equation and a reaction contribution",
             "conflicting_derivative",
         ))
@@ -350,7 +361,13 @@ function validate_expression_references(file::EsmFile, expr::Expr, path::String)
             append!(errors, validate_expression_references(file, arg, "$path/args/$(i-1)"))
         end
 
-        # Check operator_apply references
+        # Check operator_apply references.
+        # DEPRECATION NOTE: `file.operators` cannot be populated from the wire
+        # any more — the top-level `operators` block was removed in esm-spec
+        # v0.3.0 (§9 closure) and `load`/`save` reject it. This branch survives
+        # only for in-memory-constructed `EsmFile`s that still carry the legacy
+        # field; for any loaded file, an `operator_apply` reference is always
+        # flagged undefined here.
         if expr.op == "operator_apply"
             # First argument should be an operator reference
             if !isempty(expr.args) && isa(expr.args[1], VarExpr)
@@ -451,7 +468,11 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         end
 
     elseif isa(coupling_entry, CouplingOperatorApply)
-        # Validate that the referenced operator exists
+        # Validate that the referenced operator exists.
+        # DEPRECATION NOTE: as with the `operator_apply` expression op above,
+        # `file.operators` survives for in-memory compatibility only (the wire
+        # block was removed in esm-spec v0.3.0 §9 closure), so for any loaded
+        # file this branch always reports the operator as not found.
         if file.operators === nothing || !haskey(file.operators, coupling_entry.operator)
             push!(errors, StructuralError(
                 "$path/operator",
@@ -832,30 +853,16 @@ end
 """
     system_exists_in_file(file::EsmFile, system_name::String) -> Bool
 
-Check if a system (model, reaction_system, data_loader, or operator) exists in the ESM file.
+Check if a system (model, reaction_system, data_loader, or operator) exists in
+the ESM file. Delegates to [`find_top_level_system`](@ref) (types.jl) so the
+four-way top-level lookup lives in exactly one place. (The `operators` leg of
+that lookup matches only in-memory-constructed files: the `operators` block was
+removed from the wire format in esm-spec v0.3.0 — see the deprecation note on
+the `Operator` type.)
 """
 function system_exists_in_file(file::EsmFile, system_name::String)::Bool
-    # Check models
-    if file.models !== nothing && haskey(file.models, system_name)
-        return true
-    end
-
-    # Check reaction_systems
-    if file.reaction_systems !== nothing && haskey(file.reaction_systems, system_name)
-        return true
-    end
-
-    # Check data_loaders
-    if file.data_loaders !== nothing && haskey(file.data_loaders, system_name)
-        return true
-    end
-
-    # Check operators
-    if file.operators !== nothing && haskey(file.operators, system_name)
-        return true
-    end
-
-    return false
+    system, _ = find_top_level_system(file, system_name)
+    return system !== nothing
 end
 
 """

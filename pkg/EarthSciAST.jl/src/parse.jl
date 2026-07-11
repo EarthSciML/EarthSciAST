@@ -21,6 +21,8 @@ struct ParseError <: Exception
     ParseError(message::String, original_error=nothing) = new(message, original_error)
 end
 
+Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
+
 
 # Recursively convert JSON3 parse results (JSON3.Object / JSON3.Array) into
 # native Julia containers (Dict{String,Any} / Vector{Any}). JSONSchema.jl's
@@ -145,18 +147,7 @@ function _parse_op_dict(data)
     int_var_str = _opt_string(data, :var)
     lower_expr = _maybe(parse_expression, _get_field(data, :lower, nothing))
     upper_expr = _maybe(parse_expression, _get_field(data, :upper, nothing))
-
-    if op == "integral"
-        if int_var_str === nothing
-            throw(ParseError("`integral` op requires `var` field (integration variable name)"))
-        end
-        if lower_expr === nothing
-            throw(ParseError("`integral` op requires `lower` field"))
-        end
-        if upper_expr === nothing
-            throw(ParseError("`integral` op requires `upper` field"))
-        end
-    end
+    op == "integral" && _validate_integral_op(int_var_str, lower_expr, upper_expr)
 
     output_idx = _coerce_output_idx(_get_field(data, :output_idx, nothing))
     expr_body = _maybe(parse_expression, _get_field(data, :expr, nothing))
@@ -180,25 +171,11 @@ function _parse_op_dict(data)
 
     # table_lookup (esm-spec §9.5, v0.4.0): table id, per-axis input expression
     # map (carried under JSON key "axes" — struct field `table_axes`), optional
-    # output selector. ``args`` MUST be empty for a table_lookup node.
+    # output selector. The `axes` key is only parsed for a table_lookup node.
     table_str = _opt_string(data, :table)
-    table_axes_raw = _get_field(data, :axes, nothing)
-    table_axes_dict = nothing
-    if op == "table_lookup"
-        if table_str === nothing
-            throw(ParseError("`table_lookup` op requires `table` field (esm-spec §9.5)"))
-        end
-        if table_axes_raw === nothing
-            throw(ParseError("`table_lookup` op requires `axes` field (per-axis input expression map, esm-spec §9.5)"))
-        end
-        table_axes_dict = Dict{String,Expr}()
-        for (k, v) in pairs(table_axes_raw)
-            table_axes_dict[string(k)] = parse_expression(v)
-        end
-        if !isempty(args)
-            throw(ParseError("`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5)"))
-        end
-    end
+    table_axes_dict = op == "table_lookup" ?
+        _coerce_table_lookup_axes(table_str, _get_field(data, :axes, nothing), args) :
+        nothing
     output_raw = _get_field(data, :output, nothing)
     if output_raw === nothing
         output_native = nothing
@@ -216,15 +193,10 @@ function _parse_op_dict(data)
 
     # M4 geometry kernel (RFC §8.1 / Appendix B; schema bead ess-my4.4.2): the
     # node-local `id` (§6.1, by which a derived index set names its producer)
-    # and the `intersect_polygon` `manifold` flag. `intersect_polygon` is
-    # strictly manifold-required (the schema enforces it); fail fast here so a
-    # hand-built node mirrors that.
+    # and the `intersect_polygon` `manifold` flag.
     id_str = _opt_string(data, :id)
     manifold_str = _opt_string(data, :manifold)
-    if op == "intersect_polygon" && manifold_str === nothing
-        throw(ParseError("`intersect_polygon` op requires a `manifold` field " *
-                         "(planar / spherical / geodesic); it carries no default"))
-    end
+    op == "intersect_polygon" && _validate_intersect_polygon_op(manifold_str)
 
     # Value-invention producer vocabulary (RFC §5.5 / §6.1): the `distinct` set-
     # former flag and the emitted `key` (a skolem/tuple KEY expression). Preserved
@@ -261,6 +233,58 @@ function _parse_op_dict(data)
         id=id_str, manifold=manifold_str,
         distinct=distinct_val, key=key_expr,
         arg=arg_str, bindings=bindings_dict)
+end
+
+# ── Per-op validators for `_parse_op_dict` ──────────────────────────────────
+#
+# Ops with structural field requirements each get their own checker so the
+# generic field-extraction skeleton in `_parse_op_dict` reads at one level.
+# Error messages are load-rejection behavior — keep them byte-identical.
+
+# `integral`: requires the integration variable name (wire key `var`) and both
+# bound expressions.
+function _validate_integral_op(int_var, lower, upper)
+    if int_var === nothing
+        throw(ParseError("`integral` op requires `var` field (integration variable name)"))
+    end
+    if lower === nothing
+        throw(ParseError("`integral` op requires `lower` field"))
+    end
+    if upper === nothing
+        throw(ParseError("`integral` op requires `upper` field"))
+    end
+    return nothing
+end
+
+# `table_lookup` (esm-spec §9.5, v0.4.0): requires the `table` id and the
+# per-axis input expression map (wire key `axes` — struct field `table_axes`);
+# ``args`` MUST be empty (per-axis inputs live under `axes`). Returns the
+# parsed axes map.
+function _coerce_table_lookup_axes(table, axes_raw, args::Vector{Expr})::Dict{String,Expr}
+    if table === nothing
+        throw(ParseError("`table_lookup` op requires `table` field (esm-spec §9.5)"))
+    end
+    if axes_raw === nothing
+        throw(ParseError("`table_lookup` op requires `axes` field (per-axis input expression map, esm-spec §9.5)"))
+    end
+    axes = Dict{String,Expr}()
+    for (k, v) in pairs(axes_raw)
+        axes[string(k)] = parse_expression(v)
+    end
+    if !isempty(args)
+        throw(ParseError("`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5)"))
+    end
+    return axes
+end
+
+# `intersect_polygon` (RFC §8.1 / Appendix B) is strictly manifold-required
+# (the schema enforces it); fail fast here so a hand-built node mirrors that.
+function _validate_intersect_polygon_op(manifold)
+    if manifold === nothing
+        throw(ParseError("`intersect_polygon` op requires a `manifold` field " *
+                         "(planar / spherical / geodesic); it carries no default"))
+    end
+    return nothing
 end
 
 function _coerce_output_idx(data)
@@ -475,80 +499,61 @@ function coerce_esm_file(data::Any)::EsmFile
     metadata_raw === nothing && throw(ParseError("ESM document requires a `metadata` object"))
     metadata = coerce_metadata(metadata_raw)
 
-    # Extract optional fields with proper null/missing handling
-    models = if haskey(data, :models) && data.models !== nothing
-        Dict{String,Model}(string(k) => coerce_model(v) for (k, v) in pairs(data.models))
-    else
-        nothing
+    # Extract optional fields with proper null/missing handling — `_get_field`
+    # reports a JSON `null` as absent, matching the previous per-field
+    # `haskey(data, :x) && data.x !== nothing` guards.
+    models = _maybe(_get_field(data, :models, nothing)) do m
+        Dict{String,Model}(string(k) => coerce_model(v) for (k, v) in pairs(m))
     end
 
-    reaction_systems = if haskey(data, :reaction_systems) && data.reaction_systems !== nothing
-        Dict{String,ReactionSystem}(string(k) => coerce_reaction_system(v) for (k, v) in pairs(data.reaction_systems))
-    else
-        nothing
+    reaction_systems = _maybe(_get_field(data, :reaction_systems, nothing)) do rs
+        Dict{String,ReactionSystem}(string(k) => coerce_reaction_system(v) for (k, v) in pairs(rs))
     end
 
-    data_loaders = if haskey(data, :data_loaders) && data.data_loaders !== nothing
-        Dict{String,DataLoader}(string(k) => coerce_data_loader(v) for (k, v) in pairs(data.data_loaders))
-    else
-        nothing
+    data_loaders = _maybe(_get_field(data, :data_loaders, nothing)) do dl
+        Dict{String,DataLoader}(string(k) => coerce_data_loader(v) for (k, v) in pairs(dl))
     end
 
-    operators = if haskey(data, :operators) && data.operators !== nothing
-        # esm-spec v0.3.0 (§9 closure) removed the top-level `operators` block:
-        # Track-A parameterizations migrate to AST + closed-function calls;
-        # Track-B state-mutating schemes route through the discretization
-        # RFC's named schemes (`docs/rfcs/closed-function-registry.md` §6).
-        # File-loaded `operators` are now a hard error.
+    # esm-spec v0.3.0 (§9 closure) removed the top-level `operators` block:
+    # Track-A parameterizations migrate to AST + closed-function calls;
+    # Track-B state-mutating schemes route through the discretization
+    # RFC's named schemes (`docs/rfcs/closed-function-registry.md` §6).
+    # File-loaded `operators` are now a hard error. (The typed `EsmFile`
+    # fields survive for in-memory compatibility only and stay `nothing`
+    # on every parse path.)
+    if _get_field(data, :operators, nothing) !== nothing
         throw(ParseError("`operators` block is not valid in v0.3.0+ " *
                          "(removed by esm-spec §9 closure). Migrate per " *
                          "`docs/rfcs/closed-function-registry.md` §6."))
-    else
-        nothing
     end
 
-    registered_functions = if haskey(data, :registered_functions) && data.registered_functions !== nothing
+    if _get_field(data, :registered_functions, nothing) !== nothing
         throw(ParseError("`registered_functions` block is not valid in v0.3.0+ " *
                          "(removed by esm-spec §9 closure). Use the closed " *
                          "function registry via `fn` ops with spec-defined names."))
-    else
-        nothing
     end
 
-    coupling = if haskey(data, :coupling) && data.coupling !== nothing
-        CouplingEntry[coerce_coupling_entry(c) for c in data.coupling]
-    else
-        CouplingEntry[]
-    end
+    coupling_raw = _get_field(data, :coupling, nothing)
+    coupling = coupling_raw === nothing ? CouplingEntry[] :
+        CouplingEntry[coerce_coupling_entry(c) for c in coupling_raw]
 
     # esm-spec v0.8.0: a single top-level `domain` object (the one temporal
     # domain shared by every component), not the old `domains` map of named
     # domains. Cross-grid coupling is now an ordinary regridding `transform`
     # expression, so there is no `interfaces` block either.
-    domain = if haskey(data, :domain) && data.domain !== nothing
-        coerce_domain(data.domain)
-    else
-        nothing
-    end
+    domain = _maybe(coerce_domain, _get_field(data, :domain, nothing))
 
     # File-local enum mappings (esm-spec §9.3). Used by the `enum` AST op to
     # carry symbolic categorical labels in the source while the on-disk file
     # is loaded; `enum` ops are then lowered to integer `const` nodes
     # immediately after parsing so the in-memory tree never carries strings.
-    enums = if haskey(data, :enums) && data.enums !== nothing
-        coerce_enums(data.enums)
-    else
-        nothing
-    end
+    enums = _maybe(coerce_enums, _get_field(data, :enums, nothing))
 
     # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0). Each
     # entry carries named axes plus a literal nested-array data block;
     # referenced by table_lookup AST nodes via the table id key.
-    function_tables = if haskey(data, :function_tables) && data.function_tables !== nothing
-        coerce_function_tables(data.function_tables)
-    else
-        nothing
-    end
+    function_tables = _maybe(coerce_function_tables,
+                             _get_field(data, :function_tables, nothing))
 
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2;
     # esm-spec v0.8.0). A single top-level `index_sets` object — sibling of
@@ -557,8 +562,9 @@ function coerce_esm_file(data::Any)::EsmFile
     # `shape`s, and derived-set `from_faq` edges resolve against it. Empty when
     # the document declares none.
     index_sets = Dict{String,IndexSet}()
-    if haskey(data, :index_sets) && data.index_sets !== nothing
-        for (k, v) in pairs(data.index_sets)
+    index_sets_raw = _get_field(data, :index_sets, nothing)
+    if index_sets_raw !== nothing
+        for (k, v) in pairs(index_sets_raw)
             index_sets[string(k)] = coerce_index_set(v)
         end
     end
@@ -567,8 +573,6 @@ function coerce_esm_file(data::Any)::EsmFile
                   models=models,
                   reaction_systems=reaction_systems,
                   data_loaders=data_loaders,
-                  operators=operators,
-                  registered_functions=registered_functions,
                   coupling=coupling,
                   domain=domain,
                   enums=enums,
@@ -795,59 +799,11 @@ function coerce_model(data::Any)::Model
         EarthSciAST.Test[]
 
     # Inline subsystems (schema §4.7, oneOf [Model, DataLoader, SubsystemRef]):
-    # each value is a child Model, a pure-I/O DataLoader (RFC
-    # pure-io-data-loaders §4.3), or a `{"ref": "..."}` reference. Inline Model
-    # / DataLoader entries are coerced recursively here; ref entries become a
-    # `SubsystemRef` placeholder that `resolve_subsystem_refs!` replaces in
-    # place with the loaded component.
+    # each entry is coerced by `_coerce_subsystem_entry`.
     subsystems = Dict{String,Any}()
     if haskey(data, :subsystems) && data.subsystems !== nothing
         for (k, v) in pairs(data.subsystems)
-            subsystems[string(k)] = if haskey(v, :ref) && v.ref !== nothing
-                # Optional `bindings` closes the referenced document's open
-                # metaparameters at this edge (esm-spec §9.7.6 binding site 3). A
-                # binding VALUE may be a metaparameter EXPRESSION — an integer, a
-                # name in the MOUNTING document's metaparameter scope, or a
-                # `{op:+|-|*|/, args}` tree over the same (e.g. `NTGT = NX*NY`),
-                # which import renaming (name→name) cannot express. A subsystem ref
-                # is resolved as a complete document folded to concrete integers AT
-                # the mount, so — unlike an import edge — each binding value folds
-                # IMMEDIATELY against the mounting document's already-closed
-                # metaparameter environment (the mount closes its own
-                # metaparameters before its refs resolve). That environment has
-                # already been substituted into these values by
-                # `resolve_template_machinery` (which closes this document's
-                # metaparameters before coercion), so folding here collapses the
-                # expression to a concrete int; a value naming a metaparameter the
-                # document does not declare survives the substitution and fails
-                # loudly with `template_import_unknown_name`.
-                bindings = Dict{String,Int}()
-                if haskey(v, :bindings) && v.bindings !== nothing
-                    for (bk, bv) in pairs(v.bindings)
-                        bctx = "subsystems.$(string(k)): binding '$(string(bk))'"
-                        expr = require_meta_expr(_to_native_json(bv), bctx)
-                        bindings[string(bk)] =
-                            Int(eval_meta_expr(expr, Dict{String,Int64}(), bctx))
-                    end
-                end
-                # Optional `expression_template_imports` injects a discretization
-                # into the REFERENCED component's own scope (esm-spec §9.7.10
-                # form A). Kept as raw §9.7.2 entries; `_resolve_subsystem_ref`
-                # threads them into the referenced document's load and the
-                # §9.6.3 fixpoint consumes them before the mounted form is set.
-                injected = Any[]
-                if haskey(v, :expression_template_imports) &&
-                   v.expression_template_imports !== nothing
-                    injected = Any[_to_native_json(e) for e in v.expression_template_imports]
-                end
-                SubsystemRef(string(v.ref), bindings, injected)
-            elseif haskey(v, :kind) && haskey(v, :source)
-                # Loader-required fields (kind + source) discriminate an inline
-                # data loader from a Model, which carries equations instead.
-                coerce_data_loader(v)
-            else
-                coerce_model(v)
-            end
+            subsystems[string(k)] = _coerce_subsystem_entry(string(k), v)
         end
     end
 
@@ -860,6 +816,64 @@ function coerce_model(data::Any)::Model
                  initialization_equations=initialization_equations,
                  guesses=guesses,
                  system_kind=system_kind)
+end
+
+"""
+    _coerce_subsystem_entry(name::String, v) -> Union{Model,DataLoader,SubsystemRef}
+
+Coerce one `subsystems` entry (schema §4.7, oneOf [Model, DataLoader,
+SubsystemRef]): a child Model, a pure-I/O DataLoader (RFC pure-io-data-loaders
+§4.3), or a `{"ref": "..."}` reference. Inline Model / DataLoader entries are
+coerced recursively; ref entries become a `SubsystemRef` placeholder that
+`resolve_subsystem_refs!` replaces in place with the loaded component. `name`
+is the subsystem key, used only in metaparameter-binding diagnostics.
+"""
+function _coerce_subsystem_entry(name::String, v)
+    if haskey(v, :ref) && v.ref !== nothing
+        # Optional `bindings` closes the referenced document's open
+        # metaparameters at this edge (esm-spec §9.7.6 binding site 3). A
+        # binding VALUE may be a metaparameter EXPRESSION — an integer, a
+        # name in the MOUNTING document's metaparameter scope, or a
+        # `{op:+|-|*|/, args}` tree over the same (e.g. `NTGT = NX*NY`),
+        # which import renaming (name→name) cannot express. A subsystem ref
+        # is resolved as a complete document folded to concrete integers AT
+        # the mount, so — unlike an import edge — each binding value folds
+        # IMMEDIATELY against the mounting document's already-closed
+        # metaparameter environment (the mount closes its own
+        # metaparameters before its refs resolve). That environment has
+        # already been substituted into these values by
+        # `resolve_template_machinery` (which closes this document's
+        # metaparameters before coercion), so folding here collapses the
+        # expression to a concrete int; a value naming a metaparameter the
+        # document does not declare survives the substitution and fails
+        # loudly with `template_import_unknown_name`.
+        bindings = Dict{String,Int}()
+        if haskey(v, :bindings) && v.bindings !== nothing
+            for (bk, bv) in pairs(v.bindings)
+                bctx = "subsystems.$(name): binding '$(string(bk))'"
+                expr = require_meta_expr(_to_native_json(bv), bctx)
+                bindings[string(bk)] =
+                    Int(eval_meta_expr(expr, Dict{String,Int64}(), bctx))
+            end
+        end
+        # Optional `expression_template_imports` injects a discretization
+        # into the REFERENCED component's own scope (esm-spec §9.7.10
+        # form A). Kept as raw §9.7.2 entries; `_resolve_subsystem_ref`
+        # threads them into the referenced document's load and the
+        # §9.6.3 fixpoint consumes them before the mounted form is set.
+        injected = Any[]
+        if haskey(v, :expression_template_imports) &&
+           v.expression_template_imports !== nothing
+            injected = Any[_to_native_json(e) for e in v.expression_template_imports]
+        end
+        return SubsystemRef(string(v.ref), bindings, injected)
+    elseif haskey(v, :kind) && haskey(v, :source)
+        # Loader-required fields (kind + source) discriminate an inline
+        # data loader from a Model, which carries equations instead.
+        return coerce_data_loader(v)
+    else
+        return coerce_model(v)
+    end
 end
 
 """
@@ -1337,7 +1351,7 @@ function coerce_coupling_import(data::AbstractDict)::CouplingImport
     end
     ref = String(data["ref"])
     bind = Dict{String,String}()
-    bind_raw = get(data, "bind", nothing)
+    bind_raw = _get_field(data, :bind, nothing)
     if bind_raw !== nothing
         if !(bind_raw isa AbstractDict)
             throw(ParseError("coupling_import 'bind' must be an object mapping role names to components"))
@@ -1346,10 +1360,7 @@ function coerce_coupling_import(data::AbstractDict)::CouplingImport
             bind[string(k)] = String(v)
         end
     end
-    description = get(data, "description", nothing)
-    if description !== nothing
-        description = String(description)
-    end
+    description = _opt_string(data, :description)
     return CouplingImport(ref, bind; description=description)
 end
 
@@ -1366,14 +1377,11 @@ function coerce_operator_compose(data::AbstractDict)::CouplingOperatorCompose
     systems = Vector{String}(data["systems"])
     # JSON3.Object keys are Symbols — convert to String explicitly so the
     # Dict{String,Any} field doesn't choke on Symbol→String conversion.
-    translate_raw = get(data, "translate", nothing)
-    translate = translate_raw === nothing ? nothing :
-                Dict{String,Any}(string(k) => v for (k, v) in pairs(translate_raw))
-    description = get(data, "description", nothing)
-    lifting = get(data, "lifting", nothing)
-    if lifting !== nothing
-        lifting = String(lifting)
+    translate = _maybe(_get_field(data, :translate, nothing)) do t
+        Dict{String,Any}(string(k) => v for (k, v) in pairs(t))
     end
+    description = _opt_string(data, :description)
+    lifting = _opt_string(data, :lifting)
 
     return CouplingOperatorCompose(systems; translate=translate, description=description, lifting=lifting)
 end
@@ -1396,11 +1404,8 @@ function coerce_couple(data::AbstractDict)::CouplingCouple
     # Dict{String,Any} constructor doesn't choke on Symbol→String conversion.
     connector_raw = data["connector"]
     connector = Dict{String,Any}(string(k) => v for (k, v) in pairs(connector_raw))
-    description = get(data, "description", nothing)
-    lifting = get(data, "lifting", nothing)
-    if lifting !== nothing
-        lifting = String(lifting)
-    end
+    description = _opt_string(data, :description)
+    lifting = _opt_string(data, :lifting)
 
     return CouplingCouple(systems, connector; description=description, lifting=lifting)
 end
@@ -1432,20 +1437,22 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
     else
         throw(ParseError("variable_map 'transform' must be a named transform string or an expression operator node"))
     end
-    factor = get(data, "factor", nothing)
-    if factor !== nothing
-        factor = Float64(factor)
-    end
-    if transform isa Expr && factor !== nothing
-        throw(ParseError("variable_map: an expression 'transform' takes no 'factor' (fold the scaling into the expression)"))
-    end
-    description = get(data, "description", nothing)
-    lifting = get(data, "lifting", nothing)
-    if lifting !== nothing
-        lifting = String(lifting)
-    end
+    factor = _opt_float(data, :factor)
+    description = _opt_string(data, :description)
+    lifting = _opt_string(data, :lifting)
 
-    return CouplingVariableMap(from, to, transform; factor=factor, description=description, lifting=lifting)
+    # The "an expression transform takes no factor" invariant is enforced ONCE,
+    # by the `CouplingVariableMap` constructor (types.jl). The parser rebrands
+    # that `ArgumentError` as a `ParseError` carrying the historical parse-side
+    # message, so the error type/message seen from `load` is unchanged.
+    try
+        return CouplingVariableMap(from, to, transform; factor=factor, description=description, lifting=lifting)
+    catch e
+        if e isa ArgumentError && transform isa Expr && factor !== nothing
+            throw(ParseError("variable_map: an expression 'transform' takes no 'factor' (fold the scaling into the expression)"))
+        end
+        rethrow()
+    end
 end
 
 """
@@ -1459,7 +1466,7 @@ function coerce_operator_apply(data::AbstractDict)::CouplingOperatorApply
     end
 
     operator = String(data["operator"])
-    description = get(data, "description", nothing)
+    description = _opt_string(data, :description)
 
     return CouplingOperatorApply(operator; description=description)
 end
@@ -1475,14 +1482,11 @@ function coerce_callback(data::AbstractDict)::CouplingCallback
     end
 
     callback_id = String(data["callback_id"])
-    config_raw = get(data, "config", nothing)
-    config = if config_raw === nothing
-        nothing
-    else
-        # JSON3.Object keys are Symbols; stringify explicitly.
-        Dict{String,Any}(string(k) => v for (k, v) in pairs(config_raw))
+    # JSON3.Object keys are Symbols; stringify explicitly.
+    config = _maybe(_get_field(data, :config, nothing)) do c
+        Dict{String,Any}(string(k) => v for (k, v) in pairs(c))
     end
-    description = get(data, "description", nothing)
+    description = _opt_string(data, :description)
 
     return CouplingCallback(callback_id; config=config, description=description)
 end
@@ -1506,16 +1510,12 @@ function coerce_coupling_event(data::AbstractDict)::CouplingEvent
     event_type = String(data["event_type"])
 
     # Parse conditions for continuous events
-    conditions = nothing
-    if haskey(data, "conditions")
-        conditions = Expr[parse_expression(c) for c in data["conditions"]]
+    conditions = _maybe(_get_field(data, :conditions, nothing)) do cs
+        Expr[parse_expression(c) for c in cs]
     end
 
     # Parse trigger for discrete events
-    trigger = nothing
-    if haskey(data, "trigger")
-        trigger = coerce_trigger(data["trigger"])
-    end
+    trigger = _maybe(coerce_trigger, _get_field(data, :trigger, nothing))
 
     # Parse affects (required)
     if !haskey(data, "affects")
@@ -1524,27 +1524,18 @@ function coerce_coupling_event(data::AbstractDict)::CouplingEvent
     affects = [coerce_affect_equation(a) for a in data["affects"]]
 
     # Parse optional fields
-    affect_neg = nothing
-    if haskey(data, "affect_neg") && data["affect_neg"] !== nothing
-        affect_neg = [coerce_affect_equation(a) for a in data["affect_neg"]]
+    affect_neg = _maybe(_get_field(data, :affect_neg, nothing)) do an
+        [coerce_affect_equation(a) for a in an]
     end
 
-    discrete_parameters = nothing
-    if haskey(data, "discrete_parameters")
-        discrete_parameters = Vector{String}(data["discrete_parameters"])
-    end
+    discrete_parameters = _maybe(Vector{String},
+                                 _get_field(data, :discrete_parameters, nothing))
 
-    root_find = get(data, "root_find", nothing)
-    if root_find !== nothing
-        root_find = String(root_find)
-    end
+    root_find = _opt_string(data, :root_find)
 
-    reinitialize = get(data, "reinitialize", nothing)
-    if reinitialize !== nothing
-        reinitialize = Bool(reinitialize)
-    end
+    reinitialize = _maybe(Bool, _get_field(data, :reinitialize, nothing))
 
-    description = get(data, "description", nothing)
+    description = _opt_string(data, :description)
 
     return CouplingEvent(event_type, affects;
                         conditions=conditions, trigger=trigger, affect_neg=affect_neg,
@@ -1701,10 +1692,13 @@ end
 
 Render the schema-validation error list as the multi-line diagnostic message
 used by [`SchemaValidationError`](@ref) (one `  - path: message (keyword)`
-line per error).
+line per error). In practice `validate_schema` returns at most ONE error
+(JSONSchema.jl stops at the first failing issue), so the singular form is the
+norm; the count is kept in the message for the day that changes.
 """
 function _format_schema_errors(schema_errors)::String
-    error_msg = "Schema validation failed with $(length(schema_errors)) error(s):\n"
+    n = length(schema_errors)
+    error_msg = "Schema validation failed with $(n) $(n == 1 ? "error" : "errors"):\n"
     for error in schema_errors
         error_msg *= "  - $(error.path): $(error.message) ($(error.keyword))\n"
     end
@@ -1814,6 +1808,43 @@ end
 # at top level) with cycle detection shared across the walk.
 
 """
+    _reject_library_ref(raw_doc, ref, location; check_template=true)
+
+A §4.7 subsystem reference (including a top-level model `{ref}`) MUST NOT
+target a library file — the reference mechanisms are disjoint: template
+libraries are imported via `expression_template_imports` (esm-spec §9.7.1) and
+coupling libraries via a `coupling_import` coupling entry (esm-spec §10.9).
+Throws [`ExpressionTemplateError`](@ref) with the stable diagnostic code
+(`subsystem_ref_is_template_library` / `subsystem_ref_is_coupling_library`,
+esm-spec §9.6.6). `location` — the resolved path, or `nothing` for a remote
+URL ref — is appended parenthesized to the message when given.
+
+`check_template=false` skips the template-library check: the top-level
+model-ref inliner (`_inline_toplevel_model_refs!`) historically checks ONLY
+coupling libraries. That asymmetry is preserved here deliberately — adding the
+template check to the inliner would be a load-rejection behavior change (it
+may well be an accidental gap; see the call-site note).
+"""
+function _reject_library_ref(raw_doc, ref::AbstractString,
+                             location::Union{AbstractString,Nothing};
+                             check_template::Bool=true)
+    suffix = location === nothing ? "" : " ($(location))"
+    if check_template && _is_template_library_doc(raw_doc)
+        throw(ExpressionTemplateError(
+            "subsystem_ref_is_template_library",
+            "Subsystem ref '$(ref)' targets a template-library file$(suffix); " *
+            "libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
+    end
+    if _is_coupling_library_doc(raw_doc)
+        throw(ExpressionTemplateError(
+            "subsystem_ref_is_coupling_library",
+            "Subsystem ref '$(ref)' targets a coupling-library file$(suffix); " *
+            "libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
+    end
+    return nothing
+end
+
+"""
     _inline_toplevel_model_refs(raw_data, base_path) -> Union{Nothing,Dict{String,Any}}
 
 Return a native ESM dict with every top-level model `{ref}` stub replaced by the
@@ -1865,14 +1896,13 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
             comp isa Dict{String,Any} || throw(SubsystemRefError(
                 "Referenced model file '$(ref)' did not parse as a JSON object"))
             # A §4.7 subsystem ref (here, a top-level model `{ref}`) MUST NOT
-            # target a coupling-library file — libraries are imported via a
-            # `coupling_import` coupling entry (esm-spec §10.9).
-            if _is_coupling_library_doc(comp)
-                throw(ExpressionTemplateError(
-                    "subsystem_ref_is_coupling_library",
-                    "Subsystem ref '$(ref)' targets a coupling-library file " *
-                    "($(refpath)); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
-            end
+            # target a library file. NOTE the asymmetry: this inliner has only
+            # ever rejected COUPLING-library targets (`check_template=false`),
+            # while `_load_local_ref` / `_load_remote_ref` reject template
+            # libraries too. Possibly an accidental gap, but adding the
+            # template check here would change load-rejection behavior — it is
+            # preserved as-is and merely made explicit.
+            _reject_library_ref(comp, ref, refpath; check_template=false)
             compdir = dirname(refpath)
             _inline_toplevel_model_refs!(comp, compdir, visited)   # component-of-component
             cmodels = get(comp, "models", nothing)
@@ -1989,6 +2019,9 @@ Exception thrown when subsystem reference resolution fails.
 struct SubsystemRefError <: Exception
     message::String
 end
+
+Base.showerror(io::IO, e::SubsystemRefError) =
+    print(io, "SubsystemRefError: ", e.message)
 
 """
     resolve_subsystem_refs!(file::EsmFile, base_path::String)
@@ -2300,11 +2333,9 @@ function _url_dirname(url::AbstractString)::String
 end
 
 """
-    _fetch_url(url) -> String
+    _download_url_contents(url) -> String
 
-Fetch the contents of an http(s) URL. Indirected through `_URL_FETCHER`
-so tests can substitute an offline fetcher (see `template_imports_test.jl`);
-the default downloads via `Base.download`.
+Default URL fetcher: download `url` via `Base.download` and return its contents.
 """
 function _download_url_contents(url::AbstractString)::String
     tmp = Base.download(url)
@@ -2315,6 +2346,13 @@ end
 
 const _URL_FETCHER = Ref{Function}(_download_url_contents)
 
+"""
+    _fetch_url(url) -> String
+
+Fetch the contents of an http(s) URL. Indirected through `_URL_FETCHER`
+so tests can substitute an offline fetcher (see `template_imports_test.jl`);
+the default is [`_download_url_contents`](@ref) (`Base.download`).
+"""
 _fetch_url(url::AbstractString)::String = _URL_FETCHER[](url)
 
 """
@@ -2350,24 +2388,11 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
         throw(SubsystemRefError("Referenced file not found: $(resolved_path) (from ref '$(ref)')"))
     end
 
-    # A §4.7 subsystem ref MUST NOT target a template-library file — the two
-    # reference mechanisms are disjoint (esm-spec §9.7.1).
+    # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
+    # file — those reference mechanisms are disjoint (esm-spec §9.7.1, §10.9).
     content = read(resolved_path, String)
     raw_ref_doc = JSON3.read(content)
-    if _is_template_library_doc(raw_ref_doc)
-        throw(ExpressionTemplateError(
-            "subsystem_ref_is_template_library",
-            "Subsystem ref '$(ref)' targets a template-library file " *
-            "($(resolved_path)); libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
-    end
-    # A §4.7 subsystem ref MUST NOT target a coupling-library file — libraries
-    # are imported via a `coupling_import` coupling entry (esm-spec §10.9).
-    if _is_coupling_library_doc(raw_ref_doc)
-        throw(ExpressionTemplateError(
-            "subsystem_ref_is_coupling_library",
-            "Subsystem ref '$(ref)' targets a coupling-library file " *
-            "($(resolved_path)); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
-    end
+    _reject_library_ref(raw_ref_doc, ref, resolved_path)
 
     # Parse the referenced file using the IO-based load (no ref resolution on
     # its own); the ref's directory anchors its template imports, the edge's
@@ -2408,21 +2433,10 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     reject_expression_templates_pre_v04(raw_data)
     reject_template_imports_pre_v08(raw_data)
 
-    # A §4.7 subsystem ref MUST NOT target a template-library file (esm-spec §9.7.1).
-    if _is_template_library_doc(raw_data)
-        throw(ExpressionTemplateError(
-            "subsystem_ref_is_template_library",
-            "Subsystem ref '$(url)' targets a template-library file; " *
-            "libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
-    end
-    # A §4.7 subsystem ref MUST NOT target a coupling-library file — libraries
-    # are imported via a `coupling_import` coupling entry (esm-spec §10.9).
-    if _is_coupling_library_doc(raw_data)
-        throw(ExpressionTemplateError(
-            "subsystem_ref_is_coupling_library",
-            "Subsystem ref '$(url)' targets a coupling-library file; " *
-            "libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
-    end
+    # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
+    # file (esm-spec §9.7.1, §10.9). No location suffix for a remote ref: the
+    # URL already appears as the ref itself.
+    _reject_library_ref(raw_data, url, nothing)
 
     schema_errors = validate_schema(raw_data)
     if !isempty(schema_errors)
