@@ -193,7 +193,7 @@ func substituteFile(filename string, substitutions []string) {
 	newFile := esm.SubstituteInFile(*esmFile, bindings)
 
 	// Serialize and print the result
-	jsonStr, err := esm.Save(&newFile)
+	jsonStr, err := esm.Serialize(&newFile)
 	if err != nil {
 		fatalf("Failed to serialize result: %v", err)
 	}

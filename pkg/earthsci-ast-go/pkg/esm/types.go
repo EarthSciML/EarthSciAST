@@ -776,11 +776,11 @@ func (e *ESMFile) ValidateStruct() error {
 
 // ToJSON converts the ESM file to canonical (indented) JSON bytes.
 //
-// Unlike Save (serialize.go), ToJSON does NOT run (*ESMFile).Validate first —
-// it serializes whatever it is given. Callers that need the file validated
-// before emission should use Save (which returns a string) or call Validate
-// explicitly; ToJSON exists for the raw byte form and for round-trip paths that
-// have already validated.
+// Unlike Serialize (serialize.go), ToJSON does NOT run (*ESMFile).ValidateStruct
+// first — it serializes whatever it is given. Callers that need the file
+// validated before emission should use Serialize (which returns a string) or
+// call ValidateStruct explicitly; ToJSON exists for the raw byte form and for
+// round-trip paths that have already validated.
 func (e *ESMFile) ToJSON() ([]byte, error) {
 	return marshalCanonical(e, true)
 }

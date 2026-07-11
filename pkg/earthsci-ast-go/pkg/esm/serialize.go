@@ -23,9 +23,10 @@ func marshalCanonical(v any, indent bool) ([]byte, error) {
 	return json.Marshal(canonical)
 }
 
-// save is the shared serialization core for the four exported Save* entry
-// points. It validates the file (Save semantics — unlike ToJSON) and emits
-// canonical JSON, indented when indent is true and compact otherwise.
+// save is the shared serialization core for the four exported entry points
+// (Serialize/SerializeCompact return the string; SaveToFile/SaveCompactToFile
+// persist it). It validates the file (unlike the raw (*ESMFile).ToJSON) and
+// emits canonical JSON, indented when indent is true and compact otherwise.
 func save(file *ESMFile, indent bool) (string, error) {
 	if file == nil {
 		return "", fmt.Errorf("cannot serialize nil ESM file")
@@ -44,19 +45,21 @@ func save(file *ESMFile, indent bool) (string, error) {
 	return string(jsonData), nil
 }
 
-// Save serializes an ESM file to indented JSON string
-func Save(file *ESMFile) (string, error) {
+// Serialize validates an ESM file and returns it as an indented canonical JSON
+// string. (The Save* verbs write to disk; Serialize* return the string.)
+func Serialize(file *ESMFile) (string, error) {
 	return save(file, true)
 }
 
-// SaveCompact serializes an ESM file to compact JSON string (no indentation)
-func SaveCompact(file *ESMFile) (string, error) {
+// SerializeCompact validates an ESM file and returns it as a compact canonical
+// JSON string (no indentation).
+func SerializeCompact(file *ESMFile) (string, error) {
 	return save(file, false)
 }
 
 // SaveToFile saves an ESM file directly to a file path
 func SaveToFile(file *ESMFile, path string) error {
-	jsonStr, err := Save(file)
+	jsonStr, err := Serialize(file)
 	if err != nil {
 		return err
 	}
@@ -71,7 +74,7 @@ func SaveToFile(file *ESMFile, path string) error {
 
 // SaveCompactToFile saves an ESM file to a file path in compact format
 func SaveCompactToFile(file *ESMFile, path string) error {
-	jsonStr, err := SaveCompact(file)
+	jsonStr, err := SerializeCompact(file)
 	if err != nil {
 		return err
 	}

@@ -82,7 +82,7 @@ func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := Save(file)
+	jsonStr, err := Serialize(file)
 	require.NoError(t, err)
 
 	// Re-parse as a generic tree to inspect raw tokens precisely. UseNumber
@@ -139,7 +139,7 @@ func TestRoundTripPreservesIntFloatDistinction(t *testing.T) {
 	parsed, err := LoadString(input)
 	require.NoError(t, err)
 
-	jsonStr, err := Save(parsed)
+	jsonStr, err := Serialize(parsed)
 	require.NoError(t, err)
 
 	reparsed, err := LoadString(jsonStr)
@@ -187,7 +187,7 @@ func TestSaveTypedFloatFields(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := Save(file)
+	jsonStr, err := Serialize(file)
 	require.NoError(t, err)
 
 	// *float64 factor emits with trailing .0
@@ -211,7 +211,7 @@ func TestSaveRejectsNonFiniteFloat(t *testing.T) {
 		},
 	}
 
-	_, err := Save(file)
+	_, err := Serialize(file)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "E_CANONICAL_NONFINITE")
 }

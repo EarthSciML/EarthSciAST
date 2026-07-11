@@ -36,7 +36,7 @@ func TestSave(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := Save(esmFile)
+	jsonStr, err := Serialize(esmFile)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, jsonStr)
 
@@ -72,7 +72,7 @@ func TestSaveCompact(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := SaveCompact(esmFile)
+	jsonStr, err := SerializeCompact(esmFile)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, jsonStr)
 
@@ -86,7 +86,7 @@ func TestSaveCompact(t *testing.T) {
 }
 
 func TestSaveNilFile(t *testing.T) {
-	_, err := Save(nil)
+	_, err := Serialize(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot serialize nil ESM file")
 }
@@ -102,7 +102,7 @@ func TestSaveInvalidFile(t *testing.T) {
 		// Missing both Models and ReactionSystems
 	}
 
-	_, err := Save(esmFile)
+	_, err := Serialize(esmFile)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed before serialization")
 }
@@ -338,7 +338,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	}
 
 	// Serialize
-	jsonStr, err := Save(originalFile)
+	jsonStr, err := Serialize(originalFile)
 	require.NoError(t, err)
 
 	// Deserialize

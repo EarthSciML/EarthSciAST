@@ -81,13 +81,13 @@ func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
 		},
 	}
 
-	first, err := Save(original)
+	first, err := Serialize(original)
 	require.NoError(t, err, "Save must succeed on scalar `index` RHS")
 
 	reparsed, err := LoadString(first)
 	require.NoError(t, err, "LoadString must accept re-serialized scalar `index` RHS")
 
-	second, err := Save(reparsed)
+	second, err := Serialize(reparsed)
 	require.NoError(t, err, "Save must succeed on reparsed payload")
 
 	var firstVal, secondVal any

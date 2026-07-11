@@ -457,7 +457,7 @@ func TestEventCouplingPreservesAllFields(t *testing.T) {
 	assertFields(t, ec)
 
 	// The fields must also survive re-serialization and re-load.
-	out, err := Save(ef)
+	out, err := Serialize(ef)
 	require.NoError(t, err)
 	ef2, err := LoadString(out)
 	require.NoError(t, err)
@@ -507,7 +507,7 @@ func TestIntegerDefaultRoundTrip(t *testing.T) {
 	assert.Equal(t, int64(7), rs.Parameters["k"].Default, "integer parameter default should decode to int64")
 
 	// And it must re-emit as an integer literal, not "1.0".
-	out, err := Save(ef)
+	out, err := Serialize(ef)
 	require.NoError(t, err)
 	assert.Contains(t, out, `"default": 1`)
 	assert.NotContains(t, out, `"default": 1.0`)

@@ -84,13 +84,13 @@ func TestDataLoaderFixturesCoverage(t *testing.T) {
 			// 3. Round-trip: serialize, re-parse, and compare the canonicalized
 			// JSON trees. We compare via json.Unmarshal into generic interface{}
 			// so that map key ordering and whitespace don't matter.
-			serialized, err := Save(esmFile)
+			serialized, err := Serialize(esmFile)
 			if err != nil {
 				t.Fatalf("Save failed for %s: %v", tc.fixture, err)
 			}
 			roundTripped, err := LoadString(serialized)
 			if err != nil {
-				t.Fatalf("LoadString(Save()) failed for %s: %v", tc.fixture, err)
+				t.Fatalf("LoadString(Serialize()) failed for %s: %v", tc.fixture, err)
 			}
 			origNorm, err := normalizeESMJSON(esmFile)
 			if err != nil {
