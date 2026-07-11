@@ -543,9 +543,7 @@ func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]Couplin
 		if err != nil {
 			return nil, err
 		}
-		for _, ce := range expanded {
-			out = append(out, ce)
-		}
+		out = append(out, expanded...)
 	}
 	return out, nil
 }
