@@ -13,7 +13,7 @@
  * the editor consumes the core renderer.
  */
 
-import { formatChemicalName } from '@earthsciml/ast';
+import { formatChemicalName } from '@earthsciml/ast'
 
 /**
  * Apply element-aware chemical subscript formatting to a variable / species
@@ -23,5 +23,5 @@ import { formatChemicalName } from '@earthsciml/ast';
  * the editor's former hand-rolled renderer across the full species range.
  */
 export function renderChemicalName(variable: string): string {
-  return formatChemicalName(variable);
+  return formatChemicalName(variable)
 }

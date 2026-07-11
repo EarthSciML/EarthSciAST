@@ -244,7 +244,8 @@ describe('edit', () => {
     it('removeEquation by LHS distinguishes consts with different values (field-aware equality)', () => {
       // `value` is object-typed on the schema node; these are deliberately
       // hand-shaped `const` leaves that differ only in their numeric value.
-      const constNode = (v: number) => ({ op: 'const', value: v, args: [] }) as unknown as Equation['lhs']
+      const constNode = (v: number) =>
+        ({ op: 'const', value: v, args: [] }) as unknown as Equation['lhs']
       const m: Model = {
         variables: {},
         equations: [

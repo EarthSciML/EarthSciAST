@@ -9,7 +9,8 @@
  * ReactionEditor.
  */
 
-import { Accessor, createMemo } from 'solid-js';
+import type { Accessor } from 'solid-js'
+import { createMemo } from 'solid-js'
 
 /**
  * Build a reactive set that is the base highlight set plus the currently
@@ -21,15 +22,15 @@ import { Accessor, createMemo } from 'solid-js';
  */
 export function createMergedHighlight(
   base: Accessor<Set<string> | undefined>,
-  hovered: Accessor<string | null>
+  hovered: Accessor<string | null>,
 ): Accessor<Set<string>> {
   return createMemo(() => {
-    const baseSet = base() ?? new Set<string>();
-    const hoveredVar = hovered();
+    const baseSet = base() ?? new Set<string>()
+    const hoveredVar = hovered()
 
     if (hoveredVar && !baseSet.has(hoveredVar)) {
-      return new Set([...baseSet, hoveredVar]);
+      return new Set([...baseSet, hoveredVar])
     }
-    return baseSet;
-  });
+    return baseSet
+  })
 }

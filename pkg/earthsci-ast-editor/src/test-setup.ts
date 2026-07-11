@@ -1,13 +1,13 @@
-import '@testing-library/jest-dom';
-import { vi } from 'vitest';
+import '@testing-library/jest-dom'
+import { vi } from 'vitest'
 
 // Configure SolidJS testing environment
 if (typeof global.requestAnimationFrame === 'undefined') {
-  global.requestAnimationFrame = (cb) => setTimeout(cb, 16);
+  global.requestAnimationFrame = (cb) => setTimeout(cb, 16)
 }
 
 if (typeof global.cancelAnimationFrame === 'undefined') {
-  global.cancelAnimationFrame = (id) => clearTimeout(id);
+  global.cancelAnimationFrame = (id) => clearTimeout(id)
 }
 
 // jsdom does not implement ResizeObserver, which the Delimiters layout component
@@ -18,7 +18,7 @@ if (typeof global.ResizeObserver === 'undefined') {
     observe(): void {}
     unobserve(): void {}
     disconnect(): void {}
-  };
+  }
 }
 
 /**
@@ -35,5 +35,5 @@ export function installCustomElementsMock(): void {
     },
     writable: true,
     configurable: true,
-  });
+  })
 }

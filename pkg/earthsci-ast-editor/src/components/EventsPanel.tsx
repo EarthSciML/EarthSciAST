@@ -3,11 +3,12 @@
  * with inline JSON editing of conditions, triggers, and effects.
  */
 
-import { Component, createSignal, For, Show } from 'solid-js';
-import type { ContinuousEvent, DiscreteEvent, Expression } from '@earthsciml/ast';
-import { InlineForm } from './InlineForm';
-import { CollapsiblePanel } from './CollapsiblePanel';
-import { EmptyState } from './EmptyState';
+import type { Component } from 'solid-js'
+import { createSignal, For, Show } from 'solid-js'
+import type { ContinuousEvent, DiscreteEvent, Expression } from '@earthsciml/ast'
+import { InlineForm } from './InlineForm'
+import { CollapsiblePanel } from './CollapsiblePanel'
+import { EmptyState } from './EmptyState'
 
 /**
  * Parse a JSON expression string, or return null when invalid. The parsed value
@@ -16,20 +17,20 @@ import { EmptyState } from './EmptyState';
  */
 function tryParseJson(text: string): { value: unknown } | null {
   try {
-    return { value: JSON.parse(text) };
+    return { value: JSON.parse(text) }
   } catch {
-    return null;
+    return null
   }
 }
 
-const INVALID_JSON_MESSAGE = 'Invalid JSON format';
+const INVALID_JSON_MESSAGE = 'Invalid JSON format'
 
 /** Identifies which event sub-item is currently being edited inline. */
 type EventEditTarget =
   | { kind: 'condition'; eventIndex: number; index: number }
   | { kind: 'continuous-affect'; eventIndex: number; index: number }
   | { kind: 'discrete-affect'; eventIndex: number; index: number }
-  | { kind: 'trigger'; eventIndex: number };
+  | { kind: 'trigger'; eventIndex: number }
 
 /**
  * Whether two edit targets address the same sub-item. `trigger` targets have no
@@ -37,106 +38,118 @@ type EventEditTarget =
  * other kind also matches on its list index.
  */
 function targetsEqual(a: EventEditTarget, b: EventEditTarget): boolean {
-  if (a.kind !== b.kind || a.eventIndex !== b.eventIndex) return false;
-  if (!('index' in a) || !('index' in b)) return true;
-  return a.index === b.index;
+  if (a.kind !== b.kind || a.eventIndex !== b.eventIndex) return false
+  if (!('index' in a) || !('index' in b)) return true
+  return a.index === b.index
 }
 
 export interface EventsPanelProps {
-  continuousEvents?: ContinuousEvent[];
-  discreteEvents?: DiscreteEvent[];
-  onAddContinuousEvent?: (name: string, description: string) => void;
-  onAddDiscreteEvent?: (name: string, description: string) => void;
-  onEditContinuousEvent?: (index: number, event: ContinuousEvent) => void;
-  onEditDiscreteEvent?: (index: number, event: DiscreteEvent) => void;
-  readonly?: boolean;
+  continuousEvents?: ContinuousEvent[]
+  discreteEvents?: DiscreteEvent[]
+  onAddContinuousEvent?: (name: string, description: string) => void
+  onAddDiscreteEvent?: (name: string, description: string) => void
+  onEditContinuousEvent?: (index: number, event: ContinuousEvent) => void
+  onEditDiscreteEvent?: (index: number, event: DiscreteEvent) => void
+  readonly?: boolean
 }
 
 export const EventsPanel: Component<EventsPanelProps> = (props) => {
-  const [isExpanded, setIsExpanded] = createSignal(true);
-  const [addingKind, setAddingKind] = createSignal<'continuous' | 'discrete' | null>(null);
-  const [editTarget, setEditTarget] = createSignal<EventEditTarget | null>(null);
+  const [isExpanded, setIsExpanded] = createSignal(true)
+  const [addingKind, setAddingKind] = createSignal<'continuous' | 'discrete' | null>(null)
+  const [editTarget, setEditTarget] = createSignal<EventEditTarget | null>(null)
 
   const totalEvents = () =>
-    (props.continuousEvents || []).length + (props.discreteEvents || []).length;
+    (props.continuousEvents || []).length + (props.discreteEvents || []).length
 
   const isEditing = (target: EventEditTarget) => {
-    const current = editTarget();
-    return current != null && targetsEqual(current, target);
-  };
+    const current = editTarget()
+    return current != null && targetsEqual(current, target)
+  }
 
   const startAdding = (kind: 'continuous' | 'discrete') => {
-    setIsExpanded(true);
-    setEditTarget(null);
-    setAddingKind(kind);
-  };
+    setIsExpanded(true)
+    setEditTarget(null)
+    setAddingKind(kind)
+  }
 
   const handleAddConfirm = (values: Record<string, string>) => {
-    const name = values.name.trim();
-    if (!name) return 'Event name is required';
+    const name = values.name.trim()
+    if (!name) return 'Event name is required'
 
     if (addingKind() === 'continuous') {
-      props.onAddContinuousEvent?.(name, values.description || '');
+      props.onAddContinuousEvent?.(name, values.description || '')
     } else {
-      props.onAddDiscreteEvent?.(name, values.description || '');
+      props.onAddDiscreteEvent?.(name, values.description || '')
     }
-    setAddingKind(null);
-  };
+    setAddingKind(null)
+  }
 
-  const handleConditionConfirm = (event: ContinuousEvent, eventIndex: number, index: number, values: Record<string, string>) => {
-    const parsed = tryParseJson(values.condition);
-    if (!parsed) return INVALID_JSON_MESSAGE;
+  const handleConditionConfirm = (
+    event: ContinuousEvent,
+    eventIndex: number,
+    index: number,
+    values: Record<string, string>,
+  ) => {
+    const parsed = tryParseJson(values.condition)
+    if (!parsed) return INVALID_JSON_MESSAGE
 
-    const updatedConditions = [...event.conditions] as ContinuousEvent['conditions'];
-    updatedConditions[index] = parsed.value as Expression;
-    props.onEditContinuousEvent?.(eventIndex, { ...event, conditions: updatedConditions });
-    setEditTarget(null);
-  };
+    const updatedConditions = [...event.conditions] as ContinuousEvent['conditions']
+    updatedConditions[index] = parsed.value as Expression
+    props.onEditContinuousEvent?.(eventIndex, { ...event, conditions: updatedConditions })
+    setEditTarget(null)
+  }
 
   const handleAffectConfirm = (
     kind: 'continuous-affect' | 'discrete-affect',
     event: ContinuousEvent | DiscreteEvent,
     eventIndex: number,
     index: number,
-    values: Record<string, string>
+    values: Record<string, string>,
   ) => {
-    const parsedLhs = tryParseJson(values.lhs);
-    const parsedRhs = tryParseJson(values.rhs);
-    if (!parsedLhs || !parsedRhs) return INVALID_JSON_MESSAGE;
+    const parsedLhs = tryParseJson(values.lhs)
+    const parsedRhs = tryParseJson(values.rhs)
+    if (!parsedLhs || !parsedRhs) return INVALID_JSON_MESSAGE
 
-    const updatedAffects = [...(event.affects || [])];
+    const updatedAffects = [...(event.affects || [])]
     updatedAffects[index] = {
       lhs: parsedLhs.value as Expression,
-      rhs: parsedRhs.value as Expression
-    } as (typeof updatedAffects)[number];
+      rhs: parsedRhs.value as Expression,
+    } as (typeof updatedAffects)[number]
 
     if (kind === 'continuous-affect') {
       props.onEditContinuousEvent?.(eventIndex, {
         ...(event as ContinuousEvent),
-        affects: updatedAffects as ContinuousEvent['affects']
-      });
+        affects: updatedAffects as ContinuousEvent['affects'],
+      })
     } else {
       props.onEditDiscreteEvent?.(eventIndex, {
         ...(event as DiscreteEvent),
-        affects: updatedAffects as DiscreteEvent['affects']
-      });
+        affects: updatedAffects as DiscreteEvent['affects'],
+      })
     }
-    setEditTarget(null);
-  };
+    setEditTarget(null)
+  }
 
-  const handleTriggerConfirm = (event: DiscreteEvent, eventIndex: number, values: Record<string, string>) => {
-    const parsed = tryParseJson(values.trigger);
-    if (!parsed) return INVALID_JSON_MESSAGE;
+  const handleTriggerConfirm = (
+    event: DiscreteEvent,
+    eventIndex: number,
+    values: Record<string, string>,
+  ) => {
+    const parsed = tryParseJson(values.trigger)
+    if (!parsed) return INVALID_JSON_MESSAGE
 
-    props.onEditDiscreteEvent?.(eventIndex, { ...event, trigger: parsed.value as DiscreteEvent['trigger'] });
-    setEditTarget(null);
-  };
+    props.onEditDiscreteEvent?.(eventIndex, {
+      ...event,
+      trigger: parsed.value as DiscreteEvent['trigger'],
+    })
+    setEditTarget(null)
+  }
 
   /** Shared affect list rendering for continuous and discrete events. */
   const affectsList = (
     kind: 'continuous-affect' | 'discrete-affect',
     event: ContinuousEvent | DiscreteEvent,
-    eventIndex: number
+    eventIndex: number,
   ) => (
     <div class="event-affects">
       <strong>Effects:</strong>
@@ -161,10 +174,22 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
                 <InlineForm
                   title="Edit effect"
                   fields={[
-                    { name: 'lhs', label: 'Left side (JSON)', initial: JSON.stringify(affect.lhs), multiline: true },
-                    { name: 'rhs', label: 'Right side (JSON)', initial: JSON.stringify(affect.rhs), multiline: true }
+                    {
+                      name: 'lhs',
+                      label: 'Left side (JSON)',
+                      initial: JSON.stringify(affect.lhs),
+                      multiline: true,
+                    },
+                    {
+                      name: 'rhs',
+                      label: 'Right side (JSON)',
+                      initial: JSON.stringify(affect.rhs),
+                      multiline: true,
+                    },
                   ]}
-                  onConfirm={(values) => handleAffectConfirm(kind, event, eventIndex, index(), values)}
+                  onConfirm={(values) =>
+                    handleAffectConfirm(kind, event, eventIndex, index(), values)
+                  }
                   onCancel={() => setEditTarget(null)}
                 />
               </Show>
@@ -173,7 +198,7 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
         )}
       </For>
     </div>
-  );
+  )
 
   return (
     <CollapsiblePanel
@@ -187,14 +212,20 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
           <div class="event-add-buttons">
             <button
               class="add-btn"
-              onClick={(e) => { e.stopPropagation(); startAdding('continuous'); }}
+              onClick={(e) => {
+                e.stopPropagation()
+                startAdding('continuous')
+              }}
               title="Add continuous event"
             >
               + Continuous
             </button>
             <button
               class="add-btn"
-              onClick={(e) => { e.stopPropagation(); startAdding('discrete'); }}
+              onClick={(e) => {
+                e.stopPropagation()
+                startAdding('discrete')
+              }}
               title="Add discrete event"
             >
               + Discrete
@@ -207,8 +238,13 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
         <InlineForm
           title={addingKind() === 'continuous' ? 'Add continuous event' : 'Add discrete event'}
           fields={[
-            { name: 'name', label: 'Name', initial: addingKind() === 'continuous' ? 'New Continuous Event' : 'New Discrete Event' },
-            { name: 'description', label: 'Description' }
+            {
+              name: 'name',
+              label: 'Name',
+              initial:
+                addingKind() === 'continuous' ? 'New Continuous Event' : 'New Discrete Event',
+            },
+            { name: 'description', label: 'Description' },
           ]}
           confirmLabel="Add"
           onConfirm={handleAddConfirm}
@@ -235,11 +271,21 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
                           <code class="condition-expr">{JSON.stringify(condition)}</code>
                           <Show when={!props.readonly}>
                             <Show
-                              when={isEditing({ kind: 'condition', eventIndex: eventIndex(), index: index() })}
+                              when={isEditing({
+                                kind: 'condition',
+                                eventIndex: eventIndex(),
+                                index: index(),
+                              })}
                               fallback={
                                 <button
                                   class="edit-btn"
-                                  onClick={() => setEditTarget({ kind: 'condition', eventIndex: eventIndex(), index: index() })}
+                                  onClick={() =>
+                                    setEditTarget({
+                                      kind: 'condition',
+                                      eventIndex: eventIndex(),
+                                      index: index(),
+                                    })
+                                  }
                                 >
                                   Edit
                                 </button>
@@ -248,9 +294,16 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
                               <InlineForm
                                 title="Edit condition"
                                 fields={[
-                                  { name: 'condition', label: 'Condition (JSON)', initial: JSON.stringify(condition), multiline: true }
+                                  {
+                                    name: 'condition',
+                                    label: 'Condition (JSON)',
+                                    initial: JSON.stringify(condition),
+                                    multiline: true,
+                                  },
                                 ]}
-                                onConfirm={(values) => handleConditionConfirm(event, eventIndex(), index(), values)}
+                                onConfirm={(values) =>
+                                  handleConditionConfirm(event, eventIndex(), index(), values)
+                                }
                                 onCancel={() => setEditTarget(null)}
                               />
                             </Show>
@@ -288,7 +341,9 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
                           fallback={
                             <button
                               class="edit-btn"
-                              onClick={() => setEditTarget({ kind: 'trigger', eventIndex: eventIndex() })}
+                              onClick={() =>
+                                setEditTarget({ kind: 'trigger', eventIndex: eventIndex() })
+                              }
                             >
                               Edit
                             </button>
@@ -297,9 +352,16 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
                           <InlineForm
                             title="Edit trigger"
                             fields={[
-                              { name: 'trigger', label: 'Trigger (JSON)', initial: JSON.stringify(event.trigger), multiline: true }
+                              {
+                                name: 'trigger',
+                                label: 'Trigger (JSON)',
+                                initial: JSON.stringify(event.trigger),
+                                multiline: true,
+                              },
                             ]}
-                            onConfirm={(values) => handleTriggerConfirm(event, eventIndex(), values)}
+                            onConfirm={(values) =>
+                              handleTriggerConfirm(event, eventIndex(), values)
+                            }
                             onCancel={() => setEditTarget(null)}
                           />
                         </Show>
@@ -329,7 +391,7 @@ export const EventsPanel: Component<EventsPanelProps> = (props) => {
         </EmptyState>
       </Show>
     </CollapsiblePanel>
-  );
-};
+  )
+}
 
-export default EventsPanel;
+export default EventsPanel

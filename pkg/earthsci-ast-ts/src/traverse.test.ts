@@ -48,7 +48,10 @@ const file: EsmFile = {
           equations: [{ lhs: { op: 'D', args: ['z'] }, rhs: 'z' }],
         } as Model,
         // Reference stub with a bogus nested subsystem to prove non-descent.
-        Ext: { ref: './external.esm', subsystems: { Ghost: { variables: {}, equations: [] } } } as any,
+        Ext: {
+          ref: './external.esm',
+          subsystems: { Ghost: { variables: {}, equations: [] } },
+        } as any,
         // Data-loader stub (discriminated by `kind`), likewise not descended.
         Load: {
           kind: 'grid',
@@ -65,14 +68,26 @@ const file: EsmFile = {
       species: { A: {}, B: {} },
       parameters: { k1: { default: 1 } },
       reactions: [
-        { id: 'r1', substrates: [{ species: 'A', stoichiometry: 1 }], products: [{ species: 'B', stoichiometry: 1 }], rate: 'k1' },
+        {
+          id: 'r1',
+          substrates: [{ species: 'A', stoichiometry: 1 }],
+          products: [{ species: 'B', stoichiometry: 1 }],
+          rate: 'k1',
+        },
       ],
       constraint_equations: [{ lhs: 'A', rhs: 'B' }],
       subsystems: {
         RSub: {
           species: { C: {} },
           parameters: {},
-          reactions: [{ id: 'r2', substrates: null, products: [{ species: 'C', stoichiometry: 1 }], rate: '1' }],
+          reactions: [
+            {
+              id: 'r2',
+              substrates: null,
+              products: [{ species: 'C', stoichiometry: 1 }],
+              rate: '1',
+            },
+          ],
         } as ReactionSystem,
         RRef: { ref: './sub.esm' },
       },
@@ -92,7 +107,9 @@ function collect(opts?: { recurse?: boolean }): ComponentVisit[] {
 describe('isReferenceStub', () => {
   it('flags `ref` includes and `kind` data loaders, not real components', () => {
     expect(isReferenceStub({ ref: './x.esm' })).toBe(true)
-    expect(isReferenceStub({ kind: 'grid', source: { url_template: 'x' }, variables: {} } as any)).toBe(true)
+    expect(
+      isReferenceStub({ kind: 'grid', source: { url_template: 'x' }, variables: {} } as any),
+    ).toBe(true)
     expect(isReferenceStub(M1)).toBe(false)
     expect(isReferenceStub(R1)).toBe(false)
   })

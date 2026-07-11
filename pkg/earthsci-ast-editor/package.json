@@ -27,10 +27,10 @@
     "test:e2e:watch": "vitest --watch tests/editor/",
     "test:all": "vitest run src/ && vitest run tests/editor/",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
-    "format": "prettier --write src",
-    "format:check": "prettier --check src"
+    "format": "prettier --write src *.json *.js *.ts",
+    "format:check": "prettier --check src *.json *.js *.ts"
   },
   "files": [
     "dist",

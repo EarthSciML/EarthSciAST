@@ -779,7 +779,12 @@ export function expressionGraph(
     processComponentTree(b, 'reaction_systems', target as ReactionSystem, 'default')
   } else if (typeof target === 'object' && target !== null && 'lhs' in target) {
     processEquation(b, target as Equation, 0, 'default')
-  } else if (typeof target === 'object' && target !== null && 'rate' in target && !('op' in target)) {
+  } else if (
+    typeof target === 'object' &&
+    target !== null &&
+    'rate' in target &&
+    !('op' in target)
+  ) {
     // Reaction (schema field is `rate`; every reaction carries one).
     processReaction(b, target as Reaction, 0, 'default')
   } else {

@@ -181,9 +181,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   })
 
   it('conformance fixture matches the canonical expanded form (cross-binding pin)', () => {
-    const fixturePath = fixturesDir(
-      'conformance/expression_templates/arrhenius_smoke/fixture.esm',
-    )
+    const fixturePath = fixturesDir('conformance/expression_templates/arrhenius_smoke/fixture.esm')
     const expandedPath = fixturesDir(
       'conformance/expression_templates/arrhenius_smoke/expanded.esm',
     )
@@ -196,9 +194,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     // The v0.8.0 variable_map expression-transform widening: a coupling
     // `transform` invoking a template declared by the RECEIVING component
     // expands at load against that component's registry (§9.6.4).
-    const casedir = fixturesDir(
-      'conformance/expression_templates/coupling_transform_expression',
-    )
+    const casedir = fixturesDir('conformance/expression_templates/coupling_transform_expression')
     const file = load(
       fs.readFileSync(path.join(casedir, 'fixture.esm'), 'utf8'),
     ) as unknown as Record<string, unknown>
@@ -1073,9 +1069,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     } catch (e) {
       caught = e
     }
-    expect((caught as EsmMachineryError).code).toBe(
-      'apply_expression_template_invalid_declaration',
-    )
+    expect((caught as EsmMachineryError).code).toBe('apply_expression_template_invalid_declaration')
   })
 })
 

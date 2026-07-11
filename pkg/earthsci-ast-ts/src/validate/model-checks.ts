@@ -223,7 +223,12 @@ export function validateEventConsistency(model: Model, modelPath: string): Struc
 
     // Check affects variables
     errors.push(
-      ...checkAffectTargets(event.affects, declaredVariables, `${eventPath}/affects`, 'event affects'),
+      ...checkAffectTargets(
+        event.affects,
+        declaredVariables,
+        `${eventPath}/affects`,
+        'event affects',
+      ),
     )
 
     // Check functional affect variables

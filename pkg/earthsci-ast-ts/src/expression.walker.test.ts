@@ -130,7 +130,9 @@ describe('mapChildren — field preservation', () => {
 describe('mapChildren — transformation and callback contract', () => {
   it('applies fn once per direct child (one level deep)', () => {
     const node: ExprNode = { op: '+', args: ['x', 'y'] }
-    const out = mapChildren(node, (child) => (typeof child === 'string' ? child.toUpperCase() : child))
+    const out = mapChildren(node, (child) =>
+      typeof child === 'string' ? child.toUpperCase() : child,
+    )
     expect(out).toEqual({ op: '+', args: ['X', 'Y'] })
   })
 
@@ -254,16 +256,26 @@ describe('deepEqualExpr', () => {
   })
 
   it('distinguishes const nodes by their value field', () => {
-    expect(deepEqualExpr({ op: 'const', args: [], value: 1 } as unknown as ExprNode, {
-      op: 'const',
-      args: [],
-      value: 1,
-    } as unknown as ExprNode)).toBe(true)
-    expect(deepEqualExpr({ op: 'const', args: [], value: 1 } as unknown as ExprNode, {
-      op: 'const',
-      args: [],
-      value: 2,
-    } as unknown as ExprNode)).toBe(false)
+    expect(
+      deepEqualExpr(
+        { op: 'const', args: [], value: 1 } as unknown as ExprNode,
+        {
+          op: 'const',
+          args: [],
+          value: 1,
+        } as unknown as ExprNode,
+      ),
+    ).toBe(true)
+    expect(
+      deepEqualExpr(
+        { op: 'const', args: [], value: 1 } as unknown as ExprNode,
+        {
+          op: 'const',
+          args: [],
+          value: 2,
+        } as unknown as ExprNode,
+      ),
+    ).toBe(false)
   })
 
   it('distinguishes derivative nodes by wrt', () => {
@@ -274,9 +286,7 @@ describe('deepEqualExpr', () => {
   })
 
   it('distinguishes nodes by op', () => {
-    expect(
-      deepEqualExpr({ op: '+', args: ['x', 'y'] }, { op: '-', args: ['x', 'y'] }),
-    ).toBe(false)
+    expect(deepEqualExpr({ op: '+', args: ['x', 'y'] }, { op: '-', args: ['x', 'y'] })).toBe(false)
   })
 
   it('equates number vs NumericLiteral nested inside args', () => {

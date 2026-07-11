@@ -1,20 +1,20 @@
-import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@solidjs/testing-library';
-import type { ReactionSystem } from '@earthsciml/ast';
-import { ReactionEditor } from './ReactionEditor';
+import { describe, it, beforeEach, expect, vi } from 'vitest'
+import { render, screen, fireEvent, within } from '@solidjs/testing-library'
+import type { ReactionSystem } from '@earthsciml/ast'
+import { ReactionEditor } from './ReactionEditor'
 
 describe('ReactionEditor', () => {
   const mockReactionSystem: ReactionSystem = {
     species: {
-      'NO': {
-        description: 'Nitrogen monoxide'
+      NO: {
+        description: 'Nitrogen monoxide',
       },
-      'O3': {
-        description: 'Ozone'
+      O3: {
+        description: 'Ozone',
       },
-      'NO2': {
-        description: 'Nitrogen dioxide'
-      }
+      NO2: {
+        description: 'Nitrogen dioxide',
+      },
     },
     parameters: {},
     reactions: [
@@ -23,117 +23,115 @@ describe('ReactionEditor', () => {
         name: 'NO oxidation',
         substrates: [
           { species: 'NO', stoichiometry: 1 },
-          { species: 'O3', stoichiometry: 1 }
+          { species: 'O3', stoichiometry: 1 },
         ],
-        products: [
-          { species: 'NO2', stoichiometry: 1 }
-        ],
-        rate: 'k_NO_O3'
-      }
-    ]
-  };
+        products: [{ species: 'NO2', stoichiometry: 1 }],
+        rate: 'k_NO_O3',
+      },
+    ],
+  }
 
   const mockProps = {
     reactionSystem: mockReactionSystem,
     onReactionSystemChange: vi.fn(),
     highlightedVars: new Set<string>(),
     readonly: false,
-  };
+  }
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    vi.clearAllMocks()
+  })
 
   it('renders reaction count in header', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    render(() => <ReactionEditor {...mockProps} />)
 
-    expect(screen.getByText('Reactions (1)')).toBeInTheDocument();
-  });
+    expect(screen.getByText('Reactions (1)')).toBeInTheDocument()
+  })
 
   it('renders chemical reaction in proper notation', () => {
-    const { container } = render(() => <ReactionEditor {...mockProps} />);
+    const { container } = render(() => <ReactionEditor {...mockProps} />)
 
     // Scope to the reaction equation itself rather than counting NO across the
     // whole document (species panel, etc.). NO appears on both sides: the NO
     // reactant and the NO₂ product.
-    const equation = within(container.querySelector('.reaction-equation') as HTMLElement);
-    expect(equation.getAllByText(/NO/)).toHaveLength(2);
-    expect(equation.getByText(/→/)).toBeInTheDocument();
-  });
+    const equation = within(container.querySelector('.reaction-equation') as HTMLElement)
+    expect(equation.getAllByText(/NO/)).toHaveLength(2)
+    expect(equation.getByText(/→/)).toBeInTheDocument()
+  })
 
   it('renders species panel', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    render(() => <ReactionEditor {...mockProps} />)
 
-    expect(screen.getByText(/Species \(3\)/)).toBeInTheDocument();
-    expect(screen.getByText('NO')).toBeInTheDocument();
-    expect(screen.getByText('Nitrogen monoxide')).toBeInTheDocument();
-  });
+    expect(screen.getByText(/Species \(3\)/)).toBeInTheDocument()
+    expect(screen.getByText('NO')).toBeInTheDocument()
+    expect(screen.getByText('Nitrogen monoxide')).toBeInTheDocument()
+  })
 
   it('renders parameters panel', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    render(() => <ReactionEditor {...mockProps} />)
 
-    expect(screen.getByText(/Parameters \(0\)/)).toBeInTheDocument();
-  });
+    expect(screen.getByText(/Parameters \(0\)/)).toBeInTheDocument()
+  })
 
   it('shows add buttons in non-readonly mode', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    render(() => <ReactionEditor {...mockProps} />)
 
-    expect(screen.getByText('+ Add Reaction')).toBeInTheDocument();
+    expect(screen.getByText('+ Add Reaction')).toBeInTheDocument()
 
     // Species and parameters panels should also have add buttons
-    const addButtons = screen.getAllByText('+');
-    expect(addButtons.length).toBeGreaterThan(0);
-  });
+    const addButtons = screen.getAllByText('+')
+    expect(addButtons.length).toBeGreaterThan(0)
+  })
 
   it('hides add buttons in readonly mode', () => {
-    render(() => <ReactionEditor {...mockProps} readonly={true} />);
+    render(() => <ReactionEditor {...mockProps} readonly={true} />)
 
-    expect(screen.queryByText('+ Add Reaction')).not.toBeInTheDocument();
-  });
+    expect(screen.queryByText('+ Add Reaction')).not.toBeInTheDocument()
+  })
 
   it('handles rate expression clicking', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    render(() => <ReactionEditor {...mockProps} />)
 
     // Find the rate expression (displayed as [k])
-    const rateExpression = screen.getByText('[k]');
-    expect(rateExpression).toBeInTheDocument();
+    const rateExpression = screen.getByText('[k]')
+    expect(rateExpression).toBeInTheDocument()
 
     // Click should be possible (though we can't easily test the expansion in this test)
-    fireEvent.click(rateExpression);
-  });
+    fireEvent.click(rateExpression)
+  })
 
   it('displays empty state for reaction system without reactions', () => {
     const emptySystem = {
       species: {},
       parameters: {},
-      reactions: []
-    } as unknown as ReactionSystem;
+      reactions: [],
+    } as unknown as ReactionSystem
 
-    render(() => <ReactionEditor {...mockProps} reactionSystem={emptySystem} />);
+    render(() => <ReactionEditor {...mockProps} reactionSystem={emptySystem} />)
 
-    expect(screen.getByText('No reactions defined')).toBeInTheDocument();
-    expect(screen.getByText('No species defined')).toBeInTheDocument();
-  });
+    expect(screen.getByText('No reactions defined')).toBeInTheDocument()
+    expect(screen.getByText('No species defined')).toBeInTheDocument()
+  })
 
   it('applies custom CSS classes', () => {
-    const { container } = render(() => <ReactionEditor {...mockProps} class="custom-class" />);
+    const { container } = render(() => <ReactionEditor {...mockProps} class="custom-class" />)
 
-    const editor = container.querySelector('.reaction-editor');
-    expect(editor).toHaveClass('custom-class');
-  });
+    const editor = container.querySelector('.reaction-editor')
+    expect(editor).toHaveClass('custom-class')
+  })
 
   it('includes readonly class when in readonly mode', () => {
-    const { container } = render(() => <ReactionEditor {...mockProps} readonly={true} />);
+    const { container } = render(() => <ReactionEditor {...mockProps} readonly={true} />)
 
-    const editor = container.querySelector('.reaction-editor');
-    expect(editor).toHaveClass('readonly');
-  });
+    const editor = container.querySelector('.reaction-editor')
+    expect(editor).toHaveClass('readonly')
+  })
 
   it('renders reaction name when provided', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    render(() => <ReactionEditor {...mockProps} />)
 
-    expect(screen.getByText('NO oxidation')).toBeInTheDocument();
-  });
+    expect(screen.getByText('NO oxidation')).toBeInTheDocument()
+  })
 
   it('shows all parameters regardless of naming convention', () => {
     const paramSystem: ReactionSystem = {
@@ -141,85 +139,85 @@ describe('ReactionEditor', () => {
       parameters: {
         alpha: { default: 2 },
         k_NO_O3: { default: 1 },
-        temperature_ref: { default: 298.15 }
-      }
-    };
+        temperature_ref: { default: 298.15 },
+      },
+    }
 
-    render(() => <ReactionEditor {...mockProps} reactionSystem={paramSystem} />);
+    render(() => <ReactionEditor {...mockProps} reactionSystem={paramSystem} />)
 
     // Previously the panel filtered parameters by name spelling (k_/rate/const),
     // hiding everything else. All parameters must be listed.
-    expect(screen.getByText(/Parameters \(3\)/)).toBeInTheDocument();
-    expect(screen.getByText('alpha')).toBeInTheDocument();
-    expect(screen.getByText('k_NO_O3')).toBeInTheDocument();
-    expect(screen.getByText('temperature_ref')).toBeInTheDocument();
-  });
+    expect(screen.getByText(/Parameters \(3\)/)).toBeInTheDocument()
+    expect(screen.getByText('alpha')).toBeInTheDocument()
+    expect(screen.getByText('k_NO_O3')).toBeInTheDocument()
+    expect(screen.getByText('temperature_ref')).toBeInTheDocument()
+  })
 
   it('adds a parameter through the inline form (no prompt dialogs)', () => {
-    const onReactionSystemChange = vi.fn();
-    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />);
+    const onReactionSystemChange = vi.fn()
+    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />)
 
-    fireEvent.click(screen.getByLabelText('Add new parameter'));
-    fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'j_photo' } });
-    fireEvent.input(screen.getByLabelText('Default value'), { target: { value: '2.5' } });
-    fireEvent.click(screen.getByText('Add'));
+    fireEvent.click(screen.getByLabelText('Add new parameter'))
+    fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'j_photo' } })
+    fireEvent.input(screen.getByLabelText('Default value'), { target: { value: '2.5' } })
+    fireEvent.click(screen.getByText('Add'))
 
     expect(onReactionSystemChange).toHaveBeenCalledWith(
       expect.objectContaining({
         parameters: expect.objectContaining({
-          j_photo: expect.objectContaining({ default: 2.5 })
-        })
-      })
-    );
-  });
+          j_photo: expect.objectContaining({ default: 2.5 }),
+        }),
+      }),
+    )
+  })
 
   it('adds a species through the inline form (no prompt dialogs)', () => {
-    const onReactionSystemChange = vi.fn();
-    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />);
+    const onReactionSystemChange = vi.fn()
+    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />)
 
-    fireEvent.click(screen.getByLabelText('Add new species'));
-    fireEvent.input(screen.getByLabelText('Name (chemical formula)'), { target: { value: 'SO2' } });
-    fireEvent.click(screen.getByText('Add'));
+    fireEvent.click(screen.getByLabelText('Add new species'))
+    fireEvent.input(screen.getByLabelText('Name (chemical formula)'), { target: { value: 'SO2' } })
+    fireEvent.click(screen.getByText('Add'))
 
     expect(onReactionSystemChange).toHaveBeenCalledWith(
       expect.objectContaining({
         species: expect.objectContaining({
-          SO2: {}
-        })
-      })
-    );
-  });
+          SO2: {},
+        }),
+      }),
+    )
+  })
 
   it('edits a species through the inline form', () => {
-    const onReactionSystemChange = vi.fn();
-    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />);
+    const onReactionSystemChange = vi.fn()
+    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />)
 
     // Click the NO species item to open the inline edit form
-    const speciesItem = screen.getByText('Nitrogen monoxide').closest('.species-item')!;
-    fireEvent.click(speciesItem);
+    const speciesItem = screen.getByText('Nitrogen monoxide').closest('.species-item')!
+    fireEvent.click(speciesItem)
 
-    expect(screen.getByText('Edit species NO')).toBeInTheDocument();
+    expect(screen.getByText('Edit species NO')).toBeInTheDocument()
 
-    fireEvent.input(screen.getByLabelText('Description'), { target: { value: 'Nitric oxide' } });
-    fireEvent.click(screen.getByText('Save'));
+    fireEvent.input(screen.getByLabelText('Description'), { target: { value: 'Nitric oxide' } })
+    fireEvent.click(screen.getByText('Save'))
 
     expect(onReactionSystemChange).toHaveBeenCalledWith(
       expect.objectContaining({
         species: expect.objectContaining({
-          NO: expect.objectContaining({ description: 'Nitric oxide' })
-        })
-      })
-    );
-  });
+          NO: expect.objectContaining({ description: 'Nitric oxide' }),
+        }),
+      }),
+    )
+  })
 
   it('handles species with different formulas and names', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    render(() => <ReactionEditor {...mockProps} />)
 
     // O3 should show its formula (O₃) in the species panel
     // Note: In JSDOM, Unicode subscripts might not render exactly as expected
-    const speciesItems = screen.getAllByText(/O/);
-    expect(speciesItems.length).toBeGreaterThan(0);
-  });
+    const speciesItems = screen.getAllByText(/O/)
+    expect(speciesItems.length).toBeGreaterThan(0)
+  })
 
   it('applies a nested edit inside the rate subtree (regression)', () => {
     // The rate is an operator whose first argument is an editable-field op (D).
@@ -233,34 +231,38 @@ describe('ReactionEditor', () => {
           id: 'R1',
           substrates: [{ species: 'u', stoichiometry: 1 }],
           products: [{ species: 'u', stoichiometry: 1 }],
-          rate: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 't' }, 'k'] }
-        }
-      ]
-    } as unknown as ReactionSystem;
+          rate: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 't' }, 'k'] },
+        },
+      ],
+    } as unknown as ReactionSystem
 
-    const onReactionSystemChange = vi.fn();
+    const onReactionSystemChange = vi.fn()
     const { container } = render(() => (
-      <ReactionEditor {...mockProps} reactionSystem={nestedSystem} onReactionSystemChange={onReactionSystemChange} />
-    ));
+      <ReactionEditor
+        {...mockProps}
+        reactionSystem={nestedSystem}
+        onReactionSystemChange={onReactionSystemChange}
+      />
+    ))
 
     // Expand the rate editor.
-    fireEvent.click(screen.getByText('[k]'));
+    fireEvent.click(screen.getByText('[k]'))
 
     // Select the nested D node (path ['rate','args',0]) so its field-editor
     // button appears, then edit its `wrt`.
-    const nestedD = container.querySelector('[data-path="rate.args.0"]')!;
-    fireEvent.click(nestedD);
-    fireEvent.click(screen.getByTitle('Edit D fields'));
-    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } });
-    fireEvent.click(screen.getByText('Apply'));
+    const nestedD = container.querySelector('[data-path="rate.args.0"]')!
+    fireEvent.click(nestedD)
+    fireEvent.click(screen.getByTitle('Edit D fields'))
+    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByText('Apply'))
 
-    expect(onReactionSystemChange).toHaveBeenCalledTimes(1);
-    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem;
+    expect(onReactionSystemChange).toHaveBeenCalledTimes(1)
+    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem
     expect(updated.reactions[0].rate).toEqual({
       op: '+',
-      args: [{ op: 'D', args: ['u'], wrt: 'x' }, 'k']
-    });
-  });
+      args: [{ op: 'D', args: ['u'], wrt: 'x' }, 'k'],
+    })
+  })
 
   it('assigns the first unused R-id when adding after a deletion (regression)', () => {
     // R1 and R3 exist (R2 was deleted). The old `R${length+1}` scheme would
@@ -270,20 +272,24 @@ describe('ReactionEditor', () => {
       parameters: {},
       reactions: [
         { id: 'R1', substrates: [{ species: 'A' }], products: [{ species: 'B' }], rate: 'k1' },
-        { id: 'R3', substrates: [{ species: 'C' }], products: [{ species: 'D' }], rate: 'k3' }
-      ]
-    } as unknown as ReactionSystem;
+        { id: 'R3', substrates: [{ species: 'C' }], products: [{ species: 'D' }], rate: 'k3' },
+      ],
+    } as unknown as ReactionSystem
 
-    const onReactionSystemChange = vi.fn();
+    const onReactionSystemChange = vi.fn()
     render(() => (
-      <ReactionEditor {...mockProps} reactionSystem={gappedSystem} onReactionSystemChange={onReactionSystemChange} />
-    ));
+      <ReactionEditor
+        {...mockProps}
+        reactionSystem={gappedSystem}
+        onReactionSystemChange={onReactionSystemChange}
+      />
+    ))
 
-    fireEvent.click(screen.getByText('+ Add Reaction'));
+    fireEvent.click(screen.getByText('+ Add Reaction'))
 
-    expect(onReactionSystemChange).toHaveBeenCalledTimes(1);
-    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem;
-    expect(updated.reactions).toHaveLength(3);
-    expect(updated.reactions[2].id).toBe('R2');
-  });
-});
+    expect(onReactionSystemChange).toHaveBeenCalledTimes(1)
+    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem
+    expect(updated.reactions).toHaveLength(3)
+    expect(updated.reactions[2].id).toBe('R2')
+  })
+})

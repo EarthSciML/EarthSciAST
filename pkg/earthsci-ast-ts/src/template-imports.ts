@@ -601,7 +601,14 @@ function mergeScope(dst: TemplateScope, src: TemplateScope, origin: string): voi
     )
   }
   for (const [n, d] of Object.entries(src.metaparams)) {
-    mergeNamed(dst.metaparams, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'metaparameter', origin)
+    mergeNamed(
+      dst.metaparams,
+      n,
+      d,
+      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+      'metaparameter',
+      origin,
+    )
   }
 }
 
@@ -1402,7 +1409,14 @@ function processLibrary(
   }
 
   for (const [n, d] of Object.entries(collectMetaparamDecls(raw, origin))) {
-    mergeNamed(scope.metaparams, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'metaparameter', origin)
+    mergeNamed(
+      scope.metaparams,
+      n,
+      d,
+      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+      'metaparameter',
+      origin,
+    )
   }
 
   // §9.7.3 body composition in the library's own scope (decl objects are
@@ -1539,10 +1553,24 @@ function resolveRootLibraryScope(
     false,
   )
   for (const [n, d] of Object.entries(topScope.indexSets)) {
-    mergeNamed(docIsets, n, d, ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT, 'index set', DOCUMENT_ORIGIN)
+    mergeNamed(
+      docIsets,
+      n,
+      d,
+      ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+      'index set',
+      DOCUMENT_ORIGIN,
+    )
   }
   for (const [n, d] of Object.entries(topScope.metaparams)) {
-    mergeNamed(docMeta, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'metaparameter', DOCUMENT_ORIGIN)
+    mergeNamed(
+      docMeta,
+      n,
+      d,
+      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+      'metaparameter',
+      DOCUMENT_ORIGIN,
+    )
   }
   return topScope.templates
 }
@@ -1569,12 +1597,34 @@ function resolvePerComponentImports(
       const imports = comp.expression_template_imports
       if (imports === undefined) continue
       const corigin = `${compKind}.${cname}`
-      const cscope = buildScope(imports, comp.expression_templates, baseDir, stack, corigin, options, false)
+      const cscope = buildScope(
+        imports,
+        comp.expression_templates,
+        baseDir,
+        stack,
+        corigin,
+        options,
+        false,
+      )
       for (const [n, d] of Object.entries(cscope.indexSets)) {
-        mergeNamed(docIsets, n, d, ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT, 'index set', corigin)
+        mergeNamed(
+          docIsets,
+          n,
+          d,
+          ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+          'index set',
+          corigin,
+        )
       }
       for (const [n, d] of Object.entries(cscope.metaparams)) {
-        mergeNamed(docMeta, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'metaparameter', corigin)
+        mergeNamed(
+          docMeta,
+          n,
+          d,
+          ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+          'metaparameter',
+          corigin,
+        )
       }
       // The effective sequence (imports depth-first post-order, then local
       // declarations) becomes the component's template block; plain-object
@@ -1591,7 +1641,10 @@ function resolvePerComponentImports(
  * API binding of an undeclared name, `metaparameter_unbound` if any remains
  * open. Returns the closed name → integer environment.
  */
-function closeMetaparameters(docMeta: JsonObject, api: Record<string, number>): Record<string, number> {
+function closeMetaparameters(
+  docMeta: JsonObject,
+  api: Record<string, number>,
+): Record<string, number> {
   for (const k of Object.keys(api).sort()) {
     if (!Object.prototype.hasOwnProperty.call(docMeta, k)) {
       throw new EsmMachineryError(
@@ -1627,7 +1680,11 @@ function closeMetaparameters(docMeta: JsonObject, api: Record<string, number>): 
  * Phase 5 — reject a metaparameter name that collides with a visible
  * variable / parameter / species / index-set name (esm-spec §9.7.6).
  */
-function checkMetaparamNameCollisions(root: JsonObject, docMeta: JsonObject, docIsets: JsonObject): void {
+function checkMetaparamNameCollisions(
+  root: JsonObject,
+  docMeta: JsonObject,
+  docIsets: JsonObject,
+): void {
   if (Object.keys(docMeta).length === 0) return
   const visible = new Set<string>(Object.keys(docIsets))
   for (const compKind of COMPONENT_KINDS) {
@@ -1697,7 +1754,11 @@ function substituteClosedValues(
  * (`aggregate` ranges, `makearray` regions, index-set `size`s). A remaining
  * open index-set size is `metaparameter_unbound` at the root (`'reject'`).
  */
-function foldClosedDocument(root: JsonObject, topTemplates: JsonObject, docIsets: JsonObject): void {
+function foldClosedDocument(
+  root: JsonObject,
+  topTemplates: JsonObject,
+  docIsets: JsonObject,
+): void {
   for (const compKind of COMPONENT_KINDS) {
     const comps = root[compKind]
     if (!isObject(comps)) continue

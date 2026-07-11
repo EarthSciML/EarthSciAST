@@ -12,41 +12,42 @@
  * themselves (e.g. when an inline add form opens).
  */
 
-import { Component, JSX, Show } from 'solid-js';
+import type { Component, JSX } from 'solid-js'
+import { Show } from 'solid-js'
 
 export interface CollapsiblePanelProps {
   /** Root panel class, e.g. `'variables-panel'`. */
-  panelClass: string;
+  panelClass: string
 
   /** Body wrapper class, e.g. `'variables-content'`. */
-  contentClass: string;
+  contentClass: string
 
   /** Header title content (typically an `<h3>`). */
-  title: JSX.Element;
+  title: JSX.Element
 
   /** Optional header actions (add buttons); the caller gates these by readonly. */
-  actions?: JSX.Element;
+  actions?: JSX.Element
 
   /** Whether the body is shown. */
-  expanded: boolean;
+  expanded: boolean
 
   /** Called when the header is activated (click or Enter/Space). */
-  onToggle: () => void;
+  onToggle: () => void
 
   /** Panel body. */
-  children: JSX.Element;
+  children: JSX.Element
 }
 
 export const CollapsiblePanel: Component<CollapsiblePanelProps> = (props) => {
   const handleKeyDown = (e: KeyboardEvent & { currentTarget: HTMLDivElement; target: Element }) => {
     // Only respond to keys on the header itself, not on focused children
     // (e.g. the add button) whose own activation bubbles up here.
-    if (e.target !== e.currentTarget) return;
+    if (e.target !== e.currentTarget) return
     if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      props.onToggle();
+      e.preventDefault()
+      props.onToggle()
     }
-  };
+  }
 
   return (
     <div class={props.panelClass}>
@@ -64,12 +65,10 @@ export const CollapsiblePanel: Component<CollapsiblePanelProps> = (props) => {
       </div>
 
       <Show when={props.expanded}>
-        <div class={props.contentClass}>
-          {props.children}
-        </div>
+        <div class={props.contentClass}>{props.children}</div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
-export default CollapsiblePanel;
+export default CollapsiblePanel

@@ -1177,7 +1177,8 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
       if (c.format === 'latex') return `\\neg ${c.arg(a)}`
       return `not ${c.arg(a)}`
     },
-    mathml: (c) => (c.args.length === 1 ? `<mrow><mo>&not;</mo>${c.m(c.args[0])}</mrow>` : undefined),
+    mathml: (c) =>
+      c.args.length === 1 ? `<mrow><mo>&not;</mo>${c.m(c.args[0])}</mrow>` : undefined,
   },
 
   exp: { text: textElementaryFunc, mathml: mathmlUnaryCall },
@@ -1205,7 +1206,9 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
       return `log(${c.arg(a)})`
     },
     mathml: (c) =>
-      c.args.length === 1 ? `<mrow><mi>ln</mi><mo>(</mo>${c.m(c.args[0])}<mo>)</mo></mrow>` : undefined,
+      c.args.length === 1
+        ? `<mrow><mi>ln</mi><mo>(</mo>${c.m(c.args[0])}<mo>)</mo></mrow>`
+        : undefined,
   },
 
   log10: {
@@ -1405,11 +1408,7 @@ function formatBound(value: unknown, format: TextFormat): string {
 }
 
 /** Big-operator symbol for an `aggregate` reduction (semiring supersedes reduce). */
-function aggregateSymbol(
-  semiring: string | undefined,
-  reduce: string,
-  format: TextFormat,
-): string {
+function aggregateSymbol(semiring: string | undefined, reduce: string, format: TextFormat): string {
   let fam: 'plus' | 'times' | 'max' | 'min' | 'bool'
   if (semiring) {
     fam =
@@ -1665,7 +1664,9 @@ function formatExpressionNode(node: ExprNode, format: TextFormat): string {
 
   // Generic fallback: function-call notation.
   const argList = node.args.map((a) => renderExpr(a, format)).join(', ')
-  return format === 'latex' ? `\\mathrm{${latexName(node.op)}}(${argList})` : `${node.op}(${argList})`
+  return format === 'latex'
+    ? `\\mathrm{${latexName(node.op)}}(${argList})`
+    : `${node.op}(${argList})`
 }
 
 /**

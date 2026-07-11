@@ -6,88 +6,89 @@
  * and scoped reference normalization for different highlighting modes.
  */
 
-import { createContext, useContext, createSignal, createMemo, Accessor, Setter, JSX } from 'solid-js';
-import type { EsmFile, CouplingEntry } from '@earthsciml/ast';
+import type { Accessor, Setter, JSX } from 'solid-js'
+import { createContext, useContext, createSignal, createMemo } from 'solid-js'
+import type { EsmFile, CouplingEntry } from '@earthsciml/ast'
 
 // Types for the highlighting context
 export interface HighlightContextValue {
   /** Currently hovered variable */
-  hoveredVar: Accessor<string | null>;
+  hoveredVar: Accessor<string | null>
   /** Set the currently hovered variable */
-  setHoveredVar: Setter<string | null>;
+  setHoveredVar: Setter<string | null>
   /** All variables equivalent to the hovered variable */
-  highlightedVars: Accessor<Set<string>>;
+  highlightedVars: Accessor<Set<string>>
   /** Variable equivalence classes */
-  equivalences: Accessor<Map<string, Set<string>>>;
+  equivalences: Accessor<Map<string, Set<string>>>
 }
 
-export type ScopingMode = 'equation' | 'model' | 'file';
+export type ScopingMode = 'equation' | 'model' | 'file'
 
 // Union-Find data structure for building equivalence classes
 class UnionFind {
-  private parent: Map<string, string> = new Map();
-  private rank: Map<string, number> = new Map();
+  private parent: Map<string, string> = new Map()
+  private rank: Map<string, number> = new Map()
 
   // Make a new set with the given variable
   makeSet(variable: string): void {
     if (!this.parent.has(variable)) {
-      this.parent.set(variable, variable);
-      this.rank.set(variable, 0);
+      this.parent.set(variable, variable)
+      this.rank.set(variable, 0)
     }
   }
 
   // Find the root of the set containing the variable
   find(variable: string): string {
     if (!this.parent.has(variable)) {
-      this.makeSet(variable);
+      this.makeSet(variable)
     }
 
-    const parent = this.parent.get(variable)!;
+    const parent = this.parent.get(variable)!
     if (parent !== variable) {
       // Path compression
-      const root = this.find(parent);
-      this.parent.set(variable, root);
-      return root;
+      const root = this.find(parent)
+      this.parent.set(variable, root)
+      return root
     }
-    return variable;
+    return variable
   }
 
   // Union two sets by rank
   union(var1: string, var2: string): void {
-    const root1 = this.find(var1);
-    const root2 = this.find(var2);
+    const root1 = this.find(var1)
+    const root2 = this.find(var2)
 
-    if (root1 === root2) return;
+    if (root1 === root2) return
 
-    const rank1 = this.rank.get(root1) || 0;
-    const rank2 = this.rank.get(root2) || 0;
+    const rank1 = this.rank.get(root1) || 0
+    const rank2 = this.rank.get(root2) || 0
 
     if (rank1 < rank2) {
-      this.parent.set(root1, root2);
+      this.parent.set(root1, root2)
     } else if (rank1 > rank2) {
-      this.parent.set(root2, root1);
+      this.parent.set(root2, root1)
     } else {
-      this.parent.set(root2, root1);
-      this.rank.set(root1, rank1 + 1);
+      this.parent.set(root2, root1)
+      this.rank.set(root1, rank1 + 1)
     }
   }
 
   // Get all equivalence classes in a single grouping pass (each variable is
   // routed to its root's set once — O(n·α(n)) rather than O(n²)).
   getAllEquivalenceClasses(): Map<string, Set<string>> {
-    const classes = new Map<string, Set<string>>();
+    const classes = new Map<string, Set<string>>()
 
     for (const variable of this.parent.keys()) {
-      const root = this.find(variable);
-      let members = classes.get(root);
+      const root = this.find(variable)
+      let members = classes.get(root)
       if (!members) {
-        members = new Set<string>();
-        classes.set(root, members);
+        members = new Set<string>()
+        classes.set(root, members)
       }
-      members.add(variable);
+      members.add(variable)
     }
 
-    return classes;
+    return classes
   }
 }
 
@@ -95,16 +96,16 @@ class UnionFind {
  * Build variable equivalence classes from coupling rules using union-find
  */
 export function buildVarEquivalences(file: EsmFile): Map<string, Set<string>> {
-  const unionFind = new UnionFind();
+  const unionFind = new UnionFind()
 
   // Process all coupling entries
   if (file.coupling) {
     for (const coupling of file.coupling) {
-      processCouplingEntry(coupling, unionFind);
+      processCouplingEntry(coupling, unionFind)
     }
   }
 
-  return unionFind.getAllEquivalenceClasses();
+  return unionFind.getAllEquivalenceClasses()
 }
 
 /**
@@ -114,33 +115,33 @@ function processCouplingEntry(coupling: CouplingEntry, unionFind: UnionFind): vo
   switch (coupling.type) {
     case 'variable_map':
       // variable_map entries merge from↔to
-      unionFind.union(coupling.from, coupling.to);
-      break;
+      unionFind.union(coupling.from, coupling.to)
+      break
 
     case 'operator_compose':
       // operator_compose translate entries merge mapped variables
       if (coupling.translate) {
         for (const [fromVar, toTarget] of Object.entries(coupling.translate)) {
-          const toVar = typeof toTarget === 'string' ? toTarget : toTarget.var;
-          unionFind.union(fromVar, toVar);
+          const toVar = typeof toTarget === 'string' ? toTarget : toTarget.var
+          unionFind.union(fromVar, toVar)
         }
       }
-      break;
+      break
 
     case 'couple':
       // Process connector equations for equivalence
       if (coupling.connector?.equations) {
         for (const equation of coupling.connector.equations) {
           // Couple connectors create equivalence relationships
-          unionFind.union(equation.from, equation.to);
+          unionFind.union(equation.from, equation.to)
         }
       }
-      break;
+      break
 
     // Other coupling types don't create variable equivalences
     case 'callback':
     case 'event':
-      break;
+      break
   }
 }
 
@@ -155,41 +156,41 @@ function processCouplingEntry(coupling: CouplingEntry, unionFind: UnionFind): vo
 export function normalizeScopedReference(
   varName: string,
   currentModelContext?: string,
-  scopingMode: ScopingMode = 'model'
+  scopingMode: ScopingMode = 'model',
 ): string[] {
-  const normalized: string[] = [];
+  const normalized: string[] = []
 
   // For equation mode, only return the literal name
   if (scopingMode === 'equation') {
-    normalized.push(varName);
-    return normalized;
+    normalized.push(varName)
+    return normalized
   }
 
   // Always add the literal reference
-  normalized.push(varName);
+  normalized.push(varName)
 
   // If it doesn't contain a dot and we have model context, add scoped version
   if (!varName.includes('.') && currentModelContext && scopingMode !== 'file') {
-    normalized.push(`${currentModelContext}.${varName}`);
+    normalized.push(`${currentModelContext}.${varName}`)
   }
 
   // For file mode, we can add additional equivalences based on all models
   // This would require the file structure to determine all possible scoped references
 
-  return normalized;
+  return normalized
 }
 
 // Context for the highlight system
-const HighlightContext = createContext<HighlightContextValue>();
+const HighlightContext = createContext<HighlightContextValue>()
 
 /**
  * Provider component props
  */
 export interface HighlightProviderProps {
-  children: JSX.Element;
-  file: EsmFile;
-  currentModelContext?: string;
-  scopingMode?: ScopingMode;
+  children: JSX.Element
+  file: EsmFile
+  currentModelContext?: string
+  scopingMode?: ScopingMode
 }
 
 /**
@@ -200,25 +201,23 @@ export function HighlightProvider(props: HighlightProviderProps) {
   const contextValue = createHighlightContext(
     () => props.file,
     () => props.currentModelContext,
-    () => props.scopingMode ?? 'model'
-  );
+    () => props.scopingMode ?? 'model',
+  )
 
   return (
-    <HighlightContext.Provider value={contextValue}>
-      {props.children}
-    </HighlightContext.Provider>
-  );
+    <HighlightContext.Provider value={contextValue}>{props.children}</HighlightContext.Provider>
+  )
 }
 
 /**
  * Hook to access the highlight context
  */
 export function useHighlightContext(): HighlightContextValue {
-  const context = useContext(HighlightContext);
+  const context = useContext(HighlightContext)
   if (!context) {
-    throw new Error('useHighlightContext must be used within a HighlightProvider');
+    throw new Error('useHighlightContext must be used within a HighlightProvider')
   }
-  return context;
+  return context
 }
 
 /**
@@ -231,26 +230,26 @@ function shouldIncludeInHighlighting(
   variable: string,
   hoveredVariable: string,
   scopingMode: ScopingMode,
-  _currentModelContext?: string
+  _currentModelContext?: string,
 ): boolean {
   // Only 'equation' mode restricts to exact literal matches within the current
   // equation. 'model' and 'file' both include every equivalent variable (so
   // coupling relationships across models stay highlighted).
-  return scopingMode === 'equation' ? variable === hoveredVariable : true;
+  return scopingMode === 'equation' ? variable === hoveredVariable : true
 }
 
 /**
  * Utility function to check if a variable is highlighted (O(1) lookup)
  */
 export function isHighlighted(variable: string, highlightedVars: Set<string>): boolean {
-  return highlightedVars.has(variable);
+  return highlightedVars.has(variable)
 }
 
 /** A value that may be provided directly or as a reactive accessor */
-type MaybeAccessor<T> = T | Accessor<T>;
+type MaybeAccessor<T> = T | Accessor<T>
 
 function access<T>(value: MaybeAccessor<T>): T {
-  return typeof value === 'function' ? (value as Accessor<T>)() : value;
+  return typeof value === 'function' ? (value as Accessor<T>)() : value
 }
 
 /**
@@ -264,47 +263,47 @@ function access<T>(value: MaybeAccessor<T>): T {
 export function createHighlightContext(
   file: MaybeAccessor<EsmFile>,
   currentModelContext?: MaybeAccessor<string | undefined>,
-  scopingMode: MaybeAccessor<ScopingMode> = 'model'
+  scopingMode: MaybeAccessor<ScopingMode> = 'model',
 ): HighlightContextValue {
-  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
-  const equivalences = createMemo(() => buildVarEquivalences(access(file)));
+  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null)
+  const equivalences = createMemo(() => buildVarEquivalences(access(file)))
 
   const highlightedVars = createMemo(() => {
-    const hovered = hoveredVar();
-    if (!hovered) return new Set<string>();
+    const hovered = hoveredVar()
+    if (!hovered) return new Set<string>()
 
-    const equiv = equivalences();
-    const modelContext = access(currentModelContext);
-    const mode = access(scopingMode);
-    const normalizedRefs = normalizeScopedReference(hovered, modelContext, mode);
-    const allEquivalent = new Set<string>();
+    const equiv = equivalences()
+    const modelContext = access(currentModelContext)
+    const mode = access(scopingMode)
+    const normalizedRefs = normalizeScopedReference(hovered, modelContext, mode)
+    const allEquivalent = new Set<string>()
 
     for (const ref of normalizedRefs) {
       for (const [, equivalentSet] of equiv.entries()) {
         if (equivalentSet.has(ref)) {
           for (const equivalent of equivalentSet) {
             if (shouldIncludeInHighlighting(equivalent, hovered, mode, modelContext)) {
-              allEquivalent.add(equivalent);
+              allEquivalent.add(equivalent)
             }
           }
-          break;
+          break
         }
       }
     }
 
     for (const ref of normalizedRefs) {
       if (shouldIncludeInHighlighting(ref, hovered, mode, modelContext)) {
-        allEquivalent.add(ref);
+        allEquivalent.add(ref)
       }
     }
 
-    return allEquivalent;
-  });
+    return allEquivalent
+  })
 
   return {
     hoveredVar,
     setHoveredVar,
     highlightedVars,
     equivalences,
-  };
+  }
 }

@@ -7,17 +7,17 @@
  * by readonly themselves).
  */
 
-import { Component, JSX } from 'solid-js';
+import type { Component, JSX } from 'solid-js'
 
 export interface EmptyStateProps {
   /** Emoji/icon shown above the message. */
-  icon: string;
+  icon: string
 
   /** Message describing what is empty. */
-  text: string;
+  text: string
 
   /** Optional call-to-action buttons. */
-  children?: JSX.Element;
+  children?: JSX.Element
 }
 
 export const EmptyState: Component<EmptyStateProps> = (props) => (
@@ -26,6 +26,6 @@ export const EmptyState: Component<EmptyStateProps> = (props) => (
     <div class="empty-text">{props.text}</div>
     {props.children}
   </div>
-);
+)
 
-export default EmptyState;
+export default EmptyState

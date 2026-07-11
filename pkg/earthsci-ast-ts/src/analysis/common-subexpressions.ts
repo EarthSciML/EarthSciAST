@@ -116,11 +116,15 @@ export function findCommonSubexpressions(
   expr: Expr,
   minComplexity: number = DEFAULT_MIN_COMPLEXITY,
 ): CommonSubexpression[] {
-  return collectCommonSubexpressions([{ expr, name: 'root' }], minComplexity, (_name, path, context) => ({
-    path: [...path],
-    description: `Path: ${path.join(' -> ')}`,
-    context,
-  }))
+  return collectCommonSubexpressions(
+    [{ expr, name: 'root' }],
+    minComplexity,
+    (_name, path, context) => ({
+      path: [...path],
+      description: `Path: ${path.join(' -> ')}`,
+      context,
+    }),
+  )
 }
 
 /**

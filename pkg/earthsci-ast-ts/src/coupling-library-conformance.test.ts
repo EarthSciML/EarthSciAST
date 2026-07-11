@@ -84,10 +84,16 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     expect(expanded).toHaveLength(10)
     const first = expanded.slice(0, 5) as any[]
     const second = expanded.slice(5) as any[]
-    expect(first.every((e) => e.from.startsWith('FuelModelLookup.') && e.to.startsWith('RothermelFireSpread.'))).toBe(
-      true,
-    )
-    expect(second.every((e) => e.from.startsWith('LandfireFuel.') && e.to.startsWith('RothermelStatic.'))).toBe(true)
+    expect(
+      first.every(
+        (e) => e.from.startsWith('FuelModelLookup.') && e.to.startsWith('RothermelFireSpread.'),
+      ),
+    ).toBe(true)
+    expect(
+      second.every(
+        (e) => e.from.startsWith('LandfireFuel.') && e.to.startsWith('RothermelStatic.'),
+      ),
+    ).toBe(true)
   })
 
   // --- Full surface: every §10.10.2 occurrence site is rewritten ----------
@@ -197,12 +203,16 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
   it('subsystem ref targeting a coupling library -> subsystem_ref_is_coupling_library', async () => {
     const p = cl('subsystem_ref_to_library.esm')
     const f = loadPath(p)
-    expect(await errCodeAsync(() => resolveSubsystemRefs(f, path.dirname(p)))).toBe('subsystem_ref_is_coupling_library')
+    expect(await errCodeAsync(() => resolveSubsystemRefs(f, path.dirname(p)))).toBe(
+      'subsystem_ref_is_coupling_library',
+    )
   })
 
   it('template import targeting a coupling library -> template_import_is_coupling_library', () => {
     const p = cl('template_import_to_library.esm')
-    expect(errCode(() => load(readText(p), { basePath: path.dirname(p) }))).toBe('template_import_is_coupling_library')
+    expect(errCode(() => load(readText(p), { basePath: path.dirname(p) }))).toBe(
+      'template_import_is_coupling_library',
+    )
   })
 
   // --- coupletype removal (schema failure) --------------------------------

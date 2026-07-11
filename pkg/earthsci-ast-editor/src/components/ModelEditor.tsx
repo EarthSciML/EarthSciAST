@@ -17,41 +17,48 @@
  * add/edit/remove handlers that produce new Model objects.
  */
 
-import { Component, createSignal, Show } from 'solid-js';
-import type { Model, ModelVariable, Equation, ContinuousEvent, DiscreteEvent } from '@earthsciml/ast';
-import { ExpressionPalette } from './ExpressionPalette';
-import { VariablesPanel } from './VariablesPanel';
-import { EquationsPanel } from './EquationsPanel';
-import { EventsPanel } from './EventsPanel';
+import type { Component } from 'solid-js'
+import { createSignal, Show } from 'solid-js'
+import type {
+  Model,
+  ModelVariable,
+  Equation,
+  ContinuousEvent,
+  DiscreteEvent,
+} from '@earthsciml/ast'
+import { ExpressionPalette } from './ExpressionPalette'
+import { VariablesPanel } from './VariablesPanel'
+import { EquationsPanel } from './EquationsPanel'
+import { EventsPanel } from './EventsPanel'
 import {
   EXPRESSION_PLACEHOLDER,
   CONDITION_PLACEHOLDER,
   TRIGGER_PLACEHOLDER,
   VARIABLE_PLACEHOLDER,
-  VALUE_PLACEHOLDER
-} from '../constants';
+  VALUE_PLACEHOLDER,
+} from '../constants'
 
 export interface ModelEditorProps {
   /** The model to display and edit */
-  model: Model;
+  model: Model
 
   /** Display name of the model (in the ESM schema the name is the key in the `models` record) */
-  name?: string;
+  name?: string
 
   /** Optional display description for the model */
-  description?: string;
+  description?: string
 
   /** Callback when the model is modified */
-  onModelChange?: (newModel: Model) => void;
+  onModelChange?: (newModel: Model) => void
 
   /** Whether the editor is in read-only mode */
-  readonly?: boolean;
+  readonly?: boolean
 
   /** CSS class for styling */
-  class?: string;
+  class?: string
 
   /** Whether to show the expression palette */
-  showPalette?: boolean;
+  showPalette?: boolean
 }
 
 /**
@@ -60,61 +67,61 @@ export interface ModelEditorProps {
 export const ModelEditor: Component<ModelEditorProps> = (props) => {
   // Highlighting is driven by hovering variables in the variables panel:
   // the hovered variable is highlighted in the equation list.
-  const [highlightedVars, setHighlightedVars] = createSignal<Set<string>>(new Set());
+  const [highlightedVars, setHighlightedVars] = createSignal<Set<string>>(new Set())
 
   const handleVariableHover = (name: string | null) => {
-    setHighlightedVars(name ? new Set([name]) : new Set<string>());
-  };
+    setHighlightedVars(name ? new Set([name]) : new Set<string>())
+  }
 
   // Handle model modifications
   const handleModelChange = (changes: Partial<Model>) => {
-    if (props.readonly || !props.onModelChange) return;
+    if (props.readonly || !props.onModelChange) return
 
-    const newModel = { ...props.model, ...changes };
-    props.onModelChange(newModel);
-  };
+    const newModel = { ...props.model, ...changes }
+    props.onModelChange(newModel)
+  }
 
   // Variable management handlers
   const handleAddVariable = (name: string, variable: ModelVariable) => {
-    const newVariables = { ...(props.model.variables || {}), [name]: variable };
-    handleModelChange({ variables: newVariables });
-  };
+    const newVariables = { ...(props.model.variables || {}), [name]: variable }
+    handleModelChange({ variables: newVariables })
+  }
 
   const handleEditVariable = (oldName: string, newName: string, variable: ModelVariable) => {
-    const updatedVariables = { ...(props.model.variables || {}) };
+    const updatedVariables = { ...(props.model.variables || {}) }
     if (newName !== oldName) {
-      delete updatedVariables[oldName];
+      delete updatedVariables[oldName]
     }
-    updatedVariables[newName] = variable;
-    handleModelChange({ variables: updatedVariables });
-  };
+    updatedVariables[newName] = variable
+    handleModelChange({ variables: updatedVariables })
+  }
 
   const handleRemoveVariable = (name: string) => {
-    const updatedVariables = { ...(props.model.variables || {}) };
-    delete updatedVariables[name];
-    handleModelChange({ variables: updatedVariables });
-  };
+    const updatedVariables = { ...(props.model.variables || {}) }
+    delete updatedVariables[name]
+    handleModelChange({ variables: updatedVariables })
+  }
 
   // Equation management handlers
   const handleAddEquation = () => {
     const newEquation: Equation = {
       lhs: EXPRESSION_PLACEHOLDER,
-      rhs: 0
-    };
-    const newEquations = [...(props.model.equations || []), newEquation];
-    handleModelChange({ equations: newEquations });
-  };
+      rhs: 0,
+    }
+    const newEquations = [...(props.model.equations || []), newEquation]
+    handleModelChange({ equations: newEquations })
+  }
 
   const handleEditEquation = (index: number, equation: Equation) => {
-    const newEquations = [...(props.model.equations || [])];
-    newEquations[index] = equation;
-    handleModelChange({ equations: newEquations });
-  };
+    const newEquations = [...(props.model.equations || [])]
+    newEquations[index] = equation
+    handleModelChange({ equations: newEquations })
+  }
 
   const handleRemoveEquation = (index: number) => {
-    const newEquations = (props.model.equations || []).filter((_, i) => i !== index);
-    handleModelChange({ equations: newEquations });
-  };
+    const newEquations = (props.model.equations || []).filter((_, i) => i !== index)
+    handleModelChange({ equations: newEquations })
+  }
 
   // Event management handlers
   const handleAddContinuousEvent = (name: string, description: string) => {
@@ -122,49 +129,53 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
       name,
       description,
       conditions: [CONDITION_PLACEHOLDER],
-      affects: [{
-        lhs: VARIABLE_PLACEHOLDER,
-        rhs: VALUE_PLACEHOLDER
-      }]
-    };
+      affects: [
+        {
+          lhs: VARIABLE_PLACEHOLDER,
+          rhs: VALUE_PLACEHOLDER,
+        },
+      ],
+    }
 
-    const newContinuousEvents = [...(props.model.continuous_events || []), newEvent];
-    handleModelChange({ continuous_events: newContinuousEvents });
-  };
+    const newContinuousEvents = [...(props.model.continuous_events || []), newEvent]
+    handleModelChange({ continuous_events: newContinuousEvents })
+  }
 
   const handleAddDiscreteEvent = (name: string, description: string) => {
     const newEvent: DiscreteEvent = {
       name,
       description,
       trigger: { type: 'condition', expression: TRIGGER_PLACEHOLDER },
-      affects: [{
-        lhs: VARIABLE_PLACEHOLDER,
-        rhs: VALUE_PLACEHOLDER
-      }]
-    };
+      affects: [
+        {
+          lhs: VARIABLE_PLACEHOLDER,
+          rhs: VALUE_PLACEHOLDER,
+        },
+      ],
+    }
 
-    const newDiscreteEvents = [...(props.model.discrete_events || []), newEvent];
-    handleModelChange({ discrete_events: newDiscreteEvents });
-  };
+    const newDiscreteEvents = [...(props.model.discrete_events || []), newEvent]
+    handleModelChange({ discrete_events: newDiscreteEvents })
+  }
 
   const handleEditContinuousEvent = (index: number, event: ContinuousEvent) => {
-    const updatedEvents = [...(props.model.continuous_events || [])];
-    updatedEvents[index] = event;
-    handleModelChange({ continuous_events: updatedEvents });
-  };
+    const updatedEvents = [...(props.model.continuous_events || [])]
+    updatedEvents[index] = event
+    handleModelChange({ continuous_events: updatedEvents })
+  }
 
   const handleEditDiscreteEvent = (index: number, event: DiscreteEvent) => {
-    const updatedEvents = [...(props.model.discrete_events || [])];
-    updatedEvents[index] = event;
-    handleModelChange({ discrete_events: updatedEvents });
-  };
+    const updatedEvents = [...(props.model.discrete_events || [])]
+    updatedEvents[index] = event
+    handleModelChange({ discrete_events: updatedEvents })
+  }
 
   const editorClasses = () => {
-    const classes = ['model-editor'];
-    if (props.readonly) classes.push('readonly');
-    if (props.class) classes.push(props.class);
-    return classes.join(' ');
-  };
+    const classes = ['model-editor']
+    if (props.readonly) classes.push('readonly')
+    if (props.class) classes.push(props.class)
+    return classes.join(' ')
+  }
 
   return (
     <div class={editorClasses()}>
@@ -212,15 +223,12 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
         {/* Expression palette sidebar */}
         <Show when={props.showPalette && !props.readonly}>
           <div class="palette-sidebar">
-            <ExpressionPalette
-              currentModel={props.model}
-              visible={true}
-            />
+            <ExpressionPalette currentModel={props.model} visible={true} />
           </div>
         </Show>
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default ModelEditor;
+export default ModelEditor

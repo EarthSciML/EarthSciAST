@@ -3,23 +3,24 @@
  * with an EquationEditor and a remove control.
  */
 
-import { Component, createSignal, For, Show } from 'solid-js';
-import type { Equation } from '@earthsciml/ast';
-import { EquationEditor } from './EquationEditor';
-import { CollapsiblePanel } from './CollapsiblePanel';
-import { EmptyState } from './EmptyState';
+import type { Component } from 'solid-js'
+import { createSignal, For, Show } from 'solid-js'
+import type { Equation } from '@earthsciml/ast'
+import { EquationEditor } from './EquationEditor'
+import { CollapsiblePanel } from './CollapsiblePanel'
+import { EmptyState } from './EmptyState'
 
 export interface EquationsPanelProps {
-  equations?: Equation[];
-  highlightedVars?: Set<string>;
-  onAddEquation?: () => void;
-  onEditEquation?: (index: number, equation: Equation) => void;
-  onRemoveEquation?: (index: number) => void;
-  readonly?: boolean;
+  equations?: Equation[]
+  highlightedVars?: Set<string>
+  onAddEquation?: () => void
+  onEditEquation?: (index: number, equation: Equation) => void
+  onRemoveEquation?: (index: number) => void
+  readonly?: boolean
 }
 
 export const EquationsPanel: Component<EquationsPanelProps> = (props) => {
-  const [isExpanded, setIsExpanded] = createSignal(true);
+  const [isExpanded, setIsExpanded] = createSignal(true)
 
   return (
     <CollapsiblePanel
@@ -32,7 +33,10 @@ export const EquationsPanel: Component<EquationsPanelProps> = (props) => {
         <Show when={!props.readonly}>
           <button
             class="add-btn"
-            onClick={(e) => { e.stopPropagation(); props.onAddEquation?.(); }}
+            onClick={(e) => {
+              e.stopPropagation()
+              props.onAddEquation?.()
+            }}
             title="Add new equation"
             aria-label="Add new equation"
           >
@@ -75,7 +79,7 @@ export const EquationsPanel: Component<EquationsPanelProps> = (props) => {
         </EmptyState>
       </Show>
     </CollapsiblePanel>
-  );
-};
+  )
+}
 
-export default EquationsPanel;
+export default EquationsPanel

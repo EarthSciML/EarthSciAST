@@ -5,16 +5,17 @@
  * Uses CSS for the radical symbol and proper content alignment.
  */
 
-import { Component, JSX } from 'solid-js';
-import { MathLayoutProps, buildClasses } from './shared';
-import './radical.css';
+import type { Component, JSX } from 'solid-js'
+import type { MathLayoutProps } from './shared'
+import { buildClasses } from './shared'
+import './radical.css'
 
 export interface RadicalProps extends MathLayoutProps {
   /** The content under the radical */
-  content: JSX.Element;
+  content: JSX.Element
 
   /** The index of the radical (for nth roots, default is 2 for square root) */
-  index?: JSX.Element;
+  index?: JSX.Element
 }
 
 /**
@@ -23,7 +24,7 @@ export interface RadicalProps extends MathLayoutProps {
  */
 export const Radical: Component<RadicalProps> = (props) => {
   const classes = () =>
-    buildClasses('esm-radical', !!props.index && 'esm-radical-with-index', props.class);
+    buildClasses('esm-radical', !!props.index && 'esm-radical-with-index', props.class)
 
   return (
     <span
@@ -32,17 +33,11 @@ export const Radical: Component<RadicalProps> = (props) => {
       onMouseEnter={props.onMouseEnter}
       onMouseLeave={props.onMouseLeave}
       role="math"
-      aria-label={props.index ? "nth root" : "square root"}
+      aria-label={props.index ? 'nth root' : 'square root'}
     >
-      {props.index && (
-        <span class="esm-radical-index">
-          {props.index}
-        </span>
-      )}
+      {props.index && <span class="esm-radical-index">{props.index}</span>}
       <span class="esm-radical-symbol">√</span>
-      <span class="esm-radical-content">
-        {props.content}
-      </span>
+      <span class="esm-radical-content">{props.content}</span>
     </span>
-  );
-};
+  )
+}

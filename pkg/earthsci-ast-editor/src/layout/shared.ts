@@ -14,14 +14,14 @@
  */
 export interface MathLayoutProps {
   /** Additional CSS classes to apply */
-  class?: string;
+  class?: string
 
   /** Callback for click events */
-  onClick?: (e: MouseEvent) => void;
+  onClick?: (e: MouseEvent) => void
 
   /** Callback for hover events */
-  onMouseEnter?: (e: MouseEvent) => void;
-  onMouseLeave?: (e: MouseEvent) => void;
+  onMouseEnter?: (e: MouseEvent) => void
+  onMouseLeave?: (e: MouseEvent) => void
 }
 
 /**
@@ -36,9 +36,9 @@ export function buildClasses(
   base: string,
   ...conditional: Array<string | false | null | undefined>
 ): string {
-  const classes = [base];
+  const classes = [base]
   for (const cls of conditional) {
-    if (cls) classes.push(cls);
+    if (cls) classes.push(cls)
   }
-  return classes.join(' ');
+  return classes.join(' ')
 }

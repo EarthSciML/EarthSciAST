@@ -7,12 +7,13 @@
  * This is distinct from EquationEditor which shows "left = right" format.
  */
 
-import { Component, createSignal, Show } from 'solid-js';
-import type { Expression } from '@earthsciml/ast';
-import { ExpressionNode } from './ExpressionNode';
-import { ExpressionPalette } from './ExpressionPalette';
-import { createMergedHighlight } from './merged-highlight';
-import { replaceExpressionAtPath } from '../primitives/path-utils';
+import type { Component } from 'solid-js'
+import { createSignal, Show } from 'solid-js'
+import type { Expression } from '@earthsciml/ast'
+import { ExpressionNode } from './ExpressionNode'
+import { ExpressionPalette } from './ExpressionPalette'
+import { createMergedHighlight } from './merged-highlight'
+import { replaceExpressionAtPath } from '../primitives/path-utils'
 
 export interface ExpressionEditorProps {
   /**
@@ -20,81 +21,81 @@ export interface ExpressionEditorProps {
    * owns the expression and receives edits through {@link onChange}. (The name
    * is retained for API compatibility; it is not merely an initial value.)
    */
-  initialExpression: Expression;
+  initialExpression: Expression
 
   /** Callback when the expression is modified */
-  onChange?: (newExpression: Expression) => void;
+  onChange?: (newExpression: Expression) => void
 
   /** Currently highlighted variable equivalence class */
-  highlightedVars?: Set<string>;
+  highlightedVars?: Set<string>
 
   /**
    * Whether the editor is read-only. Defaults to `false` (editing enabled);
    * pass `true` for a read-only view. Matches the sibling editors' `readonly`
    * convention.
    */
-  readonly?: boolean;
+  readonly?: boolean
 
   /** Whether to show the expression palette */
-  showPalette?: boolean;
+  showPalette?: boolean
 
   /** CSS class for styling */
-  class?: string;
+  class?: string
 
   /** Unique identifier for this editor */
-  id?: string;
+  id?: string
 }
 
 /**
  * Main ExpressionEditor component
  */
 export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
-  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
-  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
-  const [showPalettePanel, setShowPalettePanel] = createSignal(props.showPalette ?? false);
+  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null)
+  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null)
+  const [showPalettePanel, setShowPalettePanel] = createSignal(props.showPalette ?? false)
 
   // Base highlight set merged with the locally hovered variable.
-  const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar);
+  const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar)
 
   // Handle selection of expression nodes
   const handleSelect = (path: (string | number)[]) => {
-    setSelectedPath(path);
-  };
+    setSelectedPath(path)
+  }
 
   // Handle hovering over variables
   const handleHoverVar = (varName: string | null) => {
-    setHoveredVar(varName);
-  };
+    setHoveredVar(varName)
+  }
 
   // Handle replacement of expression parts. Paths are pure expression-dialect
   // (rooted at the expression itself), so the shared path-utils replace applies
   // directly. Controlled: the new value flows out via onChange, not internal
   // state.
   const handleReplace = (path: (string | number)[], newExpr: Expression) => {
-    if (props.readonly) return;
+    if (props.readonly) return
 
-    const updatedExpression = replaceExpressionAtPath(props.initialExpression, path, newExpr);
-    props.onChange?.(updatedExpression);
-  };
+    const updatedExpression = replaceExpressionAtPath(props.initialExpression, path, newExpr)
+    props.onChange?.(updatedExpression)
+  }
 
   // Handle palette insertion
   const handleInsertExpression = (expr: Expression) => {
-    const selected = selectedPath();
+    const selected = selectedPath()
     if (selected) {
-      handleReplace(selected, expr);
+      handleReplace(selected, expr)
     } else {
       // If nothing selected, replace the entire expression
-      handleReplace([], expr);
+      handleReplace([], expr)
     }
-    setShowPalettePanel(false);
-  };
+    setShowPalettePanel(false)
+  }
 
   const editorClasses = () => {
-    const classes = ['expression-editor'];
-    if (props.readonly) classes.push('readonly');
-    if (props.class) classes.push(props.class);
-    return classes.join(' ');
-  };
+    const classes = ['expression-editor']
+    if (props.readonly) classes.push('readonly')
+    if (props.class) classes.push(props.class)
+    return classes.join(' ')
+  }
 
   return (
     <div class={editorClasses()} id={props.id}>
@@ -116,7 +117,7 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
         <Show when={props.showPalette && !props.readonly}>
           <button
             class="palette-toggle-btn"
-            onClick={() => setShowPalettePanel(prev => !prev)}
+            onClick={() => setShowPalettePanel((prev) => !prev)}
             title="Toggle expression palette"
             aria-label="Toggle expression palette"
           >
@@ -136,7 +137,7 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
         </div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
-export default ExpressionEditor;
+export default ExpressionEditor

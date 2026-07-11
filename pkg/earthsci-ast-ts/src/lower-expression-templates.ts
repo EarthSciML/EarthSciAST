@@ -654,7 +654,11 @@ export function composeTemplateBodies(templates: Record<string, unknown>, scope:
   for (const name of order) {
     if (refs[name]!.length === 0) continue
     const decl = templates[name] as { body: Json }
-    decl.body = inlineApplies(decl.body, templates as Templates, `${scope}.expression_templates.${name}`)
+    decl.body = inlineApplies(
+      decl.body,
+      templates as Templates,
+      `${scope}.expression_templates.${name}`,
+    )
   }
 }
 

@@ -106,10 +106,7 @@ interface SubtreeAnalysis {
  * When `costCache` is supplied, each op node's `computationalCost` is recorded
  * (keyed by node reference) so repeated subtree-cost lookups become O(1).
  */
-function computeMetricsTree(
-  expr: Expr,
-  costCache?: Map<ExpressionNode, number>,
-): SubtreeAnalysis {
+function computeMetricsTree(expr: Expr, costCache?: Map<ExpressionNode, number>): SubtreeAnalysis {
   // Leaf: constant (plain number OR tagged NumericLiteral from canonical mode).
   if (numericValue(expr) !== undefined) {
     return { metrics: makeMetrics(0, 0, 0, 1, {}), freeVars: new Set() }

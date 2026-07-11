@@ -153,7 +153,9 @@ describe('Rendering output lock (all display fixtures)', () => {
 
   for (const file of FIXTURE_FILES) {
     it(`renders ${file} identically`, () => {
-      const data = JSON.parse(readFileSync(join(process.cwd(), '../../tests/display', file), 'utf8'))
+      const data = JSON.parse(
+        readFileSync(join(process.cwd(), '../../tests/display', file), 'utf8'),
+      )
       const inputs: unknown[] = []
       collectInputs(data, inputs)
       const rows = inputs.map((input) => ({

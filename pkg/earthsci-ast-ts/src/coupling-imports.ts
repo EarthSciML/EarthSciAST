@@ -120,11 +120,7 @@ function rewriteExprInPlace(expr: unknown, fn: RefFn): unknown {
  * (esm-spec §10.10.2). Mutates `entry` in place (callers pass a clone). Its
  * read-only twin {@link forEachEntryRef} MUST visit the same occurrence set.
  */
-function rewriteEntryInPlace(
-  entry: Record<string, unknown>,
-  structFn: RefFn,
-  exprFn: RefFn,
-): void {
+function rewriteEntryInPlace(entry: Record<string, unknown>, structFn: RefFn, exprFn: RefFn): void {
   switch (entry.type) {
     case 'variable_map':
       if (typeof entry.from === 'string') entry.from = structFn(entry.from)
@@ -171,11 +167,16 @@ function rewriteEntryInPlace(
         if (a.rhs !== undefined) a.rhs = rewriteExprInPlace(a.rhs, exprFn)
         return a
       }
-      if (Array.isArray(entry.affects)) entry.affects = (entry.affects as unknown[]).map(rewriteAffect)
+      if (Array.isArray(entry.affects))
+        entry.affects = (entry.affects as unknown[]).map(rewriteAffect)
       if (Array.isArray(entry.affect_neg)) {
         entry.affect_neg = (entry.affect_neg as unknown[]).map(rewriteAffect)
       }
-      if (isObject(entry.trigger) && entry.trigger.type === 'condition' && entry.trigger.expression !== undefined) {
+      if (
+        isObject(entry.trigger) &&
+        entry.trigger.type === 'condition' &&
+        entry.trigger.expression !== undefined
+      ) {
         entry.trigger.expression = rewriteExprInPlace(entry.trigger.expression, exprFn)
       }
       if (isObject(entry.functional_affect)) {
@@ -271,7 +272,11 @@ function forEachEntryRef(
       }
       if (Array.isArray(entry.affects)) entry.affects.forEach(visitAffect)
       if (Array.isArray(entry.affect_neg)) entry.affect_neg.forEach(visitAffect)
-      if (isObject(entry.trigger) && entry.trigger.type === 'condition' && entry.trigger.expression !== undefined) {
+      if (
+        isObject(entry.trigger) &&
+        entry.trigger.type === 'condition' &&
+        entry.trigger.expression !== undefined
+      ) {
         forEachExprRef(entry.trigger.expression, exprVisit)
       }
       if (isObject(entry.functional_affect)) {
@@ -341,7 +346,9 @@ function defaultLoadRef(ref: string, basePath: string): unknown {
       `synchronous file access is unavailable in this environment; supply CouplingImportOptions.loadRef (ref '${ref}')`,
     )
   }
-  const fs = getBuiltin.call(proc, 'node:fs') as { readFileSync: (p: string, enc: string) => string }
+  const fs = getBuiltin.call(proc, 'node:fs') as {
+    readFileSync: (p: string, enc: string) => string
+  }
   const path = joinPath(basePath, ref)
   let content: string
   try {
@@ -497,8 +504,7 @@ function resolvesToComponent(file: EsmFile, value: string): boolean {
   const segs = value.split('.')
   const top = segs[0]
   const f = file as unknown as Record<string, Record<string, unknown> | undefined>
-  let node: unknown =
-    f.models?.[top] ?? f.reaction_systems?.[top] ?? f.data_loaders?.[top]
+  let node: unknown = f.models?.[top] ?? f.reaction_systems?.[top] ?? f.data_loaders?.[top]
   if (!isObject(node)) return false
   for (let i = 1; i < segs.length; i++) {
     const subs = node.subsystems
@@ -523,7 +529,9 @@ export function expandCouplingImports(
 ): CouplingEntry[] | undefined {
   const coupling = file.coupling
   if (!coupling) return undefined
-  if (!coupling.some((e) => isObject(e) && (e as { type?: unknown }).type === COUPLING_IMPORT_TYPE)) {
+  if (
+    !coupling.some((e) => isObject(e) && (e as { type?: unknown }).type === COUPLING_IMPORT_TYPE)
+  ) {
     return coupling
   }
   const loadRef = options.loadRef ?? defaultLoadRef

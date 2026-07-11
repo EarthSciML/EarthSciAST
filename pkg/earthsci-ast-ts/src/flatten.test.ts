@@ -118,7 +118,10 @@ describe('flatten', () => {
   })
 
   it('applies the factor scaling for additive/multiplicative/conversion_factor transforms', () => {
-    const makeFile = (transform: 'additive' | 'multiplicative' | 'conversion_factor', factor?: number) =>
+    const makeFile = (
+      transform: 'additive' | 'multiplicative' | 'conversion_factor',
+      factor?: number,
+    ) =>
       ({
         esm: '0.1.0',
         metadata: { name: 'test' },

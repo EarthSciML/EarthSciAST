@@ -9,34 +9,39 @@
  * - Drag-and-drop integration with expression tree
  */
 
-import { Component, createSignal, createMemo, For, Show } from 'solid-js';
-import type { Expression, Model } from '@earthsciml/ast';
-import { EXPRESSION_TEMPLATES, CATEGORY_CONFIG, type ExpressionTemplate } from './expression-templates';
+import type { Component } from 'solid-js'
+import { createSignal, createMemo, For, Show } from 'solid-js'
+import type { Expression, Model } from '@earthsciml/ast'
+import {
+  EXPRESSION_TEMPLATES,
+  CATEGORY_CONFIG,
+  type ExpressionTemplate,
+} from './expression-templates'
 
 export interface ExpressionPaletteProps {
   /** Current model for context-aware suggestions */
-  currentModel?: Model;
+  currentModel?: Model
 
   /** Callback when an expression template is inserted */
-  onInsertExpression?: (expr: Expression) => void;
+  onInsertExpression?: (expr: Expression) => void
 
   /** Whether the palette is visible */
-  visible?: boolean;
+  visible?: boolean
 
   /** CSS class for styling */
-  class?: string;
+  class?: string
 
   /** Quick insert mode (triggered by '/' shortcut) */
-  quickInsertMode?: boolean;
+  quickInsertMode?: boolean
 
   /** Search query for filtering expressions */
-  searchQuery?: string;
+  searchQuery?: string
 
   /** Callback when search query changes */
-  onSearchQueryChange?: (query: string) => void;
+  onSearchQueryChange?: (query: string) => void
 
   /** Callback when quick insert mode should be closed */
-  onCloseQuickInsert?: () => void;
+  onCloseQuickInsert?: () => void
 }
 
 /**
@@ -44,30 +49,33 @@ export interface ExpressionPaletteProps {
  * avoid colliding with the `ExpressionTemplate` data interface.
  */
 const TemplateCard: Component<{
-  template: ExpressionTemplate;
-  onInsert: (expr: Expression) => void;
+  template: ExpressionTemplate
+  onInsert: (expr: Expression) => void
 }> = (props) => {
-  const [isDragging, setIsDragging] = createSignal(false);
+  const [isDragging, setIsDragging] = createSignal(false)
 
   const handleDragStart = (e: DragEvent) => {
     if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = 'copy';
-      e.dataTransfer.setData('application/json', JSON.stringify({
-        type: 'expression-template',
-        expression: props.template.expression,
-        templateId: props.template.id
-      }));
+      e.dataTransfer.effectAllowed = 'copy'
+      e.dataTransfer.setData(
+        'application/json',
+        JSON.stringify({
+          type: 'expression-template',
+          expression: props.template.expression,
+          templateId: props.template.id,
+        }),
+      )
     }
-    setIsDragging(true);
-  };
+    setIsDragging(true)
+  }
 
   const handleDragEnd = () => {
-    setIsDragging(false);
-  };
+    setIsDragging(false)
+  }
 
   const handleClick = () => {
-    props.onInsert(props.template.expression);
-  };
+    props.onInsert(props.template.expression)
+  }
 
   return (
     <div
@@ -84,20 +92,20 @@ const TemplateCard: Component<{
       <div class="template-label">{props.template.label}</div>
       <div class="template-description">{props.template.description}</div>
     </div>
-  );
-};
+  )
+}
 
 /**
  * Component for context-aware suggestions from current model
  */
 const ContextSuggestions: Component<{
-  model?: Model;
-  onInsert: (expr: Expression) => void;
+  model?: Model
+  onInsert: (expr: Expression) => void
 }> = (props) => {
   const suggestions = createMemo(() => {
-    if (!props.model) return [];
+    if (!props.model) return []
 
-    const items: { label: string; expression: Expression; type: 'variable' | 'parameter' }[] = [];
+    const items: { label: string; expression: Expression; type: 'variable' | 'parameter' }[] = []
 
     // Add model variables (keyed by name in the ESM schema)
     if (props.model.variables) {
@@ -105,13 +113,13 @@ const ContextSuggestions: Component<{
         items.push({
           label: name,
           expression: name,
-          type: variable.type === 'parameter' ? 'parameter' : 'variable'
-        });
-      });
+          type: variable.type === 'parameter' ? 'parameter' : 'variable',
+        })
+      })
     }
 
-    return items;
-  });
+    return items
+  })
 
   return (
     <Show when={suggestions().length > 0}>
@@ -139,81 +147,83 @@ const ContextSuggestions: Component<{
         </div>
       </div>
     </Show>
-  );
-};
+  )
+}
 
 /**
  * Main ExpressionPalette component
  */
 export const ExpressionPalette: Component<ExpressionPaletteProps> = (props) => {
-  const [searchInput, setSearchInput] = createSignal('');
+  const [searchInput, setSearchInput] = createSignal('')
 
   // Controlled vs. uncontrolled is decided by a single condition: the presence
   // of `searchQuery` makes the palette controlled (the parent owns the value and
   // receives writes via `onSearchQueryChange`); otherwise it self-manages.
-  const isControlled = () => props.searchQuery !== undefined;
-  const searchQuery = createMemo(() => (isControlled() ? props.searchQuery ?? '' : searchInput()));
+  const isControlled = () => props.searchQuery !== undefined
+  const searchQuery = createMemo(() => (isControlled() ? (props.searchQuery ?? '') : searchInput()))
 
   // Filter templates based on search query
   const filteredTemplates = createMemo(() => {
-    const query = searchQuery().toLowerCase().trim();
-    if (!query) return EXPRESSION_TEMPLATES;
+    const query = searchQuery().toLowerCase().trim()
+    if (!query) return EXPRESSION_TEMPLATES
 
-    return EXPRESSION_TEMPLATES.filter(template => {
-      return template.label.toLowerCase().includes(query) ||
-             template.description.toLowerCase().includes(query) ||
-             template.keywords.some(keyword => keyword.toLowerCase().includes(query));
-    });
-  });
+    return EXPRESSION_TEMPLATES.filter((template) => {
+      return (
+        template.label.toLowerCase().includes(query) ||
+        template.description.toLowerCase().includes(query) ||
+        template.keywords.some((keyword) => keyword.toLowerCase().includes(query))
+      )
+    })
+  })
 
   // Group templates by category
   const templatesByCategory = createMemo(() => {
-    const groups: Record<string, ExpressionTemplate[]> = {};
+    const groups: Record<string, ExpressionTemplate[]> = {}
 
-    filteredTemplates().forEach(template => {
+    filteredTemplates().forEach((template) => {
       if (!groups[template.category]) {
-        groups[template.category] = [];
+        groups[template.category] = []
       }
-      groups[template.category].push(template);
-    });
+      groups[template.category].push(template)
+    })
 
-    return groups;
-  });
+    return groups
+  })
 
   // Handle insertion of expressions
   const handleInsert = (expr: Expression) => {
-    props.onInsertExpression?.(expr);
+    props.onInsertExpression?.(expr)
 
     // Close quick insert mode after selection
     if (props.quickInsertMode) {
-      props.onCloseQuickInsert?.();
+      props.onCloseQuickInsert?.()
     }
-  };
+  }
 
   // Handle search input changes (writes follow the same controlled-mode
   // condition as the read path above).
   const handleSearchChange = (value: string) => {
     if (isControlled()) {
-      props.onSearchQueryChange?.(value);
+      props.onSearchQueryChange?.(value)
     } else {
-      setSearchInput(value);
+      setSearchInput(value)
     }
-  };
+  }
 
   // Handle keyboard events in quick insert mode
   const handleKeyDown = (e: KeyboardEvent) => {
     if (props.quickInsertMode && e.key === 'Escape') {
-      props.onCloseQuickInsert?.();
+      props.onCloseQuickInsert?.()
     }
-  };
+  }
 
   const paletteClasses = () => {
-    const classes = ['expression-palette'];
-    if (props.quickInsertMode) classes.push('quick-insert-mode');
-    if (props.visible === false) classes.push('hidden');
-    if (props.class) classes.push(props.class);
-    return classes.join(' ');
-  };
+    const classes = ['expression-palette']
+    if (props.quickInsertMode) classes.push('quick-insert-mode')
+    if (props.visible === false) classes.push('hidden')
+    if (props.class) classes.push(props.class)
+    return classes.join(' ')
+  }
 
   return (
     <div class={paletteClasses()} onKeyDown={handleKeyDown}>
@@ -234,16 +244,13 @@ export const ExpressionPalette: Component<ExpressionPaletteProps> = (props) => {
       <div class="palette-content">
         {/* Context-aware suggestions */}
         <Show when={!searchQuery()}>
-          <ContextSuggestions
-            model={props.currentModel}
-            onInsert={handleInsert}
-          />
+          <ContextSuggestions model={props.currentModel} onInsert={handleInsert} />
         </Show>
 
         {/* Expression templates by category */}
         <For each={Object.entries(CATEGORY_CONFIG)}>
           {([categoryKey, categoryInfo]) => {
-            const categoryTemplates = templatesByCategory()[categoryKey] || [];
+            const categoryTemplates = templatesByCategory()[categoryKey] || []
 
             return (
               <Show when={categoryTemplates.length > 0}>
@@ -254,17 +261,12 @@ export const ExpressionPalette: Component<ExpressionPaletteProps> = (props) => {
                   </h4>
                   <div class="templates-grid">
                     <For each={categoryTemplates}>
-                      {(template) => (
-                        <TemplateCard
-                          template={template}
-                          onInsert={handleInsert}
-                        />
-                      )}
+                      {(template) => <TemplateCard template={template} onInsert={handleInsert} />}
                     </For>
                   </div>
                 </div>
               </Show>
-            );
+            )
           }}
         </For>
 
@@ -272,12 +274,8 @@ export const ExpressionPalette: Component<ExpressionPaletteProps> = (props) => {
         <Show when={searchQuery() && filteredTemplates().length === 0}>
           <div class="no-results">
             <div class="no-results-icon">🔍</div>
-            <div class="no-results-text">
-              No expressions found for "{searchQuery()}"
-            </div>
-            <div class="no-results-hint">
-              Try searching for operators, functions, or keywords
-            </div>
+            <div class="no-results-text">No expressions found for "{searchQuery()}"</div>
+            <div class="no-results-hint">Try searching for operators, functions, or keywords</div>
           </div>
         </Show>
       </div>
@@ -289,7 +287,7 @@ export const ExpressionPalette: Component<ExpressionPaletteProps> = (props) => {
         </div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
-export default ExpressionPalette;
+export default ExpressionPalette

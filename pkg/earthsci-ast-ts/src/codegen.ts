@@ -144,7 +144,10 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
           'const node with array value cannot be evaluated as a scalar; arrays are consumed by container ops (e.g. interp.searchsorted, index)',
         )
       }
-      throw new EvaluatorError('const_not_scalar', `const node with non-numeric value: ${typeof value}`)
+      throw new EvaluatorError(
+        'const_not_scalar',
+        `const node with non-numeric value: ${typeof value}`,
+      )
     }
 
     // enum nodes should have been lowered to const at load time. If

@@ -342,8 +342,14 @@ async function walkSubsystemRefs(
     const sub = subsystem as RefEdge
     const ref = sub.ref
     if (ref) {
-      await resolveRefEdge(sub, ref, subName, basePath, resolving, refChain, (parsed, refBasePath) =>
-        onRef(parsed, refBasePath, { subName, ref }),
+      await resolveRefEdge(
+        sub,
+        ref,
+        subName,
+        basePath,
+        resolving,
+        refChain,
+        (parsed, refBasePath) => onRef(parsed, refBasePath, { subName, ref }),
       )
     } else {
       // Even without a ref, recurse into nested subsystems.
@@ -394,7 +400,13 @@ async function resolveModelRefs(
           // recursively resolve any refs in it, relative to the referenced
           // file's own directory.
           subsystems[subName] = resolvedModel
-          await resolveModelRefs(resolvedModel, refBasePath, resolving, [...refChain, subName], registry)
+          await resolveModelRefs(
+            resolvedModel,
+            refBasePath,
+            resolving,
+            [...refChain, subName],
+            registry,
+          )
         }
       } else if (parsed.data_loaders) {
         // Loader-only file (RFC pure-io-data-loaders §4.3): the referenced
@@ -409,7 +421,13 @@ async function resolveModelRefs(
       }
     },
     async (subsystem, subName) =>
-      resolveModelRefs(subsystem as Model & RefEdge, basePath, resolving, [...refChain, subName], registry),
+      resolveModelRefs(
+        subsystem as Model & RefEdge,
+        basePath,
+        resolving,
+        [...refChain, subName],
+        registry,
+      ),
   )
 }
 
@@ -442,12 +460,18 @@ async function resolveReactionSystemRefs(
           // recursively resolve any refs in it, relative to the referenced
           // file's own directory.
           subsystems[subName] = resolvedRs
-          await resolveReactionSystemRefs(resolvedRs, refBasePath, resolving, [...refChain, subName])
+          await resolveReactionSystemRefs(resolvedRs, refBasePath, resolving, [
+            ...refChain,
+            subName,
+          ])
         }
       }
     },
     async (subsystem, subName) =>
-      resolveReactionSystemRefs(subsystem as ReactionSystem & RefEdge, basePath, resolving, [...refChain, subName]),
+      resolveReactionSystemRefs(subsystem as ReactionSystem & RefEdge, basePath, resolving, [
+        ...refChain,
+        subName,
+      ]),
   )
 }
 

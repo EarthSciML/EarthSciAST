@@ -8,20 +8,20 @@
 
 // Export all layout components. Each component imports its own stylesheet, so
 // the CSS is bundled transitively — no separate CSS imports needed here.
-export { Fraction } from './Fraction';
-export type { FractionProps } from './Fraction';
+export { Fraction } from './Fraction'
+export type { FractionProps } from './Fraction'
 
-export { Superscript } from './Superscript';
-export type { SuperscriptProps } from './Superscript';
+export { Superscript } from './Superscript'
+export type { SuperscriptProps } from './Superscript'
 
-export { Subscript } from './Subscript';
-export type { SubscriptProps } from './Subscript';
+export { Subscript } from './Subscript'
+export type { SubscriptProps } from './Subscript'
 
-export { Radical } from './Radical';
-export type { RadicalProps } from './Radical';
+export { Radical } from './Radical'
+export type { RadicalProps } from './Radical'
 
-export { Delimiters } from './Delimiters';
-export type { DelimitersProps } from './Delimiters';
+export { Delimiters } from './Delimiters'
+export type { DelimitersProps } from './Delimiters'
 
 // `shared.ts` (MathLayoutProps base + buildClasses) is an internal helper the
 // components import directly; it is intentionally not re-exported here.

@@ -11,25 +11,26 @@
  * keys added after a snapshot are correctly removed on undo.
  */
 
-import { createStore, produce, reconcile, unwrap, Store, SetStoreFunction } from 'solid-js/store';
-import { createSignal } from 'solid-js';
-import { validate } from '@earthsciml/ast';
-import type { EsmFile } from '@earthsciml/ast';
-import { createUndoHistory, type UndoHistory, type UndoHistoryConfig } from './history.js';
-import { getValueAtPath, PathUtils, type Path, type PathSegment } from './path-utils.js';
+import type { Store, SetStoreFunction } from 'solid-js/store'
+import { createStore, produce, reconcile, unwrap } from 'solid-js/store'
+import { createSignal } from 'solid-js'
+import { validate } from '@earthsciml/ast'
+import type { EsmFile } from '@earthsciml/ast'
+import { createUndoHistory, type UndoHistory, type UndoHistoryConfig } from './history.js'
+import { getValueAtPath, PathUtils, type Path, type PathSegment } from './path-utils.js'
 
-export { PathUtils, type Path, type PathSegment };
+export { PathUtils, type Path, type PathSegment }
 
 /**
  * Configuration for the AST store
  */
 export interface AstStoreConfig {
   /** Initial ESM file data */
-  initialFile?: EsmFile;
+  initialFile?: EsmFile
   /** Configuration for undo/redo history */
-  historyConfig?: UndoHistoryConfig;
+  historyConfig?: UndoHistoryConfig
   /** Whether to enable automatic validation */
-  enableValidation?: boolean;
+  enableValidation?: boolean
 }
 
 /**
@@ -37,21 +38,21 @@ export interface AstStoreConfig {
  */
 export interface AstStore {
   /** Reactive ESM file store */
-  file: Store<EsmFile>;
+  file: Store<EsmFile>
   /** Function to update the store (captures an undo point per mutation) */
-  setFile: SetStoreFunction<EsmFile>;
+  setFile: SetStoreFunction<EsmFile>
   /** Get value at a specific path */
-  getPath: (path: Path) => unknown;
+  getPath: (path: Path) => unknown
   /** Set value at a specific path */
-  setPath: (path: Path, value: unknown) => void;
+  setPath: (path: Path, value: unknown) => void
   /** Update value at a specific path using a function */
-  updatePath: <T>(path: Path, updateFn: (current: T) => T) => void;
+  updatePath: <T>(path: Path, updateFn: (current: T) => T) => void
   /** Undo/redo history management */
-  history: UndoHistory;
+  history: UndoHistory
   /** Current validation state */
-  isValid: () => boolean;
+  isValid: () => boolean
   /** Current validation errors */
-  validationErrors: () => string[];
+  validationErrors: () => string[]
 }
 
 /**
@@ -63,20 +64,20 @@ export interface AstStore {
  * `models`/`reaction_systems` maps are load-bearing for validity.
  */
 function createDefaultEsmFile(): EsmFile {
-  const now = new Date().toISOString();
+  const now = new Date().toISOString()
   return {
-    esm: "0.8.0",
+    esm: '0.8.0',
     metadata: {
-      name: "Untitled Model",
-      description: "A new ESM model",
+      name: 'Untitled Model',
+      description: 'A new ESM model',
       authors: [],
       created: now,
-      modified: now
+      modified: now,
     },
     models: {},
     reaction_systems: {},
-    coupling: []
-  };
+    coupling: [],
+  }
 }
 
 /**
@@ -89,15 +90,14 @@ function createDefaultEsmFile(): EsmFile {
  */
 function validateEsmFile(file: EsmFile): { isValid: boolean; errors: string[] } {
   try {
-    const result = validate(file);
-    const errors = [
-      ...(result.schema_errors ?? []),
-      ...(result.structural_errors ?? [])
-    ].map(e => e.message);
-    return { isValid: result.is_valid, errors };
+    const result = validate(file)
+    const errors = [...(result.schema_errors ?? []), ...(result.structural_errors ?? [])].map(
+      (e) => e.message,
+    )
+    return { isValid: result.is_valid, errors }
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { isValid: false, errors: [`Validation error: ${message}`] };
+    const message = error instanceof Error ? error.message : String(error)
+    return { isValid: false, errors: [`Validation error: ${message}`] }
   }
 }
 
@@ -111,20 +111,20 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
   const {
     initialFile = createDefaultEsmFile(),
     historyConfig = {},
-    enableValidation = true
-  } = config;
+    enableValidation = true,
+  } = config
 
   // Create the main store
-  const [file, setFileRaw] = createStore<EsmFile>(initialFile);
+  const [file, setFileRaw] = createStore<EsmFile>(initialFile)
 
   // Create validation signals
   const [validationState, setValidationState] = createSignal(
-    enableValidation ? validateEsmFile(initialFile) : { isValid: true, errors: [] }
-  );
+    enableValidation ? validateEsmFile(initialFile) : { isValid: true, errors: [] },
+  )
 
   function revalidate(): void {
     if (enableValidation) {
-      setValidationState(validateEsmFile(unwrap(file)));
+      setValidationState(validateEsmFile(unwrap(file)))
     }
   }
 
@@ -134,27 +134,27 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
   const history = createUndoHistory(
     () => file,
     (newFile: EsmFile) => {
-      setFileRaw(reconcile(newFile));
-      revalidate();
+      setFileRaw(reconcile(newFile))
+      revalidate()
     },
-    historyConfig
-  );
+    historyConfig,
+  )
 
   /**
    * Store setter that records the pre-mutation state as an undo point,
    * then applies the mutation and refreshes validation.
    */
   const setFile: SetStoreFunction<EsmFile> = ((...args: unknown[]) => {
-    history.capture();
-    (setFileRaw as (...a: unknown[]) => void)(...args);
-    revalidate();
-  }) as SetStoreFunction<EsmFile>;
+    history.capture()
+    ;(setFileRaw as (...a: unknown[]) => void)(...args)
+    revalidate()
+  }) as SetStoreFunction<EsmFile>
 
   /**
    * Get value at a specific path in the file
    */
   function getPath(path: Path): unknown {
-    return getValueAtPath(file, path);
+    return getValueAtPath(file, path)
   }
 
   /**
@@ -163,51 +163,51 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
   function setPath(path: Path, value: unknown): void {
     if (path.length === 0) {
       // Replacing the whole file: use reconcile so removed keys are dropped
-      history.capture();
-      setFileRaw(reconcile(value as EsmFile));
-      revalidate();
-      return;
+      history.capture()
+      setFileRaw(reconcile(value as EsmFile))
+      revalidate()
+      return
     }
 
     // Setting nested path (setFile captures the undo point)
     setFile(
-      produce(draft => {
-        let current: any = draft;
+      produce((draft) => {
+        let current: any = draft
         for (let i = 0; i < path.length - 1; i++) {
-          const segment = path[i];
+          const segment = path[i]
           if (current[segment] == null) {
             // Create intermediate objects/arrays as needed
-            const nextSegment = path[i + 1];
-            current[segment] = typeof nextSegment === 'number' ? [] : {};
+            const nextSegment = path[i + 1]
+            current[segment] = typeof nextSegment === 'number' ? [] : {}
           }
-          current = current[segment];
+          current = current[segment]
         }
-        current[path[path.length - 1]] = value;
-      })
-    );
+        current[path[path.length - 1]] = value
+      }),
+    )
   }
 
   /**
    * Update value at a specific path using a function
    */
   function updatePath<T>(path: Path, updateFn: (current: T) => T): void {
-    const currentValue = getPath(path) as T;
-    const newValue = updateFn(currentValue);
-    setPath(path, newValue);
+    const currentValue = getPath(path) as T
+    const newValue = updateFn(currentValue)
+    setPath(path, newValue)
   }
 
   /**
    * Get current validation status
    */
   function isValid(): boolean {
-    return validationState().isValid;
+    return validationState().isValid
   }
 
   /**
    * Get current validation errors
    */
   function validationErrors(): string[] {
-    return validationState().errors;
+    return validationState().errors
   }
 
   return {
@@ -218,8 +218,8 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
     updatePath,
     history,
     isValid,
-    validationErrors
-  };
+    validationErrors,
+  }
 }
 
 /**
@@ -239,19 +239,39 @@ export const CommonPaths = {
   models: (): Path => ['models'],
   model: (modelName: string): Path => ['models', modelName],
   modelVariables: (modelName: string): Path => ['models', modelName, 'variables'],
-  modelVariable: (modelName: string, varName: string): Path => ['models', modelName, 'variables', varName],
+  modelVariable: (modelName: string, varName: string): Path => [
+    'models',
+    modelName,
+    'variables',
+    varName,
+  ],
   modelEquations: (modelName: string): Path => ['models', modelName, 'equations'],
-  modelEquation: (modelName: string, index: number): Path => ['models', modelName, 'equations', index],
+  modelEquation: (modelName: string, index: number): Path => [
+    'models',
+    modelName,
+    'equations',
+    index,
+  ],
 
   // Reaction systems (keyed by name under the real `reaction_systems` key)
   reactionSystems: (): Path => ['reaction_systems'],
   reactionSystem: (systemName: string): Path => ['reaction_systems', systemName],
   reactionSpecies: (systemName: string): Path => ['reaction_systems', systemName, 'species'],
-  reactionSpeciesEntry: (systemName: string, speciesName: string): Path => ['reaction_systems', systemName, 'species', speciesName],
+  reactionSpeciesEntry: (systemName: string, speciesName: string): Path => [
+    'reaction_systems',
+    systemName,
+    'species',
+    speciesName,
+  ],
   reactions: (systemName: string): Path => ['reaction_systems', systemName, 'reactions'],
-  reaction: (systemName: string, index: number): Path => ['reaction_systems', systemName, 'reactions', index],
+  reaction: (systemName: string, index: number): Path => [
+    'reaction_systems',
+    systemName,
+    'reactions',
+    index,
+  ],
 
   // Coupling
   coupling: (): Path => ['coupling'],
-  couplingEntry: (index: number): Path => ['coupling', index]
-};
+  couplingEntry: (index: number): Path => ['coupling', index],
+}

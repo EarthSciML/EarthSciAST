@@ -3,7 +3,8 @@ import { canonicalJson } from './canonicalize.js'
 import { losslessJsonParse } from './numeric-literal.js'
 import { readFixture } from './test-helpers.js'
 
-const canon = (...segments: string[]): string => readFixture('conformance', 'canonical', ...segments)
+const canon = (...segments: string[]): string =>
+  readFixture('conformance', 'canonical', ...segments)
 
 interface ManifestEntry {
   id: string

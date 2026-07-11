@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { EsmFile, Model, Expr, DiscreteEventTrigger, VERSION } from './index.js'
+import type { EsmFile, Model, Expr, DiscreteEventTrigger } from './index.js'
+import { VERSION } from './index.js'
 
 describe('ESM Format Types', () => {
   it('should have correct package version', () => {

@@ -20,28 +20,32 @@
  * tree.
  */
 
-import type { Path } from '../primitives/path-utils';
+import type { Path } from '../primitives/path-utils'
 
 export function replaceAtDocumentPath<T>(root: T, path: Path, newValue: unknown): T {
   if (path.length === 0) {
-    return newValue as T;
+    return newValue as T
   }
 
-  const clone = structuredClone(root);
+  const clone = structuredClone(root)
 
   // Navigate to the parent of the target segment.
-  let current: unknown = clone;
+  let current: unknown = clone
   for (let i = 0; i < path.length - 1; i++) {
     if (current == null || typeof current !== 'object') {
-      throw new Error(`replaceAtDocumentPath: path does not resolve at segment "${String(path[i])}"`);
+      throw new Error(
+        `replaceAtDocumentPath: path does not resolve at segment "${String(path[i])}"`,
+      )
     }
-    current = (current as Record<PropertyKey, unknown>)[path[i]];
+    current = (current as Record<PropertyKey, unknown>)[path[i]]
   }
 
   if (current == null || typeof current !== 'object') {
-    throw new Error(`replaceAtDocumentPath: parent of "${String(path[path.length - 1])}" is not a container`);
+    throw new Error(
+      `replaceAtDocumentPath: parent of "${String(path[path.length - 1])}" is not a container`,
+    )
   }
 
-  (current as Record<PropertyKey, unknown>)[path[path.length - 1]] = newValue;
-  return clone;
+  ;(current as Record<PropertyKey, unknown>)[path[path.length - 1]] = newValue
+  return clone
 }

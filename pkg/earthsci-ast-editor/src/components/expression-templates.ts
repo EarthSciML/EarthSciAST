@@ -6,25 +6,25 @@
  * file holds only behaviour; edit this module to add/adjust palette entries.
  */
 
-import type { Expression } from '@earthsciml/ast';
-import { CLOSED_FUNCTION_NAMES } from '@earthsciml/ast';
-import { EXPRESSION_PLACEHOLDER } from '../constants';
+import type { Expression } from '@earthsciml/ast'
+import { CLOSED_FUNCTION_NAMES } from '@earthsciml/ast'
+import { EXPRESSION_PLACEHOLDER } from '../constants'
 
 /** Category a template is grouped under in the palette. */
-export type TemplateCategory = 'calculus' | 'arithmetic' | 'functions' | 'logic' | 'array';
+export type TemplateCategory = 'calculus' | 'arithmetic' | 'functions' | 'logic' | 'array'
 
 /** A single insertable palette entry. */
 export interface ExpressionTemplate {
-  id: string;
-  label: string;
-  description: string;
-  expression: Expression;
-  keywords: string[];
-  category: TemplateCategory;
+  id: string
+  label: string
+  description: string
+  expression: Expression
+  keywords: string[]
+  category: TemplateCategory
 }
 
 /** First closed function name, used as the default `fn` op template value. */
-export const DEFAULT_FN_NAME = CLOSED_FUNCTION_NAMES[0] ?? 'datetime.year';
+export const DEFAULT_FN_NAME = CLOSED_FUNCTION_NAMES[0] ?? 'datetime.year'
 
 // Predefined expression templates
 export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
@@ -37,7 +37,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     // the toolkit's arity for `D` is exactly one operand.
     expression: { op: 'D', args: [EXPRESSION_PLACEHOLDER], wrt: 't' },
     keywords: ['derivative', 'time', 'differential', 'd', 'dt'],
-    category: 'calculus'
+    category: 'calculus',
   },
   {
     id: 'integral',
@@ -45,7 +45,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Definite integral',
     expression: { op: 'integral', args: [EXPRESSION_PLACEHOLDER], var: 'x', lower: 0, upper: 1 },
     keywords: ['integral', 'integrate', 'antiderivative', 'pide'],
-    category: 'calculus'
+    category: 'calculus',
   },
 
   // Arithmetic operators
@@ -55,7 +55,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Addition',
     expression: { op: '+', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['add', 'addition', 'plus', '+'],
-    category: 'arithmetic'
+    category: 'arithmetic',
   },
   {
     id: 'subtraction',
@@ -63,7 +63,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Subtraction',
     expression: { op: '-', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['subtract', 'subtraction', 'minus', '-'],
-    category: 'arithmetic'
+    category: 'arithmetic',
   },
   {
     id: 'multiplication',
@@ -71,7 +71,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Multiplication',
     expression: { op: '*', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['multiply', 'multiplication', 'times', '*'],
-    category: 'arithmetic'
+    category: 'arithmetic',
   },
   {
     id: 'division',
@@ -79,7 +79,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Division',
     expression: { op: '/', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['divide', 'division', 'over', '/'],
-    category: 'arithmetic'
+    category: 'arithmetic',
   },
   {
     id: 'power',
@@ -87,7 +87,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Power/Exponentiation',
     expression: { op: '^', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['power', 'exponent', 'exp', '^', '**'],
-    category: 'arithmetic'
+    category: 'arithmetic',
   },
   {
     id: 'negate',
@@ -95,7 +95,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Unary negation',
     expression: { op: '-', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['negate', 'negative', 'unary', 'minus'],
-    category: 'arithmetic'
+    category: 'arithmetic',
   },
 
   // Mathematical functions
@@ -105,7 +105,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Exponential function (e^x)',
     expression: { op: 'exp', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['exponential', 'exp', 'e'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'logarithm',
@@ -113,7 +113,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Natural logarithm',
     expression: { op: 'log', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['logarithm', 'log', 'ln', 'natural'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'log10',
@@ -121,7 +121,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Base-10 logarithm',
     expression: { op: 'log10', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['log10', 'logarithm', 'base 10', 'common'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'sign',
@@ -129,7 +129,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Sign function',
     expression: { op: 'sign', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['sign', 'signum', 'sgn'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'sqrt',
@@ -137,7 +137,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Square root',
     expression: { op: 'sqrt', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['sqrt', 'square', 'root'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'absolute',
@@ -145,7 +145,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Absolute value',
     expression: { op: 'abs', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['absolute', 'abs', 'magnitude'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'sine',
@@ -153,7 +153,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Sine function',
     expression: { op: 'sin', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['sine', 'sin', 'trigonometry'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'cosine',
@@ -161,7 +161,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Cosine function',
     expression: { op: 'cos', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['cosine', 'cos', 'trigonometry'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'tangent',
@@ -169,7 +169,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Tangent function',
     expression: { op: 'tan', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['tangent', 'tan', 'trigonometry'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'arcsine',
@@ -177,7 +177,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inverse sine',
     expression: { op: 'asin', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['arcsine', 'asin', 'inverse sine', 'trigonometry'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'arccosine',
@@ -185,7 +185,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inverse cosine',
     expression: { op: 'acos', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['arccosine', 'acos', 'inverse cosine', 'trigonometry'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'arctangent',
@@ -193,7 +193,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inverse tangent',
     expression: { op: 'atan', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['arctangent', 'atan', 'inverse tangent', 'trigonometry'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'arctangent2',
@@ -201,7 +201,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Two-argument arctangent',
     expression: { op: 'atan2', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['atan2', 'arctangent', 'angle', 'trigonometry'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'sinh',
@@ -209,7 +209,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Hyperbolic sine',
     expression: { op: 'sinh', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['sinh', 'hyperbolic sine', 'hyperbolic'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'cosh',
@@ -217,7 +217,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Hyperbolic cosine',
     expression: { op: 'cosh', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['cosh', 'hyperbolic cosine', 'hyperbolic'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'tanh',
@@ -225,7 +225,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Hyperbolic tangent',
     expression: { op: 'tanh', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['tanh', 'hyperbolic tangent', 'hyperbolic'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'asinh',
@@ -233,7 +233,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inverse hyperbolic sine',
     expression: { op: 'asinh', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['asinh', 'inverse hyperbolic sine', 'hyperbolic'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'acosh',
@@ -241,7 +241,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inverse hyperbolic cosine',
     expression: { op: 'acosh', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['acosh', 'inverse hyperbolic cosine', 'hyperbolic'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'atanh',
@@ -249,7 +249,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inverse hyperbolic tangent',
     expression: { op: 'atanh', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['atanh', 'inverse hyperbolic tangent', 'hyperbolic'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'floor',
@@ -257,7 +257,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Round down to integer',
     expression: { op: 'floor', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['floor', 'round down', 'integer'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'ceil',
@@ -265,7 +265,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Round up to integer',
     expression: { op: 'ceil', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['ceil', 'ceiling', 'round up', 'integer'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'minimum',
@@ -273,7 +273,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Minimum of two values',
     expression: { op: 'min', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['minimum', 'min', 'smaller'],
-    category: 'functions'
+    category: 'functions',
   },
   {
     id: 'maximum',
@@ -281,7 +281,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Maximum of two values',
     expression: { op: 'max', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['maximum', 'max', 'larger'],
-    category: 'functions'
+    category: 'functions',
   },
 
   // Logical operators
@@ -289,9 +289,12 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'ifelse',
     label: 'ifelse(_, _, _)',
     description: 'Conditional expression',
-    expression: { op: 'ifelse', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    expression: {
+      op: 'ifelse',
+      args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER],
+    },
     keywords: ['if', 'ifelse', 'conditional', 'ternary'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'greater_than',
@@ -299,7 +302,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Greater than comparison',
     expression: { op: '>', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['greater', 'than', '>', 'compare'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'less_than',
@@ -307,7 +310,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Less than comparison',
     expression: { op: '<', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['less', 'than', '<', 'compare'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'greater_equal',
@@ -315,7 +318,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Greater than or equal comparison',
     expression: { op: '>=', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['greater', 'equal', '>=', 'gte', 'compare'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'less_equal',
@@ -323,7 +326,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Less than or equal comparison',
     expression: { op: '<=', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['less', 'equal', '<=', 'lte', 'compare'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'equals',
@@ -331,7 +334,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Equality comparison',
     expression: { op: '==', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['equals', 'equal', '==', 'compare'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'not_equals',
@@ -339,7 +342,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inequality comparison',
     expression: { op: '!=', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['not', 'equal', '!=', 'inequality', 'compare'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'logical_and',
@@ -347,7 +350,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Logical AND',
     expression: { op: 'and', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['and', 'logical', '&&', 'both'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'logical_or',
@@ -355,7 +358,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Logical OR',
     expression: { op: 'or', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['or', 'logical', '||', 'either'],
-    category: 'logic'
+    category: 'logic',
   },
   {
     id: 'logical_not',
@@ -363,7 +366,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Logical NOT',
     expression: { op: 'not', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['not', 'logical', '!', 'negate'],
-    category: 'logic'
+    category: 'logic',
   },
 
   // Array / query tier ops (esm-spec §4.2). Each is insertable with sensible
@@ -375,7 +378,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Inline literal value',
     expression: { op: 'const', args: [], value: 0 },
     keywords: ['const', 'constant', 'literal', 'value'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'true',
@@ -383,7 +386,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Boolean true literal',
     expression: { op: 'true', args: [] },
     keywords: ['true', 'boolean', 'literal'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'fn',
@@ -391,7 +394,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Closed-registry function call',
     expression: { op: 'fn', name: DEFAULT_FN_NAME, args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['fn', 'function', 'closed', 'datetime', 'interp'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'enum',
@@ -399,7 +402,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Enum member reference',
     expression: { op: 'enum', args: ['Type', 'member'] },
     keywords: ['enum', 'enumeration', 'member'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'index',
@@ -407,15 +410,19 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Array indexing',
     expression: { op: 'index', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['index', 'array', 'element', 'subscript'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'broadcast',
     label: 'broadcast(_, _)',
     description: 'Element-wise scalar op over arrays',
-    expression: { op: 'broadcast', fn: '+', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    expression: {
+      op: 'broadcast',
+      fn: '+',
+      args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER],
+    },
     keywords: ['broadcast', 'elementwise', 'map', 'array'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'makearray',
@@ -423,7 +430,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Build an array from regions and values',
     expression: { op: 'makearray', args: [], regions: [], values: [] },
     keywords: ['makearray', 'array', 'build', 'regions', 'values'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'reshape',
@@ -431,7 +438,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Reshape an array',
     expression: { op: 'reshape', args: [EXPRESSION_PLACEHOLDER], shape: [1] },
     keywords: ['reshape', 'shape', 'array', 'dimensions'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'transpose',
@@ -439,7 +446,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Transpose / permute array axes',
     expression: { op: 'transpose', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['transpose', 'permute', 'axes', 'array'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'concat',
@@ -447,7 +454,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Concatenate arrays along an axis',
     expression: { op: 'concat', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER], axis: 0 },
     keywords: ['concat', 'concatenate', 'join', 'array'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'aggregate',
@@ -458,42 +465,60 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
       args: [EXPRESSION_PLACEHOLDER],
       output_idx: ['i'],
       reduce: '+',
-      expr: EXPRESSION_PLACEHOLDER
+      expr: EXPRESSION_PLACEHOLDER,
     },
     keywords: ['aggregate', 'faq', 'reduce', 'einsum', 'sum', 'query'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'argmin',
     label: 'argmin',
     description: 'Arg-witness minimizer',
-    expression: { op: 'argmin', args: [EXPRESSION_PLACEHOLDER], arg: 'g', expr: EXPRESSION_PLACEHOLDER },
+    expression: {
+      op: 'argmin',
+      args: [EXPRESSION_PLACEHOLDER],
+      arg: 'g',
+      expr: EXPRESSION_PLACEHOLDER,
+    },
     keywords: ['argmin', 'argument', 'minimum', 'witness', 'nearest'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'argmax',
     label: 'argmax',
     description: 'Arg-witness maximizer',
-    expression: { op: 'argmax', args: [EXPRESSION_PLACEHOLDER], arg: 'g', expr: EXPRESSION_PLACEHOLDER },
+    expression: {
+      op: 'argmax',
+      args: [EXPRESSION_PLACEHOLDER],
+      arg: 'g',
+      expr: EXPRESSION_PLACEHOLDER,
+    },
     keywords: ['argmax', 'argument', 'maximum', 'witness'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'intersect_polygon',
     label: 'intersect_polygon(_, _)',
     description: 'Clip two polygons',
-    expression: { op: 'intersect_polygon', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER], manifold: 'spherical' },
+    expression: {
+      op: 'intersect_polygon',
+      args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER],
+      manifold: 'spherical',
+    },
     keywords: ['intersect', 'polygon', 'clip', 'geometry', 'manifold'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'polygon_intersection_area',
     label: 'polygon_intersection_area(_, _)',
     description: 'Area of polygon overlap',
-    expression: { op: 'polygon_intersection_area', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER], manifold: 'spherical' },
+    expression: {
+      op: 'polygon_intersection_area',
+      args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER],
+      manifold: 'spherical',
+    },
     keywords: ['polygon', 'intersection', 'area', 'overlap', 'geometry', 'manifold'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'table_lookup',
@@ -501,7 +526,7 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Sampled function table lookup',
     expression: { op: 'table_lookup', args: [], table: 'table_id', axes: {} },
     keywords: ['table_lookup', 'table', 'lookup', 'interpolate', 'sampled'],
-    category: 'array'
+    category: 'array',
   },
   {
     id: 'apply_expression_template',
@@ -509,35 +534,38 @@ export const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Invoke an in-file expression template',
     expression: { op: 'apply_expression_template', args: [], name: 'template_id', bindings: {} },
     keywords: ['apply', 'expression', 'template', 'macro'],
-    category: 'array'
-  }
-];
+    category: 'array',
+  },
+]
 
 /** Category display configuration (title, description, icon) keyed by category. */
-export const CATEGORY_CONFIG: Record<TemplateCategory, { title: string; description: string; icon: string }> = {
+export const CATEGORY_CONFIG: Record<
+  TemplateCategory,
+  { title: string; description: string; icon: string }
+> = {
   calculus: {
     title: 'Calculus',
     description: 'Differential operators',
-    icon: '∂'
+    icon: '∂',
   },
   arithmetic: {
     title: 'Arithmetic',
     description: 'Basic mathematical operations',
-    icon: '±'
+    icon: '±',
   },
   functions: {
     title: 'Functions',
     description: 'Mathematical functions',
-    icon: 'ƒ'
+    icon: 'ƒ',
   },
   logic: {
     title: 'Logic',
     description: 'Logical operators and comparisons',
-    icon: '∧'
+    icon: '∧',
   },
   array: {
     title: 'Arrays & Queries',
     description: 'Array, aggregate, and geometry ops',
-    icon: '⊞'
-  }
-};
+    icon: '⊞',
+  },
+}

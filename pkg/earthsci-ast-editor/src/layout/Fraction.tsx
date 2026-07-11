@@ -6,19 +6,20 @@
  * fraction handling in ExpressionNode with a dedicated, reusable component.
  */
 
-import { Component, JSX } from 'solid-js';
-import { MathLayoutProps, buildClasses } from './shared';
-import './fraction.css';
+import type { Component, JSX } from 'solid-js'
+import type { MathLayoutProps } from './shared'
+import { buildClasses } from './shared'
+import './fraction.css'
 
 export interface FractionProps extends MathLayoutProps {
   /** The numerator content */
-  numerator: JSX.Element;
+  numerator: JSX.Element
 
   /** The denominator content */
-  denominator: JSX.Element;
+  denominator: JSX.Element
 
   /** Whether this fraction should display inline (default true) */
-  inline?: boolean;
+  inline?: boolean
 }
 
 /**
@@ -27,7 +28,7 @@ export interface FractionProps extends MathLayoutProps {
  */
 export const Fraction: Component<FractionProps> = (props) => {
   const classes = () =>
-    buildClasses('esm-fraction', props.inline !== false && 'esm-fraction-inline', props.class);
+    buildClasses('esm-fraction', props.inline !== false && 'esm-fraction-inline', props.class)
 
   return (
     <span
@@ -38,13 +39,9 @@ export const Fraction: Component<FractionProps> = (props) => {
       role="math"
       aria-label="fraction"
     >
-      <span class="esm-fraction-numerator">
-        {props.numerator}
-      </span>
+      <span class="esm-fraction-numerator">{props.numerator}</span>
       <span class="esm-fraction-bar"></span>
-      <span class="esm-fraction-denominator">
-        {props.denominator}
-      </span>
+      <span class="esm-fraction-denominator">{props.denominator}</span>
     </span>
-  );
-};
+  )
+}

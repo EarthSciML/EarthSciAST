@@ -5,7 +5,8 @@
  * Separates concerns: JSON parsing → schema validation → type coercion.
  */
 
-import Ajv, { ErrorObject, ValidateFunction } from 'ajv'
+import type { ErrorObject, ValidateFunction } from 'ajv'
+import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 import type { EsmFile } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
@@ -194,9 +195,7 @@ const CURRENT_VERSION = parseSemanticVersion(SCHEMA_VERSION)!
  * well-formed semantic version (those cases are deliberately left to schema
  * validation). Shared by both version-check surfaces below.
  */
-function parseFileVersion(
-  data: unknown,
-): { major: number; minor: number; patch: number } | null {
+function parseFileVersion(data: unknown): { major: number; minor: number; patch: number } | null {
   if (typeof data !== 'object' || data === null) return null
   const esm = (data as Record<string, unknown>).esm
   if (typeof esm !== 'string') return null

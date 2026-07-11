@@ -7,30 +7,31 @@
  * editor by setting the selection path from the error's JSON Pointer.
  */
 
-import { Component, createMemo, For, Show } from 'solid-js';
-import type { EsmFile } from '@earthsciml/ast';
-import { validate, type ValidationError, type ValidationResult } from '@earthsciml/ast';
+import type { Component } from 'solid-js'
+import { createMemo, For, Show } from 'solid-js'
+import type { EsmFile } from '@earthsciml/ast'
+import { validate, type ValidationError, type ValidationResult } from '@earthsciml/ast'
 
 export interface ValidationPanelProps {
   /** The ESM file to validate */
-  esmFile: EsmFile;
+  esmFile: EsmFile
 
   /** Callback when an error is clicked to highlight the corresponding AST node */
-  onErrorClick?: (path: string) => void;
+  onErrorClick?: (path: string) => void
 
   /** CSS class for styling */
-  class?: string;
+  class?: string
 
   /** Whether the panel is collapsed */
-  collapsed?: boolean;
+  collapsed?: boolean
 
   /** Callback when collapse state changes */
-  onToggleCollapsed?: (collapsed: boolean) => void;
+  onToggleCollapsed?: (collapsed: boolean) => void
 }
 
 /** A validation item with UI metadata */
 interface ValidationItem extends ValidationError {
-  severity: 'error' | 'warning';
+  severity: 'error' | 'warning'
 }
 
 /**
@@ -40,15 +41,17 @@ interface ValidationItem extends ValidationError {
  * own `severity` is the single source of truth.
  */
 const ErrorSection: Component<{
-  title: string;
-  items: ValidationItem[];
-  onErrorClick: (error: ValidationError) => void;
+  title: string
+  items: ValidationItem[]
+  onErrorClick: (error: ValidationError) => void
 }> = (props) => {
-  const sectionSeverity = () => props.items[0]?.severity ?? 'error';
+  const sectionSeverity = () => props.items[0]?.severity ?? 'error'
   return (
     <Show when={props.items.length > 0}>
       <div class="error-section">
-        <h4 class={`error-section-title ${sectionSeverity() === 'warning' ? 'warning-title' : 'error-title'}`}>
+        <h4
+          class={`error-section-title ${sectionSeverity() === 'warning' ? 'warning-title' : 'error-title'}`}
+        >
           {props.title} ({props.items.length})
         </h4>
         <div class="error-list">
@@ -61,8 +64,8 @@ const ErrorSection: Component<{
                 tabIndex={0}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    props.onErrorClick(error);
+                    e.preventDefault()
+                    props.onErrorClick(error)
                   }
                 }}
               >
@@ -91,8 +94,8 @@ const ErrorSection: Component<{
         </div>
       </div>
     </Show>
-  );
-};
+  )
+}
 
 /**
  * Main ValidationPanel component
@@ -100,67 +103,67 @@ const ErrorSection: Component<{
 export const ValidationPanel: Component<ValidationPanelProps> = (props) => {
   // Reactive validation results
   const validationResult = createMemo((): ValidationResult => {
-    return validate(props.esmFile);
-  });
+    return validate(props.esmFile)
+  })
 
   // Categorized validation items. Schema and structural failures are errors;
   // unit warnings from the toolkit's dimensional analysis are warnings.
   const schemaErrors = createMemo((): ValidationItem[] =>
-    (validationResult().schema_errors || []).map(error => ({
+    (validationResult().schema_errors || []).map((error) => ({
       ...error,
-      severity: 'error' as const
-    }))
-  );
+      severity: 'error' as const,
+    })),
+  )
 
   const structuralErrors = createMemo((): ValidationItem[] =>
-    (validationResult().structural_errors || []).map(error => ({
+    (validationResult().structural_errors || []).map((error) => ({
       ...error,
-      severity: 'error' as const
-    }))
-  );
+      severity: 'error' as const,
+    })),
+  )
 
   const unitWarnings = createMemo((): ValidationItem[] =>
-    (validationResult().unit_warnings || []).map(warning => {
-      const details: Record<string, unknown> = {};
-      if (warning.equation !== undefined) details.equation = warning.equation;
+    (validationResult().unit_warnings || []).map((warning) => {
+      const details: Record<string, unknown> = {}
+      if (warning.equation !== undefined) details.equation = warning.equation
       return {
         path: warning.location || '$',
         message: warning.message,
         code: 'unit_warning',
         details,
-        severity: 'warning' as const
-      };
-    })
-  );
+        severity: 'warning' as const,
+      }
+    }),
+  )
 
   // Total counts for badge display
-  const errorCount = createMemo(() => schemaErrors().length + structuralErrors().length);
-  const warningCount = createMemo(() => unitWarnings().length);
-  const isValid = createMemo(() => validationResult().is_valid);
+  const errorCount = createMemo(() => schemaErrors().length + structuralErrors().length)
+  const warningCount = createMemo(() => unitWarnings().length)
+  const isValid = createMemo(() => validationResult().is_valid)
 
   // Handle error click to highlight AST node
   const handleErrorClick = (error: ValidationError) => {
     if (props.onErrorClick) {
-      props.onErrorClick(error.path);
+      props.onErrorClick(error.path)
     }
-  };
+  }
 
   // Handle collapse toggle
   const handleToggleCollapsed = () => {
     if (props.onToggleCollapsed) {
-      props.onToggleCollapsed(!props.collapsed);
+      props.onToggleCollapsed(!props.collapsed)
     }
-  };
+  }
 
   // CSS classes
   const panelClasses = () => {
-    const classes = ['validation-panel'];
-    if (props.collapsed) classes.push('collapsed');
-    if (isValid()) classes.push('valid');
-    else classes.push('invalid');
-    if (props.class) classes.push(props.class);
-    return classes.join(' ');
-  };
+    const classes = ['validation-panel']
+    if (props.collapsed) classes.push('collapsed')
+    if (isValid()) classes.push('valid')
+    else classes.push('invalid')
+    if (props.class) classes.push(props.class)
+    return classes.join(' ')
+  }
 
   return (
     <div class={panelClasses()}>
@@ -215,15 +218,11 @@ export const ValidationPanel: Component<ValidationPanelProps> = (props) => {
             onErrorClick={handleErrorClick}
           />
 
-          <ErrorSection
-            title="Warnings"
-            items={unitWarnings()}
-            onErrorClick={handleErrorClick}
-          />
+          <ErrorSection title="Warnings" items={unitWarnings()} onErrorClick={handleErrorClick} />
         </div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
-export default ValidationPanel;
+export default ValidationPanel

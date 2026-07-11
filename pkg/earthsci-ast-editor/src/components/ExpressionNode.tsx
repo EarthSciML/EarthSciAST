@@ -9,47 +9,53 @@
  *   (Fraction, Superscript, Radical) for mathematical typography
  */
 
-import { Component, createSignal, createMemo, Show, Switch, Match, Index, JSX } from 'solid-js';
-import type { Expression, ExpressionNode as ExprNode } from '@earthsciml/ast';
-import { useMaybeStructuralEditingContext, DraggableExpression, StructuralEditingMenu, COMMUTATIVE_OPERATORS } from '../primitives/structural-editing';
-import { renderChemicalName } from '../primitives/chemical-formula';
-import { pathsEqual, pathToString } from '../primitives/path-utils';
-import { NodeFieldEditor, opHasFieldEditor } from './NodeFieldEditor';
-import { isNumericString, formatNumber } from './number-format';
-import { Fraction } from '../layout/Fraction';
-import { Superscript } from '../layout/Superscript';
-import { Radical } from '../layout/Radical';
+import type { Component, JSX } from 'solid-js'
+import { createSignal, createMemo, Show, Switch, Match, Index } from 'solid-js'
+import type { Expression, ExpressionNode as ExprNode } from '@earthsciml/ast'
+import {
+  useMaybeStructuralEditingContext,
+  DraggableExpression,
+  StructuralEditingMenu,
+  COMMUTATIVE_OPERATORS,
+} from '../primitives/structural-editing'
+import { renderChemicalName } from '../primitives/chemical-formula'
+import { pathsEqual, pathToString } from '../primitives/path-utils'
+import { NodeFieldEditor, opHasFieldEditor } from './NodeFieldEditor'
+import { isNumericString, formatNumber } from './number-format'
+import { Fraction } from '../layout/Fraction'
+import { Superscript } from '../layout/Superscript'
+import { Radical } from '../layout/Radical'
 
 /** Operators rendered as infix comparison chains (e.g. `a > b`). */
-const COMPARISON_OPS = ['>', '<', '>=', '<=', '==', '!='];
+const COMPARISON_OPS = ['>', '<', '>=', '<=', '==', '!=']
 
 export interface ExpressionNodeProps {
   /** The expression to render (reactive from Solid store) */
-  expr: Expression;
+  expr: Expression
 
   /** AST path for unique identification and updates */
-  path: (string | number)[];
+  path: (string | number)[]
 
   /** Currently highlighted variable equivalence class */
-  highlightedVars: Set<string>;
+  highlightedVars: Set<string>
 
   /** Callback when hovering over a variable */
-  onHoverVar: (name: string | null) => void;
+  onHoverVar: (name: string | null) => void
 
   /** Callback when selecting a node */
-  onSelect: (path: (string | number)[]) => void;
+  onSelect: (path: (string | number)[]) => void
 
   /** Callback when replacing a node with new expression */
-  onReplace: (path: (string | number)[], newExpr: Expression) => void;
+  onReplace: (path: (string | number)[], newExpr: Expression) => void
 
   /** Currently selected path (for showing structural editing menu) */
-  selectedPath?: (string | number)[] | null;
+  selectedPath?: (string | number)[] | null
 
   /** Parent path for drag operations */
-  parentPath?: (string | number)[];
+  parentPath?: (string | number)[]
 
   /** Index within parent for drag operations */
-  indexInParent?: number;
+  indexInParent?: number
 }
 
 /**
@@ -58,24 +64,24 @@ export interface ExpressionNodeProps {
  * shared layout components (Section 5.2.3) instead of hand-rolled markup.
  */
 function OperatorLayout(props: {
-  node: ExprNode;
-  path: (string | number)[];
-  highlightedVars: Set<string>;
-  onHoverVar: (name: string | null) => void;
-  onSelect: (path: (string | number)[]) => void;
-  onReplace: (path: (string | number)[], newExpr: Expression) => void;
-  selectedPath?: (string | number)[] | null;
+  node: ExprNode
+  path: (string | number)[]
+  highlightedVars: Set<string>
+  onHoverVar: (name: string | null) => void
+  onSelect: (path: (string | number)[]) => void
+  onReplace: (path: (string | number)[], newExpr: Expression) => void
+  selectedPath?: (string | number)[] | null
 }) {
   // Structural editing context is optional (non-throwing accessor)
-  const structuralEditing = useMaybeStructuralEditingContext();
+  const structuralEditing = useMaybeStructuralEditingContext()
 
-  const op = () => props.node.op;
-  const args = () => (props.node.args as Expression[] | undefined) ?? [];
-  const isCommutative = () => COMMUTATIVE_OPERATORS.has(props.node.op);
+  const op = () => props.node.op
+  const args = () => (props.node.args as Expression[] | undefined) ?? []
+  const isCommutative = () => COMMUTATIVE_OPERATORS.has(props.node.op)
 
   // Helper to create child nodes with drag support
   const child = (arg: () => Expression, index: number): JSX.Element => {
-    const argPath = () => [...props.path, 'args', index];
+    const argPath = () => [...props.path, 'args', index]
     const childNode = (
       <ExpressionNode
         expr={arg()}
@@ -88,25 +94,17 @@ function OperatorLayout(props: {
         parentPath={props.path}
         indexInParent={index}
       />
-    );
+    )
 
     // Wrap in draggable component for commutative operations
     return (
-      <Show
-        when={structuralEditing && isCommutative() && args().length > 1}
-        fallback={childNode}
-      >
-        <DraggableExpression
-          path={argPath()}
-          index={index}
-          parentPath={props.path}
-          canDrag={true}
-        >
+      <Show when={structuralEditing && isCommutative() && args().length > 1} fallback={childNode}>
+        <DraggableExpression path={argPath()} index={index} parentPath={props.path} canDrag={true}>
           {childNode}
         </DraggableExpression>
       </Show>
-    );
-  };
+    )
+  }
 
   /** Render args as a separated infix sequence */
   const infixArgs = (separator: () => JSX.Element) => (
@@ -118,7 +116,7 @@ function OperatorLayout(props: {
         </>
       )}
     </Index>
-  );
+  )
 
   /** Render args as a parenthesized function argument list */
   const functionArgs = () => (
@@ -134,7 +132,7 @@ function OperatorLayout(props: {
       </Index>
       )
     </span>
-  );
+  )
 
   // Handle different operators with appropriate CSS layouts per Section 5.2.4
   return (
@@ -151,28 +149,26 @@ function OperatorLayout(props: {
     >
       <Match when={op() === '+' || op() === '-'}>
         <span class="esm-infix-op" data-operator={op()}>
-          {infixArgs(() => <span class="esm-operator"> {op()} </span>)}
+          {infixArgs(() => (
+            <span class="esm-operator"> {op()} </span>
+          ))}
         </span>
       </Match>
 
       <Match when={op() === '*'}>
         <span class="esm-multiplication" data-operator={op()}>
-          {infixArgs(() => <span class="esm-multiply">⋅</span>)}
+          {infixArgs(() => (
+            <span class="esm-multiply">⋅</span>
+          ))}
         </span>
       </Match>
 
       <Match when={op() === '/'}>
-        <Fraction
-          numerator={child(() => args()[0], 0)}
-          denominator={child(() => args()[1], 1)}
-        />
+        <Fraction numerator={child(() => args()[0], 0)} denominator={child(() => args()[1], 1)} />
       </Match>
 
       <Match when={op() === '^'}>
-        <Superscript
-          base={child(() => args()[0], 0)}
-          exponent={child(() => args()[1], 1)}
-        />
+        <Superscript base={child(() => args()[0], 0)} exponent={child(() => args()[1], 1)} />
       </Match>
 
       <Match when={op() === 'sqrt'}>
@@ -182,9 +178,7 @@ function OperatorLayout(props: {
       <Match when={op() === 'D'}>
         <span class="esm-derivative" data-operator={op()}>
           <span class="esm-d-operator">d</span>
-          <span class="esm-derivative-body">
-            {child(() => args()[0], 0)}
-          </span>
+          <span class="esm-derivative-body">{child(() => args()[0], 0)}</span>
           <Show when={props.node.wrt}>
             <span class="esm-derivative-wrt">
               <span class="esm-d-operator">d</span>
@@ -196,127 +190,130 @@ function OperatorLayout(props: {
 
       <Match when={COMPARISON_OPS.includes(op())}>
         <span class="esm-comparison" data-operator={op()}>
-          {infixArgs(() => <span class="esm-operator"> {op()} </span>)}
+          {infixArgs(() => (
+            <span class="esm-operator"> {op()} </span>
+          ))}
         </span>
       </Match>
     </Switch>
-  );
+  )
 }
 
 /**
  * Core ExpressionNode component - recursive AST renderer
  */
 export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
-  const [isHovered, setIsHovered] = createSignal(false);
-  const [showStructuralMenu, setShowStructuralMenu] = createSignal(false);
-  const [menuPosition, setMenuPosition] = createSignal({ x: 0, y: 0 });
-  const [showFieldEditor, setShowFieldEditor] = createSignal(false);
+  const [isHovered, setIsHovered] = createSignal(false)
+  const [showStructuralMenu, setShowStructuralMenu] = createSignal(false)
+  const [menuPosition, setMenuPosition] = createSignal({ x: 0, y: 0 })
+  const [showFieldEditor, setShowFieldEditor] = createSignal(false)
 
   // Structural editing context is optional (non-throwing accessor)
-  const structuralEditing = useMaybeStructuralEditingContext();
+  const structuralEditing = useMaybeStructuralEditingContext()
 
   // Determine if this expression is a variable reference
-  const isVariable = createMemo(() =>
-    typeof props.expr === 'string' && !isNumericString(props.expr)
-  );
+  const isVariable = createMemo(
+    () => typeof props.expr === 'string' && !isNumericString(props.expr),
+  )
 
   // Check if this variable should be highlighted
-  const shouldHighlight = createMemo(() =>
-    isVariable() && props.highlightedVars.has(props.expr as string)
-  );
+  const shouldHighlight = createMemo(
+    () => isVariable() && props.highlightedVars.has(props.expr as string),
+  )
 
   // Check if this node is currently selected
-  const isSelected = createMemo(() =>
-    props.selectedPath != null && pathsEqual(props.selectedPath, props.path)
-  );
+  const isSelected = createMemo(
+    () => props.selectedPath != null && pathsEqual(props.selectedPath, props.path),
+  )
 
   // Check if this can be dragged (is in a commutative operation with siblings)
-  const canDrag = createMemo(() =>
-    structuralEditing !== undefined &&
-    props.parentPath !== undefined &&
-    typeof props.indexInParent === 'number' &&
-    props.parentPath.length > 0
-  );
+  const canDrag = createMemo(
+    () =>
+      structuralEditing !== undefined &&
+      props.parentPath !== undefined &&
+      typeof props.indexInParent === 'number' &&
+      props.parentPath.length > 0,
+  )
 
   // CSS classes for styling
   const nodeClasses = createMemo(() => {
-    const classes = ['esm-expression-node'];
+    const classes = ['esm-expression-node']
 
-    if (isHovered()) classes.push('hovered');
-    if (shouldHighlight()) classes.push('highlighted');
-    if (isSelected()) classes.push('selected');
-    if (isVariable()) classes.push('variable');
-    if (typeof props.expr === 'number') classes.push('number');
-    if (typeof props.expr === 'object') classes.push('operator');
+    if (isHovered()) classes.push('hovered')
+    if (shouldHighlight()) classes.push('highlighted')
+    if (isSelected()) classes.push('selected')
+    if (isVariable()) classes.push('variable')
+    if (typeof props.expr === 'number') classes.push('number')
+    if (typeof props.expr === 'object') classes.push('operator')
 
-    return classes.join(' ');
-  });
+    return classes.join(' ')
+  })
 
   // Handle mouse events
   const handleMouseEnter = () => {
-    setIsHovered(true);
+    setIsHovered(true)
     if (isVariable()) {
-      props.onHoverVar(props.expr as string);
+      props.onHoverVar(props.expr as string)
     }
-  };
+  }
 
   const handleMouseLeave = () => {
-    setIsHovered(false);
+    setIsHovered(false)
     if (isVariable()) {
-      props.onHoverVar(null);
+      props.onHoverVar(null)
     }
-  };
+  }
 
   const handleClick = (e: MouseEvent) => {
-    e.stopPropagation();
-    props.onSelect(props.path);
-  };
+    e.stopPropagation()
+    props.onSelect(props.path)
+  }
 
   const handleContextMenu = (e: MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault()
+    e.stopPropagation()
 
     if (structuralEditing) {
-      props.onSelect(props.path); // Select the node first
-      setMenuPosition({ x: e.clientX, y: e.clientY });
-      setShowStructuralMenu(true);
+      props.onSelect(props.path) // Select the node first
+      setMenuPosition({ x: e.clientX, y: e.clientY })
+      setShowStructuralMenu(true)
     }
-  };
+  }
 
   const handleCloseMenu = () => {
-    setShowStructuralMenu(false);
-  };
+    setShowStructuralMenu(false)
+  }
 
   // Get ARIA label for accessibility
   const ariaLabel = (): string => {
     if (typeof props.expr === 'number') {
-      return `Number: ${props.expr}`;
+      return `Number: ${props.expr}`
     }
     if (typeof props.expr === 'string') {
-      return `Variable: ${props.expr}`;
+      return `Variable: ${props.expr}`
     }
     if (typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr) {
-      return `Operator: ${(props.expr as ExprNode).op}`;
+      return `Operator: ${(props.expr as ExprNode).op}`
     }
-    return 'Expression';
-  };
+    return 'Expression'
+  }
 
   const isOperatorNode = () =>
-    typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr;
+    typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr
 
   // Op name when this node is an operator (empty otherwise).
-  const opName = () => (isOperatorNode() ? (props.expr as ExprNode).op : '');
+  const opName = () => (isOperatorNode() ? (props.expr as ExprNode).op : '')
 
   // Whether this operator exposes editable non-`args` fields (e.g. D's `wrt`,
   // const's `value`, aggregate's reduce/semiring/…).
-  const canEditFields = createMemo(() => isOperatorNode() && opHasFieldEditor(opName()));
+  const canEditFields = createMemo(() => isOperatorNode() && opHasFieldEditor(opName()))
 
   const openFieldEditor = (e: MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    props.onSelect(props.path); // Select the node first
-    setShowFieldEditor(true);
-  };
+    e.preventDefault()
+    e.stopPropagation()
+    props.onSelect(props.path) // Select the node first
+    setShowFieldEditor(true)
+  }
 
   const content = (
     <>
@@ -388,7 +385,7 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
         />
       </Show>
     </>
-  );
+  )
 
   // Wrap in draggable component if this can be dragged
   return (
@@ -402,7 +399,7 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
         {content}
       </DraggableExpression>
     </Show>
-  );
-};
+  )
+}
 
-export default ExpressionNode;
+export default ExpressionNode

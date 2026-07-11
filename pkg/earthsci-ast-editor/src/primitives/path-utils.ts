@@ -14,27 +14,27 @@
  *   (e.g. `['components', 'Chemistry', 'variables', 'O3']`).
  */
 
-import type { Expression } from '@earthsciml/ast';
+import type { Expression } from '@earthsciml/ast'
 
 /** Path segment for navigating nested structures */
-export type PathSegment = string | number;
+export type PathSegment = string | number
 
 /** Path for addressing nested properties */
-export type Path = PathSegment[];
+export type Path = PathSegment[]
 
 /**
  * Navigate an arbitrary object/array structure and return the value at the
  * given document path, or `undefined` when the path does not resolve.
  */
 export function getValueAtPath(obj: unknown, path: Path): unknown {
-  if (path.length === 0) return obj;
+  if (path.length === 0) return obj
 
-  let current: any = obj;
+  let current: any = obj
   for (const segment of path) {
-    if (current == null) return undefined;
-    current = current[segment];
+    if (current == null) return undefined
+    current = current[segment]
   }
-  return current;
+  return current
 }
 
 /**
@@ -45,24 +45,24 @@ export function getValueAtPath(obj: unknown, path: Path): unknown {
  * Returns `null` when the path does not resolve.
  */
 export function getExpressionAtPath(expr: Expression, path: Path): Expression | null {
-  let current: any = expr;
+  let current: any = expr
 
   for (const segment of path) {
-    if (current == null) return null;
+    if (current == null) return null
 
     if (segment === 'args' && typeof current === 'object' && 'args' in current) {
       // Move to the args array
-      current = current.args;
+      current = current.args
     } else if (typeof segment === 'number' && Array.isArray(current)) {
       // Access array element by index
-      current = current[segment];
+      current = current[segment]
     } else {
       // Invalid path segment for current context
-      return null;
+      return null
     }
   }
 
-  return current;
+  return current
 }
 
 /**
@@ -74,48 +74,48 @@ export function getExpressionAtPath(expr: Expression, path: Path): Expression | 
 export function replaceExpressionAtPath(
   rootExpr: Expression,
   path: Path,
-  newExpr: Expression
+  newExpr: Expression,
 ): Expression {
   if (path.length === 0) {
-    return newExpr;
+    return newExpr
   }
 
   // Make a deep copy of the root expression
-  const newRoot = JSON.parse(JSON.stringify(rootExpr));
-  let current: any = newRoot;
+  const newRoot = JSON.parse(JSON.stringify(rootExpr))
+  let current: any = newRoot
 
   // Navigate to the parent of the target
   for (let i = 0; i < path.length - 1; i++) {
-    const segment = path[i];
+    const segment = path[i]
     if (segment === 'args' && typeof current === 'object' && 'args' in current) {
-      current = current.args;
+      current = current.args
     } else if (typeof segment === 'number' && Array.isArray(current)) {
-      current = current[segment];
+      current = current[segment]
     } else {
-      throw new Error(`Invalid path segment: ${segment}`);
+      throw new Error(`Invalid path segment: ${segment}`)
     }
   }
 
   // Replace at the final segment
-  const lastSegment = path[path.length - 1];
+  const lastSegment = path[path.length - 1]
   if (typeof lastSegment === 'number' && Array.isArray(current)) {
-    current[lastSegment] = newExpr;
+    current[lastSegment] = newExpr
   } else {
-    throw new Error(`Invalid final path segment: ${lastSegment}`);
+    throw new Error(`Invalid final path segment: ${lastSegment}`)
   }
 
-  return newRoot;
+  return newRoot
 }
 
 /** Check if two paths are equal segment-by-segment */
 export function pathsEqual(path1: Path, path2: Path): boolean {
-  if (path1.length !== path2.length) return false;
-  return path1.every((segment, i) => segment === path2[i]);
+  if (path1.length !== path2.length) return false
+  return path1.every((segment, i) => segment === path2[i])
 }
 
 /** Convert a path array to a dot-separated string */
 export function pathToString(path: Path): string {
-  return path.join('.');
+  return path.join('.')
 }
 
 /**
@@ -124,11 +124,11 @@ export function pathToString(path: Path): string {
  * `['args', 0]`).
  */
 export function stringToPath(pathStr: string): Path {
-  if (!pathStr) return [];
-  return pathStr.split('.').map(segment => {
-    const num = parseInt(segment, 10);
-    return isNaN(num) ? segment : num;
-  });
+  if (!pathStr) return []
+  return pathStr.split('.').map((segment) => {
+    const num = parseInt(segment, 10)
+    return isNaN(num) ? segment : num
+  })
 }
 
 /**
@@ -142,7 +142,7 @@ export const PathUtils = {
    * where numeric-looking object keys are legal).
    */
   fromString: (pathString: string): Path => {
-    return pathString.split('.').filter(segment => segment.length > 0);
+    return pathString.split('.').filter((segment) => segment.length > 0)
   },
 
   /** Convert a path array to a dot-separated string */
@@ -153,22 +153,22 @@ export const PathUtils = {
 
   /** Check if `parent` is a strict ancestor of `child` */
   isParent: (parent: Path, child: Path): boolean => {
-    if (parent.length >= child.length) return false;
-    return parent.every((segment, i) => segment === child[i]);
+    if (parent.length >= child.length) return false
+    return parent.every((segment, i) => segment === child[i])
   },
 
   /** Get the parent path (all segments except the last) */
   parent: (path: Path): Path => {
-    return path.slice(0, -1);
+    return path.slice(0, -1)
   },
 
   /** Get the last segment of a path */
   lastSegment: (path: Path): PathSegment | undefined => {
-    return path[path.length - 1];
+    return path[path.length - 1]
   },
 
   /** Append a segment to a path */
   append: (path: Path, segment: PathSegment): Path => {
-    return [...path, segment];
-  }
-};
+    return [...path, segment]
+  },
+}

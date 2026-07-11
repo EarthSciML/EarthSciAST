@@ -8,32 +8,33 @@
  * editor section.
  */
 
-import { Component, type JSX, createMemo, For, Show } from 'solid-js';
-import { Dynamic } from 'solid-js/web';
-import type { EsmFile, Model, ReactionSystem, SubsystemRef, CouplingEntry } from '@earthsciml/ast';
+import type { Component } from 'solid-js'
+import { type JSX, createMemo, For, Show } from 'solid-js'
+import { Dynamic } from 'solid-js/web'
+import type { EsmFile, Model, ReactionSystem, SubsystemRef, CouplingEntry } from '@earthsciml/ast'
 
 export interface FileSummaryProps {
   /** The ESM file to summarize */
-  esmFile: EsmFile;
+  esmFile: EsmFile
 
   /** Callback when a section header is clicked */
-  onSectionClick?: (sectionType: string, sectionId?: string) => void;
+  onSectionClick?: (sectionType: string, sectionId?: string) => void
 
   /** CSS class for styling */
-  class?: string;
+  class?: string
 
   /** Whether the summary is collapsed */
-  collapsed?: boolean;
+  collapsed?: boolean
 
   /** Callback when collapse state changes */
-  onToggleCollapsed?: (collapsed: boolean) => void;
+  onToggleCollapsed?: (collapsed: boolean) => void
 }
 
 /**
  * Helper to count items in an object or return 0 if undefined
  */
 function countItems(obj: Record<string, unknown> | undefined): number {
-  return obj ? Object.keys(obj).length : 0;
+  return obj ? Object.keys(obj).length : 0
 }
 
 /**
@@ -43,17 +44,17 @@ function countItems(obj: Record<string, unknown> | undefined): number {
  */
 const ClickableHeading: Component<{
   /** Element tag to render (e.g. 'h4' for section headers, 'div' for items). */
-  as: 'h4' | 'div';
-  class: string;
-  onActivate: () => void;
-  children: JSX.Element;
+  as: 'h4' | 'div'
+  class: string
+  onActivate: () => void
+  children: JSX.Element
 }> = (props) => {
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      props.onActivate();
+      e.preventDefault()
+      props.onActivate()
     }
-  };
+  }
   return (
     <Dynamic
       component={props.as}
@@ -65,8 +66,8 @@ const ClickableHeading: Component<{
     >
       {props.children}
     </Dynamic>
-  );
-};
+  )
+}
 
 /**
  * Helper to get coupling type description
@@ -74,17 +75,17 @@ const ClickableHeading: Component<{
 function getCouplingDescription(coupling: CouplingEntry): string {
   switch (coupling.type) {
     case 'operator_compose':
-      return `Compose: ${coupling.systems?.join(', ') || 'N/A'}`;
+      return `Compose: ${coupling.systems?.join(', ') || 'N/A'}`
     case 'couple':
-      return `Couple: ${coupling.systems?.join(', ') || 'N/A'}`;
+      return `Couple: ${coupling.systems?.join(', ') || 'N/A'}`
     case 'variable_map':
-      return `Map: ${coupling.from || 'N/A'} → ${coupling.to || 'N/A'}`;
+      return `Map: ${coupling.from || 'N/A'} → ${coupling.to || 'N/A'}`
     case 'callback':
-      return `Callback: ${coupling.callback_id || 'N/A'}`;
+      return `Callback: ${coupling.callback_id || 'N/A'}`
     case 'event':
-      return `Event coupling`;
+      return `Event coupling`
     default:
-      return 'Unknown coupling type';
+      return 'Unknown coupling type'
   }
 }
 
@@ -93,36 +94,36 @@ function getCouplingDescription(coupling: CouplingEntry): string {
  */
 function getSystemSummary(system: Model | ReactionSystem | SubsystemRef): string {
   if ('ref' in system && typeof system.ref === 'string') {
-    return `External reference: ${system.ref}`;
+    return `External reference: ${system.ref}`
   }
 
-  const items = [];
+  const items = []
 
   if ('variables' in system && system.variables) {
-    items.push(`${Object.keys(system.variables).length} variables`);
+    items.push(`${Object.keys(system.variables).length} variables`)
   }
 
   if ('species' in system && system.species) {
-    items.push(`${Object.keys(system.species).length} species`);
+    items.push(`${Object.keys(system.species).length} species`)
   }
 
   if ('parameters' in system && system.parameters) {
-    items.push(`${Object.keys(system.parameters).length} parameters`);
+    items.push(`${Object.keys(system.parameters).length} parameters`)
   }
 
   if ('equations' in system && system.equations) {
-    items.push(`${system.equations.length} equations`);
+    items.push(`${system.equations.length} equations`)
   }
 
   if ('reactions' in system && system.reactions) {
-    items.push(`${system.reactions.length} reactions`);
+    items.push(`${system.reactions.length} reactions`)
   }
 
   if ('subsystems' in system && system.subsystems) {
-    items.push(`${Object.keys(system.subsystems).length} subsystems`);
+    items.push(`${Object.keys(system.subsystems).length} subsystems`)
   }
 
-  return items.join(', ') || 'Empty system';
+  return items.join(', ') || 'Empty system'
 }
 
 /**
@@ -130,32 +131,32 @@ function getSystemSummary(system: Model | ReactionSystem | SubsystemRef): string
  */
 export const FileSummary: Component<FileSummaryProps> = (props) => {
   // Reactive summaries
-  const modelCount = createMemo(() => countItems(props.esmFile.models));
-  const reactionSystemCount = createMemo(() => countItems(props.esmFile.reaction_systems));
-  const dataLoaderCount = createMemo(() => countItems(props.esmFile.data_loaders));
-  const couplingCount = createMemo(() => props.esmFile.coupling?.length || 0);
+  const modelCount = createMemo(() => countItems(props.esmFile.models))
+  const reactionSystemCount = createMemo(() => countItems(props.esmFile.reaction_systems))
+  const dataLoaderCount = createMemo(() => countItems(props.esmFile.data_loaders))
+  const couplingCount = createMemo(() => props.esmFile.coupling?.length || 0)
 
   // Handle section click
   const handleSectionClick = (sectionType: string, sectionId?: string) => {
     if (props.onSectionClick) {
-      props.onSectionClick(sectionType, sectionId);
+      props.onSectionClick(sectionType, sectionId)
     }
-  };
+  }
 
   // Handle collapse toggle
   const handleToggleCollapsed = () => {
     if (props.onToggleCollapsed) {
-      props.onToggleCollapsed(!props.collapsed);
+      props.onToggleCollapsed(!props.collapsed)
     }
-  };
+  }
 
   // CSS classes
   const summaryClasses = () => {
-    const classes = ['file-summary'];
-    if (props.collapsed) classes.push('collapsed');
-    if (props.class) classes.push(props.class);
-    return classes.join(' ');
-  };
+    const classes = ['file-summary']
+    if (props.collapsed) classes.push('collapsed')
+    if (props.class) classes.push(props.class)
+    return classes.join(' ')
+  }
 
   return (
     <div class={summaryClasses()}>
@@ -232,9 +233,7 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
                       >
                         <strong>{modelName}</strong> →
                       </ClickableHeading>
-                      <div class="system-summary">
-                        {getSystemSummary(model)}
-                      </div>
+                      <div class="system-summary">{getSystemSummary(model)}</div>
                     </div>
                   )}
                 </For>
@@ -263,9 +262,7 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
                       >
                         <strong>{systemName}</strong> →
                       </ClickableHeading>
-                      <div class="system-summary">
-                        {getSystemSummary(system)}
-                      </div>
+                      <div class="system-summary">{getSystemSummary(system)}</div>
                     </div>
                   )}
                 </For>
@@ -326,9 +323,7 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
                       >
                         <strong>Rule {index() + 1}</strong> →
                       </ClickableHeading>
-                      <div class="system-summary">
-                        {getCouplingDescription(coupling)}
-                      </div>
+                      <div class="system-summary">{getCouplingDescription(coupling)}</div>
                     </div>
                   )}
                 </For>
@@ -352,8 +347,7 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
                     {(temporal) => (
                       <div class="info-item">
                         <strong>Time:</strong>
-                        Start: {temporal().start ?? 'N/A'},
-                        End: {temporal().end ?? 'N/A'}
+                        Start: {temporal().start ?? 'N/A'}, End: {temporal().end ?? 'N/A'}
                       </div>
                     )}
                   </Show>
@@ -373,7 +367,14 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
           </Show>
 
           {/* Empty state message */}
-          <Show when={modelCount() === 0 && reactionSystemCount() === 0 && dataLoaderCount() === 0 && couplingCount() === 0}>
+          <Show
+            when={
+              modelCount() === 0 &&
+              reactionSystemCount() === 0 &&
+              dataLoaderCount() === 0 &&
+              couplingCount() === 0
+            }
+          >
             <div class="empty-state">
               <p>This ESM file appears to be empty or contains no major components.</p>
             </div>
@@ -381,7 +382,7 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
         </div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
-export default FileSummary;
+export default FileSummary

@@ -434,9 +434,7 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
     const result = validate(data)
 
     expect(result.is_valid).toBe(false)
-    const err = result.structural_errors.find(
-      (e) => e.code === 'undefined_data_loader_variable',
-    )
+    const err = result.structural_errors.find((e) => e.code === 'undefined_data_loader_variable')
     expect(err).toBeDefined()
     expect(err!.path).toBe('/coupling/0/from')
     // The FIX: full remainder, not the truncated 'deep'.
@@ -476,9 +474,7 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
     const result = validate(data)
 
     expect(result.is_valid).toBe(false)
-    const err = result.structural_errors.find(
-      (e) => e.code === 'undefined_data_loader_variable',
-    )
+    const err = result.structural_errors.find((e) => e.code === 'undefined_data_loader_variable')
     expect(err).toBeDefined()
     expect(err!.details.variable).toBe('missing_var')
   })
