@@ -28,7 +28,7 @@ def _default_xarray_opener():
         import xarray as xr
     except ImportError as exc:
         raise XarrayLoaderError(
-            "grid loader default opener requires xarray; install xarray "
+            "data loader default opener requires xarray; install xarray "
             "or pass an explicit `opener`"
         ) from exc
 

@@ -36,10 +36,10 @@ import jsonschema
 from jsonschema import validate
 
 from .diagnostics import (
-    SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
+    SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
 )
-from .errors import EarthSciAstError
+from .errors import EarthSciAstError, ParseError
 from .esm_types import (
     AffectEquation,
     Assertion,
@@ -193,11 +193,18 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
         wrt = expr_data.get("wrt")
         dim = expr_data.get("dim")
 
+        # integral op (schema §ExpressionNode `integral`): the integration
+        # variable name (`var`, a string) plus lower/upper bounds which are
+        # themselves Expressions (numeric literal, parameter ref, or subtree).
+        var = expr_data.get("var")
+        lower = _parse_expression(expr_data["lower"]) if "lower" in expr_data else None
+        upper = _parse_expression(expr_data["upper"]) if "upper" in expr_data else None
+
         # Validate operator-specific field requirements
         if op == "D" and wrt is None:
-            raise ValueError("Operator 'D' requires 'wrt' field to be specified")
+            raise ParseError("Operator 'D' requires 'wrt' field to be specified")
         if op == "grad" and dim is None:
-            raise ValueError("Operator 'grad' requires 'dim' field to be specified")
+            raise ParseError("Operator 'grad' requires 'dim' field to be specified")
 
         # Array-op fields (schema §ExpressionNode).
         output_idx = expr_data.get("output_idx")
@@ -231,17 +238,17 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
         node_id = expr_data.get("id")
         manifold = expr_data.get("manifold")
         if op in ("intersect_polygon", "polygon_intersection_area") and manifold is None:
-            raise ValueError(
+            raise ParseError(
                 f"Operator {op!r} requires a 'manifold' field "
                 "(planar / spherical / geodesic); it carries no default"
             )
 
         if op == "call" and handler_id is None:
-            raise ValueError("Operator 'call' requires 'handler_id' field to be specified")
+            raise ParseError("Operator 'call' requires 'handler_id' field to be specified")
         if op == "fn" and name is None:
-            raise ValueError("Operator 'fn' requires 'name' field to be specified")
+            raise ParseError("Operator 'fn' requires 'name' field to be specified")
         if op == "const" and "value" not in expr_data:
-            raise ValueError("Operator 'const' requires 'value' field to be specified")
+            raise ParseError("Operator 'const' requires 'value' field to be specified")
 
         # table_lookup (esm-spec §9.5, v0.4.0): table id, per-axis input
         # expression map (carried under JSON key "axes"), optional output
@@ -251,14 +258,14 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
         table_axes = None
         if op == "table_lookup":
             if table is None:
-                raise ValueError("Operator 'table_lookup' requires 'table' field to be specified")
+                raise ParseError("Operator 'table_lookup' requires 'table' field to be specified")
             if not isinstance(table_axes_raw, dict):
-                raise ValueError(
+                raise ParseError(
                     "Operator 'table_lookup' requires 'axes' to be an object mapping axis names to input expressions"
                 )
             table_axes = {k: _parse_expression(v) for k, v in table_axes_raw.items()}
             if args:
-                raise ValueError(
+                raise ParseError(
                     "Operator 'table_lookup' must have empty 'args' (per-axis inputs live under 'axes')"
                 )
         output = expr_data.get("output")
@@ -268,6 +275,9 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
             args=args,
             wrt=wrt,
             dim=dim,
+            var=var,
+            lower=lower,
+            upper=upper,
             output_idx=output_idx,
             expr=body_expr,
             reduce=reduce,
@@ -292,7 +302,7 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
             table_axes=table_axes,
             output=output,
         )
-    raise ValueError(f"Invalid expression data: {expr_data}")
+    raise ParseError(f"Invalid expression data: {expr_data}")
 
 
 def _parse_equation(eq_data: dict[str, Any]) -> Equation:
@@ -383,7 +393,7 @@ def _parse_discrete_event_trigger(trigger_data: dict[str, Any]) -> DiscreteEvent
     if trigger_type == "preset_times":
         times = trigger_data["times"]
         return DiscreteEventTrigger(type=trigger_type, value=times)
-    raise ValueError(f"Unknown trigger type: {trigger_type}")
+    raise ParseError(f"Unknown trigger type: {trigger_type}")
 
 
 def _parse_continuous_event(event_data: dict[str, Any]) -> ContinuousEvent:
@@ -907,7 +917,7 @@ def _parse_data_loader(loader_data: dict[str, Any]) -> DataLoader:
     )
 
 
-def _parse_operator(operator_data: dict[str, Any]) -> Operator:
+def _parse_operator(operator_data: dict[str, Any], name: str = "") -> Operator:
     """Parse an operator from JSON data."""
     # Use schema fields directly
     operator_id = operator_data.get("operator_id", "")
@@ -922,6 +932,7 @@ def _parse_operator(operator_data: dict[str, Any]) -> Operator:
     return Operator(
         operator_id=operator_id,
         needed_vars=needed_vars,
+        name=name,
         modifies=modifies,
         reference=reference,
         config=config,
@@ -957,24 +968,15 @@ def _parse_registered_function(rf_data: dict[str, Any]) -> RegisteredFunction:
 
 def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
     """Parse a coupling entry from JSON data."""
-    # Get coupling type from schema
+    # Get coupling type from schema. Map straight onto the CouplingType enum
+    # (whose values ARE the schema type strings) so this can't drift when a new
+    # coupling type is added — an unknown value raises a clear ParseError.
     schema_type = coupling_data["type"]
+    try:
+        coupling_type = CouplingType(schema_type)
+    except ValueError as e:
+        raise ParseError(f"Unknown coupling type: {schema_type}") from e
 
-    # Map schema types to our enum
-    type_mapping = {
-        "operator_compose": CouplingType.OPERATOR_COMPOSE,
-        "couple": CouplingType.COUPLE,
-        "variable_map": CouplingType.VARIABLE_MAP,
-        "operator_apply": CouplingType.OPERATOR_APPLY,
-        "callback": CouplingType.CALLBACK,
-        "event": CouplingType.EVENT,
-        "coupling_import": CouplingType.COUPLING_IMPORT,
-    }
-
-    if schema_type not in type_mapping:
-        raise ValueError(f"Unknown coupling type: {schema_type}")
-
-    coupling_type = type_mapping[schema_type]
     description = coupling_data.get("description")
 
     # Create appropriate coupling entry based on type
@@ -1016,7 +1018,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
         transform_data = coupling_data.get("transform")
         if isinstance(transform_data, dict):
             if "factor" in coupling_data:
-                raise ValueError(
+                raise ParseError(
                     "variable_map coupling: an expression 'transform' takes no "
                     "'factor' (the expression computes the mapped value itself)"
                 )
@@ -1037,7 +1039,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
         # deferred to flatten (earthsci_ast.coupling_imports); the source entry
         # is preserved here for round-trip.
         bind_raw = coupling_data.get("bind", {})
-        bind = {k: v for k, v in bind_raw.items()} if isinstance(bind_raw, dict) else {}
+        bind = dict(bind_raw) if isinstance(bind_raw, dict) else {}
         return CouplingImport(
             description=description,
             ref=coupling_data.get("ref"),
@@ -1094,7 +1096,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             reinitialize=coupling_data.get("reinitialize"),
         )
 
-    raise ValueError(f"Unknown coupling type: {coupling_type}")
+    raise ParseError(f"Unknown coupling type: {coupling_type}")
 
 
 def _parse_domain(domain_data: dict[str, Any]) -> Domain:
@@ -1146,7 +1148,7 @@ def _validate_domain(domain: Domain) -> None:
             errors.append(f"Temporal domain: invalid datetime format - {e}")
 
     if errors:
-        raise ValueError(
+        raise ParseError(
             "Domain validation failed:\n" + "\n".join(f"  - {error}" for error in errors)
         )
 
@@ -1209,9 +1211,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     operators = []
     if "operators" in data:
         for op_name, op_data in data["operators"].items():
-            operator = _parse_operator(op_data)
-            operator.name = op_name
-            operators.append(operator)
+            operators.append(_parse_operator(op_data, op_name))
 
     # Parse registered_functions (esm-spec §9.2 — DEPRECATED in v0.3.0)
     registered_functions = {}
@@ -1225,7 +1225,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     if "enums" in data and data["enums"] is not None:
         for enum_name, mapping in data["enums"].items():
             if not isinstance(mapping, dict):
-                raise ValueError(
+                raise ParseError(
                     f"enums/{enum_name}: must be an object mapping symbol names "
                     f"to positive integers (esm-spec §9.3)"
                 )
@@ -1233,11 +1233,11 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
             decoded: dict[str, int] = {}
             for sym, val in mapping.items():
                 if not isinstance(val, int) or isinstance(val, bool) or val < 1:
-                    raise ValueError(
+                    raise ParseError(
                         f"enums/{enum_name}/{sym}: value must be a positive integer (got {val!r})"
                     )
                 if val in seen_values:
-                    raise ValueError(
+                    raise ParseError(
                         f"enums/{enum_name}: duplicate value {val} for symbols "
                         f"`{seen_values[val]}` and `{sym}` (values must be unique "
                         f"within an enum, esm-spec §9.3)"
@@ -1259,14 +1259,14 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     if "function_tables" in data and data["function_tables"] is not None:
         ft_map = data["function_tables"]
         if not isinstance(ft_map, dict):
-            raise ValueError(
+            raise ParseError(
                 "Top-level 'function_tables' must be an object keyed by table id "
                 f"(esm-spec §9.5). Got: {type(ft_map).__name__}"
             )
         for ft_name, ft_data in ft_map.items():
             axes_raw = ft_data.get("axes")
             if not isinstance(axes_raw, list):
-                raise ValueError(
+                raise ParseError(
                     f"function_tables['{ft_name}']: 'axes' must be a list (esm-spec §9.5)"
                 )
             axes = [
@@ -1278,7 +1278,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
                 for a in axes_raw
             ]
             if "data" not in ft_data:
-                raise ValueError(
+                raise ParseError(
                     f"function_tables['{ft_name}']: 'data' is required (esm-spec §9.5)"
                 )
             function_tables[ft_name] = FunctionTable(
@@ -1646,6 +1646,7 @@ def _resolve_model_subsystems(
     base_path: str,
     seen_refs: set,
     registry: dict[str, Any],
+    chain: tuple[str, ...] = (),
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -1657,6 +1658,9 @@ def _resolve_model_subsystems(
             (``EsmFile.index_sets``); every referenced subsystem file's
             top-level ``index_sets`` merge into it at resolution time
             (esm-spec §4.7).
+        chain: The already-seen refs in resolution order (parallel to
+            ``seen_refs``, which is unordered); used only to print a
+            deterministic chain in the circular-reference error.
     """
     if not model.subsystems:
         return
@@ -1677,9 +1681,10 @@ def _resolve_model_subsystems(
             if canonical in seen_refs:
                 raise CircularReferenceError(
                     f"Circular subsystem reference detected: '{ref_str}' "
-                    f"(chain: {' -> '.join(seen_refs)} -> {canonical})"
+                    f"(chain: {' -> '.join((*chain, canonical))})"
                 )
             new_seen = seen_refs | {canonical}
+            new_chain = (*chain, canonical)
 
             # Optional `bindings` close the referenced document's open
             # metaparameters at this edge (esm-spec §9.7.6 binding site 3);
@@ -1706,7 +1711,7 @@ def _resolve_model_subsystems(
                 sub_model.name = sub_name
                 # Recursively resolve nested subsystem refs; nested subsystem
                 # index sets merge into the SAME (top document) registry.
-                _resolve_model_subsystems(sub_model, new_base, new_seen, registry)
+                _resolve_model_subsystems(sub_model, new_base, new_seen, registry, new_chain)
                 resolved_subsystems[sub_name] = sub_model
             elif parsed.data_loaders:
                 # Single-loader file: a data loader has no subsystems, so there
@@ -1721,7 +1726,7 @@ def _resolve_model_subsystems(
         else:
             # Already a Model object, just recurse into it
             if isinstance(sub_value, Model):
-                _resolve_model_subsystems(sub_value, base_path, seen_refs, registry)
+                _resolve_model_subsystems(sub_value, base_path, seen_refs, registry, chain)
             resolved_subsystems[sub_name] = sub_value
 
     model.subsystems = resolved_subsystems
@@ -1731,6 +1736,7 @@ def _resolve_reaction_system_subsystems(
     rs: ReactionSystem,
     base_path: str,
     seen_refs: set,
+    chain: tuple[str, ...] = (),
 ) -> None:
     """Recursively resolve subsystem refs within a ReactionSystem.
 
@@ -1738,6 +1744,9 @@ def _resolve_reaction_system_subsystems(
         rs: The reaction system whose subsystems should be resolved
         base_path: The base directory for resolving relative paths
         seen_refs: Set of already-seen ref strings for circular detection
+        chain: The already-seen refs in resolution order (parallel to
+            ``seen_refs``); used only to print a deterministic chain in the
+            circular-reference error.
     """
     if not rs.subsystems:
         return
@@ -1755,9 +1764,10 @@ def _resolve_reaction_system_subsystems(
             if canonical in seen_refs:
                 raise CircularReferenceError(
                     f"Circular subsystem reference detected: '{ref_str}' "
-                    f"(chain: {' -> '.join(seen_refs)} -> {canonical})"
+                    f"(chain: {' -> '.join((*chain, canonical))})"
                 )
             new_seen = seen_refs | {canonical}
+            new_chain = (*chain, canonical)
 
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
             injected = _subsystem_ref_injected_imports(sub_value)
@@ -1769,7 +1779,7 @@ def _resolve_reaction_system_subsystems(
             if parsed.reaction_systems:
                 sub_rs = next(iter(parsed.reaction_systems.values()))
                 sub_rs.name = sub_name
-                _resolve_reaction_system_subsystems(sub_rs, new_base, new_seen)
+                _resolve_reaction_system_subsystems(sub_rs, new_base, new_seen, new_chain)
                 resolved_subsystems[sub_name] = sub_rs
             else:
                 raise SubsystemRefError(
@@ -1777,7 +1787,7 @@ def _resolve_reaction_system_subsystems(
                 )
         else:
             if isinstance(sub_value, ReactionSystem):
-                _resolve_reaction_system_subsystems(sub_value, base_path, seen_refs)
+                _resolve_reaction_system_subsystems(sub_value, base_path, seen_refs, chain)
             resolved_subsystems[sub_name] = sub_value
 
     rs.subsystems = resolved_subsystems
@@ -1927,7 +1937,7 @@ def resolve_model_refs(
         # Recursively resolve the spliced model's own subsystem refs, relative
         # to the referenced file's directory; nested subsystem index sets merge
         # into the importing document's registry (esm-spec §4.7).
-        _resolve_model_subsystems(sub_model, new_base, seen, registry)
+        _resolve_model_subsystems(sub_model, new_base, seen, registry, (canonical,))
         resolved_models[model_name] = sub_model
 
     esm_file.models = resolved_models
@@ -1970,14 +1980,18 @@ def load(
 
     Raises:
         json.JSONDecodeError: If the JSON is malformed
-        jsonschema.ValidationError: If the JSON doesn't match the schema
+        SchemaValidationError: If the JSON doesn't match the schema (raised in
+            place of the underlying ``jsonschema.ValidationError``)
         FileNotFoundError: If the file path doesn't exist
     """
     # Handle dict input directly
     resolved_base = base_path if base_path is not None else os.getcwd()
     file_path = None
     if isinstance(path_or_string, dict):
-        data = path_or_string
+        # Shallow-copy so the top-level ``data.pop(...)`` of the schema-forbidden
+        # ``continuous_events`` / ``discrete_events`` keys below does not mutate a
+        # caller's dict as a side effect.
+        data = dict(path_or_string)
     elif isinstance(path_or_string, Path) or (
         isinstance(path_or_string, str) and os.path.exists(path_or_string)
     ):

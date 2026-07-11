@@ -235,7 +235,10 @@ from .edit import (
     extract_component_from_file,
 )
 
-# Simulation tier - box-model ODE and discretized-PDE simulation (optional - requires scipy)
+# Simulation tier - box-model ODE and discretized-PDE simulation.
+# scipy is a HARD dependency (declared unconditionally in pyproject.toml), so this
+# import normally succeeds; the try/except is belt-and-suspenders that degrades
+# gracefully in a broken/partial install rather than a real optionality knob.
 _has_simulation = False
 try:
     from .simulation import (  # noqa: F401 — re-exported via __all__ below
@@ -249,7 +252,7 @@ try:
 
     _has_simulation = True
 except ImportError:
-    # scipy not available, skip simulation functionality
+    # scipy (a hard dep) missing only in a broken install; skip the sim tier.
     pass
 
 # Display and pretty-printing (Core tier requirement)
@@ -521,7 +524,8 @@ __all__ = [
     "resolve_files",
 ]
 
-# Add simulation components if scipy is available
+# Add simulation components (scipy is a hard dep, so this normally runs; guarded
+# only for a broken/partial install — see the import block above).
 if _has_simulation:
     __all__.extend(
         [

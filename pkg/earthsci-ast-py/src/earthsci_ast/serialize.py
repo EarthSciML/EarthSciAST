@@ -84,6 +84,15 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
             result["wrt"] = expr.wrt
         if expr.dim is not None:
             result["dim"] = expr.dim
+        # integral op fields (schema §ExpressionNode `integral`). Mirrors
+        # _parse_expression: ``var`` is a string, ``lower``/``upper`` are
+        # nested Expressions.
+        if expr.var is not None:
+            result["var"] = expr.var
+        if expr.lower is not None:
+            result["lower"] = _serialize_expression(expr.lower)
+        if expr.upper is not None:
+            result["upper"] = _serialize_expression(expr.upper)
         # Array-op fields (schema §ExpressionNode). Mirrors _parse_expression.
         if expr.output_idx is not None:
             result["output_idx"] = expr.output_idx
@@ -878,8 +887,15 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
             result["conditions"] = [_serialize_expression(cond) for cond in coupling.conditions]
         if coupling.trigger:
             result["trigger"] = _serialize_discrete_event_trigger(coupling.trigger)
-        if coupling.affects:
-            result["affects"] = [_serialize_affect_equation(affect) for affect in coupling.affects]
+        # Parsing folds a schema ``functional_affect`` into ``affects``; split it
+        # back out so ``affects`` carries only AffectEquations and the
+        # FunctionalAffect is re-emitted under the singular ``functional_affect``
+        # key the schema defines (dumping it into ``affects`` is schema-invalid).
+        equations, functional = _split_affects(coupling.affects)
+        if equations:
+            result["affects"] = [_serialize_affect_equation(affect) for affect in equations]
+        if functional is not None:
+            result["functional_affect"] = _serialize_affect_equation(functional)
         if coupling.affect_neg:
             result["affect_neg"] = [
                 _serialize_affect_equation(affect) for affect in coupling.affect_neg
@@ -898,26 +914,31 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     """Serialize an ESM file to JSON-compatible format."""
     result = {"esm": esm_file.version, "metadata": _serialize_metadata(esm_file.metadata)}
 
-    # Serialize models
+    # Serialize models. A value may be a concrete Model or, when a top-level
+    # model ref was never resolved (parse carries it verbatim as {"ref": ...},
+    # schema top-level `models` oneOf[Model, SubsystemRef]), a raw dict — pass
+    # the latter through verbatim, mirroring _serialize_subsystem.
     if esm_file.models:
-        if isinstance(esm_file.models, dict):
-            result["models"] = {
-                model_name: _serialize_model(model) for model_name, model in esm_file.models.items()
-            }
-        elif isinstance(esm_file.models, list):
-            result["models"] = {model.name: _serialize_model(model) for model in esm_file.models}
+        result["models"] = {
+            model_name: (
+                json.loads(json.dumps(model))
+                if isinstance(model, dict)
+                else _serialize_model(model)
+            )
+            for model_name, model in esm_file.models.items()
+        }
 
-    # Serialize reaction systems
+    # Serialize reaction systems (dict-passthrough of an unresolved ref for
+    # symmetry with models, though top-level RS refs are not carried today).
     if esm_file.reaction_systems:
-        if isinstance(esm_file.reaction_systems, dict):
-            result["reaction_systems"] = {
-                rs_name: _serialize_reaction_system(rs)
-                for rs_name, rs in esm_file.reaction_systems.items()
-            }
-        elif isinstance(esm_file.reaction_systems, list):
-            result["reaction_systems"] = {
-                rs.name: _serialize_reaction_system(rs) for rs in esm_file.reaction_systems
-            }
+        result["reaction_systems"] = {
+            rs_name: (
+                json.loads(json.dumps(rs))
+                if isinstance(rs, dict)
+                else _serialize_reaction_system(rs)
+            )
+            for rs_name, rs in esm_file.reaction_systems.items()
+        }
 
     # Serialize the single shared domain (v0.8.0).
     if esm_file.domain is not None:
@@ -937,7 +958,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     # Serialize operators
     if esm_file.operators:
         result["operators"] = {
-            getattr(operator, "name", operator.operator_id): _serialize_operator(operator)
+            (operator.name or operator.operator_id): _serialize_operator(operator)
             for operator in esm_file.operators
         }
 

@@ -42,7 +42,8 @@ def lower_reactions_to_equations(
     Args:
         reactions: List of reactions in the system.
         species: List of species in the system. Used for both ordering and
-            validation (reactants referencing unknown species are rejected).
+            validation (reactants OR products referencing unknown species are
+            rejected).
 
     Returns:
         List of :class:`Equation` objects of the form
@@ -51,7 +52,7 @@ def lower_reactions_to_equations(
 
     Raises:
         ValueError: If any reaction has no rate_constant, or references a
-            reactant that isn't in the species list.
+            reactant or product that isn't in the species list.
     """
     species_names = [s.name for s in species]
     species_rates: dict[str, Expr] = dict.fromkeys(species_names, 0)
@@ -63,6 +64,10 @@ def lower_reactions_to_equations(
         for reactant in reaction.reactants:
             if reactant not in species_names:
                 raise ValueError(f"Reactant {reactant} not found in species list")
+
+        for product in reaction.products:
+            if product not in species_names:
+                raise ValueError(f"Product {product} not found in species list")
 
         # Per esm-spec.md §7.4 the ``rate`` field is the rate COEFFICIENT.
         # The full mass-action rate law is always ``k · ∏ Sᵢ^nᵢ`` — the

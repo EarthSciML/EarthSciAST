@@ -217,6 +217,19 @@ class SimulationError(EarthSciAstError):
     pass
 
 
+class InvalidModelError(EarthSciAstError, ValueError):
+    """Raised when a model is structurally unsuitable for a requested operation.
+
+    Used by :func:`symbolic_jacobian` for its malformed-model guards (no state
+    variables, no equations, non-square system). Subclasses
+    :class:`EarthSciAstError` so it joins the package error hierarchy like its
+    siblings, and also :class:`ValueError` so existing callers/tests that catch
+    the historically-raised ``ValueError`` on these paths keep working.
+    """
+
+    pass
+
+
 class _ess_numeric_abs(sp.Function):
     """``|x|`` with construction-time canonical rewrites disabled (esm-5gk).
 
@@ -481,10 +494,12 @@ def _expr_to_sympy(
                 )
             if fn_callable_map is None:
                 raise SimulationError(
-                    "internal: `fn` op encountered without a fn_callable_map "
-                    "to register the closure into. The simulator entry point "
-                    "must construct one and thread it through "
-                    "_expr_to_sympy."
+                    "`fn` op (closed-function call, esm-spec §9.2) is not "
+                    "supported by the symbolic `to_sympy` conversion: a closed "
+                    "function needs a runtime callable map that only the "
+                    "simulation-lowering path constructs. Lower/simulate the "
+                    "expression through the simulation entry point instead of "
+                    "converting it to SymPy directly."
                 )
             const_positions = INTERP_CONST_ARG_POSITIONS.get(expr.name, ())
             const_args_by_position: dict[int, list] = {}
@@ -660,6 +675,21 @@ _FROM_SYMPY_ALL_ARGS: dict[str, str] = {
     "Or": "or",
 }
 
+# SymPy relational class name -> ESM comparison op, mirroring the forward
+# mapping in ``_BINARY_SYMPY``. Relationals are binary and are NOT
+# :class:`sympy.Function`, so ``from_sympy`` needs an explicit dispatch arm for
+# them (otherwise ``from_sympy(to_sympy(ifelse(x>y, ...)))`` falls through to the
+# final ``raise TypeError``). ``sp.Eq``/``sp.Ne`` report as ``Equality`` /
+# ``Unequality``.
+_FROM_SYMPY_RELATIONAL: dict[str, str] = {
+    "StrictGreaterThan": ">",
+    "GreaterThan": ">=",
+    "StrictLessThan": "<",
+    "LessThan": "<=",
+    "Equality": "==",
+    "Unequality": "!=",
+}
+
 # SymPy ``func.__name__`` -> ESM op, for ops whose ESM form consumes ONLY the
 # first SymPy arg. Both ``Abs`` and the NaN-safe ``_ess_numeric_abs`` placeholder
 # that ``_expr_to_sympy`` emits for the ``abs`` op (esm-5gk) map back to ``abs``.
@@ -748,6 +778,13 @@ def from_sympy(sympy_expr: sp.Expr) -> Expr:
     # Uniform function/operator ops: dispatch by SymPy func name.
     func = getattr(sympy_expr, "func", None)
     func_name = getattr(func, "__name__", None)
+    if func_name in _FROM_SYMPY_RELATIONAL:
+        # Binary comparisons (>, >=, <, <=, ==, !=); not sp.Function, so handled
+        # explicitly. Mirrors _BINARY_SYMPY in the forward direction.
+        return ExprNode(
+            op=_FROM_SYMPY_RELATIONAL[func_name],
+            args=[from_sympy(arg) for arg in sympy_expr.args],
+        )
     if func_name in _FROM_SYMPY_ALL_ARGS:
         return ExprNode(
             op=_FROM_SYMPY_ALL_ARGS[func_name],
@@ -795,10 +832,10 @@ def symbolic_jacobian(model: Model) -> sp.Matrix:
             state_vars.append(name)
 
     if not state_vars:
-        raise ValueError("Model has no state variables")
+        raise InvalidModelError("Model has no state variables")
 
     if not model.equations:
-        raise ValueError("Model has no equations")
+        raise InvalidModelError("Model has no equations")
 
     # Create symbol map for all variables
     symbol_map = {}
@@ -834,7 +871,7 @@ def symbolic_jacobian(model: Model) -> sp.Matrix:
     # which yields a plausible-but-wrong Jacobian with no diagnostic. Fail
     # loudly instead of guessing.
     if len(rhs_expressions) != len(state_vars):
-        raise ValueError(
+        raise InvalidModelError(
             f"Model has {len(state_vars)} state variables but "
             f"{len(rhs_expressions)} matching differential/state equations; "
             f"cannot build a square Jacobian. Each state variable needs "

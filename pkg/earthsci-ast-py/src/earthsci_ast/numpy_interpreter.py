@@ -18,9 +18,11 @@ Design notes
   dict. The body is evaluated once per point in the output box; results are
   assembled into an output ndarray.
 - For simple contraction bodies (``index(A, i, k) * index(B, k, j)`` with
-  ``j``, ``k`` implicit / reduced) we fall through to the generic nested loop.
-  An ``np.einsum`` fast path could be added later — the public API stays the
-  same either way.
+  ``j``, ``k`` implicit / reduced) a vectorized ``np.einsum`` fast path
+  (:func:`_eval_arrayop_vectorized`, and the cached weight-operator path in
+  :func:`_eval_arrayop_operator_cached`) handles the common scaled-product
+  forms; bodies it declines fall through to the generic nested loop. The public
+  API is the same either way.
 - Shapes are 1-based to match the schema's Julia heritage. When reading an
   element ``u[i]`` we subtract 1 from the declared integer index.
 """
@@ -1292,7 +1294,9 @@ def _eval_arrayop_vectorized(
             return np.asarray(np.max(combined, axis=red_axes), dtype=float)
         if reducer == "min":
             return np.asarray(np.min(combined, axis=red_axes), dtype=float)
-    except Exception:
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+        # Decline (→ None, fall back to the scalar loop) on the same narrow error
+        # tuple every sibling fast path catches; an unexpected error propagates.
         return None
 
     return None
@@ -2649,9 +2653,10 @@ def build_partition(model: dict[str, Any]) -> Partition:
     performs — applied once at the ``const`` threshold and again at the
     ``discrete`` one — so topology FAQs fold via the relational engine in the
     ``const`` / ``discrete`` phase and never reach the hot path. The per-step
-    ``_Node`` tree the rest of this module builds for existing (all-continuous)
-    rules is **unchanged**: the partition only schedules which sub-DAGs are
-    pre-evaluated into buffers the hot tree then reads as constants.
+    recursive :func:`eval_expr` walk the rest of this module performs for existing
+    (all-continuous) rules is **unchanged**: the partition only schedules which
+    sub-DAGs are pre-evaluated into buffers the hot evaluator then reads as
+    constants.
 
     Thin delegator to :func:`earthsci_ast.cadence.partition`; see that module
     for the full contract. Raises

@@ -241,7 +241,7 @@ HTML_TEMPLATE = """
             <div class="summary-card">
                 <h3>Test Categories</h3>
                 <div class="metric">{total_categories}</div>
-                <div>Validation, Display, Substitution, Graph</div>
+                <div>Validation, Display, Substitution</div>
             </div>
         </div>
 
@@ -290,7 +290,6 @@ def format_category_results(analysis_data: Dict[str, Any]) -> str:
         ("validation", "Validation Tests", analysis_data.get("validation_analysis", {})),
         ("display", "Display Format Tests", analysis_data.get("display_analysis", {})),
         ("substitution", "Substitution Tests", analysis_data.get("substitution_analysis", {})),
-        ("graph", "Graph Generation Tests", analysis_data.get("graph_analysis", {})),
     ]
 
     for category_id, category_name, category_data in categories:
@@ -339,7 +338,6 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
             "Substitution Divergences",
             analysis_data.get("substitution_analysis", {}),
         ),
-        ("graph", "Graph Generation Divergences", analysis_data.get("graph_analysis", {})),
     ]
 
     has_divergences = False
@@ -398,26 +396,6 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
                            <span class="code-block">{divergence.get("divergent_result", "")}</span></p>
                         """
 
-            elif category_id == "graph":
-                # Graph divergences
-                if isinstance(divergence_data, list):
-                    for divergence in divergence_data:
-                        divergence_type = divergence.get("type", "Unknown")
-                        html += f"<p><strong>Type:</strong> {divergence_type}</p>"
-
-                        if divergence_type in ["node_count", "edge_count"]:
-                            html += f"""
-                            <p><strong>Reference ({divergence.get("reference_lang", "")}):</strong> {divergence.get("reference_count", "N/A")}</p>
-                            <p><strong>Divergent ({divergence.get("divergent_lang", "")}):</strong> {divergence.get("divergent_count", "N/A")}</p>
-                            """
-                        elif divergence_type == "dot_structure":
-                            html += f"""
-                            <p><strong>Reference Lang:</strong> {divergence.get("reference_lang", "")}</p>
-                            <p><strong>Divergent Lang:</strong> {divergence.get("divergent_lang", "")}</p>
-                            <p><strong>Diff:</strong></p>
-                            <div class="code-block">{"<br>".join(divergence.get("diff", []))}</div>
-                            """
-
             html += "</div>"
 
         html += """
@@ -450,7 +428,7 @@ def generate_html_report(analysis_file: Path, output_file: Path):
     num_languages = len(languages_tested)
     languages_list = ", ".join(languages_tested)
     critical_divergences = len(divergence_summary.get("critical_divergences", []))
-    total_categories = 4
+    total_categories = 3
 
     # Determine CSS classes based on status
     overall_status_class = overall_status.lower()

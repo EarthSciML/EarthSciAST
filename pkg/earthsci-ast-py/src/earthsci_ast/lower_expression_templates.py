@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Callable
+from typing import Any
 
 from .diagnostics import (
     APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
@@ -56,9 +56,22 @@ from .diagnostics import (
     REWRITE_RULE_NONTERMINATING,
     TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
 )
-from .errors import EarthSciAstError
 
-APPLY_OP = "apply_expression_template"
+# ``ExpressionTemplateError`` + the JSON-walk primitives + ``APPLY_OP`` now live
+# in the leaf :mod:`earthsci_ast.json_walk` (shared with template_imports /
+# coupling_imports). ``ExpressionTemplateError`` and ``APPLY_OP`` are re-exported
+# here so their historical import paths keep resolving. ``_compose_template_bodies``
+# is imported at module level (see :func:`_component_registry`): the former lazy
+# back-import is gone now that the shared primitives are in a common leaf, so
+# there is no longer a module cycle to dodge.
+from .json_walk import (  # noqa: F401 — re-exported for the historical import path
+    APPLY_OP,
+    ExpressionTemplateError,
+    _is_array,
+    _is_object,
+    _walk_json,
+)
+from .template_imports import _compose_template_bodies
 
 # Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
 # manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema admits any
@@ -68,97 +81,6 @@ APPLY_OP = "apply_expression_template"
 # esm-spec §9.6.4.
 _GEOMETRY_MANIFOLD_OPS = ("intersect_polygon", "polygon_intersection_area")
 _GEOMETRY_MANIFOLD_VALUES = ("planar", "spherical", "geodesic")
-
-
-class ExpressionTemplateError(EarthSciAstError):
-    """Raised when expression-template expansion fails.
-
-    The ``code`` attribute carries one of the stable diagnostic codes:
-    ``apply_expression_template_unknown_template``,
-    ``apply_expression_template_bindings_mismatch``,
-    ``apply_expression_template_recursive_body``,
-    ``apply_expression_template_invalid_declaration``,
-    ``apply_expression_template_version_too_old``,
-    ``rewrite_rule_nonterminating``,
-    ``template_constraint_unknown_index_set`` (§9.6.1 `where` scoping),
-    ``makearray_region_inverted`` (§4.3.2 empty/inverted bounds),
-
-    or one of the esm-spec §9.7 template-library / metaparameter codes
-    (§9.6.6, raised from :mod:`earthsci_ast.template_imports` and
-    :mod:`earthsci_ast.parse`):
-
-    ``template_import_version_too_old``, ``template_import_unresolved``,
-    ``template_import_not_library``, ``subsystem_ref_is_template_library``,
-    ``template_import_cycle``, ``template_import_name_conflict``,
-    ``template_import_unknown_name``, ``template_import_index_set_conflict``,
-    ``template_body_expansion_too_deep``, ``metaparameter_unbound``,
-    ``metaparameter_type_error``, ``metaparameter_name_conflict``,
-
-    or one of the esm-spec §9.7.7 import-renaming codes (raised from
-    :mod:`earthsci_ast.template_imports`):
-
-    ``template_import_rename_unknown_name``,
-    ``template_import_rebind_unknown_name``,
-    ``template_import_rename_collision``, ``template_import_rename_invalid``.
-
-    The code constants themselves are defined in
-    :mod:`earthsci_ast.diagnostics`; their string values are part of the
-    cross-binding contract and must never change.
-    """
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"[{code}] {message}")
-        self.code = code
-
-
-def _is_object(v: Any) -> bool:
-    return isinstance(v, dict)
-
-
-def _is_array(v: Any) -> bool:
-    return isinstance(v, list)
-
-
-def _walk_json(
-    node: Any,
-    *,
-    on_str: Callable[[str], None] | None = None,
-    on_obj: Callable[[dict, str], None] | None = None,
-    skip_keys: frozenset[str] | None = None,
-    path: str = "",
-) -> None:
-    """Shared depth-first PRE-ORDER visitor over a JSON value — the single
-    recursion skeleton behind the read-only tree-walkers in this module and in
-    :mod:`earthsci_ast.template_imports`.
-
-    For each string it calls ``on_str(value)``; for each dict it calls
-    ``on_obj(node, path)`` BEFORE descending, then recurses into list elements
-    (``"{path}/{index}"``) and dict VALUES (``"{path}/{key}"``), skipping any
-    key in ``skip_keys``. ``path`` is a JSON-pointer-style location for the
-    diagnostics that report one (collectors that don't need it omit ``on_obj``
-    or ignore its second argument). Purely observational — it never rebuilds or
-    mutates the tree, so transforming passes (:func:`_substitute`, the
-    ``_rename_walk`` / ``_substitute_metaparams`` families) stay bespoke.
-    """
-    if isinstance(node, str):
-        if on_str is not None:
-            on_str(node)
-        return
-    if _is_array(node):
-        for i, child in enumerate(node):
-            _walk_json(
-                child, on_str=on_str, on_obj=on_obj, skip_keys=skip_keys, path=f"{path}/{i}"
-            )
-        return
-    if _is_object(node):
-        if on_obj is not None:
-            on_obj(node, path)
-        for k, v in node.items():
-            if skip_keys is not None and k in skip_keys:
-                continue
-            _walk_json(
-                v, on_str=on_str, on_obj=on_obj, skip_keys=skip_keys, path=f"{path}/{k}"
-            )
 
 
 def _assert_no_nested_apply(body: Any, template_name: str, path: str) -> None:
@@ -759,10 +681,8 @@ def _component_registry(comp: dict, scope: str, iset_names: set) -> tuple[dict, 
         # Registration-time body composition (esm-spec §9.7.3): inline
         # body references to match-less in-scope templates as a
         # statically-checked acyclic DAG, so every rule body the
-        # fixpoint sees is a closed AST. Lazy import: template_imports
-        # imports from this module at module level.
-        from .template_imports import _compose_template_bodies
-
+        # fixpoint sees is a closed AST (imported at module level — the
+        # shared primitives now live in the json_walk leaf, so no cycle).
         _compose_template_bodies(templates, scope)
         match_rules = _build_match_rules(templates, scope, iset_names)
     return templates, match_rules, shape_env

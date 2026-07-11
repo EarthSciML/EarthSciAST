@@ -192,6 +192,12 @@ def substitute_in_reaction_system(system, bindings: dict[str, Expr]):
 
 def expand_var_placeholders(expr: Expr, variable_names: list[str]) -> list[Expr]:
     """
+    DEPRECATED — do not use. Part of a second, semantically-divergent
+    operator_compose ``_var`` expansion (see
+    :func:`process_operator_compose_placeholders`); the real expansion is
+    :func:`earthsci_ast.flatten._expand_operator_compose_placeholders`. Kept only
+    for the ``__init__`` re-export.
+
     Expand _var placeholders in an expression to create multiple expressions,
     one for each variable name in the list.
 
@@ -260,6 +266,11 @@ def has_var_placeholder(expr: Expr) -> bool:
 
 def get_state_variables(model: Model) -> list[str]:
     """
+    DEPRECATED — do not use. Helper of the divergent
+    :func:`process_operator_compose_placeholders` (the real operator_compose
+    expansion is :func:`earthsci_ast.flatten._expand_operator_compose_placeholders`).
+    Kept only for the ``__init__`` re-export.
+
     Extract state variable names from a model.
 
     Args:
@@ -277,6 +288,12 @@ def get_state_variables(model: Model) -> list[str]:
 
 def expand_model_placeholders(model: Model, state_variables: list[str]) -> Model:
     """
+    DEPRECATED — do not use. Helper of the divergent
+    :func:`process_operator_compose_placeholders`; the real operator_compose
+    expansion is
+    :func:`earthsci_ast.flatten._expand_operator_compose_placeholders`. Kept only
+    for the ``__init__`` re-export.
+
     Expand _var placeholders in a model's equations using the provided state variables.
 
     Args:
@@ -313,6 +330,13 @@ def expand_model_placeholders(model: Model, state_variables: list[str]) -> Model
 
 def process_operator_compose_placeholders(esm_file: EsmFile) -> EsmFile:
     """
+    DEPRECATED — do not use. This is a second, semantically-divergent
+    implementation of operator_compose ``_var`` expansion; the real one that the
+    flatten pipeline uses is
+    :func:`earthsci_ast.flatten._expand_operator_compose_placeholders`. Nothing in
+    ``src/`` or ``tests/`` calls this beyond the ``__init__`` re-export. Retained
+    (not deleted) only so that re-export keeps resolving.
+
     Process operator_compose couplings in an ESM file and expand _var placeholders.
 
     This function implements the operator_compose coupling algorithm:

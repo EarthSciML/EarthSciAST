@@ -966,12 +966,20 @@ def materialize_value_invention(
     const_arrays: Mapping[str, Any] | None = None,
     params: Mapping[str, Any] | None = None,
     const_array_boundaries: Mapping[str, Sequence[str]] | None = None,
+    index_sets: Mapping[str, Any] | None = None,
 ) -> ValueInventionResult:
     """Run the build-time value-invention engine over a raw model document.
 
     ``const_arrays`` supplies the build-time factor arrays (the connectivity /
     coordinates the keys are computed from); ``params`` supplies scalar parameter
     overrides. A producer that classifies CONTINUOUS is rejected (§5.7 guard 2).
+
+    ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
+    as of v0.8.0 lives at the top level of the document rather than on each
+    model — mirrors :func:`reference_resolution.build_reference_graph`. When
+    omitted it falls back to a model-local ``model_json["index_sets"]`` key
+    (the pre-v0.8.0 behavior), so a caller need not splice the document registry
+    onto the model dict before calling.
 
     ``const_array_boundaries`` (ess-gj4) optionally declares a per-const-array,
     per-dimension out-of-range gather policy: a mapping of array name → an
@@ -988,6 +996,10 @@ def materialize_value_invention(
     const_arrays = const_arrays or {}
     params = params or {}
     const_array_boundaries = const_array_boundaries or {}
+    # Prefer the document-scoped registry (v0.8.0); fall back to a model-local
+    # ``index_sets`` key when the caller does not supply one.
+    if index_sets is None:
+        index_sets = model_json.get("index_sets", {}) or {}
     det = _vi_detect(model_json)
     result = ValueInventionResult(vi_var_names=set(det.vi_var_names))
     if not det.has_vi:
@@ -996,7 +1008,7 @@ def materialize_value_invention(
     ctx = _ViCtx(
         const_arrays={str(k): np.asarray(v, dtype=float) for k, v in const_arrays.items()},
         params={str(k): float(v) for k, v in params.items()},
-        index_sets=dict(model_json.get("index_sets", {}) or {}),
+        index_sets=dict(index_sets or {}),
         variables=dict(model_json.get("variables", {}) or {}),
         const_array_boundaries={
             str(k): [str(p) for p in v] for k, v in const_array_boundaries.items()

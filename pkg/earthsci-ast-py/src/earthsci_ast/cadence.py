@@ -206,8 +206,12 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any]) -> str:
 
 
 def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
-    """Yield every sub-Expression of a node: the operand list ``args`` plus the
-    aggregate/integral value sub-fields. ``output_idx``, ``ranges``, ``wrt``,
+    """Yield every sub-Expression of a node: the operand list ``args``, the
+    aggregate/integral value sub-fields, the ``makearray`` ``values`` list, and
+    the ``table_lookup`` per-axis input map (raw JSON key ``axes``). This is the
+    dict-form mirror of the canonical :mod:`.expr_walk` child set — a state ref
+    inside a makearray value or a table-lookup axis must NOT be misclassified
+    ``const`` and folded off the hot path. ``output_idx``, ``ranges``, ``wrt``,
     ``dim``, ``var`` are index/metadata declarations (const), not value inputs,
     so they are intentionally excluded — this is what makes the gather rule fall
     out of a plain ``max`` over children."""
@@ -215,6 +219,13 @@ def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
     for field_name in ("expr", "key", "filter", "lower", "upper"):
         if field_name in node:
             yield node[field_name]
+    values = node.get("values")
+    if isinstance(values, list):
+        yield from values
+    axes = node.get("axes")
+    if isinstance(axes, dict):
+        for axis_name in sorted(axes):
+            yield axes[axis_name]
 
 
 def classify(node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None) -> str:

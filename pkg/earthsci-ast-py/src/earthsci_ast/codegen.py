@@ -215,7 +215,7 @@ def _generate_reaction_system_code(name: str, reaction_system: dict[str, Any]) -
     # Generate @parameters for reaction parameters
     reaction_params = set()
     if reaction_system.get("reactions"):
-        for reaction in reaction_system["reactions"].values():
+        for reaction in reaction_system["reactions"]:
             if reaction.get("rate"):
                 param_names = _extract_parameter_names(reaction["rate"])
                 reaction_params.update(param_names)
@@ -227,7 +227,7 @@ def _generate_reaction_system_code(name: str, reaction_system: dict[str, Any]) -
     if reaction_system.get("reactions"):
         lines.append("")
         lines.append("rxs = [")
-        for reaction in reaction_system["reactions"].values():
+        for reaction in reaction_system["reactions"]:
             lines.append(f"    {_format_reaction(reaction)},")
         lines.append("]")
 
@@ -298,8 +298,8 @@ def _format_variable_declaration(var_name: str, variable: dict[str, Any]) -> str
         else:
             parts.append(str(default_val))
 
-    if variable.get("unit"):
-        parts.append(f'u"{variable["unit"]}"')
+    if variable.get("units"):
+        parts.append(f'u"{variable["units"]}"')
 
     if parts:
         decl += f"({', '.join(parts)})"
@@ -310,12 +310,12 @@ def _format_variable_declaration(var_name: str, variable: dict[str, Any]) -> str
 def _format_species_declaration(spec_name: str, species: dict[str, Any]) -> str:
     decl = spec_name
 
-    if species.get("initial_value") is not None:
-        initial_val = species["initial_value"]
-        if isinstance(initial_val, int):
-            decl += f"({initial_val}.0)"
+    if species.get("default") is not None:
+        default_val = species["default"]
+        if isinstance(default_val, int):
+            decl += f"({default_val}.0)"
         else:
-            decl += f"({initial_val})"
+            decl += f"({default_val})"
 
     return decl
 
@@ -384,7 +384,7 @@ def _format_expression_node(node: dict[str, Any]) -> str:
         return f"ifelse({', '.join(_format_expression(arg) for arg in args)})"
     if op == "Pre":
         return f"Pre({', '.join(_format_expression(arg) for arg in args)})"
-    if op == "^":
+    if op in ("^", "**", "pow"):
         return " ^ ".join(_format_expression(arg) for arg in args)
     if op == "grad":
         # grad(x,y) → Differential(y)(x)
@@ -449,6 +449,16 @@ def _extract_parameter_names(expr: str | int | float | dict[str, Any]) -> set:
 # Helper functions for Python code generation
 
 
+def _reaction_label(reaction: dict[str, Any], index: int) -> str:
+    """Derive a stable, code-friendly label for a reaction.
+
+    ``reactions`` is a schema-defined array (each entry an object), so a
+    reaction has no dict key to name it. Prefer the optional ``name`` field,
+    fall back to the required ``id``, then to a positional label.
+    """
+    return reaction.get("name") or reaction.get("id") or f"reaction_{index}"
+
+
 def _generate_python_model_code(name: str, model: dict[str, Any]) -> list[str]:
     lines = []
 
@@ -480,7 +490,7 @@ def _generate_python_model_code(name: str, model: dict[str, Any]) -> list[str]:
     if state_vars:
         lines.append("# State variables")
         for var_name, variable in state_vars:
-            comment = f"  # {variable['unit']}" if variable.get("unit") else ""
+            comment = f"  # {variable['units']}" if variable.get("units") else ""
             if has_derivatives:
                 lines.append(f"{var_name} = sp.Function('{var_name}'){comment}")
             else:
@@ -490,7 +500,7 @@ def _generate_python_model_code(name: str, model: dict[str, Any]) -> list[str]:
     if parameters:
         lines.append("# Parameters")
         for var_name, parameter in parameters:
-            comment = f"  # {parameter['unit']}" if parameter.get("unit") else ""
+            comment = f"  # {parameter['units']}" if parameter.get("units") else ""
             lines.append(f"{var_name} = sp.Symbol('{var_name}'){comment}")
         lines.append("")
 
@@ -520,15 +530,15 @@ def _generate_python_reaction_system_code(name: str, reaction_system: dict[str, 
     # Generate reaction rate expressions
     if reaction_system.get("reactions"):
         lines.append("# Rate expressions")
-        for reaction_name, reaction in reaction_system["reactions"].items():
+        for i, reaction in enumerate(reaction_system["reactions"]):
             if reaction.get("rate"):
                 rate_expr = _format_python_expression(reaction["rate"])
-                lines.append(f"{reaction_name}_rate = {rate_expr}")
+                lines.append(f"{_reaction_label(reaction, i)}_rate = {rate_expr}")
         lines.append("")
 
         lines.append("# Stoichiometry setup (TODO: Implement reaction network)")
-        for reaction_name, reaction in reaction_system["reactions"].items():
-            lines.append(f"# Reaction: {reaction_name}")
+        for i, reaction in enumerate(reaction_system["reactions"]):
+            lines.append(f"# Reaction: {_reaction_label(reaction, i)}")
             if reaction.get("substrates"):
                 reactant_str = " + ".join(
                     f"{s['stoichiometry']}*{s['species']}"
@@ -605,7 +615,7 @@ def _format_python_expression_node(node: dict[str, Any]) -> str:
         return "sp.Piecewise((0, True))"
     if op == "Pre":
         return f"sp.Function('Pre')({', '.join(_format_python_expression(arg) for arg in args)})"
-    if op == "^":
+    if op in ("^", "**", "pow"):
         return " ** ".join(_format_python_expression(arg) for arg in args)
     if op == "grad":
         # grad(x,y) → sp.Derivative(x, y)

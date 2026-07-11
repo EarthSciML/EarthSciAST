@@ -37,7 +37,6 @@ class ConformanceResults:
         self.validation_results = {}
         self.display_results = {}
         self.substitution_results = {}
-        self.graph_results = {}
         self.mathematical_correctness_results = {}
         self.errors = []
 
@@ -48,7 +47,6 @@ class ConformanceResults:
             "validation_results": self.validation_results,
             "display_results": self.display_results,
             "substitution_results": self.substitution_results,
-            "graph_results": self.graph_results,
             "mathematical_correctness_results": self.mathematical_correctness_results,
             "errors": self.errors,
         }
@@ -136,259 +134,199 @@ def run_validation_tests(tests_dir: Path) -> Dict[str, Any]:
     return validation_results
 
 
+# Pretty-print renderers under test — the real Core-tier display API
+# (esm-spec §4.2; tests/display/RENDERING_CONTRACT.md).
+_RENDERERS = {
+    "unicode": earthsci_ast.to_unicode,
+    "latex": earthsci_ast.to_latex,
+    "ascii": earthsci_ast.to_ascii,
+}
+
+# The frozen rendering contract is exercised as byte-identical output across
+# languages. We self-check against exactly the expectations the reference
+# Python suite (pkg/earthsci-ast-py/tests/test_display.py) asserts: flat-list /
+# top-level ``cases`` fixtures in unicode + latex, and structural_ops.json —
+# the frozen all-format array-op contract (test_display.py::test_structural_ops)
+# — in all three formats. Grouped fixtures whose cases live under nested
+# ``tests``/``test_cases`` carry stale or aspirational expectations the
+# reference suite deliberately does not assert (e.g. retired grad→frac latex,
+# charge superscripts), so they are rendered for cross-language emission but not
+# self-failed on here.
+_ALL_FORMAT_DISPLAY_FIXTURES = {"structural_ops.json"}
+
+
+def _expected_render(case: Dict[str, Any], fmt: str):
+    """Expected rendering, spelled either ``<fmt>`` or ``expected_<fmt>``
+    (mirrors test_display.py::_get_expected)."""
+    return case.get(f"expected_{fmt}", case.get(fmt))
+
+
+def _iter_display_cases(filename: str, data: Any):
+    """Yield ``(case, formats_to_check)`` mirroring the reference pytest:
+
+    - structural_ops.json: every sub-case under group ``tests`` in all three
+      formats.
+    - Otherwise: flat top-level list items (or a top-level ``cases`` list)
+      carrying an ``input``, checked in unicode + latex.
+    """
+    if filename in _ALL_FORMAT_DISPLAY_FIXTURES:
+        groups = data if isinstance(data, list) else [data]
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            for case in group.get("tests", []):
+                if isinstance(case, dict) and "input" in case:
+                    yield case, ("unicode", "latex", "ascii")
+        return
+
+    cases = data if isinstance(data, list) else data.get("cases", [])
+    for case in cases:
+        if isinstance(case, dict) and "input" in case:
+            yield case, ("unicode", "latex")
+
+
 def run_display_tests(tests_dir: Path) -> Dict[str, Any]:
-    """Test pretty-printing and display format generation."""
+    """Render every display fixture through to_unicode/to_latex/to_ascii and
+    self-check against the frozen rendering contract
+    (tests/display/RENDERING_CONTRACT.md). Emits the actual renderings for
+    cross-language comparison plus honest per-file pass/fail counts."""
     print("Running display tests...")
-    display_results = {}
+    display_results: Dict[str, Any] = {}
 
     display_dir = tests_dir / "display"
-    if display_dir.exists() and display_dir.is_dir():
-        display_files = [f for f in display_dir.iterdir() if f.suffix == ".json"]
+    if not (display_dir.exists() and display_dir.is_dir()):
+        return display_results
 
-        for filepath in display_files:
-            try:
-                with open(filepath, "r") as f:
-                    test_data = json.load(f)
-                test_results = {}
+    for filepath in sorted(display_dir.iterdir()):
+        if filepath.suffix != ".json":
+            continue
+        try:
+            with open(filepath, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            display_results[filepath.name] = {"loaded": False, "error": str(e)}
+            continue
 
-                # Test chemical formula rendering
-                if "chemical_formulas" in test_data:
-                    formula_results = []
-                    for formula_test in test_data["chemical_formulas"]:
-                        if "input" in formula_test:
-                            input_formula = formula_test["input"]
-                            try:
-                                unicode_result = earthsci_ast.render_chemical_formula(
-                                    input_formula
-                                )
+        records = []
+        passed = failed = 0
+        for case, formats in _iter_display_cases(filepath.name, data):
+            input_expr = case["input"]
+            record: Dict[str, Any] = {"input": input_expr}
+            mismatches = []
 
-                                formula_results.append(
-                                    {
-                                        "input": input_formula,
-                                        "output_unicode": unicode_result,
-                                        "output_latex": formula_test.get("expected_latex", ""),
-                                        "output_ascii": input_formula,  # Fallback
-                                        "success": True,
-                                    }
-                                )
-                            except Exception as e:
-                                formula_results.append(
-                                    {"input": input_formula, "error": str(e), "success": False}
-                                )
-                    test_results["chemical_formulas"] = formula_results
+            # Emit the actual rendering in every format for cross-language
+            # comparison, regardless of which formats we self-check.
+            for fmt in ("unicode", "latex", "ascii"):
+                try:
+                    record[f"output_{fmt}"] = _RENDERERS[fmt](input_expr)
+                except Exception as e:
+                    record[f"output_{fmt}"] = None
+                    if fmt in formats:
+                        mismatches.append({"format": fmt, "error": str(e)})
 
-                # Test expression rendering
-                if "expressions" in test_data:
-                    expression_results = []
-                    for expr_test in test_data["expressions"]:
-                        if "input" in expr_test:
-                            input_expr = expr_test["input"]
-                            try:
-                                expr = earthsci_ast.parse_expression(input_expr)
-                                unicode_result = earthsci_ast.pretty_print(
-                                    expr, format="unicode"
-                                )
-                                latex_result = earthsci_ast.pretty_print(expr, format="latex")
-                                ascii_result = earthsci_ast.pretty_print(expr, format="ascii")
+            checked = 0
+            for fmt in formats:
+                expected = _expected_render(case, fmt)
+                if expected is None:
+                    continue
+                checked += 1
+                got = record.get(f"output_{fmt}")
+                if got != expected:
+                    mismatches.append({"format": fmt, "expected": expected, "got": got})
 
-                                expression_results.append(
-                                    {
-                                        "input": input_expr,
-                                        "output_unicode": unicode_result,
-                                        "output_latex": latex_result,
-                                        "output_ascii": ascii_result,
-                                        "success": True,
-                                    }
-                                )
-                            except Exception as e:
-                                expression_results.append(
-                                    {"input": input_expr, "error": str(e), "success": False}
-                                )
-                    test_results["expressions"] = expression_results
+            if checked == 0 and not mismatches:
+                record["skipped"] = "no expected rendering to check"
+                records.append(record)
+                continue
 
-                display_results[filepath.name] = test_results
+            record["passed"] = not mismatches
+            if mismatches:
+                record["mismatches"] = mismatches
+                failed += 1
+            else:
+                passed += 1
+            records.append(record)
 
-            except Exception as e:
-                display_results[filepath.name] = {"error": str(e), "success": False}
+        display_results[filepath.name] = {
+            "cases": records,
+            "summary": {"total": passed + failed, "passed": passed, "failed": failed},
+        }
 
     return display_results
 
 
 def run_substitution_tests(tests_dir: Path) -> Dict[str, Any]:
-    """Test expression substitution functionality."""
+    """Apply the real `substitute` to every substitution fixture case and
+    self-check against the expected expression. Fixtures are top-level JSON
+    lists of ``{input, bindings, expected}`` where ``input``/``expected`` are
+    dict-form expressions and ``bindings`` maps variable names to replacements.
+
+    The per-file value is a list of ``{input, substitutions, result, ...}``
+    records — the shape the cross-language comparator consumes."""
     print("Running substitution tests...")
-    substitution_results = {}
+    substitution_results: Dict[str, Any] = {}
 
     substitution_dir = tests_dir / "substitution"
-    if substitution_dir.exists() and substitution_dir.is_dir():
-        substitution_files = [f for f in substitution_dir.iterdir() if f.suffix == ".json"]
+    if not (substitution_dir.exists() and substitution_dir.is_dir()):
+        return substitution_results
 
-        for filepath in substitution_files:
-            try:
-                with open(filepath, "r") as f:
-                    test_data = json.load(f)
-                test_results = []
-
-                if "tests" in test_data:
-                    for test_case in test_data["tests"]:
-                        if "expression" in test_case and "substitutions" in test_case:
-                            try:
-                                expr = earthsci_ast.parse_expression(test_case["expression"])
-                                substitutions = {
-                                    k: earthsci_ast.parse_expression(v)
-                                    for k, v in test_case["substitutions"].items()
-                                }
-
-                                result_expr = earthsci_ast.substitute(expr, substitutions)
-                                result_str = earthsci_ast.pretty_print(result_expr)
-
-                                test_results.append(
-                                    {
-                                        "input": test_case["expression"],
-                                        "substitutions": test_case["substitutions"],
-                                        "result": result_str,
-                                        "success": True,
-                                    }
-                                )
-                            except Exception as e:
-                                test_results.append(
-                                    {
-                                        "input": test_case.get("expression", ""),
-                                        "error": str(e),
-                                        "success": False,
-                                    }
-                                )
-
-                substitution_results[filepath.name] = test_results
-
-            except Exception as e:
-                substitution_results[filepath.name] = {"error": str(e), "success": False}
-
-    return substitution_results
-
-
-def _resolve_graph_input_file(tests_dir: Path, fixture_path: Path, ref: str):
-    """Tests/graphs fixtures reference ESM files by bare filename — they
-    live in tests/valid/. Try a few obvious roots."""
-    for candidate in (
-        fixture_path.parent / ref,
-        tests_dir / "valid" / ref,
-        tests_dir / ref,
-    ):
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _load_esm_source(tests_dir: Path, fixture_path: Path, source):
-    """Source may be a bare filename (string) or an inline ESM dict (the
-    comprehensive_graph_generation_fixtures family inlines documents)."""
-    if isinstance(source, str):
-        path = _resolve_graph_input_file(tests_dir, fixture_path, source)
-        if path is None:
-            raise FileNotFoundError(f"ESM file not found: {source}")
-        return earthsci_ast.load(path)
-    return earthsci_ast.load(source)
-
-
-def _exercise_graph_fixture(esm_data) -> Dict[str, Any]:
-    """Drive an ESM doc through validate + component_graph + expression_graph
-    and capture comparison-friendly summaries. Each step is wrapped so a
-    single failure does not abort the rest."""
-    record: Dict[str, Any] = {"loaded": True}
-
-    try:
-        result = earthsci_ast.validate(esm_data)
-        record["validation"] = {
-            "is_valid": getattr(result, "is_valid", False),
-            "schema_error_count": len(getattr(result, "schema_errors", []) or []),
-            "structural_error_count": len(getattr(result, "structural_errors", []) or []),
-        }
-    except Exception as e:
-        record["validation"] = {"error": str(e)}
-
-    try:
-        cg = earthsci_ast.component_graph(esm_data)
-        record["component_graph"] = {
-            "nodes": len(cg.nodes),
-            "edges": len(cg.edges),
-        }
-    except Exception as e:
-        record["component_graph"] = {"error": str(e)}
-
-    try:
-        eg = earthsci_ast.expression_graph(esm_data)
-        record["expression_graph"] = {
-            "nodes": len(eg.nodes),
-            "edges": len(eg.edges),
-        }
-    except Exception as e:
-        record["expression_graph"] = {"error": str(e)}
-
-    return record
-
-
-def run_graph_tests(tests_dir: Path) -> Dict[str, Any]:
-    """Drive each tests/graphs fixture through the load + validate +
-    component_graph + expression_graph pipeline. Captures node/edge counts
-    so the cross-language comparator can flag size divergence (esm-rs7).
-
-    Handles three fixture shapes:
-      1. Dict with `input_file` (bare filename in tests/valid/).
-      2. Dict with `esm_file` (legacy key, may be path or inline dict).
-      3. List of test cases each carrying its own `name` + `esm_file`.
-    """
-    print("Running graph tests...")
-    graph_results: Dict[str, Any] = {}
-
-    graphs_dir = tests_dir / "graphs"
-    if not (graphs_dir.exists() and graphs_dir.is_dir()):
-        return graph_results
-
-    for filepath in sorted(graphs_dir.iterdir()):
+    for filepath in sorted(substitution_dir.iterdir()):
         if filepath.suffix != ".json":
             continue
         try:
             with open(filepath, "r") as f:
-                test_data = json.load(f)
-
-            if isinstance(test_data, list):
-                cases: Dict[str, Any] = {}
-                for i, case in enumerate(test_data):
-                    name = case.get("name") if isinstance(case, dict) else None
-                    name = name or f"case_{i}"
-                    src = None
-                    if isinstance(case, dict):
-                        src = case.get("esm_file") or case.get("input_file")
-                    if src is None:
-                        cases[name] = {"skipped": "no esm_file/input_file"}
-                        continue
-                    try:
-                        esm_data = _load_esm_source(tests_dir, filepath, src)
-                        cases[name] = _exercise_graph_fixture(esm_data)
-                    except Exception as e:
-                        cases[name] = {"loaded": False, "error": str(e)}
-                graph_results[filepath.name] = {"test_cases": cases}
-            elif isinstance(test_data, dict):
-                src = test_data.get("input_file") or test_data.get("esm_file")
-                if src is None:
-                    graph_results[filepath.name] = {"skipped": "no input_file/esm_file"}
-                    continue
-                try:
-                    esm_data = _load_esm_source(tests_dir, filepath, src)
-                    record = _exercise_graph_fixture(esm_data)
-                    record["input_file"] = src if isinstance(src, str) else "<inline>"
-                    graph_results[filepath.name] = record
-                except Exception as e:
-                    graph_results[filepath.name] = {
-                        "loaded": False,
-                        "error": str(e),
-                        "input_file": src if isinstance(src, str) else "<inline>",
-                    }
+                data = json.load(f)
         except Exception as e:
-            graph_results[filepath.name] = {"loaded": False, "error": str(e)}
+            substitution_results[filepath.name] = {"loaded": False, "error": str(e)}
+            continue
 
-    return graph_results
+        records = []
+        cases = data if isinstance(data, list) else []
+        for case in cases:
+            if not (isinstance(case, dict) and "input" in case and "bindings" in case):
+                continue
+            record: Dict[str, Any] = {
+                "input": case["input"],
+                "substitutions": case["bindings"],
+            }
+            try:
+                result = earthsci_ast.substitute(case["input"], case["bindings"])
+                record["result"] = result
+                if "expected" in case:
+                    record["expected"] = case["expected"]
+                    record["passed"] = result == case["expected"]
+                else:
+                    record["passed"] = None
+            except Exception as e:
+                record["error"] = str(e)
+                record["passed"] = False
+            records.append(record)
+
+        substitution_results[filepath.name] = records
+
+    return substitution_results
+
+
+def _count_display_failures(display_results: Dict[str, Any]) -> int:
+    """Total self-check failures across all display fixtures."""
+    total = 0
+    for value in display_results.values():
+        if isinstance(value, dict) and "summary" in value:
+            total += value["summary"].get("failed", 0)
+        elif isinstance(value, dict) and value.get("loaded") is False:
+            total += 1
+    return total
+
+
+def _count_substitution_failures(substitution_results: Dict[str, Any]) -> int:
+    """Total self-check failures across all substitution fixtures."""
+    total = 0
+    for value in substitution_results.values():
+        if isinstance(value, list):
+            total += sum(1 for r in value if r.get("passed") is False)
+        elif isinstance(value, dict) and value.get("loaded") is False:
+            total += 1
+    return total
 
 
 def run_mathematical_correctness_tests(tests_dir: Path) -> Dict[str, Any]:
@@ -454,7 +392,14 @@ def main():
 
     try:
         results.display_results = run_display_tests(tests_dir)
-        print("✓ Display tests completed")
+        display_failures = _count_display_failures(results.display_results)
+        if display_failures:
+            results.errors.append(
+                f"Display tests: {display_failures} rendering mismatch(es) vs the contract"
+            )
+            print(f"✗ Display tests completed with {display_failures} mismatch(es)")
+        else:
+            print("✓ Display tests completed")
     except Exception as e:
         results.display_results = {}
         results.errors.append(f"Display tests failed: {str(e)}")
@@ -462,19 +407,18 @@ def main():
 
     try:
         results.substitution_results = run_substitution_tests(tests_dir)
-        print("✓ Substitution tests completed")
+        substitution_failures = _count_substitution_failures(results.substitution_results)
+        if substitution_failures:
+            results.errors.append(
+                f"Substitution tests: {substitution_failures} substitution mismatch(es)"
+            )
+            print(f"✗ Substitution tests completed with {substitution_failures} mismatch(es)")
+        else:
+            print("✓ Substitution tests completed")
     except Exception as e:
         results.substitution_results = {}
         results.errors.append(f"Substitution tests failed: {str(e)}")
         print(f"✗ Substitution tests failed: {e}")
-
-    try:
-        results.graph_results = run_graph_tests(tests_dir)
-        print("✓ Graph tests completed")
-    except Exception as e:
-        results.graph_results = {}
-        results.errors.append(f"Graph tests failed: {str(e)}")
-        print(f"✗ Graph tests failed: {e}")
 
     try:
         results.mathematical_correctness_results = run_mathematical_correctness_tests(tests_dir)

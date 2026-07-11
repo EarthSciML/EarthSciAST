@@ -249,6 +249,17 @@ class UnitValidator:
         """
         Validate dimensional consistency of an expression.
 
+        Note:
+            Bare variable names in ``expr`` are resolved against
+            ``self.known_units``, which is populated as a side effect of a
+            prior :meth:`validate_model` / :meth:`validate_reaction_system`
+            call (each seeds it with that component's declared variable/species/
+            parameter units, scoped per component). Called standalone on a fresh
+            :class:`UnitValidator`, ``known_units`` is empty, so every bare-name
+            operand resolves to "unknown dimension" and the check passes
+            vacuously. Validate the enclosing model/reaction system (or invoke
+            :func:`validate_units`) to get a meaningful result.
+
         Args:
             expr: The expression to validate
             context: Context string for error reporting

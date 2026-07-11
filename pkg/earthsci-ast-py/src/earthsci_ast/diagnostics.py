@@ -10,6 +10,16 @@ the string it holds is a cross-language breaking change requiring a spec rev.
 This is a leaf module: it imports nothing from the package so any module
 (including :mod:`earthsci_ast.parse` and the template machinery) can use
 it without creating import cycles.
+
+Sibling registry: these bare code constants and the
+:class:`earthsci_ast.error_handling.ErrorCode` enum are two parallel
+registries of stable, cross-binding diagnostic strings. This module carries
+the expression-template / coupling-library / closed-function code families
+raised during load-time lowering; ``error_handling.ErrorCode`` carries the
+codes emitted by the dataclass-level validator (:mod:`earthsci_ast.validation`).
+Both are part of the cross-language contract — see ``error_handling``'s module
+docstring for the reciprocal note. They are kept separate deliberately (no
+merge); consult both when adding or auditing a code.
 """
 
 # ---------------------------------------------------------------------------

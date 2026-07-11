@@ -718,6 +718,23 @@ def _verify_invariant_algebra(fixture: dict, exp: dict, tolerances: dict) -> Non
 def run_suite(
     manifest_path: Path, bindings: list[str], output_path: Path, timeout: float | None
 ) -> int:
+    # PRODUCERS RETIRED (bead ess-3lj.3): the per-binding adapters this suite
+    # drove ($EARTHSCI_GEOMETRY_ADAPTER_<BINDING>) were deleted in favor of the
+    # single end-to-end-evaluable document
+    # (tests/valid/geometry/conservative_regrid_overlap_join.esm). Nothing
+    # registers an adapter anymore, so this mode would silently report
+    # "no_producers" and exit 0 — masking a misinvocation. Fail loudly instead
+    # and point at the live entry point. The §5.8 contract is guarded by
+    # --self-test (see the module header + test-conformance.sh).
+    _eprint(
+        "error: the geometry producer mode is retired — no binding registers a "
+        "geometry adapter anymore (bead ess-3lj.3). Run the contract check with "
+        "`--self-test`; the per-binding conservative-regrid assembly now runs "
+        "through the evaluator (tests/valid/geometry/"
+        "conservative_regrid_overlap_join.esm)."
+    )
+    return 2
+
     manifest = load_manifest(manifest_path)
     pin = manifest.get("base_pin", {})
     tolerances = {**DEFAULT_TOLERANCES, **manifest.get("tolerances", {})}

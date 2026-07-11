@@ -9,6 +9,7 @@ Comprehensive documentation generator that:
 4. Sets up automated documentation building infrastructure
 """
 
+import ast
 import json
 import re
 import argparse
@@ -276,19 +277,27 @@ class DocumentationExtractor:
         return examples
 
     def _extract_python_docs(self) -> Dict[str, Any]:
-        """Extract documentation from Python package."""
-        python_dir = self.packages_dir / "earthsci-ast-py"
+        """Extract documentation from the Python package's public library API.
 
+        Restricted to the installed library source
+        (``pkg/earthsci-ast-py/src/earthsci_ast``) so test helpers, scripts, and
+        build artifacts never leak into the API reference. Private modules
+        (leading underscore) and ``test_*`` modules are skipped.
+        """
         functions = []
         types = []
         examples = []
 
-        if not python_dir.exists():
+        src_dir = self.packages_dir / "earthsci-ast-py" / "src" / "earthsci_ast"
+        if not src_dir.exists():
             return {"functions": functions, "types": types, "examples": examples}
 
-        # Find all Python files
-        for py_file in python_dir.rglob("*.py"):
-            if "__pycache__" in str(py_file):
+        for py_file in sorted(src_dir.rglob("*.py")):
+            if "__pycache__" in py_file.parts:
+                continue
+            # Skip test modules and private/dunder modules — not public API.
+            stem = py_file.stem
+            if stem.startswith("test_") or stem.startswith("_"):
                 continue
 
             file_functions, file_types = self._parse_python_file(py_file)
@@ -297,105 +306,89 @@ class DocumentationExtractor:
 
         return {"functions": functions, "types": types, "examples": examples}
 
+    @staticmethod
+    def _python_signature(node) -> str:
+        """Reconstruct a full ``def`` signature (multi-line-safe) via ``ast``."""
+        prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+        try:
+            args = ast.unparse(node.args)
+        except Exception:
+            args = ""
+        returns = ""
+        if node.returns is not None:
+            try:
+                returns = f" -> {ast.unparse(node.returns)}"
+            except Exception:
+                returns = ""
+        return f"{prefix} {node.name}({args}){returns}:"
+
+    @staticmethod
+    def _python_class_def(node) -> str:
+        """Reconstruct a ``class`` header (with bases) via ``ast``."""
+        parts = []
+        for base in node.bases:
+            try:
+                parts.append(ast.unparse(base))
+            except Exception:
+                pass
+        for kw in node.keywords:
+            try:
+                parts.append(f"{kw.arg}={ast.unparse(kw.value)}")
+            except Exception:
+                pass
+        return f"class {node.name}({', '.join(parts)}):" if parts else f"class {node.name}:"
+
     def _parse_python_file(self, file_path: Path) -> Tuple[List[APIFunction], List[APIType]]:
-        """Parse Python file for functions and classes with docstrings."""
+        """Parse a module for public, top-level functions and classes with the
+        ``ast`` module. Only module-level definitions whose names do not start
+        with ``_`` are treated as public API. Unlike the previous single-line
+        regex, ``ast`` correctly captures multi-line signatures."""
         functions = []
         types = []
 
         try:
             content = file_path.read_text()
-            lines = content.split("\n")
-
-            i = 0
-            while i < len(lines):
-                line = lines[i].strip()
-
-                # Function definition
-                func_match = re.match(r"def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\((.*?)\):", line)
-                if func_match:
-                    func_name = func_match.group(1)
-                    params = func_match.group(2)
-
-                    # Look for docstring
-                    i += 1
-                    docstring = ""
-                    if i < len(lines) and ('"""' in lines[i] or "'''" in lines[i]):
-                        quote_char = '"""' if '"""' in lines[i] else "'''"
-                        doc_lines = []
-
-                        if lines[i].strip().count(quote_char) == 2:
-                            # Single line docstring
-                            docstring = lines[i].strip().replace(quote_char, "")
-                        else:
-                            # Multi-line docstring
-                            doc_lines.append(lines[i].replace(quote_char, ""))
-                            i += 1
-                            while i < len(lines) and quote_char not in lines[i]:
-                                doc_lines.append(lines[i])
-                                i += 1
-                            if i < len(lines):
-                                doc_lines.append(lines[i].replace(quote_char, ""))
-                            docstring = "\n".join(doc_lines).strip()
-
-                    functions.append(
-                        APIFunction(
-                            name=func_name,
-                            language="python",
-                            file_path=str(file_path),
-                            line_number=i + 1,
-                            signature=f"def {func_name}({params}):",
-                            docstring=docstring,
-                            parameters=[],
-                            return_type="",
-                            examples=[],
-                            see_also=[],
-                            tags=[],
-                        )
-                    )
-
-                # Class definition
-                class_match = re.match(r"class\s+([a-zA-Z_][a-zA-Z0-9_]*)", line)
-                if class_match:
-                    class_name = class_match.group(1)
-
-                    # Look for docstring
-                    i += 1
-                    docstring = ""
-                    if i < len(lines) and ('"""' in lines[i] or "'''" in lines[i]):
-                        quote_char = '"""' if '"""' in lines[i] else "'''"
-                        doc_lines = []
-
-                        if lines[i].strip().count(quote_char) == 2:
-                            docstring = lines[i].strip().replace(quote_char, "")
-                        else:
-                            doc_lines.append(lines[i].replace(quote_char, ""))
-                            i += 1
-                            while i < len(lines) and quote_char not in lines[i]:
-                                doc_lines.append(lines[i])
-                                i += 1
-                            if i < len(lines):
-                                doc_lines.append(lines[i].replace(quote_char, ""))
-                            docstring = "\n".join(doc_lines).strip()
-
-                    types.append(
-                        APIType(
-                            name=class_name,
-                            language="python",
-                            file_path=str(file_path),
-                            line_number=i + 1,
-                            definition=f"class {class_name}:",
-                            docstring=docstring,
-                            fields=[],
-                            methods=[],
-                            examples=[],
-                            tags=[],
-                        )
-                    )
-
-                i += 1
-
+            tree = ast.parse(content, filename=str(file_path))
         except Exception as e:
             print(f"Warning: Could not parse Python file {file_path}: {e}")
+            return functions, types
+
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name.startswith("_"):
+                    continue
+                functions.append(
+                    APIFunction(
+                        name=node.name,
+                        language="python",
+                        file_path=str(file_path),
+                        line_number=node.lineno,
+                        signature=self._python_signature(node),
+                        docstring=ast.get_docstring(node) or "",
+                        parameters=[],
+                        return_type=ast.unparse(node.returns) if node.returns is not None else "",
+                        examples=[],
+                        see_also=[],
+                        tags=[],
+                    )
+                )
+            elif isinstance(node, ast.ClassDef):
+                if node.name.startswith("_"):
+                    continue
+                types.append(
+                    APIType(
+                        name=node.name,
+                        language="python",
+                        file_path=str(file_path),
+                        line_number=node.lineno,
+                        definition=self._python_class_def(node),
+                        docstring=ast.get_docstring(node) or "",
+                        fields=[],
+                        methods=[],
+                        examples=[],
+                        tags=[],
+                    )
+                )
 
         return functions, types
 

@@ -1,6 +1,16 @@
 """
 Minimal error handling for ESM Format.
 This provides only the essential error handling functionality required by validation.
+
+Sibling registry: this module's :class:`ErrorCode` enum and
+:mod:`earthsci_ast.diagnostics`'s bare module-level code constants are two
+parallel registries of stable, cross-binding diagnostic strings. This one
+carries the codes emitted by the dataclass-level validator
+(:mod:`earthsci_ast.validation`); ``diagnostics`` carries the
+expression-template / coupling-library / closed-function code families raised
+during load-time lowering. Both are part of the cross-language contract — see
+``diagnostics``'s module docstring for the reciprocal note. They are kept
+separate deliberately (no merge); consult both when adding or auditing a code.
 """
 from __future__ import annotations
 
@@ -56,7 +66,6 @@ class Severity(Enum):
 
     ERROR = "error"
     WARNING = "warning"
-    INFO = "info"
 
 
 @dataclass
@@ -73,7 +82,6 @@ class FixSuggestion:
     """Suggestion for fixing an error."""
 
     description: str
-    action: str | None = None
 
 
 @dataclass
@@ -88,11 +96,10 @@ class ESMError:
 
 
 class ErrorCollector:
-    """Collects errors and warnings during validation."""
+    """Collects errors during validation."""
 
     def __init__(self):
         self.errors = []
-        self.warnings = []
 
     def add_error(self, error: ESMError):
         """Add an error to the collection."""

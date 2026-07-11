@@ -34,16 +34,7 @@ from __future__ import annotations
 import datetime as _dt
 import math
 import os
-from typing import TYPE_CHECKING, Any, Callable, Optional
-
-try:  # Protocol is stdlib from 3.8; guard keeps the import defensive.
-    from typing import Protocol, runtime_checkable
-except ImportError:  # pragma: no cover - 3.7 fallback
-    Protocol = object  # type: ignore[assignment]
-
-    def runtime_checkable(cls):  # type: ignore[misc]
-        return cls
-
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # avoid a runtime import cycle with flatten/simulation.
     from ..flatten import LoaderField
@@ -119,13 +110,23 @@ class LoadDataProvider:
     def _resolve_io(self):
         """Opener/fetcher for a read, built lazily. Explicit injection wins;
         else the EARTHSCIDATADIR cache when ``use_cache``; else the un-cached
-        default (``None`` ⇒ the loader's own opener)."""
+        default (``None`` ⇒ the loader's own opener).
+
+        Only the seam the loader *kind* consumes is forwarded — the opener for
+        grid/static, the fetcher for points. ``load_data`` warns when a non-``None``
+        argument does not apply to the dispatched kind, so returning both cached
+        callables would make every cached load emit a spurious "ignored kwarg"
+        UserWarning for the inapplicable seam.
+        """
         if self._opener is not None or self._fetcher is not None:
             return self._opener, self._fetcher
         if self._use_cache:
+            from ..esm_types import DataLoaderKind
             from .cache import cached_fetcher, cached_opener
 
-            return cached_opener(), cached_fetcher()
+            if self.field.loader.kind == DataLoaderKind.POINTS:
+                return None, cached_fetcher()
+            return cached_opener(), None
         return None, None
 
     @property

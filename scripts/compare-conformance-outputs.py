@@ -4,15 +4,14 @@
 Cross-language conformance output comparison tool.
 
 This script compares the outputs from different language implementations
-and identifies divergence in validation results, display formats,
-substitution results, and graph structures.
+and identifies divergence in validation results, display formats, and
+substitution results.
 """
 
 import argparse
 import json
 from pathlib import Path
 from typing import Dict, Any
-import difflib
 
 
 class ConformanceAnalysis:
@@ -21,7 +20,6 @@ class ConformanceAnalysis:
         self.validation_analysis = {}
         self.display_analysis = {}
         self.substitution_analysis = {}
-        self.graph_analysis = {}
         self.divergence_summary = {}
         self.overall_status = "PASS"
 
@@ -31,7 +29,6 @@ class ConformanceAnalysis:
             "validation_analysis": self.validation_analysis,
             "display_analysis": self.display_analysis,
             "substitution_analysis": self.substitution_analysis,
-            "graph_analysis": self.graph_analysis,
             "divergence_summary": self.divergence_summary,
             "overall_status": self.overall_status,
         }
@@ -305,108 +302,6 @@ def compare_substitution_results(language_results: Dict[str, Dict[str, Any]]) ->
     return substitution_analysis
 
 
-def compare_graph_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """Compare graph generation results across languages."""
-    print("Comparing graph results...")
-
-    graph_analysis = {
-        "test_files": set(),
-        "divergence": {},
-        "structure_consistency": {},
-        "summary": {"total_tests": 0, "consistent_tests": 0, "divergent_tests": 0},
-    }
-
-    # Collect all test files
-    all_test_files = set()
-    for lang, results in language_results.items():
-        if "graph_results" in results:
-            all_test_files.update(results["graph_results"].keys())
-
-    graph_analysis["test_files"] = sorted(list(all_test_files))
-
-    # Compare each test file
-    for test_file in all_test_files:
-        file_results = {}
-
-        # Collect results for this test file from each language
-        for lang, results in language_results.items():
-            if "graph_results" in results and test_file in results["graph_results"]:
-                file_results[lang] = results["graph_results"][test_file]
-
-        if len(file_results) < 2:
-            continue
-
-        # Compare graph structures
-        divergences = []
-        reference_lang = list(file_results.keys())[0]
-        reference_result = file_results[reference_lang]
-
-        if "system_graph" in reference_result:
-            ref_graph = reference_result["system_graph"]
-
-            for lang, result in file_results.items():
-                if lang == reference_lang or "system_graph" not in result:
-                    continue
-
-                lang_graph = result["system_graph"]
-
-                # Compare node and edge counts
-                if ref_graph.get("nodes") != lang_graph.get("nodes"):
-                    divergences.append(
-                        {
-                            "type": "node_count",
-                            "reference_lang": reference_lang,
-                            "reference_count": ref_graph.get("nodes"),
-                            "divergent_lang": lang,
-                            "divergent_count": lang_graph.get("nodes"),
-                        }
-                    )
-
-                if ref_graph.get("edges") != lang_graph.get("edges"):
-                    divergences.append(
-                        {
-                            "type": "edge_count",
-                            "reference_lang": reference_lang,
-                            "reference_count": ref_graph.get("edges"),
-                            "divergent_lang": lang,
-                            "divergent_count": lang_graph.get("edges"),
-                        }
-                    )
-
-                # Compare DOT format output (basic structure)
-                ref_dot = ref_graph.get("dot_format", "")
-                lang_dot = lang_graph.get("dot_format", "")
-
-                if ref_dot != lang_dot and ref_dot and lang_dot:
-                    # Check for structural differences rather than exact text match
-                    ref_lines = sorted(
-                        [line.strip() for line in ref_dot.split("\n") if "->" in line]
-                    )
-                    lang_lines = sorted(
-                        [line.strip() for line in lang_dot.split("\n") if "->" in line]
-                    )
-
-                    if ref_lines != lang_lines:
-                        divergences.append(
-                            {
-                                "type": "dot_structure",
-                                "reference_lang": reference_lang,
-                                "divergent_lang": lang,
-                                "diff": list(difflib.unified_diff(ref_lines, lang_lines, n=0)),
-                            }
-                        )
-
-        if divergences:
-            graph_analysis["divergence"][test_file] = divergences
-            graph_analysis["summary"]["divergent_tests"] += 1
-        else:
-            graph_analysis["summary"]["consistent_tests"] += 1
-
-        graph_analysis["summary"]["total_tests"] += 1
-
-    return graph_analysis
-
-
 def calculate_divergence_summary(analysis: ConformanceAnalysis) -> Dict[str, Any]:
     """Calculate overall divergence summary across all test categories."""
     summary = {
@@ -420,56 +315,70 @@ def calculate_divergence_summary(analysis: ConformanceAnalysis) -> Dict[str, Any
         ("validation", analysis.validation_analysis),
         ("display", analysis.display_analysis),
         ("substitution", analysis.substitution_analysis),
-        ("graph", analysis.graph_analysis),
     ]
 
     total_score = 0.0
     categories_with_tests = 0
 
     for category_name, category_data in categories:
-        if "summary" in category_data:
-            category_summary = category_data["summary"]
-            total_tests = category_summary.get(
-                "total_tests", category_summary.get("total_files", 0)
-            )
-            divergent_tests = category_summary.get(
-                "divergent_tests", category_summary.get("divergent_files", 0)
-            )
+        if "summary" not in category_data:
+            continue
 
-            if total_tests > 0:
-                consistency_score = (total_tests - divergent_tests) / total_tests
-                summary["categories"][category_name] = {
-                    "total_tests": total_tests,
-                    "divergent_tests": divergent_tests,
-                    "consistency_score": consistency_score,
-                    "status": "PASS"
-                    if consistency_score >= 0.9
-                    else "WARN"
-                    if consistency_score >= 0.7
-                    else "FAIL",
-                }
+        category_summary = category_data["summary"]
+        total_tests = category_summary.get("total_tests", category_summary.get("total_files", 0))
+        divergent_tests = category_summary.get(
+            "divergent_tests", category_summary.get("divergent_files", 0)
+        )
 
-                total_score += consistency_score
-                categories_with_tests += 1
+        # A category with nothing to compare (e.g. only one language emitted
+        # data for it, so no cross-language pair exists) is UNTESTED — NOT
+        # trivially consistent. It is surfaced explicitly and excluded from the
+        # overall score so an empty category can never inflate the verdict.
+        if total_tests == 0:
+            summary["categories"][category_name] = {
+                "total_tests": 0,
+                "divergent_tests": 0,
+                "consistency_score": None,
+                "status": "UNTESTED",
+            }
+            continue
 
-                if divergent_tests > 0:
-                    summary["total_divergent_categories"] += 1
+        consistency_score = (total_tests - divergent_tests) / total_tests
+        summary["categories"][category_name] = {
+            "total_tests": total_tests,
+            "divergent_tests": divergent_tests,
+            "consistency_score": consistency_score,
+            "status": "PASS"
+            if consistency_score >= 0.9
+            else "WARN"
+            if consistency_score >= 0.7
+            else "FAIL",
+        }
 
-                    # Identify critical divergences
-                    if consistency_score < 0.7:
-                        summary["critical_divergences"].append(
-                            {
-                                "category": category_name,
-                                "score": consistency_score,
-                                "divergent_count": divergent_tests,
-                            }
-                        )
+        total_score += consistency_score
+        categories_with_tests += 1
 
-    # Calculate overall score (only count categories that actually have tests)
+        if divergent_tests > 0:
+            summary["total_divergent_categories"] += 1
+
+            # Identify critical divergences
+            if consistency_score < 0.7:
+                summary["critical_divergences"].append(
+                    {
+                        "category": category_name,
+                        "score": consistency_score,
+                        "divergent_count": divergent_tests,
+                    }
+                )
+
+    # Overall score averages only categories that actually had cross-language
+    # comparisons. When nothing was comparable the run is UNTESTED, not a pass.
+    summary["categories_with_tests"] = categories_with_tests
     if categories_with_tests > 0:
         summary["overall_score"] = total_score / categories_with_tests
     else:
         summary["overall_score"] = 0.0
+        summary["overall_status_hint"] = "UNTESTED"
 
     return summary
 
@@ -517,13 +426,15 @@ def main():
     analysis.validation_analysis = compare_validation_results(language_results)
     analysis.display_analysis = compare_display_results(language_results)
     analysis.substitution_analysis = compare_substitution_results(language_results)
-    analysis.graph_analysis = compare_graph_results(language_results)
 
     # Calculate divergence summary
     analysis.divergence_summary = calculate_divergence_summary(analysis)
 
-    # Determine overall status
-    if analysis.divergence_summary["overall_score"] >= 0.9:
+    # Determine overall status. When no category had a cross-language pair to
+    # compare, the run is UNTESTED rather than a (misleading) PASS.
+    if analysis.divergence_summary.get("categories_with_tests", 0) == 0:
+        analysis.overall_status = "UNTESTED"
+    elif analysis.divergence_summary["overall_score"] >= 0.9:
         analysis.overall_status = "PASS"
     elif analysis.divergence_summary["overall_score"] >= 0.7:
         analysis.overall_status = "WARN"

@@ -20,9 +20,7 @@ This module is the Python counterpart of ``pkg/earthsci-ast-ts/src/coupling-impo
 from __future__ import annotations
 
 import copy
-import json
-import os
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable
 
 from .diagnostics import (
     COUPLING_EDGE_UNKNOWN_ROLE,
@@ -35,7 +33,7 @@ from .diagnostics import (
     COUPLING_LIBRARY_NESTED_IMPORT,
     COUPLING_ROLE_UNUSED,
 )
-from .lower_expression_templates import ExpressionTemplateError
+from .json_walk import ExpressionTemplateError, load_ref_raw
 
 # Payload keys a coupling-library file MUST NOT declare (esm-spec §10.9).
 _LIBRARY_FORBIDDEN_KEYS = (
@@ -81,7 +79,7 @@ def _head_segment(ref: str) -> str:
     return ref if dot == -1 else ref[:dot]
 
 
-def _rewrite_scoped_ref(ref: str, bind: Dict[str, str]) -> str:
+def _rewrite_scoped_ref(ref: str, bind: dict[str, str]) -> str:
     """Replace the top-level segment of a scoped reference with its bound actual.
 
     ``"Fuel.w_0"`` under ``{"Fuel": "FuelModelLookup"}`` -> ``"FuelModelLookup.w_0"``;
@@ -98,9 +96,16 @@ def _rewrite_scoped_ref(ref: str, bind: Dict[str, str]) -> str:
 def _rewrite_expr(expr: Any, fn: RefFn) -> Any:
     """Rewrite/visit every scoped reference inside an Expression tree.
 
-    Numbers pass through; strings are rewritten via ``fn``; operator nodes recurse
-    into ``args``; an ``apply_expression_template`` node's ``bindings`` VALUES are
-    free-variable targets (esm-spec §10.10.2) — Expressions in their own right.
+    Numbers pass through; strings are rewritten via ``fn``. Operator nodes recurse
+    into the FULL canonical raw-dict child set — the ``args`` operand list, the
+    aggregate body / ``filter`` / ``key`` and integral ``lower`` / ``upper``
+    single-child slots, the ``makearray`` ``values`` list, and the
+    ``table_lookup`` per-axis input map (``axes``) — the dict-form mirror of
+    :func:`substitute.substitute`. (An args-only walk let a role-scoped reference
+    inside an aggregate body / filter / key / bounds escape both rewriting and the
+    ``coupling_edge_unknown_role`` check.) An ``apply_expression_template`` node's
+    ``bindings`` VALUES are additionally free-variable targets (esm-spec
+    §10.10.2) — Expressions in their own right.
     """
     if isinstance(expr, bool):
         return expr
@@ -111,8 +116,14 @@ def _rewrite_expr(expr: Any, fn: RefFn) -> Any:
     if not _is_object(expr):
         return expr
     node = expr
-    if isinstance(node.get("args"), list):
-        node["args"] = [_rewrite_expr(a, fn) for a in node["args"]]
+    for k in ("expr", "filter", "key", "lower", "upper"):
+        if k in node:
+            node[k] = _rewrite_expr(node[k], fn)
+    for k in ("args", "values"):
+        if isinstance(node.get(k), list):
+            node[k] = [_rewrite_expr(a, fn) for a in node[k]]
+    if _is_object(node.get("axes")):
+        node["axes"] = {ak: _rewrite_expr(av, fn) for ak, av in node["axes"].items()}
     if node.get("op") == "apply_expression_template" and _is_object(node.get("bindings")):
         b = node["bindings"]
         for k in list(b.keys()):
@@ -120,7 +131,7 @@ def _rewrite_expr(expr: Any, fn: RefFn) -> Any:
     return node
 
 
-def _rewrite_entry_in_place(entry: Dict[str, Any], struct_fn: RefFn, expr_fn: RefFn) -> None:
+def _rewrite_entry_in_place(entry: dict[str, Any], struct_fn: RefFn, expr_fn: RefFn) -> None:
     """Apply ``struct_fn`` to every structural system/scoped reference of a
     coupling entry and ``expr_fn`` to every scoped reference inside its
     Expression fields (esm-spec §10.10.2). Mutates ``entry`` in place (callers
@@ -155,7 +166,7 @@ def _rewrite_entry_in_place(entry: Dict[str, Any], struct_fn: RefFn, expr_fn: Re
             entry["systems"] = [struct_fn(s) if isinstance(s, str) else s for s in entry["systems"]]
         translate = entry.get("translate")
         if _is_object(translate):
-            nxt: Dict[str, Any] = {}
+            nxt: dict[str, Any] = {}
             for k, v in translate.items():
                 nk = struct_fn(k)
                 if isinstance(v, str):
@@ -204,12 +215,12 @@ def _rewrite_entry_in_place(entry: Dict[str, Any], struct_fn: RefFn, expr_fn: Re
             ]
 
 
-def _collect_role_segments(edge: Any) -> Set[str]:
+def _collect_role_segments(edge: Any) -> set[str]:
     """Collect the top-level role segments a library edge references. Structural
     ref fields (systems[], from/to, translate keys, event var lists) always name
     a role; Expression strings name a role only when they are scoped references
     (contain a dot) — bare Expression operands like ``"t"`` are incidental."""
-    seen: Set[str] = set()
+    seen: set[str] = set()
     clone = copy.deepcopy(edge)
 
     def struct_fn(ref: str) -> str:
@@ -232,45 +243,14 @@ def _collect_role_segments(edge: Any) -> Set[str]:
 
 
 def _default_load_ref(ref: str, base_path: str) -> Any:
-    """Resolve a ``coupling_import`` ``ref`` to a parsed document, reusing the
-    same §4.7 ``${VAR}`` expansion + local/URL loading the template-import
-    resolver uses. Failures are reported with ``coupling_import_unresolved``."""
-    from .parse import _expand_ref_env
-
-    ref = _expand_ref_env(ref)
-    if ref.startswith("http://") or ref.startswith("https://"):
-        import urllib.request
-
-        try:
-            with urllib.request.urlopen(ref) as response:
-                content = response.read().decode("utf-8")
-        except Exception as e:  # noqa: BLE001 — reported with the stable code
-            raise ExpressionTemplateError(
-                COUPLING_IMPORT_UNRESOLVED,
-                f"failed to download coupling-library ref '{ref}': {e}",
-            )
-    else:
-        path = os.path.abspath(os.path.join(base_path, ref))
-        if not os.path.isfile(path):
-            raise ExpressionTemplateError(
-                COUPLING_IMPORT_UNRESOLVED,
-                f"coupling-library file not found: {path} (from ref '{ref}')",
-            )
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                content = fh.read()
-        except OSError as e:
-            raise ExpressionTemplateError(
-                COUPLING_IMPORT_UNRESOLVED,
-                f"coupling-library file unreadable: {path} (from ref '{ref}'): {e}",
-            )
-    try:
-        return json.loads(content)
-    except ValueError as e:
-        raise ExpressionTemplateError(
-            COUPLING_IMPORT_UNRESOLVED,
-            f"coupling-library ref '{ref}' is not valid JSON: {e}",
-        )
+    """Resolve a ``coupling_import`` ``ref`` to a parsed document via the shared
+    §4.7 loader (:func:`json_walk.load_ref_raw`) — the same ``${VAR}`` expansion
+    + local/URL loading the template-import resolver uses. Failures are reported
+    with ``coupling_import_unresolved``."""
+    raw, _base = load_ref_raw(
+        ref, base_path, code=COUPLING_IMPORT_UNRESOLVED, subject="coupling-library"
+    )
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +300,7 @@ def _resolves_to_component(esm_file: Any, value: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _expand_one(lib: Any, ref: str, bind: Dict[str, str], esm_file: Any) -> List[Dict[str, Any]]:
+def _expand_one(lib: Any, ref: str, bind: dict[str, str], esm_file: Any) -> list[dict[str, Any]]:
     """Validate a resolved coupling-library document and expand one
     ``coupling_import`` entry into its concrete (raw) edges, bound to ``bind``.
     Raises the esm-spec §10.11 diagnostics."""
@@ -360,7 +340,7 @@ def _expand_one(lib: Any, ref: str, bind: Dict[str, str], esm_file: Any) -> List
 
     # Edge-type + role-scope checks over the declared roles.
     role_set = set(roles)
-    used_roles: Set[str] = set()
+    used_roles: set[str] = set()
     for edge in edges:
         if not _is_object(edge):
             continue
@@ -426,7 +406,7 @@ def _expand_one(lib: Any, ref: str, bind: Dict[str, str], esm_file: Any) -> List
     def rw(r: str) -> str:
         return _rewrite_scoped_ref(r, bind)
 
-    expanded: List[Dict[str, Any]] = []
+    expanded: list[dict[str, Any]] = []
     for edge in edges:
         clone = copy.deepcopy(edge)
         _rewrite_entry_in_place(clone, rw, rw)
@@ -437,8 +417,8 @@ def _expand_one(lib: Any, ref: str, bind: Dict[str, str], esm_file: Any) -> List
 def expand_coupling_imports(
     esm_file: Any,
     base_path: str = ".",
-    load_ref: Optional[LoadRefFn] = None,
-) -> List[Any]:
+    load_ref: LoadRefFn | None = None,
+) -> list[Any]:
     """Expand every ``coupling_import`` entry in ``esm_file.coupling`` into
     concrete (typed) coupling edges, splicing them in the position of the import
     entry (esm-spec §10.10.3).
@@ -457,13 +437,13 @@ def expand_coupling_imports(
         return coupling
 
     resolver = load_ref if load_ref is not None else _default_load_ref
-    out: List[Any] = []
+    out: list[Any] = []
     for entry in coupling:
         if not isinstance(entry, CouplingImport):
             out.append(entry)
             continue
         ref = entry.ref if isinstance(entry.ref, str) else ""
-        bind: Dict[str, str] = {
+        bind: dict[str, str] = {
             k: v for k, v in (entry.bind or {}).items() if isinstance(v, str)
         }
         try:
@@ -474,7 +454,7 @@ def expand_coupling_imports(
             raise ExpressionTemplateError(
                 COUPLING_IMPORT_UNRESOLVED,
                 f"coupling_import ref '{ref}' failed to load: {e}",
-            )
+            ) from e
         for raw_edge in _expand_one(lib, ref, bind, esm_file):
             out.append(_parse_coupling_entry(raw_edge))
     return out

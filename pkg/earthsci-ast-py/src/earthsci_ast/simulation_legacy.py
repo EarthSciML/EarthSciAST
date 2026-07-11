@@ -72,7 +72,9 @@ def _generate_mass_action_odes(reaction_system: ReactionSystem) -> tuple[list[st
 
 
 def _create_event_functions(
-    events: list[ContinuousEvent], symbol_map: dict[str, sp.Symbol]
+    events: list[ContinuousEvent],
+    symbol_map: dict[str, sp.Symbol],
+    state_names: list[str],
 ) -> list[Callable]:
     """
     Create event functions for SciPy integration.
@@ -80,11 +82,19 @@ def _create_event_functions(
     Args:
         events: List of continuous events
         symbol_map: Mapping from variable names to SymPy symbols
+        state_names: State/species names in the order they appear in the solver's
+            ``y`` vector. Each condition symbol is resolved to the value of the
+            state with the SAME NAME via this ordering — never positionally,
+            since ``sympy.free_symbols`` iteration order is arbitrary.
 
     Returns:
         List of event functions
     """
     event_functions = []
+    # Name -> index in the solver state vector ``y``. A condition symbol is bound
+    # to ``y[state_index[name]]``; a symbol that names no state (a stray
+    # parameter) contributes 0.0, matching the historic default-to-zero fallback.
+    state_index = {name: i for i, name in enumerate(state_names)}
 
     for event in events:
         # Handle multiple conditions - create a function for each condition
@@ -106,12 +116,26 @@ def _create_event_functions(
             # One closure factory for every crossing flavour: the event bodies are
             # identical (evaluate the condition at the current state), differing only
             # in the SciPy ``direction`` and which ``affects`` list they carry.
-            def _make_event_function(direction, affects, condition_func, var_names, event):
+            def _make_event_function(
+                direction, affects, condition_func, var_names, event, state_index
+            ):
                 def event_function(
-                    t, y, condition_func=condition_func, var_names=var_names, event=event
+                    t,
+                    y,
+                    condition_func=condition_func,
+                    var_names=var_names,
+                    event=event,
+                    state_index=state_index,
                 ):
-                    var_dict = {name: y[i] if i < len(y) else 0 for i, name in enumerate(var_names)}
-                    var_values = [var_dict.get(name, 0) for name in var_names]
+                    # Resolve each condition symbol to the value of the state with
+                    # that NAME (via ``state_index``), so the lambdified condition
+                    # sees the correct state regardless of free-symbol order.
+                    var_values = [
+                        y[state_index[name]]
+                        if name in state_index and state_index[name] < len(y)
+                        else 0.0
+                        for name in var_names
+                    ]
                     return condition_func(*var_values) if var_values else condition_func()
 
                 event_function.terminal = True
@@ -123,10 +147,14 @@ def _create_event_functions(
             if has_affect_neg and has_affect_pos:
                 # Separate event functions for positive- and negative-going crossings.
                 event_functions.append(
-                    _make_event_function(1, event.affects, condition_func, var_names, event)
+                    _make_event_function(
+                        1, event.affects, condition_func, var_names, event, state_index
+                    )
                 )
                 event_functions.append(
-                    _make_event_function(-1, event.affect_neg, condition_func, var_names, event)
+                    _make_event_function(
+                        -1, event.affect_neg, condition_func, var_names, event, state_index
+                    )
                 )
             else:
                 # Original behavior for events without affect_neg: detect all
@@ -138,6 +166,7 @@ def _create_event_functions(
                         condition_func,
                         var_names,
                         event,
+                        state_index,
                     )
                 )
 
@@ -175,29 +204,18 @@ def _apply_discrete_event_effects(
                 )  # Ensure non-negative
 
         elif isinstance(affect, FunctionalAffect):
-            # Functional effect: apply function to target variable
-            if affect.target in species_indices:
-                target_idx = species_indices[affect.target]
-                current_value = y_modified[target_idx]
-
-                # Simple function implementations
-                if affect.function == "multiply":
-                    if len(affect.arguments) >= 1:
-                        factor = float(affect.arguments[0])
-                        y_modified[target_idx] = max(0.0, current_value * factor)
-
-                elif affect.function == "add":
-                    if len(affect.arguments) >= 1:
-                        increment = float(affect.arguments[0])
-                        y_modified[target_idx] = max(0.0, current_value + increment)
-
-                elif affect.function == "set":
-                    if len(affect.arguments) >= 1:
-                        new_value = float(affect.arguments[0])
-                        y_modified[target_idx] = max(0.0, new_value)
-
-                elif affect.function == "reset":
-                    y_modified[target_idx] = 0.0
+            # A FunctionalAffect dispatches a registered handler (by ``handler_id``,
+            # reading ``read_vars`` / ``read_params`` and writing ``modified_params``)
+            # — there is no handler registry in this legacy 0-D box-model path, so it
+            # cannot be applied here. Raising (rather than silently skipping an
+            # intended state change, or AttributeError-ing on fields FunctionalAffect
+            # never had) surfaces the limitation as a clear failure result via the
+            # caller's error handling.
+            raise SimulationError(
+                f"FunctionalAffect (handler_id={affect.handler_id!r}) is not supported "
+                f"by the legacy discrete-event path; only AffectEquation assignments "
+                f"can be applied here"
+            )
 
     return y_modified
 
@@ -276,6 +294,85 @@ def _evaluate_expression_at_state(
     return float(sympy_expr)
 
 
+def _prepare_reaction_rhs(
+    reaction_system: ReactionSystem,
+    initial_conditions: dict[str, float],
+) -> tuple[list[str], dict[str, sp.Symbol], np.ndarray, Callable[[float, np.ndarray], np.ndarray]]:
+    """Shared mass-action RHS setup for both scalar reaction-system entry points.
+
+    Lowers the reaction system to mass-action ODEs, resolves the initial-condition
+    vector (explicit override > species ``default`` > 0.0, matching the flatten
+    path in flatten.py ``_collect_reaction_system``), and lambdifies the ODE
+    bodies into a clipped, non-finite-guarded ``rhs_function(t, y)``. Returns
+    ``(species_names, symbol_map, y0, rhs_function)``; raises
+    :class:`SimulationError` when the system has no species. Consolidates the
+    setup that :func:`simulate_reaction_system` and
+    :func:`simulate_with_discrete_events` previously duplicated verbatim.
+    """
+    species_names, ode_exprs = _generate_mass_action_odes(reaction_system)
+    if not species_names:
+        raise SimulationError("No species found in reaction system")
+
+    symbol_map = {name: sp.Symbol(name) for name in species_names}
+    species_defaults = {
+        s.name: s.default for s in reaction_system.species if s.default is not None
+    }
+    y0 = np.array(
+        [
+            _resolve_override(name, initial_conditions, species_defaults.get(name))
+            for name in species_names
+        ]
+    )
+
+    variables = [symbol_map[name] for name in species_names]
+    if variables and ode_exprs:
+        rhs_funcs = [
+            sp.lambdify(variables, expr, modules=_LAMBDIFY_MODULES) for expr in ode_exprs
+        ]
+
+        def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
+            """Right-hand side function for the ODE system."""
+            # Clip to prevent negative concentrations before evaluating rates.
+            y_clipped = np.maximum(y, 0.0)
+            dydt = np.array([func(*y_clipped) for func in rhs_funcs])
+            if not np.all(np.isfinite(dydt)):
+                raise SimulationError("Non-finite derivatives encountered")
+            return dydt
+    else:
+
+        def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
+            return np.zeros_like(y)
+
+    return species_names, symbol_map, y0, rhs_function
+
+
+def _fire_condition_events(
+    condition_events: list[DiscreteEvent],
+    t_current: float,
+    y_current: np.ndarray,
+    species_names: list[str],
+    symbol_map: dict[str, sp.Symbol],
+    event_times: list[float],
+) -> np.ndarray:
+    """Fire every condition-triggered discrete event that holds at the current state.
+
+    The full check sweep runs against the pre-application state (so events do not
+    see each other's mid-sweep mutations), then the triggered events are applied
+    in order, each recording its fire time in ``event_times``. Returns the
+    (possibly updated) state vector. Consolidates the check/apply block that
+    appeared twice verbatim in :func:`simulate_with_discrete_events`.
+    """
+    triggered = [
+        event
+        for event in condition_events
+        if _check_discrete_event_condition(event, t_current, y_current, species_names, symbol_map)
+    ]
+    for event in triggered:
+        y_current = _apply_discrete_event_effects(event, y_current, species_names, symbol_map)
+        event_times.append(t_current)
+    return y_current
+
+
 def simulate_reaction_system(
     reaction_system: ReactionSystem,
     initial_conditions: dict[str, float],
@@ -309,64 +406,15 @@ def simulate_reaction_system(
         - Mass-action kinetics only
     """
     try:
-        # Generate mass-action ODEs
-        species_names, ode_exprs = _generate_mass_action_odes(reaction_system)
-
-        if not species_names:
-            raise SimulationError("No species found in reaction system")
-
-        # Create symbol map
-        symbol_map = {name: sp.Symbol(name) for name in species_names}
-
-        # Create initial condition vector. An explicit `initial_conditions`
-        # override wins; otherwise fall back to the species' declared scalar
-        # `default` (matching the main flatten path in flatten.py
-        # `_collect_reaction_system`), and finally to 0.0 when neither exists.
-        species_defaults = {
-            s.name: s.default for s in reaction_system.species if s.default is not None
-        }
-        y0 = np.array(
-            [
-                _resolve_override(name, initial_conditions, species_defaults.get(name))
-                for name in species_names
-            ]
+        # Shared mass-action RHS setup (ODE gen, y0 resolution, lambdified rhs).
+        species_names, symbol_map, y0, rhs_function = _prepare_reaction_rhs(
+            reaction_system, initial_conditions
         )
-
-        # Lambdify ODEs for fast evaluation
-        variables = [symbol_map[name] for name in species_names]
-
-        # Create RHS function
-        if variables and ode_exprs:
-            rhs_funcs = [
-                sp.lambdify(variables, expr, modules=_LAMBDIFY_MODULES) for expr in ode_exprs
-            ]
-
-            def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
-                """Right-hand side function for the ODE system."""
-                try:
-                    # Ensure y has the right shape and no negative concentrations
-                    y_clipped = np.maximum(y, 0.0)  # Clip to prevent negative concentrations
-
-                    # Evaluate each ODE expression
-                    dydt = np.array([func(*y_clipped) for func in rhs_funcs])
-
-                    # Ensure result is finite
-                    if not np.all(np.isfinite(dydt)):
-                        raise SimulationError("Non-finite derivatives encountered")
-
-                    return dydt
-
-                except Exception as e:
-                    raise SimulationError(f"Error in RHS evaluation: {e}") from e
-        else:
-
-            def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
-                return np.zeros_like(y)
 
         # Create event functions if events are provided
         event_functions = []
         if events:
-            event_functions = _create_event_functions(events, symbol_map)
+            event_functions = _create_event_functions(events, symbol_map, species_names)
 
         # Set default solver options
         default_options = {
@@ -456,43 +504,10 @@ def simulate_with_discrete_events(
         # Sort time events by time
         time_events.sort(key=lambda x: x[0])
 
-        # Generate mass-action ODEs
-        species_names, ode_exprs = _generate_mass_action_odes(reaction_system)
-        if not species_names:
-            raise SimulationError("No species found in reaction system")
-
-        # Create symbol map and initial conditions. An explicit
-        # `initial_conditions` override wins; otherwise fall back to the
-        # species' declared scalar `default`, and finally to 0.0.
-        symbol_map = {name: sp.Symbol(name) for name in species_names}
-        species_defaults = {
-            s.name: s.default for s in reaction_system.species if s.default is not None
-        }
-        y_current = np.array(
-            [
-                _resolve_override(name, initial_conditions, species_defaults.get(name))
-                for name in species_names
-            ]
+        # Shared mass-action RHS setup (ODE gen, y0 resolution, lambdified rhs).
+        species_names, symbol_map, y_current, rhs_function = _prepare_reaction_rhs(
+            reaction_system, initial_conditions
         )
-
-        # Lambdify ODEs for fast evaluation
-        variables = [symbol_map[name] for name in species_names]
-        if variables and ode_exprs:
-            rhs_funcs = [
-                sp.lambdify(variables, expr, modules=_LAMBDIFY_MODULES) for expr in ode_exprs
-            ]
-
-            def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
-                """Right-hand side function for the ODE system."""
-                y_clipped = np.maximum(y, 0.0)  # Clip to prevent negative concentrations
-                dydt = np.array([func(*y_clipped) for func in rhs_funcs])
-                if not np.all(np.isfinite(dydt)):
-                    raise SimulationError("Non-finite derivatives encountered")
-                return dydt
-        else:
-
-            def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
-                return np.zeros_like(y)
 
         # Manual stepping with event handling
         t_current = t_start
@@ -564,20 +579,10 @@ def simulate_with_discrete_events(
                 event_times.append(t_current)
                 time_event_index += 1
 
-            # Check condition-based events at current time point
-            events_triggered = []
-            for event in condition_events:
-                if _check_discrete_event_condition(
-                    event, t_current, y_current, species_names, symbol_map
-                ):
-                    events_triggered.append(event)
-
-            # Apply triggered events (avoid modifying state while checking)
-            for event in events_triggered:
-                y_current = _apply_discrete_event_effects(
-                    event, y_current, species_names, symbol_map
-                )
-                event_times.append(t_current)
+            # Check + apply condition-based events at the current time point.
+            y_current = _fire_condition_events(
+                condition_events, t_current, y_current, species_names, symbol_map, event_times
+            )
 
             # Continue integration to next_t if not already there
             if t_current < next_t:
@@ -611,20 +616,10 @@ def simulate_with_discrete_events(
                     t_points.extend(sol.t[1:])  # Skip first point (duplicate)
                     y_points.extend(sol.y[:, 1:].T)  # Skip first point
 
-            # Check condition-based events after integration step
-            events_triggered = []
-            for event in condition_events:
-                if _check_discrete_event_condition(
-                    event, t_current, y_current, species_names, symbol_map
-                ):
-                    events_triggered.append(event)
-
-            # Apply triggered events
-            for event in events_triggered:
-                y_current = _apply_discrete_event_effects(
-                    event, y_current, species_names, symbol_map
-                )
-                event_times.append(t_current)
+            # Check + apply condition-based events after the integration step.
+            y_current = _fire_condition_events(
+                condition_events, t_current, y_current, species_names, symbol_map, event_times
+            )
 
         return SimulationResult(
             t=np.array(t_points),

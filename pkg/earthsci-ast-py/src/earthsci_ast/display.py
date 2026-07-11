@@ -523,6 +523,8 @@ def _get_operator_precedence(op: str) -> int:
         "/": 5,
         "not": 6,  # Unary
         "^": 7,
+        "**": 7,
+        "pow": 7,
     }
     return precedence_map.get(op, 8)  # Functions get highest precedence
 
@@ -532,37 +534,27 @@ def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = F
     if isinstance(child, (int, float, str)):
         return False
 
-    # Handle dict-style expression nodes
-    if isinstance(child, dict) and "op" in child:
-        parent_prec = _get_operator_precedence(parent.op)
-        child_prec = _get_operator_precedence(child["op"])
-        if child_prec < parent_prec:
-            return True
-        if child_prec > parent_prec:
-            return False
-        if is_right_operand and parent.op in ["-", "/", "^"]:
-            return True
-        return False
-
-    if not isinstance(child, ExprNode):
+    # Read the child's operator whether the child is an ExprNode or a
+    # dict-style node — the precedence rules below are identical for both.
+    if isinstance(child, ExprNode):
+        child_op = child.op
+    elif isinstance(child, dict) and "op" in child:
+        child_op = child["op"]
+    else:
         return False
 
     parent_prec = _get_operator_precedence(parent.op)
-    child_prec = _get_operator_precedence(child.op)
+    child_prec = _get_operator_precedence(child_op)
 
     if child_prec < parent_prec:
         return True
     if child_prec > parent_prec:
         return False
 
-    # Same precedence: need parens if child is right operand and operator is not associative
-    if is_right_operand and parent.op in ["-", "/", "^"]:
+    # Same precedence: need parens if child is right operand and operator is not
+    # associative (subtraction / division / exponentiation).
+    if is_right_operand and parent.op in ["-", "/", "^", "**", "pow"]:
         return True
-
-    # Special cases for function arguments - no parens needed for simple expressions
-    if parent.op in ["sin", "cos", "tan", "exp", "log", "sqrt", "abs"]:
-        # Only parenthesize for very low precedence operators
-        return child_prec <= 2
 
     return False
 
@@ -1000,18 +992,55 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
     # ---- N-ary / Binary operators ----
     if len(args) >= 2:
-        # Handle n-ary multiplication by folding
-        if op == "*" and len(args) > 2:
-            result = format_arg(args[0])
-            for a in args[1:]:
-                fa = format_arg(a, True)
+        # Fold n-ary operators left-to-right when there are more than two args.
+        # esm-spec §6.1 pins +, *, min, max, and, or as n-ary (e.g. `+` renders
+        # `a + b + c`). The exactly-2-arg cases fall through to the binary
+        # handlers below, which carry per-op niceties (a+(-b) → a−b,
+        # same-precedence parenthesization) that the plain fold does not need.
+        if len(args) > 2:
+            if op == "*":
+                result = format_arg(args[0])
+                for a in args[1:]:
+                    fa = format_arg(a, True)
+                    if format_type == "unicode":
+                        result = f"{result}·{fa}"
+                    elif format_type == "latex":
+                        result = f"{result} \\cdot {fa}"
+                    else:
+                        result = f"{result} * {fa}"
+                return result
+            if op == "+":
+                result = format_arg(args[0])
+                for a in args[1:]:
+                    # a + (-b) → a − b (per-term, mirroring the 2-arg branch).
+                    neg_inner = None
+                    if isinstance(a, ExprNode) and a.op == "-" and len(a.args) == 1:
+                        neg_inner = a.args[0]
+                    elif (
+                        isinstance(a, dict)
+                        and a.get("op") == "-"
+                        and len(a.get("args", [])) == 1
+                    ):
+                        neg_inner = a["args"][0]
+                    if neg_inner is not None:
+                        sep = " − " if format_type == "unicode" else " - "
+                        result = f"{result}{sep}{_fmt(neg_inner)}"
+                    else:
+                        result = f"{result} + {format_arg(a, True)}"
+                return result
+            if op in ("and", "or"):
                 if format_type == "unicode":
-                    result = f"{result}·{fa}"
-                elif format_type == "latex":
-                    result = f"{result} \\cdot {fa}"
-                else:
-                    result = f"{result} * {fa}"
-            return result
+                    sym = " ∧ " if op == "and" else " ∨ "
+                    return sym.join(format_arg(a) for a in args)
+                if format_type == "latex":
+                    sym = " \\land " if op == "and" else " \\lor "
+                    return sym.join(format_arg(a) for a in args)
+                sym = " && " if op == "and" else " || "
+                return sym.join(f"({format_arg(a)})" for a in args)
+            if op in ("min", "max"):
+                if format_type == "latex":
+                    return f"\\{op}(" + ", ".join(to_latex(a) for a in args) + ")"
+                return f"{op}(" + ", ".join(format_arg(a) for a in args) + ")"
 
         left, right = args[0], args[1]
 
@@ -1051,7 +1080,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"{format_arg(left)}/{format_arg(right, True)}"
             return f"{format_arg(left)} / {format_arg(right, True)}"
 
-        if op == "^":
+        if op in ("^", "**", "pow"):
             if format_type == "latex":
                 return f"{format_arg(left)}^{{{to_latex(right)}}}"
             if format_type == "unicode" and isinstance(right, int):

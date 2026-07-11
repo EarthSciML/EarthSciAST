@@ -13,11 +13,7 @@ from typing import Any
 
 from ..esm_types import DataLoader, DataLoaderKind
 from ._source_urls import resolve_source_urls
-from ._xarray import (  # re-export: cache.py imports _default_xarray_opener from here
-    XarrayLoaderError,
-    _default_xarray_opener,
-    _ds_to_mapping,
-)
+from ._xarray import XarrayLoaderError, _default_xarray_opener, _ds_to_mapping
 from .mirror import open_with_fallback
 from .variables import apply_variable_mapping
 

@@ -26,13 +26,16 @@ classifiers = [
 license = {file = "LICENSE"}
 requires-python = ">=3.9"
 
+# scipy / xarray / netcdf4 are required: the simulation and IO tiers (exercised
+# by the test suite) hard-depend on them. matplotlib is genuinely optional — it
+# is used lazily only by SimulationResult.plot behind an import guard — so it
+# lives in the `plot` extra, not here.
 dependencies = [
     "jsonschema>=4.0",
     "sympy>=1.9",
     "pint>=0.20",
     "numpy>=1.20",
     "scipy>=1.7",
-    "matplotlib>=3.5",
     "xarray>=0.20",
     "netcdf4>=1.5",
 ]
@@ -47,8 +50,17 @@ Issues = "https://github.com/EarthSciML/EarthSciAST/issues"
 esm-migrate = "earthsci_ast.cli.migrate:main"
 earthsci-determinism-adapter-python = "earthsci_ast.cli.determinism_adapter:main"
 earthsci-cadence-adapter-python = "earthsci_ast.cli.cadence_adapter:main"
+# The pde-simulation conformance harness probes PATH for
+# ``earthsci-pde-sim-adapter-<binding>`` (scripts/run-pde-simulation-conformance.py);
+# register the Python adapter under that exact name.
+earthsci-pde-sim-adapter-python = "earthsci_ast.cli.pde_simulation_adapter:main"
 
 [project.optional-dependencies]
+# Plotting is optional: only SimulationResult.plot imports matplotlib, lazily and
+# behind an import guard, so the core toolkit never requires it.
+plot = [
+    "matplotlib>=3.5",
+]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=3.0",

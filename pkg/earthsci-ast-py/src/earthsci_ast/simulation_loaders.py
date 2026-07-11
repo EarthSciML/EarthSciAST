@@ -186,45 +186,16 @@ def _extract_loader_var(native: Any, var: str, file_var: str | None = None) -> n
     return _coerce_field_values(native)
 
 
-def _provider_array(field: LoaderField, native: Any, target: Any) -> np.ndarray:
+def _provider_array(field: LoaderField, native: Any, target: Any = None) -> np.ndarray:
     """Lower a provider's native field to the flat sim-grid array the RHS reads.
 
     The raw ``field.var`` array is flattened unchanged (identity for a
-    native==sim-grid fixture or a stub provider). ``target`` is accepted for
-    signature compatibility but unused.
+    native==sim-grid fixture or a stub provider). ``target`` is a vestigial,
+    ignored parameter retained only for backward call-compatibility — the loader
+    target-grid / regrid machinery was removed in v0.8.0 (loader fields are
+    injected raw).
     """
     return _extract_loader_var(native, field.var, _loader_file_variable(field)).reshape(-1)
-
-
-def _build_loader_target(flat: FlattenedSystem) -> Any | None:
-    """Loader target grids are no longer built — always returns ``None``.
-
-    The bespoke spatial-grid / regrid machinery was removed in v0.8.0 (loader
-    fields are injected raw; any landing onto a model grid is an ``aggregate``
-    FAQ concern downstream), so there is no target grid to construct. Retained
-    as a no-op for signature compatibility with its call sites.
-    """
-    return None
-
-
-def _factory_accepts_target(factory: Callable) -> bool:
-    """Whether ``factory`` accepts a ``target`` keyword (so we can thread it in).
-
-    The provider-factory contract is ``(field, window) -> Provider``; a factory
-    that *also* takes ``target=`` (the earthsciio adapter, which needs the domain
-    for the GeoTIFF bbox / CDS ``area``) receives the same target the in-tree
-    default does. A ``**kwargs`` factory counts. Best-effort: an un-introspectable
-    callable is treated as the bare 2-arg contract.
-    """
-    import inspect
-
-    try:
-        params = inspect.signature(factory).parameters
-    except (TypeError, ValueError):
-        return False
-    if "target" in params:
-        return True
-    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 def _loader_cadence_boundaries(
@@ -305,7 +276,10 @@ def _provider_segment_boundaries(
         if provider is not None:
             try:
                 times = list(provider.refresh_times())
-            except Exception:
+            except (AttributeError, TypeError):
+                # Only duck-type shape mismatches (no refresh_times / not
+                # iterable) fall back to local frequency arithmetic; a genuine
+                # provider failure (I/O, cadence bug) propagates.
                 times = []
         if times and epoch is not None:
             for anchor in times:
@@ -349,6 +323,10 @@ def _run_cadence_segmented_solve(
     taint that defers the regrid off the const-setup partition). State is threaded
     across boundaries — continuous; only the forcing jumps. The build inspection, if
     given, is filled from the seed (t0) build."""
+    # Spread the whole-run DENSE_OUTPUT_MIN_POINTS budget across the cadence
+    # segments (so a multi-segment run doesn't multiply the per-segment grid), but
+    # floor each segment at 11 nodes: a short segment still needs enough interior
+    # samples for the fixture runners' linear interpolation to track the curve.
     per_seg_pts = max(11, (DENSE_OUTPUT_MIN_POINTS // len(seg_ends)) + 1)
     t_current = t0
     y_current: np.ndarray | None = None
@@ -500,29 +478,12 @@ def _simulate_with_loaders(
             # load_data), CONST → materialize() once, DISCRETE → refresh() at the
             # seed and each boundary. Native fields are bound RAW (on their native
             # grid); any native→sim regrid is an in-model coupling expression the
-            # RHS evaluates (the obsolete regrid seam was removed in v0.8.0). The
-            # `target` below is the data-FETCH domain (server-side subset bbox /
-            # CDS area), NOT a regrid target.
+            # RHS evaluates (the obsolete regrid seam was removed in v0.8.0).
             from .data_loaders.provider import build_default_provider
 
-            target = _build_loader_target(flat)
-            # The in-tree default provider derives server-side-subset URL fills
-            # (WGS84 bbox / image size, and the CDS ERA5 'area') from the target
-            # grid. An injected provider_factory keeps the public (field, window)
-            # contract, but if it ALSO accepts a ``target`` keyword (e.g. the
-            # earthsciio adapter, which needs the domain for the GeoTIFF bbox /
-            # CDS area) we thread the same target through.
-            if provider_factory is not None:
-                if _factory_accepts_target(provider_factory):
-
-                    def factory(f, w):
-                        return provider_factory(f, w, target=target)
-                else:
-                    factory = provider_factory
-            else:
-
-                def factory(f, w):
-                    return build_default_provider(f, w, target=target)
+            # Both the in-tree default and an injected provider_factory honour the
+            # public ``(field, window) -> Provider`` contract, so route directly.
+            factory = provider_factory if provider_factory is not None else build_default_provider
 
             # Sim-clock 0 is the run domain's reference_time (shared by all
             # loaders); only when the domain carries no temporal anchor do we
@@ -553,14 +514,12 @@ def _simulate_with_loaders(
 
             def _seed_const() -> None:
                 for f in const_fields:
-                    loader_arrays[f.name] = _provider_array(
-                        f, providers[f.name].materialize(), target
-                    )
+                    loader_arrays[f.name] = _provider_array(f, providers[f.name].materialize())
 
             def _refresh_discrete(when: float) -> None:
                 for f in discrete_fields:
                     loader_arrays[f.name] = _provider_array(
-                        f, providers[f.name].refresh(_abs(f, when)), target
+                        f, providers[f.name].refresh(_abs(f, when))
                     )
 
             seg_ends = _provider_segment_boundaries(discrete_fields, providers, epochs, t0, t1) + [
@@ -627,7 +586,10 @@ def _provider_is_discrete(provider: Any) -> bool:
         return False
     try:
         return len(list(provider.refresh_times())) > 0
-    except Exception:
+    except (AttributeError, TypeError):
+        # Duck-type shape mismatch only (no refresh_times / non-iterable result) →
+        # treat as const. A real refresh_times() failure must NOT be silently
+        # reclassified as const, so it propagates.
         return False
 
 
@@ -677,7 +639,9 @@ def _provider_epoch(provider: Any, t0: float) -> _dt.datetime | None:
     if anchor is None:
         try:
             times = list(provider.refresh_times())
-        except Exception:
+        except (AttributeError, TypeError):
+            # Duck-type shape mismatch only; a genuine refresh_times() failure
+            # propagates rather than silently losing the epoch anchor.
             times = []
         anchor = times[0] if times else None
     if anchor is None:
@@ -748,7 +712,10 @@ def _simulate_with_discrete_providers(
                 continue
             try:
                 anchors = list(providers[n].refresh_times())
-            except Exception:
+            except (AttributeError, TypeError):
+                # Duck-type shape mismatch only; a genuine refresh_times() failure
+                # propagates rather than silently dropping this provider's
+                # segment boundaries.
                 anchors = []
             for anchor in anchors:
                 b = _delta_seconds(anchor, epoch)

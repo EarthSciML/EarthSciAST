@@ -11,6 +11,7 @@ and join-key buffers, the :class:`BuildInspection` observability sink,
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -85,6 +86,10 @@ def _densify_solution(
     if not sol.success or getattr(sol, "sol", None) is None:
         return sol.t, sol.y
     t0, t1 = float(tspan[0]), float(tspan[1])
+    # Resample onto at least ``min_points`` nodes, but scale to 4× the solver's own
+    # step count so a stiff / eventful run (many native steps) gets proportionally
+    # denser output than the flat ``min_points`` floor would give — enough
+    # inter-step nodes for the fixture runners' linear interp to track the curve.
     n = max(min_points, int(len(sol.t)) * 4)
     grid = np.linspace(t0, t1, n)
     t_out = np.unique(np.concatenate([grid, np.asarray(sol.t, dtype=float)]))
@@ -136,11 +141,24 @@ def _resolve_state_element(
     not resolve.
     """
     base, idx = _parse_element_key(key)
-    # Match base against state names (namespaced or bare).
-    matches = [n for n in state_names if n == base or n.endswith("." + base)]
-    if not matches:
-        return None
-    var_name = matches[0]
+    # Match base against state names: an EXACT name wins outright; otherwise fall
+    # back to dot-suffix (`*.base`) matches. Refuse to pick arbitrarily among
+    # several suffix matches — an ambiguous bare IC key must not be silently
+    # assigned to whichever state happens to sort first (mirrors
+    # numpy_interpreter.ragged_factor_scope's deliberate ambiguity refusal).
+    if base in state_names:
+        var_name = base
+    else:
+        matches = [n for n in state_names if n.endswith("." + base)]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise SimulationError(
+                f"initial condition key {key!r} is ambiguous: bare name {base!r} "
+                f"matches multiple states {sorted(matches)}; use the full "
+                f"dot-namespaced state name"
+            )
+        var_name = matches[0]
     shape = shapes.get(var_name, ())
     if idx is None:
         if shape:
@@ -190,12 +208,18 @@ def _apply_initial_conditions(
     for key, value in initial_conditions.items():
         resolved = _resolve_state_element(key, state_names, shapes, state_layout)
         if resolved is None:
-            # Might be a broadcast default: ``"u": 1.0`` assigns every element.
+            # Might be a broadcast default: ``"u": 1.0`` assigns every element of a
+            # whole-array state. Prefer an exact name; a >1-way ambiguous bare key
+            # already raised in _resolve_state_element, so a lone unique dot-suffix
+            # match is the only fallback (exact-name-wins parity with resolution).
             base, idx = _parse_element_key(key)
             if idx is None:
-                matches = [n for n in state_names if n == base or n.endswith("." + base)]
-                if matches:
-                    name = matches[0]
+                if base in state_names:
+                    name = base
+                else:
+                    matches = [n for n in state_names if n.endswith("." + base)]
+                    name = matches[0] if len(matches) == 1 else None
+                if name is not None:
                     sl = state_layout[name]
                     y0[sl] = float(value)
                     continue
@@ -454,8 +478,17 @@ def _apply_aggregate_ode_to_dy(
                             if not rhs_contract_syms:
                                 val = float(eval_expr(rhs_body, ctx))
                             else:
-                                # Unroll contracted indices and combine with reduce op.
-                                acc = _REDUCE_INIT.get(rhs_reduce, 0.0)
+                                # Unroll contracted indices and combine with the
+                                # reduce op. An unknown reducer is refused (parity
+                                # with numpy_interpreter._reduce_step), never
+                                # silently treated as ``min``. `_REDUCE_INIT` is the
+                                # shared identity + validity table.
+                                if rhs_reduce not in _REDUCE_INIT:
+                                    raise SimulationError(
+                                        f"Unsupported reduce op {rhs_reduce!r} in "
+                                        f"contracted arrayop ODE"
+                                    )
+                                acc = _REDUCE_INIT[rhs_reduce]
                                 k_it = np.ndindex(*(len(r) for r in rhs_contract_ranges))
                                 for k_multi in k_it:
                                     for k_s, k_r, k_i in zip(
@@ -469,7 +502,7 @@ def _apply_aggregate_ode_to_dy(
                                         acc *= term
                                     elif rhs_reduce == "max":
                                         acc = max(acc, term)
-                                    else:
+                                    else:  # "min" — the only remaining validated op
                                         acc = min(acc, term)
                                 val = acc
                             dy[flat_pos] = val
@@ -540,9 +573,23 @@ def _apply_equation_to_dy(
     if _apply_aggregate_ode_to_dy(lhs, rhs, ctx, shapes, state_layout, dy):
         return
 
-    # Case C: algebraic equation left over after elimination — ignore for v1.
-    # The solver will still run; purely algebraic states will keep their
-    # initial values (fixture 06 is a smoke test that tolerates this).
+    # Case C: an equation left over after elimination whose LHS matched neither a
+    # scalar/element state derivative (Case A) nor an aggregate ODE (Case B), so
+    # nothing is written to ``dy``. A scalar ``ic`` op is an intentional no-op on
+    # the RHS (its initial value is folded into u0 at build time), so it is NOT
+    # "unrecognized" and must not warn. Every other shape means a state this
+    # equation was meant to constrain silently stays frozen at its initial value —
+    # emit a diagnostic naming it rather than dropping it silently (Python dedups
+    # per distinct message, so this fires once per LHS).
+    if isinstance(lhs, ExprNode) and lhs.op == "ic":
+        return
+    warnings.warn(
+        f"simulate: unrecognized algebraic equation with LHS {eq.lhs!r} was not "
+        f"applied to the ODE RHS; any state it constrains stays frozen at its "
+        f"initial value",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     return
 
 
@@ -1686,7 +1733,12 @@ def _simulate_with_numpy(
                             join_key_index_sets=build.join_key_index_sets,
                             factor_scope=build.factor_scope,
                         )
-                        _materialize_observeds(varying_observed, ctx)
+                        # Per-observed skip policy (parity with the per-step RHS
+                        # driver): a single DEAD observed that cannot be evaluated
+                        # is dropped, not fatal — otherwise the outer
+                        # ``except NumpyInterpreterError`` would discard ALL
+                        # observed rows for one unresolvable observed.
+                        _materialize_observeds(varying_observed, ctx, skip_unresolved=True)
                         for name, _ in varying_observed:
                             if name in ctx.observed_values:
                                 obs_rows[name][j] = ctx.observed_values[name]
