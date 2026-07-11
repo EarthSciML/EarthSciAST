@@ -56,8 +56,11 @@ type ClosedFunctionError struct {
 }
 
 func (e *ClosedFunctionError) Error() string {
-	return fmt.Sprintf("ClosedFunctionError(%s): %s", e.Code, e.Message)
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *ClosedFunctionError) DiagnosticCode() string { return e.Code }
 
 func newClosedFunctionError(code, msg string) *ClosedFunctionError {
 	return &ClosedFunctionError{Code: code, Message: msg}

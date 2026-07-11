@@ -23,8 +23,11 @@ type LowerEnumsError struct {
 }
 
 func (e *LowerEnumsError) Error() string {
-	return fmt.Sprintf("LowerEnumsError(%s): %s", e.Code, e.Message)
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *LowerEnumsError) DiagnosticCode() string { return e.Code }
 
 func newLowerEnumsError(code, msg string) *LowerEnumsError {
 	return &LowerEnumsError{Code: code, Message: msg}

@@ -165,6 +165,9 @@ func (e *ExpressionTemplateError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
 
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *ExpressionTemplateError) DiagnosticCode() string { return e.Code }
+
 func newETErr(code, msg string) *ExpressionTemplateError {
 	return &ExpressionTemplateError{Code: code, Message: msg}
 }

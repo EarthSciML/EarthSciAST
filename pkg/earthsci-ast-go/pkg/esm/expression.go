@@ -21,6 +21,9 @@ func (e *EvaluationError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
 
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *EvaluationError) DiagnosticCode() string { return e.Code }
+
 // FreeVariables returns the set of all variable names that appear in an expression
 func FreeVariables(expr Expression) map[string]bool {
 	variables := make(map[string]bool)

@@ -85,4 +85,30 @@ const (
 	FmtUnicode = "unicode"
 	FmtLatex   = "latex"
 	FmtAscii   = "ascii"
+	// FmtUnicodeSpaced is FmtUnicode with the multiplication operator rendered
+	// as " · " (spaced) instead of "·". The spacing is applied where the
+	// operator is emitted, so it never touches a "·" occurring inside a
+	// variable name or chemical formula.
+	FmtUnicodeSpaced = "unicode_spaced"
+)
+
+// DiagnosticError is implemented by the package's code-bearing error types
+// (EvaluationError, ExpressionTemplateError, RuleEngineError, LowerEnumsError,
+// ClosedFunctionError). It lets a caller recover the stable diagnostic code
+// from any of them uniformly — errors.As(err, &de) then de.DiagnosticCode() —
+// without switching over the concrete types. All five render Error() in the
+// shared "[code] message" form.
+type DiagnosticError interface {
+	error
+	DiagnosticCode() string
+}
+
+// Compile-time assertions that every code-bearing error type satisfies
+// DiagnosticError (and, by extension, renders Error() in the shared form).
+var (
+	_ DiagnosticError = (*EvaluationError)(nil)
+	_ DiagnosticError = (*ExpressionTemplateError)(nil)
+	_ DiagnosticError = (*RuleEngineError)(nil)
+	_ DiagnosticError = (*LowerEnumsError)(nil)
+	_ DiagnosticError = (*ClosedFunctionError)(nil)
 )

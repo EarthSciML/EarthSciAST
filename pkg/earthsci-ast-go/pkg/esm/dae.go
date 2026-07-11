@@ -22,8 +22,11 @@ type RuleEngineError struct {
 }
 
 func (e *RuleEngineError) Error() string {
-	return fmt.Sprintf("RuleEngineError(%s): %s", e.Code, e.Message)
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *RuleEngineError) DiagnosticCode() string { return e.Code }
 
 func newRuleErr(code, msg string) *RuleEngineError {
 	return &RuleEngineError{Code: code, Message: msg}
