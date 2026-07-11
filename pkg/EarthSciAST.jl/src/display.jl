@@ -301,7 +301,13 @@ end
 const _DISPLAY_OP_PRECEDENCE = Dict{String,Int}(
     "or" => 1,
     "and" => 2,
-    "==" => 3, "!=" => 3, "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
+    # "=" is the wire alias of "==" (rendered identically by
+    # `_INFIX_SEPARATORS`) and carries the same precedence in the reference
+    # registry (pkg/earthsci-ast-ts/src/op-registry.ts) — without it, an `=`
+    # node bound atom-tight and e.g. `not(x = 0)` rendered unparenthesized
+    # (`¬x = 0`), diverging from the pinned `¬(x = 0)` of
+    # tests/display/all_operators.json.
+    "==" => 3, "=" => 3, "!=" => 3, "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
     "+" => 4, "-" => 4,
     "*" => 5, "/" => 5,
     "not" => 6,  # Unary

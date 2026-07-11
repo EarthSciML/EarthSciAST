@@ -44,27 +44,38 @@ const _DISPLAY_FMTS = (
     (:ascii, to_ascii),
 )
 
+function _run_display_case(t, tname)
+    expr = _build_display_expr(t.input)
+    @testset "$tname" begin
+        for (fmt, fn) in _DISPLAY_FMTS
+            @test fn(expr) == String(t[fmt])
+        end
+    end
+end
+
+# Fixtures come in two shapes: grouped ({name, tests: [case…]} entries —
+# structural_ops.json, comprehensive_operators.json) and flat (the entry IS
+# the case — all_operators.json).
 function _run_display_fixture(path)
-    groups = JSON3.read(read(path, String))
-    for group in groups
-        gname = string(get(group, :name, "group"))
-        @testset "$gname" begin
-            for (i, t) in enumerate(group.tests)
-                tname = string(get(t, :name, "case $i"))
-                expr = _build_display_expr(t.input)
-                @testset "$tname" begin
-                    for (fmt, fn) in _DISPLAY_FMTS
-                        @test fn(expr) == String(t[fmt])
-                    end
+    entries = JSON3.read(read(path, String))
+    for (i, entry) in enumerate(entries)
+        if haskey(entry, :tests)
+            gname = string(get(entry, :name, "group"))
+            @testset "$gname" begin
+                for (j, t) in enumerate(entry.tests)
+                    _run_display_case(t, string(get(t, :name, "case $j")))
                 end
             end
+        else
+            _run_display_case(entry, string(get(entry, :name, "case $i")))
         end
     end
 end
 
 @testset "Display conformance (tests/display fixtures)" begin
     display_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "display")
-    for fixture in ("structural_ops.json", "comprehensive_operators.json")
+    for fixture in ("structural_ops.json", "comprehensive_operators.json",
+                    "all_operators.json")
         path = joinpath(display_dir, fixture)
         @testset "$fixture" begin
             if _require_fixture(path)
