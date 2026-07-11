@@ -67,9 +67,10 @@ from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap abo
     ManifestError,
     _eprint,
     build_parser,
+    canonical_serialize,
     cli_main,
     print_summary,
-    write_report,
+    run_producer_suite,
 )
 from conformance_lib import load_manifest as _load_manifest  # noqa: E402
 
@@ -315,14 +316,11 @@ def assert_acyclic_index_sets(model: dict) -> None:
 
 
 # --- CONST-fold kernels ----------------------------------------------------
-
-
-def canonical_serialize(value: Any) -> str:
-    """The canonical byte form of a folded buffer: compact JSON (',' / ':'
-    separators, no spaces), UTF-8 (no \\uXXXX), arrays for tuples — the same
-    canonical-JSON discipline §5.5.3 / the round-trip contract require. This is
-    what 'byte-identical CONST-folded buffer' means."""
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+#
+# The folded buffers serialize through the shared canonical-JSON discipline
+# (:func:`conformance_lib.canonical_serialize`, imported above) — cadence hands
+# it an arbitrary folded value directly, so no tuple-row normalization is needed
+# here. That byte form is what "byte-identical CONST-folded buffer" means.
 
 
 def fold_to_zero_based(arr: list) -> list:
@@ -735,58 +733,28 @@ def run_suite(manifest_path: Path, bindings: list, output_path: Path, timeout) -
     required = set(manifest.get("bindings_required") or [])
     fixtures = manifest["fixtures"]
 
-    adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
-
-    report: dict = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
-    overall_ok = True
-    for b in bindings:
-        ar = adapters[b]
-        b_report: dict = {
-            "adapter_status": ar.get("adapter_status"),
-            "error": ar.get("error"),
-            "fixtures": {},
+    def compare_fixture(binding: str, fx: dict, produced: dict) -> dict:
+        verdict = compare_to_golden(fx, produced)
+        return {
+            "status": "ok" if verdict["match"] else "mismatch",
+            "problems": verdict["problems"],
         }
-        if ar.get("adapter_status") != "ok":
-            b_report["status"] = "fail" if b in required else "skipped"
-            if b in required:
-                overall_ok = False
-            report["bindings"][b] = b_report
-            continue
-        b_ok = True
-        for fx in fixtures:
-            produced = ar.get("fixtures", {}).get(fx["id"])
-            if produced is None:
-                b_report["fixtures"][fx["id"]] = {"status": "missing"}
-                b_ok = False
-                continue
-            verdict = compare_to_golden(fx, produced)
-            b_report["fixtures"][fx["id"]] = {
-                "status": "ok" if verdict["match"] else "mismatch",
-                "problems": verdict["problems"],
-            }
-            if not verdict["match"]:
-                b_ok = False
-        b_report["status"] = "ok" if b_ok else "fail"
-        if not b_ok:
-            overall_ok = False
-        report["bindings"][b] = b_report
 
-    any_ok = any(a.get("adapter_status") == "ok" for a in adapters.values())
-    if not any_ok and not required:
-        # No producer registered AND none demanded: nothing to check here. The
-        # --self-test gate is the green check in such an environment. (Once a
-        # binding is in `bindings_required`, a missing producer fails above.)
-        report["status"] = "no_producers"
-        print(
+    return run_producer_suite(
+        harness=_ADAPTERS,
+        bindings=bindings,
+        required=required,
+        fixtures=fixtures,
+        manifest_path=manifest_path,
+        output_path=output_path,
+        timeout=timeout,
+        compare_fixture=compare_fixture,
+        print_report=lambda r: print_summary(r, "=== Cadence-Partition Conformance Report ==="),
+        no_producers_message=(
             "No cadence-partition adapters registered for any requested binding, "
             "and none are required. The contract is gated by --self-test here."
-        )
-    else:
-        report["status"] = "ok" if overall_ok else "fail"
-
-    write_report(report, output_path)
-    print_summary(report, "=== Cadence-Partition Conformance Report ===")
-    return 1 if report["status"] == "fail" else 0
+        ),
+    )
 
 
 # === CLI ==================================================================

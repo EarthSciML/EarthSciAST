@@ -11,7 +11,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 try:
     # Python 3.9+
@@ -93,7 +93,7 @@ from .esm_types import (
     Tolerance,
     VariableMapCoupling,
 )
-from .json_walk import expand_ref_env
+from .json_walk import expand_ref_env, read_ref_text
 
 
 class SchemaValidationError(EarthSciAstError):
@@ -1334,25 +1334,28 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
     Raises:
         SubsystemRefError: If the reference cannot be fetched or read
     """
-    ref = expand_ref_env(ref)  # esm-spec §4.7 ${VAR} expansion
-    if ref.startswith("http://") or ref.startswith("https://"):
-        import urllib.error
-        import urllib.request
+    import urllib.error
 
-        try:
-            with urllib.request.urlopen(ref) as response:
-                return response.read().decode("utf-8")
-        except (urllib.error.URLError, urllib.error.HTTPError) as e:
-            raise SubsystemRefError(f"Failed to fetch subsystem ref URL '{ref}': {e}") from e
-    else:
-        resolved = os.path.normpath(os.path.join(base_path, ref))
-        if not os.path.exists(resolved):
-            raise SubsystemRefError(
-                f"Subsystem ref file not found: '{resolved}' "
-                f"(resolved from '{ref}' relative to '{base_path}')"
-            )
-        with open(resolved) as f:
-            return f.read()
+    ref = expand_ref_env(ref)  # esm-spec §4.7 ${VAR} expansion
+    # Delegate the URL-vs-local read to the shared json_walk primitive, keeping
+    # this loader's own policy: normpath+exists resolution (matches dirs), the
+    # platform-default open encoding, only the urllib error classes wrapped, and
+    # SubsystemRefError (no diagnostic code) messages. The resolved path is
+    # unused here — the caller (`_load_ref_data`) derives its own base.
+    text, _ = read_ref_text(
+        ref,
+        base_path,
+        resolve_path=lambda base, r: os.path.normpath(os.path.join(base, r)),
+        path_exists=os.path.exists,
+        encoding=None,
+        url_error_types=(urllib.error.URLError, urllib.error.HTTPError),
+        on_url_error=lambda r, e: SubsystemRefError(f"Failed to fetch subsystem ref URL '{r}': {e}"),
+        on_missing=lambda r, p: SubsystemRefError(
+            f"Subsystem ref file not found: '{p}' "
+            f"(resolved from '{r}' relative to '{base_path}')"
+        ),
+    )
+    return text
 
 
 def _subsystem_ref_bindings(sub_value: dict[str, Any], where: str) -> dict[str, Any]:
@@ -1628,34 +1631,46 @@ def _merge_subsystem_index_sets(
             registry[n] = decl
 
 
-def _resolve_model_subsystems(
-    model: Model,
+def _resolve_subsystems_generic(
+    component: Any,
     base_path: str,
     seen_refs: set,
-    registry: dict[str, Any],
-    chain: tuple[str, ...] = (),
+    chain: tuple[str, ...],
+    *,
+    resolve_ref: Callable[[Any, str, str, set, tuple[str, ...], str], Any],
+    recurse_resolved: Callable[[Any, str, set, tuple[str, ...]], None],
 ) -> None:
-    """Recursively resolve subsystem refs within a Model.
+    """Shared skeleton behind :func:`_resolve_model_subsystems` and
+    :func:`_resolve_reaction_system_subsystems`.
 
-    Args:
-        model: The model whose subsystems should be resolved
-        base_path: The base directory for resolving relative paths
-        seen_refs: Set of already-seen ref strings for circular detection
-        registry: The importing document's index-set registry
-            (``EsmFile.index_sets``); every referenced subsystem file's
-            top-level ``index_sets`` merge into it at resolution time
-            (esm-spec §4.7).
-        chain: The already-seen refs in resolution order (parallel to
-            ``seen_refs``, which is unordered); used only to print a
-            deterministic chain in the circular-reference error.
+    Walks ``component.subsystems`` and, for each entry:
+
+    * an unresolved ``{"ref": ...}`` dict is canonicalized (esm-spec §4.7:
+      URLs as-is, local refs ``normpath``-joined against ``base_path``),
+      circular-checked (raising :class:`CircularReferenceError` with the
+      ordered ``chain``), then loaded via :func:`_load_ref_data` under its
+      edge ``bindings`` / injected imports and parsed. The parsed document,
+      the mount key, the loaded file's ``new_base``, and the extended
+      ``new_seen`` / ``new_chain`` are handed to ``resolve_ref``, whose return
+      value becomes the resolved subsystem. ``resolve_ref`` owns the
+      component-kind-specific work (which top-level component to extract, the
+      model-only index-set merge, the recursion into nested refs, and the
+      "no component" error wording).
+    * an already-resolved component is passed to ``recurse_resolved`` (which
+      recurses into it in place when it is the matching kind) and kept as-is.
+
+    ``component.subsystems`` is rebuilt from the resolved values. Keeping the
+    canonicalization / circular guard / ref-load here — the genuinely-shared
+    inner loop — makes the two public resolvers thin policy wrappers with
+    byte-identical resolution order and error messages.
     """
-    if not model.subsystems:
+    if not component.subsystems:
         return
 
     resolved_subsystems: dict[str, Any] = {}
-    for sub_name, sub_value in model.subsystems.items():
+    for sub_name, sub_value in component.subsystems.items():
         # During parsing, a ref object comes through as a dict with a "ref" key
-        # before being coerced to a Model.
+        # before being coerced to a component.
         if isinstance(sub_value, dict) and "ref" in sub_value:
             ref_str = sub_value["ref"]
 
@@ -1682,41 +1697,79 @@ def _resolve_model_subsystems(
             ref_data, new_base = _load_ref_data(ref_str, base_path, bindings, "subsystem", injected)
 
             parsed = _parse_esm_data(ref_data)
-
-            # esm-spec §4.7: the mounted file's document-scoped index sets
-            # (already metaparameter-folded) join the importing document's
-            # registry, so the importer's variables may be shaped over the mesh
-            # file's axes and a disagreement fails loudly (deep-equal-or-error).
-            _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
-
-            # Extract the single top-level model or data loader. A referenced
-            # file with exactly one top-level data loader (RFC pure-io-data-loaders
-            # §4.4) resolves to that loader, named by the parent subsystem key.
-            if parsed.models:
-                # Take the first (and expected-only) model
-                sub_model = next(iter(parsed.models.values()))
-                sub_model.name = sub_name
-                # Recursively resolve nested subsystem refs; nested subsystem
-                # index sets merge into the SAME (top document) registry.
-                _resolve_model_subsystems(sub_model, new_base, new_seen, registry, new_chain)
-                resolved_subsystems[sub_name] = sub_model
-            elif parsed.data_loaders:
-                # Single-loader file: a data loader has no subsystems, so there
-                # is nothing further to resolve.
-                sub_loader = next(iter(parsed.data_loaders.values()))
-                sub_loader.name = sub_name
-                resolved_subsystems[sub_name] = sub_loader
-            else:
-                raise SubsystemRefError(
-                    f"Subsystem ref '{ref_str}' does not contain a model or data loader"
-                )
+            resolved_subsystems[sub_name] = resolve_ref(
+                parsed, sub_name, new_base, new_seen, new_chain, ref_str
+            )
         else:
-            # Already a Model object, just recurse into it
-            if isinstance(sub_value, Model):
-                _resolve_model_subsystems(sub_value, base_path, seen_refs, registry, chain)
+            # Already a component object, just recurse into it.
+            recurse_resolved(sub_value, base_path, seen_refs, chain)
             resolved_subsystems[sub_name] = sub_value
 
-    model.subsystems = resolved_subsystems
+    component.subsystems = resolved_subsystems
+
+
+def _resolve_model_subsystems(
+    model: Model,
+    base_path: str,
+    seen_refs: set,
+    registry: dict[str, Any],
+    chain: tuple[str, ...] = (),
+) -> None:
+    """Recursively resolve subsystem refs within a Model.
+
+    Args:
+        model: The model whose subsystems should be resolved
+        base_path: The base directory for resolving relative paths
+        seen_refs: Set of already-seen ref strings for circular detection
+        registry: The importing document's index-set registry
+            (``EsmFile.index_sets``); every referenced subsystem file's
+            top-level ``index_sets`` merge into it at resolution time
+            (esm-spec §4.7).
+        chain: The already-seen refs in resolution order (parallel to
+            ``seen_refs``, which is unordered); used only to print a
+            deterministic chain in the circular-reference error.
+    """
+
+    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str):
+        # esm-spec §4.7: the mounted file's document-scoped index sets
+        # (already metaparameter-folded) join the importing document's
+        # registry, so the importer's variables may be shaped over the mesh
+        # file's axes and a disagreement fails loudly (deep-equal-or-error).
+        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
+
+        # Extract the single top-level model or data loader. A referenced
+        # file with exactly one top-level data loader (RFC pure-io-data-loaders
+        # §4.4) resolves to that loader, named by the parent subsystem key.
+        if parsed.models:
+            # Take the first (and expected-only) model
+            sub_model = next(iter(parsed.models.values()))
+            sub_model.name = sub_name
+            # Recursively resolve nested subsystem refs; nested subsystem
+            # index sets merge into the SAME (top document) registry.
+            _resolve_model_subsystems(sub_model, new_base, new_seen, registry, new_chain)
+            return sub_model
+        if parsed.data_loaders:
+            # Single-loader file: a data loader has no subsystems, so there
+            # is nothing further to resolve.
+            sub_loader = next(iter(parsed.data_loaders.values()))
+            sub_loader.name = sub_name
+            return sub_loader
+        raise SubsystemRefError(
+            f"Subsystem ref '{ref_str}' does not contain a model or data loader"
+        )
+
+    def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
+        if isinstance(sub_value, Model):
+            _resolve_model_subsystems(sub_value, sub_base, sub_seen, registry, sub_chain)
+
+    _resolve_subsystems_generic(
+        model,
+        base_path,
+        seen_refs,
+        chain,
+        resolve_ref=resolve_ref,
+        recurse_resolved=recurse_resolved,
+    )
 
 
 def _resolve_reaction_system_subsystems(
@@ -1735,49 +1788,30 @@ def _resolve_reaction_system_subsystems(
             ``seen_refs``); used only to print a deterministic chain in the
             circular-reference error.
     """
-    if not rs.subsystems:
-        return
 
-    resolved_subsystems: dict[str, Any] = {}
-    for sub_name, sub_value in rs.subsystems.items():
-        if isinstance(sub_value, dict) and "ref" in sub_value:
-            ref_str = sub_value["ref"]
+    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str):
+        # Extract the single top-level reaction system
+        if parsed.reaction_systems:
+            sub_rs = next(iter(parsed.reaction_systems.values()))
+            sub_rs.name = sub_name
+            _resolve_reaction_system_subsystems(sub_rs, new_base, new_seen, new_chain)
+            return sub_rs
+        raise SubsystemRefError(
+            f"Subsystem ref '{ref_str}' does not contain a reaction system"
+        )
 
-            canonical = (
-                os.path.normpath(os.path.join(base_path, ref_str))
-                if not ref_str.startswith("http")
-                else ref_str
-            )
-            if canonical in seen_refs:
-                raise CircularReferenceError(
-                    f"Circular subsystem reference detected: '{ref_str}' "
-                    f"(chain: {' -> '.join((*chain, canonical))})"
-                )
-            new_seen = seen_refs | {canonical}
-            new_chain = (*chain, canonical)
+    def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
+        if isinstance(sub_value, ReactionSystem):
+            _resolve_reaction_system_subsystems(sub_value, sub_base, sub_seen, sub_chain)
 
-            bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
-            injected = _subsystem_ref_injected_imports(sub_value)
-            ref_data, new_base = _load_ref_data(ref_str, base_path, bindings, "subsystem", injected)
-
-            parsed = _parse_esm_data(ref_data)
-
-            # Extract the single top-level reaction system
-            if parsed.reaction_systems:
-                sub_rs = next(iter(parsed.reaction_systems.values()))
-                sub_rs.name = sub_name
-                _resolve_reaction_system_subsystems(sub_rs, new_base, new_seen, new_chain)
-                resolved_subsystems[sub_name] = sub_rs
-            else:
-                raise SubsystemRefError(
-                    f"Subsystem ref '{ref_str}' does not contain a reaction system"
-                )
-        else:
-            if isinstance(sub_value, ReactionSystem):
-                _resolve_reaction_system_subsystems(sub_value, base_path, seen_refs, chain)
-            resolved_subsystems[sub_name] = sub_value
-
-    rs.subsystems = resolved_subsystems
+    _resolve_subsystems_generic(
+        rs,
+        base_path,
+        seen_refs,
+        chain,
+        resolve_ref=resolve_ref,
+        recurse_resolved=recurse_resolved,
+    )
 
 
 def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:

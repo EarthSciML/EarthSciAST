@@ -157,6 +157,68 @@ def expand_ref_env(ref: str) -> str:
     return _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), ref)
 
 
+def read_ref_text(
+    ref: str,
+    base_dir: str,
+    *,
+    resolve_path: Callable[[str, str], str],
+    on_missing: Callable[[str, str], Exception],
+    on_url_error: Callable[[str, Exception], Exception],
+    on_read_error: Callable[[str, str, OSError], Exception] | None = None,
+    path_exists: Callable[[str], bool] = os.path.isfile,
+    url_error_types: tuple[type[BaseException], ...] = (Exception,),
+    encoding: str | None = "utf-8",
+) -> tuple[str, str | None]:
+    """Read the raw text of a §4.7 ``ref`` — the single I/O primitive shared by
+    :func:`load_ref_raw` (template/coupling imports) and
+    :func:`earthsci_ast.parse._fetch_ref_content` (subsystem refs).
+
+    ``ref`` is assumed to already have had its ``${VAR}`` tokens expanded (each
+    caller applies :func:`expand_ref_env` under its own policy first). An
+    ``http(s)://`` ref is downloaded and UTF-8 decoded; anything else is
+    resolved to a local path via ``resolve_path(base_dir, ref)`` and read from
+    disk. Every divergence between the two callers is a parameter so each keeps
+    its OWN error type, path-resolution policy, and read semantics:
+
+    * ``resolve_path`` — how a relative ref becomes a local path
+      (``normpath`` vs ``abspath`` join).
+    * ``path_exists`` — the existence predicate (``os.path.exists`` matches dirs
+      too; the default ``os.path.isfile`` does not).
+    * ``encoding`` — text encoding for the local open (``None`` = platform
+      default, matching a bare ``open(path)``).
+    * ``url_error_types`` — which download exceptions are wrapped; anything
+      outside the tuple propagates raw (subsystem refs wrap only the
+      ``urllib.error`` classes, the import loaders wrap everything).
+    * ``on_url_error`` / ``on_missing`` / ``on_read_error`` — build the
+      caller's exception for a failed download, a missing file, and (only when
+      supplied) an unreadable file. ``on_read_error=None`` lets the ``OSError``
+      from a local read propagate unwrapped.
+
+    Returns ``(text, local_path)`` where ``local_path`` is the resolved path for
+    a local ref or ``None`` for a URL — letting the caller compute its own base
+    dir / JSON-error label without re-deriving the path.
+    """
+    if ref.startswith("http://") or ref.startswith("https://"):
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(ref) as response:
+                return response.read().decode("utf-8"), None
+        except url_error_types as e:
+            raise on_url_error(ref, e) from e
+    path = resolve_path(base_dir, ref)
+    if not path_exists(path):
+        raise on_missing(ref, path)
+    if on_read_error is None:
+        with open(path, encoding=encoding) as fh:
+            return fh.read(), path
+    try:
+        with open(path, encoding=encoding) as fh:
+            return fh.read(), path
+    except OSError as e:
+        raise on_read_error(ref, path, e) from e
+
+
 def load_ref_raw(
     ref: str,
     base_dir: str,
@@ -181,41 +243,30 @@ def load_ref_raw(
     """
     prefix = f"{origin}: " if origin else ""
     ref = expand_ref_env(ref)
-    if ref.startswith("http://") or ref.startswith("https://"):
-        import urllib.request
-
-        try:
-            with urllib.request.urlopen(ref) as response:
-                content = response.read().decode("utf-8")
-        except Exception as e:  # noqa: BLE001 — reported with the stable code
-            raise ExpressionTemplateError(
-                code, f"{prefix}failed to download {subject} ref '{ref}': {e}"
-            ) from e
-        try:
-            raw = json.loads(content)
-        except ValueError as e:
-            raise ExpressionTemplateError(
-                code, f"{prefix}{subject} ref '{ref}' is not valid JSON: {e}"
-            ) from e
-        # A relative ref inside a remote library has no resolvable base; it
-        # fails as unresolved when encountered.
-        return raw, base_dir
-    path = os.path.abspath(os.path.join(base_dir, ref))
-    if not os.path.isfile(path):
-        raise ExpressionTemplateError(
-            code, f"{prefix}{subject} file not found: {path} (from ref '{ref}')"
-        )
-    try:
-        with open(path, encoding="utf-8") as fh:
-            content = fh.read()
-    except OSError as e:
-        raise ExpressionTemplateError(
-            code, f"{prefix}{subject} file unreadable: {path} (from ref '{ref}'): {e}"
-        ) from e
+    content, path = read_ref_text(
+        ref,
+        base_dir,
+        resolve_path=lambda base, r: os.path.abspath(os.path.join(base, r)),
+        on_missing=lambda r, p: ExpressionTemplateError(
+            code, f"{prefix}{subject} file not found: {p} (from ref '{r}')"
+        ),
+        on_url_error=lambda r, e: ExpressionTemplateError(
+            code, f"{prefix}failed to download {subject} ref '{r}': {e}"
+        ),
+        on_read_error=lambda r, p, e: ExpressionTemplateError(
+            code, f"{prefix}{subject} file unreadable: {p} (from ref '{r}'): {e}"
+        ),
+    )
+    # JSON errors quote the URL ref itself but the resolved path for a local
+    # file; the base is the URL's caller-supplied base or the local file's dir.
+    # A relative ref inside a remote library has no resolvable base; it fails as
+    # unresolved when encountered.
+    label = ref if path is None else path
     try:
         raw = json.loads(content)
     except ValueError as e:
         raise ExpressionTemplateError(
-            code, f"{prefix}{subject} ref '{path}' is not valid JSON: {e}"
+            code, f"{prefix}{subject} ref '{label}' is not valid JSON: {e}"
         ) from e
-    return raw, os.path.dirname(path)
+    new_base = base_dir if path is None else os.path.dirname(path)
+    return raw, new_base

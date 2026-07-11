@@ -72,7 +72,7 @@ from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap abo
     _eprint,
     build_parser,
     cli_main,
-    write_report,
+    run_producer_suite,
 )
 from conformance_lib import load_manifest as _load_manifest  # noqa: E402
 
@@ -411,57 +411,35 @@ def run_suite(
         _eprint(f"error: golden(s) missing: {missing_golden}; run --write-golden")
         return 2
 
-    adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
-
-    report: dict[str, Any] = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
-    overall_ok = True
-
-    for b in bindings:
-        ar = adapters[b]
-        b_report: dict[str, Any] = {
-            "adapter_status": ar.get("adapter_status"),
-            "error": ar.get("error"),
-            "fixtures": {},
+    def compare_fixture(binding: str, fx: dict, produced: dict) -> dict:
+        v_golden = compare_against(fx, produced, goldens[fx["id"]], tol, kind="golden")
+        v_analytic = compare_against(
+            fx, produced, _analytic_reference(fx, manifest_path), tol, kind="analytic"
+        )
+        match = v_golden["match"] and v_analytic["match"]
+        return {
+            "status": "ok" if match else "mismatch",
+            "tol_frac_vs_golden": v_golden["max_tol_frac"],
+            "tol_frac_vs_analytic": v_analytic["max_tol_frac"],
+            "problems": v_golden["problems"] + v_analytic["problems"],
         }
-        if ar.get("adapter_status") != "ok":
-            if ar.get("stderr"):
-                b_report["stderr"] = ar["stderr"]
-            if b in required:
-                overall_ok = False
-                b_report["status"] = "fail"
-            else:
-                b_report["status"] = "skipped"
-            report["bindings"][b] = b_report
-            continue
-        b_ok = True
-        for fx in fixtures:
-            produced = ar.get("fixtures", {}).get(fx["id"])
-            if produced is None:
-                b_report["fixtures"][fx["id"]] = {"status": "missing"}
-                b_ok = False
-                continue
-            v_golden = compare_against(fx, produced, goldens[fx["id"]], tol, kind="golden")
-            v_analytic = compare_against(
-                fx, produced, _analytic_reference(fx, manifest_path), tol, kind="analytic"
-            )
-            match = v_golden["match"] and v_analytic["match"]
-            b_report["fixtures"][fx["id"]] = {
-                "status": "ok" if match else "mismatch",
-                "tol_frac_vs_golden": v_golden["max_tol_frac"],
-                "tol_frac_vs_analytic": v_analytic["max_tol_frac"],
-                "problems": v_golden["problems"] + v_analytic["problems"],
-            }
-            if not match:
-                b_ok = False
-        b_report["status"] = "ok" if b_ok else "fail"
-        if not b_ok:
-            overall_ok = False
-        report["bindings"][b] = b_report
 
-    report["status"] = "ok" if overall_ok else "fail"
-    write_report(report, output_path)
-    _print_summary(report, reference_binding)
-    return 0 if overall_ok else 1
+    # No no_producers_message: unlike determinism/cadence, an unregistered
+    # required simulator is always a fail here (Julia/Python/Rust are all
+    # required), so overall_ok alone decides ok/fail. attach_stderr keeps the
+    # solver diagnostics for a broken adapter.
+    return run_producer_suite(
+        harness=_ADAPTERS,
+        bindings=bindings,
+        required=required,
+        fixtures=fixtures,
+        manifest_path=manifest_path,
+        output_path=output_path,
+        timeout=timeout,
+        compare_fixture=compare_fixture,
+        print_report=lambda r: _print_summary(r, reference_binding),
+        attach_stderr=True,
+    )
 
 
 def _print_summary(report: dict, reference_binding: str) -> None:
