@@ -16,10 +16,11 @@ fallback throws a `RefreshError` telling the user what to load.
 """
 module EarthSciASTDataRefreshExt
 
-import EarthSciAST as ESS
 using EarthSciAST: Model, RefreshBuffers,
     RefreshError, provider_is_const, provider_refresh_times, provider_sample,
     _write_forcing!
+# Explicit import so we can add the extension method to this generic.
+import EarthSciAST: build_refresh_callback
 import DiffEqCallbacks: PresetTimeCallback
 import SciMLBase: u_modified!
 
@@ -52,10 +53,10 @@ function _group_discrete_providers(providers::AbstractDict, buffers::RefreshBuff
     return groups
 end
 
-function ESS.build_refresh_callback(model::Model;
-                                    providers::AbstractDict,
-                                    buffers::RefreshBuffers,
-                                    post_refresh::Function = () -> nothing)
+function build_refresh_callback(model::Model;
+                                providers::AbstractDict,
+                                buffers::RefreshBuffers,
+                                post_refresh::Function = () -> nothing)
     groups = _group_discrete_providers(providers, buffers)
 
     # tstops = sorted, de-duplicated union of the DISCRETE providers' refresh

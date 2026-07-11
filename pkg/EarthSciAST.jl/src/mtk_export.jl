@@ -127,6 +127,26 @@ _gap_to_note(g::GapReport) =
     "TODO_GAP: $(g.bead_id) - $(g.description) @ $(g.location)"
 
 """
+    _resolve_sys_name(sys, metadata, fallback) -> String
+
+Resolve the exported component name: caller-supplied `metadata.name` wins;
+else `nameof(sys)` if non-anonymous; else the literal `fallback` placeholder
+so the output file is still addressable. MTK-free (`nameof` + string
+handling only), shared by the MTK and Catalyst `mtk2esm` methods.
+"""
+function _resolve_sys_name(sys, metadata, fallback::String)
+    name_kw = _meta_string(metadata, :name, "")
+    isempty(name_kw) || return name_kw
+    try
+        sn = String(nameof(sys))
+        return sn == "" ? fallback : sn
+    catch e
+        @debug "mtk2esm: nameof(sys) unavailable" exception=(e, catch_backtrace())
+        return fallback
+    end
+end
+
+"""
     _reference_notes(metadata, gaps) -> Vector{String}
 
 Assemble the `reference.notes` lines for an exported component: migration

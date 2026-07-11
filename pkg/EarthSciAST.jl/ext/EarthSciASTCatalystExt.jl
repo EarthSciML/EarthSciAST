@@ -1,81 +1,87 @@
+"""
+    EarthSciASTCatalystExt
+
+The Catalyst binding, loaded automatically when `Catalyst` (with
+`ModelingToolkit` and `Symbolics`) is in the session. It supplies both
+directions of the ESM ⇄ Catalyst reaction-network bridge:
+
+- **ESM → Catalyst**: `Catalyst.ReactionSystem(::EarthSciAST.ReactionSystem)`,
+  building real `@species`/`@parameters` symbols (including reservoir
+  species) and lowering each reaction's rate expression.
+- **Catalyst → ESM**: `EarthSciAST.ReactionSystem(::Catalyst.ReactionSystem)`
+  plus the `mtk2esm` migration exporter for reaction systems.
+
+Kept a `weakdep` extension (mirroring `MTKExt` / `SimulateExt`) so the base
+package carries no Catalyst dependency; without it loaded, the core stubs in
+src/mtk_export.jl throw an `ArgumentError` naming what to load, and
+`MockCatalystSystem` (src/mock_systems.jl) remains available as a pure-Julia
+fallback.
+"""
 module EarthSciASTCatalystExt
 
-using EarthSciAST
 # Note: we deliberately do NOT import `Expr` from EarthSciAST into
 # this extension's namespace — that would shadow Core.Expr and break the
 # runtime `Core.eval`-built macro calls below (`@species` / `@parameters`),
 # whose quoted ASTs are assembled from plain `Expr` nodes. Use the `EsmExpr`
 # alias for the ESM expression type instead (same pattern as MTKExt).
+using EarthSciAST
 using EarthSciAST: NumExpr, IntExpr, VarExpr, OpExpr, Reaction,
-    ReactionSystem, Species, Parameter, Equation, ContinuousEvent,
-    DiscreteEvent, AffectEquation, FunctionalAffect, ConditionTrigger,
-    PeriodicTrigger, PresetTimesTrigger,
+    ReactionSystem, Species, Parameter,
     GapReport,
     # MTK-independent export helpers shared with the MTK extension
     # (defined next to GapReport in src/mtk_export.jl).
-    _strip_time, _meta_string, _meta_vec_string, _gap_to_note,
+    _strip_time, _resolve_sys_name,
     _reference_notes, _esm_file_metadata, _warn_gaps
 # Explicit import so we can add a method to this generic.
-import EarthSciAST: mtk2esm, mtk2esm_gaps
+import EarthSciAST: mtk2esm
 using ModelingToolkit
 using Symbolics
 using Catalyst
 
 const EsmExpr = EarthSciAST.Expr
 
+# Shared with EarthSciASTMTKExt (each extension compiles its own copy); the
+# per-extension policy hooks that keep the two extensions' behavior distinct
+# are documented in each file's header.
+include("shared/esm_to_symbolic.jl")
+include("shared/symbolic_to_esm.jl")
+include("shared/eval_var_macro.jl")
+
 # ========================================
-# ESM Expr → Symbolics conversion (local copy for rate expressions)
+# ESM Expr → Symbolics conversion (rate expressions)
 # ========================================
 
+# The unary elementwise ops the rate interpreter accepts — deliberately
+# NARROWER than the MTK lowering's set (no sinh/asin/…); membership is
+# behavior, so it stays explicit.
+const _RATE_UNARY_SCALAR_OPS = ("exp", "log", "log10", "sin", "cos", "tan",
+                                "sqrt", "abs")
+
+# Lower an ESM rate expression to Symbolics. The extension-independent
+# scalar arms live in the shared `_esm_to_symbolic_core`
+# (ext/shared/esm_to_symbolic.jl); the hooks below carry this extension's
+# policies: NumExpr values pass through untouched (no Int promotion), and
+# any op outside the scalar vocabulary is an error.
 function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any})
-    if expr isa IntExpr
-        return expr.value
-    elseif expr isa NumExpr
-        return expr.value
-    elseif expr isa VarExpr
-        if haskey(var_dict, expr.name)
-            return var_dict[expr.name]
-        else
-            sym = Symbolics.variable(Symbol(expr.name); T=Real)
-            var_dict[expr.name] = sym
-            return sym
-        end
-    elseif expr isa OpExpr
-        op = expr.op
-        if op == "+"
-            args = [_esm_to_symbolic(a, var_dict) for a in expr.args]
-            return length(args) == 1 ? args[1] : sum(args)
-        elseif op == "-"
-            args = [_esm_to_symbolic(a, var_dict) for a in expr.args]
-            return length(args) == 1 ? -args[1] : args[1] - args[2]
-        elseif op == "*"
-            args = [_esm_to_symbolic(a, var_dict) for a in expr.args]
-            return length(args) == 1 ? args[1] : prod(args)
-        elseif op == "/"
-            l = _esm_to_symbolic(expr.args[1], var_dict)
-            r = _esm_to_symbolic(expr.args[2], var_dict)
-            return l / r
-        elseif op == "^"
-            l = _esm_to_symbolic(expr.args[1], var_dict)
-            r = _esm_to_symbolic(expr.args[2], var_dict)
-            return l^r
-        elseif op in ("exp", "log", "log10", "sin", "cos", "tan", "sqrt", "abs")
-            arg = _esm_to_symbolic(expr.args[1], var_dict)
-            fn = getfield(Base, Symbol(op))
-            return fn(arg)
-        elseif op in ("max", "min")
-            # Same arity rule the MTK extension enforces: the spec defines
-            # min/max as n-ary with n >= 2 (esm-spec §4.2).
-            length(expr.args) < 2 && throw(ArgumentError(
-                "$op requires at least 2 arguments (esm-spec §4.2)"))
-            args = [_esm_to_symbolic(a, var_dict) for a in expr.args]
-            fn = getfield(Base, Symbol(op))
-            return reduce(fn, args)
-        else
-            throw(ArgumentError("Unsupported operator in rate expression: $op"))
-        end
+    return _esm_to_symbolic_core(expr, a -> _esm_to_symbolic(a, var_dict);
+        number_value = identity,
+        resolve_var = name -> _resolve_rate_var(name, var_dict),
+        unary_ops = _RATE_UNARY_SCALAR_OPS,
+        extended_op = (op, _) -> throw(ArgumentError(
+            "Unsupported operator in rate expression: $op")))
+end
+
+# Unknown-variable policy of the rate interpreter: AUTO-CREATE a fresh real
+# symbol and cache it. The MTK lowering throws instead; the divergence is
+# live behavior (see ext/shared/esm_to_symbolic.jl).
+function _resolve_rate_var(name::String, var_dict::Dict{String,Any})
+    if haskey(var_dict, name)
+        return var_dict[name]
+    else
+        sym = Symbolics.variable(Symbol(name); T=Real)
+        var_dict[name] = sym
+        return sym
     end
-    error("Unknown expression type: $(typeof(expr))")
 end
 
 # ========================================
@@ -84,24 +90,18 @@ end
 
 # Create a Catalyst species using @species so it carries the species
 # metadata Catalyst.Reaction expects — the plain Symbolics.variable path
-# strips it. We invoke @species at runtime via Core.eval because the macro
-# insists on literal identifiers. Julia ASTs are built with the qualified
-# `Core.Expr` — bare `Expr` is ambiguous here (Base.Expr vs the package's
-# exported ESM `Expr`); the ESM expression type is only ever referenced via
-# the `EsmExpr` alias.
+# strips it. We invoke @species at runtime via the shared `_eval_var_macro`
+# scaffold (ext/shared/eval_var_macro.jl) because the macro insists on
+# literal identifiers; the live `t` symbol is passed by value through a
+# `let` binding.
 function _make_species(name::Symbol, t_sym)
-    binding = Core.Expr(:(=), :__esm_t, t_sym)
     call = Core.Expr(:call, name, :__esm_t)
-    block = Core.Expr(:block, binding, :(Catalyst.@species $(call)))
-    let_expr = Core.Expr(:let, Core.Expr(:block), block)
-    vars = Core.eval(Catalyst, let_expr)
-    return vars[1]
+    return _eval_var_macro(Catalyst, Symbol("@species"), call;
+                           bindings=[:__esm_t => t_sym])
 end
 
-function _make_cparam(name::Symbol)
-    vars = Core.eval(Catalyst, :(@parameters $(name)))
-    return vars[1]
-end
+_make_catalyst_param(name::Symbol) =
+    _eval_var_macro(Catalyst, Symbol("@parameters"), name)
 
 # Reservoir species: declared as a parameter with Catalyst's
 # isconstantspecies=true metadata. The @species macro rejects this
@@ -111,16 +111,12 @@ end
 function _make_constant_species(name::Symbol)
     # Equivalent to `@parameters X [isconstantspecies=true]` at runtime.
     meta = Core.Expr(:vect, Core.Expr(:(=), :isconstantspecies, true))
-    decl = Core.Expr(:macrocall, Symbol("@parameters"), LineNumberNode(0), name, meta)
-    vars = Core.eval(Catalyst, decl)
-    return vars[1]
+    return _eval_var_macro(Catalyst, Symbol("@parameters"), name, meta)
 end
 
-function _make_civ(name::Symbol)
-    # Independent variables in Catalyst/MTK need @independent_variables metadata.
-    vars = Core.eval(Catalyst, :(@variables $(name)))
-    return vars[1]
-end
+# Independent variables in Catalyst/MTK need @independent_variables metadata.
+_make_catalyst_independent_var(name::Symbol) =
+    _eval_var_macro(Catalyst, Symbol("@variables"), name)
 
 """
     Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem; name=:anonymous, kwargs...)
@@ -130,7 +126,7 @@ Build a `Catalyst.ReactionSystem` from an ESM `ReactionSystem`.
 function Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem;
                                  name::Union{Symbol,AbstractString}=:anonymous,
                                  kwargs...)
-    t = _make_civ(:t)
+    t = _make_catalyst_independent_var(:t)
 
     species_dict = Dict{String,Any}()
     species_syms = Any[]
@@ -149,7 +145,7 @@ function Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem;
     end
 
     for p in rsys.parameters
-        sym = _make_cparam(Symbol(p.name))
+        sym = _make_catalyst_param(Symbol(p.name))
         push!(param_syms, sym)
         param_dict[p.name] = sym
     end
@@ -272,16 +268,20 @@ end
 
 # (`_strip_time` is shared from src/mtk_export.jl.)
 
+# Ordered operator table of the Catalyst rate walk, matched by `==` — a
+# deliberately smaller coverage than the MTK export walk's table (which is
+# also matched by a nameof-tolerant predicate); only the table scan itself
+# (`_call_op_to_esm_name`) is shared.
+const _RATE_EXPORT_OP_TABLE = ((+, "+"), (*, "*"), (-, "-"), (/, "/"), (^, "^"))
+
+# Reverse walk for rate expressions. The scalar fast-paths, the Const-node
+# branch, and the operator-table scan are shared with the MTK export walk
+# (ext/shared/symbolic_to_esm.jl); unlike that walk, this one has no
+# derivative branch and no `known_vars` disambiguation — species calls are
+# recognized by `issym(op)` instead.
 function _catalyst_rate_to_esm(expr)
-    if expr isa Bool
-        return IntExpr(Int64(expr))  # defensive
-    elseif expr isa Integer
-        return IntExpr(Int64(expr))
-    elseif expr isa AbstractFloat
-        return NumExpr(Float64(expr))
-    elseif expr isa Real
-        return NumExpr(Float64(expr))
-    end
+    lit = _number_to_esm_literal(expr)  # Bool arm is defensive here
+    lit === nothing || return lit
     raw = Symbolics.unwrap(expr)
     if Symbolics.issym(raw)
         return VarExpr(_strip_time(string(Symbolics.getname(raw))))
@@ -298,28 +298,15 @@ function _catalyst_rate_to_esm(expr)
             return VarExpr(_strip_time(string(Symbolics.getname(op))))
         end
         esm_args = [_catalyst_rate_to_esm(a) for a in args]
-        if op == (+); return OpExpr("+", esm_args)
-        elseif op == (*); return OpExpr("*", esm_args)
-        elseif op == (-); return OpExpr("-", esm_args)
-        elseif op == (/); return OpExpr("/", esm_args)
-        elseif op == (^); return OpExpr("^", esm_args)
-        else
-            return OpExpr(string(nameof(op)), esm_args)
-        end
+        esm_op = _call_op_to_esm_name(op, _RATE_EXPORT_OP_TABLE, ==)
+        esm_op === nothing || return OpExpr(esm_op, esm_args)
+        return OpExpr(string(nameof(op)), esm_args)
     end
-    # Const-style symbolic literal: numeric values (including those
-    # introduced by MTK Constants substitution) appear in the symbolic
-    # tree as BasicSymbolic Const nodes for which `issym`/`iscall` are
-    # both false. Without this branch they fall through to the string
-    # fallback below and get serialized as JSON strings (esm-edt).
-    val = Symbolics.value(raw)
-    if val isa Bool
-        return IntExpr(Int64(val))
-    elseif val isa Integer
-        return IntExpr(Int64(val))
-    elseif val isa Real
-        return NumExpr(Float64(val))
-    end
+    # Const-style symbolic literal (esm-edt): without this branch, numeric
+    # Const nodes would fall through to the string fallback below and get
+    # serialized as JSON strings.
+    const_lit = _symbolic_const_to_esm(raw)
+    const_lit === nothing || return const_lit
     return VarExpr(string(expr))
 end
 
@@ -345,21 +332,7 @@ Placeholders filled in Phase 2: `description`, `version`, `reference`,
 function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
     gaps = GapReport[]
 
-    # Resolve system name: caller-supplied `metadata.name` wins; else
-    # `nameof(rs)` if non-anonymous; else a literal placeholder.
-    sys_name = let name_kw = _meta_string(metadata, :name, "")
-        if !isempty(name_kw)
-            name_kw
-        else
-            try
-                sn = String(nameof(rs))
-                sn == "" ? "UnnamedReactionSystem" : sn
-            catch e
-                @debug "mtk2esm: nameof(rs) unavailable" exception=(e, catch_backtrace())
-                "UnnamedReactionSystem"
-            end
-        end
-    end
+    sys_name = _resolve_sys_name(rs, metadata, "UnnamedReactionSystem")
 
     # Build the ESM ReactionSystem via the existing reverse method, which
     # already handles species / parameters / reactions / rate expressions.

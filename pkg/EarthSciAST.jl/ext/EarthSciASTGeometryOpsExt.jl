@@ -19,7 +19,8 @@ great-circle-edge model in these bindings, matching the Python sibling.
 """
 module EarthSciASTGeometryOpsExt
 
-import EarthSciAST as ESS
+# Explicit import so we can add the extension method to this generic.
+import EarthSciAST: _spherical_clip_geometryops
 import GeometryOps as GO
 import GeoInterface as GI
 
@@ -65,8 +66,8 @@ end
 # Spherical / geodesic clip via GeometryOps `ConvexConvexSutherlandHodgman`. `a` and
 # `b` are `n×2` distinct lon-lat vertex matrices; returns the overlap ring as `n×2`
 # distinct lon-lat vertices (empty `0×2` when the cells do not overlap).
-function ESS._spherical_clip_geometryops(a::AbstractMatrix, b::AbstractMatrix,
-                                         manifold::AbstractString)
+function _spherical_clip_geometryops(a::AbstractMatrix, b::AbstractMatrix,
+                                     manifold::AbstractString)
     to_unit = GO.UnitSphereFromGeographic()
     to_geo = GO.GeographicFromUnitSphere()
     pa = _unitsphere_polygon(a, to_unit)
