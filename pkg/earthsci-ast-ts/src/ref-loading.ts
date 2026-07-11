@@ -1,12 +1,22 @@
 /**
- * Subsystem Reference Loading for the ESM format
+ * Subsystem reference loading for the ESM format (esm-spec §4.7).
  *
- * Resolves subsystem references (`ref` fields) by loading referenced ESM files
- * from local filesystem paths or remote URLs. Supports recursive resolution
- * and circular reference detection.
+ * Resolves subsystem `ref` fields by loading the referenced ESM file (local
+ * path or remote URL), resolving any §9.7 template machinery + metaparameters
+ * the referenced document carries against this edge's `bindings` / injected
+ * imports, lowering it to the §9.6.3 fixpoint, then inlining the single
+ * extracted component in place. Resolution is recursive with path-scoped
+ * circular-reference detection.
  *
- * Works in both Node.js (using dynamic fs import) and browser (using fetch)
- * environments.
+ * File access: local refs are read asynchronously via `node:fs/promises`
+ * (dynamic import so the module still parses in a browser), remote refs via
+ * `fetch`. Historically this module was purely fetch/fs I/O and so worked in
+ * both Node and the browser; that is no longer unconditional. Once a ref
+ * carries §9.7 machinery, resolution drives the SYNCHRONOUS §9.7 resolver over
+ * the already-loaded content (`resolveTemplateMachinery`), which needs a
+ * synchronous file reader for any transitive template-library imports — a
+ * plain-fetch browser host cannot satisfy that, so a machinery-bearing ref is
+ * fully resolvable only under Node (or a host supplying its own readFile hook).
  */
 
 import type { DataLoader, EsmFile, Model, ReactionSystem, SubsystemRef } from './types.js'
@@ -17,6 +27,7 @@ import {
   rejectExpressionTemplatesPreV04,
 } from './lower-expression-templates.js'
 import {
+  appendComponentImports,
   applyScopeInjections,
   evalMetaExpr,
   isTemplateLibraryDoc,
@@ -25,6 +36,8 @@ import {
   resolveTemplateMachinery,
 } from './template-imports.js'
 import { isCouplingLibraryDoc } from './coupling-imports.js'
+import { canonicalizePath, isRemoteRef, joinPath, normalizeRef } from './path-utils.js'
+import { ERROR_CODES } from './errors.js'
 import { load, validateSchema } from './parse.js'
 import { save } from './serialize.js'
 
@@ -81,8 +94,11 @@ export async function resolveSubsystemRefs(file: EsmFile, basePath: string): Pro
 
   // The importing document's index-set registry (esm-spec §4.7): every
   // referenced subsystem file's top-level `index_sets` merge into it, threaded
-  // down the model walk (mirrors §9.7.5). Created lazily so a document with no
-  // index sets and no mounted axes stays without an `index_sets` block.
+  // down the model walk (mirrors §9.7.5). When the document already declares
+  // `index_sets`, the registry ALIASES that same object so merges accumulate in
+  // place; otherwise it starts as a detached `{}` that is only attached back
+  // below if a merge actually contributed axes (so an index-set-less, mount-less
+  // document keeps no empty `index_sets` block).
   const registry: Record<string, unknown> =
     (file.index_sets as Record<string, unknown> | undefined) ?? {}
 
@@ -133,7 +149,7 @@ function mergeSubsystemIndexSets(
     if (Object.prototype.hasOwnProperty.call(registry, n)) {
       if (!deepEqual(registry[n], decl)) {
         throw new ExpressionTemplateError(
-          'subsystem_index_set_conflict',
+          ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
           `index set '${n}' from subsystem ref '${ref}' collides with a non-deep-equal declaration in the importing document. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7).`,
         )
       }
@@ -167,7 +183,7 @@ function readEdgeBindings(sub: { bindings?: unknown }, subName: string): Record<
   if (raw === undefined || raw === null) return out
   if (typeof raw !== 'object' || Array.isArray(raw)) {
     throw new ExpressionTemplateError(
-      'metaparameter_type_error',
+      ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `subsystems.${subName}: \`bindings\` must be an object (esm-spec §9.7.6)`,
     )
   }
@@ -190,7 +206,7 @@ function readEdgeInjectedImports(sub: { expression_template_imports?: unknown })
   if (raw === undefined || raw === null) return []
   if (!Array.isArray(raw)) {
     throw new ExpressionTemplateError(
-      'template_import_not_library',
+      ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
       'subsystem-ref `expression_template_imports` must be a list of §9.7.2 import entries (esm-spec §9.7.10)',
     )
   }
@@ -223,13 +239,13 @@ function resolveRefDocument(
 ): EsmFile {
   if (isTemplateLibraryDoc(parsed)) {
     throw new ExpressionTemplateError(
-      'subsystem_ref_is_template_library',
+      ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
       `Subsystem ref '${ref}' targets a template-library file; libraries are imported via expression_template_imports (esm-spec §9.7.1)`,
     )
   }
   if (isCouplingLibraryDoc(parsed)) {
     throw new ExpressionTemplateError(
-      'subsystem_ref_is_coupling_library',
+      ERROR_CODES.SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
       `Subsystem ref '${ref}' targets a coupling-library file; libraries are imported via a coupling_import coupling entry (esm-spec §10.9)`,
     )
   }
@@ -264,17 +280,19 @@ interface RefEdge {
  * cycle-check the edge, load and parse the referenced document, resolve its
  * §9.7 machinery against this edge's bindings / injected imports, then hand
  * the parsed document (plus its own base directory, for recursive resolution)
- * to `inline` for component extraction.
+ * to `inline` for component extraction. `ref` is passed explicitly (the caller
+ * has already established `sub.ref` is present), so no non-null assertion on
+ * the optional `RefEdge.ref` field is needed here.
  */
 async function resolveRefEdge(
   sub: RefEdge,
+  ref: string,
   subName: string,
   basePath: string,
   resolving: Set<string>,
   refChain: string[],
   inline: (parsed: EsmFile, refBasePath: string) => Promise<void>,
 ): Promise<void> {
-  const ref = sub.ref!
   const chainKey = normalizeRef(ref, basePath)
 
   // Check for circular references
@@ -300,6 +318,41 @@ async function resolveRefEdge(
 }
 
 /**
+ * Shared subsystem-map walk for model and reaction-system resolution: for each
+ * subsystem entry, either resolve its `ref` edge (`onRef`, given the parsed +
+ * lowered referenced document and its base directory) or — when the entry
+ * carries no `ref` — recurse into it (`onRecurse`). This is the one place the
+ * two otherwise-parallel `resolveModelRefs` / `resolveReactionSystemRefs` loops
+ * are unified; only the per-kind component extraction differs and is supplied
+ * by the callbacks.
+ */
+async function walkSubsystemRefs(
+  subsystems: Record<string, unknown>,
+  basePath: string,
+  resolving: Set<string>,
+  refChain: string[],
+  onRef: (
+    parsed: EsmFile,
+    refBasePath: string,
+    ctx: { subName: string; ref: string },
+  ) => Promise<void>,
+  onRecurse: (subsystem: unknown, subName: string) => Promise<void>,
+): Promise<void> {
+  for (const [subName, subsystem] of Object.entries(subsystems)) {
+    const sub = subsystem as RefEdge
+    const ref = sub.ref
+    if (ref) {
+      await resolveRefEdge(sub, ref, subName, basePath, resolving, refChain, (parsed, refBasePath) =>
+        onRef(parsed, refBasePath, { subName, ref }),
+      )
+    } else {
+      // Even without a ref, recurse into nested subsystems.
+      await onRecurse(subsystem, subName)
+    }
+  }
+}
+
+/**
  * Recursively resolve refs in a Model's subsystems.
  */
 async function resolveModelRefs(
@@ -313,59 +366,51 @@ async function resolveModelRefs(
   // top-level model union admits it under v0.8.0, but only a full Model
   // carries `subsystems`.
   if (!('subsystems' in model) || !model.subsystems) return
+  const subsystems = model.subsystems
 
-  for (const [subName, subsystem] of Object.entries(model.subsystems)) {
-    const sub = subsystem as Model & RefEdge
-    if (sub.ref) {
-      const ref = sub.ref
-      await resolveRefEdge(
-        sub,
-        subName,
-        basePath,
-        resolving,
-        refChain,
-        async (parsed, refBasePath) => {
-          // esm-spec §4.7: the mounted file's document-scoped index sets (already
-          // metaparameter-folded) join the importing document's registry, so the
-          // importer's variables may be shaped over the mesh file's axes and a
-          // disagreement fails loudly (`subsystem_index_set_conflict`).
-          mergeSubsystemIndexSets(registry, parsed, ref)
+  await walkSubsystemRefs(
+    subsystems,
+    basePath,
+    resolving,
+    refChain,
+    async (parsed, refBasePath, { subName, ref }) => {
+      // esm-spec §4.7: the mounted file's document-scoped index sets (already
+      // metaparameter-folded) join the importing document's registry, so the
+      // importer's variables may be shaped over the mesh file's axes and a
+      // disagreement fails loudly (`subsystem_index_set_conflict`).
+      mergeSubsystemIndexSets(registry, parsed, ref)
 
-          // Extract the first model from the referenced file
-          if (parsed.models) {
-            const firstEntry = Object.entries(parsed.models)[0]
-            if (firstEntry) {
-              const resolvedModel = firstEntry[1]
-              // Replace the ref subsystem with the resolved model content, then
-              // recursively resolve any refs in it, relative to the referenced
-              // file's own directory
-              model.subsystems![subName] = resolvedModel
-              await resolveModelRefs(
-                resolvedModel,
-                refBasePath,
-                resolving,
-                [...refChain, subName],
-                registry,
-              )
-            }
-          } else if (parsed.data_loaders) {
-            // Loader-only file (RFC pure-io-data-loaders §4.3): the referenced
-            // file's sole component is `data_loaders`. The schema allows a
-            // DataLoader inside Model.subsystems, so inline the first loader
-            // keyed by the parent subName. A loader has no subsystems, so there
-            // is nothing to recurse into.
-            const firstEntry = Object.entries(parsed.data_loaders)[0]
-            if (firstEntry) {
-              model.subsystems![subName] = firstEntry[1] as DataLoader
-            }
-          }
-        },
-      )
-    } else {
-      // Even if there's no ref, recurse into subsystems
-      await resolveModelRefs(sub, basePath, resolving, [...refChain, subName], registry)
-    }
-  }
+      // esm-spec §4.7 invariant: a referenced subsystem file holds exactly ONE
+      // top-level component. Only the FIRST model is extracted; any additional
+      // top-level models in a malformed multi-component file are silently
+      // ignored (the schema/validator is the enforcement point, not this
+      // loader). A referenced file with no `models` and no `data_loaders`
+      // leaves the original `{ref}` stub in place — nothing is inlined here.
+      if (parsed.models) {
+        const firstEntry = Object.entries(parsed.models)[0]
+        if (firstEntry) {
+          const resolvedModel = firstEntry[1]
+          // Replace the ref subsystem with the resolved model content, then
+          // recursively resolve any refs in it, relative to the referenced
+          // file's own directory.
+          subsystems[subName] = resolvedModel
+          await resolveModelRefs(resolvedModel, refBasePath, resolving, [...refChain, subName], registry)
+        }
+      } else if (parsed.data_loaders) {
+        // Loader-only file (RFC pure-io-data-loaders §4.3): the referenced
+        // file's sole component is `data_loaders`. The schema allows a
+        // DataLoader inside Model.subsystems, so inline the first loader
+        // keyed by the parent subName. A loader has no subsystems, so there
+        // is nothing to recurse into.
+        const firstEntry = Object.entries(parsed.data_loaders)[0]
+        if (firstEntry) {
+          subsystems[subName] = firstEntry[1] as DataLoader
+        }
+      }
+    },
+    async (subsystem, subName) =>
+      resolveModelRefs(subsystem as Model & RefEdge, basePath, resolving, [...refChain, subName], registry),
+  )
 }
 
 /**
@@ -378,39 +423,32 @@ async function resolveReactionSystemRefs(
   refChain: string[],
 ): Promise<void> {
   if (!rs.subsystems) return
+  const subsystems = rs.subsystems
 
-  for (const [subName, subsystem] of Object.entries(rs.subsystems)) {
-    const sub = subsystem as ReactionSystem & RefEdge
-    if (sub.ref) {
-      await resolveRefEdge(
-        sub,
-        subName,
-        basePath,
-        resolving,
-        refChain,
-        async (parsed, refBasePath) => {
-          // Extract the first reaction system from the referenced file
-          if (parsed.reaction_systems) {
-            const firstEntry = Object.entries(parsed.reaction_systems)[0]
-            if (firstEntry) {
-              const resolvedRs = firstEntry[1]
-              // Replace the ref subsystem with the resolved content, then
-              // recursively resolve any refs in it, relative to the referenced
-              // file's own directory
-              rs.subsystems![subName] = resolvedRs
-              await resolveReactionSystemRefs(resolvedRs, refBasePath, resolving, [
-                ...refChain,
-                subName,
-              ])
-            }
-          }
-        },
-      )
-    } else {
-      // Even if there's no ref, recurse into subsystems
-      await resolveReactionSystemRefs(sub, basePath, resolving, [...refChain, subName])
-    }
-  }
+  await walkSubsystemRefs(
+    subsystems,
+    basePath,
+    resolving,
+    refChain,
+    async (parsed, refBasePath, { subName }) => {
+      // esm-spec §4.7 invariant: exactly one top-level reaction system per
+      // referenced file; only the FIRST is extracted (extras ignored), and a
+      // file with no `reaction_systems` leaves the `{ref}` stub in place.
+      if (parsed.reaction_systems) {
+        const firstEntry = Object.entries(parsed.reaction_systems)[0]
+        if (firstEntry) {
+          const resolvedRs = firstEntry[1]
+          // Replace the ref subsystem with the resolved content, then
+          // recursively resolve any refs in it, relative to the referenced
+          // file's own directory.
+          subsystems[subName] = resolvedRs
+          await resolveReactionSystemRefs(resolvedRs, refBasePath, resolving, [...refChain, subName])
+        }
+      }
+    },
+    async (subsystem, subName) =>
+      resolveReactionSystemRefs(subsystem as ReactionSystem & RefEdge, basePath, resolving, [...refChain, subName]),
+  )
 }
 
 /**
@@ -445,6 +483,8 @@ export async function ephemeralInjectedFile(
   } else if (file !== null) {
     raw = JSON.parse(save(file)) as Record<string, unknown>
   } else {
+    // Caller/API precondition (not a document-level §9.6.6 diagnostic), so this
+    // stays a plain `Error` rather than a coded `ExpressionTemplateError`.
     throw new Error('ephemeralInjectedFile: one of `file` or `sourcePath` must be provided')
   }
 
@@ -454,16 +494,21 @@ export async function ephemeralInjectedFile(
     if (typeof comps !== 'object' || comps === null || Array.isArray(comps)) continue
     const comp = (comps as Record<string, unknown>)[mname]
     if (typeof comp !== 'object' || comp === null || Array.isArray(comp)) continue
-    const c = comp as Record<string, unknown>
-    const existing = c.expression_template_imports
-    const base: unknown[] = Array.isArray(existing) ? [...existing] : []
-    for (const e of imports) base.push(e)
-    c.expression_template_imports = base
+    // Reuse the clone-based append (esm-spec §9.7.10 merge order) so the
+    // per-run injection matches forms A/B and never captures `imports` by
+    // reference into the built file.
+    appendComponentImports(comp as Record<string, unknown>, imports)
     injected = true
     break
   }
   if (!injected) {
-    throw new Error(`component '${mname}' not found for per-run injection (esm-spec §9.7.10)`)
+    // A §9.7.10 injection target that names no top-level component: a coded
+    // diagnostic, consistent with the surrounding `ExpressionTemplateError`
+    // convention (message preserved).
+    throw new ExpressionTemplateError(
+      ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
+      `component '${mname}' not found for per-run injection (esm-spec §9.7.10)`,
+    )
   }
 
   const f = load(JSON.stringify(raw), { basePath: baseDir })
@@ -514,24 +559,11 @@ async function loadLocalRef(ref: string, basePath: string): Promise<string> {
   }
 }
 
-/**
- * Check if a ref is a remote URL.
- */
-function isRemoteRef(ref: string): boolean {
-  return ref.startsWith('http://') || ref.startsWith('https://')
-}
-
-/**
- * Normalize a ref to a canonical key for cycle detection.
- * Local paths are resolved against basePath and collapsed (../, ./);
- * URLs are returned as-is.
- */
-function normalizeRef(ref: string, basePath: string): string {
-  if (isRemoteRef(ref)) {
-    return ref
-  }
-  return canonicalizePath(joinPath(basePath, ref))
-}
+// `isRemoteRef`, `normalizeRef` (the cycle-detection key), `joinPath`, and
+// `canonicalizePath` now come from the shared `./path-utils.js` module — they
+// were byte-identical to the `template-imports.ts` copies. The two base-dir
+// helpers below stay local: they derive an imported file's own directory for
+// recursive resolution, which is not part of the shared path surface.
 
 /**
  * Get the base directory of a remote URL for recursive resolution.
@@ -548,35 +580,4 @@ function getLocalBase(ref: string, basePath: string): string {
   const resolved = canonicalizePath(joinPath(basePath, ref))
   const lastSlash = resolved.lastIndexOf('/')
   return lastSlash > 0 ? resolved.substring(0, lastSlash) : '/'
-}
-
-/**
- * Join two POSIX-style paths.
- */
-function joinPath(a: string, b: string): string {
-  if (b.startsWith('/')) return b
-  if (a.endsWith('/')) return `${a}${b}`
-  return `${a}/${b}`
-}
-
-/**
- * Collapse "." and ".." segments in a POSIX-style path.
- */
-function canonicalizePath(p: string): string {
-  const isAbs = p.startsWith('/')
-  const parts = p.split('/').filter((seg) => seg.length > 0 && seg !== '.')
-  const stack: string[] = []
-  for (const seg of parts) {
-    if (seg === '..') {
-      if (stack.length > 0 && stack[stack.length - 1] !== '..') {
-        stack.pop()
-      } else if (!isAbs) {
-        stack.push('..')
-      }
-    } else {
-      stack.push(seg)
-    }
-  }
-  const joined = stack.join('/')
-  return isAbs ? `/${joined}` : joined || '.'
 }

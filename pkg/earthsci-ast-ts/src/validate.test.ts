@@ -406,3 +406,90 @@ describe('variable_map expression transforms (schema widening)', () => {
     expect(result.schema_errors.some((e) => e.path.includes('/coupling/0'))).toBe(true)
   })
 })
+
+describe('scoped-reference split keeps the full variable path (splitScopedRef)', () => {
+  // Regression for the split('.', 2) truncation bug: a 3-segment
+  // data-loader ref like "Weather.deep.path" must report the ENTIRE remainder
+  // ("deep.path") as the missing variable, not the truncated first segment
+  // ("deep"). Mirrors Go's strings.SplitN(from, ".", 2) remainder semantics.
+  it('reports the whole dotted remainder for a 3-segment data-loader from-ref', () => {
+    const data = {
+      esm: '0.8.0',
+      metadata: { name: 'split_scoped_ref' },
+      models: {
+        M: {
+          variables: { x: { type: 'state', default: 0.0 } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+      data_loaders: {
+        Weather: {
+          kind: 'grid',
+          source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
+          variables: {
+            T: { file_variable: 'T2', units: 'K', description: 'Temperature' },
+          },
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Weather.deep.path',
+          to: 'M.x',
+          transform: 'param_to_var',
+        },
+      ],
+    }
+
+    const result = validate(data)
+
+    expect(result.is_valid).toBe(false)
+    const err = result.structural_errors.find(
+      (e) => e.code === 'undefined_data_loader_variable',
+    )
+    expect(err).toBeDefined()
+    expect(err!.path).toBe('/coupling/0/from')
+    // The FIX: full remainder, not the truncated 'deep'.
+    expect(err!.details.variable).toBe('deep.path')
+    expect(err!.details.data_loader).toBe('Weather')
+  })
+
+  it('is unchanged for the common 2-segment data-loader from-ref', () => {
+    const data = {
+      esm: '0.8.0',
+      metadata: { name: 'split_scoped_ref_2seg' },
+      models: {
+        M: {
+          variables: { x: { type: 'state', default: 0.0 } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+      data_loaders: {
+        Weather: {
+          kind: 'grid',
+          source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
+          variables: {
+            T: { file_variable: 'T2', units: 'K', description: 'Temperature' },
+          },
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Weather.missing_var',
+          to: 'M.x',
+          transform: 'param_to_var',
+        },
+      ],
+    }
+
+    const result = validate(data)
+
+    expect(result.is_valid).toBe(false)
+    const err = result.structural_errors.find(
+      (e) => e.code === 'undefined_data_loader_variable',
+    )
+    expect(err).toBeDefined()
+    expect(err!.details.variable).toBe('missing_var')
+  })
+})

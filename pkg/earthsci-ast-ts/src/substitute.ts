@@ -7,6 +7,7 @@
 
 import type { Expr, ExprNode, Model, ReactionSystem, EsmFile } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
+import { mapChildren } from './expression.js'
 
 /**
  * Context for resolving scoped references during substitution
@@ -61,15 +62,14 @@ export function substitute(
     return expr
   }
 
-  // ExpressionNode case: recursively substitute arguments
-  const node = expr as ExprNode
-  const substitutedArgs = node.args.map((arg) => substitute(arg, bindings, context))
-
-  // Return new node with substituted arguments
-  return {
-    ...node,
-    args: substitutedArgs as [Expr, ...Expr[]],
-  }
+  // ExpressionNode case: substitute EVERY expression-bearing child, not just
+  // `args`. `mapChildren` (expression.ts) enumerates the complete, canonical
+  // child set — `args`, aggregate `expr`/`filter`/`key`, integral
+  // `lower`/`upper`, `makearray` `values`, `table_lookup` `axes`, and template
+  // `bindings` — so structural subexpressions are no longer silently skipped.
+  // Every non-child metadata field (`op`, `wrt`, `reduce`, `dim`, ...) is
+  // preserved verbatim.
+  return mapChildren(expr as ExprNode, (child) => substitute(child, bindings, context))
 }
 
 /**
@@ -137,12 +137,15 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): Expr | nul
     }
   }
 
-  // Try to find in data loaders
+  // Data loaders declare no default value, so a reference into one has nothing
+  // to inline: it does NOT resolve to a substitutable expression. Return `null`
+  // (an explicit "not resolved") so the caller leaves the reference string
+  // untouched — the same net result the former `return reference` produced,
+  // but no longer masquerading as a successful resolution.
   if (esmFile.data_loaders && esmFile.data_loaders[systemName]) {
     const dataLoader = esmFile.data_loaders[systemName]
     if (dataLoader.variables && dataLoader.variables[variableName]) {
-      // Data loaders don't have default values, return the variable name as a placeholder
-      return reference
+      return null
     }
   }
 
@@ -150,7 +153,23 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): Expr | nul
 }
 
 /**
- * Apply substitution across all equations in a model.
+ * Apply substitution across an ENTIRE model, not just its equations.
+ *
+ * The rewritten expression sites are, exhaustively (this is the single write
+ * definition of "a model's expression sites"; `edit.ts`'s read-side
+ * `forEachModelExpressionSite` MUST cover the same set):
+ *   - every equation `lhs` / `rhs`;
+ *   - every observed variable's `expression`;
+ *   - every continuous event's `conditions[]`, `affects[].rhs`, and
+ *     `affect_neg[].rhs`;
+ *   - every discrete event's condition-`trigger.expression` and `affects[].rhs`;
+ *   - recursively, every inline-model subsystem (data loaders and unresolved
+ *     `{ref}` subsystems pass through unchanged).
+ *
+ * Event affect `lhs` values are write-TARGET names (`string`), not expression
+ * read-sites, and are intentionally left untouched — substitution replaces
+ * references, not assignment targets.
+ *
  * Returns a new model with substitutions applied (immutable).
  *
  * @param model - Model to substitute into
@@ -198,11 +217,46 @@ export function substituteInModel(
       )
     : undefined
 
+  // Substitute in continuous-event expression positions (conditions and affect
+  // RHSs). Absent/legacy-shaped fields are preserved verbatim via the spread.
+  const continuous_events = model.continuous_events?.map((event) => ({
+    ...event,
+    ...(Array.isArray(event.conditions) && {
+      conditions: event.conditions.map((c) => substitute(c, bindings, context)),
+    }),
+    ...(Array.isArray(event.affects) && {
+      affects: event.affects.map((a) => ({ ...a, rhs: substitute(a.rhs, bindings, context) })),
+    }),
+    ...(Array.isArray(event.affect_neg) && {
+      affect_neg: event.affect_neg.map((a) => ({
+        ...a,
+        rhs: substitute(a.rhs, bindings, context),
+      })),
+    }),
+  })) as Model['continuous_events']
+
+  // Substitute in discrete-event expression positions (a condition trigger's
+  // expression and affect RHSs). Non-condition triggers carry no expression.
+  const discrete_events = model.discrete_events?.map((event) => ({
+    ...event,
+    ...(event.trigger?.type === 'condition' && {
+      trigger: {
+        ...event.trigger,
+        expression: substitute(event.trigger.expression, bindings, context),
+      },
+    }),
+    ...(Array.isArray(event.affects) && {
+      affects: event.affects.map((a) => ({ ...a, rhs: substitute(a.rhs, bindings, context) })),
+    }),
+  })) as Model['discrete_events']
+
   return {
     ...model,
     equations,
     variables,
     ...(subsystems && { subsystems }),
+    ...(continuous_events && { continuous_events }),
+    ...(discrete_events && { discrete_events }),
   }
 }
 

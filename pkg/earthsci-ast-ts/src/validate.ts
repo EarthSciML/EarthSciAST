@@ -15,6 +15,8 @@ import {
 import { ExpressionTemplateError } from './lower-expression-templates.js'
 import { EnumLoweringError } from './lower-enums.js'
 import { LosslessJsonParseError, CanonicalNonfiniteError } from './numeric-literal.js'
+import { isExprNode } from './expression.js'
+import { ERROR_CODES } from './errors.js'
 import {
   checkDimensions,
   parseUnit,
@@ -30,11 +32,11 @@ import type {
   DataLoader,
   ReactionSystem,
   Expression,
-  ExpressionNode,
   CouplingOperatorCompose,
   CouplingCouple,
   CouplingVariableMap,
   SubsystemRef,
+  AffectEquation,
 } from './types.js'
 
 /**
@@ -58,8 +60,9 @@ export interface ValidationResult {
 }
 
 /**
- * Structural errors share the ValidationError shape; the alias is kept for
- * API compatibility with earlier releases that declared them separately.
+ * Structural errors share the exact `ValidationError` shape. This alias is a
+ * readability marker used on the return types of the structural validators
+ * below (as opposed to schema errors); it introduces no new fields.
  */
 export type StructuralError = ValidationError
 
@@ -67,6 +70,27 @@ export type StructuralError = ValidationError
 function isInlineModel(v: Model | DataLoader | SubsystemRef): v is Model {
   return !('ref' in v) && !('kind' in v)
 }
+
+// ---------------------------------------------------------------------------
+// Expression-tree walkers.
+//
+// These four walkers (extractVariableReferences, collectIndexSymbols,
+// countDerivatives, expressionReferencesName) share a common leaf-discrimination
+// rule via `isExprNode` (number/string/NumericLiteral leaves vs operator nodes).
+// They deliberately DIVERGE in DESCENT: countDerivatives descends the aggregate
+// contracted body (`expr`) as well as `args`, while the other three descend
+// `args` only. Unifying descent through `forEachChild` (the shared full-child
+// walker in expression.ts) is intentionally NOT done here: the structural pass's
+// bound-symbol collector (collectIndexSymbols) models only aggregate
+// output_idx/ranges and `index` element positions — it does NOT model the
+// binder symbols introduced by `skolem` / `join` / `distinct` `key` bodies or
+// the `argmin`/`argmax` `arg` witness. Descending those fields would surface
+// those binder names (e.g. the `skolem('edge', …)` term in
+// tests/valid/aggregate/skolem_distinct_rank.esm, or the join bin in
+// nearest_generator_argmin.esm) as `undefined_variable`, changing emitted
+// diagnostics on files that are structurally valid. Full descent unification is
+// therefore deferred until the bound-symbol collector models those binders.
+// ---------------------------------------------------------------------------
 
 /**
  * Extract all variable references from an expression
@@ -81,11 +105,10 @@ function extractVariableReferences(expr: Expression): string[] {
     } else if (typeof node === 'number') {
       // Numbers are literals, no variables
       return
-    } else if (node && typeof node === 'object' && 'op' in node) {
+    } else if (isExprNode(node)) {
       // Expression node - recursively visit arguments
-      const exprNode = node as ExpressionNode
-      if (exprNode.args) {
-        for (const arg of exprNode.args) {
+      if (node.args) {
+        for (const arg of node.args) {
           visit(arg)
         }
       }
@@ -109,30 +132,28 @@ function collectIndexSymbols(expr: Expression): Set<string> {
   const symbols = new Set<string>()
 
   function visit(node: Expression): void {
-    if (!node || typeof node !== 'object' || !('op' in node)) return
-    const exprNode = node as ExpressionNode
+    if (!isExprNode(node)) return
 
-    if (exprNode.op === 'aggregate') {
-      const agg = exprNode as any
-      for (const idx of agg.output_idx || []) {
+    if (node.op === 'aggregate') {
+      for (const idx of node.output_idx || []) {
         if (typeof idx === 'string') symbols.add(idx)
       }
-      if (agg.ranges && typeof agg.ranges === 'object') {
-        for (const key of Object.keys(agg.ranges)) symbols.add(key)
+      if (node.ranges && typeof node.ranges === 'object') {
+        for (const key of Object.keys(node.ranges)) symbols.add(key)
       }
     }
 
-    if (exprNode.op === 'index' && exprNode.args) {
+    if (node.op === 'index' && node.args) {
       // index(array, pos1, pos2, ...): positions after the array head are
       // index expressions; bare-name positions are bound index symbols.
-      for (let i = 1; i < exprNode.args.length; i++) {
-        const pos = exprNode.args[i]
+      for (let i = 1; i < node.args.length; i++) {
+        const pos = node.args[i]
         if (typeof pos === 'string') symbols.add(pos)
       }
     }
 
-    if (exprNode.args) {
-      for (const arg of exprNode.args) visit(arg)
+    if (node.args) {
+      for (const arg of node.args) visit(arg)
     }
   }
 
@@ -147,10 +168,9 @@ function collectIndexSymbols(expr: Expression): Set<string> {
  */
 function derivativeTargetVariable(arg: Expression): string | undefined {
   if (typeof arg === 'string') return arg
-  if (arg && typeof arg === 'object' && 'op' in arg) {
-    const node = arg as ExpressionNode
-    if (node.op === 'index' && node.args && node.args.length > 0) {
-      const head = node.args[0]
+  if (isExprNode(arg)) {
+    if (arg.op === 'index' && arg.args && arg.args.length > 0) {
+      const head = arg.args[0]
       if (typeof head === 'string') return head
     }
   }
@@ -166,16 +186,13 @@ function derivativeTargetVariable(arg: Expression): string | undefined {
  */
 function lhsAssignmentTarget(lhs: Expression): string | undefined {
   if (typeof lhs === 'string') return lhs
-  if (lhs && typeof lhs === 'object' && 'op' in lhs) {
-    const node = lhs as ExpressionNode
-    switch (node.op) {
+  if (isExprNode(lhs)) {
+    switch (lhs.op) {
       case 'D':
       case 'index':
-        return node.args && node.args.length > 0 ? lhsAssignmentTarget(node.args[0]) : undefined
+        return lhs.args && lhs.args.length > 0 ? lhsAssignmentTarget(lhs.args[0]) : undefined
       case 'aggregate':
-        return (node as any).expr !== undefined
-          ? lhsAssignmentTarget((node as any).expr as Expression)
-          : undefined
+        return lhs.expr !== undefined ? lhsAssignmentTarget(lhs.expr) : undefined
       default:
         return undefined
     }
@@ -195,24 +212,23 @@ function countDerivatives(expr: Expression): { [variable: string]: number } {
   const derivatives: { [variable: string]: number } = {}
 
   function visit(node: Expression): void {
-    if (typeof node === 'object' && node && 'op' in node) {
-      const exprNode = node as ExpressionNode
-      if (exprNode.op === 'D' && exprNode.args && exprNode.args.length >= 1) {
-        const target = derivativeTargetVariable(exprNode.args[0])
+    if (isExprNode(node)) {
+      if (node.op === 'D' && node.args && node.args.length >= 1) {
+        const target = derivativeTargetVariable(node.args[0])
         if (target !== undefined) {
           derivatives[target] = (derivatives[target] || 0) + 1
         }
       }
       // Recursively visit all arguments
-      if (exprNode.args) {
-        for (const arg of exprNode.args) {
+      if (node.args) {
+        for (const arg of node.args) {
           visit(arg)
         }
       }
       // An aggregate carries its contracted body (and any LHS derivative)
       // in `expr`, not `args` — descend there too.
-      if ('expr' in exprNode && (exprNode as any).expr !== undefined) {
-        visit((exprNode as any).expr as Expression)
+      if (node.expr !== undefined) {
+        visit(node.expr)
       }
     }
   }
@@ -287,6 +303,24 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): boolean {
 }
 
 /**
+ * Split a scoped reference like `"System.var"` or `"System.Sub.var"` into its
+ * head system segment and the ENTIRE remaining dotted path.
+ *
+ * Unlike a 2-limit split (`ref.split('.', 2)`), the remainder keeps every
+ * trailing segment, so `"A.b.c"` → `["A", "b.c"]` rather than truncating to
+ * `"b"`. This matches Go's `strings.SplitN(ref, ".", 2)` remainder semantics,
+ * so the (system, variable-path) decomposition is identical across bindings.
+ * Callers that need a scoped ref's system head and variable path share this
+ * one helper (both `validateCouplingIntegrity` and `validateDataLoaderReferences`
+ * previously parsed the same field two incompatible ways).
+ */
+function splitScopedRef(ref: string): [string, string] {
+  const dot = ref.indexOf('.')
+  if (dot < 0) return [ref, '']
+  return [ref.slice(0, dot), ref.slice(dot + 1)]
+}
+
+/**
  * Check equation-unknown balance for a model
  */
 function validateEquationBalance(model: Model, modelPath: string): StructuralError[] {
@@ -326,7 +360,7 @@ function validateEquationBalance(model: Model, modelPath: string): StructuralErr
 
     errors.push({
       path: modelPath,
-      code: 'equation_count_mismatch',
+      code: ERROR_CODES.EQUATION_COUNT_MISMATCH,
       message: `Number of ODE equations (${odeEquationCount}) does not match number of state variables (${stateVariables.length})`,
       details: {
         state_variables: stateVariables,
@@ -383,7 +417,7 @@ function validateReferenceIntegrity(
           if (!resolveScopedReference(varRef, esmFile)) {
             errors.push({
               path: sidePath,
-              code: 'unresolved_scoped_ref',
+              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
               message: `Scoped reference "${varRef}" cannot be resolved`,
               details: { reference: varRef },
             })
@@ -396,7 +430,7 @@ function validateReferenceIntegrity(
           // Local reference
           errors.push({
             path: sidePath,
-            code: 'undefined_variable',
+            code: ERROR_CODES.UNDEFINED_VARIABLE,
             message: `Variable "${varRef}" referenced in equation is not declared`,
             details: { variable: varRef },
           })
@@ -413,13 +447,47 @@ function validateReferenceIntegrity(
     if (variable.type === 'observed' && !variable.expression) {
       errors.push({
         path: `${modelPath}/variables/${varName}`,
-        code: 'missing_observed_expr',
+        code: ERROR_CODES.MISSING_OBSERVED_EXPR,
         message: `Observed variable "${varName}" is missing its expression field`,
         details: { variable: varName },
       })
     }
   }
 
+  return errors
+}
+
+/**
+ * Flag affect-equation LHS targets that are not declared variables. Shared by
+ * the discrete-event `affects`, continuous-event `affects`, and continuous-event
+ * `affect_neg` loops, which are byte-identical apart from the array path segment
+ * and the human-readable context phrase.
+ *
+ * `phrase` is interpolated verbatim into the message, preserving the historical
+ * per-site wording — "event affects" vs "continuous event affects" vs
+ * "continuous event affect_neg" — which the cross-language goldens pin, so it is
+ * NOT unified. `basePath` is the array's JSON path (e.g. `.../affects`); the
+ * per-element `/${j}/lhs` suffix is appended here.
+ */
+function checkAffectTargets(
+  affects: AffectEquation[] | null | undefined,
+  declaredVariables: Set<string>,
+  basePath: string,
+  phrase: string,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!affects) return errors
+  for (let j = 0; j < affects.length; j++) {
+    const affect = affects[j]
+    if (!declaredVariables.has(affect.lhs)) {
+      errors.push({
+        path: `${basePath}/${j}/lhs`,
+        code: ERROR_CODES.EVENT_VAR_UNDECLARED,
+        message: `Variable "${affect.lhs}" in ${phrase} is not declared`,
+        details: { variable: affect.lhs },
+      })
+    }
+  }
   return errors
 }
 
@@ -446,7 +514,7 @@ function validateEventConsistency(model: Model, modelPath: string): StructuralEr
         if (!declaredParameters.has(paramName)) {
           errors.push({
             path: `${eventPath}/discrete_parameters`,
-            code: 'invalid_discrete_param',
+            code: ERROR_CODES.INVALID_DISCRETE_PARAM,
             message: `discrete_parameters entry "${paramName}" does not match a declared parameter`,
             details: { parameter: paramName },
           })
@@ -455,19 +523,9 @@ function validateEventConsistency(model: Model, modelPath: string): StructuralEr
     }
 
     // Check affects variables
-    if (event.affects) {
-      for (let j = 0; j < event.affects.length; j++) {
-        const affect = event.affects[j]
-        if (!declaredVariables.has(affect.lhs)) {
-          errors.push({
-            path: `${eventPath}/affects/${j}/lhs`,
-            code: 'event_var_undeclared',
-            message: `Variable "${affect.lhs}" in event affects is not declared`,
-            details: { variable: affect.lhs },
-          })
-        }
-      }
-    }
+    errors.push(
+      ...checkAffectTargets(event.affects, declaredVariables, `${eventPath}/affects`, 'event affects'),
+    )
 
     // Check functional affect variables
     if (event.functional_affect) {
@@ -475,7 +533,7 @@ function validateEventConsistency(model: Model, modelPath: string): StructuralEr
         if (!declaredVariables.has(varName)) {
           errors.push({
             path: `${eventPath}/functional_affect/read_vars`,
-            code: 'event_var_undeclared',
+            code: ERROR_CODES.EVENT_VAR_UNDECLARED,
             message: `Variable "${varName}" in functional_affect read_vars is not declared`,
             details: { variable: varName },
           })
@@ -486,7 +544,7 @@ function validateEventConsistency(model: Model, modelPath: string): StructuralEr
         if (!declaredParameters.has(paramName)) {
           errors.push({
             path: `${eventPath}/functional_affect/read_params`,
-            code: 'event_var_undeclared',
+            code: ERROR_CODES.EVENT_VAR_UNDECLARED,
             message: `Parameter "${paramName}" in functional_affect read_params is not declared`,
             details: { variable: paramName },
           })
@@ -501,34 +559,24 @@ function validateEventConsistency(model: Model, modelPath: string): StructuralEr
     const eventPath = `${modelPath}/continuous_events/${i}`
 
     // Check affects variables
-    if (event.affects) {
-      for (let j = 0; j < event.affects.length; j++) {
-        const affect = event.affects[j]
-        if (!declaredVariables.has(affect.lhs)) {
-          errors.push({
-            path: `${eventPath}/affects/${j}/lhs`,
-            code: 'event_var_undeclared',
-            message: `Variable "${affect.lhs}" in continuous event affects is not declared`,
-            details: { variable: affect.lhs },
-          })
-        }
-      }
-    }
+    errors.push(
+      ...checkAffectTargets(
+        event.affects,
+        declaredVariables,
+        `${eventPath}/affects`,
+        'continuous event affects',
+      ),
+    )
 
     // Check affect_neg variables
-    if (event.affect_neg) {
-      for (let j = 0; j < event.affect_neg.length; j++) {
-        const affect = event.affect_neg[j]
-        if (!declaredVariables.has(affect.lhs)) {
-          errors.push({
-            path: `${eventPath}/affect_neg/${j}/lhs`,
-            code: 'event_var_undeclared',
-            message: `Variable "${affect.lhs}" in continuous event affect_neg is not declared`,
-            details: { variable: affect.lhs },
-          })
-        }
-      }
-    }
+    errors.push(
+      ...checkAffectTargets(
+        event.affect_neg,
+        declaredVariables,
+        `${eventPath}/affect_neg`,
+        'continuous event affect_neg',
+      ),
+    )
   }
 
   return errors
@@ -553,72 +601,54 @@ function validateReactionConsistency(
     if (reaction.substrates === null && reaction.products === null) {
       errors.push({
         path: reactionPath,
-        code: 'null_reaction',
+        code: ERROR_CODES.NULL_REACTION,
         message: `Reaction "${reaction.id}" has both substrates: null and products: null`,
         details: { reaction_id: reaction.id },
       })
     }
 
-    // Check substrates
-    if (reaction.substrates && Array.isArray(reaction.substrates)) {
-      for (let j = 0; j < reaction.substrates.length; j++) {
-        const substrate = reaction.substrates[j]
-        if (substrate && !declaredSpecies.has(substrate.species)) {
+    // Check substrates and products. The two blocks were byte-identical apart
+    // from the reactant role, which only varies the path segment and the
+    // "reaction <role>" message wording — so they share one loop.
+    for (const role of ['substrates', 'products'] as const) {
+      const reactants = reaction[role]
+      if (!reactants || !Array.isArray(reactants)) continue
+      for (let j = 0; j < reactants.length; j++) {
+        const reactant = reactants[j]
+        if (reactant && !declaredSpecies.has(reactant.species)) {
           errors.push({
-            path: `${reactionPath}/substrates/${j}/species`,
-            code: 'undefined_species',
-            message: `Species "${substrate.species}" in reaction substrates is not declared`,
-            details: { species: substrate.species, reaction_id: reaction.id },
+            path: `${reactionPath}/${role}/${j}/species`,
+            code: ERROR_CODES.UNDEFINED_SPECIES,
+            message: `Species "${reactant.species}" in reaction ${role} is not declared`,
+            details: { species: reactant.species, reaction_id: reaction.id },
           })
         }
 
         // Check stoichiometry is positive integer
         if (
-          substrate &&
-          (!Number.isInteger(substrate.stoichiometry) || substrate.stoichiometry <= 0)
+          reactant &&
+          (!Number.isInteger(reactant.stoichiometry) || reactant.stoichiometry <= 0)
         ) {
           errors.push({
-            path: `${reactionPath}/substrates/${j}/stoichiometry`,
-            code: 'invalid_stoichiometry',
-            message: `Stoichiometry must be a positive integer, got ${substrate.stoichiometry}`,
-            details: { stoichiometry: substrate.stoichiometry, reaction_id: reaction.id },
+            path: `${reactionPath}/${role}/${j}/stoichiometry`,
+            code: ERROR_CODES.INVALID_STOICHIOMETRY,
+            message: `Stoichiometry must be a positive integer, got ${reactant.stoichiometry}`,
+            details: { stoichiometry: reactant.stoichiometry, reaction_id: reaction.id },
           })
         }
       }
     }
 
-    // Check products
-    if (reaction.products && Array.isArray(reaction.products)) {
-      for (let j = 0; j < reaction.products.length; j++) {
-        const product = reaction.products[j]
-        if (product && !declaredSpecies.has(product.species)) {
-          errors.push({
-            path: `${reactionPath}/products/${j}/species`,
-            code: 'undefined_species',
-            message: `Species "${product.species}" in reaction products is not declared`,
-            details: { species: product.species, reaction_id: reaction.id },
-          })
-        }
-
-        // Check stoichiometry is positive integer
-        if (product && (!Number.isInteger(product.stoichiometry) || product.stoichiometry <= 0)) {
-          errors.push({
-            path: `${reactionPath}/products/${j}/stoichiometry`,
-            code: 'invalid_stoichiometry',
-            message: `Stoichiometry must be a positive integer, got ${product.stoichiometry}`,
-            details: { stoichiometry: product.stoichiometry, reaction_id: reaction.id },
-          })
-        }
-      }
-    }
-
-    // Check rate expression references
+    // Check rate expression references. NOTE: the `undefined_parameter` code
+    // covers BOTH undeclared species and undeclared parameters in a rate
+    // expression; the code string is conformance-pinned so it is not split by
+    // reference kind.
     const rateVars = extractVariableReferences(reaction.rate)
     for (const varRef of rateVars) {
       if (!declaredSpecies.has(varRef) && !declaredParameters.has(varRef)) {
         errors.push({
           path: `${reactionPath}/rate`,
-          code: 'undefined_parameter',
+          code: ERROR_CODES.UNDEFINED_PARAMETER,
           message: `Variable "${varRef}" in rate expression is not declared as species or parameter`,
           details: { variable: varRef, reaction_id: reaction.id },
         })
@@ -651,8 +681,8 @@ function validateReactionSystemICs(
 
   for (let i = 0; i < constraintEquations.length; i++) {
     const lhs = constraintEquations[i]?.lhs
-    if (!lhs || typeof lhs !== 'object' || !('op' in lhs)) continue
-    const node = lhs as ExpressionNode
+    if (!isExprNode(lhs)) continue
+    const node = lhs
     if (node.op !== 'ic') continue
 
     let species: string | null = null
@@ -662,7 +692,7 @@ function validateReactionSystemICs(
 
     errors.push({
       path: `${systemPath}/constraint_equations/${i}`,
-      code: 'ic_in_reaction_system',
+      code: ERROR_CODES.IC_IN_REACTION_SYSTEM,
       message:
         'ic equation not allowed in a reaction system; a reaction system has no equations ' +
         'field and hosts no ic equations (ICs are model-hosted: species.default, or a ' +
@@ -832,6 +862,12 @@ function validateReactionRateUnits(
     if (!resolvable) continue
 
     const rateResult = checkDimensions(reaction.rate, bindings)
+    // COUPLING: this skip test string-matches the human-readable warning prose
+    // emitted by checkDimensions in units.ts. It is intentionally left as a
+    // substring match here — units.ts owns that wording and is off-limits to
+    // this module. A Wave-2 units effort is separately introducing structured
+    // warning codes; do NOT depend on those here until they land (changing this
+    // to a code check now would decouple from the current units.ts message).
     if (rateResult.warnings.some((w) => w.includes('Unknown variable'))) continue
 
     const expectedPower = 1 - totalOrder
@@ -847,7 +883,7 @@ function validateReactionRateUnits(
 
     errors.push({
       path: `${systemPath}/reactions/${i}`,
-      code: 'unit_inconsistency',
+      code: ERROR_CODES.UNIT_INCONSISTENCY,
       message: 'Reaction rate expression has incompatible units for reaction stoichiometry',
       details: {
         reaction_id: reaction.id,
@@ -886,10 +922,9 @@ function expressionReferencesName(expr: Expression | undefined, name: string): b
   if (expr === undefined || expr === null) return false
   if (typeof expr === 'string') return expr === name
   if (typeof expr === 'number') return false
-  if (typeof expr === 'object' && 'op' in expr) {
-    const node = expr as ExpressionNode
-    if (node.args) {
-      for (const arg of node.args) {
+  if (isExprNode(expr)) {
+    if (expr.args) {
+      for (const arg of expr.args) {
         if (expressionReferencesName(arg, name)) return true
       }
     }
@@ -931,7 +966,7 @@ function validatePhysicalConstantUnits(model: Model, modelPath: string): Structu
     const targetName = usageName ?? name
     errors.push({
       path: `${modelPath}/variables/${targetName}`,
-      code: 'unit_inconsistency',
+      code: ERROR_CODES.UNIT_INCONSISTENCY,
       message: 'Physical constant used with incorrect dimensional analysis',
       details: {
         constant_name: name,
@@ -970,8 +1005,8 @@ function validateConversionFactorConsistency(model: Model, modelPath: string): S
     if (!lhsUnits) continue
 
     const expr = vdef.expression
-    if (typeof expr !== 'object' || !('op' in expr)) continue
-    const node = expr as ExpressionNode
+    if (!isExprNode(expr)) continue
+    const node = expr
     if (node.op !== '*' || !node.args || node.args.length !== 2) continue
 
     let numeric: number | undefined
@@ -1010,7 +1045,7 @@ function validateConversionFactorConsistency(model: Model, modelPath: string): S
 
     errors.push({
       path: `${modelPath}/variables/${vname}`,
-      code: 'unit_inconsistency',
+      code: ERROR_CODES.UNIT_INCONSISTENCY,
       message: 'Unit conversion factor is incorrect for specified unit transformation',
       details: {
         variable: vname,
@@ -1029,36 +1064,46 @@ function validateConversionFactorConsistency(model: Model, modelPath: string): S
  * The synchronous validate() function cannot resolve external file references;
  * call resolveSubsystemRefs() before validate() to inline them first.
  */
+/**
+ * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
+ * `subsystems` map. Shared by the models and reaction-systems passes, which
+ * differ only in the JSON path prefix.
+ */
+function flagRefSubsystems(
+  subsystems: Record<string, unknown>,
+  pathPrefix: string,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  for (const [subsystemName, subsystem] of Object.entries(subsystems)) {
+    if (subsystem && typeof subsystem === 'object' && 'ref' in subsystem) {
+      const ref = (subsystem as SubsystemRef).ref
+      if (typeof ref === 'string') {
+        errors.push({
+          path: `${pathPrefix}/${subsystemName}`,
+          code: ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
+          message: `Subsystem '${subsystemName}' is an unresolved file reference ('${ref}'). Call resolveSubsystemRefs() before validate().`,
+          details: { ref },
+        })
+      }
+    }
+  }
+  return errors
+}
+
 function validateSubsystemRefs(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
   if (esmFile.models) {
     for (const [modelName, model] of Object.entries(esmFile.models)) {
       if ('ref' in model || !model.subsystems) continue
-      for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
-        if ('ref' in subsystem && typeof (subsystem as SubsystemRef).ref === 'string') {
-          errors.push({
-            path: `/models/${modelName}/subsystems/${subsystemName}`,
-            code: 'unresolved_subsystem_ref',
-            message: `Subsystem '${subsystemName}' is an unresolved file reference ('${(subsystem as SubsystemRef).ref}'). Call resolveSubsystemRefs() before validate().`,
-            details: { ref: (subsystem as SubsystemRef).ref },
-          })
-        }
-      }
+      errors.push(...flagRefSubsystems(model.subsystems, `/models/${modelName}/subsystems`))
     }
   }
   if (esmFile.reaction_systems) {
     for (const [systemName, system] of Object.entries(esmFile.reaction_systems)) {
       if (!system.subsystems) continue
-      for (const [subsystemName, subsystem] of Object.entries(system.subsystems)) {
-        if ('ref' in subsystem && typeof (subsystem as SubsystemRef).ref === 'string') {
-          errors.push({
-            path: `/reaction_systems/${systemName}/subsystems/${subsystemName}`,
-            code: 'unresolved_subsystem_ref',
-            message: `Subsystem '${subsystemName}' is an unresolved file reference ('${(subsystem as SubsystemRef).ref}'). Call resolveSubsystemRefs() before validate().`,
-            details: { ref: (subsystem as SubsystemRef).ref },
-          })
-        }
-      }
+      errors.push(
+        ...flagRefSubsystems(system.subsystems, `/reaction_systems/${systemName}/subsystems`),
+      )
     }
   }
   return errors
@@ -1079,7 +1124,7 @@ function validateDefaultUnits(model: Model, modelPath: string): StructuralError[
     if (isAffineTempUnit(default_units) || isAffineTempUnit(units)) {
       errors.push({
         path: `${modelPath}/variables/${vname}`,
-        code: 'unit_inconsistency',
+        code: ERROR_CODES.UNIT_INCONSISTENCY,
         message: `default_units '${default_units}' requires an affine conversion to/from '${units}'; use an expression instead of a scalar default`,
         details: { variable: vname, units, default_units },
       })
@@ -1107,27 +1152,15 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
     const coupling = esmFile.coupling[i]
     const couplingPath = `/coupling/${i}`
 
-    if (coupling.type === 'operator_compose') {
-      // Check systems exist
-      const composeEntry = coupling as CouplingOperatorCompose
-      for (const systemName of composeEntry.systems) {
+    if (coupling.type === 'operator_compose' || coupling.type === 'couple') {
+      // operator_compose and couple both carry a `systems` list and their
+      // existence checks were byte-identical, so the two branches are merged.
+      const systemsEntry = coupling as CouplingOperatorCompose | CouplingCouple
+      for (const systemName of systemsEntry.systems) {
         if (!availableSystems.has(systemName)) {
           errors.push({
             path: `${couplingPath}/systems`,
-            code: 'undefined_system',
-            message: `Coupling entry references nonexistent system "${systemName}"`,
-            details: { system: systemName },
-          })
-        }
-      }
-    } else if (coupling.type === 'couple') {
-      // Check systems exist
-      const coupleEntry = coupling as CouplingCouple
-      for (const systemName of coupleEntry.systems) {
-        if (!availableSystems.has(systemName)) {
-          errors.push({
-            path: `${couplingPath}/systems`,
-            code: 'undefined_system',
+            code: ERROR_CODES.UNDEFINED_SYSTEM,
             message: `Coupling entry references nonexistent system "${systemName}"`,
             details: { system: systemName },
           })
@@ -1136,10 +1169,16 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
     } else if (coupling.type === 'variable_map') {
       // Check from/to system references exist
       const vmEntry = coupling as CouplingVariableMap
-      // `factor` is a scaling slot for the scaling string transforms
-      // only; an Expression transform spells its own arithmetic, so a
-      // `factor` alongside it is a modeling error (the schema rejects
-      // this combination too — this mirrors it structurally).
+      // `factor` is a scaling slot for the scaling string transforms only; an
+      // Expression transform spells its own arithmetic, so a `factor` alongside
+      // it is a modeling error.
+      //
+      // NOTE (kept, not deleted): this check is effectively UNREACHABLE through
+      // the public `validate()` — the JSON schema already rejects the
+      // `factor` + Expression-transform combination, and structural validation
+      // runs only when `schema_errors.length === 0`. It is retained as a
+      // defensive structural mirror of that schema rule (and would fire if
+      // performStructuralValidation were ever driven on a schema-invalid file).
       if (
         vmEntry.factor !== undefined &&
         typeof vmEntry.transform === 'object' &&
@@ -1147,7 +1186,7 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
       ) {
         errors.push({
           path: `${couplingPath}/factor`,
-          code: 'factor_with_expression_transform',
+          code: ERROR_CODES.FACTOR_WITH_EXPRESSION_TRANSFORM,
           message: `variable_map with an Expression transform must not carry 'factor'; fold the scaling into the expression`,
           details: { factor: vmEntry.factor },
         })
@@ -1155,17 +1194,16 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
       for (const field of ['from', 'to'] as const) {
         const ref = vmEntry[field]
         if (typeof ref === 'string' && ref.includes('.')) {
-          const systemName = ref.split('.')[0]
+          const [systemName, varName] = splitScopedRef(ref)
           if (!availableSystems.has(systemName)) {
             errors.push({
               path: `${couplingPath}/${field}`,
-              code: 'unresolved_scoped_ref',
+              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
               message: `Scoped reference "${ref}" references nonexistent system "${systemName}"`,
               details: { reference: ref, system: systemName },
             })
           } else {
             // Check variable exists in the system
-            const varName = ref.split('.').slice(1).join('.')
             const system =
               (esmFile.models || {})[systemName] || (esmFile.reaction_systems || {})[systemName]
             if (system) {
@@ -1178,7 +1216,7 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
                 if (!loaderVariables[varName]) {
                   errors.push({
                     path: `${couplingPath}/${field}`,
-                    code: 'unresolved_scoped_ref',
+                    code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
                     message: `Variable "${varName}" not found in system "${systemName}"`,
                     details: { reference: ref, system: systemName, variable: varName },
                   })
@@ -1194,9 +1232,6 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
   return errors
 }
 
-/**
- * Main structural validation function
- */
 /**
  * Check for circular cross-model variable references (without explicit coupling)
  */
@@ -1233,19 +1268,21 @@ function validateCircularReferences(esmFile: EsmFile): StructuralError[] {
   const visited = new Set<string>()
   const inStack = new Set<string>()
 
-  function dfs(node: string, path: string[]): boolean {
+  // Returns void: the boolean was never read by any caller (cycles are
+  // reported by pushing to `errors`, and recursion ignores the result).
+  function dfs(node: string, path: string[]): void {
     if (inStack.has(node)) {
       const cycleStart = path.indexOf(node)
       const cycle = path.slice(cycleStart).concat(node)
       errors.push({
         path: '/models',
         message: `Circular dependency detected: ${cycle.join(' → ')}`,
-        code: 'circular_dependency',
+        code: ERROR_CODES.CIRCULAR_DEPENDENCY,
         details: { cycle },
       })
-      return true
+      return
     }
-    if (visited.has(node)) return false
+    if (visited.has(node)) return
 
     visited.add(node)
     inStack.add(node)
@@ -1256,7 +1293,6 @@ function validateCircularReferences(esmFile: EsmFile): StructuralError[] {
     }
 
     inStack.delete(node)
-    return false
   }
 
   for (const modelName of modelDeps.keys()) {
@@ -1269,7 +1305,17 @@ function validateCircularReferences(esmFile: EsmFile): StructuralError[] {
 }
 
 /**
- * Validate data loader variable references in coupling entries
+ * Validate data loader variable references in coupling entries.
+ *
+ * NOTE (overlap, deferred): `validateCouplingIntegrity` also checks a
+ * variable_map `from`/`to` against a system's members and, for a data-loader
+ * head, emits `unresolved_scoped_ref` — whereas THIS pass emits the more
+ * specific `undefined_data_loader_variable`. The two do not collide in
+ * practice: `validateCouplingIntegrity` only reaches the loader-variable check
+ * when the head also resolves as a model/reaction_system (a name collision),
+ * otherwise `system` is undefined and it emits nothing. Consolidating them
+ * would change WHICH code fires for such a collision, so they are kept separate
+ * and the overlap is documented rather than merged.
  */
 function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
@@ -1282,16 +1328,20 @@ function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[] {
     if (coupling.type === 'variable_map' && 'from' in coupling) {
       const from = (coupling as any).from as string
       if (from && from.includes('.')) {
-        const [sourceName, varName] = from.split('.', 2)
+        // Keep the FULL variable path after the source head — a 2-limit split
+        // (`from.split('.', 2)`) would truncate "Loader.a.b" to variable "a"
+        // (a JS-vs-Go SplitN discrepancy). splitScopedRef mirrors Go's
+        // strings.SplitN(from, ".", 2) remainder semantics.
+        const [sourceName, varName] = splitScopedRef(from)
         // Check if source is a data loader
         if (esmFile.data_loaders[sourceName]) {
           const loader = esmFile.data_loaders[sourceName]
-          const loaderVariables = (loader as any).variables || {}
+          const loaderVariables = loader.variables || {}
           if (!(varName in loaderVariables)) {
             errors.push({
               path: `${couplingPath}/from`,
               message: `Data loader '${sourceName}' does not expose variable '${varName}'`,
-              code: 'undefined_data_loader_variable',
+              code: ERROR_CODES.UNDEFINED_DATA_LOADER_VARIABLE,
               details: {
                 data_loader: sourceName,
                 variable: varName,
@@ -1324,7 +1374,7 @@ function validateTemporalResolution(esmFile: EsmFile): StructuralError[] {
   const durationFields: Array<'file_period' | 'frequency'> = ['file_period', 'frequency']
 
   for (const [loaderName, loader] of Object.entries(esmFile.data_loaders)) {
-    const temporal = (loader as any).temporal
+    const temporal = loader.temporal
     if (!temporal || typeof temporal !== 'object') continue
     for (const field of durationFields) {
       const value = temporal[field]
@@ -1332,7 +1382,7 @@ function validateTemporalResolution(esmFile: EsmFile): StructuralError[] {
         errors.push({
           path: `/data_loaders/${loaderName}/temporal/${field}`,
           message: `Invalid ISO 8601 duration: '${value}'`,
-          code: 'invalid_temporal_duration',
+          code: ERROR_CODES.INVALID_TEMPORAL_DURATION,
           details: { field, value },
         })
       }
@@ -1349,15 +1399,24 @@ function validateTemporalResolution(esmFile: EsmFile): StructuralError[] {
  */
 function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[] {
   return warnings
-    .filter((warning) => warning.code === 'dimensional_mismatch')
+    .filter((warning) => warning.code === ERROR_CODES.DIMENSIONAL_MISMATCH)
     .map((warning) => ({
+      // NOTE: the `'$'` root-path sentinel here (and in validate()'s catch
+      // blocks) is left as-is rather than normalized to the schema layer's
+      // `'/'`. It is only emitted for a location-less warning; changing it
+      // would alter an emitted `path` string, which the cross-language goldens
+      // may pin, so normalization is deferred.
       path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : '$',
       message: warning.message,
-      code: 'unit_error',
+      code: ERROR_CODES.UNIT_ERROR,
       details: { equation: warning.equation || '' },
     }))
 }
 
+/**
+ * Main structural validation function. Runs every structural (post-schema)
+ * validator over a loaded ESM file and returns the aggregated errors.
+ */
 function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
 
@@ -1466,13 +1525,13 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
  * stable strings that renames cannot silently change.
  */
 function loadErrorCode(error: Error): string {
-  if (error instanceof SchemaValidationError) return 'schema_validation_error'
-  if (error instanceof ParseError) return 'parse_error'
-  if (error instanceof ExpressionTemplateError) return 'expression_template_error'
-  if (error instanceof EnumLoweringError) return 'enum_lowering_error'
-  if (error instanceof LosslessJsonParseError) return 'json_parse_error'
-  if (error instanceof CanonicalNonfiniteError) return 'nonfinite_number'
-  return 'load_error'
+  if (error instanceof SchemaValidationError) return ERROR_CODES.SCHEMA_VALIDATION_ERROR
+  if (error instanceof ParseError) return ERROR_CODES.PARSE_ERROR
+  if (error instanceof ExpressionTemplateError) return ERROR_CODES.EXPRESSION_TEMPLATE_ERROR
+  if (error instanceof EnumLoweringError) return ERROR_CODES.ENUM_LOWERING_ERROR
+  if (error instanceof LosslessJsonParseError) return ERROR_CODES.JSON_PARSE_ERROR
+  if (error instanceof CanonicalNonfiniteError) return ERROR_CODES.NONFINITE_NUMBER
+  return ERROR_CODES.LOAD_ERROR
 }
 
 /**
@@ -1503,7 +1562,14 @@ export function validate(data: string | object): ValidationResult {
   try {
     let parsedData: object
 
-    // Parse JSON if string
+    // Parse JSON if string.
+    //
+    // NOTE (deferred): this uses bare `JSON.parse`, whereas `load(str)` uses
+    // `losslessJsonParse`. Switching to the lossless parser here would change
+    // the emitted parse-error surface (a `LosslessJsonParseError` with
+    // different message/code instead of the `Invalid JSON: ...` /
+    // `json_parse_error` pair below), so reusing that helper is deferred to
+    // avoid altering emitted diagnostics.
     if (typeof data === 'string') {
       try {
         parsedData = JSON.parse(data)
@@ -1515,7 +1581,7 @@ export function validate(data: string | object): ValidationResult {
             {
               path: '$',
               message: `Invalid JSON: ${error.message}`,
-              code: 'json_parse_error',
+              code: ERROR_CODES.JSON_PARSE_ERROR,
               details: { error: error.message },
             },
           ],
@@ -1567,7 +1633,7 @@ export function validate(data: string | object): ValidationResult {
         {
           path: '$',
           message: `Validation failed with unexpected error: ${error.message || String(e)}`,
-          code: 'unexpected_error',
+          code: ERROR_CODES.UNEXPECTED_ERROR,
           details: {
             exception_type: error.constructor.name,
             error: error.message || String(e),

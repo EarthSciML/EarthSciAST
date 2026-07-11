@@ -167,6 +167,43 @@ describe('edit', () => {
     it('should throw error when renaming non-existent variable', () => {
       expect(() => renameVariable(model, 'nonexistent', 'new_name')).toThrow(EntityNotFoundError)
     })
+
+    it('renames references inside event conditions and affect RHSs (unified sites)', () => {
+      const m: Model = {
+        variables: { x: { type: 'state' }, v: { type: 'state' } },
+        equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'v' }],
+        continuous_events: [
+          {
+            name: 'e',
+            conditions: [{ op: '>', args: ['x', 10] }],
+            affects: [{ lhs: 'v', rhs: { op: '-', args: ['x'] } }],
+          },
+        ],
+      }
+
+      const result = renameVariable(m, 'x', 'pos')
+
+      // removeVariable scans event sites, so renameVariable must rewrite them
+      // too — otherwise a rename leaves a reference removal would have flagged.
+      expect(result.continuous_events![0]!.conditions[0]).toEqual({ op: '>', args: ['pos', 10] })
+      expect(result.continuous_events![0]!.affects[0]!.rhs).toEqual({ op: '-', args: ['pos'] })
+    })
+
+    it('detects references inside event conditions (unified sites)', () => {
+      const m: Model = {
+        variables: { x: { type: 'state' }, v: { type: 'state' } },
+        equations: [{ lhs: { op: 'D', args: ['v'], wrt: 't' }, rhs: 0 }],
+        continuous_events: [
+          {
+            name: 'e',
+            conditions: [{ op: '>', args: ['x', 10] }],
+            affects: [{ lhs: 'v', rhs: 0 }],
+          },
+        ],
+      }
+
+      expect(() => removeVariable(m, 'x')).toThrow(VariableInUseError)
+    })
   })
 
   describe('Equation Operations', () => {
@@ -202,6 +239,29 @@ describe('edit', () => {
 
     it('should throw error when removing equation with invalid index', () => {
       expect(() => removeEquation(model, 10)).toThrow(EntityNotFoundError)
+    })
+
+    it('removeEquation by LHS distinguishes consts with different values (field-aware equality)', () => {
+      // `value` is object-typed on the schema node; these are deliberately
+      // hand-shaped `const` leaves that differ only in their numeric value.
+      const constNode = (v: number) => ({ op: 'const', value: v, args: [] }) as unknown as Equation['lhs']
+      const m: Model = {
+        variables: {},
+        equations: [
+          { lhs: constNode(1), rhs: 'a' },
+          { lhs: constNode(2), rhs: 'b' },
+        ],
+      }
+
+      // The old field-blind equality compared only op/args, so both consts
+      // looked equal and removeEquation deleted equation 0. deepEqualExpr
+      // distinguishes them, so the value:2 equation is the one removed.
+      const result = removeEquation(m, constNode(2))
+      expect(result.equations).toHaveLength(1)
+      expect(result.equations![0]!.rhs).toBe('a')
+
+      // A value that matches neither equation is genuinely not found.
+      expect(() => removeEquation(m, constNode(3))).toThrow(EntityNotFoundError)
     })
 
     it('should apply substitutions to equations', () => {

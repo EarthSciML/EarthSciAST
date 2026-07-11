@@ -107,6 +107,67 @@ describe('Basic expressions', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Byte-identical output lock (refactor safety net).
+//
+// Walks EVERY display fixture, collects every `input` node, and snapshots the
+// four renderings (unicode/latex/ascii/mathml). Snapshots are generated from
+// the current implementation and then guard against any output drift during
+// the pretty-print render-table refactor. Errors are captured verbatim so the
+// snapshot stays stable for inputs a given renderer rejects.
+// ---------------------------------------------------------------------------
+describe('Rendering output lock (all display fixtures)', () => {
+  const FIXTURE_FILES = [
+    'all_operators.json',
+    'chemical_subscripts.json',
+    'chemical_subscripts_comprehensive.json',
+    'chemical_subscripts_edge_cases.json',
+    'comprehensive_operators.json',
+    'element_recognition.json',
+    'expr_precedence.json',
+    'latex_format.json',
+    'number_formatting.json',
+    'operator_precedence.json',
+    'structural_ops.json',
+    'unicode_format.json',
+  ]
+
+  // Recursively collect every value stored under an `input` key.
+  function collectInputs(node: unknown, out: unknown[]): void {
+    if (Array.isArray(node)) {
+      for (const el of node) collectInputs(el, out)
+    } else if (node !== null && typeof node === 'object') {
+      const rec = node as Record<string, unknown>
+      if ('input' in rec) out.push(rec.input)
+      for (const k of Object.keys(rec)) collectInputs(rec[k], out)
+    }
+  }
+
+  const render = (fn: (x: never) => string, input: unknown): string => {
+    try {
+      return fn(input as never)
+    } catch (e) {
+      return `THROWS: ${(e as Error).message}`
+    }
+  }
+
+  for (const file of FIXTURE_FILES) {
+    it(`renders ${file} identically`, () => {
+      const data = JSON.parse(readFileSync(join(process.cwd(), '../../tests/display', file), 'utf8'))
+      const inputs: unknown[] = []
+      collectInputs(data, inputs)
+      const rows = inputs.map((input) => ({
+        input,
+        unicode: render(toUnicode, input),
+        latex: render(toLatex, input),
+        ascii: render(toAscii, input),
+        mathml: render(toMathML, input),
+      }))
+      expect(rows).toMatchSnapshot()
+    })
+  }
+})
+
 describe('MathML formatting', () => {
   it('should format numbers correctly', () => {
     expect(toMathML(42)).toBe('<mn>42</mn>')

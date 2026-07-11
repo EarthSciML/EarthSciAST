@@ -305,6 +305,75 @@ describe('substitute', () => {
 
     expect(result).toEqual(expected)
   })
+
+  // Regression: substitute() historically recursed ONLY into `args`, silently
+  // skipping expression-bearing structural fields. It now walks the full child
+  // set via mapChildren.
+  it('substitutes into aggregate expr/filter/key structural fields', () => {
+    const expr = {
+      op: 'aggregate',
+      args: ['i'],
+      expr: { op: '*', args: ['k', 'i'] },
+      filter: { op: '>', args: ['k', 0] },
+      key: { op: '+', args: ['k', 1] },
+    } as unknown as Expr
+    const bindings = { k: 2 }
+    expect(substitute(expr, bindings)).toEqual({
+      op: 'aggregate',
+      args: ['i'],
+      expr: { op: '*', args: [2, 'i'] },
+      filter: { op: '>', args: [2, 0] },
+      key: { op: '+', args: [2, 1] },
+    })
+  })
+
+  it('substitutes into integral lower/upper bounds', () => {
+    const expr = {
+      op: 'integral',
+      args: [{ op: '*', args: ['f', 'x'] }],
+      var: 'x',
+      lower: 'a',
+      upper: 'b',
+    } as unknown as Expr
+    const bindings = { a: 0, b: 10, f: 3 }
+    expect(substitute(expr, bindings)).toEqual({
+      op: 'integral',
+      args: [{ op: '*', args: [3, 'x'] }],
+      var: 'x',
+      lower: 0,
+      upper: 10,
+    })
+  })
+
+  it('substitutes into table_lookup axis expressions', () => {
+    const expr = {
+      op: 'table_lookup',
+      args: [],
+      table: 'k_table',
+      axes: { temperature: 'T', pressure: { op: '*', args: ['P', 'scale'] } },
+    } as unknown as Expr
+    const bindings = { T: 300, scale: 2 }
+    expect(substitute(expr, bindings)).toEqual({
+      op: 'table_lookup',
+      args: [],
+      table: 'k_table',
+      axes: { temperature: 300, pressure: { op: '*', args: ['P', 2] } },
+    })
+  })
+
+  it('substitutes into makearray values', () => {
+    const expr = {
+      op: 'makearray',
+      args: [],
+      values: ['a', { op: '+', args: ['b', 1] }],
+    } as unknown as Expr
+    const bindings = { a: 5, b: 7 }
+    expect(substitute(expr, bindings)).toEqual({
+      op: 'makearray',
+      args: [],
+      values: [5, { op: '+', args: [7, 1] }],
+    })
+  })
 })
 
 describe('substituteInModel', () => {

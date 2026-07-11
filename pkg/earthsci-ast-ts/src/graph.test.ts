@@ -5,7 +5,17 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { componentGraph, expressionGraph, toDot, toMermaid, toJsonGraph } from './graph.js'
+import {
+  componentGraph,
+  component_graph,
+  buildGraph,
+  expressionGraph,
+  lhsTargetName,
+  NON_EQUATION_INDEX,
+  toDot,
+  toMermaid,
+  toJsonGraph,
+} from './graph.js'
 import type {
   EsmFile,
   Model,
@@ -878,5 +888,118 @@ describe('Graph export functions', () => {
       const mermaidOutput = toMermaid(graph)
       expect(mermaidOutput).toContain('O₃')
     })
+  })
+})
+
+describe('buildGraph helper', () => {
+  interface KeyedNode {
+    k: string
+  }
+  const nodes: KeyedNode[] = [{ k: 'a' }, { k: 'b' }, { k: 'c' }]
+  const edges = [
+    { source: 'a', target: 'b', data: 'ab' },
+    { source: 'b', target: 'c', data: 'bc' },
+  ]
+
+  it('wires successors/predecessors/adjacency from the edge list', () => {
+    const g = buildGraph(nodes, edges, (n) => n.k)
+
+    expect(g.nodes).toBe(nodes)
+    expect(g.edges).toBe(edges)
+
+    expect(g.successors('a')).toEqual(['b'])
+    expect(g.predecessors('b')).toEqual(['a'])
+    expect(g.adjacency('b').sort()).toEqual(['a', 'c'])
+  })
+
+  it('returns [] for a known node with no incident edges and for unknown keys', () => {
+    const g = buildGraph(nodes, edges, (n) => n.k)
+
+    // 'a' has no predecessors; 'c' has no successors (both are known nodes).
+    expect(g.predecessors('a')).toEqual([])
+    expect(g.successors('c')).toEqual([])
+
+    // Unknown key resolves to empty arrays, not undefined.
+    expect(g.adjacency('missing')).toEqual([])
+    expect(g.predecessors('missing')).toEqual([])
+    expect(g.successors('missing')).toEqual([])
+  })
+})
+
+describe('component_graph (deprecated alias)', () => {
+  const mockEsmFile: EsmFile = {
+    esm: '0.1.0',
+    metadata: { name: 'Test', authors: [] },
+    models: {
+      Transport: { variables: { u: { type: 'state', default: 0 } }, equations: [] },
+      Chemistry: { variables: { o3: { type: 'state', default: 0 } }, equations: [] },
+    },
+    coupling: [{ type: 'operator_compose', systems: ['Transport', 'Chemistry'] }],
+  }
+
+  it('returns the flat {nodes, edges} ComponentGraph shape the editor consumes', () => {
+    const cg = component_graph(mockEsmFile)
+
+    expect(cg).toHaveProperty('nodes')
+    expect(cg).toHaveProperty('edges')
+    // The flat alias does NOT carry the adjacency helpers of componentGraph().
+    expect(cg).not.toHaveProperty('adjacency')
+
+    // Edges retain the from/to CouplingEdge shape.
+    const composeEdge = cg.edges.find((e) => e.type === 'operator_compose')
+    expect(composeEdge?.from).toBe('Transport')
+    expect(composeEdge?.to).toBe('Chemistry')
+  })
+
+  it('produces the same nodes/edge payloads as componentGraph()', () => {
+    const cg = component_graph(mockEsmFile)
+    const g = componentGraph(mockEsmFile)
+
+    expect(cg.nodes).toEqual(g.nodes)
+    // componentGraph wraps the same CouplingEdge objects in {source,target,data}.
+    expect(cg.edges).toEqual(g.edges.map((e) => e.data))
+  })
+})
+
+describe('expressionGraph mergeCoupled option', () => {
+  const mockFile: EsmFile = {
+    esm: '0.1.0',
+    metadata: { name: 'Test', authors: [] },
+    models: {
+      A: { variables: { u: { type: 'state', default: 0 } }, equations: [] },
+      B: { variables: { v: { type: 'parameter', default: 0 } }, equations: [] },
+    },
+    coupling: [{ type: 'variable_map', from: 'A.u', to: 'B.v', transform: 'identity' }],
+  }
+
+  it('does not add coupling edges by default', () => {
+    const graph = expressionGraph(mockFile)
+    expect(graph.edges.find((e) => e.source === 'A.u' && e.target === 'B.v')).toBeUndefined()
+  })
+
+  it('adds cross-system edges when mergeCoupled is set (camelCase)', () => {
+    const graph = expressionGraph(mockFile, { mergeCoupled: true })
+    const edge = graph.edges.find((e) => e.source === 'A.u' && e.target === 'B.v')
+    expect(edge).toBeDefined()
+    expect(edge?.data.equation_index).toBe(NON_EQUATION_INDEX)
+  })
+
+  it('still accepts the deprecated merge_coupled key', () => {
+    const graph = expressionGraph(mockFile, { merge_coupled: true })
+    expect(graph.edges.find((e) => e.source === 'A.u' && e.target === 'B.v')).toBeDefined()
+  })
+})
+
+describe('lhsTargetName', () => {
+  it('unwraps bare names and D/index/aggregate wrappers', () => {
+    expect(lhsTargetName('x')).toBe('x')
+    expect(lhsTargetName({ op: 'D', args: ['x'] })).toBe('x')
+    expect(lhsTargetName({ op: 'index', args: ['v', 'i'] })).toBe('v')
+    expect(lhsTargetName({ op: 'aggregate', args: [], expr: { op: 'D', args: ['y'] } })).toBe('y')
+  })
+
+  it('returns undefined for unrecognized LHS shapes', () => {
+    expect(lhsTargetName({ op: 'unknown', args: ['x'] })).toBeUndefined()
+    expect(lhsTargetName(42)).toBeUndefined()
   })
 })

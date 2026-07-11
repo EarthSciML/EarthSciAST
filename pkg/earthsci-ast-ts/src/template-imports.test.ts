@@ -20,7 +20,11 @@ import {
   MAX_TEMPLATE_EXPANSION_DEPTH,
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
-import { rejectTemplateImportsPreV08, resolveTemplateMachinery } from './template-imports.js'
+import {
+  appendComponentImports,
+  rejectTemplateImportsPreV08,
+  resolveTemplateMachinery,
+} from './template-imports.js'
 
 const repoRoot = path.resolve(__dirname, '../../..')
 const conf = (...parts: string[]) =>
@@ -335,15 +339,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
   const loadStr = (text: string, metaparameters?: Record<string, number>) =>
     load(text, { basePath: tmpDir, metaparameters })
 
-  const errCode = (f: () => unknown): string | null => {
-    try {
-      f()
-      return null
-    } catch (e) {
-      if (e instanceof ExpressionTemplateError) return e.code
-      throw e
-    }
-  }
+  // `errCode` is shared from module scope (defined once, above).
 
   it('template_import_unresolved: missing / unparsable ref', () => {
     expect(
@@ -680,5 +676,33 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
      "metaparameters": {"N": {"type": "integer", "default": 1}},
      "expression_templates": {"t": {"params": [], "body": 1}}}`)
     expect(() => rejectTemplateImportsPreV08(ok)).not.toThrow()
+  })
+
+  // Regression: the §9.7.10 injected-imports append (shared by template-imports
+  // forms A/B and by ref-loading's ephemeralInjectedFile / subsystem-ref form A)
+  // must DEEP-CLONE each appended entry, never capture the caller's array by
+  // reference. ref-loading previously pushed by reference; both now route
+  // through the exported `appendComponentImports`.
+  it('appendComponentImports deep-clones injected entries and preserves merge order', () => {
+    const entry: Record<string, any> = { ref: './lib.esm', bindings: { N: 4 } }
+    const comp: Record<string, unknown> = {}
+    appendComponentImports(comp, [entry])
+
+    // Mutating the caller's source entry after the append must NOT leak into
+    // the component (a by-reference push would let it).
+    entry.bindings.N = 99
+    const appended = comp.expression_template_imports as any[]
+    expect(appended[0].bindings.N).toBe(4)
+
+    // Merge order (esm-spec §9.7.10): the component's own imports first, then
+    // the injected list appended after.
+    const comp2: Record<string, unknown> = {
+      expression_template_imports: [{ ref: './own.esm' }],
+    }
+    appendComponentImports(comp2, [{ ref: './inj.esm' }])
+    expect((comp2.expression_template_imports as any[]).map((e) => e.ref)).toEqual([
+      './own.esm',
+      './inj.esm',
+    ])
   })
 })

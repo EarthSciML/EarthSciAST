@@ -1,0 +1,4675 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Rendering output lock (all display fixtures) > renders all_operators.json identically 1`] = `
+[
+  {
+    "ascii": "div(u)",
+    "input": {
+      "args": [
+        "u",
+      ],
+      "op": "div",
+    },
+    "latex": "\\mathrm{div}(u)",
+    "mathml": "<mrow><mi>div</mi><mo>(</mo><mi>u</mi><mo>)</mo></mrow>",
+    "unicode": "div(u)",
+  },
+  {
+    "ascii": "laplacian(T)",
+    "input": {
+      "args": [
+        "T",
+      ],
+      "op": "laplacian",
+    },
+    "latex": "\\mathrm{laplacian}(T)",
+    "mathml": "<mrow><mi>laplacian</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow>",
+    "unicode": "laplacian(T)",
+  },
+  {
+    "ascii": "x > 0 and x < 10",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            0,
+          ],
+          "op": ">",
+        },
+        {
+          "args": [
+            "x",
+            10,
+          ],
+          "op": "<",
+        },
+      ],
+      "op": "and",
+    },
+    "latex": "x > 0 \\land x < 10",
+    "mathml": "<mrow><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>&and;</mo><mrow><mi>x</mi><mo>&lt;</mo><mn>10</mn></mrow></mrow>",
+    "unicode": "x > 0 ∧ x < 10",
+  },
+  {
+    "ascii": "x < 0 or x > 10",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            0,
+          ],
+          "op": "<",
+        },
+        {
+          "args": [
+            "x",
+            10,
+          ],
+          "op": ">",
+        },
+      ],
+      "op": "or",
+    },
+    "latex": "x < 0 \\lor x > 10",
+    "mathml": "<mrow><mrow><mi>x</mi><mo>&lt;</mo><mn>0</mn></mrow><mo>&or;</mo><mrow><mi>x</mi><mo>&gt;</mo><mn>10</mn></mrow></mrow>",
+    "unicode": "x < 0 ∨ x > 10",
+  },
+  {
+    "ascii": "not (x == 0)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            0,
+          ],
+          "op": "=",
+        },
+      ],
+      "op": "not",
+    },
+    "latex": "\\neg (x = 0)",
+    "mathml": "<mrow><mo>&not;</mo><mrow><mi>=</mi><mo>(</mo><mi>x</mi><mo>,</mo><mn>0</mn><mo>)</mo></mrow></mrow>",
+    "unicode": "¬(x = 0)",
+  },
+  {
+    "ascii": "atan2(y, x)",
+    "input": {
+      "args": [
+        "y",
+        "x",
+      ],
+      "op": "atan2",
+    },
+    "latex": "\\mathrm{atan2}(y, x)",
+    "mathml": "<mrow><mi>atan2</mi><mo>(</mo><mi>y</mi><mo>,</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "atan2(y, x)",
+  },
+  {
+    "ascii": "min(a, b)",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "min",
+    },
+    "latex": "\\min(a, b)",
+    "mathml": "<mrow><mi>min</mi><mo>(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>)</mo></mrow>",
+    "unicode": "min(a, b)",
+  },
+  {
+    "ascii": "max(a, b)",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "max",
+    },
+    "latex": "\\max(a, b)",
+    "mathml": "<mrow><mi>max</mi><mo>(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>)</mo></mrow>",
+    "unicode": "max(a, b)",
+  },
+  {
+    "ascii": "floor(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "floor",
+    },
+    "latex": "\\lfloor x \\rfloor",
+    "mathml": "<mrow><mo>&lfloor;</mo><mi>x</mi><mo>&rfloor;</mo></mrow>",
+    "unicode": "⌊x⌋",
+  },
+  {
+    "ascii": "ceil(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "ceil",
+    },
+    "latex": "\\lceil x \\rceil",
+    "mathml": "<mrow><mo>&lceil;</mo><mi>x</mi><mo>&rceil;</mo></mrow>",
+    "unicode": "⌈x⌉",
+  },
+  {
+    "ascii": "sqrt(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "sqrt",
+    },
+    "latex": "\\sqrt{x}",
+    "mathml": "<msqrt><mi>x</mi></msqrt>",
+    "unicode": "√x",
+  },
+  {
+    "ascii": "log(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "log",
+    },
+    "latex": "\\ln(x)",
+    "mathml": "<mrow><mi>ln</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "ln(x)",
+  },
+  {
+    "ascii": "log10(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "log10",
+    },
+    "latex": "\\log_{10}(x)",
+    "mathml": "<mrow><msub><mi>log</mi><mn>10</mn></msub><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "log₁₀(x)",
+  },
+  {
+    "ascii": "sin(theta)",
+    "input": {
+      "args": [
+        "θ",
+      ],
+      "op": "sin",
+    },
+    "latex": "\\sin(\\theta)",
+    "mathml": "<mrow><mi>sin</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "unicode": "sin(θ)",
+  },
+  {
+    "ascii": "cos(theta)",
+    "input": {
+      "args": [
+        "θ",
+      ],
+      "op": "cos",
+    },
+    "latex": "\\cos(\\theta)",
+    "mathml": "<mrow><mi>cos</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "unicode": "cos(θ)",
+  },
+  {
+    "ascii": "tan(theta)",
+    "input": {
+      "args": [
+        "θ",
+      ],
+      "op": "tan",
+    },
+    "latex": "\\tan(\\theta)",
+    "mathml": "<mrow><mi>tan</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "unicode": "tan(θ)",
+  },
+  {
+    "ascii": "asin(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "asin",
+    },
+    "latex": "\\arcsin(x)",
+    "mathml": "<mrow><mi>asin</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "arcsin(x)",
+  },
+  {
+    "ascii": "acos(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "acos",
+    },
+    "latex": "\\arccos(x)",
+    "mathml": "<mrow><mi>acos</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "arccos(x)",
+  },
+  {
+    "ascii": "atan(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "atan",
+    },
+    "latex": "\\arctan(x)",
+    "mathml": "<mrow><mi>atan</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "arctan(x)",
+  },
+  {
+    "ascii": "abs(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "abs",
+    },
+    "latex": "|x|",
+    "mathml": "<mrow><mo>|</mo><mi>x</mi><mo>|</mo></mrow>",
+    "unicode": "|x|",
+  },
+  {
+    "ascii": "sign(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "sign",
+    },
+    "latex": "\\mathrm{sgn}(x)",
+    "mathml": "<mrow><mi>sgn</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "sgn(x)",
+  },
+  {
+    "ascii": "x == y",
+    "input": {
+      "args": [
+        "x",
+        "y",
+      ],
+      "op": "=",
+    },
+    "latex": "x = y",
+    "mathml": "<mrow><mi>=</mi><mo>(</mo><mi>x</mi><mo>,</mo><mi>y</mi><mo>)</mo></mrow>",
+    "unicode": "x = y",
+  },
+  {
+    "ascii": "x != y",
+    "input": {
+      "args": [
+        "x",
+        "y",
+      ],
+      "op": "!=",
+    },
+    "latex": "x \\neq y",
+    "mathml": "<mrow><mi>x</mi><mo>&neq;</mo><mi>y</mi></mrow>",
+    "unicode": "x ≠ y",
+  },
+  {
+    "ascii": "x < y",
+    "input": {
+      "args": [
+        "x",
+        "y",
+      ],
+      "op": "<",
+    },
+    "latex": "x < y",
+    "mathml": "<mrow><mi>x</mi><mo>&lt;</mo><mi>y</mi></mrow>",
+    "unicode": "x < y",
+  },
+  {
+    "ascii": "x <= y",
+    "input": {
+      "args": [
+        "x",
+        "y",
+      ],
+      "op": "<=",
+    },
+    "latex": "x \\leq y",
+    "mathml": "<mrow><mi>x</mi><mo>&leq;</mo><mi>y</mi></mrow>",
+    "unicode": "x ≤ y",
+  },
+  {
+    "ascii": "x > y",
+    "input": {
+      "args": [
+        "x",
+        "y",
+      ],
+      "op": ">",
+    },
+    "latex": "x > y",
+    "mathml": "<mrow><mi>x</mi><mo>&gt;</mo><mi>y</mi></mrow>",
+    "unicode": "x > y",
+  },
+  {
+    "ascii": "x >= y",
+    "input": {
+      "args": [
+        "x",
+        "y",
+      ],
+      "op": ">=",
+    },
+    "latex": "x \\geq y",
+    "mathml": "<mrow><mi>x</mi><mo>&geq;</mo><mi>y</mi></mrow>",
+    "unicode": "x ≥ y",
+  },
+  {
+    "ascii": "sinh(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "sinh",
+    },
+    "latex": "\\sinh(x)",
+    "mathml": "<mrow><mi>sinh</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "sinh(x)",
+  },
+  {
+    "ascii": "cosh(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "cosh",
+    },
+    "latex": "\\cosh(x)",
+    "mathml": "<mrow><mi>cosh</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "cosh(x)",
+  },
+  {
+    "ascii": "tanh(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "tanh",
+    },
+    "latex": "\\tanh(x)",
+    "mathml": "<mrow><mi>tanh</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "tanh(x)",
+  },
+  {
+    "ascii": "asinh(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "asinh",
+    },
+    "latex": "\\sinh^{-1}(x)",
+    "mathml": "<mrow><mi>asinh</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "sinh⁻¹(x)",
+  },
+  {
+    "ascii": "acosh(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "acosh",
+    },
+    "latex": "\\cosh^{-1}(x)",
+    "mathml": "<mrow><mi>acosh</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "cosh⁻¹(x)",
+  },
+  {
+    "ascii": "atanh(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "atanh",
+    },
+    "latex": "\\tanh^{-1}(x)",
+    "mathml": "<mrow><mi>atanh</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "tanh⁻¹(x)",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders chemical_subscripts.json identically 1`] = `
+[
+  {
+    "ascii": "O3",
+    "input": "O3",
+    "latex": "\\mathrm{O_3}",
+    "mathml": "<mi>O</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "O₃",
+  },
+  {
+    "ascii": "NO2",
+    "input": "NO2",
+    "latex": "\\mathrm{NO_2}",
+    "mathml": "<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "NO₂",
+  },
+  {
+    "ascii": "CH2O",
+    "input": "CH2O",
+    "latex": "\\mathrm{CH_2O}",
+    "mathml": "<mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi>",
+    "unicode": "CH₂O",
+  },
+  {
+    "ascii": "H2O2",
+    "input": "H2O2",
+    "latex": "\\mathrm{H_2O_2}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "H₂O₂",
+  },
+  {
+    "ascii": "CO2",
+    "input": "CO2",
+    "latex": "\\mathrm{CO_2}",
+    "mathml": "<mi>C</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "CO₂",
+  },
+  {
+    "ascii": "NH3",
+    "input": "NH3",
+    "latex": "\\mathrm{NH_3}",
+    "mathml": "<mi>N</mi><mi>H</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "NH₃",
+  },
+  {
+    "ascii": "SO4",
+    "input": "SO4",
+    "latex": "\\mathrm{SO_4}",
+    "mathml": "<mi>S</mi><mi>O</mi><msub><mi></mi><mn>4</mn></msub>",
+    "unicode": "SO₄",
+  },
+  {
+    "ascii": "Ca2",
+    "input": "Ca2",
+    "latex": "\\mathrm{Ca_2}",
+    "mathml": "<mi>Ca</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "Ca₂",
+  },
+  {
+    "ascii": "k_NO_O3",
+    "input": "k_NO_O3",
+    "latex": "k_{\\mathrm{NO_O_3}}",
+    "mathml": "<mi>k</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow></msub>",
+    "unicode": "k_NO_O₃",
+  },
+  {
+    "ascii": "jNO2",
+    "input": "jNO2",
+    "latex": "j_{\\mathrm{NO_2}}",
+    "mathml": "<mi>j</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub></mrow></msub>",
+    "unicode": "jNO₂",
+  },
+  {
+    "ascii": "T",
+    "input": "T",
+    "latex": "T",
+    "mathml": "<mi>T</mi>",
+    "unicode": "T",
+  },
+  {
+    "ascii": "var2",
+    "input": "var2",
+    "latex": "\\mathrm{var2}",
+    "mathml": "<mi>var2</mi>",
+    "unicode": "var2",
+  },
+  {
+    "ascii": "CH4",
+    "input": "CH4",
+    "latex": "\\mathrm{CH_4}",
+    "mathml": "<mi>C</mi><mi>H</mi><msub><mi></mi><mn>4</mn></msub>",
+    "unicode": "CH₄",
+  },
+  {
+    "ascii": "C2H6",
+    "input": "C2H6",
+    "latex": "\\mathrm{C_2H_6}",
+    "mathml": "<mi>C</mi><msub><mi></mi><mn>2</mn></msub><mi>H</mi><msub><mi></mi><mn>6</mn></msub>",
+    "unicode": "C₂H₆",
+  },
+  {
+    "ascii": "C6H12O6",
+    "input": "C6H12O6",
+    "latex": "\\mathrm{C_6H_{12}O_6}",
+    "mathml": "<mi>C</mi><msub><mi></mi><mn>6</mn></msub><mi>H</mi><msub><mi></mi><mn>12</mn></msub><mi>O</mi><msub><mi></mi><mn>6</mn></msub>",
+    "unicode": "C₆H₁₂O₆",
+  },
+  {
+    "ascii": "Fe2O3",
+    "input": "Fe2O3",
+    "latex": "\\mathrm{Fe_2O_3}",
+    "mathml": "<mi>Fe</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "Fe₂O₃",
+  },
+  {
+    "ascii": "NaCl",
+    "input": "NaCl",
+    "latex": "\\mathrm{NaCl}",
+    "mathml": "<mi>Na</mi><mi>Cl</mi>",
+    "unicode": "NaCl",
+  },
+  {
+    "ascii": "Al2O3",
+    "input": "Al2O3",
+    "latex": "\\mathrm{Al_2O_3}",
+    "mathml": "<mi>Al</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "Al₂O₃",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders chemical_subscripts_comprehensive.json identically 1`] = `
+[
+  {
+    "ascii": "H2",
+    "input": "H2",
+    "latex": "\\mathrm{H_2}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "H₂",
+  },
+  {
+    "ascii": "He4",
+    "input": "He4",
+    "latex": "\\mathrm{He_4}",
+    "mathml": "<mi>He</mi><msub><mi></mi><mn>4</mn></msub>",
+    "unicode": "He₄",
+  },
+  {
+    "ascii": "Li7",
+    "input": "Li7",
+    "latex": "\\mathrm{Li_7}",
+    "mathml": "<mi>Li</mi><msub><mi></mi><mn>7</mn></msub>",
+    "unicode": "Li₇",
+  },
+  {
+    "ascii": "C12",
+    "input": "C12",
+    "latex": "\\mathrm{C_{12}}",
+    "mathml": "<mi>C</mi><msub><mi></mi><mn>12</mn></msub>",
+    "unicode": "C₁₂",
+  },
+  {
+    "ascii": "N14",
+    "input": "N14",
+    "latex": "\\mathrm{N_{14}}",
+    "mathml": "<mi>N</mi><msub><mi></mi><mn>14</mn></msub>",
+    "unicode": "N₁₄",
+  },
+  {
+    "ascii": "O16",
+    "input": "O16",
+    "latex": "\\mathrm{O_{16}}",
+    "mathml": "<mi>O</mi><msub><mi></mi><mn>16</mn></msub>",
+    "unicode": "O₁₆",
+  },
+  {
+    "ascii": "Ca2",
+    "input": "Ca2",
+    "latex": "\\mathrm{Ca_2}",
+    "mathml": "<mi>Ca</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "Ca₂",
+  },
+  {
+    "ascii": "Mg24",
+    "input": "Mg24",
+    "latex": "\\mathrm{Mg_{24}}",
+    "mathml": "<mi>Mg</mi><msub><mi></mi><mn>24</mn></msub>",
+    "unicode": "Mg₂₄",
+  },
+  {
+    "ascii": "Al27",
+    "input": "Al27",
+    "latex": "\\mathrm{Al_{27}}",
+    "mathml": "<mi>Al</mi><msub><mi></mi><mn>27</mn></msub>",
+    "unicode": "Al₂₇",
+  },
+  {
+    "ascii": "Si28",
+    "input": "Si28",
+    "latex": "\\mathrm{Si_{28}}",
+    "mathml": "<mi>Si</mi><msub><mi></mi><mn>28</mn></msub>",
+    "unicode": "Si₂₈",
+  },
+  {
+    "ascii": "Cl35",
+    "input": "Cl35",
+    "latex": "\\mathrm{Cl_{35}}",
+    "mathml": "<mi>Cl</mi><msub><mi></mi><mn>35</mn></msub>",
+    "unicode": "Cl₃₅",
+  },
+  {
+    "ascii": "Ar40",
+    "input": "Ar40",
+    "latex": "\\mathrm{Ar_{40}}",
+    "mathml": "<mi>Ar</mi><msub><mi></mi><mn>40</mn></msub>",
+    "unicode": "Ar₄₀",
+  },
+  {
+    "ascii": "CH3CHO",
+    "input": "CH3CHO",
+    "latex": "\\mathrm{CH_3CHO}",
+    "mathml": "<mi>C</mi><mi>H</mi><msub><mi></mi><mn>3</mn></msub><mi>C</mi><mi>H</mi><mi>O</mi>",
+    "unicode": "CH₃CHO",
+  },
+  {
+    "ascii": "Ca(OH)2",
+    "input": "Ca(OH)2",
+    "latex": "\\mathrm{Ca(OH)_2}",
+    "mathml": "<mi>Ca</mi>(<mi>O</mi><mi>H</mi>)2",
+    "unicode": "Ca(OH)₂",
+  },
+  {
+    "ascii": "C2H5OH",
+    "input": "C2H5OH",
+    "latex": "\\mathrm{C_2H_5OH}",
+    "mathml": "<mi>C</mi><msub><mi></mi><mn>2</mn></msub><mi>H</mi><msub><mi></mi><mn>5</mn></msub><mi>O</mi><mi>H</mi>",
+    "unicode": "C₂H₅OH",
+  },
+  {
+    "ascii": "CH3COOH",
+    "input": "CH3COOH",
+    "latex": "\\mathrm{CH_3COOH}",
+    "mathml": "<mi>C</mi><mi>H</mi><msub><mi></mi><mn>3</mn></msub><mi>C</mi><mi>O</mi><mi>O</mi><mi>H</mi>",
+    "unicode": "CH₃COOH",
+  },
+  {
+    "ascii": "C6H12O6",
+    "input": "C6H12O6",
+    "latex": "\\mathrm{C_6H_{12}O_6}",
+    "mathml": "<mi>C</mi><msub><mi></mi><mn>6</mn></msub><mi>H</mi><msub><mi></mi><mn>12</mn></msub><mi>O</mi><msub><mi></mi><mn>6</mn></msub>",
+    "unicode": "C₆H₁₂O₆",
+  },
+  {
+    "ascii": "NH4NO3",
+    "input": "NH4NO3",
+    "latex": "\\mathrm{NH_4NO_3}",
+    "mathml": "<mi>N</mi><mi>H</mi><msub><mi></mi><mn>4</mn></msub><mi>N</mi><mi>O</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "NH₄NO₃",
+  },
+  {
+    "ascii": "CaCl2",
+    "input": "CaCl2",
+    "latex": "\\mathrm{CaCl_2}",
+    "mathml": "<mi>Ca</mi><mi>Cl</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "CaCl₂",
+  },
+  {
+    "ascii": "NaCl",
+    "input": "NaCl",
+    "latex": "\\mathrm{NaCl}",
+    "mathml": "<mi>Na</mi><mi>Cl</mi>",
+    "unicode": "NaCl",
+  },
+  {
+    "ascii": "var2",
+    "input": "var2",
+    "latex": "\\mathrm{var2}",
+    "mathml": "<mi>var2</mi>",
+    "unicode": "var2",
+  },
+  {
+    "ascii": "T",
+    "input": "T",
+    "latex": "T",
+    "mathml": "<mi>T</mi>",
+    "unicode": "T",
+  },
+  {
+    "ascii": "T298",
+    "input": "T298",
+    "latex": "T_{298}",
+    "mathml": "<mi>T298</mi>",
+    "unicode": "T298",
+  },
+  {
+    "ascii": "pressure",
+    "input": "pressure",
+    "latex": "\\mathrm{pressure}",
+    "mathml": "<mi>pressure</mi>",
+    "unicode": "pressure",
+  },
+  {
+    "ascii": "x1",
+    "input": "x1",
+    "latex": "x_1",
+    "mathml": "<mi>x1</mi>",
+    "unicode": "x1",
+  },
+  {
+    "ascii": "rate_constant",
+    "input": "rate_constant",
+    "latex": "\\mathrm{rate\\_constant}",
+    "mathml": "<mi>rate_constant</mi>",
+    "unicode": "rate_constant",
+  },
+  {
+    "ascii": "k_NO_O3",
+    "input": "k_NO_O3",
+    "latex": "k_{\\mathrm{NO_O_3}}",
+    "mathml": "<mi>k</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow></msub>",
+    "unicode": "k_NO_O₃",
+  },
+  {
+    "ascii": "j_NO2_photolysis",
+    "input": "j_NO2_photolysis",
+    "latex": "j_{\\mathrm{NO_2}}_\\mathrm{photolysis}",
+    "mathml": "<mi>j_NO2_photolysis</mi>",
+    "unicode": "j_NO₂_photolysis",
+  },
+  {
+    "ascii": "rate_OH_NO2",
+    "input": "rate_OH_NO2",
+    "latex": "\\mathrm{rate}_{\\mathrm{OH}}_{\\mathrm{NO_2}}",
+    "mathml": "<mi>rate</mi><msub><mi></mi><mrow><mi>O</mi><mi>H</mi>_<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub></mrow></msub>",
+    "unicode": "rate_OH_NO₂",
+  },
+  {
+    "ascii": "conc_H2O_vapor",
+    "input": "conc_H2O_vapor",
+    "latex": "\\mathrm{conc}_{\\mathrm{H_2O}}_\\mathrm{vapor}",
+    "mathml": "<mi>conc_H2O_vapor</mi>",
+    "unicode": "conc_H₂O_vapor",
+  },
+  {
+    "ascii": "temp_CO2_eq",
+    "input": "temp_CO2_eq",
+    "latex": "\\mathrm{temp}_{\\mathrm{CO_2}}_\\mathrm{eq}",
+    "mathml": "<mi>temp_CO2_eq</mi>",
+    "unicode": "temp_CO₂_eq",
+  },
+  {
+    "ascii": "jNO2",
+    "input": "jNO2",
+    "latex": "j_{\\mathrm{NO_2}}",
+    "mathml": "<mi>j</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub></mrow></msub>",
+    "unicode": "jNO₂",
+  },
+  {
+    "ascii": "kOH",
+    "input": "kOH",
+    "latex": "k_{\\mathrm{OH}}",
+    "mathml": "<mi>k</mi><msub><mi></mi><mrow><mi>O</mi><mi>H</mi></mrow></msub>",
+    "unicode": "kOH",
+  },
+  {
+    "ascii": "alphaCO2",
+    "input": "alphaCO2",
+    "latex": "\\mathrm{alpha}_{\\mathrm{CO_2}}",
+    "mathml": "<mi>alpha</mi><msub><mi></mi><mrow><mi>C</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub></mrow></msub>",
+    "unicode": "alphaCO₂",
+  },
+  {
+    "ascii": "betaH2SO4",
+    "input": "betaH2SO4",
+    "latex": "\\mathrm{beta}_{\\mathrm{H_2SO_4}}",
+    "mathml": "<mi>beta</mi><msub><mi></mi><mrow><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>S</mi><mi>O</mi><msub><mi></mi><mn>4</mn></msub></mrow></msub>",
+    "unicode": "betaH₂SO₄",
+  },
+  {
+    "ascii": "H1",
+    "input": "H1",
+    "latex": "\\mathrm{H_1}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>1</mn></msub>",
+    "unicode": "H₁",
+  },
+  {
+    "ascii": "Be9",
+    "input": "Be9",
+    "latex": "\\mathrm{Be_9}",
+    "mathml": "<mi>Be</mi><msub><mi></mi><mn>9</mn></msub>",
+    "unicode": "Be₉",
+  },
+  {
+    "ascii": "B11",
+    "input": "B11",
+    "latex": "\\mathrm{B_{11}}",
+    "mathml": "<mi>B</mi><msub><mi></mi><mn>11</mn></msub>",
+    "unicode": "B₁₁",
+  },
+  {
+    "ascii": "Ne20",
+    "input": "Ne20",
+    "latex": "\\mathrm{Ne_{20}}",
+    "mathml": "<mi>Ne</mi><msub><mi></mi><mn>20</mn></msub>",
+    "unicode": "Ne₂₀",
+  },
+  {
+    "ascii": "Na23",
+    "input": "Na23",
+    "latex": "\\mathrm{Na_{23}}",
+    "mathml": "<mi>Na</mi><msub><mi></mi><mn>23</mn></msub>",
+    "unicode": "Na₂₃",
+  },
+  {
+    "ascii": "P31",
+    "input": "P31",
+    "latex": "\\mathrm{P_{31}}",
+    "mathml": "<mi>P</mi><msub><mi></mi><mn>31</mn></msub>",
+    "unicode": "P₃₁",
+  },
+  {
+    "ascii": "S32",
+    "input": "S32",
+    "latex": "\\mathrm{S_{32}}",
+    "mathml": "<mi>S</mi><msub><mi></mi><mn>32</mn></msub>",
+    "unicode": "S₃₂",
+  },
+  {
+    "ascii": "K39",
+    "input": "K39",
+    "latex": "\\mathrm{K_{39}}",
+    "mathml": "<mi>K</mi><msub><mi></mi><mn>39</mn></msub>",
+    "unicode": "K₃₉",
+  },
+  {
+    "ascii": "Fe56",
+    "input": "Fe56",
+    "latex": "\\mathrm{Fe_{56}}",
+    "mathml": "<mi>Fe</mi><msub><mi></mi><mn>56</mn></msub>",
+    "unicode": "Fe₅₆",
+  },
+  {
+    "ascii": "Cu63",
+    "input": "Cu63",
+    "latex": "\\mathrm{Cu_{63}}",
+    "mathml": "<mi>Cu</mi><msub><mi></mi><mn>63</mn></msub>",
+    "unicode": "Cu₆₃",
+  },
+  {
+    "ascii": "Zn65",
+    "input": "Zn65",
+    "latex": "\\mathrm{Zn_{65}}",
+    "mathml": "<mi>Zn</mi><msub><mi></mi><mn>65</mn></msub>",
+    "unicode": "Zn₆₅",
+  },
+  {
+    "ascii": "Br79",
+    "input": "Br79",
+    "latex": "\\mathrm{Br_{79}}",
+    "mathml": "<mi>Br</mi><msub><mi></mi><mn>79</mn></msub>",
+    "unicode": "Br₇₉",
+  },
+  {
+    "ascii": "Kr84",
+    "input": "Kr84",
+    "latex": "\\mathrm{Kr_{84}}",
+    "mathml": "<mi>Kr</mi><msub><mi></mi><mn>84</mn></msub>",
+    "unicode": "Kr₈₄",
+  },
+  {
+    "ascii": "Rb85",
+    "input": "Rb85",
+    "latex": "\\mathrm{Rb_{85}}",
+    "mathml": "<mi>Rb</mi><msub><mi></mi><mn>85</mn></msub>",
+    "unicode": "Rb₈₅",
+  },
+  {
+    "ascii": "Sr88",
+    "input": "Sr88",
+    "latex": "\\mathrm{Sr_{88}}",
+    "mathml": "<mi>Sr</mi><msub><mi></mi><mn>88</mn></msub>",
+    "unicode": "Sr₈₈",
+  },
+  {
+    "ascii": "Y89",
+    "input": "Y89",
+    "latex": "\\mathrm{Y_{89}}",
+    "mathml": "<mi>Y</mi><msub><mi></mi><mn>89</mn></msub>",
+    "unicode": "Y₈₉",
+  },
+  {
+    "ascii": "Zr90",
+    "input": "Zr90",
+    "latex": "\\mathrm{Zr_{90}}",
+    "mathml": "<mi>Zr</mi><msub><mi></mi><mn>90</mn></msub>",
+    "unicode": "Zr₉₀",
+  },
+  {
+    "ascii": "Mo98",
+    "input": "Mo98",
+    "latex": "\\mathrm{Mo_{98}}",
+    "mathml": "<mi>Mo</mi><msub><mi></mi><mn>98</mn></msub>",
+    "unicode": "Mo₉₈",
+  },
+  {
+    "ascii": "Ag107",
+    "input": "Ag107",
+    "latex": "\\mathrm{Ag_{107}}",
+    "mathml": "<mi>Ag</mi><msub><mi></mi><mn>107</mn></msub>",
+    "unicode": "Ag₁₀₇",
+  },
+  {
+    "ascii": "I127",
+    "input": "I127",
+    "latex": "\\mathrm{I_{127}}",
+    "mathml": "<mi>I</mi><msub><mi></mi><mn>127</mn></msub>",
+    "unicode": "I₁₂₇",
+  },
+  {
+    "ascii": "Xe131",
+    "input": "Xe131",
+    "latex": "\\mathrm{Xe_{131}}",
+    "mathml": "<mi>Xe</mi><msub><mi></mi><mn>131</mn></msub>",
+    "unicode": "Xe₁₃₁",
+  },
+  {
+    "ascii": "Ba137",
+    "input": "Ba137",
+    "latex": "\\mathrm{Ba_{137}}",
+    "mathml": "<mi>Ba</mi><msub><mi></mi><mn>137</mn></msub>",
+    "unicode": "Ba₁₃₇",
+  },
+  {
+    "ascii": "Au197",
+    "input": "Au197",
+    "latex": "\\mathrm{Au_{197}}",
+    "mathml": "<mi>Au</mi><msub><mi></mi><mn>197</mn></msub>",
+    "unicode": "Au₁₉₇",
+  },
+  {
+    "ascii": "Hg202",
+    "input": "Hg202",
+    "latex": "\\mathrm{Hg_{202}}",
+    "mathml": "<mi>Hg</mi><msub><mi></mi><mn>202</mn></msub>",
+    "unicode": "Hg₂₀₂",
+  },
+  {
+    "ascii": "Pb207",
+    "input": "Pb207",
+    "latex": "\\mathrm{Pb_{207}}",
+    "mathml": "<mi>Pb</mi><msub><mi></mi><mn>207</mn></msub>",
+    "unicode": "Pb₂₀₇",
+  },
+  {
+    "ascii": "Ra226",
+    "input": "Ra226",
+    "latex": "\\mathrm{Ra_{226}}",
+    "mathml": "<mi>Ra</mi><msub><mi></mi><mn>226</mn></msub>",
+    "unicode": "Ra₂₂₆",
+  },
+  {
+    "ascii": "U238",
+    "input": "U238",
+    "latex": "\\mathrm{U_{238}}",
+    "mathml": "<mi>U</mi><msub><mi></mi><mn>238</mn></msub>",
+    "unicode": "U₂₃₈",
+  },
+  {
+    "ascii": "Ca12",
+    "input": "Ca12",
+    "latex": "\\mathrm{Ca_{12}}",
+    "mathml": "<mi>Ca</mi><msub><mi></mi><mn>12</mn></msub>",
+    "unicode": "Ca₁₂",
+  },
+  {
+    "ascii": "Co59",
+    "input": "Co59",
+    "latex": "\\mathrm{Co_{59}}",
+    "mathml": "<mi>Co</mi><msub><mi></mi><mn>59</mn></msub>",
+    "unicode": "Co₅₉",
+  },
+  {
+    "ascii": "Cl2",
+    "input": "Cl2",
+    "latex": "\\mathrm{Cl_2}",
+    "mathml": "<mi>Cl</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "Cl₂",
+  },
+  {
+    "ascii": "Cr52",
+    "input": "Cr52",
+    "latex": "\\mathrm{Cr_{52}}",
+    "mathml": "<mi>Cr</mi><msub><mi></mi><mn>52</mn></msub>",
+    "unicode": "Cr₅₂",
+  },
+  {
+    "ascii": "H0",
+    "input": "H0",
+    "latex": "\\mathrm{H_0}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>0</mn></msub>",
+    "unicode": "H₀",
+  },
+  {
+    "ascii": "O0",
+    "input": "O0",
+    "latex": "\\mathrm{O_0}",
+    "mathml": "<mi>O</mi><msub><mi></mi><mn>0</mn></msub>",
+    "unicode": "O₀",
+  },
+  {
+    "ascii": "C100",
+    "input": "C100",
+    "latex": "\\mathrm{C_{100}}",
+    "mathml": "<mi>C</mi><msub><mi></mi><mn>100</mn></msub>",
+    "unicode": "C₁₀₀",
+  },
+  {
+    "ascii": "x2",
+    "input": "x2",
+    "latex": "x_2",
+    "mathml": "<mi>x2</mi>",
+    "unicode": "x2",
+  },
+  {
+    "ascii": "y3",
+    "input": "y3",
+    "latex": "y_3",
+    "mathml": "<mi>y3</mi>",
+    "unicode": "y3",
+  },
+  {
+    "ascii": "z1",
+    "input": "z1",
+    "latex": "z_1",
+    "mathml": "<mi>z1</mi>",
+    "unicode": "z1",
+  },
+  {
+    "ascii": "w4",
+    "input": "w4",
+    "latex": "w_4",
+    "mathml": "<mi>w4</mi>",
+    "unicode": "w4",
+  },
+  {
+    "ascii": "Mg(NO3)2",
+    "input": "Mg(NO3)2",
+    "latex": "\\mathrm{Mg(NO_3)_2}",
+    "mathml": "<mi>Mg</mi>(<mi>N</mi><mi>O</mi><msub><mi></mi><mn>3</mn></msub>)2",
+    "unicode": "Mg(NO₃)₂",
+  },
+  {
+    "ascii": "Al2(SO4)3",
+    "input": "Al2(SO4)3",
+    "latex": "\\mathrm{Al_2(SO_4)_3}",
+    "mathml": "<mi>Al</mi><msub><mi></mi><mn>2</mn></msub>(<mi>S</mi><mi>O</mi><msub><mi></mi><mn>4</mn></msub>)3",
+    "unicode": "Al₂(SO₄)₃",
+  },
+  {
+    "ascii": "Cu(NO3)2",
+    "input": "Cu(NO3)2",
+    "latex": "\\mathrm{Cu(NO_3)_2}",
+    "mathml": "<mi>Cu</mi>(<mi>N</mi><mi>O</mi><msub><mi></mi><mn>3</mn></msub>)2",
+    "unicode": "Cu(NO₃)₂",
+  },
+  {
+    "ascii": "H",
+    "input": "H",
+    "latex": "H",
+    "mathml": "<mi>H</mi>",
+    "unicode": "H",
+  },
+  {
+    "ascii": "O",
+    "input": "O",
+    "latex": "O",
+    "mathml": "<mi>O</mi>",
+    "unicode": "O",
+  },
+  {
+    "ascii": "C",
+    "input": "C",
+    "latex": "C",
+    "mathml": "<mi>C</mi>",
+    "unicode": "C",
+  },
+  {
+    "ascii": "N",
+    "input": "N",
+    "latex": "N",
+    "mathml": "<mi>N</mi>",
+    "unicode": "N",
+  },
+  {
+    "ascii": "Ca",
+    "input": "Ca",
+    "latex": "Ca",
+    "mathml": "<mi>Ca</mi>",
+    "unicode": "Ca",
+  },
+  {
+    "ascii": "Mg",
+    "input": "Mg",
+    "latex": "Mg",
+    "mathml": "<mi>Mg</mi>",
+    "unicode": "Mg",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders chemical_subscripts_edge_cases.json identically 1`] = `
+[
+  {
+    "ascii": "H2O",
+    "input": "H2O",
+    "latex": "\\mathrm{H_2O}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi>",
+    "unicode": "H₂O",
+  },
+  {
+    "ascii": "k_NO2_O3",
+    "input": "k_NO2_O3",
+    "latex": "k_{\\mathrm{NO_2}}_{\\mathrm{O_3}}",
+    "mathml": "<mi>k</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow></msub>",
+    "unicode": "k_NO₂_O₃",
+  },
+  {
+    "ascii": "Ca12",
+    "input": "Ca12",
+    "latex": "\\mathrm{Ca_{12}}",
+    "mathml": "<mi>Ca</mi><msub><mi></mi><mn>12</mn></msub>",
+    "unicode": "Ca₁₂",
+  },
+  {
+    "ascii": "Cl2O",
+    "input": "Cl2O",
+    "latex": "\\mathrm{Cl_2O}",
+    "mathml": "<mi>Cl</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi>",
+    "unicode": "Cl₂O",
+  },
+  {
+    "ascii": "Co3O4",
+    "input": "Co3O4",
+    "latex": "\\mathrm{Co_3O_4}",
+    "mathml": "<mi>Co</mi><msub><mi></mi><mn>3</mn></msub><mi>O</mi><msub><mi></mi><mn>4</mn></msub>",
+    "unicode": "Co₃O₄",
+  },
+  {
+    "ascii": "Cr2O7",
+    "input": "Cr2O7",
+    "latex": "\\mathrm{Cr_2O_7}",
+    "mathml": "<mi>Cr</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><msub><mi></mi><mn>7</mn></msub>",
+    "unicode": "Cr₂O₇",
+  },
+  {
+    "ascii": "H1",
+    "input": "H1",
+    "latex": "\\mathrm{H_1}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>1</mn></msub>",
+    "unicode": "H₁",
+  },
+  {
+    "ascii": "He2",
+    "input": "He2",
+    "latex": "\\mathrm{He_2}",
+    "mathml": "<mi>He</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "He₂",
+  },
+  {
+    "ascii": "Li3",
+    "input": "Li3",
+    "latex": "\\mathrm{Li_3}",
+    "mathml": "<mi>Li</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "Li₃",
+  },
+  {
+    "ascii": "Be4",
+    "input": "Be4",
+    "latex": "\\mathrm{Be_4}",
+    "mathml": "<mi>Be</mi><msub><mi></mi><mn>4</mn></msub>",
+    "unicode": "Be₄",
+  },
+  {
+    "ascii": "B5",
+    "input": "B5",
+    "latex": "\\mathrm{B_5}",
+    "mathml": "<mi>B</mi><msub><mi></mi><mn>5</mn></msub>",
+    "unicode": "B₅",
+  },
+  {
+    "ascii": "Ne10",
+    "input": "Ne10",
+    "latex": "\\mathrm{Ne_{10}}",
+    "mathml": "<mi>Ne</mi><msub><mi></mi><mn>10</mn></msub>",
+    "unicode": "Ne₁₀",
+  },
+  {
+    "ascii": "Sc21",
+    "input": "Sc21",
+    "latex": "\\mathrm{Sc_{21}}",
+    "mathml": "<mi>Sc</mi><msub><mi></mi><mn>21</mn></msub>",
+    "unicode": "Sc₂₁",
+  },
+  {
+    "ascii": "Ti22",
+    "input": "Ti22",
+    "latex": "\\mathrm{Ti_{22}}",
+    "mathml": "<mi>Ti</mi><msub><mi></mi><mn>22</mn></msub>",
+    "unicode": "Ti₂₂",
+  },
+  {
+    "ascii": "V23",
+    "input": "V23",
+    "latex": "\\mathrm{V_{23}}",
+    "mathml": "<mi>V</mi><msub><mi></mi><mn>23</mn></msub>",
+    "unicode": "V₂₃",
+  },
+  {
+    "ascii": "Mn25",
+    "input": "Mn25",
+    "latex": "\\mathrm{Mn_{25}}",
+    "mathml": "<mi>Mn</mi><msub><mi></mi><mn>25</mn></msub>",
+    "unicode": "Mn₂₅",
+  },
+  {
+    "ascii": "Ni28",
+    "input": "Ni28",
+    "latex": "\\mathrm{Ni_{28}}",
+    "mathml": "<mi>Ni</mi><msub><mi></mi><mn>28</mn></msub>",
+    "unicode": "Ni₂₈",
+  },
+  {
+    "ascii": "Ga31",
+    "input": "Ga31",
+    "latex": "\\mathrm{Ga_{31}}",
+    "mathml": "<mi>Ga</mi><msub><mi></mi><mn>31</mn></msub>",
+    "unicode": "Ga₃₁",
+  },
+  {
+    "ascii": "Ge32",
+    "input": "Ge32",
+    "latex": "\\mathrm{Ge_{32}}",
+    "mathml": "<mi>Ge</mi><msub><mi></mi><mn>32</mn></msub>",
+    "unicode": "Ge₃₂",
+  },
+  {
+    "ascii": "As33",
+    "input": "As33",
+    "latex": "\\mathrm{As_{33}}",
+    "mathml": "<mi>As</mi><msub><mi></mi><mn>33</mn></msub>",
+    "unicode": "As₃₃",
+  },
+  {
+    "ascii": "Se34",
+    "input": "Se34",
+    "latex": "\\mathrm{Se_{34}}",
+    "mathml": "<mi>Se</mi><msub><mi></mi><mn>34</mn></msub>",
+    "unicode": "Se₃₄",
+  },
+  {
+    "ascii": "Tc43",
+    "input": "Tc43",
+    "latex": "\\mathrm{Tc_{43}}",
+    "mathml": "<mi>Tc</mi><msub><mi></mi><mn>43</mn></msub>",
+    "unicode": "Tc₄₃",
+  },
+  {
+    "ascii": "Ru44",
+    "input": "Ru44",
+    "latex": "\\mathrm{Ru_{44}}",
+    "mathml": "<mi>Ru</mi><msub><mi></mi><mn>44</mn></msub>",
+    "unicode": "Ru₄₄",
+  },
+  {
+    "ascii": "Rh45",
+    "input": "Rh45",
+    "latex": "\\mathrm{Rh_{45}}",
+    "mathml": "<mi>Rh</mi><msub><mi></mi><mn>45</mn></msub>",
+    "unicode": "Rh₄₅",
+  },
+  {
+    "ascii": "Pd46",
+    "input": "Pd46",
+    "latex": "\\mathrm{Pd_{46}}",
+    "mathml": "<mi>Pd</mi><msub><mi></mi><mn>46</mn></msub>",
+    "unicode": "Pd₄₆",
+  },
+  {
+    "ascii": "Cd48",
+    "input": "Cd48",
+    "latex": "\\mathrm{Cd_{48}}",
+    "mathml": "<mi>Cd</mi><msub><mi></mi><mn>48</mn></msub>",
+    "unicode": "Cd₄₈",
+  },
+  {
+    "ascii": "In49",
+    "input": "In49",
+    "latex": "\\mathrm{In_{49}}",
+    "mathml": "<mi>In</mi><msub><mi></mi><mn>49</mn></msub>",
+    "unicode": "In₄₉",
+  },
+  {
+    "ascii": "Sn50",
+    "input": "Sn50",
+    "latex": "\\mathrm{Sn_{50}}",
+    "mathml": "<mi>Sn</mi><msub><mi></mi><mn>50</mn></msub>",
+    "unicode": "Sn₅₀",
+  },
+  {
+    "ascii": "Sb51",
+    "input": "Sb51",
+    "latex": "\\mathrm{Sb_{51}}",
+    "mathml": "<mi>Sb</mi><msub><mi></mi><mn>51</mn></msub>",
+    "unicode": "Sb₅₁",
+  },
+  {
+    "ascii": "Te52",
+    "input": "Te52",
+    "latex": "\\mathrm{Te_{52}}",
+    "mathml": "<mi>Te</mi><msub><mi></mi><mn>52</mn></msub>",
+    "unicode": "Te₅₂",
+  },
+  {
+    "ascii": "Cs55",
+    "input": "Cs55",
+    "latex": "\\mathrm{Cs_{55}}",
+    "mathml": "<mi>Cs</mi><msub><mi></mi><mn>55</mn></msub>",
+    "unicode": "Cs₅₅",
+  },
+  {
+    "ascii": "La57",
+    "input": "La57",
+    "latex": "\\mathrm{La_{57}}",
+    "mathml": "<mi>La</mi><msub><mi></mi><mn>57</mn></msub>",
+    "unicode": "La₅₇",
+  },
+  {
+    "ascii": "Ce58",
+    "input": "Ce58",
+    "latex": "\\mathrm{Ce_{58}}",
+    "mathml": "<mi>Ce</mi><msub><mi></mi><mn>58</mn></msub>",
+    "unicode": "Ce₅₈",
+  },
+  {
+    "ascii": "Pr59",
+    "input": "Pr59",
+    "latex": "\\mathrm{Pr_{59}}",
+    "mathml": "<mi>Pr</mi><msub><mi></mi><mn>59</mn></msub>",
+    "unicode": "Pr₅₉",
+  },
+  {
+    "ascii": "Nd60",
+    "input": "Nd60",
+    "latex": "\\mathrm{Nd_{60}}",
+    "mathml": "<mi>Nd</mi><msub><mi></mi><mn>60</mn></msub>",
+    "unicode": "Nd₆₀",
+  },
+  {
+    "ascii": "Pm61",
+    "input": "Pm61",
+    "latex": "\\mathrm{Pm_{61}}",
+    "mathml": "<mi>Pm</mi><msub><mi></mi><mn>61</mn></msub>",
+    "unicode": "Pm₆₁",
+  },
+  {
+    "ascii": "Sm62",
+    "input": "Sm62",
+    "latex": "\\mathrm{Sm_{62}}",
+    "mathml": "<mi>Sm</mi><msub><mi></mi><mn>62</mn></msub>",
+    "unicode": "Sm₆₂",
+  },
+  {
+    "ascii": "Eu63",
+    "input": "Eu63",
+    "latex": "\\mathrm{Eu_{63}}",
+    "mathml": "<mi>Eu</mi><msub><mi></mi><mn>63</mn></msub>",
+    "unicode": "Eu₆₃",
+  },
+  {
+    "ascii": "Gd64",
+    "input": "Gd64",
+    "latex": "\\mathrm{Gd_{64}}",
+    "mathml": "<mi>Gd</mi><msub><mi></mi><mn>64</mn></msub>",
+    "unicode": "Gd₆₄",
+  },
+  {
+    "ascii": "Tb65",
+    "input": "Tb65",
+    "latex": "\\mathrm{Tb_{65}}",
+    "mathml": "<mi>Tb</mi><msub><mi></mi><mn>65</mn></msub>",
+    "unicode": "Tb₆₅",
+  },
+  {
+    "ascii": "Dy66",
+    "input": "Dy66",
+    "latex": "\\mathrm{Dy_{66}}",
+    "mathml": "<mi>Dy</mi><msub><mi></mi><mn>66</mn></msub>",
+    "unicode": "Dy₆₆",
+  },
+  {
+    "ascii": "Ho67",
+    "input": "Ho67",
+    "latex": "\\mathrm{Ho_{67}}",
+    "mathml": "<mi>Ho</mi><msub><mi></mi><mn>67</mn></msub>",
+    "unicode": "Ho₆₇",
+  },
+  {
+    "ascii": "Er68",
+    "input": "Er68",
+    "latex": "\\mathrm{Er_{68}}",
+    "mathml": "<mi>Er</mi><msub><mi></mi><mn>68</mn></msub>",
+    "unicode": "Er₆₈",
+  },
+  {
+    "ascii": "Tm69",
+    "input": "Tm69",
+    "latex": "\\mathrm{Tm_{69}}",
+    "mathml": "<mi>Tm</mi><msub><mi></mi><mn>69</mn></msub>",
+    "unicode": "Tm₆₉",
+  },
+  {
+    "ascii": "Yb70",
+    "input": "Yb70",
+    "latex": "\\mathrm{Yb_{70}}",
+    "mathml": "<mi>Yb</mi><msub><mi></mi><mn>70</mn></msub>",
+    "unicode": "Yb₇₀",
+  },
+  {
+    "ascii": "Lu71",
+    "input": "Lu71",
+    "latex": "\\mathrm{Lu_{71}}",
+    "mathml": "<mi>Lu</mi><msub><mi></mi><mn>71</mn></msub>",
+    "unicode": "Lu₇₁",
+  },
+  {
+    "ascii": "Hf72",
+    "input": "Hf72",
+    "latex": "\\mathrm{Hf_{72}}",
+    "mathml": "<mi>Hf</mi><msub><mi></mi><mn>72</mn></msub>",
+    "unicode": "Hf₇₂",
+  },
+  {
+    "ascii": "Ta73",
+    "input": "Ta73",
+    "latex": "\\mathrm{Ta_{73}}",
+    "mathml": "<mi>Ta</mi><msub><mi></mi><mn>73</mn></msub>",
+    "unicode": "Ta₇₃",
+  },
+  {
+    "ascii": "W74",
+    "input": "W74",
+    "latex": "\\mathrm{W_{74}}",
+    "mathml": "<mi>W</mi><msub><mi></mi><mn>74</mn></msub>",
+    "unicode": "W₇₄",
+  },
+  {
+    "ascii": "Re75",
+    "input": "Re75",
+    "latex": "\\mathrm{Re_{75}}",
+    "mathml": "<mi>Re</mi><msub><mi></mi><mn>75</mn></msub>",
+    "unicode": "Re₇₅",
+  },
+  {
+    "ascii": "Os76",
+    "input": "Os76",
+    "latex": "\\mathrm{Os_{76}}",
+    "mathml": "<mi>Os</mi><msub><mi></mi><mn>76</mn></msub>",
+    "unicode": "Os₇₆",
+  },
+  {
+    "ascii": "Ir77",
+    "input": "Ir77",
+    "latex": "\\mathrm{Ir_{77}}",
+    "mathml": "<mi>Ir</mi><msub><mi></mi><mn>77</mn></msub>",
+    "unicode": "Ir₇₇",
+  },
+  {
+    "ascii": "Pt78",
+    "input": "Pt78",
+    "latex": "\\mathrm{Pt_{78}}",
+    "mathml": "<mi>Pt</mi><msub><mi></mi><mn>78</mn></msub>",
+    "unicode": "Pt₇₈",
+  },
+  {
+    "ascii": "Tl81",
+    "input": "Tl81",
+    "latex": "\\mathrm{Tl_{81}}",
+    "mathml": "<mi>Tl</mi><msub><mi></mi><mn>81</mn></msub>",
+    "unicode": "Tl₈₁",
+  },
+  {
+    "ascii": "Bi83",
+    "input": "Bi83",
+    "latex": "\\mathrm{Bi_{83}}",
+    "mathml": "<mi>Bi</mi><msub><mi></mi><mn>83</mn></msub>",
+    "unicode": "Bi₈₃",
+  },
+  {
+    "ascii": "Po84",
+    "input": "Po84",
+    "latex": "\\mathrm{Po_{84}}",
+    "mathml": "<mi>Po</mi><msub><mi></mi><mn>84</mn></msub>",
+    "unicode": "Po₈₄",
+  },
+  {
+    "ascii": "At85",
+    "input": "At85",
+    "latex": "\\mathrm{At_{85}}",
+    "mathml": "<mi>At</mi><msub><mi></mi><mn>85</mn></msub>",
+    "unicode": "At₈₅",
+  },
+  {
+    "ascii": "Rn86",
+    "input": "Rn86",
+    "latex": "\\mathrm{Rn_{86}}",
+    "mathml": "<mi>Rn</mi><msub><mi></mi><mn>86</mn></msub>",
+    "unicode": "Rn₈₆",
+  },
+  {
+    "ascii": "Fr87",
+    "input": "Fr87",
+    "latex": "\\mathrm{Fr_{87}}",
+    "mathml": "<mi>Fr</mi><msub><mi></mi><mn>87</mn></msub>",
+    "unicode": "Fr₈₇",
+  },
+  {
+    "ascii": "Ac89",
+    "input": "Ac89",
+    "latex": "\\mathrm{Ac_{89}}",
+    "mathml": "<mi>Ac</mi><msub><mi></mi><mn>89</mn></msub>",
+    "unicode": "Ac₈₉",
+  },
+  {
+    "ascii": "Th90",
+    "input": "Th90",
+    "latex": "\\mathrm{Th_{90}}",
+    "mathml": "<mi>Th</mi><msub><mi></mi><mn>90</mn></msub>",
+    "unicode": "Th₉₀",
+  },
+  {
+    "ascii": "Pa91",
+    "input": "Pa91",
+    "latex": "\\mathrm{Pa_{91}}",
+    "mathml": "<mi>Pa</mi><msub><mi></mi><mn>91</mn></msub>",
+    "unicode": "Pa₉₁",
+  },
+  {
+    "ascii": "Np93",
+    "input": "Np93",
+    "latex": "\\mathrm{Np_{93}}",
+    "mathml": "<mi>Np</mi><msub><mi></mi><mn>93</mn></msub>",
+    "unicode": "Np₉₃",
+  },
+  {
+    "ascii": "Pu94",
+    "input": "Pu94",
+    "latex": "\\mathrm{Pu_{94}}",
+    "mathml": "<mi>Pu</mi><msub><mi></mi><mn>94</mn></msub>",
+    "unicode": "Pu₉₄",
+  },
+  {
+    "ascii": "Am95",
+    "input": "Am95",
+    "latex": "\\mathrm{Am_{95}}",
+    "mathml": "<mi>Am</mi><msub><mi></mi><mn>95</mn></msub>",
+    "unicode": "Am₉₅",
+  },
+  {
+    "ascii": "Cm96",
+    "input": "Cm96",
+    "latex": "\\mathrm{Cm_{96}}",
+    "mathml": "<mi>Cm</mi><msub><mi></mi><mn>96</mn></msub>",
+    "unicode": "Cm₉₆",
+  },
+  {
+    "ascii": "Bk97",
+    "input": "Bk97",
+    "latex": "\\mathrm{Bk_{97}}",
+    "mathml": "<mi>Bk</mi><msub><mi></mi><mn>97</mn></msub>",
+    "unicode": "Bk₉₇",
+  },
+  {
+    "ascii": "Cf98",
+    "input": "Cf98",
+    "latex": "\\mathrm{Cf_{98}}",
+    "mathml": "<mi>Cf</mi><msub><mi></mi><mn>98</mn></msub>",
+    "unicode": "Cf₉₈",
+  },
+  {
+    "ascii": "Es99",
+    "input": "Es99",
+    "latex": "\\mathrm{Es_{99}}",
+    "mathml": "<mi>Es</mi><msub><mi></mi><mn>99</mn></msub>",
+    "unicode": "Es₉₉",
+  },
+  {
+    "ascii": "Fm100",
+    "input": "Fm100",
+    "latex": "\\mathrm{Fm_{100}}",
+    "mathml": "<mi>Fm</mi><msub><mi></mi><mn>100</mn></msub>",
+    "unicode": "Fm₁₀₀",
+  },
+  {
+    "ascii": "Md101",
+    "input": "Md101",
+    "latex": "\\mathrm{Md_{101}}",
+    "mathml": "<mi>Md</mi><msub><mi></mi><mn>101</mn></msub>",
+    "unicode": "Md₁₀₁",
+  },
+  {
+    "ascii": "No102",
+    "input": "No102",
+    "latex": "\\mathrm{No_{102}}",
+    "mathml": "<mi>No</mi><msub><mi></mi><mn>102</mn></msub>",
+    "unicode": "No₁₀₂",
+  },
+  {
+    "ascii": "Lr103",
+    "input": "Lr103",
+    "latex": "\\mathrm{Lr_{103}}",
+    "mathml": "<mi>Lr</mi><msub><mi></mi><mn>103</mn></msub>",
+    "unicode": "Lr₁₀₃",
+  },
+  {
+    "ascii": "Rf104",
+    "input": "Rf104",
+    "latex": "\\mathrm{Rf_{104}}",
+    "mathml": "<mi>Rf</mi><msub><mi></mi><mn>104</mn></msub>",
+    "unicode": "Rf₁₀₄",
+  },
+  {
+    "ascii": "Db105",
+    "input": "Db105",
+    "latex": "\\mathrm{Db_{105}}",
+    "mathml": "<mi>Db</mi><msub><mi></mi><mn>105</mn></msub>",
+    "unicode": "Db₁₀₅",
+  },
+  {
+    "ascii": "Sg106",
+    "input": "Sg106",
+    "latex": "\\mathrm{Sg_{106}}",
+    "mathml": "<mi>Sg</mi><msub><mi></mi><mn>106</mn></msub>",
+    "unicode": "Sg₁₀₆",
+  },
+  {
+    "ascii": "Bh107",
+    "input": "Bh107",
+    "latex": "\\mathrm{Bh_{107}}",
+    "mathml": "<mi>Bh</mi><msub><mi></mi><mn>107</mn></msub>",
+    "unicode": "Bh₁₀₇",
+  },
+  {
+    "ascii": "Hs108",
+    "input": "Hs108",
+    "latex": "\\mathrm{Hs_{108}}",
+    "mathml": "<mi>Hs</mi><msub><mi></mi><mn>108</mn></msub>",
+    "unicode": "Hs₁₀₈",
+  },
+  {
+    "ascii": "Mt109",
+    "input": "Mt109",
+    "latex": "\\mathrm{Mt_{109}}",
+    "mathml": "<mi>Mt</mi><msub><mi></mi><mn>109</mn></msub>",
+    "unicode": "Mt₁₀₉",
+  },
+  {
+    "ascii": "Ds110",
+    "input": "Ds110",
+    "latex": "\\mathrm{Ds_{110}}",
+    "mathml": "<mi>Ds</mi><msub><mi></mi><mn>110</mn></msub>",
+    "unicode": "Ds₁₁₀",
+  },
+  {
+    "ascii": "Rg111",
+    "input": "Rg111",
+    "latex": "\\mathrm{Rg_{111}}",
+    "mathml": "<mi>Rg</mi><msub><mi></mi><mn>111</mn></msub>",
+    "unicode": "Rg₁₁₁",
+  },
+  {
+    "ascii": "Cn112",
+    "input": "Cn112",
+    "latex": "\\mathrm{Cn_{112}}",
+    "mathml": "<mi>Cn</mi><msub><mi></mi><mn>112</mn></msub>",
+    "unicode": "Cn₁₁₂",
+  },
+  {
+    "ascii": "Nh113",
+    "input": "Nh113",
+    "latex": "\\mathrm{Nh_{113}}",
+    "mathml": "<mi>Nh</mi><msub><mi></mi><mn>113</mn></msub>",
+    "unicode": "Nh₁₁₃",
+  },
+  {
+    "ascii": "Fl114",
+    "input": "Fl114",
+    "latex": "\\mathrm{Fl_{114}}",
+    "mathml": "<mi>Fl</mi><msub><mi></mi><mn>114</mn></msub>",
+    "unicode": "Fl₁₁₄",
+  },
+  {
+    "ascii": "Mc115",
+    "input": "Mc115",
+    "latex": "\\mathrm{Mc_{115}}",
+    "mathml": "<mi>Mc</mi><msub><mi></mi><mn>115</mn></msub>",
+    "unicode": "Mc₁₁₅",
+  },
+  {
+    "ascii": "Lv116",
+    "input": "Lv116",
+    "latex": "\\mathrm{Lv_{116}}",
+    "mathml": "<mi>Lv</mi><msub><mi></mi><mn>116</mn></msub>",
+    "unicode": "Lv₁₁₆",
+  },
+  {
+    "ascii": "Ts117",
+    "input": "Ts117",
+    "latex": "\\mathrm{Ts_{117}}",
+    "mathml": "<mi>Ts</mi><msub><mi></mi><mn>117</mn></msub>",
+    "unicode": "Ts₁₁₇",
+  },
+  {
+    "ascii": "Og118",
+    "input": "Og118",
+    "latex": "\\mathrm{Og_{118}}",
+    "mathml": "<mi>Og</mi><msub><mi></mi><mn>118</mn></msub>",
+    "unicode": "Og₁₁₈",
+  },
+  {
+    "ascii": "var123",
+    "input": "var123",
+    "latex": "\\mathrm{var123}",
+    "mathml": "<mi>var123</mi>",
+    "unicode": "var123",
+  },
+  {
+    "ascii": "temp_surface",
+    "input": "temp_surface",
+    "latex": "\\mathrm{temp\\_surface}",
+    "mathml": "<mi>temp_surface</mi>",
+    "unicode": "temp_surface",
+  },
+  {
+    "ascii": "xx2",
+    "input": "xx2",
+    "latex": "\\mathrm{xx2}",
+    "mathml": "<mi>xx2</mi>",
+    "unicode": "xx2",
+  },
+  {
+    "ascii": "abc123",
+    "input": "abc123",
+    "latex": "\\mathrm{abc123}",
+    "mathml": "<mi>abc123</mi>",
+    "unicode": "abc123",
+  },
+  {
+    "ascii": "Q1",
+    "input": "Q1",
+    "latex": "Q_1",
+    "mathml": "<mi>Q1</mi>",
+    "unicode": "Q1",
+  },
+  {
+    "ascii": "X1",
+    "input": "X1",
+    "latex": "X_1",
+    "mathml": "<mi>X1</mi>",
+    "unicode": "X1",
+  },
+  {
+    "ascii": "J5",
+    "input": "J5",
+    "latex": "J_5",
+    "mathml": "<mi>J5</mi>",
+    "unicode": "J5",
+  },
+  {
+    "ascii": "Z10",
+    "input": "Z10",
+    "latex": "Z_{10}",
+    "mathml": "<mi>Z10</mi>",
+    "unicode": "Z10",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders comprehensive_operators.json identically 1`] = `
+[
+  {
+    "ascii": "a + b + c",
+    "input": {
+      "args": [
+        "a",
+        "b",
+        "c",
+      ],
+      "op": "+",
+    },
+    "latex": "a + b + c",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mi>b</mi><mo>+</mo><mi>c</mi></mrow>",
+    "unicode": "a + b + c",
+  },
+  {
+    "ascii": "a - b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "-",
+    },
+    "latex": "a - b",
+    "mathml": "<mrow><mi>a</mi><mo>-</mo><mi>b</mi></mrow>",
+    "unicode": "a − b",
+  },
+  {
+    "ascii": "a * b * c",
+    "input": {
+      "args": [
+        "a",
+        "b",
+        "c",
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot b \\cdot c",
+    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "unicode": "a·b·c",
+  },
+  {
+    "ascii": "a / b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b}",
+    "mathml": "<mfrac><mi>a</mi><mi>b</mi></mfrac>",
+    "unicode": "a/b",
+  },
+  {
+    "ascii": "x^3",
+    "input": {
+      "args": [
+        "x",
+        3,
+      ],
+      "op": "^",
+    },
+    "latex": "x^{3}",
+    "mathml": "<msup><mi>x</mi><mn>3</mn></msup>",
+    "unicode": "x³",
+  },
+  {
+    "ascii": "D(x)/Dt",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial x}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>x</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂x/∂t",
+  },
+  {
+    "ascii": "grad(phi)",
+    "input": {
+      "args": [
+        "phi",
+      ],
+      "dim": "x",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(\\phi)",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mi>phi</mi><mo>)</mo></mrow>",
+    "unicode": "grad(φ)",
+  },
+  {
+    "ascii": "div(v)",
+    "input": {
+      "args": [
+        "v",
+      ],
+      "op": "div",
+    },
+    "latex": "\\mathrm{div}(v)",
+    "mathml": "<mrow><mi>div</mi><mo>(</mo><mi>v</mi><mo>)</mo></mrow>",
+    "unicode": "div(v)",
+  },
+  {
+    "ascii": "laplacian(u)",
+    "input": {
+      "args": [
+        "u",
+      ],
+      "op": "laplacian",
+    },
+    "latex": "\\mathrm{laplacian}(u)",
+    "mathml": "<mrow><mi>laplacian</mi><mo>(</mo><mi>u</mi><mo>)</mo></mrow>",
+    "unicode": "laplacian(u)",
+  },
+  {
+    "ascii": "exp(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "exp",
+    },
+    "latex": "\\exp(x)",
+    "mathml": "<mrow><mi>exp</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "exp(x)",
+  },
+  {
+    "ascii": "log(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "log",
+    },
+    "latex": "\\ln(x)",
+    "mathml": "<mrow><mi>ln</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "ln(x)",
+  },
+  {
+    "ascii": "log10(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "log10",
+    },
+    "latex": "\\log_{10}(x)",
+    "mathml": "<mrow><msub><mi>log</mi><mn>10</mn></msub><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "log₁₀(x)",
+  },
+  {
+    "ascii": "sqrt(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "sqrt",
+    },
+    "latex": "\\sqrt{x}",
+    "mathml": "<msqrt><mi>x</mi></msqrt>",
+    "unicode": "√x",
+  },
+  {
+    "ascii": "abs(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "abs",
+    },
+    "latex": "|x|",
+    "mathml": "<mrow><mo>|</mo><mi>x</mi><mo>|</mo></mrow>",
+    "unicode": "|x|",
+  },
+  {
+    "ascii": "sign(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "sign",
+    },
+    "latex": "\\mathrm{sgn}(x)",
+    "mathml": "<mrow><mi>sgn</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "sgn(x)",
+  },
+  {
+    "ascii": "sin(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "sin",
+    },
+    "latex": "\\sin(x)",
+    "mathml": "<mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "sin(x)",
+  },
+  {
+    "ascii": "cos(theta)",
+    "input": {
+      "args": [
+        "θ",
+      ],
+      "op": "cos",
+    },
+    "latex": "\\cos(\\theta)",
+    "mathml": "<mrow><mi>cos</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "unicode": "cos(θ)",
+  },
+  {
+    "ascii": "tan(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "tan",
+    },
+    "latex": "\\tan(x)",
+    "mathml": "<mrow><mi>tan</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "tan(x)",
+  },
+  {
+    "ascii": "asin(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "asin",
+    },
+    "latex": "\\arcsin(x)",
+    "mathml": "<mrow><mi>asin</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "arcsin(x)",
+  },
+  {
+    "ascii": "acos(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "acos",
+    },
+    "latex": "\\arccos(x)",
+    "mathml": "<mrow><mi>acos</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "arccos(x)",
+  },
+  {
+    "ascii": "atan(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "atan",
+    },
+    "latex": "\\arctan(x)",
+    "mathml": "<mrow><mi>atan</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "arctan(x)",
+  },
+  {
+    "ascii": "atan2(y, x)",
+    "input": {
+      "args": [
+        "y",
+        "x",
+      ],
+      "op": "atan2",
+    },
+    "latex": "\\mathrm{atan2}(y, x)",
+    "mathml": "<mrow><mi>atan2</mi><mo>(</mo><mi>y</mi><mo>,</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "atan2(y, x)",
+  },
+  {
+    "ascii": "min(a, b)",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "min",
+    },
+    "latex": "\\min(a, b)",
+    "mathml": "<mrow><mi>min</mi><mo>(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>)</mo></mrow>",
+    "unicode": "min(a, b)",
+  },
+  {
+    "ascii": "max(a, b, c)",
+    "input": {
+      "args": [
+        "a",
+        "b",
+        "c",
+      ],
+      "op": "max",
+    },
+    "latex": "\\max(a, b, c)",
+    "mathml": "<mrow><mi>max</mi><mo>(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>,</mo><mi>c</mi><mo>)</mo></mrow>",
+    "unicode": "max(a, b, c)",
+  },
+  {
+    "ascii": "floor(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "floor",
+    },
+    "latex": "\\lfloor x \\rfloor",
+    "mathml": "<mrow><mo>&lfloor;</mo><mi>x</mi><mo>&rfloor;</mo></mrow>",
+    "unicode": "⌊x⌋",
+  },
+  {
+    "ascii": "ceil(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "ceil",
+    },
+    "latex": "\\lceil x \\rceil",
+    "mathml": "<mrow><mo>&lceil;</mo><mi>x</mi><mo>&rceil;</mo></mrow>",
+    "unicode": "⌈x⌉",
+  },
+  {
+    "ascii": "a > b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": ">",
+    },
+    "latex": "a > b",
+    "mathml": "<mrow><mi>a</mi><mo>&gt;</mo><mi>b</mi></mrow>",
+    "unicode": "a > b",
+  },
+  {
+    "ascii": "a < b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "<",
+    },
+    "latex": "a < b",
+    "mathml": "<mrow><mi>a</mi><mo>&lt;</mo><mi>b</mi></mrow>",
+    "unicode": "a < b",
+  },
+  {
+    "ascii": "a >= b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": ">=",
+    },
+    "latex": "a \\geq b",
+    "mathml": "<mrow><mi>a</mi><mo>&geq;</mo><mi>b</mi></mrow>",
+    "unicode": "a ≥ b",
+  },
+  {
+    "ascii": "a <= b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "<=",
+    },
+    "latex": "a \\leq b",
+    "mathml": "<mrow><mi>a</mi><mo>&leq;</mo><mi>b</mi></mrow>",
+    "unicode": "a ≤ b",
+  },
+  {
+    "ascii": "a == b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "==",
+    },
+    "latex": "a = b",
+    "mathml": "<mrow><mi>a</mi><mo>=</mo><mi>b</mi></mrow>",
+    "unicode": "a = b",
+  },
+  {
+    "ascii": "a != b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "!=",
+    },
+    "latex": "a \\neq b",
+    "mathml": "<mrow><mi>a</mi><mo>&neq;</mo><mi>b</mi></mrow>",
+    "unicode": "a ≠ b",
+  },
+  {
+    "ascii": "p and q",
+    "input": {
+      "args": [
+        "p",
+        "q",
+      ],
+      "op": "and",
+    },
+    "latex": "p \\land q",
+    "mathml": "<mrow><mi>p</mi><mo>&and;</mo><mi>q</mi></mrow>",
+    "unicode": "p ∧ q",
+  },
+  {
+    "ascii": "p or q or r",
+    "input": {
+      "args": [
+        "p",
+        "q",
+        "r",
+      ],
+      "op": "or",
+    },
+    "latex": "p \\lor q \\lor r",
+    "mathml": "<mrow><mi>p</mi><mo>&or;</mo><mi>q</mi><mo>&or;</mo><mi>r</mi></mrow>",
+    "unicode": "p ∨ q ∨ r",
+  },
+  {
+    "ascii": "not p",
+    "input": {
+      "args": [
+        "p",
+      ],
+      "op": "not",
+    },
+    "latex": "\\neg p",
+    "mathml": "<mrow><mo>&not;</mo><mi>p</mi></mrow>",
+    "unicode": "¬p",
+  },
+  {
+    "ascii": "ifelse(x > 0, x, -x)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            0,
+          ],
+          "op": ">",
+        },
+        "x",
+        {
+          "args": [
+            "x",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "ifelse",
+    },
+    "latex": "\\begin{cases} x & \\text{if } x > 0 \\\\ -x & \\text{otherwise} \\end{cases}",
+    "mathml": "<mrow><mi>ifelse</mi><mo>(</mo><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>,</mo><mi>x</mi><mo>,</mo><mrow><mo>-</mo><mi>x</mi></mrow><mo>)</mo></mrow>",
+    "unicode": "ifelse(x > 0, x, −x)",
+  },
+  {
+    "ascii": "Pre(velocity)",
+    "input": {
+      "args": [
+        "velocity",
+      ],
+      "op": "Pre",
+    },
+    "latex": "\\mathrm{Pre}(\\mathrm{velocity})",
+    "mathml": "<mrow><mi>Pre</mi><mo>(</mo><mi>velocity</mi><mo>)</mo></mrow>",
+    "unicode": "Pre(velocity)",
+  },
+  {
+    "ascii": "exp(-1370 * log(T) / R)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            {
+              "args": [
+                -1370,
+                {
+                  "args": [
+                    "T",
+                  ],
+                  "op": "log",
+                },
+              ],
+              "op": "*",
+            },
+            "R",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "exp",
+    },
+    "latex": "\\exp\\left(\\frac{-1370 \\cdot \\ln(T)}{R}\\right)",
+    "mathml": "<mrow><mi>exp</mi><mo>(</mo><mfrac><mrow><mn>-1370</mn><mo>&cdot;</mo><mrow><mi>ln</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow></mrow><mi>R</mi></mfrac><mo>)</mo></mrow>",
+    "unicode": "exp(−1370·ln(T)/R)",
+  },
+  {
+    "ascii": "A * sin(omega * t) + B * cos(omega * t)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "A",
+            {
+              "args": [
+                {
+                  "args": [
+                    "ω",
+                    "t",
+                  ],
+                  "op": "*",
+                },
+              ],
+              "op": "sin",
+            },
+          ],
+          "op": "*",
+        },
+        {
+          "args": [
+            "B",
+            {
+              "args": [
+                {
+                  "args": [
+                    "ω",
+                    "t",
+                  ],
+                  "op": "*",
+                },
+              ],
+              "op": "cos",
+            },
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "A \\cdot \\sin(\\omega \\cdot t) + B \\cdot \\cos(\\omega \\cdot t)",
+    "mathml": "<mrow><mrow><mi>A</mi><mo>&cdot;</mo><mrow><mi>sin</mi><mo>(</mo><mrow><mi>&omega;</mi><mo>&cdot;</mo><mi>t</mi></mrow><mo>)</mo></mrow></mrow><mo>+</mo><mrow><mi>B</mi><mo>&cdot;</mo><mrow><mi>cos</mi><mo>(</mo><mrow><mi>&omega;</mi><mo>&cdot;</mo><mi>t</mi></mrow><mo>)</mo></mrow></mrow></mrow>",
+    "unicode": "A·sin(ω·t) + B·cos(ω·t)",
+  },
+  {
+    "ascii": "sqrt(a^2 + b^2 + 2 * a * b * cos(gamma))",
+    "input": {
+      "args": [
+        {
+          "args": [
+            {
+              "args": [
+                "a",
+                2,
+              ],
+              "op": "^",
+            },
+            {
+              "args": [
+                "b",
+                2,
+              ],
+              "op": "^",
+            },
+            {
+              "args": [
+                2,
+                "a",
+                "b",
+                {
+                  "args": [
+                    "γ",
+                  ],
+                  "op": "cos",
+                },
+              ],
+              "op": "*",
+            },
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "sqrt",
+    },
+    "latex": "\\sqrt{a^{2} + b^{2} + 2 \\cdot a \\cdot b \\cdot \\cos(\\gamma)}",
+    "mathml": "<msqrt><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup><mo>+</mo><mrow><mn>2</mn><mo>&cdot;</mo><mi>a</mi><mo>&cdot;</mo><mi>b</mi><mo>&cdot;</mo><mrow><mi>cos</mi><mo>(</mo><mi>&gamma;</mi><mo>)</mo></mrow></mrow></mrow></msqrt>",
+    "unicode": "√(a² + b² + 2·a·b·cos(γ))",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders element_recognition.json identically 1`] = `
+[
+  {
+    "ascii": "CO2",
+    "input": "CO2",
+    "latex": "\\mathrm{CO_2}",
+    "mathml": "<mi>C</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "CO₂",
+  },
+  {
+    "ascii": "H2O",
+    "input": "H2O",
+    "latex": "\\mathrm{H_2O}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi>",
+    "unicode": "H₂O",
+  },
+  {
+    "ascii": "C6H12O6",
+    "input": "C6H12O6",
+    "latex": "\\mathrm{C_6H_{12}O_6}",
+    "mathml": "<mi>C</mi><msub><mi></mi><mn>6</mn></msub><mi>H</mi><msub><mi></mi><mn>12</mn></msub><mi>O</mi><msub><mi></mi><mn>6</mn></msub>",
+    "unicode": "C₆H₁₂O₆",
+  },
+  {
+    "ascii": "Ca2+",
+    "input": "Ca2+",
+    "latex": "\\mathrm{Ca_2+}",
+    "mathml": "<mi>Ca</mi><msub><mi></mi><mn>2</mn></msub>+",
+    "unicode": "Ca₂+",
+  },
+  {
+    "ascii": "SO4-2",
+    "input": "SO4-2",
+    "latex": "\\mathrm{SO_4-_2}",
+    "mathml": "<mi>S</mi><mi>O</mi><msub><mi></mi><mn>4</mn></msub>-2",
+    "unicode": "SO₄-₂",
+  },
+  {
+    "ascii": "NO2",
+    "input": "NO2",
+    "latex": "\\mathrm{NO_2}",
+    "mathml": "<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "NO₂",
+  },
+  {
+    "ascii": "H2SO4",
+    "input": "H2SO4",
+    "latex": "\\mathrm{H_2SO_4}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>S</mi><mi>O</mi><msub><mi></mi><mn>4</mn></msub>",
+    "unicode": "H₂SO₄",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders expr_precedence.json identically 1`] = `
+[
+  {
+    "ascii": "a + b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "+",
+    },
+    "latex": "a + b",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow>",
+    "unicode": "a + b",
+  },
+  {
+    "ascii": "a * b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot b",
+    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "unicode": "a·b",
+  },
+  {
+    "ascii": "a * b + c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "*",
+        },
+        "c",
+      ],
+      "op": "+",
+    },
+    "latex": "a \\cdot b + c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "unicode": "a·b + c",
+  },
+  {
+    "ascii": "(a + b) * c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "+",
+        },
+        "c",
+      ],
+      "op": "*",
+    },
+    "latex": "(a + b) \\cdot c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "unicode": "(a + b)·c",
+  },
+  {
+    "ascii": "x^2",
+    "input": {
+      "args": [
+        "x",
+        2,
+      ],
+      "op": "^",
+    },
+    "latex": "x^{2}",
+    "mathml": "<msup><mi>x</mi><mn>2</mn></msup>",
+    "unicode": "x²",
+  },
+  {
+    "ascii": "x^2 + 2 * x",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            2,
+          ],
+          "op": "^",
+        },
+        {
+          "args": [
+            2,
+            "x",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "x^{2} + 2 \\cdot x",
+    "mathml": "<mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mrow><mn>2</mn><mo>&cdot;</mo><mi>x</mi></mrow></mrow>",
+    "unicode": "x² + 2·x",
+  },
+  {
+    "ascii": "(x + y)^2",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            "y",
+          ],
+          "op": "+",
+        },
+        2,
+      ],
+      "op": "^",
+    },
+    "latex": "(x + y)^{2}",
+    "mathml": "<msup><mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow><mn>2</mn></msup>",
+    "unicode": "(x + y)²",
+  },
+  {
+    "ascii": "-x",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "-",
+    },
+    "latex": "-x",
+    "mathml": "<mrow><mo>-</mo><mi>x</mi></mrow>",
+    "unicode": "−x",
+  },
+  {
+    "ascii": "a - b",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a - b",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mrow><mo>-</mo><mi>b</mi></mrow></mrow>",
+    "unicode": "a − b",
+  },
+  {
+    "ascii": "a / b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b}",
+    "mathml": "<mfrac><mi>a</mi><mi>b</mi></mfrac>",
+    "unicode": "a/b",
+  },
+  {
+    "ascii": "D(O3)/Dt",
+    "input": {
+      "args": [
+        "O3",
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂O₃/∂t",
+  },
+  {
+    "ascii": "grad(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "dim": "y",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(x)",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "grad(x)",
+  },
+  {
+    "ascii": "exp(-1370 / T)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            -1370,
+            "T",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "exp",
+    },
+    "latex": "\\exp\\left(\\frac{-1370}{T}\\right)",
+    "mathml": "<mrow><mi>exp</mi><mo>(</mo><mfrac><mn>-1370</mn><mi>T</mi></mfrac><mo>)</mo></mrow>",
+    "unicode": "exp(−1370/T)",
+  },
+  {
+    "ascii": "Pre(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "Pre",
+    },
+    "latex": "\\mathrm{Pre}(x)",
+    "mathml": "<mrow><mi>Pre</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "Pre(x)",
+  },
+  {
+    "ascii": "ifelse(x > 0, x, 0)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            0,
+          ],
+          "op": ">",
+        },
+        "x",
+        0,
+      ],
+      "op": "ifelse",
+    },
+    "latex": "\\begin{cases} x & \\text{if } x > 0 \\\\ 0 & \\text{otherwise} \\end{cases}",
+    "mathml": "<mrow><mi>ifelse</mi><mo>(</mo><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>,</mo><mi>x</mi><mo>,</mo><mn>0</mn><mo>)</mo></mrow>",
+    "unicode": "ifelse(x > 0, x, 0)",
+  },
+  {
+    "ascii": "1.8e-12",
+    "input": 1.8e-12,
+    "latex": "1.8 \\times 10^{-12}",
+    "mathml": "<mn>1.8e-12</mn>",
+    "unicode": "1.8×10⁻¹²",
+  },
+  {
+    "ascii": "2.46e+19",
+    "input": 24600000000000000000,
+    "latex": "2.46 \\times 10^{19}",
+    "mathml": "<mn>2.46e+19</mn>",
+    "unicode": "2.46×10¹⁹",
+  },
+  {
+    "ascii": "1.8e-12 * O3 * NO * M",
+    "input": {
+      "args": [
+        1.8e-12,
+        "O3",
+        "NO",
+        "M",
+      ],
+      "op": "*",
+    },
+    "latex": "1.8 \\times 10^{-12} \\cdot \\mathrm{O_3} \\cdot \\mathrm{NO} \\cdot M",
+    "mathml": "<mrow><mn>1.8e-12</mn><mo>&cdot;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi><mo>&cdot;</mo><mi>M</mi></mrow>",
+    "unicode": "1.8×10⁻¹²·O₃·NO·M",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders latex_format.json identically 1`] = `
+[
+  {
+    "ascii": "D(O3)/Dt",
+    "input": {
+      "args": [
+        "O3",
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂O₃/∂t",
+  },
+  {
+    "ascii": "D(concentration)/Dt",
+    "input": {
+      "args": [
+        "concentration",
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial \\mathrm{concentration}}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>concentration</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂concentration/∂t",
+  },
+  {
+    "ascii": "grad(T)",
+    "input": {
+      "args": [
+        "T",
+      ],
+      "dim": "x",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(T)",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow>",
+    "unicode": "grad(T)",
+  },
+  {
+    "ascii": "grad(pressure)",
+    "input": {
+      "args": [
+        "pressure",
+      ],
+      "dim": "y",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(\\mathrm{pressure})",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mi>pressure</mi><mo>)</mo></mrow>",
+    "unicode": "grad(pressure)",
+  },
+  {
+    "ascii": "a / b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b}",
+    "mathml": "<mfrac><mi>a</mi><mi>b</mi></mfrac>",
+    "unicode": "a/b",
+  },
+  {
+    "ascii": "(a + b) / c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "+",
+        },
+        "c",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a + b}{c}",
+    "mathml": "<mfrac><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mi>c</mi></mfrac>",
+    "unicode": "(a + b)/c",
+  },
+  {
+    "ascii": "a / (b * c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b \\cdot c}",
+    "mathml": "<mfrac><mi>a</mi><mrow><mi>b</mi><mo>&cdot;</mo><mi>c</mi></mrow></mfrac>",
+    "unicode": "a/(b·c)",
+  },
+  {
+    "ascii": "O3",
+    "input": "O3",
+    "latex": "\\mathrm{O_3}",
+    "mathml": "<mi>O</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "O₃",
+  },
+  {
+    "ascii": "NO2",
+    "input": "NO2",
+    "latex": "\\mathrm{NO_2}",
+    "mathml": "<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "NO₂",
+  },
+  {
+    "ascii": "CH2O",
+    "input": "CH2O",
+    "latex": "\\mathrm{CH_2O}",
+    "mathml": "<mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi>",
+    "unicode": "CH₂O",
+  },
+  {
+    "ascii": "H2O2",
+    "input": "H2O2",
+    "latex": "\\mathrm{H_2O_2}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "H₂O₂",
+  },
+  {
+    "ascii": "a * b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot b",
+    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "unicode": "a·b",
+  },
+  {
+    "ascii": "k * \\mathrm{O_3} * \\mathrm{NO}",
+    "input": {
+      "args": [
+        "k",
+        "\\mathrm{O_3}",
+        "\\mathrm{NO}",
+      ],
+      "op": "*",
+    },
+    "latex": "k \\cdot \\mathrm{\\mathrm}_{\\mathrm{{O}}_\\mathrm{3}} \\cdot \\mathrm{\\mathrm}_{\\mathrm{{_{\\mathrm{NO}}}}",
+    "mathml": "<mrow><mi>k</mi><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub></mrow>",
+    "unicode": "k·\\mathrm_{O_₃}·\\mathrm{NO}",
+  },
+  {
+    "ascii": "1.8e-12",
+    "input": 1.8e-12,
+    "latex": "1.8 \\times 10^{-12}",
+    "mathml": "<mn>1.8e-12</mn>",
+    "unicode": "1.8×10⁻¹²",
+  },
+  {
+    "ascii": "2.46e+19",
+    "input": 24600000000000000000,
+    "latex": "2.46 \\times 10^{19}",
+    "mathml": "<mn>2.46e+19</mn>",
+    "unicode": "2.46×10¹⁹",
+  },
+  {
+    "ascii": "exp(-E / RT)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "-E",
+            "RT",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "exp",
+    },
+    "latex": "\\exp\\left(\\frac{\\mathrm{-E}}{\\mathrm{RT}}\\right)",
+    "mathml": "<mrow><mi>exp</mi><mo>(</mo><mfrac><mi>-E</mi><mi>RT</mi></mfrac><mo>)</mo></mrow>",
+    "unicode": "exp(-E/RT)",
+  },
+  {
+    "ascii": "sqrt(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "sqrt",
+    },
+    "latex": "\\sqrt{x}",
+    "mathml": "<msqrt><mi>x</mi></msqrt>",
+    "unicode": "√x",
+  },
+  {
+    "ascii": "sin(\\theta)",
+    "input": {
+      "args": [
+        "\\theta",
+      ],
+      "op": "sin",
+    },
+    "latex": "\\sin(\\mathrm{\\theta})",
+    "mathml": "<mrow><mi>sin</mi><mo>(</mo><mi>\\theta</mi><mo>)</mo></mrow>",
+    "unicode": "sin(\\θ)",
+  },
+  {
+    "ascii": "x^2",
+    "input": {
+      "args": [
+        "x",
+        2,
+      ],
+      "op": "^",
+    },
+    "latex": "x^{2}",
+    "mathml": "<msup><mi>x</mi><mn>2</mn></msup>",
+    "unicode": "x²",
+  },
+  {
+    "ascii": "x^(n + 1)",
+    "input": {
+      "args": [
+        "x",
+        {
+          "args": [
+            "n",
+            1,
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "x^{n + 1}",
+    "mathml": "<msup><mi>x</mi><mrow><mi>n</mi><mo>+</mo><mn>1</mn></mrow></msup>",
+    "unicode": "x^(n + 1)",
+  },
+  {
+    "ascii": "div(\\mathbf{v})",
+    "input": {
+      "args": [
+        "\\mathbf{v}",
+      ],
+      "op": "div",
+    },
+    "latex": "\\mathrm{div}(\\mathrm{\\mathbf{v}})",
+    "mathml": "<mrow><mi>div</mi><mo>(</mo><mi>\\mathbf{v}</mi><mo>)</mo></mrow>",
+    "unicode": "div(\\mathbf{v})",
+  },
+  {
+    "ascii": "laplacian(T)",
+    "input": {
+      "args": [
+        "T",
+      ],
+      "op": "laplacian",
+    },
+    "latex": "\\mathrm{laplacian}(T)",
+    "mathml": "<mrow><mi>laplacian</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow>",
+    "unicode": "laplacian(T)",
+  },
+  {
+    "ascii": "D(O3)/Dt == (-k_{NO_O3}) * \\mathrm{O_3} * \\mathrm{NO} * M + j_{NO2} * \\mathrm{NO_2}",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "O3",
+          ],
+          "op": "D",
+          "wrt": "t",
+        },
+        {
+          "args": [
+            {
+              "args": [
+                {
+                  "args": [
+                    "k_{NO_O3}",
+                  ],
+                  "op": "-",
+                },
+                "\\mathrm{O_3}",
+                "\\mathrm{NO}",
+                "M",
+              ],
+              "op": "*",
+            },
+            {
+              "args": [
+                "j_{NO2}",
+                "\\mathrm{NO_2}",
+              ],
+              "op": "*",
+            },
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "=",
+    },
+    "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t} = (-k_{\\mathrm{{_{\\mathrm{NO_O_3}}}}) \\cdot \\mathrm{\\mathrm}_{\\mathrm{{O}}_\\mathrm{3}} \\cdot \\mathrm{\\mathrm}_{\\mathrm{{_{\\mathrm{NO}}}} \\cdot M + j_{\\mathrm{{_{\\mathrm{NO_2}}}} \\cdot \\mathrm{\\mathrm}_{\\mathrm{{NO}}_\\mathrm{2}}",
+    "mathml": "<mrow><mi>=</mi><mo>(</mo><mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>,</mo><mrow><mrow><mrow><mo>-</mo><mi>k</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub>}</mrow></msub></mrow><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub><mo>&cdot;</mo><mi>M</mi></mrow><mo>+</mo><mrow><mi>j</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_2}</mrow></msub></mrow></mrow><mo>)</mo></mrow>",
+    "unicode": "∂O₃/∂t = (−k_{NO_O₃})·\\mathrm_{O_₃}·\\mathrm{NO}·M + j_{NO₂}·\\mathrm_{NO_₂}",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders number_formatting.json identically 1`] = `
+[
+  {
+    "ascii": "3",
+    "input": 3,
+    "latex": "3",
+    "mathml": "<mn>3</mn>",
+    "unicode": "3",
+  },
+  {
+    "ascii": "-1",
+    "input": -1,
+    "latex": "-1",
+    "mathml": "<mn>-1</mn>",
+    "unicode": "−1",
+  },
+  {
+    "ascii": "1000",
+    "input": 1000,
+    "latex": "1000",
+    "mathml": "<mn>1000</mn>",
+    "unicode": "1000",
+  },
+  {
+    "ascii": "0",
+    "input": 0,
+    "latex": "0",
+    "mathml": "<mn>0</mn>",
+    "unicode": "0",
+  },
+  {
+    "ascii": "5e-3",
+    "input": 0.005,
+    "latex": "5 \\times 10^{-3}",
+    "mathml": "<mn>5e-3</mn>",
+    "unicode": "5×10⁻³",
+  },
+  {
+    "ascii": "298.15",
+    "input": 298.15,
+    "latex": "298.15",
+    "mathml": "<mn>298.15</mn>",
+    "unicode": "298.15",
+  },
+  {
+    "ascii": "3.14",
+    "input": 3.14,
+    "latex": "3.14",
+    "mathml": "<mn>3.14</mn>",
+    "unicode": "3.14",
+  },
+  {
+    "ascii": "1.8e-12",
+    "input": 1.8e-12,
+    "latex": "1.8 \\times 10^{-12}",
+    "mathml": "<mn>1.8e-12</mn>",
+    "unicode": "1.8×10⁻¹²",
+  },
+  {
+    "ascii": "2.46e+19",
+    "input": 24600000000000000000,
+    "latex": "2.46 \\times 10^{19}",
+    "mathml": "<mn>2.46e+19</mn>",
+    "unicode": "2.46×10¹⁹",
+  },
+  {
+    "ascii": "1e-3",
+    "input": 0.001,
+    "latex": "1 \\times 10^{-3}",
+    "mathml": "<mn>1e-3</mn>",
+    "unicode": "1×10⁻³",
+  },
+  {
+    "ascii": "1.5e+4",
+    "input": 15000,
+    "latex": "1.5 \\times 10^{4}",
+    "mathml": "<mn>1.5e+4</mn>",
+    "unicode": "1.5×10⁴",
+  },
+  {
+    "ascii": "0",
+    "input": 0,
+    "latex": "0",
+    "mathml": "<mn>0</mn>",
+    "unicode": "0",
+  },
+  {
+    "ascii": "0",
+    "input": -0,
+    "latex": "0",
+    "mathml": "<mn>0</mn>",
+    "unicode": "0",
+  },
+  {
+    "ascii": "0.01",
+    "input": 0.01,
+    "latex": "0.01",
+    "mathml": "<mn>0.01</mn>",
+    "unicode": "0.01",
+  },
+  {
+    "ascii": "9.999e-3",
+    "input": 0.009999,
+    "latex": "9.999 \\times 10^{-3}",
+    "mathml": "<mn>9.999e-3</mn>",
+    "unicode": "9.999×10⁻³",
+  },
+  {
+    "ascii": "9999.99",
+    "input": 9999.99,
+    "latex": "9999.99",
+    "mathml": "<mn>9999.99</mn>",
+    "unicode": "9999.99",
+  },
+  {
+    "ascii": "1e+4",
+    "input": 10000,
+    "latex": "1 \\times 10^{4}",
+    "mathml": "<mn>1e+4</mn>",
+    "unicode": "1×10⁴",
+  },
+  {
+    "ascii": "-3.14",
+    "input": -3.14,
+    "latex": "-3.14",
+    "mathml": "<mn>-3.14</mn>",
+    "unicode": "−3.14",
+  },
+  {
+    "ascii": "-1.8e-12",
+    "input": -1.8e-12,
+    "latex": "-1.8 \\times 10^{-12}",
+    "mathml": "<mn>-1.8e-12</mn>",
+    "unicode": "-1.8×10⁻¹²",
+  },
+  {
+    "ascii": "Infinity",
+    "input": "Infinity",
+    "latex": "\\mathrm{Infinity}",
+    "mathml": "<mi>Infinity</mi>",
+    "unicode": "Infinity",
+  },
+  {
+    "ascii": "-Infinity",
+    "input": "-Infinity",
+    "latex": "\\mathrm{-Infinity}",
+    "mathml": "<mi>-Infinity</mi>",
+    "unicode": "-Infinity",
+  },
+  {
+    "ascii": "NaN",
+    "input": "NaN",
+    "latex": "\\mathrm{NaN}",
+    "mathml": "<mi>Na</mi><mi>N</mi>",
+    "unicode": "NaN",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders operator_precedence.json identically 1`] = `
+[
+  {
+    "ascii": "a * b + c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "*",
+        },
+        "c",
+      ],
+      "op": "+",
+    },
+    "latex": "a \\cdot b + c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "unicode": "a·b + c",
+  },
+  {
+    "ascii": "(a + b) * c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "+",
+        },
+        "c",
+      ],
+      "op": "*",
+    },
+    "latex": "(a + b) \\cdot c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "unicode": "(a + b)·c",
+  },
+  {
+    "ascii": "a^(b + c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "a^{b + c}",
+    "mathml": "<msup><mi>a</mi><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></msup>",
+    "unicode": "a^(b + c)",
+  },
+  {
+    "ascii": "a^b + c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "^",
+        },
+        "c",
+      ],
+      "op": "+",
+    },
+    "latex": "a^{b} + c",
+    "mathml": "<mrow><msup><mi>a</mi><mi>b</mi></msup><mo>+</mo><mi>c</mi></mrow>",
+    "unicode": "a^b + c",
+  },
+  {
+    "ascii": "-a * b",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "-a \\cdot b",
+    "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow></mrow>",
+    "unicode": "−a·b",
+  },
+  {
+    "ascii": "(-a) * b",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+          ],
+          "op": "-",
+        },
+        "b",
+      ],
+      "op": "*",
+    },
+    "latex": "(-a) \\cdot b",
+    "mathml": "<mrow><mrow><mo>-</mo><mi>a</mi></mrow><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "unicode": "(−a)·b",
+  },
+  {
+    "ascii": "-a^b",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "-a^{b}",
+    "mathml": "<mrow><mo>-</mo><msup><mi>a</mi><mi>b</mi></msup></mrow>",
+    "unicode": "−a^b",
+  },
+  {
+    "ascii": "(-a)^b",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+          ],
+          "op": "-",
+        },
+        "b",
+      ],
+      "op": "^",
+    },
+    "latex": "(-a)^{b}",
+    "mathml": "<msup><mrow><mo>-</mo><mi>a</mi></mrow><mi>b</mi></msup>",
+    "unicode": "(−a)^b",
+  },
+  {
+    "ascii": "sin(x) + y",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+          ],
+          "op": "sin",
+        },
+        "y",
+      ],
+      "op": "+",
+    },
+    "latex": "\\sin(x) + y",
+    "mathml": "<mrow><mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>+</mo><mi>y</mi></mrow>",
+    "unicode": "sin(x) + y",
+  },
+  {
+    "ascii": "sin(x + y)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            "y",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "sin",
+    },
+    "latex": "\\sin(x + y)",
+    "mathml": "<mrow><mi>sin</mi><mo>(</mo><mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow><mo>)</mo></mrow>",
+    "unicode": "sin(x + y)",
+  },
+  {
+    "ascii": "exp(x) * y",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+          ],
+          "op": "exp",
+        },
+        "y",
+      ],
+      "op": "*",
+    },
+    "latex": "\\exp(x) \\cdot y",
+    "mathml": "<mrow><mrow><mi>exp</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>&cdot;</mo><mi>y</mi></mrow>",
+    "unicode": "exp(x)·y",
+  },
+  {
+    "ascii": "D(x)/Dt + y",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+          ],
+          "op": "D",
+          "wrt": "t",
+        },
+        "y",
+      ],
+      "op": "+",
+    },
+    "latex": "\\frac{\\partial x}{\\partial t} + y",
+    "mathml": "<mrow><mfrac><mrow><mo>&part;</mo><mi>x</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mi>y</mi></mrow>",
+    "unicode": "∂x/∂t + y",
+  },
+  {
+    "ascii": "D(x + y)/Dt",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            "y",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial x + y}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&part;</mo><mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂x + y/∂t",
+  },
+  {
+    "ascii": "grad(f * g)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "f",
+            "g",
+          ],
+          "op": "*",
+        },
+      ],
+      "dim": "x",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(f \\cdot g)",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mrow><mi>f</mi><mo>&cdot;</mo><mi>g</mi></mrow><mo>)</mo></mrow>",
+    "unicode": "grad(f·g)",
+  },
+  {
+    "ascii": "a + b + c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "+",
+        },
+        "c",
+      ],
+      "op": "+",
+    },
+    "latex": "a + b + c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "unicode": "a + b + c",
+  },
+  {
+    "ascii": "a + b + c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a + b + c",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a + b + c",
+  },
+  {
+    "ascii": "a * b * c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "*",
+        },
+        "c",
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot b \\cdot c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "unicode": "a·b·c",
+  },
+  {
+    "ascii": "a^(b^c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "a^{b^{c}}",
+    "mathml": "<msup><mi>a</mi><msup><mi>b</mi><mi>c</mi></msup></msup>",
+    "unicode": "a^(b^c)",
+  },
+  {
+    "ascii": "a^b^c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "^",
+        },
+        "c",
+      ],
+      "op": "^",
+    },
+    "latex": "a^{b}^{c}",
+    "mathml": "<msup><msup><mi>a</mi><mi>b</mi></msup><mi>c</mi></msup>",
+    "unicode": "a^b^c",
+  },
+  {
+    "ascii": "sin(x) * cos(y) + z^2",
+    "input": {
+      "args": [
+        {
+          "args": [
+            {
+              "args": [
+                "x",
+              ],
+              "op": "sin",
+            },
+            {
+              "args": [
+                "y",
+              ],
+              "op": "cos",
+            },
+          ],
+          "op": "*",
+        },
+        {
+          "args": [
+            "z",
+            2,
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "\\sin(x) \\cdot \\cos(y) + z^{2}",
+    "mathml": "<mrow><mrow><mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>&cdot;</mo><mrow><mi>cos</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow></mrow><mo>+</mo><msup><mi>z</mi><mn>2</mn></msup></mrow>",
+    "unicode": "sin(x)·cos(y) + z²",
+  },
+  {
+    "ascii": "(a + b) / (c * d)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "+",
+        },
+        {
+          "args": [
+            "c",
+            "d",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a + b}{c \\cdot d}",
+    "mathml": "<mfrac><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mrow><mi>c</mi><mo>&cdot;</mo><mi>d</mi></mrow></mfrac>",
+    "unicode": "(a + b)/(c·d)",
+  },
+  {
+    "ascii": "O3 * NO",
+    "input": {
+      "args": [
+        "O3",
+        "NO",
+      ],
+      "op": "*",
+    },
+    "latex": "\\mathrm{O_3} \\cdot \\mathrm{NO}",
+    "mathml": "<mrow><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi></mrow>",
+    "unicode": "O₃·NO",
+  },
+  {
+    "ascii": "D(CH2O)/Dt + k_OH * CH2O * OH",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "CH2O",
+          ],
+          "op": "D",
+          "wrt": "t",
+        },
+        {
+          "args": [
+            "k_OH",
+            "CH2O",
+            "OH",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "\\frac{\\partial \\mathrm{CH_2O}}{\\partial t} + k_{\\mathrm{OH}} \\cdot \\mathrm{CH_2O} \\cdot \\mathrm{OH}",
+    "mathml": "<mrow><mfrac><mrow><mo>&part;</mo><mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mrow><mi>k</mi><msub><mi></mi><mrow><mi>O</mi><mi>H</mi></mrow></msub><mo>&cdot;</mo><mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><mo>&cdot;</mo><mi>O</mi><mi>H</mi></mrow></mrow>",
+    "unicode": "∂CH₂O/∂t + k_OH·CH₂O·OH",
+  },
+  {
+    "ascii": "grad(phi) + laplacian(psi)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "phi",
+          ],
+          "dim": "x",
+          "op": "grad",
+        },
+        {
+          "args": [
+            "psi",
+          ],
+          "op": "laplacian",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "\\mathrm{grad}(\\phi) + \\mathrm{laplacian}(\\psi)",
+    "mathml": "<mrow><mrow><mi>grad</mi><mo>(</mo><mi>phi</mi><mo>)</mo></mrow><mo>+</mo><mrow><mi>laplacian</mi><mo>(</mo><mi>psi</mi><mo>)</mo></mrow></mrow>",
+    "unicode": "grad(φ) + laplacian(ψ)",
+  },
+  {
+    "ascii": "div(u * tracer)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "u",
+            "tracer",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "div",
+    },
+    "latex": "\\mathrm{div}(u \\cdot \\mathrm{tracer})",
+    "mathml": "<mrow><mi>div</mi><mo>(</mo><mrow><mi>u</mi><mo>&cdot;</mo><mi>tracer</mi></mrow><mo>)</mo></mrow>",
+    "unicode": "div(u·tracer)",
+  },
+  {
+    "ascii": "x > 0 and x < 10",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+            0,
+          ],
+          "op": ">",
+        },
+        {
+          "args": [
+            "x",
+            10,
+          ],
+          "op": "<",
+        },
+      ],
+      "op": "and",
+    },
+    "latex": "x > 0 \\land x < 10",
+    "mathml": "<mrow><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>&and;</mo><mrow><mi>x</mi><mo>&lt;</mo><mn>10</mn></mrow></mrow>",
+    "unicode": "x > 0 ∧ x < 10",
+  },
+  {
+    "ascii": "t <= 0 or t >= 8.64e+4",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "t",
+            0,
+          ],
+          "op": "<=",
+        },
+        {
+          "args": [
+            "t",
+            86400,
+          ],
+          "op": ">=",
+        },
+      ],
+      "op": "or",
+    },
+    "latex": "t \\leq 0 \\lor t \\geq 8.64 \\times 10^{4}",
+    "mathml": "<mrow><mrow><mi>t</mi><mo>&leq;</mo><mn>0</mn></mrow><mo>&or;</mo><mrow><mi>t</mi><mo>&geq;</mo><mn>8.64e+4</mn></mrow></mrow>",
+    "unicode": "t ≤ 0 ∨ t ≥ 8.64×10⁴",
+  },
+  {
+    "ascii": "Pre(velocity)",
+    "input": {
+      "args": [
+        "velocity",
+      ],
+      "op": "Pre",
+    },
+    "latex": "\\mathrm{Pre}(\\mathrm{velocity})",
+    "mathml": "<mrow><mi>Pre</mi><mo>(</mo><mi>velocity</mi><mo>)</mo></mrow>",
+    "unicode": "Pre(velocity)",
+  },
+  {
+    "ascii": "Pre(x) + 1",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "x",
+          ],
+          "op": "Pre",
+        },
+        1,
+      ],
+      "op": "+",
+    },
+    "latex": "\\mathrm{Pre}(x) + 1",
+    "mathml": "<mrow><mrow><mi>Pre</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>+</mo><mn>1</mn></mrow>",
+    "unicode": "Pre(x) + 1",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders structural_ops.json identically 1`] = `
+[
+  {
+    "ascii": "5",
+    "input": {
+      "args": [],
+      "op": "const",
+      "value": 5,
+    },
+    "latex": "5",
+    "mathml": "<mn>5</mn>",
+    "unicode": "5",
+  },
+  {
+    "ascii": "2.5",
+    "input": {
+      "args": [],
+      "op": "const",
+      "value": 2.5,
+    },
+    "latex": "2.5",
+    "mathml": "<mn>2.5</mn>",
+    "unicode": "2.5",
+  },
+  {
+    "ascii": "[1, 2, 3]",
+    "input": {
+      "args": [],
+      "op": "const",
+      "value": [
+        1,
+        2,
+        3,
+      ],
+    },
+    "latex": "[1, 2, 3]",
+    "mathml": "<mtext>[1, 2, 3]</mtext>",
+    "unicode": "[1, 2, 3]",
+  },
+  {
+    "ascii": "true",
+    "input": {
+      "args": [],
+      "op": "true",
+    },
+    "latex": "true",
+    "mathml": "<mi>true</mi>",
+    "unicode": "true",
+  },
+  {
+    "ascii": "datetime.year(t)",
+    "input": {
+      "args": [
+        "t",
+      ],
+      "name": "datetime.year",
+      "op": "fn",
+    },
+    "latex": "\\mathrm{datetime.year}(t)",
+    "mathml": "<mtext>datetime.year(t)</mtext>",
+    "unicode": "datetime.year(t)",
+  },
+  {
+    "ascii": "datetime.day_of_year(t)",
+    "input": {
+      "args": [
+        "t",
+      ],
+      "name": "datetime.day_of_year",
+      "op": "fn",
+    },
+    "latex": "\\mathrm{datetime.day\\_of\\_year}(t)",
+    "mathml": "<mtext>datetime.day_of_year(t)</mtext>",
+    "unicode": "datetime.day_of_year(t)",
+  },
+  {
+    "ascii": "Season.summer",
+    "input": {
+      "args": [
+        "Season",
+        "summer",
+      ],
+      "op": "enum",
+    },
+    "latex": "\\mathrm{Season.summer}",
+    "mathml": "<mtext>Season.summer</mtext>",
+    "unicode": "Season.summer",
+  },
+  {
+    "ascii": "A[i, j]",
+    "input": {
+      "args": [
+        "A",
+        "i",
+        "j",
+      ],
+      "op": "index",
+    },
+    "latex": "A[i, j]",
+    "mathml": "<mtext>A[i, j]</mtext>",
+    "unicode": "A[i, j]",
+  },
+  {
+    "ascii": "(A + B)[i]",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "A",
+            "B",
+          ],
+          "op": "+",
+        },
+        "i",
+      ],
+      "op": "index",
+    },
+    "latex": "(A + B)[i]",
+    "mathml": "<mtext>(A + B)[i]</mtext>",
+    "unicode": "(A + B)[i]",
+  },
+  {
+    "ascii": "A + B",
+    "input": {
+      "args": [
+        "A",
+        "B",
+      ],
+      "fn": "+",
+      "op": "broadcast",
+    },
+    "latex": "A + B",
+    "mathml": "<mrow><mi>A</mi><mo>+</mo><mi>B</mi></mrow>",
+    "unicode": "A + B",
+  },
+  {
+    "ascii": "exp(A)",
+    "input": {
+      "args": [
+        "A",
+      ],
+      "fn": "exp",
+      "op": "broadcast",
+    },
+    "latex": "\\exp(A)",
+    "mathml": "<mrow><mi>exp</mi><mo>(</mo><mi>A</mi><mo>)</mo></mrow>",
+    "unicode": "exp(A)",
+  },
+  {
+    "ascii": "integral(f, x, 0, 1)",
+    "input": {
+      "args": [
+        "f",
+      ],
+      "lower": 0,
+      "op": "integral",
+      "upper": 1,
+      "var": "x",
+    },
+    "latex": "\\int_{0}^{1} f \\, dx",
+    "mathml": "<mtext>∫[0, 1] f dx</mtext>",
+    "unicode": "∫[0, 1] f dx",
+  },
+  {
+    "ascii": "visc[T=temp]",
+    "input": {
+      "args": [],
+      "axes": {
+        "T": "temp",
+      },
+      "op": "table_lookup",
+      "table": "visc",
+    },
+    "latex": "\\mathrm{visc}[T = \\mathrm{temp}]",
+    "mathml": "<mtext>visc[T=temp]</mtext>",
+    "unicode": "visc[T=temp]",
+  },
+  {
+    "ascii": "k_rate[T=temp, p=pres]:1",
+    "input": {
+      "args": [],
+      "axes": {
+        "T": "temp",
+        "p": "pres",
+      },
+      "op": "table_lookup",
+      "output": 1,
+      "table": "k_rate",
+    },
+    "latex": "\\mathrm{k\\_rate}[T = \\mathrm{temp}, p = \\mathrm{pres}]:1",
+    "mathml": "<mtext>k_rate[T=temp, p=pres]:1</mtext>",
+    "unicode": "k_rate[T=temp, p=pres]:1",
+  },
+  {
+    "ascii": "central_diff<f=u, h=dx>",
+    "input": {
+      "args": [],
+      "bindings": {
+        "f": "u",
+        "h": "dx",
+      },
+      "name": "central_diff",
+      "op": "apply_expression_template",
+    },
+    "latex": "\\mathrm{central\\_diff}\\langle f = u, h = \\mathrm{dx} \\rangle",
+    "mathml": "<mtext>central_diff⟨f=u, h=dx⟩</mtext>",
+    "unicode": "central_diff⟨f=u, h=dx⟩",
+  },
+  {
+    "ascii": "makearray([1:3] = 0, [4:6] = q)",
+    "input": {
+      "args": [],
+      "op": "makearray",
+      "regions": [
+        [
+          [
+            1,
+            3,
+          ],
+        ],
+        [
+          [
+            4,
+            6,
+          ],
+        ],
+      ],
+      "values": [
+        {
+          "args": [],
+          "op": "const",
+          "value": 0,
+        },
+        "q",
+      ],
+    },
+    "latex": "\\mathrm{makearray}([1:3] = 0, [4:6] = q)",
+    "mathml": "<mtext>makearray([1:3] = 0, [4:6] = q)</mtext>",
+    "unicode": "makearray([1:3] = 0, [4:6] = q)",
+  },
+  {
+    "ascii": "makearray([1:3, 1:2] = z)",
+    "input": {
+      "args": [],
+      "op": "makearray",
+      "regions": [
+        [
+          [
+            1,
+            3,
+          ],
+          [
+            1,
+            2,
+          ],
+        ],
+      ],
+      "values": [
+        "z",
+      ],
+    },
+    "latex": "\\mathrm{makearray}([1:3, 1:2] = z)",
+    "mathml": "<mtext>makearray([1:3, 1:2] = z)</mtext>",
+    "unicode": "makearray([1:3, 1:2] = z)",
+  },
+  {
+    "ascii": "reshape(A, [2, 3])",
+    "input": {
+      "args": [
+        "A",
+      ],
+      "op": "reshape",
+      "shape": [
+        2,
+        3,
+      ],
+    },
+    "latex": "\\mathrm{reshape}(A, [2, 3])",
+    "mathml": "<mtext>reshape(A, [2, 3])</mtext>",
+    "unicode": "reshape(A, [2, 3])",
+  },
+  {
+    "ascii": "transpose(A)",
+    "input": {
+      "args": [
+        "A",
+      ],
+      "op": "transpose",
+    },
+    "latex": "A^{T}",
+    "mathml": "<mtext>Aᵀ</mtext>",
+    "unicode": "Aᵀ",
+  },
+  {
+    "ascii": "transpose(A, [1, 0])",
+    "input": {
+      "args": [
+        "A",
+      ],
+      "op": "transpose",
+      "perm": [
+        1,
+        0,
+      ],
+    },
+    "latex": "\\mathrm{transpose}(A, [1, 0])",
+    "mathml": "<mtext>transpose(A, [1, 0])</mtext>",
+    "unicode": "transpose(A, [1, 0])",
+  },
+  {
+    "ascii": "concat(A, B, axis=0)",
+    "input": {
+      "args": [
+        "A",
+        "B",
+      ],
+      "axis": 0,
+      "op": "concat",
+    },
+    "latex": "\\mathrm{concat}(A, B, axis=0)",
+    "mathml": "<mtext>concat(A, B, axis=0)</mtext>",
+    "unicode": "concat(A, B, axis=0)",
+  },
+  {
+    "ascii": "intersect_polygon(P, Q, manifold=spherical)",
+    "input": {
+      "args": [
+        "P",
+        "Q",
+      ],
+      "manifold": "spherical",
+      "op": "intersect_polygon",
+    },
+    "latex": "\\mathrm{intersect\\_polygon}(P, Q, manifold=spherical)",
+    "mathml": "<mtext>intersect_polygon(P, Q, manifold=spherical)</mtext>",
+    "unicode": "intersect_polygon(P, Q, manifold=spherical)",
+  },
+  {
+    "ascii": "polygon_intersection_area(P, Q, manifold=planar)",
+    "input": {
+      "args": [
+        "P",
+        "Q",
+      ],
+      "manifold": "planar",
+      "op": "polygon_intersection_area",
+    },
+    "latex": "\\mathrm{polygon\\_intersection\\_area}(P, Q, manifold=planar)",
+    "mathml": "<mtext>polygon_intersection_area(P, Q, manifold=planar)</mtext>",
+    "unicode": "polygon_intersection_area(P, Q, manifold=planar)",
+  },
+  {
+    "ascii": "sum[i] (A * B)",
+    "input": {
+      "args": [
+        "A",
+        "B",
+      ],
+      "expr": {
+        "args": [
+          "A",
+          "B",
+        ],
+        "op": "*",
+      },
+      "op": "aggregate",
+      "output_idx": [
+        "i",
+      ],
+      "reduce": "+",
+    },
+    "latex": "\\sum_{i} (A \\cdot B)",
+    "mathml": "<mtext>Σ[i] (A·B)</mtext>",
+    "unicode": "Σ[i] (A·B)",
+  },
+  {
+    "ascii": "prod[i, j] (A)",
+    "input": {
+      "args": [
+        "A",
+      ],
+      "expr": "A",
+      "op": "aggregate",
+      "output_idx": [
+        "i",
+        "j",
+      ],
+      "reduce": "*",
+    },
+    "latex": "\\prod_{i, j} (A)",
+    "mathml": "<mtext>Π[i, j] (A)</mtext>",
+    "unicode": "Π[i, j] (A)",
+  },
+  {
+    "ascii": "sum[i] (A * B) where {j in 1:10}",
+    "input": {
+      "args": [],
+      "expr": {
+        "args": [
+          "A",
+          "B",
+        ],
+        "op": "*",
+      },
+      "op": "aggregate",
+      "output_idx": [
+        "i",
+      ],
+      "ranges": {
+        "j": [
+          1,
+          10,
+        ],
+      },
+      "reduce": "+",
+    },
+    "latex": "\\sum_{i} (A \\cdot B) \\text{ where } \\{j \\in 1:10\\}",
+    "mathml": "<mtext>Σ[i] (A·B) where {j∈1:10}</mtext>",
+    "unicode": "Σ[i] (A·B) where {j∈1:10}",
+  },
+  {
+    "ascii": "min[i] (d) [semiring=min_sum]",
+    "input": {
+      "args": [],
+      "expr": "d",
+      "op": "aggregate",
+      "output_idx": [
+        "i",
+      ],
+      "semiring": "min_sum",
+    },
+    "latex": "\\min_{i} (d) [semiring=min_sum]",
+    "mathml": "<mtext>min[i] (d) [semiring=min_sum]</mtext>",
+    "unicode": "min[i] (d) [semiring=min_sum]",
+  },
+  {
+    "ascii": "argmin[g] (abs(d)) where {g in 1:10}",
+    "input": {
+      "arg": "g",
+      "args": [],
+      "expr": {
+        "args": [
+          "d",
+        ],
+        "op": "abs",
+      },
+      "op": "argmin",
+      "ranges": {
+        "g": [
+          1,
+          10,
+        ],
+      },
+    },
+    "latex": "\\mathrm{argmin}_{g} (|d|) \\text{ where } \\{g \\in 1:10\\}",
+    "mathml": "<mtext>argmin[g] (|d|) where {g∈1:10}</mtext>",
+    "unicode": "argmin[g] (|d|) where {g∈1:10}",
+  },
+  {
+    "ascii": "grad(phi)",
+    "input": {
+      "args": [
+        "phi",
+      ],
+      "dim": "x",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(\\phi)",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mi>phi</mi><mo>)</mo></mrow>",
+    "unicode": "grad(φ)",
+  },
+  {
+    "ascii": "div(v)",
+    "input": {
+      "args": [
+        "v",
+      ],
+      "op": "div",
+    },
+    "latex": "\\mathrm{div}(v)",
+    "mathml": "<mrow><mi>div</mi><mo>(</mo><mi>v</mi><mo>)</mo></mrow>",
+    "unicode": "div(v)",
+  },
+  {
+    "ascii": "laplacian(u)",
+    "input": {
+      "args": [
+        "u",
+      ],
+      "op": "laplacian",
+    },
+    "latex": "\\mathrm{laplacian}(u)",
+    "mathml": "<mrow><mi>laplacian</mi><mo>(</mo><mi>u</mi><mo>)</mo></mrow>",
+    "unicode": "laplacian(u)",
+  },
+  {
+    "ascii": "grad(f * g)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "f",
+            "g",
+          ],
+          "op": "*",
+        },
+      ],
+      "dim": "x",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(f \\cdot g)",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mrow><mi>f</mi><mo>&cdot;</mo><mi>g</mi></mrow><mo>)</mo></mrow>",
+    "unicode": "grad(f·g)",
+  },
+  {
+    "ascii": "godunov_hamiltonian(u, v)",
+    "input": {
+      "args": [
+        "u",
+        "v",
+      ],
+      "op": "godunov_hamiltonian",
+    },
+    "latex": "\\mathrm{godunov\\_hamiltonian}(u, v)",
+    "mathml": "<mrow><mi>godunov_hamiltonian</mi><mo>(</mo><mi>u</mi><mo>,</mo><mi>v</mi><mo>)</mo></mrow>",
+    "unicode": "godunov_hamiltonian(u, v)",
+  },
+  {
+    "ascii": "skolem(edge, u, v)",
+    "input": {
+      "args": [
+        "edge",
+        "u",
+        "v",
+      ],
+      "op": "skolem",
+    },
+    "latex": "\\mathrm{skolem}(\\mathrm{edge}, u, v)",
+    "mathml": "<mrow><mi>skolem</mi><mo>(</mo><mi>edge</mi><mo>,</mo><mi>u</mi><mo>,</mo><mi>v</mi><mo>)</mo></mrow>",
+    "unicode": "skolem(edge, u, v)",
+  },
+  {
+    "ascii": "rank(S)",
+    "input": {
+      "args": [
+        "S",
+      ],
+      "op": "rank",
+    },
+    "latex": "\\mathrm{rank}(S)",
+    "mathml": "<mrow><mi>rank</mi><mo>(</mo><mi>S</mi><mo>)</mo></mrow>",
+    "unicode": "rank(S)",
+  },
+]
+`;
+
+exports[`Rendering output lock (all display fixtures) > renders unicode_format.json identically 1`] = `
+[
+  {
+    "ascii": "D(O3)/Dt",
+    "input": {
+      "args": [
+        "O3",
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂O₃/∂t",
+  },
+  {
+    "ascii": "D(concentration)/Dt",
+    "input": {
+      "args": [
+        "concentration",
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial \\mathrm{concentration}}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>concentration</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂concentration/∂t",
+  },
+  {
+    "ascii": "grad(T)",
+    "input": {
+      "args": [
+        "T",
+      ],
+      "dim": "x",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(T)",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow>",
+    "unicode": "grad(T)",
+  },
+  {
+    "ascii": "grad(pressure)",
+    "input": {
+      "args": [
+        "pressure",
+      ],
+      "dim": "y",
+      "op": "grad",
+    },
+    "latex": "\\mathrm{grad}(\\mathrm{pressure})",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mi>pressure</mi><mo>)</mo></mrow>",
+    "unicode": "grad(pressure)",
+  },
+  {
+    "ascii": "a * b",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot b",
+    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "unicode": "a·b",
+  },
+  {
+    "ascii": "k * O3 * NO",
+    "input": {
+      "args": [
+        "k",
+        "O3",
+        "NO",
+      ],
+      "op": "*",
+    },
+    "latex": "k \\cdot \\mathrm{O_3} \\cdot \\mathrm{NO}",
+    "mathml": "<mrow><mi>k</mi><mo>&cdot;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi></mrow>",
+    "unicode": "k·O₃·NO",
+  },
+  {
+    "ascii": "-a",
+    "input": {
+      "args": [
+        "a",
+      ],
+      "op": "-",
+    },
+    "latex": "-a",
+    "mathml": "<mrow><mo>-</mo><mi>a</mi></mrow>",
+    "unicode": "−a",
+  },
+  {
+    "ascii": "a - b",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a - b",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mrow><mo>-</mo><mi>b</mi></mrow></mrow>",
+    "unicode": "a − b",
+  },
+  {
+    "ascii": "Pre(x)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "Pre",
+    },
+    "latex": "\\mathrm{Pre}(x)",
+    "mathml": "<mrow><mi>Pre</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
+    "unicode": "Pre(x)",
+  },
+  {
+    "ascii": "div(velocity_field)",
+    "input": {
+      "args": [
+        "velocity_field",
+      ],
+      "op": "div",
+    },
+    "latex": "\\mathrm{div}(\\mathrm{velocity\\_field})",
+    "mathml": "<mrow><mi>div</mi><mo>(</mo><mi>velocity_field</mi><mo>)</mo></mrow>",
+    "unicode": "div(velocity_field)",
+  },
+  {
+    "ascii": "laplacian(T)",
+    "input": {
+      "args": [
+        "T",
+      ],
+      "op": "laplacian",
+    },
+    "latex": "\\mathrm{laplacian}(T)",
+    "mathml": "<mrow><mi>laplacian</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow>",
+    "unicode": "laplacian(T)",
+  },
+  {
+    "ascii": "O3",
+    "input": "O3",
+    "latex": "\\mathrm{O_3}",
+    "mathml": "<mi>O</mi><msub><mi></mi><mn>3</mn></msub>",
+    "unicode": "O₃",
+  },
+  {
+    "ascii": "NO2",
+    "input": "NO2",
+    "latex": "\\mathrm{NO_2}",
+    "mathml": "<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "NO₂",
+  },
+  {
+    "ascii": "CH2O",
+    "input": "CH2O",
+    "latex": "\\mathrm{CH_2O}",
+    "mathml": "<mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi>",
+    "unicode": "CH₂O",
+  },
+  {
+    "ascii": "H2O2",
+    "input": "H2O2",
+    "latex": "\\mathrm{H_2O_2}",
+    "mathml": "<mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><msub><mi></mi><mn>2</mn></msub>",
+    "unicode": "H₂O₂",
+  },
+  {
+    "ascii": "x^2",
+    "input": {
+      "args": [
+        "x",
+        2,
+      ],
+      "op": "^",
+    },
+    "latex": "x^{2}",
+    "mathml": "<msup><mi>x</mi><mn>2</mn></msup>",
+    "unicode": "x²",
+  },
+  {
+    "ascii": "x^3",
+    "input": {
+      "args": [
+        "x",
+        3,
+      ],
+      "op": "^",
+    },
+    "latex": "x^{3}",
+    "mathml": "<msup><mi>x</mi><mn>3</mn></msup>",
+    "unicode": "x³",
+  },
+  {
+    "ascii": "x^n",
+    "input": {
+      "args": [
+        "x",
+        "n",
+      ],
+      "op": "^",
+    },
+    "latex": "x^{n}",
+    "mathml": "<msup><mi>x</mi><mi>n</mi></msup>",
+    "unicode": "x^n",
+  },
+  {
+    "ascii": "a * b + c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "*",
+        },
+        "c",
+      ],
+      "op": "+",
+    },
+    "latex": "a \\cdot b + c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "unicode": "a·b + c",
+  },
+  {
+    "ascii": "a * (b + c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot (b + c)",
+    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a·(b + c)",
+  },
+  {
+    "ascii": "D(O₃)/Dt == (-k_NO_O3) * O₃ * NO * M + jNO2 * NO₂",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "O₃",
+          ],
+          "op": "D",
+          "wrt": "t",
+        },
+        {
+          "args": [
+            {
+              "args": [
+                {
+                  "args": [
+                    "k_NO_O3",
+                  ],
+                  "op": "-",
+                },
+                "O₃",
+                "NO",
+                "M",
+              ],
+              "op": "*",
+            },
+            {
+              "args": [
+                "jNO2",
+                "NO₂",
+              ],
+              "op": "*",
+            },
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "=",
+    },
+    "latex": "\\frac{\\partial \\mathrm{O₃}}{\\partial t} = (-k_{\\mathrm{NO_O_3}}) \\cdot \\mathrm{O₃} \\cdot \\mathrm{NO} \\cdot M + j_{\\mathrm{NO_2}} \\cdot \\mathrm{NO₂}",
+    "mathml": "<mrow><mi>=</mi><mo>(</mo><mfrac><mrow><mo>&part;</mo><mi>O</mi>₃</mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>,</mo><mrow><mrow><mrow><mo>-</mo><mi>k</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow></msub></mrow><mo>&cdot;</mo><mi>O</mi>₃<mo>&cdot;</mo><mi>N</mi><mi>O</mi><mo>&cdot;</mo><mi>M</mi></mrow><mo>+</mo><mrow><mi>j</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub></mrow></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi>₂</mrow></mrow><mo>)</mo></mrow>",
+    "unicode": "∂O₃/∂t = (−k_NO_O₃)·O₃·NO·M + jNO₂·NO₂",
+  },
+]
+`;

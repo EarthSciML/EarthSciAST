@@ -20,7 +20,9 @@ import type {
   Expr,
 } from './types.js'
 import { substituteInModel } from './substitute.js'
-import { isNumericLiteral, numericValue } from './numeric-literal.js'
+import { isNumericLiteral } from './numeric-literal.js'
+import { deepEqualExpr, forEachChild, isExprNode } from './expression.js'
+import { forEachEquation, forEachModelVariable, isReferenceStub } from './traverse.js'
 
 /**
  * Error thrown when attempting to remove a variable that is still referenced
@@ -82,59 +84,36 @@ export function removeVariable(model: Model, name: string): Model {
     throw new EntityNotFoundError('Variable', name)
   }
 
-  // Check for references in equations
-  const references: string[] = []
+  // A Set collapses the same site reported from more than one position (e.g.
+  // an equation matching in both `lhs` and `rhs`) into a single reference, and
+  // preserves discovery order.
+  const references = new Set<string>()
 
-  if (model.equations) {
-    for (let i = 0; i < model.equations.length; i++) {
-      const equation = model.equations[i]
-      if (referencesVariable(equation.lhs, name) || referencesVariable(equation.rhs, name)) {
-        references.push(`equation ${i}`)
-      }
+  // Scan every EXPRESSION read-site — the same set `substituteInModel` rewrites
+  // (equations, observed-variable expressions, event conditions/triggers/affect
+  // RHSs, recursing into inline subsystems) — via the shared enumerator, so
+  // removal safety and renaming can never again disagree on where a variable
+  // can appear.
+  forEachModelExpressionSite(model, (expr, site) => {
+    if (referencesVariable(expr, name)) references.add(site)
+  })
+
+  // Event affect TARGETS are variable NAMES (`string`), not expression
+  // read-sites: a variable written by an event is still in use, so it is
+  // checked here rather than in the Expression-typed enumerator above.
+  for (const [i, event] of (model.continuous_events ?? []).entries()) {
+    for (const [j, affect] of (event.affects ?? []).entries()) {
+      if (affect.lhs === name) references.add(`continuous_event ${i} affect ${j}`)
+    }
+  }
+  for (const [i, event] of (model.discrete_events ?? []).entries()) {
+    for (const [j, affect] of (event.affects ?? []).entries()) {
+      if (affect.lhs === name) references.add(`discrete_event ${i} affect ${j}`)
     }
   }
 
-  // Check for references in events
-  if (model.continuous_events) {
-    for (let i = 0; i < model.continuous_events.length; i++) {
-      const event = model.continuous_events[i]
-      for (const condition of event.conditions || []) {
-        if (referencesVariable(condition, name)) {
-          references.push(`continuous_event ${i} condition`)
-          break
-        }
-      }
-      if (event.affects) {
-        for (let j = 0; j < event.affects.length; j++) {
-          if (event.affects[j].lhs === name || referencesVariable(event.affects[j].rhs, name)) {
-            references.push(`continuous_event ${i} affect ${j}`)
-          }
-        }
-      }
-    }
-  }
-
-  if (model.discrete_events) {
-    for (let i = 0; i < model.discrete_events.length; i++) {
-      const event = model.discrete_events[i]
-      if (
-        event.trigger?.type === 'condition' &&
-        referencesVariable(event.trigger.expression, name)
-      ) {
-        references.push(`discrete_event ${i} trigger`)
-      }
-      if (event.affects) {
-        for (let j = 0; j < event.affects.length; j++) {
-          if (event.affects[j].lhs === name || referencesVariable(event.affects[j].rhs, name)) {
-            references.push(`discrete_event ${i} affect ${j}`)
-          }
-        }
-      }
-    }
-  }
-
-  if (references.length > 0) {
-    throw new VariableInUseError(name, references)
+  if (references.size > 0) {
+    throw new VariableInUseError(name, [...references])
   }
 
   const { [name]: _removed, ...remainingVariables } = model.variables
@@ -145,7 +124,13 @@ export function removeVariable(model: Model, name: string): Model {
 }
 
 /**
- * Rename a variable throughout a model
+ * Rename a variable throughout a model.
+ *
+ * The rewrite covers exactly the expression sites `removeVariable` scans (via
+ * `substituteInModel` — equations, observed-variable expressions, event
+ * conditions/triggers/affect RHSs, and inline subsystems), so a rename never
+ * leaves a dangling reference in a site the removal guard would have flagged.
+ *
  * @param model Model to rename variable in
  * @param oldName Current variable name
  * @param newName New variable name
@@ -212,8 +197,10 @@ export function removeEquation(model: Model, indexOrLhs: number | Expr): Model {
       throw new EntityNotFoundError('Equation', `index ${indexToRemove}`)
     }
   } else {
-    // Find equation by LHS
-    indexToRemove = equations.findIndex((eq) => expressionsEqual(eq.lhs, indexOrLhs))
+    // Find equation by LHS using field-aware structural equality, so e.g. two
+    // `const` nodes with different `value`s (or derivatives differing only in
+    // `wrt`) are NOT treated as the same equation.
+    indexToRemove = equations.findIndex((eq) => deepEqualExpr(eq.lhs, indexOrLhs))
     if (indexToRemove === -1) {
       throw new EntityNotFoundError('Equation', `with LHS ${JSON.stringify(indexOrLhs)}`)
     }
@@ -227,7 +214,16 @@ export function removeEquation(model: Model, indexOrLhs: number | Expr): Model {
 }
 
 /**
- * Apply substitutions to all equations in a model
+ * Apply substitutions across a model.
+ *
+ * NOTE: despite the historical name, this does NOT touch only equations — it is
+ * a thin alias for {@link substituteInModel} and therefore also rewrites
+ * observed-variable expressions, event expression positions, and inline
+ * subsystems. See `substituteInModel` for the full list of rewritten sites.
+ *
+ * @deprecated The name understates its blast radius; call `substituteInModel`
+ *   (exported from `substitute.js`) directly. Retained as a public back-compat
+ *   export (re-exported via `index.ts` and `analysis/index.ts`).
  * @param model Model to apply substitutions to
  * @param bindings Variable name to expression mappings
  * @returns New model with substitutions applied
@@ -261,14 +257,17 @@ export function addReaction(system: ReactionSystem, reaction: Reaction): Reactio
  * @throws EntityNotFoundError if reaction not found
  */
 export function removeReaction(system: ReactionSystem, id: string): ReactionSystem {
-  const reactionIndex = system.reactions.findIndex((r) => r.id === id)
-  if (reactionIndex === -1) {
+  if (!system.reactions.some((r) => r.id === id)) {
     throw new EntityNotFoundError('Reaction', id)
   }
 
   const newReactions = system.reactions.filter((r) => r.id !== id)
   if (newReactions.length === 0) {
-    throw new Error('Cannot remove the last reaction from a reaction system')
+    // A reaction system must retain at least one reaction (the `reactions`
+    // tuple is non-empty by schema); the sole remaining reaction is therefore
+    // still required. Reuse the file's typed "still in use" error rather than a
+    // bare `Error` amid the module's typed-error convention.
+    throw new VariableInUseError(id, ['reaction system must retain at least one reaction'])
   }
 
   return {
@@ -381,39 +380,36 @@ export function addDiscreteEvent(model: Model, event: DiscreteEvent): Model {
 }
 
 /**
- * Remove an event from a model by name
- * @param model Model to remove event from
+ * Remove events from a model by name.
+ *
+ * Remove-ALL semantics: EVERY event whose `name` matches is removed, not just
+ * the first. Containers are tried in order — if any continuous event matches,
+ * only continuous events are filtered; otherwise discrete events are filtered
+ * (a name present in both containers is removed only from `continuous_events`).
+ * The emptied array is kept as `[]` rather than dropped (pinned by
+ * `edit.test.ts`).
+ *
+ * @param model Model to remove event(s) from
  * @param name Event name to remove
- * @returns New model with event removed
- * @throws EntityNotFoundError if event not found
+ * @returns New model with matching event(s) removed
+ * @throws EntityNotFoundError if no event with that name exists
  */
 export function removeEvent(model: Model, name: string): Model {
-  let found = false
-  const updatedModel = { ...model }
-
-  // Try to remove from continuous events
-  if (model.continuous_events) {
-    const index = model.continuous_events.findIndex((e) => e.name === name)
-    if (index !== -1) {
-      updatedModel.continuous_events = model.continuous_events.filter((e) => e.name !== name)
-      found = true
+  if (model.continuous_events?.some((e) => e.name === name)) {
+    return {
+      ...model,
+      continuous_events: model.continuous_events.filter((e) => e.name !== name),
     }
   }
 
-  // Try to remove from discrete events
-  if (model.discrete_events && !found) {
-    const index = model.discrete_events.findIndex((e) => e.name === name)
-    if (index !== -1) {
-      updatedModel.discrete_events = model.discrete_events.filter((e) => e.name !== name)
-      found = true
+  if (model.discrete_events?.some((e) => e.name === name)) {
+    return {
+      ...model,
+      discrete_events: model.discrete_events.filter((e) => e.name !== name),
     }
   }
 
-  if (!found) {
-    throw new EntityNotFoundError('Event', name)
-  }
-
-  return updatedModel
+  throw new EntityNotFoundError('Event', name)
 }
 
 // =============================================================================
@@ -448,6 +444,11 @@ export function removeCoupling(file: EsmFile, index: number): EsmFile {
     throw new EntityNotFoundError('Coupling', `index ${index}`)
   }
 
+  // NOTE: empty-collection convention is deliberately drop-to-`undefined` here
+  // (pinned by `edit.test.ts` — `coupling` is optional at the file root), which
+  // differs from `removeEvent`/`removeEquation` that keep an emptied `[]` (also
+  // test-pinned). The two shapes cannot be unified without breaking a pinned
+  // test, so each op keeps its established, tested convention.
   const newCoupling = coupling.filter((_, i) => i !== index)
   return {
     ...file,
@@ -572,7 +573,79 @@ export { deriveODEs } from './reactions.js'
 // =============================================================================
 
 /**
- * Check if an expression references a specific variable
+ * Enumerate every EXPRESSION read-site in a model, in a single documented
+ * order, and report each to `visit(expr, site)` with a human-readable location
+ * label (used verbatim in `VariableInUseError` reference lists).
+ *
+ * This is the shared, read-side definition of "a model's expression sites"; it
+ * MUST stay in lockstep with the write-side set rewritten by
+ * `substituteInModel` (substitute.ts) so `removeVariable` (which scans these
+ * sites) and `renameVariable` (which rewrites them) can never disagree on where
+ * a variable may appear. Component/equation/variable walking is delegated to
+ * `traverse.js`; each yielded value is an `Expression`-typed child that the
+ * caller walks with the expression utilities.
+ *
+ * Sites, in order: equation `lhs`/`rhs`; observed-variable `expression`;
+ * continuous-event `conditions[]`, `affects[].rhs`, `affect_neg[].rhs`;
+ * discrete-event condition-`trigger.expression`, `affects[].rhs`; then, recursed
+ * with a dotted `prefix`, every inline-model subsystem (reference stubs and
+ * data loaders are opaque leaves, skipped). Affect `lhs` targets are `string`
+ * names, not expression sites, and are handled by the caller.
+ */
+function forEachModelExpressionSite(
+  model: Model,
+  visit: (expr: Expr, site: string) => void,
+  prefix = '',
+): void {
+  forEachEquation(model, (equation, i) => {
+    visit(equation.lhs, `${prefix}equation ${i}`)
+    visit(equation.rhs, `${prefix}equation ${i}`)
+  })
+
+  forEachModelVariable(model, (variable, name) => {
+    if (variable.expression !== undefined) {
+      visit(variable.expression, `${prefix}variable ${name} expression`)
+    }
+  })
+
+  for (const [i, event] of (model.continuous_events ?? []).entries()) {
+    for (const condition of event.conditions ?? []) {
+      visit(condition, `${prefix}continuous_event ${i} condition`)
+    }
+    for (const [j, affect] of (event.affects ?? []).entries()) {
+      visit(affect.rhs as Expr, `${prefix}continuous_event ${i} affect ${j}`)
+    }
+    if (Array.isArray(event.affect_neg)) {
+      for (const [j, affect] of event.affect_neg.entries()) {
+        visit(affect.rhs as Expr, `${prefix}continuous_event ${i} affect_neg ${j}`)
+      }
+    }
+  }
+
+  for (const [i, event] of (model.discrete_events ?? []).entries()) {
+    if (event.trigger?.type === 'condition') {
+      visit(event.trigger.expression, `${prefix}discrete_event ${i} trigger`)
+    }
+    for (const [j, affect] of (event.affects ?? []).entries()) {
+      visit(affect.rhs as Expr, `${prefix}discrete_event ${i} affect ${j}`)
+    }
+  }
+
+  for (const [name, subsystem] of Object.entries(model.subsystems ?? {})) {
+    if (!isReferenceStub(subsystem)) {
+      forEachModelExpressionSite(subsystem as Model, visit, `${prefix}${name}.`)
+    }
+  }
+}
+
+/**
+ * Check if an expression references a specific variable.
+ *
+ * Recursion is delegated to the shared `forEachChild` walker (expression.ts),
+ * so EVERY expression-bearing field is covered — aggregate `expr`/`filter`,
+ * integral bounds, `makearray` values, `table_lookup` axes, etc. — not just
+ * `args`.
+ *
  * @param expr Expression to check
  * @param variableName Variable name to look for
  * @returns True if the expression references the variable
@@ -589,49 +662,13 @@ function referencesVariable(expr: Expr, variableName: string): boolean {
     return false
   }
 
-  // ExpressionNode case
-  const node = expr as any
-  if (node.args && Array.isArray(node.args)) {
-    return node.args.some((arg: Expr) => referencesVariable(arg, variableName))
+  if (isExprNode(expr)) {
+    let found = false
+    forEachChild(expr, (child) => {
+      if (!found && referencesVariable(child, variableName)) found = true
+    })
+    return found
   }
 
   return false
-}
-
-/**
- * Check if two expressions are structurally equal
- * @param a First expression
- * @param b Second expression
- * @returns True if expressions are equal
- */
-function expressionsEqual(a: Expr, b: Expr): boolean {
-  if (typeof a === 'string' || typeof b === 'string') {
-    return typeof a === 'string' && typeof b === 'string' && a === b
-  }
-
-  // Numeric literals: compare by underlying value, treating plain numbers
-  // and tagged NumericLiteral leaves as equal when they share a value.
-  const na = numericValue(a)
-  const nb = numericValue(b)
-  if (na !== undefined || nb !== undefined) {
-    return na !== undefined && nb !== undefined && Object.is(na, nb)
-  }
-
-  // ExpressionNode case
-  const nodeA = a as any
-  const nodeB = b as any
-
-  if (nodeA.op !== nodeB.op) {
-    return false
-  }
-
-  if (!nodeA.args && !nodeB.args) {
-    return true
-  }
-
-  if (!nodeA.args || !nodeB.args || nodeA.args.length !== nodeB.args.length) {
-    return false
-  }
-
-  return nodeA.args.every((arg: Expr, i: number) => expressionsEqual(arg, nodeB.args[i]))
 }
