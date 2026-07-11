@@ -1,28 +1,19 @@
 """
 Code generation for the ESM format
 
-This module provides functions to generate self-contained scripts
-from ESM files in multiple target languages:
-- Julia: compatible with ModelingToolkit, Catalyst, EarthSciMLBase, and OrdinaryDiffEq
-- Python: compatible with SymPy, earthsci_ast, and SciPy
+This module generates a self-contained, *illustrative* Julia script from an
+ESM file (compatible with ModelingToolkit, Catalyst, EarthSciMLBase, and
+OrdinaryDiffEq).
 """
 
 """
     _generate_script(file::EsmFile; language, imports, model_emitter,
-                     reaction_system_emitter, coupling_lang,
-                     simulation_setup=nothing, emit_data_loaders=false)
+                     reaction_system_emitter, emit_data_loaders=false)
 
-Shared script driver behind [`to_julia_code`](@ref) and
-[`to_python_code`](@ref). Both emitters produce the same skeleton — header →
-imports → models → reaction systems → coupling → domain — so they route
-through this one function and pass their language-specific pieces explicitly;
-the skeletons cannot drift structurally. The two DELIBERATE asymmetries
-between the emitters are visible as parameters rather than divergent copies:
-
-- `simulation_setup`: extra lines emitted after the reaction systems — only
-  the Python emitter has a "Simulation setup" block.
-- `emit_data_loaders`: whether to emit data-loader placeholder comments —
-  only the Julia emitter does.
+Script driver behind [`to_julia_code`](@ref): header → imports → models →
+reaction systems → coupling → domain → data loaders. The language-specific
+pieces (imports, per-model / per-reaction-system emitters) are passed
+explicitly so the skeleton lives in one place.
 
 Note: events are handled within individual models, not at the file level.
 Coupling, domain, and data-loader sections are comment-only placeholders
@@ -33,8 +24,6 @@ function _generate_script(file::EsmFile;
                           imports::Vector{String},
                           model_emitter::Function,
                           reaction_system_emitter::Function,
-                          coupling_lang::Symbol,
-                          simulation_setup::Union{Vector{String},Nothing}=nothing,
                           emit_data_loaders::Bool=false)
     lines = String[]
 
@@ -72,16 +61,11 @@ function _generate_script(file::EsmFile;
         end
     end
 
-    # Simulation setup (Python-only asymmetry; see docstring)
-    if simulation_setup !== nothing
-        append!(lines, simulation_setup)
-    end
-
     # Generate coupling placeholders (codegen not yet implemented)
     if !isnothing(file.coupling) && !isempty(file.coupling)
         push!(lines, "# Coupling")
         for coupling in file.coupling
-            append!(lines, generate_coupling_placeholder(coupling; lang=coupling_lang))
+            append!(lines, generate_coupling_placeholder(coupling))
         end
         push!(lines, "")
     end
@@ -93,8 +77,7 @@ function _generate_script(file::EsmFile;
         push!(lines, "")
     end
 
-    # Generate data loader placeholders (Julia-only asymmetry; codegen not
-    # yet implemented)
+    # Generate data loader placeholders (codegen not yet implemented)
     if emit_data_loaders && !isnothing(file.data_loaders) && !isempty(file.data_loaders)
         push!(lines, "# Data Loaders")
         for (name, data_loader) in file.data_loaders
@@ -129,40 +112,7 @@ function to_julia_code(file::EsmFile)
         ],
         model_emitter = generate_model_code,
         reaction_system_emitter = generate_reaction_system_code,
-        coupling_lang = :julia,
         emit_data_loaders = true)
-end
-
-"""
-    to_python_code(file::EsmFile)
-
-Generate a Python script from an ESM file.
-Returns a string containing Python code.
-
-Like [`to_julia_code`](@ref), the output is illustrative scaffolding for a
-SymPy/earthsci_ast workflow, not guaranteed-runnable code.
-"""
-function to_python_code(file::EsmFile)
-    return _generate_script(file;
-        language = "Python",
-        imports = [
-            "import sympy as sp",
-            "import earthsci_ast as esm",
-            "import scipy",
-            "from sympy import Function",
-        ],
-        model_emitter = generate_python_model_code,
-        reaction_system_emitter = generate_python_reaction_system_code,
-        coupling_lang = :python,
-        simulation_setup = [
-            "# Simulation setup",
-            "tspan = (0, 10)  # time span",
-            "parameters = {}  # parameter values",
-            "initial_conditions = {}  # initial values",
-            "",
-            "# result = esm.simulate(tspan=tspan, parameters=parameters, initial_conditions=initial_conditions)",
-            "",
-        ])
 end
 
 # Helper functions for Julia code generation
@@ -292,25 +242,22 @@ function generate_reaction_system_code(name::String, reaction_system::ReactionSy
 end
 
 """
-    generate_coupling_placeholder(coupling::CouplingEntry; lang::Symbol=:julia)
+    generate_coupling_placeholder(coupling::CouplingEntry)
 
-Emit comment-only placeholder lines describing a coupling entry (coupling
-codegen is not yet implemented). Shared by the Julia and Python emitters;
-`lang=:julia` adds Julia-specific implementation notes.
+Emit comment-only placeholder lines describing a coupling entry, with
+Julia-specific implementation notes (coupling codegen is not yet implemented).
 """
-function generate_coupling_placeholder(coupling::CouplingEntry; lang::Symbol=:julia)
+function generate_coupling_placeholder(coupling::CouplingEntry)
     lines = String[]
     if coupling isa CouplingOperatorCompose
         push!(lines, "# Coupling (operator_compose): compose systems $(join(coupling.systems, ", "))")
-        lang === :julia &&
-            push!(lines, "#   Needs: ConnectorSystem to match LHS time derivatives and add RHS terms")
+        push!(lines, "#   Needs: ConnectorSystem to match LHS time derivatives and add RHS terms")
     elseif coupling isa CouplingCouple
         push!(lines, "# Coupling (couple): bidirectional coupling of $(join(coupling.systems, ", "))")
-        lang === :julia &&
-            push!(lines, "#   Needs: connector equations via compose()")
+        push!(lines, "#   Needs: connector equations via compose()")
     elseif coupling isa CouplingVariableMap
         push!(lines, "# Coupling (variable_map): $(coupling.from) → $(coupling.to) via $(coupling.transform)")
-        if lang === :julia && !isnothing(coupling.factor)
+        if !isnothing(coupling.factor)
             push!(lines, "#   Factor: $(coupling.factor)")
         end
     elseif coupling isa CouplingOperatorApply
@@ -417,13 +364,11 @@ function format_reaction(reaction::Reaction)
 end
 
 # ---------------------------------------------------------------------------
-# Precedence-aware parenthesization for emitted code
+# Precedence-aware parenthesization for emitted Julia code
 #
 # Adapted from display.jl's `get_operator_precedence` / `needs_parentheses`,
-# but per target language: generated code is *executed*, not just read, so the
-# tables must match each language's parser. In particular the Python emitter
-# renders `and`/`or` as bitwise `&`/`|`, which bind *tighter* than comparisons
-# in Python — the opposite of Julia's `&&`/`||`.
+# but tuned for CODE that is *executed*, not just read: the table must match
+# Julia's parser so the emitted script re-parses to the same AST.
 # ---------------------------------------------------------------------------
 
 # Julia surface syntax: ||, && loosest; ^ tightest and right-associative.
@@ -433,17 +378,6 @@ const _JULIA_CODEGEN_PRECEDENCE = Dict{String,Int}(
     "+" => 4, "-" => 4,
     "*" => 5, "/" => 5,
     "^" => 7,
-)
-
-# Python surface syntax for the SymPy emitter: comparisons bind looser than
-# `|`/`&`; `**` is right-associative.
-const _PYTHON_CODEGEN_PRECEDENCE = Dict{String,Int}(
-    "==" => 1, "!=" => 1, "<" => 1, ">" => 1, "<=" => 1, ">=" => 1,
-    "or" => 2,   # emitted as |
-    "and" => 3,  # emitted as &
-    "+" => 4, "-" => 4,
-    "*" => 5, "/" => 5,
-    "^" => 7,    # emitted as **
 )
 
 # Function calls / atoms: effectively infinite precedence, never parenthesized.
@@ -464,14 +398,14 @@ function _codegen_needs_parens(table::Dict{String,Int}, parent_op::String,
     child_prec > parent_prec && return false
     # Equal precedence:
     parent_op in ("-", "/") && return is_right   # left-associative, non-commutative
-    # `^` right-associative (Julia ^, Python **): parenthesize the LEFT
-    # operand. NOTE deliberate divergence from display.jl `needs_parentheses`,
-    # which parenthesizes the RIGHT operand of `^` — the rule frozen by the
-    # cross-language pretty-printer contract (pretty-print.ts, pinned by the
-    # tests/display fixtures). Emitted code must instead re-parse correctly in
-    # the target language, so the emitters wrap the left. Do not reconcile.
+    # `^` right-associative: parenthesize the LEFT operand. NOTE deliberate
+    # divergence from display.jl `needs_parentheses`, which parenthesizes the
+    # RIGHT operand of `^` — that rule is frozen by the cross-language
+    # pretty-printer contract (pretty-print.ts, pinned by the tests/display
+    # fixtures). Emitted code must instead re-parse correctly in Julia, so the
+    # emitter wraps the left. Do not reconcile.
     parent_op == "^" && return !is_right
-    # Chained comparisons mean something different in both languages — wrap.
+    # Chained comparisons mean something different in Julia — wrap.
     parent_op in ("==", "!=", "<", ">", "<=", ">=") && return true
     return false
 end
@@ -579,205 +513,3 @@ function extract_parameter_names(expr::Expr, species_names::Set{String})
     return Set{String}(name for name in free_variables(expr) if !(name in species_names))
 end
 
-# Helper functions for Python code generation
-
-function generate_python_model_code(name::String, model::Model)
-    lines = String[]
-
-    push!(lines, "# Model: $name")
-
-    # Collect state variables and parameters
-    state_vars = Tuple{String, ModelVariable}[]
-    parameters = Tuple{String, ModelVariable}[]
-
-    if !isnothing(model.variables) && !isempty(model.variables)
-        for (var_name, variable) in model.variables
-            if variable.type == StateVariable
-                push!(state_vars, (var_name, variable))
-            elseif variable.type == ParameterVariable
-                push!(parameters, (var_name, variable))
-            end
-        end
-    end
-
-    # Generate time symbol if needed
-    has_derivatives = !isnothing(model.equations) &&
-        any(eq -> has_derivative_in_expression(eq.lhs) || has_derivative_in_expression(eq.rhs),
-            model.equations)
-
-    if has_derivatives
-        push!(lines, "# Time variable")
-        push!(lines, "t = sp.Symbol('t')")
-        push!(lines, "")
-    end
-
-    # Generate symbol/function definitions
-    if !isempty(state_vars)
-        push!(lines, "# State variables")
-        for (var_name, variable) in state_vars
-            comment = isnothing(variable.units) ? "" : "  # $(variable.units)"
-            if has_derivatives
-                push!(lines, "$var_name = sp.Function('$var_name')$comment")
-            else
-                push!(lines, "$var_name = sp.Symbol('$var_name')$comment")
-            end
-        end
-        push!(lines, "")
-    end
-
-    if !isempty(parameters)
-        push!(lines, "# Parameters")
-        for (param_name, parameter) in parameters
-            comment = isnothing(parameter.units) ? "" : "  # $(parameter.units)"
-            push!(lines, "$param_name = sp.Symbol('$param_name')$comment")
-        end
-        push!(lines, "")
-    end
-
-    # Generate equations
-    if !isnothing(model.equations) && !isempty(model.equations)
-        push!(lines, "# Equations")
-        for (i, equation) in enumerate(model.equations)
-            lhs = format_python_expression(equation.lhs)
-            rhs = format_python_expression(equation.rhs)
-            push!(lines, "eq$i = sp.Eq($lhs, $rhs)")
-        end
-    end
-
-    return lines
-end
-
-function generate_python_reaction_system_code(name::String, reaction_system::ReactionSystem)
-    lines = String[]
-
-    push!(lines, "# Reaction System: $name")
-
-    # Generate species symbols
-    if !isnothing(reaction_system.species) && !isempty(reaction_system.species)
-        push!(lines, "# Species")
-        for species in reaction_system.species
-            push!(lines, "$(species.name) = sp.Symbol('$(species.name)')")
-        end
-        push!(lines, "")
-    end
-
-    # Generate reaction rate expressions
-    if !isnothing(reaction_system.reactions) && !isempty(reaction_system.reactions)
-        push!(lines, "# Rate expressions")
-        for (i, reaction) in enumerate(reaction_system.reactions)
-            if !isnothing(reaction.rate)
-                rate_expr = format_python_expression(reaction.rate)
-                push!(lines, "reaction_$(i)_rate = $rate_expr")
-            end
-        end
-        push!(lines, "")
-
-        push!(lines, "# Stoichiometry")
-        for (i, reaction) in enumerate(reaction_system.reactions)
-            push!(lines, "# Reaction $i:")
-            substrates = raw_substrates(reaction)
-            if !isnothing(substrates) && !isempty(substrates)
-                push!(lines, "#   Reactants: $(_format_reaction_side(substrates))")
-            end
-            products = raw_products(reaction)
-            if !isnothing(products) && !isempty(products)
-                push!(lines, "#   Products: $(_format_reaction_side(products))")
-            end
-        end
-    end
-
-    return lines
-end
-
-function format_python_expression(expr::Expr)
-    if isa(expr, IntExpr)
-        return string(expr.value)
-    elseif isa(expr, NumExpr)
-        return string(expr.value)
-    elseif isa(expr, VarExpr)
-        return expr.name
-    elseif isa(expr, OpExpr)
-        return format_python_expression_node(expr)
-    else
-        throw(ArgumentError("Unsupported expression type: $(typeof(expr))"))
-    end
-end
-
-function format_python_expression_node(node::OpExpr)
-    op = node.op
-    args = node.args
-
-    # Format one operand with precedence-aware parenthesization (Python table).
-    fmt(arg, is_right::Bool=false) = begin
-        s = format_python_expression(arg)
-        _codegen_needs_parens(_PYTHON_CODEGEN_PRECEDENCE, op, arg, is_right) ? "($s)" : s
-    end
-    fmt_chain(sep) = join([fmt(args[1]); [fmt(a, true) for a in args[2:end]]], sep)
-
-    # Apply expression mappings for Python
-    if op == "+"
-        return fmt_chain(" + ")
-    elseif op == "*"
-        return fmt_chain(" * ")
-    elseif op == "D"
-        # D(x,t) → Derivative(x(t), t)
-        if length(args) >= 1
-            var_name = format_python_expression(args[1])
-            return "sp.Derivative($(var_name)(t), t)"
-        end
-        return "sp.Derivative()"
-    elseif op == "exp"
-        return "sp.exp($(join(map(format_python_expression, args), ", ")))"
-    elseif op == "ifelse"
-        # ifelse(condition, true_val, false_val) → sp.Piecewise((true_val, condition), (false_val, True))
-        if length(args) >= 3
-            condition = format_python_expression(args[1])
-            true_val = format_python_expression(args[2])
-            false_val = format_python_expression(args[3])
-            return "sp.Piecewise(($true_val, $condition), ($false_val, True))"
-        end
-        return "sp.Piecewise((0, True))"
-    elseif op == "Pre"
-        return "Function('Pre')($(join(map(format_python_expression, args), ", ")))"
-    elseif op == "^"
-        return fmt_chain(" ** ")
-    elseif op == "grad"
-        # grad(x,y) → sp.Derivative(x, y)
-        if length(args) >= 2
-            func = format_python_expression(args[1])
-            var = format_python_expression(args[2])
-            return "sp.Derivative($func, $var)"
-        elseif length(args) == 1
-            return "sp.Derivative($(format_python_expression(args[1])), x)"
-        end
-        return "sp.Derivative()"
-    elseif op == "-"
-        if length(args) == 1
-            return "-$(_format_unary_minus_operand(args[1], _PYTHON_CODEGEN_PRECEDENCE, format_python_expression))"
-        else
-            return fmt_chain(" - ")
-        end
-    elseif op == "/"
-        return fmt_chain(" / ")
-    elseif op in ["<", ">", "<=", ">=", "==", "!="]
-        return fmt_chain(" $op ")
-    elseif op == "and"
-        return fmt_chain(" & ")
-    elseif op == "or"
-        return fmt_chain(" | ")
-    elseif op == "not"
-        return "~($(format_python_expression(args[1])))"
-    else
-        # For other operators, use function call syntax
-        return "$op($(join(map(format_python_expression, args), ", ")))"
-    end
-end
-
-function has_derivative_in_expression(expr::Expr)
-    if isa(expr, OpExpr) && expr.op == "D"
-        return true
-    elseif isa(expr, OpExpr)
-        return any(has_derivative_in_expression, expr.args)
-    end
-    return false
-end

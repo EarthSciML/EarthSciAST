@@ -27,8 +27,6 @@ Collection of examples showing how to use the ESM Format libraries.
 - [Subsystem Handling](julia-subsystem-handling.md)
 - [Code Generation](julia-code-generation.md)
 - [should generate model code with variables and equations](julia-should-generate-model-code-with-variables-and-equations.md)
-- [to_python_code](julia-to_python_code.md)
-- [should generate model code with variables and equations](julia-should-generate-model-code-with-variables-and-equations.md)
 - [EarthSciAST.jl Tests](julia-esmformat-jl-tests.md)
 - [Valid fixture: $filename](julia-valid-fixture---filename.md)
 - [Round-trip Tests](julia-round-trip-tests.md)

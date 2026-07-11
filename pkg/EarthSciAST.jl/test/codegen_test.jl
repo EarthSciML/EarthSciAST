@@ -68,67 +68,6 @@ const _CG = EarthSciAST
         end
     end
 
-    @testset "to_python_code" begin
-        @testset "should generate basic Python script structure" begin
-            file = EsmFile(
-                "0.1.0",
-                Metadata(
-                    "Test Model";
-                    description = "A test model for Python code generation"
-                );
-                models = Dict{String,Model}(),
-                reaction_systems = Dict{String,ReactionSystem}()
-            )
-
-            code = to_python_code(file)
-
-            @test occursin("import sympy as sp", code)
-            @test occursin("import earthsci_ast as esm", code)
-            @test occursin("import scipy", code)
-            @test occursin("# Title: Test Model", code)
-            @test occursin("# Description: A test model for Python code generation", code)
-            @test occursin("tspan = (0, 10)", code)
-            @test occursin("parameters = {}", code)
-            @test occursin("initial_conditions = {}", code)
-        end
-
-        @testset "should generate model code with variables and equations" begin
-            file = EsmFile(
-                "0.1.0",
-                Metadata("Test Model for Python");
-                models = Dict(
-                    "atmospheric" => Model(
-                        Dict(
-                            "O3" => ModelVariable(
-                                StateVariable;
-                                default = 50.0,
-                                units = "ppb"
-                            ),
-                            "k1" => ModelVariable(
-                                ParameterVariable;
-                                default = 1e-3
-                            )
-                        ),
-                        [
-                            Equation(
-                                OpExpr("D", EarthSciAST.Expr[VarExpr("O3")]),
-                                OpExpr("*", EarthSciAST.Expr[VarExpr("k1"), VarExpr("O3")])
-                            )
-                        ]
-                    )
-                ),
-                reaction_systems = Dict{String,ReactionSystem}()
-            )
-
-            code = to_python_code(file)
-
-            @test occursin("t = sp.Symbol('t')", code)
-            @test occursin("O3 = sp.Function('O3')  # ppb", code)
-            @test occursin("k1 = sp.Symbol('k1')", code)
-            @test occursin("eq1 = sp.Eq(sp.Derivative(O3(t), t), k1 * O3)", code)
-        end
-    end
-
     @testset "precedence-aware expression formatting" begin
         a = VarExpr("a")
         b = VarExpr("b")
@@ -162,24 +101,6 @@ const _CG = EarthSciAST
             @test fmt(OpExpr("and", E[OpExpr("or", E[a, b]), c])) == "(a || b) && c"
             # function-call args never get extra parens
             @test fmt(OpExpr("exp", E[plus])) == "exp(a + b)"
-        end
-
-        @testset "Python emitter" begin
-            fmt = _CG.format_python_expression
-            @test fmt(OpExpr("*", E[plus, c])) == "(a + b) * c"
-            @test fmt(OpExpr("-", E[a, OpExpr("-", E[b, c])])) == "a - (b - c)"
-            # ** is right-associative
-            @test fmt(OpExpr("^", E[OpExpr("^", E[a, b]), c])) == "(a ** b) ** c"
-            @test fmt(OpExpr("^", E[a, OpExpr("^", E[b, c])])) == "a ** b ** c"
-            @test fmt(OpExpr("-", E[plus])) == "-(a + b)"
-            # In Python, & binds tighter than comparisons: comparison operands
-            # of and/or MUST be parenthesized.
-            lt1 = OpExpr("<", E[a, b])
-            lt2 = OpExpr("<", E[b, c])
-            @test fmt(OpExpr("and", E[lt1, lt2])) == "(a < b) & (b < c)"
-            @test fmt(OpExpr("or", E[lt1, lt2])) == "(a < b) | (b < c)"
-            # | under & wraps
-            @test fmt(OpExpr("and", E[OpExpr("or", E[a, b]), c])) == "(a | b) & c"
         end
 
         @testset "nested expression flows through to_julia_code" begin

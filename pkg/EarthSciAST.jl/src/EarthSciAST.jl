@@ -161,7 +161,7 @@ export
     add_coupling, remove_coupling, compose, map_variable,
     extract,
     # Code generation
-    to_julia_code, to_python_code,
+    to_julia_code,
     # Text display formats
     to_ascii, format_expression_ascii,
     to_unicode, to_latex,
