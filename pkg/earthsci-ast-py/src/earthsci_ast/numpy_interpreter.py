@@ -18,9 +18,11 @@ Design notes
   dict. The body is evaluated once per point in the output box; results are
   assembled into an output ndarray.
 - For simple contraction bodies (``index(A, i, k) * index(B, k, j)`` with
-  ``j``, ``k`` implicit / reduced) we fall through to the generic nested loop.
-  An ``np.einsum`` fast path could be added later — the public API stays the
-  same either way.
+  ``j``, ``k`` implicit / reduced) a vectorized ``np.einsum`` fast path
+  (:func:`_eval_arrayop_vectorized`, and the cached weight-operator path in
+  :func:`_eval_arrayop_operator_cached`) handles the common scaled-product
+  forms; bodies it declines fall through to the generic nested loop. The public
+  API is the same either way.
 - Shapes are 1-based to match the schema's Julia heritage. When reading an
   element ``u[i]`` we subtract 1 from the declared integer index.
 """
@@ -40,6 +42,7 @@ from .cadence import partition as _partition_model
 from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
 from .expr_walk import any_child
+from .index_ranges import expand_range as _expand_range
 from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
 )
@@ -1292,7 +1295,9 @@ def _eval_arrayop_vectorized(
             return np.asarray(np.max(combined, axis=red_axes), dtype=float)
         if reducer == "min":
             return np.asarray(np.min(combined, axis=red_axes), dtype=float)
-    except Exception:
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+        # Decline (→ None, fall back to the scalar loop) on the same narrow error
+        # tuple every sibling fast path catches; an unexpected error propagates.
         return None
 
     return None
@@ -1333,8 +1338,6 @@ def _expand_reduce_ranges(
     """Dense 1-based value list for each contracted range, in ``reduce_syms``
     order (``_expand_range`` of each resolved reduce spec) — the one line every
     scalar / vectorized reduction path repeats to expand its contracted box."""
-    from .flatten import _expand_range  # local import to avoid cycle
-
     return [_expand_range(resolved[s]) for s in reduce_syms]
 
 
@@ -1589,8 +1592,6 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # identical; ragged sets become per-parent dynamic bounds.
     resolved: dict[str, Any] = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
 
-    from .flatten import _expand_range  # local import to avoid cycle
-
     out_ranges_exp: list[list[int]] = []
     for s in out_syms:
         rs = resolved[s]
@@ -1816,8 +1817,6 @@ def _eval_arrayop_ragged(
     point — the named, first-class form of the per-parent dynamic bound (RFC
     §5.2). Non-ragged reduce ranges in the same node expand statically.
     """
-    from .flatten import _expand_range  # local import to avoid cycle
-
     out = np.zeros(out_shape, dtype=float)
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
         parent_binding = dict(ctx.locals)
@@ -2649,9 +2648,10 @@ def build_partition(model: dict[str, Any]) -> Partition:
     performs — applied once at the ``const`` threshold and again at the
     ``discrete`` one — so topology FAQs fold via the relational engine in the
     ``const`` / ``discrete`` phase and never reach the hot path. The per-step
-    ``_Node`` tree the rest of this module builds for existing (all-continuous)
-    rules is **unchanged**: the partition only schedules which sub-DAGs are
-    pre-evaluated into buffers the hot tree then reads as constants.
+    recursive :func:`eval_expr` walk the rest of this module performs for existing
+    (all-continuous) rules is **unchanged**: the partition only schedules which
+    sub-DAGs are pre-evaluated into buffers the hot evaluator then reads as
+    constants.
 
     Thin delegator to :func:`earthsci_ast.cadence.partition`; see that module
     for the full contract. Raises

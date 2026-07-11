@@ -56,9 +56,16 @@ _SQUARE_A = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]])
 _SQUARE_B = np.array([[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]])
 
 try:  # the spherical clip path needs the pinned optional dependency
-    import spherely  # noqa: F401
+    import spherely
 
-    _HAVE_SPHERELY = True
+    # Probe the actual constructor contract the clip needs, not mere
+    # importability: an off-contract spherely (one exposing none of the polygon
+    # constructors ``geometry._spherely_polygon`` probes) should SKIP the
+    # spherical-clip tests, not FAIL them. Mirrors the getattr chain in
+    # ``earthsci_ast.geometry._spherely_polygon``.
+    _HAVE_SPHERELY = any(
+        hasattr(spherely, _name) for _name in ("create_polygon", "polygon", "Polygon")
+    )
 except ImportError:
     _HAVE_SPHERELY = False
 
@@ -392,7 +399,11 @@ def test_spherical_clip_overlapping_squares_with_spherely() -> None:
     # agree with spherely's own S2 area of the SAME clipped ring to the tight
     # S2-vs-S2 tolerance (B.5 / §5.8.2) — both share the S2 geodesic-edge model.
     area_excess = geom.polygon_area(ring, "spherical")
-    area_spherely = float(spherely.area(geom._spherely_polygon(ring)))
+    # Compare at the SAME radius (R=1): geom.polygon_area defaults to the unit
+    # sphere, so spherely.area must be asked for the unit-sphere area too —
+    # spherely.area defaults to EARTH_RADIUS_METERS (area in m²), which would be
+    # a units mismatch, not a geometry disagreement.
+    area_spherely = float(spherely.area(geom._spherely_polygon(ring), radius=1.0))
     assert geom.area_tolerance_ok(area_excess, area_spherely, rtol=1e-9)
 
 

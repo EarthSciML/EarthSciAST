@@ -48,7 +48,6 @@ Exit codes:
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -64,9 +63,10 @@ from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap abo
     ManifestError,
     _eprint,
     build_parser,
+    canonical_serialize as _canonical_serialize,
     cli_main,
     print_summary,
-    write_report,
+    run_producer_suite,
 )
 from conformance_lib import load_manifest as _load_manifest  # noqa: E402
 
@@ -178,11 +178,11 @@ def group_by_sum(rows: list[list]) -> list[tuple]:
 
 def canonical_serialize(rows: list) -> str:
     """The canonical byte form of an index set: compact JSON (no spaces),
-    UTF-8 (no \\uXXXX escaping), tuples as arrays. This is the same canonical-JSON
-    discipline the round-trip idempotence contract relies on; it is what
-    'byte-identical serialized index set' means."""
-    plain = [list(r) for r in rows]
-    return json.dumps(plain, separators=(",", ":"), ensure_ascii=False)
+    UTF-8 (no \\uXXXX escaping), tuples as arrays. Normalizes the index-set
+    tuples to lists, then routes through the shared canonical-JSON discipline
+    (:func:`conformance_lib.canonical_serialize`) the round-trip idempotence
+    contract relies on; it is what 'byte-identical serialized index set' means."""
+    return _canonical_serialize([list(r) for r in rows])
 
 
 def reference_compute(fixture: dict) -> dict:
@@ -433,70 +433,34 @@ def run_suite(
     required = set(manifest.get("bindings_required") or [])
     fixtures = manifest["fixtures"]
 
-    adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
-
-    report: dict[str, Any] = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
-    overall_ok = True
-
-    for b in bindings:
-        ar = adapters[b]
-        b_base = pin.get(b, 0)
-        b_report: dict[str, Any] = {
-            "adapter_status": ar.get("adapter_status"),
-            "error": ar.get("error"),
-            "fixtures": {},
-        }
-        if ar.get("adapter_status") != "ok":
-            if b in required:
-                overall_ok = False
-                b_report["status"] = "fail"
-            else:
-                b_report["status"] = "skipped"
-            report["bindings"][b] = b_report
-            continue
-        b_ok = True
-        for fx in fixtures:
-            produced = ar.get("fixtures", {}).get(fx["id"])
-            if produced is None:
-                b_report["fixtures"][fx["id"]] = {"status": "missing"}
-                b_ok = False
-                continue
-            verdict = compare_to_golden(fx, produced, b_base)
-            variants = compare_variants(fx, produced, b_base)
-            match = verdict["match"] and variants["match"]
-            b_report["fixtures"][fx["id"]] = {
-                "status": "ok" if match else "mismatch",
-                "problems": verdict["problems"] + variants["problems"],
-            }
-            if not match:
-                b_ok = False
-        b_report["status"] = "ok" if b_ok else "fail"
+    def compare_fixture(binding: str, fx: dict, produced: dict) -> dict:
         # A producer that bothered to REGISTER (adapter_status == ok) must
         # conform — a mismatch always fails the run, optional or not. Optional
-        # bindings get a pass only by being absent (handled above as "skipped").
-        if not b_ok:
-            overall_ok = False
-        report["bindings"][b] = b_report
+        # bindings get a pass only by being absent (reported "skipped").
+        b_base = pin.get(binding, 0)
+        verdict = compare_to_golden(fx, produced, b_base)
+        variants = compare_variants(fx, produced, b_base)
+        match = verdict["match"] and variants["match"]
+        return {
+            "status": "ok" if match else "mismatch",
+            "problems": verdict["problems"] + variants["problems"],
+        }
 
-    any_ok = any(a.get("adapter_status") == "ok" for a in adapters.values())
-    if not any_ok and not required:
-        # No producer registered AND none demanded: nothing to check. The
-        # --self-test gate is the green check in such an environment; not a
-        # failure. (Once a binding is in `bindings_required`, a missing producer
-        # below fails instead of silently passing here.)
-        report["status"] = "no_producers"
-        print(
+    return run_producer_suite(
+        harness=_ADAPTERS,
+        bindings=bindings,
+        required=required,
+        fixtures=fixtures,
+        manifest_path=manifest_path,
+        output_path=output_path,
+        timeout=timeout,
+        compare_fixture=compare_fixture,
+        print_report=lambda r: print_summary(r, "=== Determinism Conformance Report ==="),
+        no_producers_message=(
             "No determinism adapters registered for any requested binding, and "
             "none are required. The contract is gated by --self-test here."
-        )
-    else:
-        report["status"] = "ok" if overall_ok else "fail"
-
-    write_report(report, output_path)
-    print_summary(report, "=== Determinism Conformance Report ===")
-    if report["status"] == "fail":
-        return 1
-    return 0
+        ),
+    )
 
 
 # === CLI ==================================================================

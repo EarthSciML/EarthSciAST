@@ -53,7 +53,19 @@ class SimulationResult:
 
         Args:
             variables: Optional list of variable names to plot. If None, plots all.
-            **kwargs: Additional arguments passed to matplotlib.pyplot
+            **kwargs: A fixed set of recognized formatting options (NOT forwarded
+                verbatim to matplotlib). Recognized keys:
+
+                - ``figsize`` (default ``(10, 6)``) — passed to ``plt.subplots``.
+                - ``linewidth`` (default ``2``) — per-series line width.
+                - ``xlabel`` (default ``"Time"``), ``ylabel`` (default
+                  ``"Concentration"``), ``title`` (default ``"Simulation Results"``).
+                - ``xlim`` / ``ylim`` — axis limits, applied only if present.
+                - ``save_path`` — if set, save the figure there (with ``dpi``,
+                  default ``150``).
+                - ``show`` (default ``True``) — call ``plt.show()`` when truthy.
+
+                Any other key is ignored. Returns ``(fig, ax)``.
         """
         try:
             import matplotlib.pyplot as plt

@@ -18,7 +18,6 @@ from .esm_types import (
     Equation,
     EsmFile,
     Expr,
-    ExprNode,
     Metadata,
     Model,
     ModelVariable,
@@ -29,6 +28,7 @@ from .esm_types import (
     Species,
     VariableMapCoupling,
 )
+from .substitute import substitute
 from .validation import ValidationResult, validate
 
 
@@ -243,18 +243,14 @@ class ESMEditor:
         Returns:
             Modified expression with substitutions applied
         """
-        if isinstance(expr, str):
-            return substitutions.get(expr, expr)
-
-        if isinstance(expr, (int, float)):
-            return expr
-
-        if isinstance(expr, ExprNode):
-            # Recursively substitute in arguments
-            new_args = [self.substitute_in_expression(arg, substitutions) for arg in expr.args]
-            return replace(expr, args=new_args)
-
-        return expr
+        # Delegate to the canonical reference walker (:func:`substitute.substitute`),
+        # which recurses through EVERY expression-bearing child slot via
+        # ``expr_walk.map_children`` — aggregate bodies, ``filter``/``key``,
+        # integral ``lower``/``upper``, ``makearray`` values, and ``table_lookup``
+        # axes — not just ``args``. The previous args-only recursion silently
+        # missed occurrences in those slots (the exact bug class expr_walk exists
+        # to end), so ``rename_variable`` left stale references behind.
+        return substitute(expr, substitutions)
 
     def rename_variable(
         self, target: Model | ReactionSystem, old_name: str, new_name: str
@@ -502,12 +498,23 @@ class ESMEditor:
                         success=False, errors=[f"Variable '{operation.target_id}' not found"]
                     )
 
-                # Apply updates to the variable
+                # Apply updates to the variable. Reject typo'd field names
+                # (silently ignoring them would drop the caller's intended edit)
+                # and rebuild immutably via ``dataclasses.replace`` rather than
+                # mutating the shared dataclass in place.
                 current_var = model.variables[operation.target_id]
-                for key, value in operation.data.items():
-                    if hasattr(current_var, key):
-                        setattr(current_var, key, value)
-
+                unknown = [k for k in operation.data if not hasattr(current_var, k)]
+                if unknown:
+                    return EditResult(
+                        success=False,
+                        errors=[
+                            f"Unknown field(s) for variable '{operation.target_id}': "
+                            f"{', '.join(sorted(unknown))}"
+                        ],
+                    )
+                model.variables[operation.target_id] = replace(
+                    current_var, **operation.data
+                )
                 return EditResult(success=True, modified_object=model)
 
             if operation.operation_type == "rename":

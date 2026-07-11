@@ -24,9 +24,10 @@ tests/mathematical_correctness/
 ├── algebraic_verification.esm         (32 symbolic mathematics tests)
 ├── performance_benchmarks.esm         (18 performance benchmark categories)
 ├── README.md                          (comprehensive documentation)
-├── SUMMARY.md                         (this task summary)
-└── validate_fixtures.py               (validation script)
+└── SUMMARY.md                         (this task summary)
 ```
+
+These fixtures are validated by `scripts/run-python-conformance.py` (mathematical-correctness category).
 
 ### 3. Expected Results with Tolerance Specifications ✅
 Every test case includes:
@@ -97,7 +98,7 @@ Specifications for identical results across Julia, TypeScript, Python, Rust, and
 - Test fixtures properly structured for automated loading
 
 ### Validation System ✅
-- Created `validate_fixtures.py` for automatic fixture validation
+- Fixtures are validated automatically via `scripts/run-python-conformance.py`
 - JSON structure validation implemented
 - Content verification for all mathematical test categories
 

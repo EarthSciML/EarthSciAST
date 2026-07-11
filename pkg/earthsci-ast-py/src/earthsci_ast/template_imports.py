@@ -27,7 +27,6 @@ reference implementation ``EarthSciAST.jl/src/template_imports.jl``.
 from __future__ import annotations
 
 import copy
-import json
 import os
 import re
 from typing import Any
@@ -55,13 +54,21 @@ from .diagnostics import (
     TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
     TEMPLATE_INJECT_TARGET_UNKNOWN,
 )
-from .lower_expression_templates import (
+
+# Shared leaf primitives (also used by lower_expression_templates). Importing
+# them from the json_walk leaf — rather than from lower_expression_templates —
+# is what lets lower_expression_templates import ``_compose_template_bodies``
+# from here at module level without a cycle. ``APPLY_OP``, ``_expand_apply``,
+# ``_validate_templates`` and ``reject_expression_templates_pre_v04`` that this
+# module still needs from lower_expression_templates are imported lazily at
+# their (function-scoped) use sites for the same reason.
+from .json_walk import (
     APPLY_OP,
     ExpressionTemplateError,
     _is_array,
     _is_object,
-    _validate_templates,
     _walk_json,
+    load_ref_raw,
 )
 
 __all__ = [
@@ -1028,61 +1035,13 @@ def _apply_edge_renames(
     return scope
 
 
-_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-def _expand_ref_env(ref: str) -> str:
-    """Expand ``${VAR}`` tokens in a §4.7 ref from the environment.
-
-    esm-spec §4.7: an OPTIONAL loader capability (like URL refs). An UNSET
-    variable is left literal, so the ref simply fails to resolve
-    (``template_import_unresolved`` / the subsystem error) rather than silently
-    misresolving. Only the braced ``${VAR}`` form is expanded (not bare
-    ``$VAR``), for byte-consistency with the Julia binding.
-    """
-    return _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), ref)
-
-
 def _load_import_raw(ref: str, base_dir: str, origin: str):
-    ref = _expand_ref_env(ref)
-    if ref.startswith("http://") or ref.startswith("https://"):
-        import urllib.error
-        import urllib.request
-
-        try:
-            with urllib.request.urlopen(ref) as response:
-                content = response.read().decode("utf-8")
-        except Exception as e:  # noqa: BLE001 — reported with the stable code
-            raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_UNRESOLVED,
-                f"{origin}: failed to download template-library ref '{ref}': {e}",
-            ) from e
-        try:
-            raw = json.loads(content)
-        except ValueError as e:
-            raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_UNRESOLVED,
-                f"{origin}: template-library ref '{ref}' is not valid JSON: {e}",
-            ) from e
-        # Relative refs inside a remote library have no resolvable base; they
-        # fail as unresolved when encountered.
-        return raw, base_dir
-    path = os.path.abspath(os.path.join(base_dir, ref))
-    if not os.path.isfile(path):
-        raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_UNRESOLVED,
-            f"{origin}: template-library file not found: {path} (from ref '{ref}')",
-        )
-    with open(path, encoding="utf-8") as fh:
-        content = fh.read()
-    try:
-        raw = json.loads(content)
-    except ValueError as e:
-        raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_UNRESOLVED,
-            f"{origin}: template-library ref '{path}' is not valid JSON: {e}",
-        ) from e
-    return raw, os.path.dirname(path)
+    """Resolve a §9.7 template-library ``ref`` to ``(raw, new_base_dir)`` via the
+    shared §4.7 loader (:func:`json_walk.load_ref_raw`), reporting failures with
+    ``template_import_unresolved``."""
+    return load_ref_raw(
+        ref, base_dir, code=TEMPLATE_IMPORT_UNRESOLVED, subject="template-library", origin=origin
+    )
 
 
 def _canonical_ref(ref: str, base_dir: str) -> str:
@@ -1244,6 +1203,11 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
     if _is_object(tpl):
         for n, d in tpl.items():
             own[str(n)] = copy.deepcopy(d)
+    # Lazy import (see the module-level json_walk note): keeps this module free
+    # of a module-level lower_expression_templates import, so lower can import
+    # ``_compose_template_bodies`` from here without a cycle.
+    from .lower_expression_templates import _validate_templates
+
     _validate_templates(own, origin)
     for n, d in own.items():
         _merge_named(scope.templates, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
@@ -1319,6 +1283,8 @@ def _resolve_root_library(
         if _is_object(tpl):
             for n, d in tpl.items():
                 own[str(n)] = d
+        from .lower_expression_templates import _validate_templates
+
         _validate_templates(own, "document")
         for n, d in own.items():
             _merge_named(
@@ -1377,6 +1343,8 @@ def _resolve_component_imports(
             tpl = comp.get("expression_templates")
             if _is_object(tpl):
                 own = {str(n): d for n, d in tpl.items()}
+                from .lower_expression_templates import _validate_templates
+
                 _validate_templates(own, corigin)
                 for n, d in own.items():
                     _merge_named(

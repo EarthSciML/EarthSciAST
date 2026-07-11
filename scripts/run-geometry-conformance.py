@@ -69,7 +69,6 @@ Exit codes:
 
 from __future__ import annotations
 
-import json
 import math
 import sys
 from pathlib import Path
@@ -86,6 +85,7 @@ from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap abo
     ManifestError,
     _eprint,
     build_parser,
+    canonical_serialize as _canonical_serialize,
     cli_main,
     print_summary,
     write_report,
@@ -307,10 +307,11 @@ def reference_assemble(fixture: dict, payload: dict, atol: float) -> dict:
 
 def canonical_serialize(rows: list) -> str:
     """The canonical byte form of an index set: compact JSON (no spaces), UTF-8,
-    tuples as arrays — the same discipline the determinism gate uses. This is what
-    'byte-identical candidate set' means."""
-    plain = [list(r) for r in rows]
-    return json.dumps(plain, separators=(",", ":"), ensure_ascii=False)
+    tuples as arrays. Normalizes the candidate-pair tuples to lists, then routes
+    through the shared canonical-JSON discipline the determinism gate uses
+    (:func:`conformance_lib.canonical_serialize`). This is what 'byte-identical
+    candidate set' means."""
+    return _canonical_serialize([list(r) for r in rows])
 
 
 def normalize_pairs(pairs: list, base: int) -> list[list[int]]:
@@ -718,6 +719,23 @@ def _verify_invariant_algebra(fixture: dict, exp: dict, tolerances: dict) -> Non
 def run_suite(
     manifest_path: Path, bindings: list[str], output_path: Path, timeout: float | None
 ) -> int:
+    # PRODUCERS RETIRED (bead ess-3lj.3): the per-binding adapters this suite
+    # drove ($EARTHSCI_GEOMETRY_ADAPTER_<BINDING>) were deleted in favor of the
+    # single end-to-end-evaluable document
+    # (tests/valid/geometry/conservative_regrid_overlap_join.esm). Nothing
+    # registers an adapter anymore, so this mode would silently report
+    # "no_producers" and exit 0 — masking a misinvocation. Fail loudly instead
+    # and point at the live entry point. The §5.8 contract is guarded by
+    # --self-test (see the module header + test-conformance.sh).
+    _eprint(
+        "error: the geometry producer mode is retired — no binding registers a "
+        "geometry adapter anymore (bead ess-3lj.3). Run the contract check with "
+        "`--self-test`; the per-binding conservative-regrid assembly now runs "
+        "through the evaluator (tests/valid/geometry/"
+        "conservative_regrid_overlap_join.esm)."
+    )
+    return 2
+
     manifest = load_manifest(manifest_path)
     pin = manifest.get("base_pin", {})
     tolerances = {**DEFAULT_TOLERANCES, **manifest.get("tolerances", {})}

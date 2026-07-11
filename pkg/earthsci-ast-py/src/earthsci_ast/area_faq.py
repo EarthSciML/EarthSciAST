@@ -1,5 +1,6 @@
-"""``polygon_area`` as a ``sum_product`` FAQ over the clipped ring (RFC
-``semiring-faq-unified-ir`` §8.1; ``CONFORMANCE_SPEC.md`` §5.8; bead ess-d4g.1).
+"""``polygon_area`` as a ``sum_product`` FAQ (Functional Aggregate Query) over
+the clipped ring (RFC ``semiring-faq-unified-ir`` §8.1; ``CONFORMANCE_SPEC.md``
+§5.8; bead ess-d4g.1).
 
 ``polygon_area`` is **not** a new op: the area of a clipped vertex ring is an
 ordinary ``sum_product`` aggregate over the ring index set. This module builds

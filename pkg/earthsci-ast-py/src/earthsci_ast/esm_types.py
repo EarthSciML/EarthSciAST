@@ -578,6 +578,10 @@ class Operator:
 
     operator_id: str
     needed_vars: list[str]
+    # The operators-map key this entry was declared under (like Model /
+    # ReactionSystem / DataLoader carry). Set at parse time; the serializer
+    # re-emits the operator under it.
+    name: str = ""
     modifies: list[str] | None = None
     reference: Reference | None = None
     config: dict[str, Any] = field(default_factory=dict)
@@ -732,8 +736,8 @@ class CouplingImport(BaseCouplingEntry):
     """
 
     coupling_type: CouplingType = field(default=CouplingType.COUPLING_IMPORT, init=False)
-    ref: Optional[str] = None
-    bind: Dict[str, str] = field(default_factory=dict)
+    ref: str | None = None
+    bind: dict[str, str] = field(default_factory=dict)
 
 
 # Discriminated union of all coupling entry types

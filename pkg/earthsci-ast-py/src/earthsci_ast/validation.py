@@ -1,8 +1,33 @@
 """
-ESM Format validation module.
+Layer 2 of 2: dataclass-level semantic validation.
 
 This module provides a standardized validation interface for cross-language
 conformance testing, returning structured validation results.
+
+Layer boundary (what lives where):
+
+* THIS module runs on a PARSED :class:`~earthsci_ast.esm_types.EsmFile`
+  (dataclasses), AFTER ``load()`` has already succeeded. It is invoked
+  explicitly through :func:`validate` (``load()`` does NOT call it), and it
+  COLLECTS problems as structured records rather than raising: semantic errors
+  become :class:`~earthsci_ast.error_handling.ErrorCode`-coded
+  ``ValidationError`` entries and unit problems become ``UnitWarning`` entries,
+  all returned in a :class:`ValidationResult`. It owns the *semantic* rules:
+  equation-unknown balance (:func:`_validate_equation_balance_enhanced`),
+  reaction consistency (:func:`_validate_reaction_consistency`), reaction
+  rate dimensions, reaction-system ``ic`` rejection, event consistency, and
+  unit warnings. New semantic rules belong HERE, in the coded channel.
+
+* :mod:`earthsci_ast.structural_checks` is Layer 1: raw-``dict`` structural
+  validation that ``load()`` runs BEFORE parsing to dataclasses. It is a
+  load-time gate that RAISES
+  :class:`~earthsci_ast.structural_checks.StructuralValidationError` (a
+  ``SchemaValidationError`` subclass) collapsing its findings into a prose
+  blob (also exposed structurally on ``.findings``). Rules that need only the
+  raw document shape belong there. See that module's docstring for the
+  reciprocal note. A few rules historically existed in both layers; where a
+  semantic rule is owned here, the raw-dict twin over there carries a
+  cross-reference back to this module.
 """
 from __future__ import annotations
 
@@ -146,10 +171,7 @@ def validate(esm_file) -> ValidationResult:
         # 1. Equation-Unknown Balance validation
         _validate_equation_balance_enhanced(esm_file, error_collector)
 
-        # 2. Reference Integrity validation
-        _validate_reference_integrity_enhanced(esm_file, error_collector)
-
-        # 3. Reaction Consistency validation
+        # 2. Reaction Consistency validation
         _validate_reaction_consistency(esm_file, structural_errors)
 
         # 3b. Reaction rate/stoichiometry dimensional check (mass-action contract)
@@ -175,24 +197,6 @@ def validate(esm_file) -> ValidationResult:
                     details=error.context.details if error.context else {},
                 )
             )
-
-        for warning in error_collector.warnings:
-            if warning.code == ErrorCode.UNIT_MISMATCH:
-                unit_warnings.append(
-                    UnitWarning(
-                        path=warning.context.path if warning.context else "$",
-                        message=warning.message,
-                    )
-                )
-            else:
-                structural_errors.append(
-                    ValidationError(
-                        path=warning.context.path if warning.context else "$",
-                        message=warning.message,
-                        code=warning.code.value,
-                        details=warning.context.details if warning.context else {},
-                    )
-                )
 
     except Exception as e:
         # Catch-all for unexpected errors
@@ -292,44 +296,6 @@ def _validate_equation_balance_enhanced(esm_file: EsmFile, error_collector: Erro
             error_collector.add_error(error)
 
 
-def _validate_reference_integrity_enhanced(
-    esm_file: EsmFile, error_collector: ErrorCollector
-) -> None:
-    """Enhanced reference integrity validation with smart suggestions."""
-    all_models = {model.name: model for model in esm_file.models.values()}
-    all_reaction_systems = {rs.name: rs for rs in esm_file.reaction_systems.values()}
-
-    # Validate coupling references with enhanced error handling
-    for i, coupling in enumerate(esm_file.coupling):
-        coupling_path = f"/coupling/{i}"
-
-        # Check source model/system existence (only if field exists)
-        if hasattr(coupling, "source_model") and coupling.source_model is not None:
-            if (
-                coupling.source_model not in all_models
-                and coupling.source_model not in all_reaction_systems
-            ):
-                available_components = list(all_models.keys()) + list(all_reaction_systems.keys())
-                error = ESMErrorFactory.create_undefined_reference_error(
-                    coupling.source_model, available_components, f"{coupling_path}/source_model"
-                )
-                error.message = f"Source model/system '{coupling.source_model}' not found"
-                error_collector.add_error(error)
-
-        # Check target model/system existence (only if field exists)
-        if hasattr(coupling, "target_model") and coupling.target_model is not None:
-            if (
-                coupling.target_model not in all_models
-                and coupling.target_model not in all_reaction_systems
-            ):
-                available_components = list(all_models.keys()) + list(all_reaction_systems.keys())
-                error = ESMErrorFactory.create_undefined_reference_error(
-                    coupling.target_model, available_components, f"{coupling_path}/target_model"
-                )
-                error.message = f"Target model/system '{coupling.target_model}' not found"
-                error_collector.add_error(error)
-
-
 def _validate_stoich(
     species_stoich: dict[str, Any],
     species_names: set[str],
@@ -408,9 +374,17 @@ def _validate_reaction_consistency(
     - Stoichiometries are positive
     - No reaction has both substrates: null and products: null
     - Rate expressions only reference declared parameters/species
+
+    This is the single owner of the undeclared-reaction-species rule; the
+    raw-dict layer's twin in
+    ``earthsci_ast.structural_checks._check_reaction_systems`` was dropped.
     """
-    for rs_idx, (_rs_name, rs) in enumerate(esm_file.reaction_systems.items()):
-        rs_path = f"/reaction_systems/{rs_idx}"
+    for rs_name, rs in esm_file.reaction_systems.items():
+        # Name-keyed JSON pointer, matching the sibling reaction checks
+        # (_validate_reaction_system_ics / _validate_reaction_rate_dimensions).
+        # reaction_systems is a name-keyed map, so a numeric enumerate() index
+        # here would be a meaningless pointer.
+        rs_path = f"/reaction_systems/{rs_name}"
 
         # Build set of declared species and parameters
         species_names = {species.name for species in rs.species}

@@ -6,10 +6,20 @@ docs/rfcs/discretization.md §10.1 and §16.1: relocation of
 domain-level boundary_conditions to model-level boundary_conditions.
 This is the transform behind the ``esm-migrate`` CLI
 (:mod:`earthsci_ast.cli.migrate`).
+
+.. warning::
+    This is a **v0.2-era** tool. Its output targets ESM v0.2.0 and emits a
+    ``boundary_conditions`` model field that the CURRENT (v0.8.0) schema has
+    removed — so the migrated document is **NOT valid** under the current
+    schema and cannot be loaded by :func:`earthsci_ast.parse.load` as-is. There
+    is no automated v0.2 → v0.8 migration chain; bringing a v0.1 file up to the
+    current schema requires further **manual** migration after running this
+    tool. Callers are warned at runtime (``DeprecationWarning``).
 """
 from __future__ import annotations
 
 import copy
+import warnings
 from typing import Any
 
 from .errors import EarthSciAstError
@@ -139,7 +149,24 @@ def migrate_file_0_1_to_0_2(data: dict[str, Any]) -> dict[str, Any]:
 
     The migration is pure: the input dict is not mutated; a deep copy is
     returned.
+
+    .. warning::
+        This is a **v0.2-era** transform. The returned dict targets ESM v0.2.0
+        and carries model-level ``boundary_conditions``, a field the current
+        (v0.8.0) schema has removed — so the result is **NOT valid** under the
+        current schema and will not load without further **manual** migration.
+        There is no automated v0.2 → v0.8 chain. A ``DeprecationWarning`` is
+        emitted whenever this function runs.
     """
+    warnings.warn(
+        "migrate_file_0_1_to_0_2 is a v0.2-era tool: its output targets ESM "
+        "v0.2.0 and emits a model-level 'boundary_conditions' field that the "
+        "current (v0.8.0) schema removed, so the result is NOT valid under the "
+        "current schema and requires further manual migration to load.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     out = copy.deepcopy(data)
 
     from_version = out.get("esm")

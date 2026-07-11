@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..errors import EarthSciAstError
 from ..esm_types import DataLoader, DataLoaderKind
 from ._xarray import XarrayLoaderError, _default_xarray_opener, _ds_to_mapping
 from .mirror import open_with_fallback
@@ -18,8 +17,14 @@ from .url_template import expand_with_mirrors
 from .variables import apply_variable_mapping
 
 
-class StaticLoaderError(EarthSciAstError, RuntimeError):
-    """Raised when a static source cannot be loaded."""
+class StaticLoaderError(XarrayLoaderError):
+    """Raised when a static source cannot be loaded.
+
+    Subclasses :class:`XarrayLoaderError` (mirroring ``GridLoaderError`` in
+    ``grid.py``) so callers can catch either loader's failures on the shared
+    base, and so a propagating xarray-opener error keeps its type instead of
+    being flattened to a string.
+    """
 
 
 @dataclass
@@ -53,10 +58,10 @@ class StaticLoader:
         )
         if opener is None:
             opener = _default_xarray_opener()
-        try:
-            ds = open_with_fallback(urls, opener)
-        except XarrayLoaderError as exc:
-            raise StaticLoaderError(str(exc)) from exc
+        # Let opener / mirror-fallback errors propagate with their own type
+        # (mirroring GridLoader.load); XarrayLoaderError subclasses flow through
+        # unchanged rather than being stringified into a StaticLoaderError.
+        ds = open_with_fallback(urls, opener)
         raw = _ds_to_mapping(ds)
         remapped = apply_variable_mapping(raw, self.dl.variables, strict=True)
         return StaticLoadResult(urls_tried=urls, dataset=ds, variables=remapped)

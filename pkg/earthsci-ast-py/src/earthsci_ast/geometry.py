@@ -162,7 +162,7 @@ def _planar_clip(subject: np.ndarray, clip: np.ndarray) -> np.ndarray:
     # ``np.float64`` element access / ``float(...)`` coercion per operation is pure
     # overhead here. The math is unchanged, so the overlap ring is bit-identical.
     clip_pts = clip.tolist()
-    output = [(x, y) for x, y in subject.tolist()]
+    output = [tuple(pt) for pt in subject.tolist()]
     n_clip = len(clip_pts)
     for i in range(n_clip):
         if not output:
@@ -479,19 +479,26 @@ def _spherical_clip(subject: np.ndarray, clip: np.ndarray) -> np.ndarray:
 def _spherely_polygon(ring: np.ndarray) -> object:
     """Build a spherely polygon from a lon-lat ring across its pre-1.0 API.
 
-    spherely exposes polygon construction as either the ``spherely.polygon``
-    function or the ``spherely.Polygon`` class depending on the release; both
-    take a shell of ``(lon, lat)`` tuples in degrees. Probe both so a pin bump
-    within the pre-1.0 line does not silently break the clip.
+    spherely exposes polygon construction under a few spellings across its
+    pre-1.0 releases: the pinned ``spherely==0.1.0`` provides
+    ``spherely.create_polygon`` (shell as ``(lon, lat)`` tuples in degrees),
+    while other releases have exposed ``spherely.polygon`` / ``spherely.Polygon``.
+    Probe all of them so a pin bump within the pre-1.0 line does not silently
+    break the clip.
     """
     import spherely
 
     shell = [(float(lon), float(lat)) for lon, lat in ring]
-    ctor = getattr(spherely, "polygon", None) or getattr(spherely, "Polygon", None)
+    ctor = (
+        getattr(spherely, "create_polygon", None)
+        or getattr(spherely, "polygon", None)
+        or getattr(spherely, "Polygon", None)
+    )
     if ctor is None:  # pragma: no cover - exercised only with an off-contract spherely
         raise GeometryBackendUnavailable(
-            "installed `spherely` exposes neither `polygon` nor `Polygon`; pin a "
-            "release that constructs polygons from a lon-lat shell."
+            "installed `spherely` exposes no polygon constructor "
+            "(`create_polygon` / `polygon` / `Polygon`); pin a release that "
+            "constructs polygons from a lon-lat shell."
         )
     return ctor(shell)
 
@@ -529,8 +536,12 @@ def _spherely_coords(geometry: object) -> np.ndarray:
         import json
 
         return _coords_from_geojson(json.loads(spherely.to_geojson(geometry)))
+    # The pinned ``spherely==0.1.0`` has no GeoJSON accessor but does serialize to
+    # WKT; parse the exterior ring out of the POLYGON / MULTIPOLYGON text.
+    if hasattr(spherely, "to_wkt"):
+        return _coords_from_wkt(spherely.to_wkt(geometry))
     raise GeometryBackendUnavailable(
-        "installed `spherely` exposes no GeoJSON / __geo_interface__ accessor to "
+        "installed `spherely` exposes no GeoJSON / WKT accessor to "
         "read clip-ring vertices; pin a spherely release that provides one "
         "(the s2geography C++ surface beneath is stable)."
     )
@@ -548,6 +559,30 @@ def _coords_from_geojson(geo: dict) -> np.ndarray:
     else:
         return np.zeros((0, 2), dtype=float)
     return np.asarray(ring, dtype=float) if ring else np.zeros((0, 2), dtype=float)
+
+
+def _coords_from_wkt(wkt: str) -> np.ndarray:
+    """Pull the first polygon exterior ring out of a WKT ``POLYGON`` / ``MULTIPOLYGON``.
+
+    The pinned ``spherely==0.1.0`` serializes geographies to WKT (``to_wkt``) but
+    exposes no GeoJSON accessor. Only the exterior ring of the first polygon is
+    read — the same first-ring convention as :func:`_coords_from_geojson` — which
+    is all a convex-cell overlap ever produces. An empty geometry
+    (``POLYGON EMPTY`` / ``MULTIPOLYGON EMPTY``) yields ``(0, 2)``.
+    """
+    import re
+
+    # First parenthesized coordinate list is the outer polygon's exterior ring for
+    # both POLYGON ((...)) and MULTIPOLYGON (((...))).
+    match = re.search(r"\(\s*\(+\s*([^()]+?)\s*\)", wkt)
+    if not match:
+        return np.zeros((0, 2), dtype=float)
+    verts = []
+    for pair in match.group(1).split(","):
+        parts = pair.split()
+        if len(parts) >= 2:
+            verts.append((float(parts[0]), float(parts[1])))
+    return np.asarray(verts, dtype=float) if verts else np.zeros((0, 2), dtype=float)
 
 
 # --------------------------------------------------------------------------- #

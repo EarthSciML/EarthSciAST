@@ -144,7 +144,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
 def _default_dataset_opener() -> Callable[[str], Any]:
     # Imported lazily to avoid importing xarray at module import time and to
     # keep cache.py free of an import cycle with the loader modules.
-    from .grid import _default_xarray_opener
+    from ._xarray import _default_xarray_opener
 
     return _default_xarray_opener()
 

@@ -1,5 +1,5 @@
 """
-Structural validation of raw ESM JSON documents (post-schema, pre-parse).
+Layer 1 of 2: raw-dict structural validation (post-schema, pre-parse).
 
 This module hosts the raw-dict structural-validation suite that
 ``earthsci_ast.parse.load`` runs after JSON-schema validation and template
@@ -8,16 +8,84 @@ and scoped-reference resolution, unit/dimension consistency, metadata formats,
 data-loader/reaction-system/event checks, and the registered-function call
 audit — everything invoked from :func:`_validate_structural`.
 
+Layer boundary (what lives where):
+
+* THIS module operates on the raw ``dict`` decoded from JSON, BEFORE the
+  document is parsed into :mod:`earthsci_ast.esm_types` dataclasses. It is a
+  load-time gate: any finding aborts ``load()`` by raising
+  :class:`StructuralValidationError` (a :class:`SchemaValidationError`
+  subclass) whose human-readable ``str()`` is a collapsed blob of all
+  findings and whose ``.findings`` list carries the same findings as
+  machine-readable ``(code, message)`` records. Rules that need only the raw
+  shape of the document (arity, reference resolution, metadata/temporal
+  string formats, the registered-function-call audit) belong here.
+
+* :mod:`earthsci_ast.validation` is Layer 2: dataclass-level *semantic*
+  validation. It runs later, on a parsed :class:`~earthsci_ast.esm_types.EsmFile`,
+  is invoked explicitly via ``validation.validate()`` (not by ``load()``),
+  collects structured :class:`~earthsci_ast.error_handling.ErrorCode` records
+  into a ``ValidationResult`` instead of raising, and owns the semantic rules
+  (equation-unknown balance, reaction consistency, event consistency, unit
+  warnings). New semantic rules should go THERE, in the coded channel — not
+  here. See that module's docstring for the reciprocal note. The two layers
+  historically grew overlapping copies of a few rules; where a rule is owned
+  by ``validation.py`` the local twin here is annotated with a cross-reference.
+
 Split out of ``parse.py`` so raw-dict validation and dataclass parsing stay
 separate concerns. ``parse`` imports from this module at module top; this
 module only imports from ``parse`` lazily inside :func:`_validate_structural`
-(for :class:`~earthsci_ast.parse.SchemaValidationError`), keeping the
+and :func:`_structural_validation_error_cls` (for
+:class:`~earthsci_ast.parse.SchemaValidationError`), keeping the
 module-import graph acyclic.
 """
 from __future__ import annotations
 
 import re
 from typing import Any
+
+# StructuralValidationError is built lazily (and cached) so that its base class,
+# ``earthsci_ast.parse.SchemaValidationError``, can be imported without
+# reintroducing the parse<->structural_checks import cycle this module's
+# docstring documents. It subclasses SchemaValidationError so existing
+# ``except SchemaValidationError`` / ``pytest.raises(SchemaValidationError)``
+# callers keep catching structural failures unchanged, while carrying the
+# findings additionally as machine-readable ``(code, message)`` records on
+# ``.findings`` — the counterpart to validation.py's structured ErrorCode
+# records. Exposed as the module attribute ``StructuralValidationError`` via
+# the PEP 562 ``__getattr__`` below.
+_STRUCTURAL_VALIDATION_ERROR_CLS: type | None = None
+
+
+def _structural_validation_error_cls() -> type:
+    """Return the cached :class:`StructuralValidationError` class, building it
+    (and lazily importing its ``SchemaValidationError`` base) on first use."""
+    global _STRUCTURAL_VALIDATION_ERROR_CLS
+    if _STRUCTURAL_VALIDATION_ERROR_CLS is None:
+        from .parse import SchemaValidationError
+
+        class StructuralValidationError(SchemaValidationError):
+            """Raised by :func:`_validate_structural` when raw-dict structural
+            checks find problems.
+
+            ``str(err)`` is the same collapsed human-readable blob the raw
+            structural pass has always produced (so message-matching callers are
+            unchanged); ``err.findings`` is the same set of problems as a list of
+            ``(code, message)`` tuples, giving the stable diagnostic codes a
+            machine-readable home alongside the prose blob."""
+
+            def __init__(self, message: str, findings: list[tuple[str, str]] | None = None):
+                super().__init__(message)
+                self.findings: list[tuple[str, str]] = list(findings or [])
+
+        _STRUCTURAL_VALIDATION_ERROR_CLS = StructuralValidationError
+    return _STRUCTURAL_VALIDATION_ERROR_CLS
+
+
+def __getattr__(name: str):  # PEP 562: lazy module-level attribute.
+    if name == "StructuralValidationError":
+        return _structural_validation_error_cls()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Shared pint unit registry, constructed lazily on first use. Unit parsing is
 # hot (per-variable / per-equation checks) and ``pint.UnitRegistry()`` is
@@ -147,15 +215,116 @@ _UNIT_ALIASES = {
 }
 
 
+# Nested single-expression child slots of a raw-dict ExprNode, in the canonical
+# order used by ``expr_walk._SINGLE_CHILD_FIELDS`` (the one true child-field
+# set). ``args``/``values`` are expression LISTS and ``axes`` is a
+# ``{name: expr}`` MAP (the dataclass ``table_axes``; its raw JSON key is
+# ``axes``), so they are walked separately below.
+_EXPR_STRING_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
+
+# Fields that BIND index/integration symbols for a node's body (esm-spec §5;
+# expr_walk.py's module docstring). A symbol introduced here is a bound
+# variable of the aggregate/makearray/integral, not a reference to a declared
+# model symbol, so reference checks must not flag it as undefined.
+def _bare_string_leaves(expr) -> set[str]:
+    """Collect every bare-string leaf reachable from ``expr`` across the full
+    child-field set (used to pull loop symbols out of index-coordinate
+    sub-expressions like ``i + 1``)."""
+    out: set[str] = set()
+    if isinstance(expr, str):
+        out.add(expr)
+    elif isinstance(expr, dict):
+        for arg in expr.get("args", []) or []:
+            out |= _bare_string_leaves(arg)
+        for field_name in _EXPR_STRING_CHILD_FIELDS:
+            out |= _bare_string_leaves(expr.get(field_name))
+        for val in expr.get("values", []) or []:
+            out |= _bare_string_leaves(val)
+        axes = expr.get("axes")
+        if isinstance(axes, dict):
+            for child in axes.values():
+                out |= _bare_string_leaves(child)
+    return out
+
+
+def _expression_bound_symbols(expr) -> set[str]:
+    """Collect every index/integration symbol BOUND anywhere in ``expr``.
+
+    Explicit binders live in ``ranges`` (dict keys), ``output_idx`` (string
+    entries), ``wrt`` (derivative variable) and ``var`` (integral variable).
+    A ``makearray`` stencil lowered from a grad/div template, however, carries
+    NO explicit binder field once round-tripped — its loop symbols (``i``/``j``)
+    appear only as the COORDINATE arguments of the ``index`` ops in its region
+    bodies (``index(field, i + 1, j)``). Those coordinate symbols are therefore
+    also treated as bound. Used by :func:`_check_variable_references` to avoid
+    flagging a contracted/loop index symbol as an undefined variable once the
+    walker descends into aggregate/makearray bodies."""
+    bound: set[str] = set()
+    if not isinstance(expr, dict):
+        return bound
+    ranges = expr.get("ranges")
+    if isinstance(ranges, dict):
+        bound.update(ranges.keys())
+    output_idx = expr.get("output_idx")
+    if isinstance(output_idx, list):
+        bound.update(s for s in output_idx if isinstance(s, str))
+    for binder_field in ("wrt", "var"):
+        sym = expr.get(binder_field)
+        if isinstance(sym, str):
+            bound.add(sym)
+    if expr.get("op") == "index":
+        # Coordinate positions (everything after the indexed field) are index
+        # expressions over loop symbols, never top-level declared references.
+        for coord in (expr.get("args", []) or [])[1:]:
+            bound |= _bare_string_leaves(coord)
+    for field_name in _EXPR_STRING_CHILD_FIELDS:
+        bound |= _expression_bound_symbols(expr.get(field_name))
+    for arg in expr.get("args", []) or []:
+        bound |= _expression_bound_symbols(arg)
+    for val in expr.get("values", []) or []:
+        bound |= _expression_bound_symbols(val)
+    axes = expr.get("axes")
+    if isinstance(axes, dict):
+        for child in axes.values():
+            bound |= _expression_bound_symbols(child)
+    return bound
+
+
 def _walk_expression_strings(expr) -> list[str]:
-    """Recursively collect string args from inside op-expression nodes only."""
-    result = []
-    if isinstance(expr, dict) and "op" in expr and "args" in expr:
-        for arg in expr["args"]:
-            if isinstance(arg, str):
-                result.append(arg)
-            elif isinstance(arg, dict):
-                result.extend(_walk_expression_strings(arg))
+    """Recursively collect string leaves from EVERY child-expression slot of an
+    op-expression node, not just ``args``.
+
+    Earlier this descended only ``args`` and silently skipped the nested
+    single-expression fields (``expr``/``filter``/``key``/``lower``/``upper``),
+    the ``values`` list, and the ``axes`` map — so references hidden in
+    aggregate bodies, ``filter`` predicates, integral bounds, Skolem ``key``
+    terms, ``makearray`` value lists, and ``table_lookup`` axis expressions were
+    invisible to the reference checks. It now visits the full child-field set
+    the sibling walkers (and :mod:`earthsci_ast.expr_walk`) use. Bound index
+    symbols surfaced from aggregate bodies are filtered by the caller via
+    :func:`_expression_bound_symbols`."""
+    result: list[str] = []
+    if not (isinstance(expr, dict) and "op" in expr):
+        return result
+
+    def descend(child) -> None:
+        if isinstance(child, str):
+            result.append(child)
+        elif isinstance(child, dict):
+            result.extend(_walk_expression_strings(child))
+
+    for arg in expr.get("args", []) or []:
+        descend(arg)
+    for field_name in _EXPR_STRING_CHILD_FIELDS:
+        child = expr.get(field_name)
+        if child is not None:
+            descend(child)
+    for val in expr.get("values", []) or []:
+        descend(val)
+    axes = expr.get("axes")
+    if isinstance(axes, dict):
+        for child in axes.values():
+            descend(child)
     return result
 
 
@@ -243,10 +412,6 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
         global_symbols.update(rs.keys())
     for d in data_loaders.values():
         global_symbols.update(d.keys())
-    # Add spatial dim names from the single shared domain, if it declares any.
-    dom = data.get("domain")
-    if isinstance(dom, dict):
-        global_symbols.update(dom.get("spatial", {}).keys())
 
     return {
         "models": models,
@@ -306,11 +471,20 @@ def _check_variable_references(
     2. Bare-string refs in the RHS of D() (derivative) equations: every ref must
        resolve to a symbol declared somewhere in the file. Plain assignment-style
        equations are not checked because they often use coupled-in vars.
+
+    The walker (:func:`_walk_expression_strings`) now descends the full child
+    set, so refs hidden in aggregate bodies are visible here. Index/integration
+    symbols bound by the equation's own aggregate/makearray/integral nodes are
+    collected via :func:`_expression_bound_symbols` and skipped — they are bound
+    variables, not references to declared symbols.
     """
     global_symbols = tables["global_symbols"]
     for mname, m in data.get("models", {}).items():
         for i, eq in enumerate(m.get("equations", [])):
             lhs_is_derivative = isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
+            bound_symbols = _expression_bound_symbols(eq.get("lhs")) | _expression_bound_symbols(
+                eq.get("rhs")
+            )
             for side in ("lhs", "rhs"):
                 if side not in eq:
                     continue
@@ -326,6 +500,11 @@ def _check_variable_references(
                     # advection idiom `grad(_var, dim)`. Skip it so it is not
                     # flagged as an undefined variable reference.
                     if ref == "_var":
+                        continue
+                    # A symbol bound by an aggregate/makearray/integral in this
+                    # equation (a contracted index like `i`/`j`/`e`, or an
+                    # integration variable) is not a declared-symbol reference.
+                    if ref in bound_symbols:
                         continue
                     if "." in ref:
                         # 3+ part refs may use subsystem nesting; only check top-level system
@@ -523,34 +702,6 @@ def _collect_var_units(tables: dict[str, Any]) -> dict[str, str]:
     return var_units
 
 
-def _infer_expression_units(expr, var_units: dict[str, str]):
-    """
-    Best-effort inference of expression units. Returns the unit string,
-    None if can't infer, or special tag '<incompatible>' if a unit conflict was found inside.
-    """
-    if isinstance(expr, (int, float)):
-        return "dimensionless"
-    if isinstance(expr, str):
-        return var_units.get(expr)
-    if not isinstance(expr, dict):
-        return None
-    op = expr.get("op")
-    args = expr.get("args", [])
-    if op in ("+", "-"):
-        # All args must share units
-        sub_units = [_infer_expression_units(a, var_units) for a in args]
-        non_none = [u for u in sub_units if u is not None]
-        if len(non_none) >= 2:
-            ref = non_none[0]
-            for u in non_none[1:]:
-                if not _units_compatible(ref, u):
-                    return "<incompatible>"
-        return non_none[0] if non_none else None
-    if op == "*":
-        return None  # multiplication can have varied units
-    return None
-
-
 def _is_derivative_compatible(lhs_var_units: str, rhs_units: str) -> bool:
     """
     Check whether rhs_units could be the time derivative of lhs_var_units.
@@ -586,80 +737,6 @@ def _is_dimensionless_unit(unit: str | None) -> bool:
         # unparseable unit (or pint unavailable): cannot verify, treat as
         # not-dimensionless (do not assert dimensionlessness we can't confirm).
         return False
-
-
-def _model_coordinate_units(
-    data: dict[str, Any], model: dict[str, Any]
-) -> dict[str, str | None] | None:
-    """
-    Resolve the enclosing model's domain coordinate units.
-
-    Returns a {dim_name: units_str_or_None} map — units is None when the
-    coordinate is declared without a `units` field. Returns None when the
-    model has no domain reference or the domain/spatial block is missing,
-    so callers can distinguish "no info" from "coord declared, units absent".
-    """
-    domain_name = model.get("domain")
-    if not domain_name:
-        return None
-    domain = (data.get("domains") or {}).get(domain_name)
-    if not isinstance(domain, dict):
-        return None
-    spatial = domain.get("spatial")
-    if not isinstance(spatial, dict):
-        return None
-    coords: dict[str, str | None] = {}
-    for dim_name, dim_def in spatial.items():
-        if isinstance(dim_def, dict):
-            coords[dim_name] = dim_def.get("units")
-        else:
-            coords[dim_name] = None
-    return coords
-
-
-def _walk_expression_for_spatial_operator_checks(
-    expr: Any,
-    coord_units: dict[str, str | None] | None,
-    path: str,
-    errors: list[str],
-) -> None:
-    """
-    Walk an expression tree and flag grad/div/laplacian whose spatial
-    coordinate has no declared units (or is not present in the model's
-    domain at all), which leaves the operator's result dimensionally
-    unresolvable. Matches the TypeScript validator's behaviour.
-    """
-    if not isinstance(expr, dict):
-        return
-    op = expr.get("op")
-    args = expr.get("args", []) or []
-    if op in ("grad", "div", "laplacian"):
-        dim_name = expr.get("dim")
-        # Only enforce when the enclosing model has a declared domain —
-        # coord_units is None means "no info", so skip. This matches the
-        # Python Model type lacking a persisted `domain` field on round-trip
-        # and keeps the check aligned with when the author has opted in by
-        # declaring domain + spatial coordinates.
-        if dim_name is not None and coord_units is not None:
-            if dim_name not in coord_units:
-                errors.append(
-                    f"{path}: operator '{op}' references coordinate '{dim_name}' "
-                    f"not declared in model's domain (unit_inconsistency)"
-                )
-            else:
-                coord_u = coord_units[dim_name]
-                if coord_u is None or _is_dimensionless_unit(coord_u):
-                    errors.append(
-                        f"{path}: {op.capitalize()} operator applied to variable "
-                        f"with incompatible spatial units: coordinate '{dim_name}' "
-                        f"has no declared units (unit_inconsistency)"
-                    )
-    for i, arg in enumerate(args):
-        _walk_expression_for_spatial_operator_checks(arg, coord_units, f"{path}/args[{i}]", errors)
-    if "expr" in expr:
-        _walk_expression_for_spatial_operator_checks(
-            expr["expr"], coord_units, f"{path}/expr", errors
-        )
 
 
 def _walk_expression_for_exponent_checks(
@@ -918,15 +995,15 @@ def _check_unit_consistency(
        clearly incompatible with x/time (e.g., velocity-rate set to mass).
     2. Observed variable expressions whose top-level + or - has incompatible operands.
     3. '^' operators whose right operand has non-dimensionless units.
-    4. grad/div/laplacian operators whose referenced coordinate is not
-       declared in the model's domain, or is declared without units — the
-       result's dimension cannot be resolved, matching the TypeScript
-       validator's behaviour.
+
+    (A former check #4 for grad/div/laplacian spatial-coordinate units was
+    removed with the v0.8.0 geometry rewrite: it read the deleted
+    ``Domain.spatial`` / per-model ``domain`` / top-level ``domains`` schema
+    constructs and could never fire.)
     """
     var_units = _collect_var_units(tables)
 
     for mname, m in data.get("models", {}).items():
-        coord_units = _model_coordinate_units(data, m)
         # Observed variables: check direct addition/subtraction operand compatibility
         for vname, vdef in m.get("variables", {}).items():
             if vdef.get("type") == "observed" and "expression" in vdef:
@@ -949,20 +1026,13 @@ def _check_unit_consistency(
                 _walk_expression_for_exponent_checks(
                     expr, var_units, f"models/{mname}/variables/{vname}/expression", errors
                 )
-                _walk_expression_for_spatial_operator_checks(
-                    expr, coord_units, f"models/{mname}/variables/{vname}/expression", errors
-                )
 
-        # Check '^' exponents and grad/div/laplacian coordinate resolution
-        # in equation rhs/lhs expressions as well
+        # Check '^' exponents in equation rhs/lhs expressions as well
         for ei, eq in enumerate(m.get("equations", [])):
             for side in ("lhs", "rhs"):
                 if side in eq:
                     _walk_expression_for_exponent_checks(
                         eq[side], var_units, f"models/{mname}/equations[{ei}]/{side}", errors
-                    )
-                    _walk_expression_for_spatial_operator_checks(
-                        eq[side], coord_units, f"models/{mname}/equations[{ei}]/{side}", errors
                     )
 
         # Equations: only check D(x)/dt = bare_var case
@@ -986,58 +1056,6 @@ def _check_unit_consistency(
                 errors.append(
                     f"models/{mname}/equations[{i}]: rhs '{rhs}' units '{rhs_units}' incompatible with time derivative of '{lhs_var_units}'"
                 )
-
-
-def _check_equation_balance(data: dict[str, Any], errors: list[str]) -> None:
-    """
-    Check for clearly broken equation/state-variable patterns.
-
-    Flags only the unambiguous cases (no operators/coupling/data_loaders to disambiguate):
-    1. Model has state variables but zero equations.
-    2. Total equations < state variables AND no observed variables provide algebraic
-       relations (under-determined with no compensating relations).
-    3. ODE equations > state variables (over-determined).
-    """
-    has_operators = bool(data.get("operators"))
-    has_coupling = bool(data.get("coupling"))
-    has_loaders = bool(data.get("data_loaders"))
-    has_external = has_operators or has_coupling or has_loaders
-
-    for mname, m in data.get("models", {}).items():
-        state_vars = {n for n, v in m.get("variables", {}).items() if v.get("type") == "state"}
-        observed_vars = {
-            n for n, v in m.get("variables", {}).items() if v.get("type") == "observed"
-        }
-        eqs = m.get("equations", [])
-        ode_lhs_vars = []
-        for eq in eqs:
-            lhs = eq.get("lhs")
-            if isinstance(lhs, dict) and lhs.get("op") == "D":
-                args = lhs.get("args", [])
-                if args and isinstance(args[0], str):
-                    ode_lhs_vars.append(args[0])
-
-        if has_external:
-            continue
-
-        # Case 1: state vars but zero equations
-        if state_vars and not eqs:
-            errors.append(f"models/{mname}: has {len(state_vars)} state variables but no equations")
-            continue
-
-        # Case 2: more ODE equations than state variables (over-determined)
-        if len(ode_lhs_vars) > len(state_vars):
-            errors.append(
-                f"models/{mname}: equation count mismatch — {len(ode_lhs_vars)} ODE equations for {len(state_vars)} state variables (over-determined)"
-            )
-            continue
-
-        # Case 3: total equations less than state variables AND no observed vars
-        # to provide algebraic relations
-        if len(eqs) < len(state_vars) and not observed_vars:
-            errors.append(
-                f"models/{mname}: equation count mismatch — {len(eqs)} equations for {len(state_vars)} state variables (under-determined, no algebraic relations)"
-            )
 
 
 def _check_operator_state_coverage(data: dict[str, Any], errors: list[str]) -> None:
@@ -1069,7 +1087,17 @@ def _check_operator_state_coverage(data: dict[str, Any], errors: list[str]) -> N
 
 
 def _check_reaction_systems(data: dict[str, Any], errors: list[str]) -> None:
-    """Validate reaction system: substrates/products are declared species, rate refs valid."""
+    """Validate reaction system rate references (raw-dict, load-time).
+
+    Undeclared-species detection (substrates/products referencing a species not
+    in the ``species`` map) is OWNED by the dataclass/coded layer —
+    :func:`earthsci_ast.validation._validate_reaction_consistency` via
+    ``_validate_stoich`` (code ``undeclared_species``). It formerly had a
+    string-blob twin here; that duplicate was removed so the rule has one owner
+    (finding: duplicated-rule dedup). The null-null and rate-reference checks
+    below have coded twins there too, but are kept here as the raw-dict
+    load-time gate.
+    """
     for rsname, rs in data.get("reaction_systems", {}).items():
         species = set(rs.get("species", {}).keys())
         params = set(rs.get("parameters", {}).keys())
@@ -1088,21 +1116,6 @@ def _check_reaction_systems(data: dict[str, Any], errors: list[str]) -> None:
                     f"reaction_systems/{rsname}/reactions[{ri}]: reaction has both substrates and products as null"
                 )
                 continue
-            # Check substrate/product species are declared
-            for s in substrates or []:
-                if isinstance(s, dict):
-                    sp = s.get("species")
-                    if sp and sp not in species:
-                        errors.append(
-                            f"reaction_systems/{rsname}/reactions[{ri}]: substrate species '{sp}' not declared"
-                        )
-            for p in products or []:
-                if isinstance(p, dict):
-                    sp = p.get("species")
-                    if sp and sp not in species:
-                        errors.append(
-                            f"reaction_systems/{rsname}/reactions[{ri}]: product species '{sp}' not declared"
-                        )
             # Check rate expression references valid symbols
             rate = reaction.get("rate")
             if rate is not None:
@@ -1203,55 +1216,72 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     """
     Perform post-schema structural validation.
 
-    Raises SchemaValidationError if any structural problems are found.
+    Raises :class:`StructuralValidationError` (a ``SchemaValidationError``
+    subclass) if any structural problems are found. Each check contributes its
+    findings under a stable diagnostic code, collected onto the raised error's
+    ``.findings`` list as ``(code, message)`` pairs; the raised error's
+    ``str()`` is the same collapsed prose blob as before.
     """
-    # Function-level import: ``parse`` imports this module at module top, so
-    # the exception class is imported lazily here to keep the module-level
-    # import graph acyclic.
-    from .parse import SchemaValidationError
+    findings: list[tuple[str, str]] = []
 
-    errors: list[str] = []
+    def collect(code: str, run) -> None:
+        """Run ``run(sub)`` (a check that appends prose messages to ``sub``) and
+        tag every message it produces with ``code``, preserving order."""
+        sub: list[str] = []
+        run(sub)
+        findings.extend((code, msg) for msg in sub)
 
     # Operator arity check (walk all expressions)
-    def walk_for_arity(obj, path):
+    def walk_for_arity(errors, obj, path):
         if isinstance(obj, dict):
             if "op" in obj and "args" in obj:
                 _check_expression_arity(obj, errors, path)
                 return
             for k, v in obj.items():
-                walk_for_arity(v, f"{path}/{k}")
+                walk_for_arity(errors, v, f"{path}/{k}")
         elif isinstance(obj, list):
             for i, v in enumerate(obj):
-                walk_for_arity(v, f"{path}[{i}]")
+                walk_for_arity(errors, v, f"{path}[{i}]")
 
-    walk_for_arity(data, "")
+    collect("operator_arity", lambda sub: walk_for_arity(sub, data, ""))
 
     tables = _build_symbol_tables(data)
 
-    _check_variable_references(data, tables, errors)
-    _check_coupling_references(data, tables, errors)
-    _check_circular_references(data, tables, errors)
-    _check_data_loader_variables(data, errors)
-    _check_discrete_parameters(data, errors)
-    _check_metadata_formats(data, errors)
-    _check_temporal_resolution(data, errors)
+    collect("undefined_reference", lambda sub: _check_variable_references(data, tables, sub))
+    collect("undefined_reference", lambda sub: _check_coupling_references(data, tables, sub))
+    collect("circular_reference", lambda sub: _check_circular_references(data, tables, sub))
+    collect("data_loader_config", lambda sub: _check_data_loader_variables(data, sub))
+    collect("invalid_discrete_param", lambda sub: _check_discrete_parameters(data, sub))
+    collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
+    collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
     # Subsystem ref existence/parse is checked by resolve_subsystem_refs after
     # structural validation, which raises SubsystemRefError with richer context.
-    _check_unit_consistency(data, tables, errors)
-    _check_default_units_consistency(data, errors)
-    _check_conversion_factor_consistency(data, errors)
-    _check_physical_constant_units(data, errors)
-    _check_event_references(data, tables, errors)
-    _check_equation_balance(data, errors)
-    _check_operator_state_coverage(data, errors)
-    _check_reaction_systems(data, errors)
+    collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
+    collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
+    collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))
+    collect("unit_inconsistency", lambda sub: _check_physical_constant_units(data, sub))
+    collect("event_var_undeclared", lambda sub: _check_event_references(data, tables, sub))
+    # Equation-unknown balance is OWNED by the dataclass/coded layer,
+    # ``earthsci_ast.validation._validate_equation_balance_enhanced`` (code
+    # ``equation_count_mismatch``), which correctly EXCLUDES ``ic`` equations
+    # from the count. The former raw-dict twin ``_check_equation_balance``
+    # counted ``ic`` equations and could disagree with it on the same file; it
+    # was removed so the rule has a single owner (finding: duplicated-rule
+    # dedup). Operator-state coverage below is a DISTINCT check with no coded
+    # twin, so it stays here.
+    collect("uncovered_state_variable", lambda sub: _check_operator_state_coverage(data, sub))
+    collect("reaction_consistency", lambda sub: _check_reaction_systems(data, sub))
     # Reaction rate/stoichiometry dimensional consistency is now enforced in
     # ``earthsci_ast.validation._validate_reaction_rate_dimensions`` with a
     # structured ``unit_inconsistency`` payload matching the cross-language
     # contract in ``tests/invalid/expected_errors.json``.
-    _check_registered_function_calls(data, errors)
+    collect(
+        "missing_registered_function",
+        lambda sub: _check_registered_function_calls(data, sub),
+    )
 
-    if errors:
-        raise SchemaValidationError(
-            "Structural validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+    if findings:
+        blob = "Structural validation failed:\n" + "\n".join(
+            f"  - {msg}" for _code, msg in findings
         )
+        raise _structural_validation_error_cls()(blob, findings=findings)

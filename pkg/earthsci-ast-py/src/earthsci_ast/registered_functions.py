@@ -43,9 +43,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from .diagnostics import (
     CLOSED_FUNCTION_ARITY,
@@ -97,35 +97,75 @@ class ClosedFunctionError(EarthSciAstError):
 # ============================================================
 
 
-_CLOSED_FUNCTION_NAMES: frozenset = frozenset(
-    {
-        "datetime.year",
-        "datetime.month",
-        "datetime.day",
-        "datetime.hour",
-        "datetime.minute",
-        "datetime.second",
-        "datetime.day_of_year",
-        "datetime.julian_day",
-        "datetime.is_leap_year",
-        "interp.searchsorted",
-        "interp.linear",
-        "interp.bilinear",
-    }
-)
+@dataclass(frozen=True)
+class _ClosedFunction:
+    """One entry in the closed-function registry (esm-spec §9.2).
+
+    ``arity`` is the exact argument count (checked centrally before dispatch);
+    ``handler`` receives ``(name, args)`` and returns the ``int``/``float``
+    result; ``const_positions`` lists the argument slots that MUST be inline
+    ``const`` arrays (table / axis data) — empty for all-dynamic functions.
+    """
+
+    arity: int
+    handler: Callable[[str, Sequence[Any]], int | float]
+    const_positions: tuple[int, ...] = ()
+
+
+# Single source of truth for the v0.3.0 closed function set (esm-spec §9.2).
+# ``_CLOSED_FUNCTION_NAMES`` and ``INTERP_CONST_ARG_POSITIONS`` are DERIVED from
+# this map, and :func:`evaluate_closed_function` dispatches through it — so a new
+# primitive is added in exactly one place. Handlers are lambdas that defer to the
+# module-level helper functions defined further below; the deferred lookup means
+# definition order does not matter (the helpers only need to exist at call time).
+_CLOSED_FUNCTIONS: dict[str, _ClosedFunction] = {
+    "datetime.year": _ClosedFunction(
+        1, lambda name, args: _check_int32(name, _to_datetime(args[0]).year)
+    ),
+    "datetime.month": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).month),
+    "datetime.day": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).day),
+    "datetime.hour": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).hour),
+    "datetime.minute": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).minute),
+    "datetime.second": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).second),
+    "datetime.day_of_year": _ClosedFunction(
+        1, lambda name, args: _day_of_year(_to_datetime(args[0]))
+    ),
+    "datetime.julian_day": _ClosedFunction(
+        1, lambda name, args: _datetime_julian_day(float(args[0]))
+    ),
+    "datetime.is_leap_year": _ClosedFunction(
+        1, lambda name, args: 1 if _is_leap_year(_to_datetime(args[0]).year) else 0
+    ),
+    "interp.searchsorted": _ClosedFunction(
+        2, lambda name, args: _interp_searchsorted(name, float(args[0]), args[1]), (1,)
+    ),
+    "interp.linear": _ClosedFunction(
+        3, lambda name, args: _interp_linear(name, args[0], args[1], float(args[2])), (0, 1)
+    ),
+    "interp.bilinear": _ClosedFunction(
+        5,
+        lambda name, args: _interp_bilinear(
+            name, args[0], args[1], args[2], float(args[3]), float(args[4])
+        ),
+        (0, 1, 2),
+    ),
+}
+
+
+_CLOSED_FUNCTION_NAMES: frozenset = frozenset(_CLOSED_FUNCTIONS)
 
 
 # Argument positions that MUST be inline `const` arrays (table / axis data) for
 # each closed function. Per esm-spec §9.2 ``interp.*``, these slots accept only
 # materialized constant data — they are not state-dependent expressions and the
 # evaluators (``numpy_interpreter.eval_expr`` and the SymPy bridge) extract the
-# raw Python list before calling :func:`evaluate_closed_function`. Any closed
-# function whose ``name`` is not a key here has all-dynamic arguments
-# (e.g. ``datetime.*`` takes a single scalar ``t_utc``).
+# raw Python list before calling :func:`evaluate_closed_function`. DERIVED from
+# ``_CLOSED_FUNCTIONS`` (single source of truth); any closed function absent here
+# has all-dynamic arguments (e.g. ``datetime.*`` takes a single scalar ``t_utc``).
 INTERP_CONST_ARG_POSITIONS: dict[str, tuple] = {
-    "interp.searchsorted": (1,),
-    "interp.linear": (0, 1),
-    "interp.bilinear": (0, 1, 2),
+    name: spec.const_positions
+    for name, spec in _CLOSED_FUNCTIONS.items()
+    if spec.const_positions
 }
 
 
@@ -438,54 +478,15 @@ def evaluate_closed_function(name: str, args: Sequence[Any]) -> int | float:
 
     Raises :class:`ClosedFunctionError` on contract violations.
     """
-    if name not in _CLOSED_FUNCTION_NAMES:
+    spec = _CLOSED_FUNCTIONS.get(name)
+    if spec is None:
         raise ClosedFunctionError(
             UNKNOWN_CLOSED_FUNCTION,
             f"`fn` name `{name}` is not in the v0.3.0 closed function "
             f"registry (esm-spec §9.2). Adding a primitive requires a spec rev.",
         )
-
-    if name == "datetime.year":
-        _expect_arity(name, args, 1)
-        return _check_int32(name, _to_datetime(args[0]).year)
-    if name == "datetime.month":
-        _expect_arity(name, args, 1)
-        return _to_datetime(args[0]).month
-    if name == "datetime.day":
-        _expect_arity(name, args, 1)
-        return _to_datetime(args[0]).day
-    if name == "datetime.hour":
-        _expect_arity(name, args, 1)
-        return _to_datetime(args[0]).hour
-    if name == "datetime.minute":
-        _expect_arity(name, args, 1)
-        return _to_datetime(args[0]).minute
-    if name == "datetime.second":
-        _expect_arity(name, args, 1)
-        return _to_datetime(args[0]).second
-    if name == "datetime.day_of_year":
-        _expect_arity(name, args, 1)
-        return _day_of_year(_to_datetime(args[0]))
-    if name == "datetime.julian_day":
-        _expect_arity(name, args, 1)
-        return _datetime_julian_day(float(args[0]))
-    if name == "datetime.is_leap_year":
-        _expect_arity(name, args, 1)
-        return 1 if _is_leap_year(_to_datetime(args[0]).year) else 0
-    if name == "interp.searchsorted":
-        _expect_arity(name, args, 2)
-        return _interp_searchsorted(name, float(args[0]), args[1])
-    if name == "interp.linear":
-        _expect_arity(name, args, 3)
-        return _interp_linear(name, args[0], args[1], float(args[2]))
-    if name == "interp.bilinear":
-        _expect_arity(name, args, 5)
-        return _interp_bilinear(name, args[0], args[1], args[2], float(args[3]), float(args[4]))
-    # Should be unreachable — `name in _CLOSED_FUNCTION_NAMES` covered above.
-    raise ClosedFunctionError(
-        UNKNOWN_CLOSED_FUNCTION,
-        f"internal: `fn` name `{name}` is in the registry but has no dispatch arm",
-    )
+    _expect_arity(name, args, spec.arity)
+    return spec.handler(name, args)
 
 
 # ============================================================
@@ -519,6 +520,22 @@ def extract_const_array(node: Any) -> list[Any]:
 # ============================================================
 
 
+class EnumLoweringError(EarthSciAstError, ValueError):
+    """Raised when enum lowering (esm-spec §9.3) fails.
+
+    Carries the stable diagnostic ``code`` (``unknown_enum`` /
+    ``unknown_enum_symbol``) as a structured attribute — like
+    :class:`ClosedFunctionError` — instead of interpolating it into the message
+    text. Also subclasses :class:`ValueError` so callers that historically
+    caught the bare ``ValueError`` this path raised remain compatible.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+
+
 def lower_enums(file: EsmFile) -> EsmFile:
     """Walk every expression tree in ``file`` and replace each ``enum`` op
     with a ``const`` integer per the file's ``enums`` block.
@@ -528,10 +545,13 @@ def lower_enums(file: EsmFile) -> EsmFile:
 
     Validation (esm-spec §9.3):
 
-    - An ``enum`` op naming an undeclared enum raises :class:`ValueError`
-      with code ``unknown_enum``.
+    - An ``enum`` op naming an undeclared enum raises
+      :class:`EnumLoweringError` with ``code == "unknown_enum"``.
     - An ``enum`` op naming a symbol not declared under that enum raises
-      with code ``unknown_enum_symbol``.
+      :class:`EnumLoweringError` with ``code == "unknown_enum_symbol"``.
+
+    :class:`EnumLoweringError` subclasses :class:`ValueError`, so existing
+    ``except ValueError`` callers continue to catch these.
 
     Mutates ``file`` in place; returns the file for convenience.
     """
@@ -595,14 +615,15 @@ def _lower_expr(node: Any, enums: dict[str, dict[str, int]]) -> Any:
             )
         enum_name, symbol_name = node.args[0], node.args[1]
         if enum_name not in enums:
-            raise ValueError(
-                f"{UNKNOWN_ENUM}: enum `{enum_name}` is not declared in the file's `enums` block"
+            raise EnumLoweringError(
+                UNKNOWN_ENUM,
+                f"enum `{enum_name}` is not declared in the file's `enums` block",
             )
         mapping = enums[enum_name]
         if symbol_name not in mapping:
-            raise ValueError(
-                f"{UNKNOWN_ENUM_SYMBOL}: symbol `{symbol_name}` is not declared "
-                f"under enum `{enum_name}`"
+            raise EnumLoweringError(
+                UNKNOWN_ENUM_SYMBOL,
+                f"symbol `{symbol_name}` is not declared under enum `{enum_name}`",
             )
         return ExprNode(op="const", args=[], value=mapping[symbol_name])
     # Recurse through the FULL canonical child set (args, lower, upper, expr,

@@ -289,6 +289,115 @@ def print_summary(report: dict, title: str) -> None:
                 print(f"      FAIL {fid}: {fr.get('problems') or fr.get('status')}")
 
 
+# === Canonical serialization ==============================================
+
+
+def canonical_serialize(obj: Any) -> str:
+    """The canonical byte form shared by the byte-identity conformance gates:
+    compact JSON (``','`` / ``':'`` separators, no spaces), UTF-8 (no
+    ``\\uXXXX`` escaping), arrays for tuples. This is the single canonical-JSON
+    discipline behind "byte-identical <index set / candidate set / CONST-folded
+    buffer>" (CONFORMANCE_SPEC.md §5.5.3 determinism / §5.7 cadence / §5.8
+    geometry) and the round-trip idempotence contract. The determinism and
+    geometry runners first normalize their tuple *rows* to lists in a thin local
+    wrapper; cadence serializes an arbitrary folded value straight through."""
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+# === Producer-suite driver ================================================
+
+
+def run_producer_suite(
+    *,
+    harness: AdapterHarness,
+    bindings: list[str],
+    required: set,
+    fixtures: list,
+    manifest_path: Path,
+    output_path: Path,
+    timeout: float | None,
+    compare_fixture: Callable[[str, dict, dict], dict],
+    print_report: Callable[[dict], None],
+    no_producers_message: str | None = None,
+    attach_stderr: bool = False,
+) -> int:
+    """The shared producer-mode loop for the live manifest runners (determinism,
+    cadence, pde-simulation).
+
+    Discovers + runs every requested binding's adapter, then gates each one:
+
+      * an adapter that did not run OK is a hard ``fail`` when the binding is
+        ``required`` (which also sinks ``overall_ok``) and a ``skipped``
+        otherwise; its stderr tail is attached when ``attach_stderr`` (the PDE
+        runner keeps it, the others never did);
+      * otherwise every fixture is compared via ``compare_fixture(binding, fx,
+        produced)`` — a runner-supplied callable returning the per-fixture report
+        dict, whose ``status`` of ``ok`` marks the fixture passing and anything
+        else sinks the binding; a fixture the adapter omitted is ``missing`` and
+        sinks the binding.
+
+    ``no_producers_message``, when given, reproduces the determinism/cadence
+    "nothing registered and nothing required" green state (status
+    ``no_producers``, the message printed before the report is written); pass
+    ``None`` (the PDE runner) to skip that branch and let ``overall_ok`` alone
+    decide ``ok`` vs ``fail``. The report is then written, ``print_report`` renders
+    the console summary, and the exit code is ``1`` iff the final status is
+    ``fail`` (``0`` for ``ok`` / ``no_producers``)."""
+    adapters = harness.collect(bindings, manifest_path, timeout)
+    report: dict[str, Any] = {
+        "manifest_path": str(manifest_path),
+        "status": "ok",
+        "bindings": {},
+    }
+    overall_ok = True
+    for b in bindings:
+        ar = adapters[b]
+        b_report: dict[str, Any] = {
+            "adapter_status": ar.get("adapter_status"),
+            "error": ar.get("error"),
+            "fixtures": {},
+        }
+        if ar.get("adapter_status") != "ok":
+            if attach_stderr and ar.get("stderr"):
+                b_report["stderr"] = ar["stderr"]
+            b_report["status"] = "fail" if b in required else "skipped"
+            if b in required:
+                overall_ok = False
+            report["bindings"][b] = b_report
+            continue
+        b_ok = True
+        for fx in fixtures:
+            produced = ar.get("fixtures", {}).get(fx["id"])
+            if produced is None:
+                b_report["fixtures"][fx["id"]] = {"status": "missing"}
+                b_ok = False
+                continue
+            fr = compare_fixture(b, fx, produced)
+            b_report["fixtures"][fx["id"]] = fr
+            if fr.get("status") != "ok":
+                b_ok = False
+        b_report["status"] = "ok" if b_ok else "fail"
+        if not b_ok:
+            overall_ok = False
+        report["bindings"][b] = b_report
+
+    if (
+        no_producers_message is not None
+        and not required
+        and not any(a.get("adapter_status") == "ok" for a in adapters.values())
+    ):
+        # Nothing registered AND nothing demanded: the --self-test gate is the
+        # green check in such an environment (see each runner's module header).
+        report["status"] = "no_producers"
+        print(no_producers_message)
+    else:
+        report["status"] = "ok" if overall_ok else "fail"
+
+    write_report(report, output_path)
+    print_report(report)
+    return 1 if report["status"] == "fail" else 0
+
+
 # === CLI ==================================================================
 
 

@@ -20,6 +20,7 @@ and are re-imported here so existing ``sympy_bridge`` imports keep working.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -84,15 +85,19 @@ def _flat_to_sympy_rhs(
 ]:
     """Build the SymPy ODE RHS expressions from a FlattenedSystem.
 
-    Performs scalar algebraic-equation elimination as part of construction:
-    equations of the form ``v = <body>`` (where ``v`` is a state variable
-    that has no corresponding ``D(v, t) = …`` differential equation) are
-    treated as observed/algebraic. Each algebraic body is symbolically
-    substituted into every other algebraic body and into every differential
-    RHS, so the integrator's RHS depends only on differential states and
-    parameters. This is the scalar equivalent of MTK's ``structural_simplify``
-    and is required for models like ``diameter_growth`` where ``A`` and
-    ``I_D`` are algebraically defined alongside an ODE for ``D_p``.
+    Performs scalar algebraic-equation classification as part of construction:
+    equations of the form ``v = <body>`` (where ``v`` is a state variable that
+    has no corresponding ``D(v, t) = …`` differential equation) are treated as
+    observed/algebraic. Eager substitution of each algebraic body into the
+    others and into the differential RHS is intentionally NOT performed (see the
+    Returns note and ``_compile_flat_rhs``): the bodies are kept in their
+    original unexpanded form, topologically sorted by their inter-dependence,
+    and evaluated sequentially at runtime. Substituting eagerly would grow the
+    expression trees combinatorially for models with many ``Piecewise``
+    algebraic bodies. This is the scalar analogue of MTK's
+    ``structural_simplify`` and is required for models like ``diameter_growth``
+    where ``A`` and ``I_D`` are algebraically defined alongside an ODE for
+    ``D_p``.
 
     Parameter values are NOT inlined — parameter symbols remain free in
     ``rhs_exprs`` and ``algebraic_value_exprs`` so the symbolic form (and
@@ -198,7 +203,18 @@ def _flat_to_sympy_rhs(
                             sp.Eq(symbol_map[lhs], rhs_sym),
                             target,
                         )
-                    except Exception:
+                    except Exception as exc:
+                        # sp.solve's failure surface is wide (NotImplementedError,
+                        # PolynomialError, GeneratorsNeeded, …), so keep the broad
+                        # catch — but no longer swallow it silently: the equation
+                        # is about to be dropped, which the author should know.
+                        warnings.warn(
+                            f"Could not solve algebraic constraint "
+                            f"`{lhs} = {rhs_sym}` for `{target_name}` "
+                            f"({type(exc).__name__}: {exc}); skipping it.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
                         solutions = []
                     if solutions:
                         alg_rhs[target_name] = sp.sympify(solutions[0])
@@ -261,11 +277,7 @@ def _flat_to_sympy_rhs(
 
 def _observed_to_sympy_value_exprs(
     flat: FlattenedSystem,
-    state_names: list[str],
-    parameter_names: list[str],
     symbol_map: dict[str, sp.Symbol],
-    algebraic_state_names: list[str],
-    algebraic_value_exprs: dict[str, sp.Expr],
     fn_callable_map: dict[str, Callable] | None = None,
 ) -> tuple[list[str], dict[str, sp.Expr]]:
     """Build SymPy value expressions for ``flat.observed_variables``.
@@ -283,8 +295,8 @@ def _observed_to_sympy_value_exprs(
     This is a separate function from :func:`_flat_to_sympy_rhs` to keep the
     latter's tuple-return shape stable for external callers (the EarthSciModels
     inline-test runner pre-populates ``flat._simulate_compile_cache`` by
-    unpacking the original 6-tuple — adding observed there would break that
-    contract).
+    unpacking :func:`_flat_to_sympy_rhs`'s return tuple — adding observed there
+    would break that contract).
 
     Returns
     -------
@@ -434,11 +446,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
 
     observed_names, observed_value_exprs = _observed_to_sympy_value_exprs(
         flat,
-        state_names,
-        parameter_names,
         symbol_map,
-        algebraic_state_names,
-        algebraic_value_exprs,
         fn_callable_map,
     )
 

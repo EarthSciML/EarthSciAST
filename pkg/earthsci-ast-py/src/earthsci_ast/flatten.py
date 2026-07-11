@@ -35,6 +35,13 @@ from .esm_types import (
     VariableMapCoupling,
 )
 from .expr_walk import any_child, iter_children, map_children, walk
+
+# ``_expand_range`` moved to the dependency-free leaf :mod:`.index_ranges` (so
+# :mod:`.numpy_interpreter` can import it at module load instead of via three
+# function-local imports that dodged an import cycle). Re-exported here under its
+# original name for backward compatibility — ``simulation_array`` and callers in
+# this module still import ``_expand_range`` from :mod:`.flatten`.
+from .index_ranges import expand_range as _expand_range
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
@@ -460,35 +467,6 @@ def _has_array_op(expr: Expr) -> bool:
     return False
 
 
-def _expand_range(r: list[int]) -> list[int]:
-    """Expand a range spec ``[start, stop]`` or ``[start, step, stop]``.
-
-    Ranges are inclusive on both ends (matching Julia ``start:stop``).
-    """
-    if len(r) == 2:
-        start, stop = r
-        step = 1
-    elif len(r) == 3:
-        start, step, stop = r
-    else:
-        raise ValueError(f"Invalid range spec: {r}")
-    if step == 0:
-        raise ValueError(f"Range step cannot be zero: {r}")
-    vals: list[int] = []
-    v = int(start)
-    stop = int(stop)
-    step = int(step)
-    if step > 0:
-        while v <= stop:
-            vals.append(v)
-            v += step
-    else:
-        while v >= stop:
-            vals.append(v)
-            v += step
-    return vals
-
-
 def _has_spatial_operator(expr: Expr) -> bool:
     """Return True if ``expr`` contains a spatial derivative operator."""
     if isinstance(expr, ExprNode):
@@ -906,10 +884,11 @@ def _apply_variable_map(
 ) -> None:
     """Substitute the target parameter with the source variable.
 
-    For ``param_to_var``, the target parameter is removed from the parameter
-    list (it becomes a shared variable). For other transforms (``identity``,
-    ``additive``, ``multiplicative``, ``conversion_factor``) we still substitute
-    so the equation set references the canonical name.
+    For ``param_to_var``, ``conversion_factor``, and the empty/absent transform,
+    the target parameter is *promoted* — removed from the parameter list (it
+    becomes a shared variable). For the remaining transforms (``identity``,
+    ``additive``, ``multiplicative``) the target is left in the parameter list;
+    we still substitute so the equation set references the canonical name.
 
     ``loader_names`` is the set of top-level ``data_loaders`` keys. When a
     ``param_to_var`` binds a LOADED field (``from_var``'s owning system is a data
@@ -1071,25 +1050,11 @@ def _namespace_event_affects(affects: list, system_var_names: dict[str, str]) ->
             if isinstance(ns_rhs, str):
                 ns_rhs = system_var_names.get(ns_rhs, ns_rhs)
             elif isinstance(ns_rhs, ExprNode):
-                ns_rhs = _namespace_event_expr(ns_rhs, system_var_names)
+                ns_rhs = substitute(ns_rhs, system_var_names)
             out.append(AffectEquation(lhs=ns_lhs, rhs=ns_rhs))
         else:
             out.append(affect)
     return out
-
-
-def _namespace_event_expr(expr: Expr, system_var_names: dict[str, str]) -> Expr:
-    if _is_number(expr) or expr is None:
-        return expr
-    if isinstance(expr, str):
-        return system_var_names.get(expr, expr)
-    if isinstance(expr, ExprNode):
-        # See _namespace_expr: ``map_children`` rebuilds via ``replace`` to
-        # preserve closed-function metadata that hand-listing fields would
-        # silently drop (esm-6ka), and covers every child slot (aggregate
-        # bodies, bounds, values, filter/key, table axes), not just ``args``.
-        return map_children(expr, lambda c: _namespace_event_expr(c, system_var_names))
-    return expr
 
 
 # ============================================================================
@@ -1236,7 +1201,7 @@ def _namespace_events(esm_file: EsmFile, flat: FlattenedSystem) -> None:
 
     for event in esm_file.events:
         if isinstance(event, ContinuousEvent):
-            new_conditions = [_namespace_event_expr(c, var_to_namespaced) for c in event.conditions]
+            new_conditions = [substitute(c, var_to_namespaced) for c in event.conditions]
             new_affects = _namespace_event_affects(event.affects, var_to_namespaced)
             new_affect_neg = (
                 _namespace_event_affects(event.affect_neg, var_to_namespaced)
@@ -1753,9 +1718,9 @@ def infer_variable_shapes(flat: FlattenedSystem) -> dict[str, tuple[int, ...]]:
 
     Indices are assumed to be 1-based and contiguous starting at 1; the
     inferred length for each dimension is the maximum observed index along
-    that dimension. Variables whose index uses report a minimum below 1 get
-    their shape biased so the flat size covers the full range (``max - min + 1``),
-    which mirrors the Julia binding's 1-based semantics.
+    that dimension (clamped to at least 1). An index below 1 is out of range
+    under the 1-based convention — the max is kept as-is and :func:`simulate`
+    raises later if such a variable is ever flat-indexed.
 
     The result is a pure function of ``flat`` (state variables + equations), both
     fixed for a run, yet the deep ``_collect_index_uses`` tree walk is re-run on
@@ -1790,24 +1755,18 @@ def infer_variable_shapes(flat: FlattenedSystem) -> dict[str, tuple[int, ...]]:
             )
         ndim = next(iter(ndim_set))
         per_dim_max: list[int] = [0] * ndim
-        per_dim_min: list[int] = [10**9] * ndim
         for tup in tups:
             for d, v in enumerate(tup):
                 if v > per_dim_max[d]:
                     per_dim_max[d] = v
-                if v < per_dim_min[d]:
-                    per_dim_min[d] = v
         shape: list[int] = []
         for d in range(ndim):
             # 1-based: length = max index (under the convention that index 1
             # is the first slot). Offset indices like u[i-1] where i starts at
-            # 2 still max out at the highest element.
+            # 2 still max out at the highest element. An index below 1 is out of
+            # range under this convention — the max is kept as-is and simulate()
+            # errors later if the variable is ever flat-indexed.
             length = max(per_dim_max[d], 1)
-            if per_dim_min[d] < 1:
-                # Indices below 1 mean the variable is referenced "out of range" —
-                # not supported. Keep the max as-is; simulate() will error if this
-                # ever gets flat-indexed.
-                pass
             shape.append(length)
         shapes[name] = tuple(shape)
     flat._infer_shapes_cache = dict(shapes)
