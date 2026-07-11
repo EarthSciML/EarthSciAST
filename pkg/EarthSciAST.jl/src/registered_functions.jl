@@ -562,13 +562,13 @@ function lower_enums!(file::EsmFile)::EsmFile
 end
 
 function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
-    for (_, var) in model.variables
+    for (name, var) in model.variables
         if var.expression !== nothing
             # ModelVariable.expression is read-only after construction, so we
             # rebuild the dict entry with the lowered expression.
             lowered = _lower_expr_enums(var.expression, enums)
             if lowered !== var.expression
-                _replace_var_expression!(model.variables, var, lowered)
+                _replace_var_expression!(model.variables, name, var, lowered)
             end
         end
     end
@@ -597,19 +597,12 @@ function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
     end
 end
 
-function _replace_var_expression!(vars::Dict{String,ModelVariable},
+function _replace_var_expression!(vars::Dict{String,ModelVariable}, name::String,
                                   var::ModelVariable, new_expr::Expr)
     # ModelVariable is immutable; rebuild it with the new expression and
-    # update the dictionary in place. Find the key by identity.
-    target_key = nothing
-    for (k, v) in vars
-        if v === var
-            target_key = k
-            break
-        end
-    end
-    target_key === nothing && return  # dropped during iteration; ignore
-    vars[target_key] = ModelVariable(var.type;
+    # update the dictionary entry (`name` is the caller's iteration key;
+    # assigning an existing key during iteration is safe — no rehash).
+    vars[name] = ModelVariable(var.type;
         default=var.default, description=var.description,
         expression=new_expr, units=var.units, default_units=var.default_units,
         shape=var.shape, location=var.location,
