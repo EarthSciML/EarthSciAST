@@ -174,20 +174,9 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
     S = zeros(Float64, n_species, n_rxns)
 
     for (j, rxn) in enumerate(reactions)
-        substrates = getfield(rxn, :substrates)
-        if substrates !== nothing
-            for entry in substrates
-                if haskey(species_idx, entry.species)
-                    S[species_idx[entry.species], j] -= entry.stoichiometry
-                end
-            end
-        end
-        products = getfield(rxn, :products)
-        if products !== nothing
-            for entry in products
-                if haskey(species_idx, entry.species)
-                    S[species_idx[entry.species], j] += entry.stoichiometry
-                end
+        for (sp, signed_stoich) in each_stoich_term(rxn)
+            if haskey(species_idx, sp)
+                S[species_idx[sp], j] += signed_stoich
             end
         end
     end
@@ -225,6 +214,18 @@ end
 # Spatial-operator detection
 # ========================================
 
+# Op-class memberships used by the flatten pipeline's spatial detection.
+# NOTE: these (like shape_promotion.jl's `_ARRAY_PRODUCER_OPS` /
+# `_SELF_INDEXED_OPS`) really belong in op_registry.jl as membership flags;
+# the registry is frozen this wave, so they live here for now.
+#
+# All spatial differential operators (plus `D` with a spatial `wrt`, which is
+# checked separately since it depends on the `wrt` value).
+const _SPATIAL_OPS = ("grad", "div", "laplacian")
+# The spatial operators that carry an explicit `dim` field (`laplacian` does
+# not — it implies the domain's full spatial axes).
+const _DIM_SPATIAL_OPS = ("grad", "div")
+
 """
     has_spatial_operator(expr) -> Bool
 
@@ -236,7 +237,7 @@ function has_spatial_operator(expr::Expr)::Bool
         return false
     end
     if expr isa OpExpr
-        if expr.op in ("grad", "div", "laplacian")
+        if expr.op in _SPATIAL_OPS
             return true
         end
         if expr.op == "D" && expr.wrt !== nothing && expr.wrt != "t"
@@ -262,7 +263,7 @@ end
 
 function _collect_spatial_dims!(dims::Set{Symbol}, expr::Expr)
     if expr isa OpExpr
-        if expr.op in ("grad", "div") && expr.dim !== nothing
+        if expr.op in _DIM_SPATIAL_OPS && expr.dim !== nothing
             push!(dims, Symbol(expr.dim))
         elseif expr.op == "D" && expr.wrt !== nothing && expr.wrt != "t"
             push!(dims, Symbol(expr.wrt))
@@ -408,7 +409,8 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         elseif entry isa CouplingCouple
             _apply_couple!(equations, entry, opaque_refs)
         elseif entry isa CouplingVariableMap
-            _apply_variable_map!(equations, params, entry, loader_names, observeds)
+            _apply_variable_map!(equations, params, entry;
+                                 loader_names=loader_names, observeds=observeds)
         elseif entry isa CouplingOperatorApply
             push!(opaque_refs, "operator_apply:$(entry.operator)")
         elseif entry isa CouplingCallback
@@ -523,9 +525,7 @@ function flattened_to_esm(flat::FlattenedSystem;
 
     model = Dict{String,Any}(
         "variables" => variables,
-        "equations" => Any[serialize_equation(Equation(eq.lhs, eq.rhs;
-                            _comment=eq._comment))
-                           for eq in flat.equations],
+        "equations" => Any[serialize_equation(eq) for eq in flat.equations],
     )
 
     doc = Dict{String,Any}(

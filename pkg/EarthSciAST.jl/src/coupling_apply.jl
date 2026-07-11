@@ -5,11 +5,21 @@
 
 using OrderedCollections: OrderedDict
 
+# ========================================
+# Equation-LHS pattern helpers
+# ========================================
+
 """
     lhs_dependent_variable(expr) -> Union{String, Nothing}
 
 Extract the dependent variable name from an equation LHS. For `D(x, t)`, returns
 `"x"`. For a bare `VarExpr("x")`, returns `"x"`. Otherwise returns `nothing`.
+
+NOTE: this deliberately CONFLATES the differential (`D(x, t) = …`) and bare
+algebraic (`x = …`) equation forms — the operator_compose merge keys equations
+by dependent variable regardless of form. Use
+[`differential_lhs_variable`](@ref) when only the differential form should
+match (e.g. state-ODE detection).
 """
 function lhs_dependent_variable(expr::Expr)::Union{String, Nothing}
     if expr isa VarExpr
@@ -18,6 +28,22 @@ function lhs_dependent_variable(expr::Expr)::Union{String, Nothing}
         return (expr.args[1]::VarExpr).name
     end
     return nothing
+end
+
+"""
+    differential_lhs_variable(expr) -> Union{String, Nothing}
+
+The dependent-variable name of a DIFFERENTIAL equation LHS: returns `"x"` for
+`D(x, …)` (any `wrt` — the flatten pipeline's LHS derivatives are time
+derivatives by construction, so `wrt` is not inspected) and `nothing` for
+anything else, including a bare `VarExpr` — see
+[`lhs_dependent_variable`](@ref) for the form-conflating variant.
+"""
+function differential_lhs_variable(expr::Expr)::Union{String, Nothing}
+    expr isa OpExpr || return nothing
+    expr.op == "D" || return nothing
+    (!isempty(expr.args) && expr.args[1] isa VarExpr) || return nothing
+    return (expr.args[1]::VarExpr).name
 end
 
 # ========================================
@@ -75,12 +101,10 @@ end
 
 function _collect_explicit_derivative_lhs!(acc::Set{String}, model::Model, prefix::String)
     for eq in model.equations
-        if eq.lhs isa OpExpr && eq.lhs.op == "D" && !isempty(eq.lhs.args) &&
-           eq.lhs.args[1] isa VarExpr
-            raw = (eq.lhs.args[1]::VarExpr).name
-            # A bare name refers to a variable in this model's scope.
-            push!(acc, occursin('.', raw) ? raw : "$(prefix).$(raw)")
-        end
+        raw = differential_lhs_variable(eq.lhs)
+        raw === nothing && continue
+        # A bare name refers to a variable in this model's scope.
+        push!(acc, occursin('.', raw) ? raw : "$(prefix).$(raw)")
     end
     for (sub_name, sub) in model.subsystems
         # Only Model subsystems contribute explicit-derivative LHS names.
@@ -91,17 +115,10 @@ end
 
 function _collect_reaction_species!(acc::Set{String}, rsys::ReactionSystem, prefix::String)
     for rxn in rsys.reactions
-        substrates = getfield(rxn, :substrates)
-        if substrates !== nothing
-            for entry in substrates
-                push!(acc, "$(prefix).$(entry.species)")
-            end
-        end
-        products = getfield(rxn, :products)
-        if products !== nothing
-            for entry in products
-                push!(acc, "$(prefix).$(entry.species)")
-            end
+        # Collection-only use of the shared signed-stoichiometry iteration —
+        # the sign is irrelevant here, only the species names.
+        for (species, _) in each_stoich_term(rxn)
+            push!(acc, "$(prefix).$(species)")
         end
     end
     for (sub_name, sub) in rsys.subsystems
@@ -194,6 +211,17 @@ end
 # Coupling rule application (§4.7.5 step 3)
 # ========================================
 
+# The `_var` placeholder: an operator_compose template equation whose LHS
+# dependent variable is `_var` (or a namespaced `<prefix>._var` after
+# collection) does not name a concrete state — it is expanded once per state
+# variable of the other coupled systems.
+const PLACEHOLDER_VAR = "_var"
+
+# True iff `name` is the bare `_var` placeholder or any namespaced
+# `<prefix>._var` form of it.
+is_placeholder(name::AbstractString)::Bool =
+    name == PLACEHOLDER_VAR || endswith(name, "." * PLACEHOLDER_VAR)
+
 """
 Apply a `CouplingOperatorCompose` entry: for each equation LHS dependent
 variable (with `translate` and `_var` placeholder expansion), find matching
@@ -211,7 +239,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
     normal_indices = Int[]
     for (i, eq) in enumerate(equations)
         dep = lhs_dependent_variable(eq.lhs)
-        if dep !== nothing && (dep == "_var" || endswith(dep, "._var"))
+        if dep !== nothing && is_placeholder(dep)
             push!(placeholder_indices, i)
         else
             push!(normal_indices, i)
@@ -251,7 +279,13 @@ function _apply_operator_compose!(equations::Vector{Equation},
     for (i, eq) in enumerate(equations)
         dep = lhs_dependent_variable(eq.lhs)
         dep === nothing && continue
-        # Apply translation to land on a canonical name.
+        # Apply translation to land on a canonical name. A non-String
+        # `translate` value (malformed payload — the connector/translate dicts
+        # are deliberately untyped at coercion time) is SILENTLY ignored and
+        # the equation keeps its own dependent variable. Pinned behavior for
+        # now; Wave 3 should surface the discard (e.g. via
+        # `metadata.opaque_coupling_refs`, like `_apply_couple!` does for an
+        # unparsed connector equation).
         canonical = get(translate, dep, dep)
         canonical = canonical isa String ? canonical : dep
         push!(get!(by_dep, canonical, Int[]), i)
@@ -316,8 +350,7 @@ function _substitute_placeholder(expr::Expr,
     if expr isa NumExpr || expr isa IntExpr
         return expr
     elseif expr isa VarExpr
-        if expr.name == "_var" || expr.name == placeholder ||
-           endswith(expr.name, "._var")
+        if is_placeholder(expr.name) || expr.name == placeholder
             return VarExpr(target)
         end
         return expr
@@ -350,26 +383,22 @@ forbidden — the opaque-refs channel is the designated fallback.
 function _apply_couple!(equations::Vector{Equation},
                         entry::CouplingCouple,
                         opaque_refs::Vector{String})
-    connector = entry.connector
-    if haskey(connector, "equations")
-        raw = connector["equations"]
-        if raw isa AbstractVector
-            for item in raw
-                if item isa Equation
-                    push!(equations, item)
-                elseif item isa AbstractDict
-                    lhs = get(item, "lhs", nothing)
-                    rhs = get(item, "rhs", nothing)
-                    if lhs isa Expr &&
-                       rhs isa Expr
-                        push!(equations, Equation(lhs, rhs; _comment="couple"))
-                    else
-                        push!(opaque_refs, string(
-                            "couple:unparsed_connector_equation:",
-                            join(entry.systems, "<->")))
-                    end
-                end
-            end
+    raw = get(entry.connector, "equations", nothing)
+    raw isa AbstractVector || return
+    for item in raw
+        if item isa Equation
+            push!(equations, item)
+            continue
+        end
+        item isa AbstractDict || continue
+        lhs = get(item, "lhs", nothing)
+        rhs = get(item, "rhs", nothing)
+        if lhs isa Expr && rhs isa Expr
+            push!(equations, Equation(lhs, rhs; _comment="couple"))
+        else
+            push!(opaque_refs, string(
+                "couple:unparsed_connector_equation:",
+                join(entry.systems, "<->")))
         end
     end
     return
@@ -397,62 +426,77 @@ loader variable — e.g. `-Meteorology.u_wind * grad(...)` would not be lifted t
 """
 function _apply_variable_map!(equations::Vector{Equation},
                               params::OrderedDict{String, ModelVariable},
-                              entry::CouplingVariableMap,
+                              entry::CouplingVariableMap;
                               loader_names::Set{String}=Set{String}(),
                               observeds::Union{OrderedDict{String, ModelVariable},Nothing}=nothing)
-    from = entry.from
-    to = entry.to
-    transform = entry.transform
-
-    # Expression transform (esm-spec §10.4): the entry binds the target to a
-    # DERIVED value. Remove the `to` parameter and introduce in its place an
-    # observed variable — same name, units, shape, description — whose defining
-    # expression is the transform, evaluated in the flattened coupled system's
-    # scope. References to `to` in the equations are left intact: they now
-    # resolve to the observed, exactly as if the author had declared it. Every
-    # variable reference inside the transform is (by contract) a fully-scoped
-    # reference, so no namespacing is applied; the expression MUST reference
-    # the entry's `from` variable — it is the data-flow edge the entry declares.
-    if transform isa Expr
-        # `contains` (expression.jl) walks EVERY expression-bearing field —
-        # aggregate bodies, filter predicates, bounds, table-lookup axes — so
-        # the reference check is not blind to nested aggregate transforms.
-        if !contains(transform, from)
-            throw(ArgumentError(
-                "variable_map($(from) -> $(to)): expression transform does not " *
-                "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"))
-        end
-        to_var = get(params, to, nothing)
-        if to_var !== nothing
-            delete!(params, to)
-        end
-        if observeds !== nothing
-            observeds[to] = ModelVariable(ObservedVariable;
-                units=to_var === nothing ? nothing : to_var.units,
-                description=to_var === nothing ? nothing : to_var.description,
-                expression=transform,
-                shape=to_var === nothing ? nothing : to_var.shape)
-        end
-        # Synthesize the observed's defining equation (`to ~ transform`) so the
-        # flattened system stays well-determined — mirroring _collect_model!'s
-        # observed-equation synthesis for authored observeds.
-        push!(equations, Equation(VarExpr(to), transform))
+    if entry.transform isa Expr
+        _apply_expression_transform!(equations, params, observeds, entry)
         return
     end
+    _substitute_variable_map!(equations, entry)
+    _promote_variable_map_param!(params, entry, loader_names)
+    return
+end
 
+# Expression transform (esm-spec §10.4): the entry binds the target to a
+# DERIVED value. Remove the `to` parameter and introduce in its place an
+# observed variable — same name, units, shape, description — whose defining
+# expression is the transform, evaluated in the flattened coupled system's
+# scope. References to `to` in the equations are left intact: they now
+# resolve to the observed, exactly as if the author had declared it. Every
+# variable reference inside the transform is (by contract) a fully-scoped
+# reference, so no namespacing is applied; the expression MUST reference
+# the entry's `from` variable — it is the data-flow edge the entry declares.
+function _apply_expression_transform!(equations::Vector{Equation},
+                                      params::OrderedDict{String, ModelVariable},
+                                      observeds::Union{OrderedDict{String, ModelVariable},Nothing},
+                                      entry::CouplingVariableMap)
+    from = entry.from
+    to = entry.to
+    transform = entry.transform::Expr
+    # `contains` (expression.jl) walks EVERY expression-bearing field —
+    # aggregate bodies, filter predicates, bounds, table-lookup axes — so
+    # the reference check is not blind to nested aggregate transforms.
+    if !contains(transform, from)
+        throw(ArgumentError(
+            "variable_map($(from) -> $(to)): expression transform does not " *
+            "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"))
+    end
+    to_var = get(params, to, nothing)
+    if to_var !== nothing
+        delete!(params, to)
+    end
+    if observeds !== nothing
+        observeds[to] = ModelVariable(ObservedVariable;
+            units=to_var === nothing ? nothing : to_var.units,
+            description=to_var === nothing ? nothing : to_var.description,
+            expression=transform,
+            shape=to_var === nothing ? nothing : to_var.shape)
+    end
+    # Synthesize the observed's defining equation (`to ~ transform`) so the
+    # flattened system stays well-determined — mirroring _collect_model!'s
+    # observed-equation synthesis for authored observeds.
+    push!(equations, Equation(VarExpr(to), transform))
+    return
+end
+
+# Substitute the `to` reference with `from` (optionally factor-scaled) in every
+# flattened equation.
+function _substitute_variable_map!(equations::Vector{Equation},
+                                   entry::CouplingVariableMap)
     # Build replacement Expr. `factor` is a scaling coefficient (schema restricts
     # it to the scaling transforms — additive / multiplicative / conversion_factor;
     # a bare param_to_var / identity may not carry one). Apply it uniformly here
     # so all three bindings agree — Julia/Rust previously scaled only for
     # `conversion_factor`, silently dropping it for additive/multiplicative while
     # Python applied it. A factor of 1.0 is a no-op and left unwrapped.
-    replacement::Expr = VarExpr(from)
+    replacement::Expr = VarExpr(entry.from)
     if entry.factor !== nothing && entry.factor != 1.0
         replacement = OpExpr("*",
-            Expr[NumExpr(entry.factor::Float64), VarExpr(from)])
+            Expr[NumExpr(entry.factor::Float64), VarExpr(entry.from)])
     end
 
-    bindings = Dict{String, Expr}(to => replacement)
+    bindings = Dict{String, Expr}(entry.to => replacement)
     for (i, eq) in enumerate(equations)
         equations[i] = Equation(
             substitute(eq.lhs, bindings),
@@ -460,23 +504,30 @@ function _apply_variable_map!(equations::Vector{Equation},
             _comment=eq._comment,
         )
     end
+    return
+end
 
-    # For param_to_var / conversion_factor, remove target param from parameter list.
-    if (transform == "param_to_var" || transform == "conversion_factor") &&
-       haskey(params, to)
-        to_var = params[to]
-        delete!(params, to)
-        # Carry a grid shape from the (deleted) consumer parameter onto the
-        # loader-qualified producer name, so the pointwise lift indexes the
-        # loaded field per cell. Only when `from` is a data-loader variable
-        # (guards against binding a model STATE, which already lives in `states`).
-        if to_var.shape !== nothing && !isempty(to_var.shape) && !haskey(params, from)
-            from_owner = first(split(from, "."; limit=2))
-            if from_owner in loader_names
-                params[from] = ModelVariable(ParameterVariable;
-                    shape=to_var.shape, units=to_var.units,
-                    description=to_var.description)
-            end
+# For param_to_var / conversion_factor, remove the target param from the
+# parameter list (it is now driven by `from`), carrying its grid shape onto a
+# loader-qualified producer when applicable.
+function _promote_variable_map_param!(params::OrderedDict{String, ModelVariable},
+                                      entry::CouplingVariableMap,
+                                      loader_names::Set{String})
+    (entry.transform == "param_to_var" || entry.transform == "conversion_factor") ||
+        return
+    haskey(params, entry.to) || return
+    to_var = params[entry.to]
+    delete!(params, entry.to)
+    # Carry a grid shape from the (deleted) consumer parameter onto the
+    # loader-qualified producer name, so the pointwise lift indexes the
+    # loaded field per cell. Only when `from` is a data-loader variable
+    # (guards against binding a model STATE, which already lives in `states`).
+    if to_var.shape !== nothing && !isempty(to_var.shape) && !haskey(params, entry.from)
+        from_owner = first(split(entry.from, "."; limit=2))
+        if from_owner in loader_names
+            params[entry.from] = ModelVariable(ParameterVariable;
+                shape=to_var.shape, units=to_var.units,
+                description=to_var.description)
         end
     end
     return

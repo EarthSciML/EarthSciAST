@@ -17,19 +17,25 @@ rewritten as `"<prefix>.<name>"`. For dotted names (e.g. `Sub.var`), the first
 segment is treated as the local symbol: if it is in `local_names` (a local
 subsystem), the whole dotted path is prefixed; otherwise the reference is
 already external and is left unchanged. Numeric literals are unchanged.
+
+Index-set references (`shape` entries, `ranges[*]` `{from}`, producer `id`s)
+are NOT namespaced: as of esm-spec v0.8.0 index sets are a single
+document-scoped registry with plain names shared by every component. (A former
+`idx_names` parameter that could opt component-local index identifiers into
+prefixing was dead — every caller passed it empty — and has been removed.)
 """
-function namespace_expr(expr::NumExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::Expr
+function namespace_expr(expr::NumExpr, prefix::String,
+                        local_names::Set{String})::Expr
     return expr
 end
 
-function namespace_expr(expr::IntExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::Expr
+function namespace_expr(expr::IntExpr, prefix::String,
+                        local_names::Set{String})::Expr
     return expr
 end
 
-function namespace_expr(expr::VarExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::Expr
+function namespace_expr(expr::VarExpr, prefix::String,
+                        local_names::Set{String})::Expr
     if occursin('.', expr.name)
         first_part = String(split(expr.name, '.')[1])
         if first_part in local_names
@@ -41,28 +47,6 @@ function namespace_expr(expr::VarExpr, prefix::String, local_names::Set{String},
         return VarExpr("$(prefix).$(expr.name)")
     end
     return expr
-end
-
-# Namespace a `ranges` map: rewrite each `IndexSetRef`'s `from` set name when it
-# is a component-local index identifier, and namespace any expression-valued
-# dense bound. Index-VARIABLE names (the `of` parents, the range keys) are
-# arrayop-local and are left untouched.
-function _namespace_ranges(ranges, prefix::String, local_names::Set{String},
-                           idx_names::Set{String})
-    ranges === nothing && return nothing
-    out = Dict{String,Any}()
-    for (k, v) in ranges
-        if v isa IndexSetRef
-            newfrom = v.from in idx_names ? "$(prefix).$(v.from)" : v.from
-            out[k] = IndexSetRef(newfrom; of=v.of)
-        elseif v isa AbstractVector
-            out[k] = Any[x isa Expr ?
-                         namespace_expr(x, prefix, local_names, idx_names) : x for x in v]
-        else
-            out[k] = v
-        end
-    end
-    return out
 end
 
 # Namespace a value-equality `join`'s key-column names (RFC §5.3). A join column
@@ -90,8 +74,8 @@ function _namespace_join(join, prefix::String, local_names::Set{String})
                for clause in join]
 end
 
-function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::Expr
+function namespace_expr(expr::OpExpr, prefix::String,
+                        local_names::Set{String})::Expr
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach arrayop / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
@@ -102,42 +86,15 @@ function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
     # hand-listed keywords and silently dropped int_var/lower/upper/table/
     # table_axes/output.
     result = map_children(
-        x -> namespace_expr(x, prefix, local_names, idx_names), expr)::OpExpr
-    # `map_children` recurses into expression-bearing fields only. Three fields
-    # carry index-set / column identifiers that also need namespacing so a
-    # flattened component's private geometry/index names don't collide with a
-    # sibling's after merge — override them on the recursed node:
-    #  - `id`: the value-invention producer id matched by a derived set's `from_faq`,
-    #    namespaced when it is a component-local index identifier.
-    #  - `ranges`: each `IndexSetRef`'s `{from: <set>}` set name (`map_children`
-    #    copies `IndexSetRef` entries verbatim). `_namespace_ranges` is the sole
-    #    authority for `ranges`: it rewrites both the `from` references AND the
-    #    expression-valued dense bounds — the latter identically to `map_children` —
-    #    so overriding the whole field is behavior-preserving.
-    #  - `join`: a `join.on` key column may name a component-local bin buffer.
-    # `id`/`ranges` are gated on `idx_names` (empty for models that declare no
-    # index sets) and `join` is `nothing` for models without a value-equality
-    # join, so non-geometry models are byte-identical to before.
-    new_id = (expr.id !== nothing && expr.id in idx_names) ? "$(prefix).$(expr.id)" : expr.id
-    new_ranges = _namespace_ranges(expr.ranges, prefix, local_names, idx_names)
-    new_join = _namespace_join(expr.join, prefix, local_names)
-    return reconstruct(result; id=new_id, ranges=new_ranges, join=new_join)
-end
-
-# ========================================
-# Variable-shape namespacing (RFC semiring-faq-unified-ir §5.2)
-# ========================================
-
-# Namespace a variable's `shape` index-set references (gated on `idx_names`).
-# As of esm-spec v0.8.0 index sets are document-scoped with plain, shared names,
-# so the flattener passes an empty `idx_names` and this is a no-op — a shape's
-# entries (index-set names / domain dims) are global and never prefixed. The
-# gate is retained so a future component-local shape identifier could opt in.
-function _namespace_var_shape(var::ModelVariable, prefix::String, idx_names::Set{String})::ModelVariable
-    var.shape === nothing && return var
-    any(s -> s in idx_names, var.shape) || return var
-    new_shape = String[s in idx_names ? "$(prefix).$(s)" : s for s in var.shape]
-    return reconstruct(var; shape=new_shape)
+        x -> namespace_expr(x, prefix, local_names), expr)::OpExpr
+    # `map_children` recurses into expression-bearing fields only. One field
+    # carries plain-name identifiers that also need namespacing: a `join.on` key
+    # column may name a component-local bin buffer (see `_namespace_join`).
+    # `join` is `nothing` for models without a value-equality join, so those are
+    # byte-identical to before. Index-set identifier fields (`id`,
+    # `ranges[*].from`) are document-scoped (v0.8.0) and never prefixed.
+    return reconstruct(result;
+        join=_namespace_join(expr.join, prefix, local_names))
 end
 
 # ========================================
@@ -169,23 +126,19 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
     # once by `flatten` from the top-level object) with plain names shared by every
     # component — no longer per-`Model` and no longer namespaced. So index-set
-    # references (`shape` entries, `ranges[*]` `{from}`, producer `id`s and their
-    # `from_faq` edges) stay as plain document-level names and must NOT be
-    # rewritten to a `<prefix>.` form. Passing an empty `idx_names` leaves them
-    # untouched while ordinary variable references are still namespaced.
-    idx_names = Set{String}()
+    # references (an array variable's `shape` entries, `ranges[*]` `{from}`,
+    # producer `id`s and their `from_faq` edges) stay as plain document-level
+    # names and must NOT be rewritten to a `<prefix>.` form; only ordinary
+    # variable references are namespaced.
 
     for (name, var) in model.variables
         namespaced = "$(prefix).$(name)"
-        # An array variable's `shape` names index sets, which are document-scoped
-        # (v0.8.0): their plain names are shared across components, so the shape
-        # passes through unchanged (empty `idx_names` → no-op).
-        v = _namespace_var_shape(var, prefix, idx_names)
-        # Namespace the defining `expression` body too, consistent with the
-        # namespaced key/shape and the synthesized observed equation below.
-        # `_namespace_var_shape` copies `expression` verbatim, so an observed's
-        # array-aggregate / const body otherwise keeps UNQUALIFIED intra-model
-        # references (e.g. an aggregate body `index(rg_src_poly, …)`) even though
+        v = var
+        # Namespace the defining `expression` body, consistent with the
+        # namespaced key and the synthesized observed equation below.
+        # An observed's array-aggregate / const body otherwise keeps UNQUALIFIED
+        # intra-model references (e.g. an aggregate body `index(rg_src_poly, …)`)
+        # even though
         # its own key became `<prefix>.rg_src_lon`. The geometry / value-invention
         # front-door (RFC §6.1 / §8.6.1) reads this `expression` DIRECTLY (see
         # `flattened_to_esm`), so an unqualified ref can no longer resolve against
@@ -193,7 +146,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         # is self-consistent with its key, shape, and equation form.
         if v.expression !== nothing
             v = reconstruct(v;
-                expression=namespace_expr(v.expression, prefix, local_names, idx_names))
+                expression=namespace_expr(v.expression, prefix, local_names))
         end
         if v.type == StateVariable
             states[namespaced] = v
@@ -206,8 +159,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
 
     explicit_lhs_names = Set{String}()
     for eq in model.equations
-        lhs = namespace_expr(eq.lhs, prefix, local_names, idx_names)
-        rhs = namespace_expr(eq.rhs, prefix, local_names, idx_names)
+        lhs = namespace_expr(eq.lhs, prefix, local_names)
+        rhs = namespace_expr(eq.rhs, prefix, local_names)
         push!(equations, Equation(lhs, rhs; _comment=eq._comment))
         if lhs isa VarExpr
             push!(explicit_lhs_names, lhs.name)
@@ -226,15 +179,15 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         namespaced = "$(prefix).$(name)"
         namespaced in explicit_lhs_names && continue
         lhs = VarExpr(namespaced)
-        rhs = namespace_expr(var.expression, prefix, local_names, idx_names)
+        rhs = namespace_expr(var.expression, prefix, local_names)
         push!(equations, Equation(lhs, rhs))
     end
 
     for ev in model.continuous_events
-        new_conds = Expr[namespace_expr(c, prefix, local_names, idx_names) for c in ev.conditions]
+        new_conds = Expr[namespace_expr(c, prefix, local_names) for c in ev.conditions]
         new_affects = AffectEquation[
             AffectEquation(startswith(a.lhs, prefix * ".") || occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
-                           namespace_expr(a.rhs, prefix, local_names, idx_names))
+                           namespace_expr(a.rhs, prefix, local_names))
             for a in ev.affects
         ]
         push!(continuous_events,
@@ -245,12 +198,12 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         new_affects = FunctionalAffect[
             FunctionalAffect(
                 occursin('.', a.target) ? a.target : "$(prefix).$(a.target)",
-                namespace_expr(a.expression, prefix, local_names, idx_names);
+                namespace_expr(a.expression, prefix, local_names);
                 operation=a.operation)
             for a in ev.affects
         ]
         new_trigger = if ev.trigger isa ConditionTrigger
-            ConditionTrigger(namespace_expr(ev.trigger.expression, prefix, local_names, idx_names))
+            ConditionTrigger(namespace_expr(ev.trigger.expression, prefix, local_names))
         else
             ev.trigger
         end

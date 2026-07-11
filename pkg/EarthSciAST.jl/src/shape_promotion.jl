@@ -37,7 +37,7 @@ function _infer_expr_shape(expr::Expr,
             # A gather selects one element (or a fixed slice) — scalar output for
             # promotion purposes (the level-set already indexes its own field).
             return String[]
-        elseif op == "aggregate" || op == "arrayop" || op == "makearray"
+        elseif op in _ARRAY_PRODUCER_OPS
             # Output is exactly the uncontracted axes named in output_idx.
             return expr.output_idx === nothing ? String[] :
                    String[string(x) for x in expr.output_idx]
@@ -66,6 +66,51 @@ function _infer_expr_shape(expr::Expr,
     return String[]
 end
 
+# Op-class memberships for the array rewrites below and in pointwise_lift.jl.
+# NOTE: like flatten.jl's `_SPATIAL_OPS`/`_DIM_SPATIAL_OPS`, these belong in
+# op_registry.jl as membership flags; the registry is frozen this wave, so
+# they live here for now.
+#
+# Nodes that PRODUCE an array (subject to `output_idx` emptiness for the
+# reductions — see `_is_array_producer`).
+const _ARRAY_PRODUCER_OPS = ("aggregate", "arrayop", "makearray")
+# Nodes that carry their own indexing (the array producers plus an `index`
+# gather): the leaf-indexing rewrites never descend into them.
+const _SELF_INDEXED_OPS = ("aggregate", "arrayop", "makearray", "index")
+
+# Shared typed bare-array-reference rewrite: wrap array references in
+# `index(ref, loops…)` gathers. A `VarExpr` leaf naming a variable in
+# `arrayvars` is wrapped; an `OpExpr` for which `wrap_node` is true is wrapped
+# WHOLE (checked before `stop_node`); an `OpExpr` for which `stop_node` is true
+# is returned untouched (it is self-contained / carries its own indexing);
+# every other `OpExpr` recurses into `args` only (elementwise position) and is
+# rebuilt field-preservingly. The two typed callers share this leaf test and
+# wrap but differ in their wrap/stop predicate sets: `_index_array_leaves`
+# (below) and `_lift_rhs_to_cell` (pointwise_lift.jl). The raw-JSON dict twin
+# of this rewrite is `_index_bare` (below), which walks a discretized native
+# document instead of typed Exprs.
+function _wrap_bare_array_refs(expr::Expr, arrayvars::Set{String},
+                               loops::Vector{String};
+                               wrap_node, stop_node)::Expr
+    if expr isa VarExpr
+        expr.name in arrayvars || return expr
+        return _index_wrap(expr, loops)
+    elseif expr isa OpExpr
+        wrap_node(expr) && return _index_wrap(expr, loops)
+        stop_node(expr) && return expr
+        new_args = Expr[_wrap_bare_array_refs(a, arrayvars, loops;
+                                              wrap_node=wrap_node,
+                                              stop_node=stop_node)
+                        for a in expr.args]
+        return reconstruct(expr; args=new_args)
+    end
+    return expr
+end
+
+# `index(node, loops…)`: gather `node`'s element at the current cell.
+_index_wrap(node::Expr, loops::Vector{String})::OpExpr =
+    OpExpr("index", Expr[node, (VarExpr(l) for l in loops)...])
+
 # Replace each VarExpr leaf naming a promoted ARRAY variable with `index(v, loops…)`,
 # leaving scalar leaves (params, constants, reductions' results) untouched. Does
 # not descend into nested aggregate/arrayop bodies — those carry their own indexing.
@@ -80,29 +125,9 @@ end
 # `output_idx`) and an `index` gather stay untouched — they are already scalar.
 function _index_array_leaves(expr::Expr,
                              arrayvars::Set{String}, loops::Vector{String})::Expr
-    if expr isa VarExpr
-        if expr.name in arrayvars
-            idx = Expr[VarExpr(expr.name)]
-            for l in loops
-                push!(idx, VarExpr(l))
-            end
-            return OpExpr("index", idx)
-        end
-        return expr
-    elseif expr isa OpExpr
-        if _is_array_producer(expr)
-            idx = Expr[expr]
-            for l in loops
-                push!(idx, VarExpr(l))
-            end
-            return OpExpr("index", idx)
-        end
-        (expr.op == "aggregate" || expr.op == "arrayop" || expr.op == "makearray" ||
-         expr.op == "index") && return expr
-        new_args = Expr[_index_array_leaves(a, arrayvars, loops) for a in expr.args]
-        return reconstruct(expr; args=new_args)
-    end
-    return expr
+    return _wrap_bare_array_refs(expr, arrayvars, loops;
+        wrap_node = _is_array_producer,
+        stop_node = e -> e.op in _SELF_INDEXED_OPS)
 end
 
 # True iff `expr` is an array-PRODUCING node: a `makearray`, or an
@@ -111,13 +136,16 @@ end
 function _is_array_producer(expr::Expr)::Bool
     expr isa OpExpr || return false
     expr.op == "makearray" && return true
-    (expr.op == "aggregate" || expr.op == "arrayop") || return false
+    # The remaining producers (aggregate/arrayop) are array-valued only with a
+    # non-empty `output_idx` — a scalar reduction has an empty one.
+    expr.op in _ARRAY_PRODUCER_OPS || return false
     expr.output_idx === nothing && return false
     return any(s -> s isa AbstractString, expr.output_idx)
 end
 
 # Wrap a (formerly scalar) defining expression in an arrayop producing `shape`.
-# Loop vars are fresh simple names (`_p0`, `_p1`, …) — NOT the index-set names,
+# Loop vars are fresh simple names following the shape-promotion synthetic-name
+# convention `_p<k>` (zero-based: `_p0`, `_p1`, …) — NOT the index-set names,
 # which may be dotted/namespaced. Each shape axis ranges over the index set it
 # names (`{from: …}`); dimension sizes are declared via `index_sets` since the
 # removal of the Domain.spatial spec, so the domain contributes none here.
@@ -146,9 +174,9 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
     diff_states = Set{String}()
     alg_defined = Set{String}()
     for eq in flat.equations
-        if eq.lhs isa OpExpr && eq.lhs.op == "D" && !isempty(eq.lhs.args) &&
-           eq.lhs.args[1] isa VarExpr
-            push!(diff_states, (eq.lhs.args[1]::VarExpr).name)
+        dv = differential_lhs_variable(eq.lhs)
+        if dv !== nothing
+            push!(diff_states, dv)
         elseif eq.lhs isa VarExpr
             push!(alg_defined, (eq.lhs::VarExpr).name)
         end
@@ -186,29 +214,35 @@ order, so the spatial state equation `D(psi,t) = …` carries the fully-inlined 
 when no elementwise array observed exists. Returns a new system; the input is untouched.
 """
 function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSystem
-    is_array_obs(nm) = haskey(flat.observed_variables, nm) &&
-        (v = flat.observed_variables[nm]; v.shape !== nothing && !isempty(v.shape))
-    is_elementwise(rhs) = !(rhs isa OpExpr &&
-        ((rhs::OpExpr).op == "arrayop" || (rhs::OpExpr).op == "aggregate" ||
-         (rhs::OpExpr).op == "makearray"))
+    function is_array_obs(nm)
+        haskey(flat.observed_variables, nm) || return false
+        v = flat.observed_variables[nm]
+        return v.shape !== nothing && !isempty(v.shape)
+    end
+    is_elementwise(rhs) = !(rhs isa OpExpr && (rhs::OpExpr).op in _ARRAY_PRODUCER_OPS)
     targets = Dict{String,Expr}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
         nm = (eq.lhs::VarExpr).name
-        (is_array_obs(nm) && is_elementwise(eq.rhs)) && (targets[nm] = eq.rhs)
+        if is_array_obs(nm) && is_elementwise(eq.rhs)
+            targets[nm] = eq.rhs
+        end
     end
     isempty(targets) && return flat
 
     # Dependency order (the chain is feed-forward; a cycle is a real authoring
     # error). `free_variables` walks the shared `child_exprs` traversal, so a
     # dependency nested in an aggregate body / filter / bound is seen too.
-    order = String[]; done = Set{String}()
+    order = String[]
+    done = Set{String}()
     while length(order) < length(targets)
         progressed = false
         for (nm, rhs) in targets
             nm in done && continue
             if all(d -> d in done, intersect(free_variables(rhs), keys(targets)))
-                push!(order, nm); push!(done, nm); progressed = true
+                push!(order, nm)
+                push!(done, nm)
+                progressed = true
             end
         end
         progressed || throw(DimensionPromotionError(
@@ -348,8 +382,10 @@ Post-discretize pass: replace a BARE reference to a promoted array variable with
 var's per-cell value. Inside a nested `arrayop` the loops are its own `output_idx`;
 in the spatial state equation (`D(psi,t) = expr(i,j)`, which `discretize` lowers
 with the grad-rule grid loops — only AFTER `promote_downstream_shapes`) the loops
-are `spatial_loops`. Mutates and returns the native `doc`. This generalizes the
-driver's hand `couple_fields` bare→index rewrite.
+are `spatial_loops`. The `spatial_loops` default `["i","j"]` is a convention pin:
+it matches the literal grid-loop names the `discretize` grad-rule lowering emits
+for a 2-D spatial state equation. Mutates and returns the native `doc`. This
+generalizes the driver's hand `couple_fields` bare→index rewrite.
 """
 function index_promoted_refs!(doc::AbstractDict, arrayvars;
                               spatial_loops::Vector{String}=["i","j"])::AbstractDict
@@ -370,6 +406,10 @@ end
 # Single loop-tracking walk: `loops` is the iteration context for bare promoted
 # refs. An `arrayop` switches the context to its own output_idx for its body; an
 # `index` node keeps its array operand (arg 1) and recurses only the index exprs.
+# This is the raw-JSON dict twin of the typed `_wrap_bare_array_refs` rewrite
+# above (same leaf test + `index(ref, loops…)` wrap); it stays separate because
+# it walks a discretized NATIVE document (string leaves, `{"op": …}` dicts,
+# loop-context switching at `arrayop`) rather than typed Exprs.
 function _index_bare(node, av::Set{String}, loops::Vector{String})
     if node isa AbstractString
         return node in av ? Dict{String,Any}("op"=>"index", "args"=>Any[node, loops...]) : node

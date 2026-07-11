@@ -15,6 +15,34 @@ const DEFAULT_SPECIES_CONCENTRATION = 1.0
 const DEFAULT_SPECIES_UNITS = "mol/L"
 
 """
+    each_stoich_term(rxn::Reaction) -> Vector{Tuple{String,Float64}}
+
+The reaction's stoichiometry as `(species, signed_stoichiometry)` pairs:
+substrates first with NEGATIVE sign, then products with POSITIVE sign, each
+side in its declared order. Uses `raw_substrates`/`raw_products`, which bypass
+the backward-compat `getproperty` Dict shim on `Reaction`. This is the single
+signed-stoichiometry iteration shared by `lower_reactions_to_equations`,
+`stoichiometric_matrix`, and flatten's reaction-species collection
+(`_collect_reaction_species!`).
+"""
+function each_stoich_term(rxn::Reaction)::Vector{Tuple{String,Float64}}
+    terms = Tuple{String,Float64}[]
+    substrates = raw_substrates(rxn)
+    if substrates !== nothing
+        for entry in substrates
+            push!(terms, (entry.species, -entry.stoichiometry))
+        end
+    end
+    products = raw_products(rxn)
+    if products !== nothing
+        for entry in products
+            push!(terms, (entry.species, entry.stoichiometry))
+        end
+    end
+    return terms
+end
+
+"""
     derive_odes(rxn_sys::ReactionSystem) -> Model
 
 Generate an ODE model from a reaction system using standard mass action kinetics.
@@ -127,26 +155,9 @@ function stoichiometric_matrix(rxn_sys::ReactionSystem)::Matrix{Float64}
     S = zeros(Float64, n_species, n_reactions)
 
     for (j, reaction) in enumerate(rxn_sys.reactions)
-        # Use getfield to bypass the backward-compat getproperty overrides that
-        # would convert :products into a Dict of Pairs — StoichiometryEntry has
-        # .species/.stoichiometry and does not match the Pair API.
-        substrates = getfield(reaction, :substrates)
-        if substrates !== nothing
-            for entry in substrates
-                if haskey(species_idx, entry.species)
-                    i = species_idx[entry.species]
-                    S[i, j] -= entry.stoichiometry
-                end
-            end
-        end
-
-        products = getfield(reaction, :products)
-        if products !== nothing
-            for entry in products
-                if haskey(species_idx, entry.species)
-                    i = species_idx[entry.species]
-                    S[i, j] += entry.stoichiometry
-                end
+        for (species, signed_stoich) in each_stoich_term(reaction)
+            if haskey(species_idx, species)
+                S[species_idx[species], j] += signed_stoich
             end
         end
     end
@@ -207,6 +218,7 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::Expr
         end
     end
 
-    return length(mass_action_terms) == 1 ? mass_action_terms[1] :
-           OpExpr("*", mass_action_terms)
+    # The substrate loop above pushed at least one factor (the early return
+    # covers the no-substrate case), so there are always ≥ 2 terms here.
+    return OpExpr("*", mass_action_terms)
 end
