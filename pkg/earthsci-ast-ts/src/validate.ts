@@ -10,6 +10,7 @@ import {
   load,
   ParseError,
   SchemaValidationError,
+  ROOT_PATH,
   type SchemaError,
 } from './parse.js'
 import { ExpressionTemplateError } from './lower-expression-templates.js'
@@ -1230,24 +1231,23 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
               details: { reference: ref, system: systemName },
             })
           } else {
-            // Check variable exists in the system
+            // Check the variable exists in the model / reaction_system. Whether
+            // a DATA LOADER exposes a variable is NOT resolved here — that is the
+            // sole responsibility of `validateDataLoaderReferences` (which covers
+            // both `from` and `to`). A loader-only head therefore leaves `system`
+            // undefined and this branch emits nothing, deferring to that pass.
             const system =
               (esmFile.models || {})[systemName] || (esmFile.reaction_systems || {})[systemName]
             if (system) {
               const vars = (system as any).variables || (system as any).species || {}
               const params = (system as any).parameters || {}
               if (!vars[varName] && !params[varName]) {
-                // Check data loaders
-                const dataLoader = (esmFile.data_loaders || {})[systemName]
-                const loaderVariables = dataLoader?.variables || {}
-                if (!loaderVariables[varName]) {
-                  errors.push({
-                    path: `${couplingPath}/${field}`,
-                    code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
-                    message: `Variable "${varName}" not found in system "${systemName}"`,
-                    details: { reference: ref, system: systemName, variable: varName },
-                  })
-                }
+                errors.push({
+                  path: `${couplingPath}/${field}`,
+                  code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+                  message: `Variable "${varName}" not found in system "${systemName}"`,
+                  details: { reference: ref, system: systemName, variable: varName },
+                })
               }
             }
           }
@@ -1332,17 +1332,18 @@ function validateCircularReferences(esmFile: EsmFile): StructuralError[] {
 }
 
 /**
- * Validate data loader variable references in coupling entries.
+ * Validate data-loader variable references in coupling entries.
  *
- * NOTE (overlap, deferred): `validateCouplingIntegrity` also checks a
- * variable_map `from`/`to` against a system's members and, for a data-loader
- * head, emits `unresolved_scoped_ref` — whereas THIS pass emits the more
- * specific `undefined_data_loader_variable`. The two do not collide in
- * practice: `validateCouplingIntegrity` only reaches the loader-variable check
- * when the head also resolves as a model/reaction_system (a name collision),
- * otherwise `system` is undefined and it emits nothing. Consolidating them
- * would change WHICH code fires for such a collision, so they are kept separate
- * and the overlap is documented rather than merged.
+ * This pass is the SINGLE authority for whether a data-loader-exposed variable
+ * resolves, covering BOTH endpoints of a `variable_map` (`from` AND `to`): a
+ * scoped ref whose head names a data loader is checked here and only here,
+ * always emitting `undefined_data_loader_variable`. `validateCouplingIntegrity`
+ * deliberately does NOT resolve loader-headed refs (it keeps only model /
+ * reaction_system membership handling), so the two passes no longer overlap —
+ * even for a name collision (a head that resolves as both a model/reaction_system
+ * AND a data loader): the loader-exposed-variable question is answered solely
+ * here, while `validateCouplingIntegrity`'s model-membership check independently
+ * governs the model side.
  */
 function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
@@ -1351,32 +1352,32 @@ function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[] {
   for (let i = 0; i < esmFile.coupling.length; i++) {
     const coupling = esmFile.coupling[i]
     const couplingPath = `/coupling/${i}`
+    if (coupling.type !== 'variable_map') continue
+    const vmEntry = coupling as CouplingVariableMap
 
-    if (coupling.type === 'variable_map' && 'from' in coupling) {
-      const from = (coupling as any).from as string
-      if (from && from.includes('.')) {
-        // Keep the FULL variable path after the source head — a 2-limit split
-        // (`from.split('.', 2)`) would truncate "Loader.a.b" to variable "a"
-        // (a JS-vs-Go SplitN discrepancy). splitScopedRef mirrors Go's
-        // strings.SplitN(from, ".", 2) remainder semantics.
-        const [sourceName, varName] = splitScopedRef(from)
-        // Check if source is a data loader
-        if (esmFile.data_loaders[sourceName]) {
-          const loader = esmFile.data_loaders[sourceName]
-          const loaderVariables = loader.variables || {}
-          if (!(varName in loaderVariables)) {
-            errors.push({
-              path: `${couplingPath}/from`,
-              message: `Data loader '${sourceName}' does not expose variable '${varName}'`,
-              code: ERROR_CODES.UNDEFINED_DATA_LOADER_VARIABLE,
-              details: {
-                data_loader: sourceName,
-                variable: varName,
-                available: Object.keys(loaderVariables),
-              },
-            })
-          }
-        }
+    for (const field of ['from', 'to'] as const) {
+      const ref = vmEntry[field]
+      if (typeof ref !== 'string' || !ref.includes('.')) continue
+      // Keep the FULL variable path after the source head — a 2-limit split
+      // (`ref.split('.', 2)`) would truncate "Loader.a.b" to variable "a"
+      // (a JS-vs-Go SplitN discrepancy). splitScopedRef mirrors Go's
+      // strings.SplitN(ref, ".", 2) remainder semantics.
+      const [sourceName, varName] = splitScopedRef(ref)
+      // Only a data-loader head is this pass's concern.
+      const loader = esmFile.data_loaders[sourceName]
+      if (!loader) continue
+      const loaderVariables = loader.variables || {}
+      if (!(varName in loaderVariables)) {
+        errors.push({
+          path: `${couplingPath}/${field}`,
+          message: `Data loader '${sourceName}' does not expose variable '${varName}'`,
+          code: ERROR_CODES.UNDEFINED_DATA_LOADER_VARIABLE,
+          details: {
+            data_loader: sourceName,
+            variable: varName,
+            available: Object.keys(loaderVariables),
+          },
+        })
       }
     }
   }
@@ -1428,12 +1429,10 @@ function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[]
   return warnings
     .filter((warning) => warning.code === ERROR_CODES.DIMENSIONAL_MISMATCH)
     .map((warning) => ({
-      // NOTE: the `'$'` root-path sentinel here (and in validate()'s catch
-      // blocks) is left as-is rather than normalized to the schema layer's
-      // `'/'`. It is only emitted for a location-less warning; changing it
-      // would alter an emitted `path` string, which the cross-language goldens
-      // may pin, so normalization is deferred.
-      path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : '$',
+      // Root token is the shared `ROOT_PATH` ('$'), used only when the warning
+      // carries no location (consistent with validate()'s catch blocks and
+      // parse.ts's schema-error root fallback).
+      path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : ROOT_PATH,
       message: warning.message,
       code: ERROR_CODES.UNIT_ERROR,
       details: { equation: warning.equation || '' },
@@ -1608,7 +1607,7 @@ export function validate(data: string | object): ValidationResult {
           is_valid: false,
           schema_errors: [
             {
-              path: '$',
+              path: ROOT_PATH,
               message: `Invalid JSON: ${error.message}`,
               code: ERROR_CODES.JSON_PARSE_ERROR,
               details: { error: error.message },
@@ -1643,7 +1642,7 @@ export function validate(data: string | object): ValidationResult {
       } catch (e: unknown) {
         const error = e as Error
         structural_errors.push({
-          path: '$',
+          path: ROOT_PATH,
           message: error.message || String(e),
           code: loadErrorCode(error),
           details: {
@@ -1660,7 +1659,7 @@ export function validate(data: string | object): ValidationResult {
       is_valid: false,
       schema_errors: [
         {
-          path: '$',
+          path: ROOT_PATH,
           message: `Validation failed with unexpected error: ${error.message || String(e)}`,
           code: ERROR_CODES.UNEXPECTED_ERROR,
           details: {

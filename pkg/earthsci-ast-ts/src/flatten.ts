@@ -347,16 +347,16 @@ function processCouplingEntry(acc: FlattenAccumulator, entry: CouplingEntry): vo
         break
       }
       const ruleDesc = `variable_map(${entry.from} -> ${entry.to}, ${entry.transform})`
-      // KNOWN LIMITATION (documented, output intentionally unchanged): only the
-      // `conversion_factor` transform consumes `entry.factor` (as `factor *
-      // from`). The `additive` and `multiplicative` transforms — and any
-      // `factor` supplied with them — currently collapse to an identity map
-      // (`to = from`), silently dropping the scaling/offset. The flattened
-      // rhs strings for those transforms are NOT yet spec-pinned, so emitting
-      // one here would introduce untested output; handling them is deferred to
-      // a wave that pins their string form. `param_to_var`/`identity` are
-      // correctly identity maps.
-      if (entry.transform === 'conversion_factor' && entry.factor !== undefined) {
+      // `factor` is a scaling coefficient the schema permits only on the scaling
+      // transforms (additive / multiplicative / conversion_factor), so apply it
+      // uniformly whenever present — the mapped value becomes `factor * from`.
+      // This mirrors Rust (`apply_variable_map`), Python (`_apply_variable_map`),
+      // and Go (`applyVariableMap`), which all scale by `factor` regardless of
+      // which scaling transform is named; TS previously honored only
+      // `conversion_factor`, silently dropping the factor for additive /
+      // multiplicative. A factor of 1 (or absent) is a no-op identity map, as
+      // are `param_to_var` / `identity` (which never carry a factor).
+      if (entry.factor !== undefined && entry.factor !== 1) {
         variables[entry.to] = `${entry.factor} * ${entry.from}`
       } else {
         variables[entry.to] = entry.from

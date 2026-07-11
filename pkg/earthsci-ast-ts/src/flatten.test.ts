@@ -117,6 +117,29 @@ describe('flatten', () => {
     expect(flat.variables['Sink.y']).toBe('((2 * Src.F) + Sink.offset)')
   })
 
+  it('applies the factor scaling for additive/multiplicative/conversion_factor transforms', () => {
+    const makeFile = (transform: 'additive' | 'multiplicative' | 'conversion_factor', factor?: number) =>
+      ({
+        esm: '0.1.0',
+        metadata: { name: 'test' },
+        models: {
+          A: { variables: { x: { type: 'state' } }, equations: [] },
+          B: { variables: { y: { type: 'parameter' } }, equations: [] },
+        },
+        coupling: [{ type: 'variable_map', from: 'A.x', to: 'B.y', transform, factor }],
+      }) satisfies EsmFile
+
+    // Factor applies uniformly across every scaling transform (mirrors Rust /
+    // Python / Go: `factor * from`, additive and multiplicative alike).
+    expect(flatten(makeFile('multiplicative', 2.5)).variables['B.y']).toBe('2.5 * A.x')
+    expect(flatten(makeFile('additive', 3)).variables['B.y']).toBe('3 * A.x')
+    expect(flatten(makeFile('conversion_factor', 1000)).variables['B.y']).toBe('1000 * A.x')
+
+    // A factor of 1 (or absent) is a no-op identity map.
+    expect(flatten(makeFile('multiplicative', 1)).variables['B.y']).toBe('A.x')
+    expect(flatten(makeFile('additive')).variables['B.y']).toBe('A.x')
+  })
+
   it('produces nested dot-namespacing for subsystems', () => {
     const file = {
       esm: '0.1.0',

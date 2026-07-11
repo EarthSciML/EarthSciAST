@@ -9,7 +9,7 @@
  * factor rather than being treated as independent dimensions.
  */
 
-import type { Expression, ExpressionNode, EsmFile } from './types.js'
+import type { Expression, ExpressionNode, EsmFile, Model } from './types.js'
 import {
   type CanonicalDims,
   type ParsedUnit,
@@ -18,6 +18,7 @@ import {
 } from './unit-conversion.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { getOpInfo } from './op-registry.js'
+import { forEachComponent, forEachEquation } from './traverse.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
@@ -430,26 +431,64 @@ function checkAndReport(
 }
 
 /**
+ * Build the coordinate → units table a model's `grad`/`div`/`laplacian` ops
+ * resolve their `dim` against. Mirrors Julia's `_collect_coordinate_units`
+ * (validate.jl): every declared model variable maps to its parsed units, and a
+ * variable declared WITHOUT units maps to a dimensionless entry. `checkDimensions`
+ * then flags a grad whose `dim` names a dimensionless (no-units) coordinate,
+ * resolves one naming a coordinate WITH units, and — for a `dim` that is NOT a
+ * declared variable (an index-set axis) — finds no entry and falls back to the
+ * metre denominator. Parameters live in `variables` (type `parameter`) so they
+ * are covered by the same loop, matching Julia's `model.variables`.
+ */
+function buildCoordinateBindings(model: Model): Map<string, ParsedUnit> {
+  const coords = new Map<string, ParsedUnit>()
+  for (const [name, variable] of Object.entries(model.variables ?? {})) {
+    coords.set(name, variable.units ? parseUnit(variable.units) : dimensionless())
+  }
+  return coords
+}
+
+/**
  * Validate dimensional consistency of equations in an ESM file.
  *
- * SCOPE: checks only TOP-LEVEL `models` — each model's dynamic `equations` and
- * its `observed` variable expressions. It deliberately does NOT recurse into
- * `subsystems`, nor check reaction-system `constraint_equations`. The
- * unit-binding environment is assembled only from top-level declarations, so
- * descending would report spurious "Unknown variable" warnings for
- * subsystem-local names on existing fixtures. Callers needing broader coverage
- * should assemble their own bindings and call `checkDimensions` directly.
+ * SCOPE: every real inline component — each top-level model / reaction system
+ * AND their inline `subsystems` (walked via `forEachComponent(..., {recurse:
+ * true})`; reference-stub and data-loader subsystems are opaque leaves and are
+ * skipped). For each, `forEachEquation` covers a model's dynamic `equations`
+ * and a reaction system's `constraint_equations`; models additionally have
+ * their `observed` variable expressions checked.
  *
- * SPATIAL COORDINATES: `validateUnits` never supplies `checkDimensions`'
- * optional `coordinateBindings`, so `grad`/`div`/`laplacian` here fall back to
- * the metre-denominator default. To resolve spatial-derivative units against a
- * model's declared domain, call `checkDimensions` directly with a
- * `coordinateBindings` map.
+ * BINDINGS: the shared top-level environment (top-level models' variables +
+ * reaction systems' species/parameters, scoped key + bare first-wins) is used
+ * for EVERY component, including subsystems. Subsystem-local declarations are
+ * deliberately NOT added, so a name defined only inside a subsystem stays an
+ * "Unknown variable" and keeps the mismatch-suppression in `checkAndReport`.
+ * This is the conservative scope required to broaden coverage without
+ * introducing cross-language divergence: binding a subsystem's own variables
+ * would un-suppress equation-level mismatches for nondimensionalized subsystem
+ * ODEs (e.g. `D(u,t) = k*u` with a dimensionless `u`), which the other bindings
+ * — none of which run a full per-equation dimensional check — never flag. A
+ * top-level reaction system's `constraint_equations` still resolve fully,
+ * because that system's species/parameters ARE in the shared environment.
+ *
+ * SPATIAL COORDINATES: each model supplies `checkDimensions` a
+ * `coordinateBindings` map built from its declared variables (see
+ * {@link buildCoordinateBindings}), so `grad`/`div`/`laplacian` resolve their
+ * `dim` against the model's own declarations (mirroring Julia's
+ * `validate_model_gradient_units`). Reaction-system constraint equations get no
+ * coordinate table (gradient-unit resolution is model-only in Julia), so any
+ * grad there keeps the metre-denominator fallback.
  */
 export function validateUnits(file: EsmFile): UnitWarning[] {
   const warnings: UnitWarning[] = []
-  const unitBindings = new Map<string, ParsedUnit>()
 
+  // Shared binding environment: top-level models' variables + reaction systems'
+  // species/parameters (scoped key + bare first-wins). This is the ONLY
+  // environment — subsystem-local declarations are never added (see the
+  // docstring's BINDINGS note), so a subsystem-only name stays unbound and its
+  // equation-level mismatch is suppressed.
+  const unitBindings = new Map<string, ParsedUnit>()
   if (file.models) {
     for (const [modelName, model] of Object.entries(file.models)) {
       if ('variables' in model && model.variables) {
@@ -459,7 +498,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       }
     }
   }
-
   if (file.reaction_systems) {
     for (const [systemName, system] of Object.entries(file.reaction_systems)) {
       if ('species' in system && system.species) {
@@ -467,7 +505,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
           addBinding(unitBindings, systemName, speciesName, species.units)
         }
       }
-
       if ('parameters' in system && system.parameters) {
         for (const [paramName, param] of Object.entries(system.parameters)) {
           addBinding(unitBindings, systemName, paramName, param.units)
@@ -480,58 +517,76 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   // (`validateReactionRateUnits`) so it can emit a structured
   // `unit_inconsistency` error with typed details instead of a prose warning.
 
-  if (file.models) {
-    for (const [modelName, model] of Object.entries(file.models)) {
-      if ('equations' in model && model.equations) {
-        const location = `models.${modelName}`
-        for (const equation of model.equations) {
-          checkAndReport(warnings, location, 'Error checking equation dimensions', () => {
-            const lhsResult = checkDimensions(equation.lhs, unitBindings)
-            const rhsResult = checkDimensions(equation.rhs, unitBindings)
-            const diagnostics = [...lhsResult.diagnostics, ...rhsResult.diagnostics]
-            const mismatch: UnitWarning | null = dimsEqual(
-              lhsResult.dimensions.dims,
-              rhsResult.dimensions.dims,
-            )
-              ? null
-              : {
-                  message: `Dimensional mismatch in equation: LHS has ${formatDims(lhsResult.dimensions.dims)}, RHS has ${formatDims(rhsResult.dimensions.dims)}`,
-                  code: 'dimensional_mismatch',
-                  location,
-                  equation: `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`,
-                }
-            return { diagnostics, mismatch }
-          })
-        }
-      }
+  forEachComponent(
+    file,
+    (visit) => {
+      if (visit.isReference) return
+      const { scopedName, component } = visit
+      const location = `${visit.kind}.${scopedName}`
 
-      if ('variables' in model && model.variables) {
-        for (const [varName, variable] of Object.entries(model.variables)) {
+      // Every component (top-level and subsystem) shares `unitBindings`;
+      // subsystem-local names stay unbound (see the docstring's BINDINGS note),
+      // preserving the legacy mismatch-suppression.
+
+      // Coordinate table for grad/div/laplacian — models only (a reaction
+      // system has no `variables`, so `undefined` here keeps the metre fallback
+      // for any grad in a constraint equation).
+      const coordinateBindings =
+        'variables' in component ? buildCoordinateBindings(component) : undefined
+
+      forEachEquation(component, (equation) => {
+        checkAndReport(warnings, location, 'Error checking equation dimensions', () => {
+          const lhsResult = checkDimensions(equation.lhs, unitBindings, coordinateBindings)
+          const rhsResult = checkDimensions(equation.rhs, unitBindings, coordinateBindings)
+          const diagnostics = [...lhsResult.diagnostics, ...rhsResult.diagnostics]
+          const mismatch: UnitWarning | null = dimsEqual(
+            lhsResult.dimensions.dims,
+            rhsResult.dimensions.dims,
+          )
+            ? null
+            : {
+                message: `Dimensional mismatch in equation: LHS has ${formatDims(lhsResult.dimensions.dims)}, RHS has ${formatDims(rhsResult.dimensions.dims)}`,
+                code: 'dimensional_mismatch',
+                location,
+                equation: `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`,
+              }
+          return { diagnostics, mismatch }
+        })
+      })
+
+      if ('variables' in component && component.variables) {
+        for (const [varName, variable] of Object.entries(component.variables)) {
           if (variable.type === 'observed' && variable.expression) {
             const expression = variable.expression
-            const location = `models.${modelName}.variables.${varName}`
-            checkAndReport(warnings, location, 'Error checking observed variable dimensions', () => {
-              const exprResult = checkDimensions(expression, unitBindings)
-              const varDims: ParsedUnit = variable.units
-                ? parseUnit(variable.units)
-                : dimensionless()
-              const mismatch: UnitWarning | null = dimsEqual(
-                exprResult.dimensions.dims,
-                varDims.dims,
-              )
-                ? null
-                : {
-                    message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
-                    code: 'dimensional_mismatch',
-                    location,
-                  }
-              return { diagnostics: exprResult.diagnostics, mismatch }
-            })
+            const varLocation = `${location}.variables.${varName}`
+            checkAndReport(
+              warnings,
+              varLocation,
+              'Error checking observed variable dimensions',
+              () => {
+                const exprResult = checkDimensions(expression, unitBindings, coordinateBindings)
+                const varDims: ParsedUnit = variable.units
+                  ? parseUnit(variable.units)
+                  : dimensionless()
+                const mismatch: UnitWarning | null = dimsEqual(
+                  exprResult.dimensions.dims,
+                  varDims.dims,
+                )
+                  ? null
+                  : {
+                      message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
+                      code: 'dimensional_mismatch',
+                      location: varLocation,
+                    }
+                return { diagnostics: exprResult.diagnostics, mismatch }
+              },
+            )
           }
         }
       }
-    }
-  }
+    },
+    { recurse: true },
+  )
 
   return warnings
 }
