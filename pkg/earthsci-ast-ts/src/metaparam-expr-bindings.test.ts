@@ -25,8 +25,8 @@ import * as path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { load } from './parse.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
-import { EsmMachineryError } from './lower-expression-templates.js'
 import { evalMetaExpr, requireMetaExpr, resolveTemplateMachinery } from './template-imports.js'
+import { errCode, errCodeAsync } from './test-helpers.js'
 
 let dir: string
 
@@ -42,27 +42,6 @@ function write(name: string, doc: unknown): string {
   const p = path.join(dir, name)
   fs.writeFileSync(p, JSON.stringify(doc))
   return p
-}
-
-/** Return the thrown EsmMachineryError code, or null on success. */
-function errCode(fn: () => unknown): string | null {
-  try {
-    fn()
-    return null
-  } catch (e) {
-    if (e instanceof EsmMachineryError) return e.code
-    throw e
-  }
-}
-
-async function errCodeAsync(fn: () => Promise<unknown>): Promise<string | null> {
-  try {
-    await fn()
-    return null
-  } catch (e) {
-    if (e instanceof EsmMachineryError) return e.code
-    throw e
-  }
 }
 
 // --------------------------------------------------------------------------

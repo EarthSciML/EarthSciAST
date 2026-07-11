@@ -16,37 +16,22 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { load } from './parse.js'
 import { save } from './serialize.js'
 import { ephemeralInjectedFile, resolveSubsystemRefs } from './ref-loading.js'
-import { EsmMachineryError } from './lower-expression-templates.js'
+import { errCode, fixturesDir, loadFixtureFile } from './test-helpers.js'
 
-const repoRoot = path.resolve(__dirname, '../../..')
-const conf = (...parts: string[]) =>
-  path.join(repoRoot, 'tests', 'conformance', 'expression_templates', ...parts)
+const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_templates', ...parts)
 
 const golden = (goldenPath: string): unknown => JSON.parse(fs.readFileSync(goldenPath, 'utf8'))
 
 /** load() from a fixture path with the fixture's directory as basePath. */
-function loadPath(p: string): any {
-  return load(fs.readFileSync(p, 'utf8'), { basePath: path.dirname(p) })
-}
+const loadPath = (p: string): any => loadFixtureFile(p)
 
 /** load() then resolve subsystem refs (the assembled document). */
 async function loadResolved(p: string): Promise<any> {
   const f = loadPath(p)
   await resolveSubsystemRefs(f, path.dirname(p))
   return f
-}
-
-function errCode(f: () => unknown): string | null {
-  try {
-    f()
-    return null
-  } catch (e) {
-    if (e instanceof EsmMachineryError) return e.code
-    throw e
-  }
 }
 
 describe('scope-directed template injection (esm-spec §9.7.10)', () => {

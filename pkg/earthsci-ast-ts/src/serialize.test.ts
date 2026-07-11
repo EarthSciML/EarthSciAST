@@ -9,16 +9,13 @@
  *     discriminator per RFC §5.4.6 (e.g. `floatLit(1)` emits as `1.0`)
  */
 import { describe, it, expect } from 'vitest'
-import * as fs from 'fs'
-import * as path from 'path'
 import { load } from './parse.js'
 import { save } from './serialize.js'
 import { intLit, floatLit, losslessJsonParse } from './numeric-literal.js'
-
-const REPO_ROOT = path.join(__dirname, '..', '..', '..')
+import { readFixture } from './test-helpers.js'
 
 function fixture(name: string): string {
-  return fs.readFileSync(path.join(REPO_ROOT, 'tests', 'valid', name), 'utf-8')
+  return readFixture('valid', name)
 }
 
 describe('save() — NumericLiteral handling', () => {

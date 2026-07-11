@@ -14,6 +14,7 @@ import {
 } from './lower-expression-templates.js'
 import { EsmDiagnosticError } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
+import { fixturesDir } from './test-helpers.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
 // `arrhenius` template and one inline rate, plus an arithmetic check.
@@ -180,14 +181,11 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   })
 
   it('conformance fixture matches the canonical expanded form (cross-binding pin)', () => {
-    const root = path.resolve(__dirname, '../../..')
-    const fixturePath = path.join(
-      root,
-      'tests/conformance/expression_templates/arrhenius_smoke/fixture.esm',
+    const fixturePath = fixturesDir(
+      'conformance/expression_templates/arrhenius_smoke/fixture.esm',
     )
-    const expandedPath = path.join(
-      root,
-      'tests/conformance/expression_templates/arrhenius_smoke/expanded.esm',
+    const expandedPath = fixturesDir(
+      'conformance/expression_templates/arrhenius_smoke/expanded.esm',
     )
     const file = load(fs.readFileSync(fixturePath, 'utf8'))
     const expanded = JSON.parse(fs.readFileSync(expandedPath, 'utf8'))
@@ -198,10 +196,8 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     // The v0.8.0 variable_map expression-transform widening: a coupling
     // `transform` invoking a template declared by the RECEIVING component
     // expands at load against that component's registry (§9.6.4).
-    const root = path.resolve(__dirname, '../../..')
-    const casedir = path.join(
-      root,
-      'tests/conformance/expression_templates/coupling_transform_expression',
+    const casedir = fixturesDir(
+      'conformance/expression_templates/coupling_transform_expression',
     )
     const file = load(
       fs.readFileSync(path.join(casedir, 'fixture.esm'), 'utf8'),
@@ -463,7 +459,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
 // ---------------------------------------------------------------------------
 
 describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)', () => {
-  const confDir = path.resolve(__dirname, '../../..', 'tests/conformance/expression_templates')
+  const confDir = fixturesDir('conformance/expression_templates')
   const fixtureText = (name: string) =>
     fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8')
   // Mirror the Julia driver `_lower_conf`: parse the fixture and run the
@@ -893,11 +889,7 @@ describe('scalar_field_param conformance fixture', () => {
   // Drives tests/conformance/expression_templates/scalar_field_param — the
   // scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
   // (planar / spherical) — against its pinned Julia-generated expanded.esm.
-  const caseDir = path.resolve(
-    __dirname,
-    '../../..',
-    'tests/conformance/expression_templates/scalar_field_param',
-  )
+  const caseDir = fixturesDir('conformance/expression_templates/scalar_field_param')
 
   it('matches the canonical expanded form', () => {
     const fixture = JSON.parse(fs.readFileSync(path.join(caseDir, 'fixture.esm'), 'utf8'))
@@ -917,7 +909,7 @@ describe('scalar_field_param conformance fixture', () => {
 // ---------------------------------------------------------------------------
 
 describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
-  const confDir = path.resolve(__dirname, '../../..', 'tests/conformance/expression_templates')
+  const confDir = fixturesDir('conformance/expression_templates')
   const fixture = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8'))
   const golden = (name: string) =>
@@ -1093,7 +1085,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
 // ---------------------------------------------------------------------------
 
 describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
-  const validDir = path.resolve(__dirname, '../../..', 'tests/valid')
+  const validDir = fixturesDir('valid')
 
   it('empty bound [start, start-1] loads clean at the minimum extent', () => {
     // tests/valid/makearray_empty_region_min_extent.esm folds the interior

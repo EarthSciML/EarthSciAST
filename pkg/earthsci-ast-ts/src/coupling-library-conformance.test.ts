@@ -19,37 +19,28 @@ import { flatten } from './flatten.js'
 import { expandCouplingImports } from './coupling-imports.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import { validate } from './validate.js'
+import {
+  errCode as errCodeShared,
+  errCodeAsync as errCodeAsyncShared,
+  fixturesDir,
+  loadFixtureFile,
+} from './test-helpers.js'
 import type { CouplingEntry, EsmFile } from './types.js'
 
-const repoRoot = path.resolve(__dirname, '../../..')
-const dir = path.join(repoRoot, 'tests', 'coupling_libraries')
+const dir = fixturesDir('coupling_libraries')
 const cl = (...parts: string[]): string => path.join(dir, ...parts)
 
 const readText = (p: string): string => fs.readFileSync(p, 'utf8')
 const readJson = (p: string): Record<string, unknown> => JSON.parse(readText(p))
 
 /** load() a fixture with the fixtures directory as basePath. */
-function loadPath(p: string): EsmFile {
-  return load(readText(p), { basePath: path.dirname(p) })
-}
+const loadPath = (p: string): EsmFile => loadFixtureFile(p)
 
-/** Run `fn`; return the thrown error's `.code`, or a sentinel. */
-function errCode(fn: () => unknown): string {
-  try {
-    fn()
-    return 'NO_ERROR'
-  } catch (e) {
-    return (e as { code?: string }).code ?? 'NON_CODE_ERROR'
-  }
-}
-async function errCodeAsync(fn: () => Promise<unknown>): Promise<string> {
-  try {
-    await fn()
-    return 'NO_ERROR'
-  } catch (e) {
-    return (e as { code?: string }).code ?? 'NON_CODE_ERROR'
-  }
-}
+// This file-corpus suite uses the legacy sentinel contract: 'NO_ERROR' on
+// success and `err.code ?? 'NON_CODE_ERROR'` for any throw (never rethrows).
+const errCode = (fn: () => unknown): string | null => errCodeShared(fn, { sentinel: true })
+const errCodeAsync = (fn: () => Promise<unknown>): Promise<string | null> =>
+  errCodeAsyncShared(fn, { sentinel: true })
 
 /** Expand a fixture's coupling_import edges (typed convenience). */
 function expandFixture(p: string): CouplingEntry[] {

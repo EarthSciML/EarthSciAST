@@ -3,9 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { validate } from './validate.js'
+import { readFixture } from './test-helpers.js'
 
 describe('Structural validation', () => {
   it('should detect equation count mismatch', () => {
@@ -324,16 +323,7 @@ describe('Structural validation', () => {
   // at the usage site `gas_law_calculation` (mirrors Python's
   // parse._check_physical_constant_units, gt-3tgv).
   it('should reject units_dimensional_constant_error.esm with unit_inconsistency at usage site', () => {
-    const fixturePath = join(
-      __dirname,
-      '..',
-      '..',
-      '..',
-      'tests',
-      'invalid',
-      'units_dimensional_constant_error.esm',
-    )
-    const content = readFileSync(fixturePath, 'utf-8')
+    const content = readFixture('invalid', 'units_dimensional_constant_error.esm')
     const result = validate(content)
     expect(result.is_valid).toBe(false)
     const err = result.structural_errors.find(

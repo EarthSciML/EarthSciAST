@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { canonicalJson } from './canonicalize.js'
 import { losslessJsonParse } from './numeric-literal.js'
+import { readFixture } from './test-helpers.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-// pkg/earthsci-ast-ts/src/ -> repo root is 3 levels up.
-const REPO_ROOT = resolve(__dirname, '..', '..', '..')
-const FIXTURES_DIR = resolve(REPO_ROOT, 'tests', 'conformance', 'canonical')
+const canon = (...segments: string[]): string => readFixture('conformance', 'canonical', ...segments)
 
 interface ManifestEntry {
   id: string
@@ -21,7 +15,7 @@ interface Manifest {
   fixtures: ManifestEntry[]
 }
 
-const manifest: Manifest = JSON.parse(readFileSync(resolve(FIXTURES_DIR, 'manifest.json'), 'utf-8'))
+const manifest: Manifest = JSON.parse(canon('manifest.json'))
 
 describe('canonical-form cross-binding conformance', () => {
   for (const entry of manifest.fixtures) {
@@ -29,9 +23,7 @@ describe('canonical-form cross-binding conformance', () => {
     // tagged `intLit` leaves and JSON-float tokens (`1.0`, `5e-324`) become
     // `floatLit` leaves. Preserves the RFC §5.4.1 distinction that the
     // binding's canonical form depends on.
-    const raw = losslessJsonParse(
-      readFileSync(resolve(FIXTURES_DIR, entry.path), 'utf-8'),
-    ) as Record<string, unknown>
+    const raw = losslessJsonParse(canon(entry.path)) as Record<string, unknown>
     const expected = raw.expected as string
     const input = raw.input
     const test = entry.ts_skip ? it.skip : it

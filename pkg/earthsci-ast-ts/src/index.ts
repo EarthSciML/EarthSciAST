@@ -16,7 +16,10 @@
  * ```
  */
 
-// Re-export all types from types.ts (which includes generated types and augmentations)
+// Intentional full wildcard re-export of the schema type-definition barrel
+// (generated schema types plus augmentations — dozens of type aliases). Kept as
+// `export *` on purpose: enumerating every generated type by name is fragile and
+// churns with the schema, and this module owns only type definitions.
 export * from './types.js'
 
 // Export parsing and serialization functions
@@ -47,8 +50,58 @@ export type {
   DependencyEdge,
 } from './graph.js'
 
-// Export advanced expression analysis and manipulation
-export * from './analysis/index.js'
+// Export advanced expression analysis and manipulation.
+// Explicit named re-export of the full public surface of ./analysis/index.js
+// (formerly `export *`); every symbol that module exports is enumerated here.
+export {
+  // Dependency graph analysis
+  buildDependencyGraph,
+  findDeadVariables,
+  findDependencyChains,
+  // Complexity analysis
+  analyzeComplexity,
+  compareComplexity,
+  classifyComplexity,
+  findExpensiveSubexpressions,
+  estimateParallelPotential,
+  detectStabilityIssues,
+  // Common subexpression identification
+  findCommonSubexpressions,
+  findCommonSubexpressionsAcrossExpressions,
+  findCommonSubexpressionsInModel,
+  findCommonSubexpressionsInEsmFile,
+  estimateSavings,
+  generateFactoredVariableNames,
+  groupSubexpressionsByType,
+  DEFAULT_MIN_COMPLEXITY,
+  // Symbolic differentiation
+  differentiate,
+  partialDerivatives,
+  gradient,
+  higherOrderDerivative,
+  isDifferentiable,
+  findCriticalPoints,
+  NonDifferentiableExpressionError,
+  InvalidDerivativeOrderError,
+  // Combined expression-analysis entry point
+  analyzeExpression,
+  ExpressionAnalyzer,
+} from './analysis/index.js'
+export type {
+  // Analysis-owned types
+  DependencyNode,
+  DependencyRelation,
+  DependencyGraph,
+  VariableKind,
+  ComplexityMetrics,
+  StabilityIssue,
+  CommonSubexpression,
+  ExpressionLocation,
+  DerivativeResult,
+  // Combined-analysis option/result shapes
+  AnalysisResults,
+  AnalysisOptions,
+} from './analysis/index.js'
 
 // Export pretty-printing utilities
 export { toUnicode, toLatex, toAscii, toMathML, formatChemicalName } from './pretty-print.js'
@@ -56,8 +109,41 @@ export { toUnicode, toLatex, toAscii, toMathML, formatChemicalName } from './pre
 // Export substitution utilities
 export { substitute, substituteInModel, substituteInReactionSystem } from './substitute.js'
 
-// Export immutable editing operations
-export * from './edit.js'
+// Export immutable editing operations.
+// Explicit named re-export of the full public surface of ./edit.js (formerly
+// `export *`). edit.js also re-exports `deriveODEs` from reactions.js, but that
+// symbol is already exported from reactions.js above, so it is intentionally
+// not re-listed here to avoid a duplicate re-export.
+export {
+  // Typed errors
+  VariableInUseError,
+  EntityNotFoundError,
+  // Variable operations
+  addVariable,
+  removeVariable,
+  renameVariable,
+  // Equation operations
+  addEquation,
+  removeEquation,
+  substituteInEquations,
+  // Reaction operations
+  addReaction,
+  removeReaction,
+  addSpecies,
+  removeSpecies,
+  // Event operations
+  addContinuousEvent,
+  addDiscreteEvent,
+  removeEvent,
+  // Coupling operations
+  addCoupling,
+  removeCoupling,
+  compose,
+  mapVariable,
+  // File-level operations
+  merge,
+  extract,
+} from './edit.js'
 
 // Export expression structural operations
 export { freeVariables, freeParameters, contains, simplify } from './expression.js'

@@ -16,7 +16,6 @@ import { load, validateSchema } from './parse.js'
 import { save } from './serialize.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import {
-  EsmMachineryError,
   MAX_TEMPLATE_EXPANSION_DEPTH,
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
@@ -25,12 +24,11 @@ import {
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template-imports.js'
+import { errCode, errCodeAsync, fixturesDir, loadFixtureFile } from './test-helpers.js'
 
-const repoRoot = path.resolve(__dirname, '../../..')
-const conf = (...parts: string[]) =>
-  path.join(repoRoot, 'tests', 'conformance', 'expression_templates', ...parts)
-const invalidDir = path.join(repoRoot, 'tests', 'invalid', 'template_imports')
-const validDir = path.join(repoRoot, 'tests', 'valid')
+const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_templates', ...parts)
+const invalidDir = fixturesDir('invalid', 'template_imports')
+const validDir = fixturesDir('valid')
 
 /** Raw §9.7 pipeline (resolve → lower), mirroring the Julia golden generator. */
 function expandRaw(fixturePath: string): unknown {
@@ -41,29 +39,9 @@ function expandRaw(fixturePath: string): unknown {
 
 const golden = (goldenPath: string): unknown => JSON.parse(fs.readFileSync(goldenPath, 'utf8'))
 
-function errCode(f: () => unknown): string | null {
-  try {
-    f()
-    return null
-  } catch (e) {
-    if (e instanceof EsmMachineryError) return e.code
-    throw e
-  }
-}
-
-async function errCodeAsync(f: () => Promise<unknown>): Promise<string | null> {
-  try {
-    await f()
-    return null
-  } catch (e) {
-    if (e instanceof EsmMachineryError) return e.code
-    throw e
-  }
-}
-
 /** load() from a fixture path with the fixture's directory as basePath. */
 function loadPath(p: string, metaparameters?: Record<string, number>) {
-  return load(fs.readFileSync(p, 'utf8'), { basePath: path.dirname(p), metaparameters })
+  return loadFixtureFile(p, { metaparameters })
 }
 
 describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
@@ -261,7 +239,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
 
   it('invalid fixtures: every §9.7 diagnostic code, machine-checked', async () => {
     const expected = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, 'tests', 'invalid', 'expected_errors.json'), 'utf8'),
+      fs.readFileSync(fixturesDir('invalid', 'expected_errors.json'), 'utf8'),
     ) as Record<string, { resolver_only?: boolean; resolver_error_code?: string }>
     const fixtures = fs
       .readdirSync(invalidDir)

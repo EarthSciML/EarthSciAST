@@ -3,16 +3,13 @@
  * guesses, and system_kind (gt-ebuq).
  */
 import { describe, it, expect } from 'vitest'
-import * as fs from 'fs'
-import * as path from 'path'
 import { load } from './parse.js'
 import { save } from './serialize.js'
+import { readFixture } from './test-helpers.js'
 import type { Model } from './types.js'
 
-const REPO_ROOT = path.join(__dirname, '..', '..', '..')
-
 function loadFixture(name: string) {
-  const text = fs.readFileSync(path.join(REPO_ROOT, 'tests', 'valid', name), 'utf-8')
+  const text = readFixture('valid', name)
   return { text, parsed: load(text) }
 }
 

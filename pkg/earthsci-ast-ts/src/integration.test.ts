@@ -4,15 +4,11 @@
 
 import { describe, it, expect } from 'vitest'
 import { validate } from './validate.js'
-import { readFileSync } from 'fs'
-import { join } from 'path'
-
-const testsDir = join(__dirname, '../../../tests')
+import { readFixture } from './test-helpers.js'
 
 describe('Structural validation integration', () => {
   it('should detect equation count mismatch in actual test file', () => {
-    const testFile = join(testsDir, 'invalid/equation_count_mismatch.esm')
-    const data = readFileSync(testFile, 'utf-8')
+    const data = readFixture('invalid', 'equation_count_mismatch.esm')
 
     const result = validate(data)
 

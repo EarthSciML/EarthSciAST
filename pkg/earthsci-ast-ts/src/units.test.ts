@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { parseUnit, checkDimensions, validateUnits, type ParsedUnit } from './units.js'
 import { load } from './parse.js'
+import { readFixture } from './test-helpers.js'
 import type { Expression, EsmFile } from './types.js'
 
 describe('Unit parsing and dimensional analysis', () => {
@@ -365,7 +364,6 @@ describe('Unit parsing and dimensional analysis', () => {
     // unit registry covers a different subset, so this test asserts only
     // that load and validateUnits complete successfully and emit warnings
     // as a typed array.
-    const fixturesDir = join(__dirname, '..', '..', '..', 'tests', 'valid')
     const fixtures = [
       'units_conversions.esm',
       'units_dimensional_analysis.esm',
@@ -374,7 +372,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     for (const fname of fixtures) {
       it(`loads ${fname} and runs validateUnits`, () => {
-        const content = readFileSync(join(fixturesDir, fname), 'utf8')
+        const content = readFixture('valid', fname)
         const file = load(content) as EsmFile
         expect(file.models).toBeDefined()
         expect(Object.keys(file.models ?? {}).length).toBeGreaterThan(0)

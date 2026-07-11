@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { flatten } from './flatten.js'
 import { expandCouplingImports, isCouplingLibraryDoc } from './coupling-imports.js'
+import { errCode as errCodeShared } from './test-helpers.js'
 import type { EsmFile } from './types.js'
 
 // A coupling-library file: roles + role-scoped edges, no models/loaders.
@@ -44,14 +45,9 @@ function assembly(coupling: unknown[]): EsmFile {
 
 const loadRef = () => lib
 
-function errCode(fn: () => void): string {
-  try {
-    fn()
-    return 'NO_ERROR'
-  } catch (e) {
-    return (e as { code?: string }).code ?? 'NON_CODE_ERROR'
-  }
-}
+// This file-corpus suite uses the legacy sentinel contract: 'NO_ERROR' on
+// success and `err.code ?? 'NON_CODE_ERROR'` for any throw (never rethrows).
+const errCode = (fn: () => unknown): string => errCodeShared(fn, { sentinel: true }) as string
 
 describe('isCouplingLibraryDoc', () => {
   it('identifies a coupling-library file by top-level coupling_roles', () => {
