@@ -526,28 +526,23 @@ func extractVariablesFromExpression(expr Expression) []string {
 // 5. Graph Utility Methods
 // ========================================
 
-// Adjacency returns adjacent nodes for a given node in component graph
-func (g *ComponentGraph) Adjacency(node ComponentNode) []struct {
+// ComponentAdjacency is one entry returned by ComponentGraph.Adjacency: a
+// neighbouring component node and the coupling edge that reaches it.
+type ComponentAdjacency struct {
 	Neighbor ComponentNode
 	Edge     CouplingEdge
-} {
-	var result []struct {
-		Neighbor ComponentNode
-		Edge     CouplingEdge
-	}
+}
+
+// Adjacency returns adjacent nodes for a given node in component graph
+func (g *ComponentGraph) Adjacency(node ComponentNode) []ComponentAdjacency {
+	var result []ComponentAdjacency
 
 	for _, edge := range g.Edges {
 		if edge.Source.ID == node.ID {
-			result = append(result, struct {
-				Neighbor ComponentNode
-				Edge     CouplingEdge
-			}{edge.Target, edge.Data})
+			result = append(result, ComponentAdjacency{edge.Target, edge.Data})
 		}
 		if edge.Data.Bidirectional && edge.Target.ID == node.ID {
-			result = append(result, struct {
-				Neighbor ComponentNode
-				Edge     CouplingEdge
-			}{edge.Source, edge.Data})
+			result = append(result, ComponentAdjacency{edge.Source, edge.Data})
 		}
 	}
 
@@ -586,22 +581,20 @@ func (g *ComponentGraph) Successors(node ComponentNode) []ComponentNode {
 	return result
 }
 
-// AdjacencyVariable returns adjacent nodes for a given node in expression graph
-func (g *ExpressionGraph) AdjacencyVariable(node VariableNode) []struct {
+// VariableAdjacency is one entry returned by ExpressionGraph.AdjacencyVariable:
+// a neighbouring variable node and the dependency edge that reaches it.
+type VariableAdjacency struct {
 	Neighbor VariableNode
 	Edge     DependencyEdge
-} {
-	var result []struct {
-		Neighbor VariableNode
-		Edge     DependencyEdge
-	}
+}
+
+// AdjacencyVariable returns adjacent nodes for a given node in expression graph
+func (g *ExpressionGraph) AdjacencyVariable(node VariableNode) []VariableAdjacency {
+	var result []VariableAdjacency
 
 	for _, edge := range g.Edges {
 		if edge.Source.Name == node.Name && edge.Source.System == node.System {
-			result = append(result, struct {
-				Neighbor VariableNode
-				Edge     DependencyEdge
-			}{edge.Target, edge.Data})
+			result = append(result, VariableAdjacency{edge.Target, edge.Data})
 		}
 	}
 

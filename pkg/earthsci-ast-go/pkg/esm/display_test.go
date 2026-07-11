@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -346,6 +347,36 @@ func TestComplexChemicalExpression(t *testing.T) {
 
 	assert.Equal(t, "1.8×10⁻¹²·O₃·NO·M", unicode)
 	assert.Equal(t, "1.8 \\times 10^{-12} \\cdot \\mathrm{O_{3}} \\cdot \\mathrm{NO} \\cdot M", latex)
+}
+
+// TestToUnicodeSpacedMatchesUnicode pins that ToUnicodeSpaced (now rendered via
+// FmtUnicodeSpaced, spacing applied at the operator) reproduces the previous
+// behavior — a "·"→" · " rewrite of the ToUnicode output — for every render
+// path. Because "·" is only ever emitted by the multiplication operator, the
+// spaced-at-emission form must equal the old post-hoc ReplaceAll for any
+// expression whose leaves contain no "·". A missed format-switch arm (which
+// would misroute FmtUnicodeSpaced to the ascii fallback) is caught here.
+func TestToUnicodeSpacedMatchesUnicode(t *testing.T) {
+	cases := []struct {
+		name string
+		expr Expression
+	}{
+		{"scalar mul with sci-notation + chemistry", ExprNode{Op: "*", Args: []any{1.8e-12, "O3", "NO", "M"}}},
+		{"nested mul", ExprNode{Op: "*", Args: []any{"a", ExprNode{Op: "*", Args: []any{"b", "c"}}}}},
+		{"mul over additive term (parens)", ExprNode{Op: "*", Args: []any{"k", ExprNode{Op: "+", Args: []any{"x", "y"}}}}},
+		{"division", ExprNode{Op: "/", Args: []any{ExprNode{Op: "*", Args: []any{"a", "b"}}, "c"}}},
+		{"power of product", ExprNode{Op: "^", Args: []any{ExprNode{Op: "*", Args: []any{"a", "b"}}, 2.0}}},
+		{"function call", ExprNode{Op: "exp", Args: []any{ExprNode{Op: "*", Args: []any{"-1.0", "x"}}}}},
+		{"bare variable (no mul)", "O3"},
+		{"bare number (no mul)", 3.14},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := strings.ReplaceAll(ToUnicode(tc.expr), "·", " · ")
+			got := ToUnicodeSpaced(tc.expr)
+			assert.Equal(t, want, got)
+		})
+	}
 }
 
 func TestModelSummary(t *testing.T) {

@@ -119,7 +119,7 @@ func formatNumber(num float64, format string) string {
 		mantissa := num / math.Pow(10, float64(exp))
 
 		switch format {
-		case FmtUnicode:
+		case FmtUnicode, FmtUnicodeSpaced:
 			expStr := formatSuperscript(exp)
 			mantissaStr := fmt.Sprintf("%.3g", mantissa)
 			// Replace regular minus with unicode minus for negative mantissa
@@ -136,7 +136,7 @@ func formatNumber(num float64, format string) string {
 
 	result := fmt.Sprintf("%g", num)
 	// Replace regular minus with unicode minus in unicode format
-	if format == FmtUnicode && strings.HasPrefix(result, "-") {
+	if (format == FmtUnicode || format == FmtUnicodeSpaced) && strings.HasPrefix(result, "-") {
 		result = "−" + result[1:]
 	}
 	return result
@@ -198,7 +198,7 @@ func formatVariable(varName string, format string) string {
 	}
 
 	switch format {
-	case FmtUnicode:
+	case FmtUnicode, FmtUnicodeSpaced:
 		if sym, ok := greekUnicode[varName]; ok {
 			return sym
 		}
@@ -360,7 +360,7 @@ func formatExprNode(node ExprNode, format string) string {
 			// Unary minus
 			arg := formatExpression(args[0], format)
 			switch format {
-			case FmtUnicode:
+			case FmtUnicode, FmtUnicodeSpaced:
 				return "−" + arg
 			case FmtLatex:
 				return "-" + arg
@@ -379,7 +379,7 @@ func formatExprNode(node ExprNode, format string) string {
 			}
 
 			switch format {
-			case FmtUnicode:
+			case FmtUnicode, FmtUnicodeSpaced:
 				return left + " − " + right
 			case FmtLatex:
 				return left + " - " + right
@@ -404,7 +404,7 @@ func formatExprNode(node ExprNode, format string) string {
 		if len(args) == 1 {
 			arg := formatExpression(args[0], format)
 			switch format {
-			case FmtUnicode, FmtLatex:
+			case FmtUnicode, FmtUnicodeSpaced, FmtLatex:
 				return "|" + arg + "|"
 			default:
 				return "abs(" + arg + ")"
@@ -417,7 +417,7 @@ func formatExprNode(node ExprNode, format string) string {
 		if len(args) >= 1 {
 			arg := formatExpression(args[0], format)
 			switch format {
-			case FmtUnicode:
+			case FmtUnicode, FmtUnicodeSpaced:
 				return "exp(" + arg + ")"
 			case FmtLatex:
 				if shouldUseExpLeft(args[0]) {
@@ -500,6 +500,10 @@ func formatMultiplication(args []any, format string) string {
 	}
 
 	switch format {
+	case FmtUnicodeSpaced:
+		// Spacing is applied here, at the operator, so it can never touch a "·"
+		// occurring inside a rendered leaf (variable name, chemical formula).
+		return strings.Join(parts, " · ")
 	case FmtUnicode:
 		return strings.Join(parts, "·")
 	case FmtLatex:
@@ -543,7 +547,7 @@ func formatExponentiation(args []any, format string) string {
 	}
 
 	switch format {
-	case FmtUnicode:
+	case FmtUnicode, FmtUnicodeSpaced:
 		if exp == "2" {
 			return base + "²"
 		} else if exp == "3" {
@@ -561,12 +565,14 @@ func formatExponentiation(args []any, format string) string {
 	}
 }
 
-// ToUnicodeSpaced converts an expression to Unicode string with spaced multiplication
-// for better readability in model summary displays.
+// ToUnicodeSpaced converts an expression to a Unicode string identical to
+// ToUnicode except that the multiplication operator renders as " · " (spaced)
+// for readability in model-summary displays. The spacing is produced at the
+// operator during formatting (FmtUnicodeSpaced), not by a post-hoc string
+// replace, so a "·" inside a rendered leaf (e.g. a hydrate chemical formula) is
+// never disturbed.
 func ToUnicodeSpaced(target Expression) string {
-	result := formatExpression(target, FmtUnicode)
-	// Replace "·" with " · " for better readability in model summaries
-	return strings.ReplaceAll(result, "·", " · ")
+	return formatExpression(target, FmtUnicodeSpaced)
 }
 
 // ModelSummary returns a structured model summary display showing all models,
@@ -739,7 +745,7 @@ func formatDerivative(args []any, wrt *string, format string) string {
 	timeVar := *wrt
 
 	switch format {
-	case FmtUnicode:
+	case FmtUnicode, FmtUnicodeSpaced:
 		return "∂" + variable + "/∂" + timeVar
 	case FmtLatex:
 		formattedVar := formatExpression(args[0], format)
@@ -897,7 +903,7 @@ func aggregateSymbol(semiring, reduce, format string) string {
 	}
 	t := aggregateSymbolTable[fam]
 	switch format {
-	case FmtUnicode:
+	case FmtUnicode, FmtUnicodeSpaced:
 		return t[0]
 	case FmtLatex:
 		return t[1]
@@ -1114,7 +1120,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		switch format {
 		case FmtLatex:
 			return "\\int_{" + lo + "}^{" + hi + "} " + f + " \\, d" + v, true
-		case FmtUnicode:
+		case FmtUnicode, FmtUnicodeSpaced:
 			return "∫[" + lo + ", " + hi + "] " + f + " d" + v, true
 		default:
 			return "integral(" + f + ", " + v + ", " + lo + ", " + hi + ")", true
@@ -1166,7 +1172,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		switch format {
 		case FmtLatex:
 			return "\\mathrm{" + latexEscape(name) + "}\\langle " + inner + " \\rangle", true
-		case FmtUnicode:
+		case FmtUnicode, FmtUnicodeSpaced:
 			return name + "⟨" + inner + "⟩", true
 		default:
 			return name + "<" + inner + ">", true
@@ -1218,7 +1224,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		switch format {
 		case FmtLatex:
 			return wrapIfOpValue(args[0], format) + "^{T}", true
-		case FmtUnicode:
+		case FmtUnicode, FmtUnicodeSpaced:
 			return wrapIfOpValue(args[0], format) + "ᵀ", true
 		default:
 			return "transpose(" + formatExpression(args[0], format) + ")", true
