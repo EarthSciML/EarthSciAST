@@ -104,6 +104,22 @@ struct _VecNode
     literal::Float64
     idx::Int
     sym::Symbol
+    # Per-kind payload (`handler` is the historical name, pinned by tests —
+    # test/tree_walk_vectorized_test.jl reads `merged.handler`):
+    #   _VK_PGATHER → the captured live forcing buffer (`Vector{Float64}`,
+    #                 aliased — refreshed in place by the loader callback);
+    #   _VK_FN      → a typed `_Interp*Spec` (zero-box `interp.*` kernels) or
+    #                 the boxed closed-function carrier `Tuple{String,Any}`
+    #                 (`(fname, const_args)`) for the all-scalar `datetime.*`
+    #                 path;
+    #   _VK_OP      → whatever `_Node.handler` carried through `_merge_nodes`
+    #                 (a `(name, const_args)` tuple on closed-call ops;
+    #                 `nothing` for ordinary elementwise ops);
+    #   every other kind → `nothing`.
+    # Kept `::Any` deliberately: each consumer narrows it with an `isa` split /
+    # typeassert (`_eval_vec`'s `_VK_PGATHER` arm, `_eval_vec_fn`,
+    # `_eval_vec_fn_boxed`), so a `Union` field type would not improve
+    # inference and could only change codegen.
     handler::Any
     vals::Vector{Float64}
     slots::Vector{Int}
@@ -524,6 +540,56 @@ function _eval_vec_fn_boxed(n::_VecNode, u, p, t)::Vector{Float64}
     return b
 end
 
+# The MECHANICAL unary elementwise arms of `_eval_vec_op` (`sin` … `ceil`),
+# GENERATED from the op-registry table `_UNARY_ELEMENTWISE_OPS`
+# (src/op_registry.jl) so a unary op added to the registry grows this ladder
+# automatically. The generated body is one `op === :name` compare chain in
+# table (= original hand-ladder arm) order, each arm equivalent to the
+# hand-written original:
+#     _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t)
+#     @. b = fn(c1); return b
+# — same arity guard, same fused broadcast, same buffer discipline (write the
+# caller's `b`, return `b`). Returns `nothing` when `op` is not a mechanical
+# unary op, so the caller's ladder falls through to the structurally distinct
+# arms (`-`, `atan`, `min`/`max`, …). This is NOT a Dict/table dispatch: the
+# splice compiles to the same compare-and-branch machine code as the hand
+# ladder, and bit-identity with the scalar path is pinned by the vectorized
+# differential tests.
+let arms = :(return nothing)
+    for row in reverse(_UNARY_ELEMENTWISE_OPS)
+        # The arm splices the op SYMBOL (`sin`), not the registry's function
+        # VALUE: `@.` deliberately refuses to dotify spliced non-Symbol callees
+        # (`Base.Broadcast.dottable(x) = false`), and the symbol reproduces the
+        # hand-written arm's module-scope name resolution exactly. The registry
+        # pins `sym === Symbol(name)` with `fn` the equally-named Base function;
+        # the load-time check after this block asserts that identity per arm.
+        # NB: `Core.Expr` — the bare name `Expr` is the package's AST type here.
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 1)
+                             c1 = _eval_vec(c[1], u, p, t)
+                             @. b = $(row.sym)(c1)
+                             return b
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_vec_unary_elementwise(op::Symbol, c::Vector{_VecNode},
+                                                       b::Vector{Float64}, u, p, t)
+        $arms
+    end
+end
+
+# Load-time guard for the symbol-spliced arms above: each op name must still
+# resolve, in THIS module's scope, to the registry's recorded scalar function —
+# so a future shadowing of e.g. `log` cannot silently desync the generated
+# ladder from the `_OP_TABLE` row (and from the scalar `_eval_node_op` twin,
+# which resolves the same module-scope names).
+for _row in _UNARY_ELEMENTWISE_OPS
+    getfield(@__MODULE__, _row.sym) === _row.fn ||
+        error("vectorize.jl: unary ladder arm '$(_row.name)' does not resolve " *
+              "to the op-registry scalar function in module scope")
+end
+
 # Elementwise op over child vectors, written in place into `n.buf`. Each arm
 # mirrors the corresponding scalar arm in `_eval_node_op` — fused `@.` broadcasts
 # apply the identical scalar op lane-by-lane, so lane j equals the scalar value
@@ -637,11 +703,14 @@ function _eval_vec_op(n::_VecNode, u, p, t)::Vector{Float64}
         c3 = _eval_vec(c[3], u, p, t)
         @. b = ifelse(c1 != 0, c2, c3); return b
 
-    elseif op === :sin;   _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = sin(c1);   return b
-    elseif op === :cos;   _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = cos(c1);   return b
-    elseif op === :tan;   _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = tan(c1);   return b
-    elseif op === :asin;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = asin(c1);  return b
-    elseif op === :acos;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = acos(c1);  return b
+    # The 19 mechanical unary arms (`sin` … `ceil`) are GENERATED from the
+    # registry table — see `_eval_vec_unary_elementwise` above. `nothing` ⇒ not
+    # one of them ⇒ fall through to the structurally distinct arms below. The
+    # probe sits where the first mechanical arm (`sin`) sat; every arm tests
+    # `op === <disjoint symbol>`, so probing the second historical run
+    # (`sinh` … `ceil`) before `atan`/`atan2` cannot change which arm fires.
+    elseif (unary = _eval_vec_unary_elementwise(op, c, b, u, p, t)) !== nothing
+        return unary
     elseif op === :atan
         if length(c) == 1
             c1 = _eval_vec(c[1], u, p, t)
@@ -656,20 +725,6 @@ function _eval_vec_op(n::_VecNode, u, p, t)::Vector{Float64}
         _expect_arity_n(op, c, 2)
         c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
         @. b = atan(c1, c2); return b
-    elseif op === :sinh;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = sinh(c1);  return b
-    elseif op === :cosh;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = cosh(c1);  return b
-    elseif op === :tanh;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = tanh(c1);  return b
-    elseif op === :asinh; _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = asinh(c1); return b
-    elseif op === :acosh; _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = acosh(c1); return b
-    elseif op === :atanh; _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = atanh(c1); return b
-    elseif op === :exp;   _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = exp(c1);   return b
-    elseif op === :log;   _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = log(c1);   return b
-    elseif op === :log10; _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = log10(c1); return b
-    elseif op === :sqrt;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = sqrt(c1);  return b
-    elseif op === :abs;   _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = abs(c1);   return b
-    elseif op === :sign;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = sign(c1);  return b
-    elseif op === :floor; _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = floor(c1); return b
-    elseif op === :ceil;  _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t); @. b = ceil(c1);  return b
     elseif op === :min
         # n-ary min (esm-spec §4.2 — arity ≥ 2), matching the scalar arm's guard.
         length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
