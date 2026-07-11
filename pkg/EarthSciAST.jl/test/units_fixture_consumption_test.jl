@@ -53,7 +53,7 @@ function _resolve_observed!(model, bindings::Dict{String,Float64})
     end
 end
 
-function _run_units_test(mname::AbstractString, model, t::_ESM_UF.Test)
+function _run_units_test(mname::AbstractString, model, t::_ESM_UF.InlineTest)
     bindings = Dict{String,Float64}()
     for (vname, var) in model.variables
         (var.type == _ESM_UF.ParameterVariable ||

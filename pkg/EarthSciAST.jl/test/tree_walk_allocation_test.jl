@@ -25,7 +25,7 @@ function _contraction_model(M)
     vars = Dict("y" => ModelVariable(StateVariable),
                 "x" => ModelVariable(StateVariable))
     body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
-    rhs = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i"], expr_body=body,
+    rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
                  ranges=Dict("i" => [1, 2], "k" => [1, M]), reduce="+")
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, 2), rhs)])
 end

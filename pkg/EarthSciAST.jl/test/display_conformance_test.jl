@@ -25,14 +25,14 @@ end
 function _build_display_expr(input)
     op = string(get(input, :op, ""))
     if op == "apply_expression_template"
-        bindings = Dict{String,ESM.Expr}()
+        bindings = Dict{String,ESM.ASTExpr}()
         raw = get(input, :bindings, nothing)
         if raw !== nothing
             for (k, v) in pairs(raw)
                 bindings[string(k)] = ESM.parse_expression(v)
             end
         end
-        return ESM.OpExpr("apply_expression_template", ESM.Expr[];
+        return ESM.OpExpr("apply_expression_template", ESM.ASTExpr[];
             name=string(input.name), bindings=bindings)
     end
     return ESM.parse_expression(input)

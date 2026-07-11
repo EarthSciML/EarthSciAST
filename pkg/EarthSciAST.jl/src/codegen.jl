@@ -388,7 +388,7 @@ _codegen_precedence(table::Dict{String,Int}, op::String) =
 
 # Should `child`, rendered as an operand of infix `parent_op`, be parenthesized?
 function _codegen_needs_parens(table::Dict{String,Int}, parent_op::String,
-                               child::Expr, is_right::Bool)
+                               child::ASTExpr, is_right::Bool)
     child isa OpExpr || return false
     parent_prec = _codegen_precedence(table, parent_op)
     # Function-call parents wrap their args in (...) already.
@@ -412,7 +412,7 @@ end
 
 # Render the operand of a unary minus, parenthesizing children that bind
 # looser than multiplication (so `-(a + b)` never degrades to `-a + b`).
-function _format_unary_minus_operand(arg::Expr, table::Dict{String,Int}, fmt::Function)
+function _format_unary_minus_operand(arg::ASTExpr, table::Dict{String,Int}, fmt::Function)
     inner = fmt(arg)
     if arg isa OpExpr && _codegen_precedence(table, arg.op) <= table["+"]
         return "($inner)"
@@ -424,7 +424,7 @@ end
 # `format_expression`) so it cannot be confused with display.jl's same-named
 # pretty-printer, whose 2-arg method renders notation rather than executable
 # code.
-function format_julia_expression(expr::Expr)
+function format_julia_expression(expr::ASTExpr)
     if isa(expr, IntExpr)
         return string(expr.value)
     elseif isa(expr, NumExpr)
@@ -500,7 +500,7 @@ function format_julia_expression_node(node::OpExpr)
 end
 
 """
-    extract_parameter_names(expr::Expr, species_names::Set{String}) -> Set{String}
+    extract_parameter_names(expr::ASTExpr, species_names::Set{String}) -> Set{String}
 
 Rate-expression symbols that should be emitted as `@parameters`: every free
 variable of `expr` that is not a declared species. Resolving against the
@@ -509,7 +509,7 @@ single-letter species are never re-declared as parameters, while declared
 parameters and undeclared symbols alike still get a `@parameters` entry so
 the generated script defines them.
 """
-function extract_parameter_names(expr::Expr, species_names::Set{String})
+function extract_parameter_names(expr::ASTExpr, species_names::Set{String})
     return Set{String}(name for name in free_variables(expr) if !(name in species_names))
 end
 

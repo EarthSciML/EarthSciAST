@@ -126,7 +126,7 @@ is what lets a parameter-backed rank≥2 observed / analytic reference be
 asserted directly (esm-spec §6.6.5) instead of erroring with
 `E_TREEWALK_UNBOUND_VARIABLE`.
 """
-function evaluate_cellwise(expr::Expr, cells::AbstractVector{<:AbstractVector{<:Integer}};
+function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector{<:Integer}};
                            const_arrays::AbstractDict=Dict{String,Any}(),
                            registered_functions::AbstractDict=Dict{String,Function}(),
                            params::AbstractDict=Dict{String,Float64}())::Vector{Float64}
@@ -513,7 +513,7 @@ function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
 
     ref = nothing
     if a.reference !== nothing
-        if a.reference isa Expr
+        if a.reference isa ASTExpr
             # Model parameters (load-time constants) are in scope for a §6.6.5
             # analytic `reference`; state is not. `insp.params` carries the
             # build's resolved scalar params (override-or-default).

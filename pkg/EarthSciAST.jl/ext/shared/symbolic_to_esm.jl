@@ -1,4 +1,4 @@
-# Shared arms of the reverse (Symbolics → ESM Expr) walks.
+# Shared arms of the reverse (Symbolics → ESM ASTExpr) walks.
 #
 # Included by BOTH EarthSciASTMTKExt (`_symbolic_to_esm_export`) and
 # EarthSciASTCatalystExt (`_catalyst_rate_to_esm`). The walks themselves stay

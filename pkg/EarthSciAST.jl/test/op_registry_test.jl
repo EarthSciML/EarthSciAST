@@ -160,13 +160,13 @@ end
           sort(collect(fieldnames(OpExpr)))
     # Behavior spot-checks on the emitter itself (bypassing `canonicalize`'s
     # rewrites): ignored fields emit fine, non-emissible ones throw.
-    @test ESM._emit_node_json(OpExpr("+", EarthSciAST.Expr[VarExpr("a"),
+    @test ESM._emit_node_json(OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a"),
                                                            VarExpr("b")];
                                      arg="i")) ==
-          ESM._emit_node_json(OpExpr("+", EarthSciAST.Expr[VarExpr("a"),
+          ESM._emit_node_json(OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a"),
                                                            VarExpr("b")]))
     @test_throws CanonicalizeError ESM._emit_node_json(
-        OpExpr("+", EarthSciAST.Expr[VarExpr("a")]; shape=Any[2]))
+        OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a")]; shape=Any[2]))
 end
 
 @testset "Wave-1 foundation smoke checks" begin
@@ -174,12 +174,12 @@ end
     @testset "foreach_subexpr visits every child_exprs descendant" begin
         # An aggregate whose variables hide in expr_body / filter — the fields
         # a hand-rolled args-only walk misses.
-        body = OpExpr("*", EarthSciAST.Expr[VarExpr("w"), VarExpr("u")])
-        agg = OpExpr("aggregate", EarthSciAST.Expr[];
+        body = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("w"), VarExpr("u")])
+        agg = OpExpr("aggregate", EarthSciAST.ASTExpr[];
                      output_idx=Any["i"],
                      ranges=Dict{String,Any}("i" => [1, 4]),
                      expr_body=body,
-                     filter=OpExpr(">", EarthSciAST.Expr[VarExpr("w"),
+                     filter=OpExpr(">", EarthSciAST.ASTExpr[VarExpr("w"),
                                                          NumExpr(0.0)]))
         seen = String[]
         ESM.foreach_subexpr(agg) do e

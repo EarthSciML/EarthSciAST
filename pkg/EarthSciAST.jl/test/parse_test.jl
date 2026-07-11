@@ -140,8 +140,8 @@ using JSON3
 
         variables = Dict("x" => ModelVariable(StateVariable, default=1.0))
 
-        lhs = OpExpr("D", Vector{EarthSciAST.Expr}([VarExpr("x")]), wrt="t")
-        rhs = OpExpr("*", Vector{EarthSciAST.Expr}([NumExpr(-0.1), VarExpr("x")]))
+        lhs = OpExpr("D", Vector{EarthSciAST.ASTExpr}([VarExpr("x")]), wrt="t")
+        rhs = OpExpr("*", Vector{EarthSciAST.ASTExpr}([NumExpr(-0.1), VarExpr("x")]))
         equations = [Equation(lhs, rhs)]
 
         model = Model(variables, equations)
@@ -427,7 +427,7 @@ using JSON3
         @test esm isa EarthSciAST.EsmFile
         entry = esm.coupling[1]
         @test entry isa CouplingVariableMap
-        @test entry.transform isa EarthSciAST.Expr
+        @test entry.transform isa EarthSciAST.ASTExpr
         tr = entry.transform::EarthSciAST.OpExpr
         @test tr.op == "+"
 

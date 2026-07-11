@@ -598,7 +598,7 @@ function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
 end
 
 function _replace_var_expression!(vars::Dict{String,ModelVariable}, name::String,
-                                  var::ModelVariable, new_expr::Expr)
+                                  var::ModelVariable, new_expr::ASTExpr)
     # ModelVariable is immutable; rebuild it with the new expression and
     # update the dictionary entry (`name` is the caller's iteration key;
     # assigning an existing key during iteration is safe — no rehash).
@@ -638,7 +638,7 @@ function _lower_coupling_entry_enums!(ce::CouplingEntry,
             for (i, e) in enumerate(eqs)
                 if e isa AbstractDict && haskey(e, "expression")
                     expr_obj = e["expression"]
-                    if expr_obj isa Expr
+                    if expr_obj isa ASTExpr
                         e["expression"] = _lower_expr_enums(expr_obj, enums)
                     end
                 end
@@ -655,7 +655,7 @@ function _lower_expr_enums(e::IntExpr, _) ; return e end
 function _lower_expr_enums(e::VarExpr, _) ; return e end
 
 function _lower_expr_enums(e::OpExpr,
-                           enums::Dict{String,Dict{String,Int}})::Expr
+                           enums::Dict{String,Dict{String,Int}})::ASTExpr
     if e.op == "enum"
         # esm-spec §4.5: args are exactly two strings — the enum name and the
         # symbolic key. Strings come through `parse_expression` as `VarExpr`,
@@ -677,7 +677,7 @@ function _lower_expr_enums(e::OpExpr,
         if !haskey(mapping, symbol_name)
             throw(ParseError("unknown_enum_symbol: symbol `$(symbol_name)` is not declared under enum `$(enum_name)`"))
         end
-        return OpExpr("const", Expr[]; value=mapping[symbol_name])
+        return OpExpr("const", ASTExpr[]; value=mapping[symbol_name])
     end
     # Recurse into EVERY expression-bearing field via the shared field-preserving
     # rewrite (`map_children`), so an `enum` nested in an integral bound, a

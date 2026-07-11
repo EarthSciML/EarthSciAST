@@ -25,7 +25,7 @@
 
 # Output shape (vector of index-set / dim names; empty = scalar) of an expression
 # under the current per-variable shape map.
-function _infer_expr_shape(expr::Expr,
+function _infer_expr_shape(expr::ASTExpr,
                            shapes::Dict{String,Vector{String}})::Vector{String}
     if expr isa NumExpr || expr isa IntExpr
         return String[]
@@ -88,16 +88,16 @@ const _SELF_INDEXED_OPS = _ops_with(:self_indexed)
 # (below) and `_lift_rhs_to_cell` (pointwise_lift.jl). The raw-JSON dict twin
 # of this rewrite is `_index_bare` (below), which walks a discretized native
 # document instead of typed Exprs.
-function _wrap_bare_array_refs(expr::Expr, arrayvars::Set{String},
+function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
                                loops::Vector{String};
-                               wrap_node, stop_node)::Expr
+                               wrap_node, stop_node)::ASTExpr
     if expr isa VarExpr
         expr.name in arrayvars || return expr
         return _index_wrap(expr, loops)
     elseif expr isa OpExpr
         wrap_node(expr) && return _index_wrap(expr, loops)
         stop_node(expr) && return expr
-        new_args = Expr[_wrap_bare_array_refs(a, arrayvars, loops;
+        new_args = ASTExpr[_wrap_bare_array_refs(a, arrayvars, loops;
                                               wrap_node=wrap_node,
                                               stop_node=stop_node)
                         for a in expr.args]
@@ -107,8 +107,8 @@ function _wrap_bare_array_refs(expr::Expr, arrayvars::Set{String},
 end
 
 # `index(node, loops…)`: gather `node`'s element at the current cell.
-_index_wrap(node::Expr, loops::Vector{String})::OpExpr =
-    OpExpr("index", Expr[node, (VarExpr(l) for l in loops)...])
+_index_wrap(node::ASTExpr, loops::Vector{String})::OpExpr =
+    OpExpr("index", ASTExpr[node, (VarExpr(l) for l in loops)...])
 
 # Replace each VarExpr leaf naming a promoted ARRAY variable with `index(v, loops…)`,
 # leaving scalar leaves (params, constants, reductions' results) untouched. Does
@@ -122,8 +122,8 @@ _index_wrap(node::Expr, loops::Vector{String})::OpExpr =
 # `D(u, x)` to a `makearray`, and the surrounding equation (`rhs = -c * D(u,x)`)
 # multiplies that array elementwise. A genuine scalar reduction (empty
 # `output_idx`) and an `index` gather stay untouched — they are already scalar.
-function _index_array_leaves(expr::Expr,
-                             arrayvars::Set{String}, loops::Vector{String})::Expr
+function _index_array_leaves(expr::ASTExpr,
+                             arrayvars::Set{String}, loops::Vector{String})::ASTExpr
     return _wrap_bare_array_refs(expr, arrayvars, loops;
         wrap_node = _is_array_producer,
         stop_node = e -> e.op in _SELF_INDEXED_OPS)
@@ -132,7 +132,7 @@ end
 # True iff `expr` is an array-PRODUCING node: a `makearray`, or an
 # `aggregate`/`arrayop` with a non-empty `output_idx` (a scalar reduction has an
 # empty `output_idx` and produces a scalar).
-function _is_array_producer(expr::Expr)::Bool
+function _is_array_producer(expr::ASTExpr)::Bool
     expr isa OpExpr || return false
     expr.op == "makearray" && return true
     # The remaining producers (aggregate/arrayop) are array-valued only with a
@@ -148,12 +148,12 @@ end
 # which may be dotted/namespaced. Each shape axis ranges over the index set it
 # names (`{from: …}`); dimension sizes are declared via `index_sets` since the
 # removal of the Domain.spatial spec, so the domain contributes none here.
-function _lift_to_arrayop(expr::Expr, shape::Vector{String},
+function _lift_to_arrayop(expr::ASTExpr, shape::Vector{String},
                           arrayvars::Set{String})::OpExpr
     loops = String["_p$(i-1)" for i in 1:length(shape)]
     ranges = Dict{String,Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
     body = _index_array_leaves(expr, arrayvars, loops)
-    return OpExpr("arrayop", Expr[];
+    return OpExpr("arrayop", ASTExpr[];
                   output_idx=Any[l for l in loops], ranges=ranges, expr_body=body)
 end
 
@@ -219,7 +219,7 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
         return v.shape !== nothing && !isempty(v.shape)
     end
     is_elementwise(rhs) = !(rhs isa OpExpr && (rhs::OpExpr).op in _ARRAY_PRODUCER_OPS)
-    targets = Dict{String,Expr}()
+    targets = Dict{String,ASTExpr}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
         nm = (eq.lhs::VarExpr).name
@@ -248,7 +248,7 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
             "inline_elementwise_array_observeds: cyclic elementwise " *
             "array-observed dependency among $(sort!(collect(setdiff(keys(targets), done))))"))
     end
-    resolved = Dict{String,Expr}()
+    resolved = Dict{String,ASTExpr}()
     for nm in order
         resolved[nm] = substitute(targets[nm], resolved)
     end
@@ -290,7 +290,7 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
 
     # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
-    defs = Dict{String,Expr}()
+    defs = Dict{String,ASTExpr}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs

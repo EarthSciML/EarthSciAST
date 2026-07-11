@@ -25,7 +25,7 @@ BUILD-TIME products that are otherwise internal to the evaluator closure:
 * `const_arrays::Dict{String,Any}` — the full const-array registry as
   registered for the build: caller-supplied arrays, `const`-op array
   observeds, keyed-factor aliases, materialized clip rings and setup arrays.
-* `observed_exprs::Dict{String,Expr}` — the resolved observed substitution
+* `observed_exprs::Dict{String,ASTExpr}` — the resolved observed substitution
   map (post index-set-range resolution and observed-into-observed inlining),
   exactly as inlined into the compiled RHS.
 * `params::Dict{String,Float64}` — the resolved SCALAR parameter values (the
@@ -43,11 +43,11 @@ Filling the record never changes the build: the returned
 mutable struct BuildInspection
     setup_arrays::Dict{String,Array{Float64}}
     const_arrays::Dict{String,Any}
-    observed_exprs::Dict{String,Expr}
+    observed_exprs::Dict{String,ASTExpr}
     params::Dict{String,Float64}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
-                                    Dict{String,Any}(), Dict{String,Expr}(),
+                                    Dict{String,Any}(), Dict{String,ASTExpr}(),
                                     Dict{String,Float64}())
 
 """
@@ -130,7 +130,7 @@ function _prepare_model_equations(model::Model)
     equations = model.equations
     let synth = Equation[]
         for (name, v) in model.variables
-            (v.type == ObservedVariable && v.expression isa Expr) || continue
+            (v.type == ObservedVariable && v.expression isa ASTExpr) || continue
             any(eq -> eq.lhs isa VarExpr && (eq.lhs::VarExpr).name == name,
                 model.equations) && continue
             push!(synth, Equation(VarExpr(name), v.expression))
@@ -188,7 +188,7 @@ function _discover_geometry_vars(model::Model, equations::Vector{Equation},
         end
     end
     setup_vars = Set{String}()
-    defs = Dict{String,Expr}()
+    defs = Dict{String,ASTExpr}()
     inline_vars = Set{String}()
     if has_setup_geometry
         pre_state_names = Set{String}(n for (n, v) in model.variables
@@ -268,7 +268,7 @@ function _collect_pia_operand_arrays(model::Model, equations::Vector{Equation},
             _collect_pia_operands!(eq.rhs, pia_names)
         end
         for (_, v) in model.variables
-            v.expression isa Expr && _collect_pia_operands!(v.expression, pia_names)
+            v.expression isa ASTExpr && _collect_pia_operands!(v.expression, pia_names)
         end
         for name in pia_names
             var = get(model.variables, name, nothing)
@@ -358,7 +358,7 @@ function _register_bare_alias_arrays!(const_obs_arrays::Dict{String,Array{Float6
                                       pia_operand_vars, geom_ring_vars,
                                       geom_setup_vars, geom_inline_vars,
                                       array_inline_vars)
-    alias_defs = Dict{String,Expr}()
+    alias_defs = Dict{String,ASTExpr}()
     for eq in equations
         eq.lhs isa VarExpr && (alias_defs[(eq.lhs::VarExpr).name] = eq.rhs)
     end
@@ -514,7 +514,7 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
                             param_scope::AbstractDict,
                             registered_functions::AbstractDict)
     eq_ics = Dict{String,Float64}()
-    field_ics = Tuple{String,EarthSciAST.Expr}[]
+    field_ics = Tuple{String,EarthSciAST.ASTExpr}[]
     kept = Equation[]
     for eq in equations
         if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
@@ -697,7 +697,7 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                          observed_names, geom_ring_vars,
                                          geom_setup_vars, geom_inline_vars,
                                          array_inline_vars)
-    observed_exprs = Dict{String,Expr}()
+    observed_exprs = Dict{String,ASTExpr}()
     derivative_eqs = Equation[]
     for eq in equations
         if eq.lhs isa VarExpr && ((eq.lhs::VarExpr).name in geom_ring_vars ||
@@ -837,7 +837,7 @@ function _seed_arrayop_init_u0!(u0::Vector{Float64}, init_equations,
         body === nothing && continue
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
         for idx_tuple in Iterators.product(range_iters...)
-            idx_exprs = Dict{String,Expr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
+            idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
                                           for d in 1:length(idx_names))
             cname = _cell_key(var_name, [idx_tuple[d] for d in 1:length(idx_names)])
             slot = get(var_map, cname, 0)
@@ -871,7 +871,7 @@ end
 function _discrete_materialize_split(equations::Vector{Equation},
                                      inline_candidates, state_var_names, param_names)
     (isempty(inline_candidates) || isempty(param_names)) && return Set{String}()
-    defs = Dict{String,Expr}()
+    defs = Dict{String,ASTExpr}()
     for eq in equations
         eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
     end
@@ -921,7 +921,7 @@ end
 # per refresh. `mut` is the caller's `DiscreteMaterializer` sink; it is populated in
 # place. Mutates `pgather` (adds the caches).
 function _build_discrete_materializer!(mut::DiscreteMaterializer,
-        discrete_vars, discrete_defs::Dict{String,Expr}, resolved_obs::Dict{String,Expr},
+        discrete_vars, discrete_defs::Dict{String,ASTExpr}, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int}, const_arrays::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs, p, n_states::Int)
     isempty(discrete_vars) && return nothing
@@ -972,7 +972,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
         lin = LinearIndices(Tuple(dims))
         for idx_tuple in Iterators.product(rngs...)
-            gather = OpExpr("index", Expr[rop_res::OpExpr,
+            gather = OpExpr("index", ASTExpr[rop_res::OpExpr,
                 (IntExpr(Int64(idx_tuple[d])) for d in 1:length(idx_names))...])
             g_r = _resolve_indices(gather, array_var_info, var_map, const_arrays, pgather)
             node = _compile(g_r, var_map, param_sym_set, reg_funcs)
@@ -1215,7 +1215,7 @@ function _build_partition_and_materialize(model::Model, cls;
     # phase 4) and remove their equations from the ODE stream — they are
     # materialized into cache buffers, never compiled as observeds/derivatives.
     # Empty (no-op) unless the `materialize_out` sink opted in.
-    discrete_defs = Dict{String,Expr}()
+    discrete_defs = Dict{String,ASTExpr}()
     if !isempty(cls.discrete_vars)
         kept = Equation[]
         for eq in equations
@@ -1523,10 +1523,10 @@ end
 # instead of N per-cell scalar nodes — see section 4b and
 # `_compile_arrayop_equation!`. Returns `(scalar_entries, vec_kernels)`.
 function _compile_derivative_equations(derivative_eqs::Vector{Equation},
-        resolved_obs::Dict{String,Expr}, array_var_info,
+        resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int)
-    scalar_entries = Tuple{Int,Expr}[]
+    scalar_entries = Tuple{Int,ASTExpr}[]
     vec_kernels = _VecKernel[]
     covered = falses(n_states)
 
@@ -1587,7 +1587,7 @@ end
 # (`vec_kernels` is a `Vector{_VecKernel}`; the annotation is omitted because
 # `_VecKernel` is defined in section 4b, after this build section.)
 function _compile_arrayop_equation!(vec_kernels,
-        covered::BitVector, eq::Equation, resolved_obs::Dict{String,Expr},
+        covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
         param_sym_set, reg_funcs)
@@ -1675,11 +1675,11 @@ end
 # (N-independent) groups. The equation-derived inputs are keyword-only (several
 # share a type, so positional passing could silently swap two of them).
 function _compile_arrayop_percell!(vec_kernels, covered::BitVector,
-        lhs_body::OpExpr, rhs_body::Expr;
+        lhs_body::OpExpr, rhs_body::ASTExpr;
         idx_names::Vector{String}, range_iters,
         contract_names::Vector{String}, contract_ranges, contract_const,
         rhs_oplus::String, rhs_zerobar::Float64, agg_gates, agg_filter,
-        resolved_obs::Dict{String,Expr}, array_var_info,
+        resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs)
     cell_entries = Tuple{Int,_Node}[]
@@ -1687,7 +1687,7 @@ function _compile_arrayop_percell!(vec_kernels, covered::BitVector,
     for idx_tuple in Iterators.product(range_iters...)
         idx_env  = Dict{String,Int}(idx_names[d] => idx_tuple[d]
                                     for d in 1:length(idx_names))
-        idx_exprs = Dict{String,Expr}(k => IntExpr(Int64(v))
+        idx_exprs = Dict{String,ASTExpr}(k => IntExpr(Int64(v))
                                       for (k, v) in idx_env)
         # Determine which cell the LHS writes to.
         sub_lhs = _sub_preserving(lhs_body, idx_exprs)
@@ -1939,7 +1939,7 @@ function _select_model_json(esm::AbstractDict, model_name)
 end
 
 """
-    evaluate_expr(expr::Expr, bindings::AbstractDict;
+    evaluate_expr(expr::ASTExpr, bindings::AbstractDict;
                   registered_functions::AbstractDict=Dict{String,Function}())::Float64
 
 Evaluate a single AST expression at the supplied numeric `bindings` by
@@ -1954,7 +1954,7 @@ Throws `UnboundVariableError` when `expr` references a name that is not
 in `bindings` and is not the time variable; other failures surface as
 [`TreeWalkError`](@ref).
 """
-function evaluate_expr(expr::Expr, bindings::AbstractDict;
+function evaluate_expr(expr::ASTExpr, bindings::AbstractDict;
                        registered_functions::AbstractDict=Dict{String,Function}())::Float64
     var_map = Dict{String,Int}()
     u = Vector{Float64}(undef, length(bindings))

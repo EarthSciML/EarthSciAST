@@ -147,7 +147,7 @@ Used to seed the level-set's signed-distance `psi` from the domain's declared
 IC over the real (projected) fire grid — no per-cell loop in the runner.
 """
 function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
-                             var_name::AbstractString, expr::Expr, coords)
+                             var_name::AbstractString, expr::ASTExpr, coords)
     pairs_ = collect(coords)
     dims = String[String(first(p)) for p in pairs_]
     axes_ = [collect(Float64, last(p)) for p in pairs_]

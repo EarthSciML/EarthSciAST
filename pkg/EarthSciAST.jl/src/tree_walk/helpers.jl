@@ -24,26 +24,26 @@ end
 # `handler_id`, `fn`, etc., which would corrupt `call`/`broadcast`
 # nodes on their way through. Scoped here because this module is the
 # only caller that needs the full preservation.
-function _sub_preserving(expr::NumExpr, bindings::Dict{String,Expr})
+function _sub_preserving(expr::NumExpr, bindings::Dict{String,ASTExpr})
     return expr
 end
-function _sub_preserving(expr::IntExpr, bindings::Dict{String,Expr})
+function _sub_preserving(expr::IntExpr, bindings::Dict{String,ASTExpr})
     return expr
 end
-function _sub_preserving(expr::VarExpr, bindings::Dict{String,Expr})
+function _sub_preserving(expr::VarExpr, bindings::Dict{String,ASTExpr})
     return get(bindings, expr.name, expr)
 end
 
 # Substitute each expression in `args`, returning `(substituted, changed)`. Like
 # `_resolve_arg_vec`, the ORIGINAL vector is returned untouched (no allocation)
 # when no element binds, and only the first differing element triggers a copy.
-function _sub_arg_vec(args::Vector{Expr}, bindings::Dict{String,Expr})
+function _sub_arg_vec(args::Vector{ASTExpr}, bindings::Dict{String,ASTExpr})
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
         a = args[i]
-        # Manual union-split over the four concrete `Expr` subtypes. `args` has the
-        # abstract element type `Expr`, so a bare `_sub_preserving(a, …)` dispatches
+        # Manual union-split over the four concrete `ASTExpr` subtypes. `args` has the
+        # abstract element type `ASTExpr`, so a bare `_sub_preserving(a, …)` dispatches
         # dynamically (`ijl_apply_generic`) — the single largest flat cost in the
         # build profile. Narrowing with `isa` lets the `OpExpr`/`VarExpr` calls
         # resolve statically and short-circuits the `NumExpr`/`IntExpr` leaves
@@ -62,7 +62,7 @@ function _sub_arg_vec(args::Vector{Expr}, bindings::Dict{String,Expr})
     return new_args, changed
 end
 
-function _sub_preserving(expr::OpExpr, bindings::Dict{String,Expr})
+function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr})
     new_args, changed = _sub_arg_vec(expr.args, bindings)
     new_body = expr.expr_body
     if expr.expr_body !== nothing
@@ -95,7 +95,7 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,Expr})
     # whose reduction bound references an OUTER loop index — e.g. a per-cell
     # variable-valence reduction `k ∈ [1, index(n_edges_on_cell, i)]` inside an
     # outer `i`-loop — has `i` resolved when the inner arrayop is later expanded.
-    # Bounds are Int (pass through) or Expr (recursively substituted).
+    # Bounds are Int (pass through) or ASTExpr (recursively substituted).
     new_ranges = _sub_ranges(expr.ranges, bindings)
     # `reconstruct` (types.jl) copies every remaining OpExpr field, so the full
     # preservation this helper promises holds even as fields are added.
@@ -104,15 +104,15 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,Expr})
 end
 
 # Substitute loop-var bindings into an arrayop `ranges` dict's bound expressions.
-# Each entry is a vector whose elements are Int (left as-is) or an Expr bound
+# Each entry is a vector whose elements are Int (left as-is) or an ASTExpr bound
 # (recursively `_sub_preserving`d). Returns `nothing` unchanged when ranges is
 # nothing; otherwise a fresh Dict so the original is never mutated.
-_sub_ranges(ranges::Nothing, ::Dict{String,Expr}) = nothing
-function _sub_ranges(ranges, bindings::Dict{String,Expr})
+_sub_ranges(ranges::Nothing, ::Dict{String,ASTExpr}) = nothing
+function _sub_ranges(ranges, bindings::Dict{String,ASTExpr})
     out = Dict{String,Any}()
     for (k, v) in ranges
         out[String(k)] = v isa AbstractVector ?
-            Any[(e isa Expr ? _sub_preserving(e, bindings) : e) for e in v] : v
+            Any[(e isa ASTExpr ? _sub_preserving(e, bindings) : e) for e in v] : v
     end
     return out
 end
@@ -122,8 +122,8 @@ end
 # variable as a free variable — so inlining observed names into a
 # model equation is a single `_sub_preserving` call. Iteration cap =
 # depth of the longest valid chain; exceeding it means there's a cycle.
-function _resolve_observed(obs::Dict{String,Expr})
-    resolved = Dict{String,Expr}()
+function _resolve_observed(obs::Dict{String,ASTExpr})
+    resolved = Dict{String,ASTExpr}()
     for (k, v) in obs
         resolved[k] = v
     end
@@ -214,7 +214,7 @@ Anything else (e.g. a loaded expression the seed path cannot fold) is a hard
 error, so a scoped-reference ic that cannot be resolved is never silently
 dropped.
 """
-function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.Expr,
+function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
                            cell::Vector{Int}, const_arrays, registered_functions;
                            params::AbstractDict=_EMPTY_PARAMS)::Float64
     # (1) Loaded field supplied as a const array over the lifted grid.
@@ -263,7 +263,7 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.Expr,
 end
 
 """
-    _index_at_cell(expr, idxs) -> Expr
+    _index_at_cell(expr, idxs) -> ASTExpr
 
 Broadcast-index an elementwise expression at the concrete 1-based cell `idxs`:
 every array-PRODUCING node (`makearray`, or `aggregate`/`arrayop` with non-empty
@@ -271,10 +271,10 @@ every array-PRODUCING node (`makearray`, or `aggregate`/`arrayop` with non-empty
 and scalar leaves (literals, scalar names, `index` gathers, scalar reductions)
 pass through. The concrete-index dual of `_index_array_leaves` (loop-name form).
 """
-function _index_at_cell(expr::EarthSciAST.Expr, idxs::Vector{Int})::EarthSciAST.Expr
+function _index_at_cell(expr::EarthSciAST.ASTExpr, idxs::Vector{Int})::EarthSciAST.ASTExpr
     if expr isa OpExpr
         if _is_array_producer(expr)
-            idx_args = Expr[expr]
+            idx_args = ASTExpr[expr]
             for k in idxs
                 push!(idx_args, IntExpr(Int64(k)))
             end
@@ -282,7 +282,7 @@ function _index_at_cell(expr::EarthSciAST.Expr, idxs::Vector{Int})::EarthSciAST.
         end
         (expr.op == "aggregate" || expr.op == "arrayop" || expr.op == "makearray" ||
          expr.op == "index") && return expr
-        return reconstruct(expr; args=Expr[_index_at_cell(a, idxs) for a in expr.args])
+        return reconstruct(expr; args=ASTExpr[_index_at_cell(a, idxs) for a in expr.args])
     end
     return expr
 end
@@ -296,7 +296,7 @@ end
 # parameter-dependent coordinate expression / observed / reference resolves
 # (esm-spec §6.6.5). Binding them widens only what NAMES resolve, never how a
 # value is computed — determinism and byte-identical output are preserved.
-function _eval_cellwise(expr::EarthSciAST.Expr, cell::Vector{Int};
+function _eval_cellwise(expr::EarthSciAST.ASTExpr, cell::Vector{Int};
                         const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                         registered_functions::AbstractDict=Dict{String,Function}(),
                         params::AbstractDict=_EMPTY_PARAMS)::Float64
@@ -332,7 +332,7 @@ function _ic_body_is_closed_form(e)::Bool
     for a in e.args
         _ic_body_is_closed_form(a) || return false
     end
-    e.expr_body !== nothing && (_ic_body_is_closed_form(e.expr_body::Expr) || return false)
+    e.expr_body !== nothing && (_ic_body_is_closed_form(e.expr_body::ASTExpr) || return false)
     if e.values !== nothing
         for v in e.values
             _ic_body_is_closed_form(v) || return false

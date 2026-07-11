@@ -1,5 +1,5 @@
 # ========================================
-# ESM Expr → Symbolics conversion
+# ESM ASTExpr → Symbolics conversion
 # ========================================
 
 # The mechanical unary ops the ODE/PDE lowering accepts. Deliberately NOT the
@@ -12,7 +12,7 @@ const _MTK_UNARY_SCALAR_OPS = ("exp", "log", "log10", "sin", "cos", "tan",
                                "sqrt", "abs")
 
 """
-Build a Symbolics.jl expression from an ESM `Expr` tree, using the given
+Build a Symbolics.jl expression from an ESM `ASTExpr` tree, using the given
 variable dictionary (name → symbolic variable) and the time symbol `t_sym`.
 Spatial dimension symbols are created on demand and cached in `dim_dict`.
 

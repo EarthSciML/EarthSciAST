@@ -15,8 +15,8 @@ _graph_model() = Model(
         "k" => ModelVariable(ParameterVariable, default=0.5),
     ),
     [Equation(
-        OpExpr("D", ESSG.Expr[VarExpr("x")], wrt="t"),
-        OpExpr("*", ESSG.Expr[VarExpr("k"), VarExpr("x")]),
+        OpExpr("D", ESSG.ASTExpr[VarExpr("x")], wrt="t"),
+        OpExpr("*", ESSG.ASTExpr[VarExpr("k"), VarExpr("x")]),
     )],
 )
 

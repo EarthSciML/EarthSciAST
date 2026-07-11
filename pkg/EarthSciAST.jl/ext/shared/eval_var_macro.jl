@@ -14,7 +14,7 @@ ModelingToolkit / Catalyst) keeps us robust to internal type-parameter
 changes across versions — only the macro's public surface is used.
 
 `call_args` are the macro's argument expressions: a bare name `Symbol`, a
-`name(iv...)` call `Expr`, a metadata vector `Expr`, ….
+`name(iv...)` call `Core.Expr`, a metadata vector `Core.Expr`, ….
 
 `bindings` (`holder_name => value` pairs) wrap the macro call in a `let`
 block so live symbolic objects (e.g. independent variables) can be passed

@@ -24,9 +24,9 @@ import Symbolics
                 description="decay rate", units="1/s"),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("sea_level_rise")],
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("sea_level_rise")],
                 wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("k"), VarExpr("sea_level_rise"),
             ]),
         )
@@ -51,8 +51,8 @@ import Symbolics
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("T")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("T")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("k"), VarExpr("T"),
             ]),
         )
@@ -69,8 +69,8 @@ import Symbolics
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("k"), VarExpr("x"),
             ]),
         )
@@ -86,8 +86,8 @@ import Symbolics
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("k"), VarExpr("x"),
             ]),
         )
@@ -105,8 +105,8 @@ import Symbolics
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("k"), VarExpr("x"),
             ]),
         )

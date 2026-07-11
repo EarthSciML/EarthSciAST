@@ -128,7 +128,7 @@ end
     # The registry + observed map are exposed too.
     @test haskey(insp.const_arrays, "src_poly")
     @test haskey(insp.const_arrays, "A_ij")     # setup arrays register as const arrays
-    @test insp.observed_exprs isa Dict{String,EarthSciAST.Expr}
+    @test insp.observed_exprs isa Dict{String,EarthSciAST.ASTExpr}
 
     # Observability is inert: the build without `inspect` is identical.
     f2!, u02, p2, tspan2, var_map2 = build_evaluator(_bi_regrid_doc())

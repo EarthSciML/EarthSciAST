@@ -11,12 +11,12 @@ using BenchmarkTools
             "v" => ModelVariable(StateVariable; default=0.0, description="Velocity"),
             "omega" => ModelVariable(ParameterVariable; default=1.0, description="Angular frequency"),
             "energy" => ModelVariable(ObservedVariable;
-                expression=OpExpr("+", EarthSciAST.Expr[
-                    OpExpr("/", EarthSciAST.Expr[OpExpr("^", EarthSciAST.Expr[VarExpr("v"), NumExpr(2.0)]), NumExpr(2.0)]),
-                    OpExpr("/", EarthSciAST.Expr[
-                        OpExpr("*", EarthSciAST.Expr[
-                            OpExpr("^", EarthSciAST.Expr[VarExpr("omega"), NumExpr(2.0)]),
-                            OpExpr("^", EarthSciAST.Expr[VarExpr("x"), NumExpr(2.0)])
+                expression=OpExpr("+", EarthSciAST.ASTExpr[
+                    OpExpr("/", EarthSciAST.ASTExpr[OpExpr("^", EarthSciAST.ASTExpr[VarExpr("v"), NumExpr(2.0)]), NumExpr(2.0)]),
+                    OpExpr("/", EarthSciAST.ASTExpr[
+                        OpExpr("*", EarthSciAST.ASTExpr[
+                            OpExpr("^", EarthSciAST.ASTExpr[VarExpr("omega"), NumExpr(2.0)]),
+                            OpExpr("^", EarthSciAST.ASTExpr[VarExpr("x"), NumExpr(2.0)])
                         ]),
                         NumExpr(2.0)
                     ])
@@ -24,11 +24,11 @@ using BenchmarkTools
         )
 
         equations = [
-            Equation(OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
+            Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
                      VarExpr("v")),
-            Equation(OpExpr("D", EarthSciAST.Expr[VarExpr("v")], wrt="t"),
-                     OpExpr("*", EarthSciAST.Expr[
-                        OpExpr("-", EarthSciAST.Expr[OpExpr("^", EarthSciAST.Expr[VarExpr("omega"), NumExpr(2.0)])]),
+            Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("v")], wrt="t"),
+                     OpExpr("*", EarthSciAST.ASTExpr[
+                        OpExpr("-", EarthSciAST.ASTExpr[OpExpr("^", EarthSciAST.ASTExpr[VarExpr("omega"), NumExpr(2.0)])]),
                         VarExpr("x")]))
         ]
 
@@ -62,7 +62,7 @@ using BenchmarkTools
         ]
         reactions = [
             Reaction(Dict("NO" => 1, "O3" => 1), Dict("NO2" => 1),
-                     OpExpr("*", EarthSciAST.Expr[VarExpr("k1"), VarExpr("M")])),
+                     OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k1"), VarExpr("M")])),
             Reaction(Dict("NO2" => 1), Dict("NO" => 1, "O3" => 1),
                      VarExpr("j1")),
         ]
@@ -90,11 +90,11 @@ using BenchmarkTools
         )
         # PDE: du/dt = D * grad(grad(u, x), x)  (spatial derivatives present)
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("u")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("u")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("D"),
-                OpExpr("grad", EarthSciAST.Expr[
-                    OpExpr("grad", EarthSciAST.Expr[VarExpr("u")], dim="x"),
+                OpExpr("grad", EarthSciAST.ASTExpr[
+                    OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("u")], dim="x"),
                 ], dim="x"),
             ])
         )
@@ -116,8 +116,8 @@ using BenchmarkTools
             "k" => ModelVariable(ParameterVariable; default=0.5),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[OpExpr("-", EarthSciAST.Expr[VarExpr("k")]), VarExpr("x")]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]), VarExpr("x")]),
         )
         flat = flatten(Model(vars, [eq]); name="OnlyODE")
         @test flat.independent_variables == [:t]

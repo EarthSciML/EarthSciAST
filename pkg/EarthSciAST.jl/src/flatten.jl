@@ -4,7 +4,7 @@ Coupled System Flattening for ESM Format.
 Implements spec §4.7.5 (flattening algorithm) and §4.7.6 (dimension promotion).
 
 `flatten(::EsmFile)` produces a `FlattenedSystem`: a single flat equation system
-with dot-namespaced variables and real Expr-tree equations. Reactions are lowered
+with dot-namespaced variables and real ASTExpr-tree equations. Reactions are lowered
 to ODEs via `lower_reactions_to_equations`; coupling rules merge RHS terms;
 `variable_map` substitutes parameters; `operator_apply`/`callback` are recorded
 opaquely in metadata.
@@ -61,7 +61,7 @@ A coupled ESM file flattened into a single symbolic representation.
 
 All variables, parameters, and species are dot-namespaced (e.g.
 `"SimpleOzone.O3"`, `"Atmosphere.Chemistry.NO2"`). Equations are real
-`Equation` objects whose Expr trees reference namespaced names via `VarExpr`.
+`Equation` objects whose ASTExpr trees reference namespaced names via `VarExpr`.
 This is the canonical intermediate form consumed by MTK/PDESystem constructors
 (in the Julia extension) and by cross-language code generators.
 
@@ -182,8 +182,8 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
     end
 
     for (i, name) in enumerate(species_names)
-        lhs = OpExpr("D", Expr[VarExpr(name)], wrt="t")
-        terms = Expr[]
+        lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt="t")
+        terms = ASTExpr[]
         for (j, rxn) in enumerate(reactions)
             stoich = S[i, j]
             stoich == 0 && continue
@@ -191,10 +191,10 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
             if stoich == 1
                 push!(terms, rate_expr)
             elseif stoich == -1
-                push!(terms, OpExpr("-", Expr[rate_expr]))
+                push!(terms, OpExpr("-", ASTExpr[rate_expr]))
             else
                 push!(terms, OpExpr("*",
-                    Expr[NumExpr(Float64(stoich)), rate_expr]))
+                    ASTExpr[NumExpr(Float64(stoich)), rate_expr]))
             end
         end
         rhs = if isempty(terms)
@@ -231,7 +231,7 @@ const _DIM_SPATIAL_OPS = _ops_with(:dim_spatial)
 True if the expression contains any spatial operator (`grad`, `div`,
 `laplacian`, or `D` with `wrt != "t"`).
 """
-function has_spatial_operator(expr::Expr)::Bool
+function has_spatial_operator(expr::ASTExpr)::Bool
     if expr isa NumExpr || expr isa IntExpr || expr isa VarExpr
         return false
     end
@@ -254,13 +254,13 @@ end
 
 Collect all spatial dimension names referenced by spatial operators in `expr`.
 """
-function spatial_dims_in_expr(expr::Expr)::Set{Symbol}
+function spatial_dims_in_expr(expr::ASTExpr)::Set{Symbol}
     dims = Set{Symbol}()
     _collect_spatial_dims!(dims, expr)
     return dims
 end
 
-function _collect_spatial_dims!(dims::Set{Symbol}, expr::Expr)
+function _collect_spatial_dims!(dims::Set{Symbol}, expr::ASTExpr)
     if expr isa OpExpr
         if expr.op in _DIM_SPATIAL_OPS && expr.dim !== nothing
             push!(dims, Symbol(expr.dim))

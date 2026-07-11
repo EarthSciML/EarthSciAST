@@ -20,7 +20,7 @@ const ESM = EarthSciAST
 
 _af_v(n) = VarExpr(n)
 _af_n(x) = NumExpr(Float64(x))
-_af_op(op, a...; kw...) = OpExpr(op, ESM.Expr[a...]; kw...)
+_af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
 
 @testset "tree_walk audit fixes" begin
 
@@ -92,7 +92,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.Expr[a...]; kw...)
         # (`table`, `table_axes`, `output`, `distinct`, `key`) plus `ranges`
         # (which forces the reconstruct path even when nothing binds).
         keyexpr = _af_op("skolem", _af_v("i"))
-        node = OpExpr("aggregate", ESM.Expr[_af_v("q")];
+        node = OpExpr("aggregate", ESM.ASTExpr[_af_v("q")];
                       output_idx=Any["i"],
                       ranges=Dict{String,Any}("i" => [1, 3]),
                       expr_body=_af_op("+", _af_v("q"), _af_v("z")),
@@ -104,7 +104,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.Expr[a...]; kw...)
                       id="node0", manifold="planar",
                       distinct=true, key=keyexpr)
         subd = ESM._sub_preserving(node,
-                                   Dict{String,ESM.Expr}("z" => _af_n(7.0)))
+                                   Dict{String,ESM.ASTExpr}("z" => _af_n(7.0)))
         @test subd.table == "tbl0"
         @test subd.table_axes !== nothing
         @test subd.output == 1

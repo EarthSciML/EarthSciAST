@@ -141,7 +141,7 @@ using EarthSciAST
         # Cancellation form: rate = k / A, substrates A + B.
         # Result: (k/A) * A * B — substrate A appears twice (denominator + multiplier).
         cancellation_rate = OpExpr("/",
-            EarthSciAST.Expr[VarExpr("k_cld"), VarExpr("A")])
+            EarthSciAST.ASTExpr[VarExpr("k_cld"), VarExpr("A")])
         cancellation_reaction = Reaction(
             Dict("A" => 1, "B" => 1),
             Dict("C" => 1),

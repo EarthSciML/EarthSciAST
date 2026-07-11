@@ -19,11 +19,11 @@ fallback.
 """
 module EarthSciASTCatalystExt
 
-# Note: we deliberately do NOT import `Expr` from EarthSciAST into
-# this extension's namespace — that would shadow Core.Expr and break the
-# runtime `Core.eval`-built macro calls below (`@species` / `@parameters`),
-# whose quoted ASTs are assembled from plain `Expr` nodes. Use the `EsmExpr`
-# alias for the ESM expression type instead (same pattern as MTKExt).
+# We refer to the ESM abstract expression type via the `EsmExpr` alias (below)
+# rather than importing it unqualified — same pattern as MTKExt. The runtime
+# `Core.eval`-built macro calls below (`@species` / `@parameters`) assemble
+# Julia `Core.Expr` AST, written explicitly (there is no name clash now that the
+# ESM type is `ASTExpr`, not `Expr`).
 using EarthSciAST
 using EarthSciAST: NumExpr, IntExpr, VarExpr, OpExpr, Reaction,
     ReactionSystem, Species, Parameter,
@@ -39,7 +39,7 @@ using ModelingToolkit
 using Symbolics
 using Catalyst
 
-const EsmExpr = EarthSciAST.Expr
+const EsmExpr = EarthSciAST.ASTExpr
 
 # Shared with EarthSciASTMTKExt (each extension compiles its own copy); the
 # per-extension policy hooks that keep the two extensions' behavior distinct
@@ -49,7 +49,7 @@ include("shared/symbolic_to_esm.jl")
 include("shared/eval_var_macro.jl")
 
 # ========================================
-# ESM Expr → Symbolics conversion (rate expressions)
+# ESM ASTExpr → Symbolics conversion (rate expressions)
 # ========================================
 
 # The unary elementwise ops the rate interpreter accepts — deliberately

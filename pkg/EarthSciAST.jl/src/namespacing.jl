@@ -10,9 +10,9 @@ using OrderedCollections: OrderedDict
 # ========================================
 
 """
-    namespace_expr(expr, prefix, local_names) -> Expr
+    namespace_expr(expr, prefix, local_names) -> ASTExpr
 
-Return a new Expr tree with every VarExpr referencing a name in `local_names`
+Return a new ASTExpr tree with every VarExpr referencing a name in `local_names`
 rewritten as `"<prefix>.<name>"`. For dotted names (e.g. `Sub.var`), the first
 segment is treated as the local symbol: if it is in `local_names` (a local
 subsystem), the whole dotted path is prefixed; otherwise the reference is
@@ -25,17 +25,17 @@ document-scoped registry with plain names shared by every component. (A former
 prefixing was dead — every caller passed it empty — and has been removed.)
 """
 function namespace_expr(expr::NumExpr, prefix::String,
-                        local_names::Set{String})::Expr
+                        local_names::Set{String})::ASTExpr
     return expr
 end
 
 function namespace_expr(expr::IntExpr, prefix::String,
-                        local_names::Set{String})::Expr
+                        local_names::Set{String})::ASTExpr
     return expr
 end
 
 function namespace_expr(expr::VarExpr, prefix::String,
-                        local_names::Set{String})::Expr
+                        local_names::Set{String})::ASTExpr
     if occursin('.', expr.name)
         first_part = String(split(expr.name, '.')[1])
         if first_part in local_names
@@ -75,7 +75,7 @@ function _namespace_join(join, prefix::String, local_names::Set{String})
 end
 
 function namespace_expr(expr::OpExpr, prefix::String,
-                        local_names::Set{String})::Expr
+                        local_names::Set{String})::ASTExpr
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach arrayop / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
@@ -184,7 +184,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     end
 
     for ev in model.continuous_events
-        new_conds = Expr[namespace_expr(c, prefix, local_names) for c in ev.conditions]
+        new_conds = ASTExpr[namespace_expr(c, prefix, local_names) for c in ev.conditions]
         new_affects = AffectEquation[
             AffectEquation(startswith(a.lhs, prefix * ".") || occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
                            namespace_expr(a.rhs, prefix, local_names))

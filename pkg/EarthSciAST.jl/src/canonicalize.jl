@@ -21,7 +21,7 @@ field carries a stable error code:
 - `E_CANONICAL_BAD_CONST` — Julia-local: a `const`-op `value` payload of an
   unsupported Julia type reached the canonical emitter (internal misuse, not
   an authoring error).
-- `E_CANONICAL_BAD_NODE` — Julia-local: an `Expr` subtype unknown to the
+- `E_CANONICAL_BAD_NODE` — Julia-local: an `ASTExpr` subtype unknown to the
   canonical emitter reached `_emit_json` (defensively unreachable for the four
   concrete node types; internal misuse, not an authoring error).
 """
@@ -34,7 +34,7 @@ Base.showerror(io::IO, e::CanonicalizeError) =
     print(io, "CanonicalizeError(", e.code, "): ", e.message)
 
 """
-    canonicalize(expr::Expr) -> Expr
+    canonicalize(expr::ASTExpr) -> ASTExpr
 
 Canonicalize an expression tree per discretization RFC §5.4. Returns a new
 tree; the input is not mutated. Throws [`CanonicalizeError`](@ref) for
@@ -64,7 +64,7 @@ end
 canonicalize(e::VarExpr) = e
 
 function canonicalize(e::OpExpr)
-    new_args = Vector{Expr}(undef, length(e.args))
+    new_args = Vector{ASTExpr}(undef, length(e.args))
     for (i, a) in enumerate(e.args)
         new_args[i] = canonicalize(a)
     end
@@ -170,7 +170,7 @@ function _canon_neg(node::OpExpr)
     return _canon_neg_value(node.args[1])
 end
 
-function _canon_neg_value(arg::Expr)
+function _canon_neg_value(arg::ASTExpr)
     if arg isa IntExpr
         return IntExpr(-arg.value)
     elseif arg isa NumExpr
@@ -178,11 +178,11 @@ function _canon_neg_value(arg::Expr)
     elseif arg isa OpExpr && arg.op == "neg" && length(arg.args) == 1
         return arg.args[1]
     end
-    return OpExpr("neg", Expr[arg])
+    return OpExpr("neg", ASTExpr[arg])
 end
 
-function _flatten_same_op(args::Vector{Expr}, op::String)
-    out = Expr[]
+function _flatten_same_op(args::Vector{ASTExpr}, op::String)
+    out = ASTExpr[]
     for a in args
         if a isa OpExpr && a.op == op
             append!(out, a.args)
@@ -193,8 +193,8 @@ function _flatten_same_op(args::Vector{Expr}, op::String)
     return out
 end
 
-function _partition_identity(args::Vector{Expr}, identity::Int)
-    others = Expr[]
+function _partition_identity(args::Vector{ASTExpr}, identity::Int)
+    others = ASTExpr[]
     had_int = false
     had_float = false
     for a in args
@@ -211,12 +211,12 @@ function _partition_identity(args::Vector{Expr}, identity::Int)
     return others, had_int, had_float
 end
 
-_all_float_literals(args::Vector{Expr}) = !isempty(args) && all(a -> a isa NumExpr, args)
+_all_float_literals(args::Vector{ASTExpr}) = !isempty(args) && all(a -> a isa NumExpr, args)
 
 _is_zero_any(e) = (e isa IntExpr && e.value == 0) || (e isa NumExpr && e.value == 0.0)
 _is_one_any(e)  = (e isa IntExpr && e.value == 1) || (e isa NumExpr && e.value == 1.0)
 
-function _arg_tier(e::Expr)
+function _arg_tier(e::ASTExpr)
     if e isa IntExpr || e isa NumExpr
         return 0
     elseif e isa VarExpr
@@ -229,11 +229,11 @@ end
 
 _numeric_key(e::IntExpr) = Float64(e.value)
 _numeric_key(e::NumExpr) = e.value
-_numeric_key(e::Expr)    = 0.0
+_numeric_key(e::ASTExpr)    = 0.0
 
-function _sort_args!(args::Vector{Expr})
+function _sort_args!(args::Vector{ASTExpr})
     cache = Dict{Int,String}()
-    function get_json(idx::Int, e::Expr)
+    function get_json(idx::Int, e::ASTExpr)
         haskey(cache, idx) && return cache[idx]
         s = _emit_json(e)
         cache[idx] = s
@@ -247,7 +247,7 @@ function _sort_args!(args::Vector{Expr})
     end
 end
 
-function _compare(a::Expr, b::Expr, ia::Int, ib::Int, get_json)
+function _compare(a::ASTExpr, b::ASTExpr, ia::Int, ib::Int, get_json)
     ta, tb = _arg_tier(a), _arg_tier(b)
     if ta != tb
         return ta < tb
@@ -267,7 +267,7 @@ function _compare(a::Expr, b::Expr, ia::Int, ib::Int, get_json)
 end
 
 """
-    canonical_json(expr::Expr) -> String
+    canonical_json(expr::ASTExpr) -> String
 
 Emit the canonical on-wire JSON form of an expression per RFC §5.4.6: keys
 sorted, no extraneous whitespace, shortest round-trip floats with trailing-`.0`
@@ -288,11 +288,11 @@ emitting more fields — such nodes throw
 caller (tree-walk CSE `_cse_key`) treats any `CanonicalizeError` as "decline
 sharing", which is exactly the safe behavior.
 """
-function canonical_json(expr::Expr)::String
+function canonical_json(expr::ASTExpr)::String
     return _emit_json(canonicalize(expr))
 end
 
-function _emit_json(e::Expr)::String
+function _emit_json(e::ASTExpr)::String
     if e isa IntExpr
         return string(e.value)
     elseif e isa NumExpr
@@ -303,7 +303,7 @@ function _emit_json(e::Expr)::String
         return _emit_node_json(e)
     end
     # Defensively unreachable: the four branches above cover every concrete
-    # `Expr` subtype. Typed like the rest of the canonicalizer's failures so a
+    # `ASTExpr` subtype. Typed like the rest of the canonicalizer's failures so a
     # future node type surfaces as a CanonicalizeError, not an ErrorException.
     throw(CanonicalizeError("E_CANONICAL_BAD_NODE",
         "cannot canonicalize value of type $(typeof(e))"))

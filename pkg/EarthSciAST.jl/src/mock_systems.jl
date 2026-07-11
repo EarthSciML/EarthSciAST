@@ -168,12 +168,12 @@ function _event_summaries(flat::FlattenedSystem)::Vector{String}
 end
 
 """
-    _expr_to_string(expr::Expr) -> String
+    _expr_to_string(expr::ASTExpr) -> String
 
-Render an ESM Expr tree as a readable string. Shared helper for mock
+Render an ESM ASTExpr tree as a readable string. Shared helper for mock
 system equation rendering.
 """
-function _expr_to_string(expr::Expr)
+function _expr_to_string(expr::ASTExpr)
     if expr isa IntExpr
         return string(expr.value)
     elseif expr isa NumExpr

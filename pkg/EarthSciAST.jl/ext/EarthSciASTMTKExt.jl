@@ -23,10 +23,11 @@ fallbacks.
 module EarthSciASTMTKExt
 
 using EarthSciAST
-# Note: we deliberately do NOT import `Expr` from EarthSciAST into
-# this extension's namespace — that would shadow Core.Expr and break the
-# `Symbolics.@variables` macro call we use for programmatic variable creation
-# (the macro's generated code references Core.Expr).
+# We refer to the ESM abstract expression type via the `EsmExpr` alias (below)
+# rather than importing it unqualified — a convenience shared with the Catalyst
+# extension. Programmatic variable creation via `Symbolics.@variables` builds
+# Julia `Core.Expr` AST, written explicitly throughout (there is no name clash
+# now that the ESM type is `ASTExpr`, not `Expr`).
 using EarthSciAST: FlattenedSystem, ModelVariable, StateVariable,
     ParameterVariable, ObservedVariable, BrownianVariable,
     NumExpr, IntExpr, VarExpr, OpExpr,
@@ -41,7 +42,7 @@ using EarthSciAST: FlattenedSystem, ModelVariable, StateVariable,
     _has_spatial_ivs, _use_pde_ctor_msg, _use_ode_ctor_msg
 # Explicit import so we can add methods to these generics.
 import EarthSciAST: mtk2esm, mtk2esm_gaps
-const EsmExpr = EarthSciAST.Expr
+const EsmExpr = EarthSciAST.ASTExpr
 using ModelingToolkit
 using ModelingToolkit: @variables, @parameters, Differential, System, PDESystem
 using Symbolics

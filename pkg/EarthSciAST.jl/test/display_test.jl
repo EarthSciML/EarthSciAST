@@ -78,8 +78,8 @@ using EarthSciAST
 
     @testset "Parentheses Logic" begin
         # Create test expressions
-        add_expr = OpExpr("+", EarthSciAST.Expr[NumExpr(1.0), VarExpr("x")])
-        mul_expr = OpExpr("*", EarthSciAST.Expr[VarExpr("y"), VarExpr("z")])
+        add_expr = OpExpr("+", EarthSciAST.ASTExpr[NumExpr(1.0), VarExpr("x")])
+        mul_expr = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("y"), VarExpr("z")])
 
         # Test needs_parentheses
         @test EarthSciAST.needs_parentheses("*", add_expr, false) == true   # (1 + x) * ...
@@ -105,13 +105,13 @@ using EarthSciAST
         @test EarthSciAST.format_expression_latex(chem_var) == "\\mathrm{H_{2}O}"
 
         # Test basic OpExpr formatting
-        add_expr = OpExpr("+", EarthSciAST.Expr[NumExpr(1.0), VarExpr("x")])
+        add_expr = OpExpr("+", EarthSciAST.ASTExpr[NumExpr(1.0), VarExpr("x")])
         @test EarthSciAST.format_expression_unicode(add_expr) == "1 + x"  # Julia formats 1.0 as "1"
         @test EarthSciAST.format_expression_latex(add_expr) == "1 + x"  # Julia formats 1.0 as "1"
     end
 
     @testset "Show Methods" begin
-        # Test Expr show methods
+        # Test ASTExpr show methods
         num_expr = NumExpr(2.5)
 
         # Test plain text output
@@ -128,11 +128,11 @@ using EarthSciAST
         @test String(take!(io)) == "2.5"
 
         # Test more complex expressions with ASCII MIME type
-        mul_expr = OpExpr("*", EarthSciAST.Expr[VarExpr("x"), NumExpr(2.0)])
+        mul_expr = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("x"), NumExpr(2.0)])
         show(io, "text/ascii", mul_expr)
         @test String(take!(io)) == "x * 2"
 
-        pow_expr = OpExpr("^", EarthSciAST.Expr[VarExpr("x"), NumExpr(2.0)])
+        pow_expr = OpExpr("^", EarthSciAST.ASTExpr[VarExpr("x"), NumExpr(2.0)])
         show(io, "text/ascii", pow_expr)
         @test String(take!(io)) == "x^2"
 
@@ -144,8 +144,8 @@ using EarthSciAST
 
     @testset "Equation Display" begin
         # Test Equation show method
-        lhs = OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t")
-        rhs = OpExpr("*", EarthSciAST.Expr[NumExpr(2.0), VarExpr("x")])
+        lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t")
+        rhs = OpExpr("*", EarthSciAST.ASTExpr[NumExpr(2.0), VarExpr("x")])
         eq = Equation(lhs, rhs)
 
         io = IOBuffer()
@@ -182,8 +182,8 @@ using EarthSciAST
             "k" => ModelVariable(ParameterVariable, default=0.5),
         )
         equations = [Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[VarExpr("k"), VarExpr("x")]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k"), VarExpr("x")]),
         )]
         model = Model(variables, equations)
 
@@ -223,7 +223,7 @@ using EarthSciAST
     end
 
     @testset "min/max render as function calls for any arity" begin
-        E = EarthSciAST.Expr
+        E = EarthSciAST.ASTExpr
         two = OpExpr("max", E[VarExpr("a"), VarExpr("b")])
         three = OpExpr("min", E[VarExpr("a"), VarExpr("b"), VarExpr("c")])
         @test EarthSciAST.format_expression_unicode(two) == "max(a, b)"
@@ -236,7 +236,7 @@ using EarthSciAST
         @test to_ascii(nothing) == "nothing"
         @test to_ascii(2.5) == "2.5"
         @test to_ascii("H2O") == "H2O"
-        eq = Equation(VarExpr("y"), OpExpr("+", EarthSciAST.Expr[VarExpr("x"), NumExpr(1.0)]))
+        eq = Equation(VarExpr("y"), OpExpr("+", EarthSciAST.ASTExpr[VarExpr("x"), NumExpr(1.0)]))
         @test to_ascii(eq) == "y = x + 1"
         @test_throws ArgumentError to_ascii(:a_symbol)
     end

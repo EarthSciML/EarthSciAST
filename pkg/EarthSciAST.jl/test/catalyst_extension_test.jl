@@ -250,10 +250,10 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         params = [EarthSciAST.Parameter("k", 1.0)]
         # Rate 1: max(k, 0.0) — the clamp pattern from geoschem_fullchem.
         rate_max = OpExpr("max",
-            EarthSciAST.Expr[VarExpr("k"), NumExpr(0.0)])
+            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(0.0)])
         # Rate 2: min(k, 5.0) — symmetric coverage for the other primitive.
         rate_min = OpExpr("min",
-            EarthSciAST.Expr[VarExpr("k"), NumExpr(5.0)])
+            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(5.0)])
         rxns = EarthSciAST.Reaction[
             EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1),
                                            rate_max),
@@ -296,7 +296,7 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         @test avogadro == floor(avogadro)
         @test avogadro > typemax(Int)
         rate = OpExpr("*",
-            EarthSciAST.Expr[VarExpr("k"), NumExpr(avogadro)])
+            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(avogadro)])
         rxns = EarthSciAST.Reaction[
             EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1),
                                            rate),

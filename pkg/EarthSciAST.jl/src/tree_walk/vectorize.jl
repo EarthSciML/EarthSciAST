@@ -566,7 +566,7 @@ let arms = :(return nothing)
         # hand-written arm's module-scope name resolution exactly. The registry
         # pins `sym === Symbol(name)` with `fn` the equally-named Base function;
         # the load-time check after this block asserts that identity per arm.
-        # NB: `Core.Expr` — the bare name `Expr` is the package's AST type here.
+        # NB: `Core.Expr` is Julia's AST node builder (used to assemble this @eval'd arm).
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
                          quote
                              _expect_arity_n(op, c, 1)

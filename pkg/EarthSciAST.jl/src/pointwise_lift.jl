@@ -20,7 +20,7 @@ using OrderedCollections: OrderedDict
 # pointwise on the grid through the existing arrayop evaluator.
 
 # Collect every `makearray` OpExpr node reachable from `expr`.
-function _collect_makearrays!(acc::Vector{OpExpr}, expr::Expr)
+function _collect_makearrays!(acc::Vector{OpExpr}, expr::ASTExpr)
     expr isa OpExpr || return acc
     expr.op == "makearray" && push!(acc, expr)
     # Walk every immediate sub-expression via the shared traversal instead of a
@@ -38,7 +38,7 @@ end
 
 # First VarExpr leaf name in an index-argument expression (the loop variable of
 # that index position), or `nothing` for a constant position.
-function _index_arg_loop(expr::Expr)::Union{String,Nothing}
+function _index_arg_loop(expr::ASTExpr)::Union{String,Nothing}
     if expr isa VarExpr
         return expr.name
     elseif expr isa OpExpr
@@ -117,8 +117,8 @@ end
 # rewrite (shape_promotion.jl); its typed twin with a different wrap/stop set
 # is `_index_array_leaves`. The stop set here deliberately omits `makearray` —
 # the wrap predicate claims every makearray first.
-function _lift_rhs_to_cell(expr::Expr, arrayvars::Set{String},
-                           loops::Vector{String})::Expr
+function _lift_rhs_to_cell(expr::ASTExpr, arrayvars::Set{String},
+                           loops::Vector{String})::ASTExpr
     return _wrap_bare_array_refs(expr, arrayvars, loops;
         wrap_node = e -> e.op == "makearray",
         stop_node = e -> e.op == "index" || e.op == "aggregate" ||
@@ -268,12 +268,12 @@ function _pointwise_lift_equation(eq::Equation, species::String,
                                   loops::Vector{String},
                                   ranges::Dict{String,Any})::Equation
     oidx = Any[l for l in loops]
-    idx_species = OpExpr("index", Expr[VarExpr(species),
+    idx_species = OpExpr("index", ASTExpr[VarExpr(species),
                          (VarExpr(l) for l in loops)...])
-    new_lhs = OpExpr("aggregate", Expr[];
+    new_lhs = OpExpr("aggregate", ASTExpr[];
                      output_idx=oidx, ranges=ranges,
-                     expr_body=OpExpr("D", Expr[idx_species], wrt="t"))
-    new_rhs = OpExpr("aggregate", Expr[];
+                     expr_body=OpExpr("D", ASTExpr[idx_species], wrt="t"))
+    new_rhs = OpExpr("aggregate", ASTExpr[];
                      output_idx=oidx, ranges=ranges,
                      expr_body=_lift_rhs_to_cell(eq.rhs, arrayvars, loops))
     return Equation(new_lhs, new_rhs; _comment=eq._comment)

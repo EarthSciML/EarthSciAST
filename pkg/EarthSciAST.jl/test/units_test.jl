@@ -96,14 +96,14 @@ using Unitful
         @test dims_unknown === nothing
 
         # Test basic OpExpr (multiplication works better than addition with mixed units)
-        mul_expr = OpExpr("*", EarthSciAST.Expr[VarExpr("x"), VarExpr("y")])
+        mul_expr = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("x"), VarExpr("y")])
         dims_mul = EarthSciAST.get_expression_dimensions(mul_expr, var_units)
         @test dims_mul !== nothing
         @test dimension(dims_mul) == Unitful.𝐋 * Unitful.𝐓
     end
 
     @testset "Expression Dimensions: extended op coverage" begin
-        E = EarthSciAST.Expr
+        E = EarthSciAST.ASTExpr
         var_units = Dict("x" => "m", "y" => "m", "z" => "s", "f" => "")
 
         # min/max: same-dimension args carry the dimension through
@@ -156,7 +156,7 @@ using Unitful
         )
 
         # Test valid equation: dx/dt = v (velocity)
-        lhs = OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t")
+        lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t")
         rhs = VarExpr("v")
         valid_eq = Equation(lhs, rhs)
 
@@ -180,7 +180,7 @@ using Unitful
 
         equations = [
             Equation(
-                OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
+                OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
                 VarExpr("v")
             )
         ]
@@ -237,7 +237,7 @@ using Unitful
         # Simple equation: dx/dt = v, should infer x has units m
         equations = [
             Equation(
-                OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
+                OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
                 VarExpr("v")
             )
         ]

@@ -45,12 +45,12 @@ function _to_native_json(x)
 end
 
 """
-    parse_expression(data::Any) -> Expr
+    parse_expression(data::Any) -> ASTExpr
 
 Parse JSON data into an Expression (NumExpr, VarExpr, or OpExpr).
 Handles the oneOf discriminated union based on JSON structure.
 """
-function parse_expression(data::Any)::Expr
+function parse_expression(data::Any)::ASTExpr
     # Bool <: Integer in Julia, so screen it first (JSON booleans should not
     # become integer literals — they do not appear in valid ESM expressions).
     if isa(data, Bool)
@@ -140,7 +140,7 @@ function _parse_op_dict(data)
                          "have expanded it (esm-spec §9.6)."))
     end
     args_data = _get_field(data, :args, ())
-    args = Vector{Expr}([parse_expression(arg) for arg in args_data])
+    args = Vector{ASTExpr}([parse_expression(arg) for arg in args_data])
     wrt = _opt_string(data, :wrt)
     dim = _opt_string(data, :dim)
 
@@ -157,7 +157,7 @@ function _parse_op_dict(data)
     regions = _coerce_regions(_get_field(data, :regions, nothing))
     raw_values = _get_field(data, :values, nothing)
     values_vec = raw_values === nothing ? nothing :
-        Vector{Expr}([parse_expression(v) for v in raw_values])
+        Vector{ASTExpr}([parse_expression(v) for v in raw_values])
     shape_vec = _coerce_shape(_get_field(data, :shape, nothing))
     perm_raw = _get_field(data, :perm, nothing)
     perm_vec = perm_raw === nothing ? nothing : Vector{Int}([Int(p) for p in perm_raw])
@@ -213,7 +213,7 @@ function _parse_op_dict(data)
     bindings_raw = _get_field(data, :bindings, nothing)
     bindings_dict = nothing
     if bindings_raw !== nothing
-        bindings_dict = Dict{String,Expr}()
+        bindings_dict = Dict{String,ASTExpr}()
         for (k, v) in pairs(bindings_raw)
             bindings_dict[string(k)] = parse_expression(v)
         end
@@ -260,14 +260,14 @@ end
 # per-axis input expression map (wire key `axes` — struct field `table_axes`);
 # ``args`` MUST be empty (per-axis inputs live under `axes`). Returns the
 # parsed axes map.
-function _coerce_table_lookup_axes(table, axes_raw, args::Vector{Expr})::Dict{String,Expr}
+function _coerce_table_lookup_axes(table, axes_raw, args::Vector{ASTExpr})::Dict{String,ASTExpr}
     if table === nothing
         throw(ParseError("`table_lookup` op requires `table` field (esm-spec §9.5)"))
     end
     if axes_raw === nothing
         throw(ParseError("`table_lookup` op requires `axes` field (per-axis input expression map, esm-spec §9.5)"))
     end
-    axes = Dict{String,Expr}()
+    axes = Dict{String,ASTExpr}()
     for (k, v) in pairs(axes_raw)
         axes[string(k)] = parse_expression(v)
     end
@@ -765,7 +765,7 @@ function coerce_model(data::Any)::Model
         data.initialization_equations !== nothing ?
         [coerce_equation(eq) for eq in data.initialization_equations] :
         Equation[]
-    guesses = Dict{String,Union{Float64,Expr}}()
+    guesses = Dict{String,Union{Float64,ASTExpr}}()
     if haskey(data, :guesses) && data.guesses !== nothing
         for (k, v) in pairs(data.guesses)
             if v isa Number
@@ -795,8 +795,8 @@ function coerce_model(data::Any)::Model
     # Inline tests / tolerance (schema gt-cc1).
     tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
     tests = haskey(data, :tests) && data.tests !== nothing ?
-        EarthSciAST.Test[coerce_test(t) for t in data.tests] :
-        EarthSciAST.Test[]
+        EarthSciAST.InlineTest[coerce_test(t) for t in data.tests] :
+        EarthSciAST.InlineTest[]
 
     # Inline subsystems (schema §4.7, oneOf [Model, DataLoader, SubsystemRef]):
     # each entry is coerced by `_coerce_subsystem_entry`.
@@ -951,11 +951,11 @@ function coerce_assertion(data::Any)::Assertion
 end
 
 """
-    coerce_test(data::Any) -> Test
+    coerce_test(data::Any) -> InlineTest
 
-Parse a schema `Test` object into the Julia `Test` struct.
+Parse a schema `InlineTest` object into the Julia `InlineTest` struct.
 """
-function coerce_test(data::Any)::EarthSciAST.Test
+function coerce_test(data::Any)::EarthSciAST.InlineTest
     id = string(data.id)
     time_span = coerce_time_span(data.time_span)
     assertions = [coerce_assertion(a) for a in data.assertions]
@@ -982,7 +982,7 @@ function coerce_test(data::Any)::EarthSciAST.Test
        data.expression_template_imports !== nothing
         injected = Any[_to_native_json(e) for e in data.expression_template_imports]
     end
-    return EarthSciAST.Test(id, time_span, assertions;
+    return EarthSciAST.InlineTest(id, time_span, assertions;
         description=description,
         initial_conditions=ic,
         parameter_overrides=po,
@@ -1116,7 +1116,7 @@ function coerce_continuous_event(data::Any)::ContinuousEvent
     end
 
     raw_conditions = _get_field(data, :conditions, [])
-    conditions = Expr[parse_expression(c) for c in raw_conditions]
+    conditions = ASTExpr[parse_expression(c) for c in raw_conditions]
 
     raw_affects = _has_field(data, :affects) ? _get_field(data, :affects, []) : []
     affects = AffectEquation[coerce_affect_equation(a) for a in raw_affects]
@@ -1152,8 +1152,8 @@ function coerce_reaction_system(data::Any)::ReactionSystem
     # Inline tests / tolerance (schema gt-cc1) — same shape as on Model.
     tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
     tests = haskey(data, :tests) && data.tests !== nothing ?
-        EarthSciAST.Test[coerce_test(t) for t in data.tests] :
-        EarthSciAST.Test[]
+        EarthSciAST.InlineTest[coerce_test(t) for t in data.tests] :
+        EarthSciAST.InlineTest[]
 
     return ReactionSystem(species, reactions; parameters=parameters,
                           tolerance=tolerance, tests=tests)
@@ -1448,7 +1448,7 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
     try
         return CouplingVariableMap(from, to, transform; factor=factor, description=description, lifting=lifting)
     catch e
-        if e isa ArgumentError && transform isa Expr && factor !== nothing
+        if e isa ArgumentError && transform isa ASTExpr && factor !== nothing
             throw(ParseError("variable_map: an expression 'transform' takes no 'factor' (fold the scaling into the expression)"))
         end
         rethrow()
@@ -1511,7 +1511,7 @@ function coerce_coupling_event(data::AbstractDict)::CouplingEvent
 
     # Parse conditions for continuous events
     conditions = _maybe(_get_field(data, :conditions, nothing)) do cs
-        Expr[parse_expression(c) for c in cs]
+        ASTExpr[parse_expression(c) for c in cs]
     end
 
     # Parse trigger for discrete events

@@ -26,9 +26,9 @@ import Symbolics
             "k" => ModelVariable(ParameterVariable; default=0.5),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
-                OpExpr("-", EarthSciAST.Expr[VarExpr("k")]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
+                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
                 VarExpr("x"),
             ]),
         )
@@ -58,11 +58,11 @@ import Symbolics
             "D" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("u")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("u")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("D"),
-                OpExpr("grad", EarthSciAST.Expr[
-                    OpExpr("grad", EarthSciAST.Expr[VarExpr("u")], dim="z"),
+                OpExpr("grad", EarthSciAST.ASTExpr[
+                    OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("u")], dim="z"),
                 ], dim="z"),
             ]),
         )
@@ -80,9 +80,9 @@ import Symbolics
             "k" => ModelVariable(ParameterVariable; default=0.5),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
-                OpExpr("-", EarthSciAST.Expr[VarExpr("k")]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
+                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
                 VarExpr("x"),
             ]),
         )
@@ -96,9 +96,9 @@ import Symbolics
             "k" => ModelVariable(ParameterVariable; default=0.3),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
-                OpExpr("-", EarthSciAST.Expr[VarExpr("k")]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
+                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
                 VarExpr("x"),
             ]),
         )
@@ -134,19 +134,19 @@ import Symbolics
 
         # dC/dt = D * grad(grad(C, z), z)
         diff_eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("VertDiff.C")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
                 VarExpr("VertDiff.D"),
-                OpExpr("grad", EarthSciAST.Expr[
-                    OpExpr("grad", EarthSciAST.Expr[VarExpr("VertDiff.C")], dim="z"),
+                OpExpr("grad", EarthSciAST.ASTExpr[
+                    OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], dim="z"),
                 ], dim="z"),
             ]),
         )
         # dC.at_z/dt = -v_dep * C.at_z   (slice-ODE — surface deposition)
         slice_eq = Equation(
-            OpExpr("D", EarthSciAST.Expr[VarExpr("VertDiff.C.at_z")], wrt="t"),
-            OpExpr("*", EarthSciAST.Expr[
-                OpExpr("-", EarthSciAST.Expr[VarExpr("SurfaceDep.v_dep")]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C.at_z")], wrt="t"),
+            OpExpr("*", EarthSciAST.ASTExpr[
+                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("SurfaceDep.v_dep")]),
                 VarExpr("VertDiff.C.at_z"),
             ]),
         )

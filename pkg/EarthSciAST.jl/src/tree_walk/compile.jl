@@ -94,10 +94,10 @@ end
 # recursion that forgets to forward the memo merely stops memoizing that subtree —
 # it never changes a result.
 struct _BuildMemo
-    resolve::IdDict{OpExpr,Expr}
+    resolve::IdDict{OpExpr,ASTExpr}
     compile::IdDict{OpExpr,_Node}
 end
-_BuildMemo() = _BuildMemo(IdDict{OpExpr,Expr}(), IdDict{OpExpr,_Node}())
+_BuildMemo() = _BuildMemo(IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,_Node}())
 const _MaybeMemo = Union{Nothing,_BuildMemo}
 
 function _mknode(; kind::UInt8, op::Symbol=Symbol(""),
@@ -392,13 +392,13 @@ const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 # opaque. Leaves (state/param/literal/time) are never hoisted — caching a leaf
 # costs more than the bare read it would replace.
 _cse_hoistable(e::OpExpr) = !(e.op in _CSE_OPAQUE_OPS)
-_cse_hoistable(::Expr) = false
+_cse_hoistable(::ASTExpr) = false
 
 # Canonical-form key for a subexpression, or `nothing` if it cannot be
 # canonicalized (e.g. a non-finite literal). A `nothing` key disables sharing
 # for that subtree — CSE is a pure optimization and silently declines anything
 # it cannot key safely.
-function _cse_key(e::Expr)
+function _cse_key(e::ASTExpr)
     try
         return canonical_json(e)
     catch err
@@ -409,7 +409,7 @@ end
 
 # Count pass: tally canonical_json occurrences of every hoistable subexpression
 # across all RHS trees. A key seen >= 2 times is worth hoisting.
-function _cse_count!(e::Expr, counts::Dict{String,Int})
+function _cse_count!(e::ASTExpr, counts::Dict{String,Int})
     (e isa OpExpr && _cse_hoistable(e)) || return
     k = _cse_key(e)
     k === nothing || (counts[k] = get(counts, k, 0) + 1)
@@ -434,7 +434,7 @@ end
 # in `ctx.cached` into the prelude and replacing it with a `_NK_CACHED` ref.
 # Falls back to plain `_compile` for leaves and opaque ops, so the result is
 # identical to `_compile` wherever nothing is hoisted.
-function _compile_cse(expr::Expr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
+function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
     (expr isa OpExpr && _cse_hoistable(expr)) ||
         return _compile(expr, var_map, param_syms, reg_funcs)
 
@@ -465,7 +465,7 @@ end
 # prelude (slot-ordered def nodes), the shared cache vector, and a diagnostic
 # `(; n_slots, n_occurrences)` that witnesses the evaluate-once property
 # (criterion #2: distinct evaluations == distinct canonical subexpressions).
-function _cse_compile_scalar(entries::Vector{Tuple{Int,Expr}},
+function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
                              var_map, param_syms, reg_funcs)
     counts = Dict{String,Int}()
     for (_, e) in entries

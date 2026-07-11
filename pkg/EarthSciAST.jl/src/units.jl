@@ -288,7 +288,7 @@ enclosing operations, but note that the callers do not uniformly treat it as
 equation whose side comes back `nothing`, and [`validate_model_dimensions`](@ref)
 seeds variables with no declared units as `""` (dimensionless) before checking.
 """
-function get_expression_dimensions(expr::Expr, var_units::AbstractDict)::Union{Unitful.Units, Nothing}
+function get_expression_dimensions(expr::ASTExpr, var_units::AbstractDict)::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
         # Numbers are dimensionless unless specified otherwise
         return Unitful.NoUnits

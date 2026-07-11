@@ -47,7 +47,7 @@ end
 # in the enclosing `arrayop`, so `index(u, i-1, j+1)` inside `i in 2:9` can
 # be resolved to a concrete range on each axis.
 function _scan_shape!(shapes::Dict{String,Vector{UnitRange{Int}}},
-                      expr::Expr,
+                      expr::ASTExpr,
                       idx_env::Dict{String,UnitRange{Int}})
     if expr isa NumExpr || expr isa IntExpr || expr isa VarExpr
         return
@@ -152,7 +152,7 @@ end
 # affine offsets `op("+", [idx, NumExpr(k)])` / `op("-", ...)` with either
 # operand order. Returns a UnitRange representing the range that expression
 # sweeps, or `nothing` if the shape cannot be inferred from this node alone.
-function _eval_index_range(idx_expr::Expr, idx_env::Dict{String,UnitRange{Int}})
+function _eval_index_range(idx_expr::ASTExpr, idx_env::Dict{String,UnitRange{Int}})
     if idx_expr isa IntExpr
         v = Int(idx_expr.value)
         return v:v
@@ -176,7 +176,7 @@ function _eval_index_range(idx_expr::Expr, idx_env::Dict{String,UnitRange{Int}})
     return nothing
 end
 
-function _split_affine(a::Expr, b::Expr)
+function _split_affine(a::ASTExpr, b::ASTExpr)
     if a isa VarExpr && b isa IntExpr
         return a.name, Int(b.value)
     elseif a isa IntExpr && b isa VarExpr

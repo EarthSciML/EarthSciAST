@@ -21,36 +21,36 @@
 const _AREA_DEG2RAD = π / 180
 
 # `index(overlap_clip, idx, col)` — read coordinate `col` (1 = lon, 2 = lat) of
-# clip-ring vertex `idx` (an `Expr`: a range symbol, an affine `v+1`, or a literal).
-_clip_col(idx::Expr, col::Int) =
-    OpExpr("index", Expr[VarExpr("overlap_clip"), idx, IntExpr(col)])
+# clip-ring vertex `idx` (an `ASTExpr`: a range symbol, an affine `v+1`, or a literal).
+_clip_col(idx::ASTExpr, col::Int) =
+    OpExpr("index", ASTExpr[VarExpr("overlap_clip"), idx, IntExpr(col)])
 
 # Unit 3-vector AST `(cosφ·cosλ, cosφ·sinλ, sinφ)` of clip-ring vertex `idx`.
-function _clip_unit_vec(idx::Expr)
-    lon = OpExpr("*", Expr[_clip_col(idx, 1), NumExpr(_AREA_DEG2RAD)])
-    lat = OpExpr("*", Expr[_clip_col(idx, 2), NumExpr(_AREA_DEG2RAD)])
-    cos_lat = OpExpr("cos", Expr[lat])
-    return (OpExpr("*", Expr[cos_lat, OpExpr("cos", Expr[lon])]),
-            OpExpr("*", Expr[cos_lat, OpExpr("sin", Expr[lon])]),
-            OpExpr("sin", Expr[lat]))
+function _clip_unit_vec(idx::ASTExpr)
+    lon = OpExpr("*", ASTExpr[_clip_col(idx, 1), NumExpr(_AREA_DEG2RAD)])
+    lat = OpExpr("*", ASTExpr[_clip_col(idx, 2), NumExpr(_AREA_DEG2RAD)])
+    cos_lat = OpExpr("cos", ASTExpr[lat])
+    return (OpExpr("*", ASTExpr[cos_lat, OpExpr("cos", ASTExpr[lon])]),
+            OpExpr("*", ASTExpr[cos_lat, OpExpr("sin", ASTExpr[lon])]),
+            OpExpr("sin", ASTExpr[lat]))
 end
 
-_dot3(u, v) = OpExpr("+", Expr[
-    OpExpr("*", Expr[u[1], v[1]]),
-    OpExpr("*", Expr[u[2], v[2]]),
-    OpExpr("*", Expr[u[3], v[3]])])
+_dot3(u, v) = OpExpr("+", ASTExpr[
+    OpExpr("*", ASTExpr[u[1], v[1]]),
+    OpExpr("*", ASTExpr[u[2], v[2]]),
+    OpExpr("*", ASTExpr[u[3], v[3]])])
 
 _cross3(u, v) = (
-    OpExpr("-", Expr[OpExpr("*", Expr[u[2], v[3]]), OpExpr("*", Expr[u[3], v[2]])]),
-    OpExpr("-", Expr[OpExpr("*", Expr[u[3], v[1]]), OpExpr("*", Expr[u[1], v[3]])]),
-    OpExpr("-", Expr[OpExpr("*", Expr[u[1], v[2]]), OpExpr("*", Expr[u[2], v[1]])]))
+    OpExpr("-", ASTExpr[OpExpr("*", ASTExpr[u[2], v[3]]), OpExpr("*", ASTExpr[u[3], v[2]])]),
+    OpExpr("-", ASTExpr[OpExpr("*", ASTExpr[u[3], v[1]]), OpExpr("*", ASTExpr[u[1], v[3]])]),
+    OpExpr("-", ASTExpr[OpExpr("*", ASTExpr[u[1], v[2]]), OpExpr("*", ASTExpr[u[2], v[1]])]))
 
 # Van Oosterom–Strackee signed solid angle of triangle a,b,c:
 # 2·atan2(a·(b×c), 1 + a·b + b·c + c·a).
 function _spherical_excess(a, b, c)
     triple = _dot3(a, _cross3(b, c))
-    denom = OpExpr("+", Expr[NumExpr(1.0), _dot3(a, b), _dot3(b, c), _dot3(c, a)])
-    return OpExpr("*", Expr[NumExpr(2.0), OpExpr("atan2", Expr[triple, denom])])
+    denom = OpExpr("+", ASTExpr[NumExpr(1.0), _dot3(a, b), _dot3(b, c), _dot3(c, a)])
+    return OpExpr("*", ASTExpr[NumExpr(2.0), OpExpr("atan2", ASTExpr[triple, denom])])
 end
 
 """
@@ -68,8 +68,8 @@ carry zero excess, so the sum collapses to the `Σ_{i=2}^{n-1}` fan the oracle
 function _spherical_area_faq(n::Int)::OpExpr
     apex = _clip_unit_vec(IntExpr(1))
     here = _clip_unit_vec(VarExpr("v"))
-    nxt  = _clip_unit_vec(OpExpr("+", Expr[VarExpr("v"), IntExpr(1)]))
-    return OpExpr("aggregate", Expr[VarExpr("overlap_clip")];
+    nxt  = _clip_unit_vec(OpExpr("+", ASTExpr[VarExpr("v"), IntExpr(1)]))
+    return OpExpr("aggregate", ASTExpr[VarExpr("overlap_clip")];
                   semiring="sum_product", output_idx=Any[],
                   ranges=Dict{String,Any}("v" => [1, n]),
                   expr_body=_spherical_excess(apex, here, nxt))

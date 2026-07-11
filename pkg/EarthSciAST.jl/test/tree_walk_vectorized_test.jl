@@ -30,16 +30,16 @@ function _fieldic_model(N)
     vars = Dict("psi" => ModelVariable(StateVariable; shape=["i", "j"]))
     dref = _op("D", _idx("psi", _v("i"), _v("j")); wrt="t")
     drhs = _op("neg", _idx("psi", _v("i"), _v("j")))
-    dlhs = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i", "j"],
+    dlhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=dref, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    drhs_ao = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i", "j"],
+    drhs_ao = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=drhs, ranges=Dict("i" => [1, N], "j" => [1, N]))
     icbody = _op("-",
         _op("sqrt", _op("+",
             _op("^", _op("-", _op("*", _op("-", _v("i"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)),
             _op("^", _op("-", _op("*", _op("-", _v("j"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)))),
         _n(0.3 * N))
-    ic_agg = OpExpr("aggregate", ESM.Expr[]; output_idx=Any["i", "j"],
+    ic_agg = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=icbody, ranges=Dict("i" => [1, N], "j" => [1, N]))
     ESM.Model(vars, [ESM.Equation(dlhs, drhs_ao),
                      ESM.Equation(_op("ic", _v("psi")), ic_agg)])
@@ -84,7 +84,7 @@ end
         vars = Dict("y" => ModelVariable(StateVariable),
                     "x" => ModelVariable(StateVariable))
         body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
-        rhs = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i"], expr_body=body,
+        rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
                      ranges=Dict("i" => [1, 2], "k" => [1, 3]), reduce="+")
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, 2), rhs)])
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]

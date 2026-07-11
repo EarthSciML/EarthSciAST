@@ -166,7 +166,7 @@ function stoichiometric_matrix(rxn_sys::ReactionSystem)::Matrix{Float64}
 end
 
 """
-    mass_action_rate(reaction::Reaction, species::Vector{Species}) -> Expr
+    mass_action_rate(reaction::Reaction, species::Vector{Species}) -> ASTExpr
 
 Compute the mass action rate expression for a reaction.
 
@@ -184,7 +184,7 @@ coefficient unchanged.
   helper; retained for API stability and future validation)
 
 # Returns
-- `Expr`: Mass action rate expression
+- `ASTExpr`: Mass action rate expression
 
 # Examples
 ```julia
@@ -195,7 +195,7 @@ coefficient unchanged.
 # Returns: k
 ```
 """
-function mass_action_rate(reaction::Reaction, species::Vector{Species})::Expr
+function mass_action_rate(reaction::Reaction, species::Vector{Species})::ASTExpr
     rate_expr = reaction.rate
 
     # Source reactions (no substrates): the rate expression IS the full rate.
@@ -204,7 +204,7 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::Expr
     end
 
     # Always multiply the rate coefficient by ∏[substrate]^stoich (spec §7.4).
-    mass_action_terms = Expr[rate_expr]
+    mass_action_terms = ASTExpr[rate_expr]
     for entry in reaction.substrates
         species_expr = VarExpr(entry.species)
         if entry.stoichiometry == 1
@@ -214,7 +214,7 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::Expr
                 IntExpr(Int64(entry.stoichiometry)) :
                 NumExpr(entry.stoichiometry)
             push!(mass_action_terms, OpExpr("^",
-                Expr[species_expr, exponent_expr]))
+                ASTExpr[species_expr, exponent_expr]))
         end
     end
 

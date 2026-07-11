@@ -10,7 +10,7 @@ const _ME = EarthSciAST
 
 _mn(x) = _ME.NumExpr(x)
 _mv(n) = _ME.VarExpr(n)
-_mop(op, args...; kwargs...) = _ME.OpExpr(op, _ME.Expr[args...]; kwargs...)
+_mop(op, args...; kwargs...) = _ME.OpExpr(op, _ME.ASTExpr[args...]; kwargs...)
 _mderiv(name) = _mop("D", _mv(name); wrt="t")
 
 @testset "Mock systems" begin
@@ -39,7 +39,7 @@ _mderiv(name) = _mop("D", _mv(name); wrt="t")
     end
 
     @testset "event summaries symmetric between MockMTKSystem and MockPDESystem" begin
-        ev = ContinuousEvent(_ME.Expr[_mv("x")],
+        ev = ContinuousEvent(_ME.ASTExpr[_mv("x")],
                              [AffectEquation("x", _mn(0.0))])
         vars = Dict{String,ModelVariable}("x" => ModelVariable(StateVariable; default=1.0))
         ode_model = Model(vars, [Equation(_mderiv("x"), _mv("x"))];

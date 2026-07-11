@@ -4,7 +4,7 @@
 # Each `Model` and `ReactionSystem` may carry a `tests` block (ESM spec §6.6)
 # of scalar `(variable, time, expected, [tolerance])` assertions. This module
 # walks a given set of root directories, parses every `.esm` file via `load`,
-# simulates each Test on the resulting MTK system, samples each Assertion via
+# simulates each InlineTest on the resulting MTK system, samples each Assertion via
 # the solution interpolant, and compares to the declared expected value with
 # the tolerance resolved per spec §6.6.4 (assertion > test > model > default
 # `rel=1e-6`).

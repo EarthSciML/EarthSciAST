@@ -28,7 +28,7 @@ const ESMJ = EarthSciAST
     _v(n)  = VarExpr(String(n))
     _n(x)  = NumExpr(Float64(x))
     _i(x)  = IntExpr(Int64(x))
-    _op(op, args...; kw...) = OpExpr(String(op), ESMJ.Expr[args...]; kw...)
+    _op(op, args...; kw...) = OpExpr(String(op), ESMJ.ASTExpr[args...]; kw...)
     _idx(var, ix...)  = _op("index", _v(var), [_v(String(s)) for s in ix]...)
     _Didx(var, ix...) = _op("D", _idx(var, ix...); wrt="t")
     _R(s) = ESMJ.IndexSetRef(String(s))

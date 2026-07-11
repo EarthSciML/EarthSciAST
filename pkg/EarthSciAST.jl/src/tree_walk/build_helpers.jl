@@ -175,12 +175,12 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
             for i in eachindex(shape)
                 ranges[loops[i]] = IndexSetRef(shape[i])
             end
-            idx_args = Expr[VarExpr(vname)]
+            idx_args = ASTExpr[VarExpr(vname)]
             for l in loops
                 push!(idx_args, VarExpr(l))
             end
-            lhs_body = OpExpr("D", Expr[OpExpr("index", idx_args)]; wrt=lhs.wrt)
-            new_lhs = OpExpr("arrayop", Expr[];
+            lhs_body = OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt=lhs.wrt)
+            new_lhs = OpExpr("arrayop", ASTExpr[];
                              output_idx=Any[l for l in loops], ranges=ranges,
                              expr_body=lhs_body)
             new_rhs = _index_array_leaves(eq.rhs, arrayvars, loops)
@@ -244,14 +244,14 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
     end
     # A bare `name = rhs` algebraic definition per name (the D(state,t) equation
     # has an OpExpr lhs, so it is never a target — only its RHS is rewritten).
-    defs = Dict{String,Expr}()
+    defs = Dict{String,ASTExpr}()
     for eq in equations
         lhs = eq.lhs
         if lhs isa VarExpr
             defs[lhs.name] = eq.rhs
         end
     end
-    targets = Dict{String,Expr}()
+    targets = Dict{String,ASTExpr}()
     for (name, rhs) in defs
         if is_array_obs(name) && rhs isa OpExpr &&
            rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS
@@ -268,7 +268,7 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
     order = _dependency_order(collect(keys(targets)), name -> deps[name];
         on_cycle=_ -> throw(TreeWalkError("E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
             "cyclic elementwise array-observed dependency among $(collect(keys(targets)))")))
-    resolved = Dict{String,Expr}()
+    resolved = Dict{String,ASTExpr}()
     for name in order
         resolved[name] = substitute(targets[name], resolved)
     end

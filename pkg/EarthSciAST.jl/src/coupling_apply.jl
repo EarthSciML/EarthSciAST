@@ -21,7 +21,7 @@ by dependent variable regardless of form. Use
 [`differential_lhs_variable`](@ref) when only the differential form should
 match (e.g. state-ODE detection).
 """
-function lhs_dependent_variable(expr::Expr)::Union{String, Nothing}
+function lhs_dependent_variable(expr::ASTExpr)::Union{String, Nothing}
     if expr isa VarExpr
         return expr.name
     elseif expr isa OpExpr && expr.op == "D" && !isempty(expr.args) && expr.args[1] isa VarExpr
@@ -39,7 +39,7 @@ derivatives by construction, so `wrt` is not inspected) and `nothing` for
 anything else, including a bare `VarExpr` — see
 [`lhs_dependent_variable`](@ref) for the form-conflating variant.
 """
-function differential_lhs_variable(expr::Expr)::Union{String, Nothing}
+function differential_lhs_variable(expr::ASTExpr)::Union{String, Nothing}
     expr isa OpExpr || return nothing
     expr.op == "D" || return nothing
     (!isempty(expr.args) && expr.args[1] isa VarExpr) || return nothing
@@ -300,7 +300,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
         # Sum all RHS terms into a single equation; keep the first equation's LHS.
         first_idx = indices[1]
         lhs = equations[first_idx].lhs
-        terms = Expr[equations[i].rhs for i in indices]
+        terms = ASTExpr[equations[i].rhs for i in indices]
         new_rhs = length(terms) == 1 ? terms[1] : OpExpr("+", terms)
         push!(merged, Equation(lhs, new_rhs))
         for i in indices
@@ -343,9 +343,9 @@ function _collect_target_state_vars(equations::Vector{Equation},
     return vars
 end
 
-function _substitute_placeholder(expr::Expr,
+function _substitute_placeholder(expr::ASTExpr,
                                  placeholder::Union{String, Nothing},
-                                 target::String)::Expr
+                                 target::String)::ASTExpr
     placeholder === nothing && return expr
     if expr isa NumExpr || expr isa IntExpr
         return expr
@@ -370,9 +370,9 @@ end
 Apply a `CouplingCouple` entry: attach the connector equations to the
 flattened equation list. The connector.equations field may contain full
 equation structures; we accept both raw Equation objects and dict-shaped
-connector entries whose `lhs`/`rhs` are already-parsed `Expr`s.
+connector entries whose `lhs`/`rhs` are already-parsed `ASTExpr`s.
 
-A dict-shaped connector equation that cannot be coerced (no parsed `Expr`
+A dict-shaped connector equation that cannot be coerced (no parsed `ASTExpr`
 lhs/rhs) is NOT silently degraded into a bogus placeholder equation; it is
 recorded in `opaque_refs` (the `metadata.opaque_coupling_refs` channel used
 for the other couplings the flattener cannot lower) so callers can see the
@@ -393,7 +393,7 @@ function _apply_couple!(equations::Vector{Equation},
         item isa AbstractDict || continue
         lhs = get(item, "lhs", nothing)
         rhs = get(item, "rhs", nothing)
-        if lhs isa Expr && rhs isa Expr
+        if lhs isa ASTExpr && rhs isa ASTExpr
             push!(equations, Equation(lhs, rhs; _comment="couple"))
         else
             push!(opaque_refs, string(
@@ -409,7 +409,7 @@ Apply a `CouplingVariableMap` entry: substitute the `to` parameter/variable
 with the `from` variable in every flattened equation. For `param_to_var` and
 `conversion_factor`, also promote `to` out of the parameters map.
 
-When `transform` is an `Expr` (esm-spec §10.4 expression transform), the target
+When `transform` is an `ASTExpr` (esm-spec §10.4 expression transform), the target
 parameter instead becomes an observed defined by the transform expression —
 see the expression arm below.
 
@@ -429,7 +429,7 @@ function _apply_variable_map!(equations::Vector{Equation},
                               entry::CouplingVariableMap;
                               loader_names::Set{String}=Set{String}(),
                               observeds::Union{OrderedDict{String, ModelVariable},Nothing}=nothing)
-    if entry.transform isa Expr
+    if entry.transform isa ASTExpr
         _apply_expression_transform!(equations, params, observeds, entry)
         return
     end
@@ -453,7 +453,7 @@ function _apply_expression_transform!(equations::Vector{Equation},
                                       entry::CouplingVariableMap)
     from = entry.from
     to = entry.to
-    transform = entry.transform::Expr
+    transform = entry.transform::ASTExpr
     # `contains` (expression.jl) walks EVERY expression-bearing field —
     # aggregate bodies, filter predicates, bounds, table-lookup axes — so
     # the reference check is not blind to nested aggregate transforms.
@@ -484,19 +484,19 @@ end
 # flattened equation.
 function _substitute_variable_map!(equations::Vector{Equation},
                                    entry::CouplingVariableMap)
-    # Build replacement Expr. `factor` is a scaling coefficient (schema restricts
+    # Build replacement ASTExpr. `factor` is a scaling coefficient (schema restricts
     # it to the scaling transforms — additive / multiplicative / conversion_factor;
     # a bare param_to_var / identity may not carry one). Apply it uniformly here
     # so all three bindings agree — Julia/Rust previously scaled only for
     # `conversion_factor`, silently dropping it for additive/multiplicative while
     # Python applied it. A factor of 1.0 is a no-op and left unwrapped.
-    replacement::Expr = VarExpr(entry.from)
+    replacement::ASTExpr = VarExpr(entry.from)
     if entry.factor !== nothing && entry.factor != 1.0
         replacement = OpExpr("*",
-            Expr[NumExpr(entry.factor::Float64), VarExpr(entry.from)])
+            ASTExpr[NumExpr(entry.factor::Float64), VarExpr(entry.from)])
     end
 
-    bindings = Dict{String, Expr}(entry.to => replacement)
+    bindings = Dict{String, ASTExpr}(entry.to => replacement)
     for (i, eq) in enumerate(equations)
         equations[i] = Equation(
             substitute(eq.lhs, bindings),
@@ -560,7 +560,7 @@ describe_coupling_entry(entry::CouplingCouple)::String =
         "couple($(join(entry.systems, " <-> ")))", entry.description)
 
 function describe_coupling_entry(entry::CouplingVariableMap)::String
-    transform_str = entry.transform isa Expr ?
+    transform_str = entry.transform isa ASTExpr ?
         "expression" : entry.transform
     desc = "variable_map($(entry.from) -> $(entry.to), transform=$(transform_str))"
     if entry.factor !== nothing

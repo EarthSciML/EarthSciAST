@@ -31,19 +31,19 @@ function _toy_ode_system(name::Symbol=:ToyDecay)
     )
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", ESM.Expr[OpExpr("-", ESM.Expr[VarExpr("k1")]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", ESM.ASTExpr[OpExpr("-", ESM.ASTExpr[VarExpr("k1")]),
                                  VarExpr("x")])),
         ESM.Equation(
-            OpExpr("D", ESM.Expr[VarExpr("y")], wrt="t"),
-            OpExpr("-", ESM.Expr[
-                OpExpr("*", ESM.Expr[VarExpr("k1"), VarExpr("x")]),
-                OpExpr("*", ESM.Expr[VarExpr("k2"), VarExpr("y")])])),
+            OpExpr("D", ESM.ASTExpr[VarExpr("y")], wrt="t"),
+            OpExpr("-", ESM.ASTExpr[
+                OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("x")]),
+                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("y")])])),
         ESM.Equation(
-            OpExpr("D", ESM.Expr[VarExpr("z")], wrt="t"),
-            OpExpr("-", ESM.Expr[
-                OpExpr("*", ESM.Expr[VarExpr("k2"), VarExpr("y")]),
-                OpExpr("*", ESM.Expr[VarExpr("k3"), VarExpr("z")])])),
+            OpExpr("D", ESM.ASTExpr[VarExpr("z")], wrt="t"),
+            OpExpr("-", ESM.ASTExpr[
+                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("y")]),
+                OpExpr("*", ESM.ASTExpr[VarExpr("k3"), VarExpr("z")])])),
     ]
     model = ESM.Model(vars, eqs)
     return MTK.System(model; name=name)
@@ -178,7 +178,7 @@ end
 
     gaps = GapReport[]
     seen = Set{String}()
-    unknown_op = OpExpr("sigmoid", ESM.Expr[VarExpr("u")])
+    unknown_op = OpExpr("sigmoid", ESM.ASTExpr[VarExpr("u")])
     walker(unknown_op, seen, gaps, "equations[0].rhs")
 
     @test !isempty(gaps)
@@ -193,8 +193,8 @@ end
     )
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.Expr[VarExpr("u")], wrt="t"),
-            OpExpr("*", ESM.Expr[OpExpr("-", ESM.Expr[VarExpr("k")]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("u")], wrt="t"),
+            OpExpr("*", ESM.ASTExpr[OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
                                  VarExpr("u")])),
     ]
     model = ESM.Model(vars, eqs)
@@ -318,11 +318,11 @@ end
     # D(u) ~ -k * min(max(u, 0.0), 1.0)  — clamped decay
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.Expr[VarExpr("u")], wrt="t"),
-            OpExpr("*", ESM.Expr[
-                OpExpr("-", ESM.Expr[VarExpr("k")]),
-                OpExpr("min", ESM.Expr[
-                    OpExpr("max", ESM.Expr[VarExpr("u"), NumExpr(0.0)]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("u")], wrt="t"),
+            OpExpr("*", ESM.ASTExpr[
+                OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
+                OpExpr("min", ESM.ASTExpr[
+                    OpExpr("max", ESM.ASTExpr[VarExpr("u"), NumExpr(0.0)]),
                     NumExpr(1.0)
                 ])
             ])
@@ -383,11 +383,11 @@ end
     # D(x) ~ -min(x, y, z) — nested min
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("-", ESM.Expr[
-                OpExpr("min", ESM.Expr[
+            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("-", ESM.ASTExpr[
+                OpExpr("min", ESM.ASTExpr[
                     VarExpr("x"),
-                    OpExpr("min", ESM.Expr[VarExpr("y"), VarExpr("z")])
+                    OpExpr("min", ESM.ASTExpr[VarExpr("y"), VarExpr("z")])
                 ])
             ])
         ),

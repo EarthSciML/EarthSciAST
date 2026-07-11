@@ -10,23 +10,23 @@ using EarthSciAST
         # Test NumExpr
         num_expr = NumExpr(3.14)
         @test num_expr.value == 3.14
-        @test num_expr isa EarthSciAST.Expr
+        @test num_expr isa EarthSciAST.ASTExpr
 
         # Test VarExpr
         var_expr = VarExpr("x")
         @test var_expr.name == "x"
-        @test var_expr isa EarthSciAST.Expr
+        @test var_expr isa EarthSciAST.ASTExpr
 
         # Test OpExpr
-        op_expr = OpExpr("+", EarthSciAST.Expr[NumExpr(1.0), VarExpr("x")])
+        op_expr = OpExpr("+", EarthSciAST.ASTExpr[NumExpr(1.0), VarExpr("x")])
         @test op_expr.op == "+"
         @test length(op_expr.args) == 2
         @test op_expr.wrt === nothing
         @test op_expr.dim === nothing
-        @test op_expr isa EarthSciAST.Expr
+        @test op_expr isa EarthSciAST.ASTExpr
 
         # Test OpExpr with optional parameters
-        diff_expr = OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t", dim="time")
+        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t", dim="time")
         @test diff_expr.wrt == "t"
         @test diff_expr.dim == "time"
     end
@@ -35,8 +35,8 @@ using EarthSciAST
         # Test Equation. Qualify ESM.Equation: under MTK 11 + Pkg.test
         # extras the test session has both ESS and MTK loaded into Main,
         # which makes the bare `Equation` reference ambiguous.
-        lhs = OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t")
-        rhs = OpExpr("*", EarthSciAST.Expr[NumExpr(2.0), VarExpr("x")])
+        lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t")
+        rhs = OpExpr("*", EarthSciAST.ASTExpr[NumExpr(2.0), VarExpr("x")])
         eq = EarthSciAST.Equation(lhs, rhs)
         @test eq.lhs == lhs
         @test eq.rhs == rhs
@@ -79,7 +79,7 @@ using EarthSciAST
         # Test Reaction
         reactants = Dict("A" => 1, "B" => 1)
         products = Dict("C" => 1)
-        rate = OpExpr("*", EarthSciAST.Expr[VarExpr("k"), VarExpr("A"), VarExpr("B")])
+        rate = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k"), VarExpr("A"), VarExpr("B")])
         reaction = Reaction(reactants, products, rate)
         @test EarthSciAST.get_reactants_dict(reaction) == reactants
         @test EarthSciAST.get_products_dict(reaction) == products
@@ -139,10 +139,10 @@ using EarthSciAST
     end
 
     @testset "Type Hierarchy" begin
-        # Test that all expression types are subtypes of Expr
-        @test NumExpr <: EarthSciAST.Expr
-        @test VarExpr <: EarthSciAST.Expr
-        @test OpExpr <: EarthSciAST.Expr
+        # Test that all expression types are subtypes of ASTExpr
+        @test NumExpr <: EarthSciAST.ASTExpr
+        @test VarExpr <: EarthSciAST.ASTExpr
+        @test OpExpr <: EarthSciAST.ASTExpr
 
         # Test that trigger types are subtypes of DiscreteEventTrigger
         @test ConditionTrigger <: DiscreteEventTrigger

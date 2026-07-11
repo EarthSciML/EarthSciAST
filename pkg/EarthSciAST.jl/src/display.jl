@@ -2,9 +2,9 @@
 Pretty-printing formatters for ESM format expressions, equations, models, and files.
 
 Implements display methods for various ESM format types:
-- Base.show(io::IO, ::MIME"text/plain", expr::Expr): Unicode display with chemical subscripts
-- Base.show(io::IO, ::MIME"text/latex", expr::Expr): LaTeX mathematical notation
-- Base.show(io::IO, ::MIME"text/ascii", expr::Expr): Plain ASCII mathematical notation
+- Base.show(io::IO, ::MIME"text/plain", expr::ASTExpr): Unicode display with chemical subscripts
+- Base.show(io::IO, ::MIME"text/latex", expr::ASTExpr): LaTeX mathematical notation
+- Base.show(io::IO, ::MIME"text/ascii", expr::ASTExpr): Plain ASCII mathematical notation
 - Base.show(io::IO, ::MIME"text/plain", model::Model): Model summary display
 - Base.show(io::IO, ::MIME"text/plain", esm_file::EsmFile): Structured ESM file summary per spec Section 6.3
 - Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem): Chemical reaction notation
@@ -338,13 +338,13 @@ is_function_call_op(op::String) =
     get_operator_precedence(op) == _DISPLAY_FUNCTION_PRECEDENCE
 
 """
-    needs_parentheses(parent_op::String, child::Expr, is_right_operand::Bool=false) -> Bool
+    needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false) -> Bool
 
 Check if parentheses are needed around a subexpression, mirroring
 pretty-print.ts `needsParentheses`. A function-call argument is parenthesized
 only when it is a logical-`or` (loosest precedence).
 """
-function needs_parentheses(parent_op::String, child::Expr, is_right_operand::Bool=false)
+function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false)
     if isa(child, NumExpr) || isa(child, IntExpr) || isa(child, VarExpr)
         return false
     end
@@ -386,39 +386,39 @@ function needs_parentheses(parent_op::String, child::Expr, is_right_operand::Boo
 end
 
 """
-    Base.show(io::IO, ::MIME"text/plain", expr::Expr)
+    Base.show(io::IO, ::MIME"text/plain", expr::ASTExpr)
 
 Unicode display: chemical subscripts via element-aware tokenizer, ∂x/∂t derivatives,
 · for multiplication, − for unary minus, scientific notation with Unicode superscripts.
 """
-function Base.show(io::IO, ::MIME"text/plain", expr::Expr)
+function Base.show(io::IO, ::MIME"text/plain", expr::ASTExpr)
     print(io, format_expression_unicode(expr))
 end
 
 """
-    Base.show(io::IO, ::MIME"text/latex", expr::Expr)
+    Base.show(io::IO, ::MIME"text/latex", expr::ASTExpr)
 
 LaTeX display: \\frac{}{}, \\partial, \\mathrm{} for species.
 """
-function Base.show(io::IO, ::MIME"text/latex", expr::Expr)
+function Base.show(io::IO, ::MIME"text/latex", expr::ASTExpr)
     print(io, format_expression_latex(expr))
 end
 
 """
-    Base.show(io::IO, ::MIME"text/ascii", expr::Expr)
+    Base.show(io::IO, ::MIME"text/ascii", expr::ASTExpr)
 
 ASCII display: plain ASCII mathematical notation with standard operators (*, /, ^).
 """
-function Base.show(io::IO, ::MIME"text/ascii", expr::Expr)
+function Base.show(io::IO, ::MIME"text/ascii", expr::ASTExpr)
     print(io, format_expression_ascii(expr))
 end
 
 """
-    format_expression(expr::Expr, format::Symbol) -> String
+    format_expression(expr::ASTExpr, format::Symbol) -> String
 
 Format an expression in the given notation (`:unicode`, `:latex`, or `:ascii`).
 """
-function format_expression(expr::Expr, format::Symbol)
+function format_expression(expr::ASTExpr, format::Symbol)
     format in (:unicode, :latex, :ascii) ||
         throw(ArgumentError("Unsupported format: $format"))
 
@@ -443,25 +443,25 @@ function format_expression(expr::Expr, format::Symbol)
 end
 
 """
-    format_expression_unicode(expr::Expr) -> String
+    format_expression_unicode(expr::ASTExpr) -> String
 
 Format an expression as Unicode mathematical notation.
 """
-format_expression_unicode(expr::Expr) = format_expression(expr, :unicode)
+format_expression_unicode(expr::ASTExpr) = format_expression(expr, :unicode)
 
 """
-    format_expression_latex(expr::Expr) -> String
+    format_expression_latex(expr::ASTExpr) -> String
 
 Format an expression as LaTeX mathematical notation.
 """
-format_expression_latex(expr::Expr) = format_expression(expr, :latex)
+format_expression_latex(expr::ASTExpr) = format_expression(expr, :latex)
 
 """
-    format_expression_ascii(expr::Expr) -> String
+    format_expression_ascii(expr::ASTExpr) -> String
 
 Format an expression as plain ASCII mathematical notation.
 """
-format_expression_ascii(expr::Expr) = format_expression(expr, :ascii)
+format_expression_ascii(expr::ASTExpr) = format_expression(expr, :ascii)
 
 # ── Structural / array-query op rendering (mirrors pretty-print.ts) ──────────
 # The closed evaluable-core ops whose defining data lives in fields OTHER than
@@ -509,7 +509,7 @@ function format_bound(value, format::Symbol)
         return string(value)
     elseif value isa AbstractString
         return String(value)
-    elseif value isa Expr
+    elseif value isa ASTExpr
         return format_expression(value, format)
     else
         return string(value)
@@ -653,7 +653,7 @@ function format_structural_op(node::OpExpr, format::Symbol)
         end
     elseif op == "table_lookup"
         table = node.table === nothing ? "" : node.table
-        axes = node.table_axes === nothing ? Dict{String,Expr}() : node.table_axes
+        axes = node.table_axes === nothing ? Dict{String,ASTExpr}() : node.table_axes
         eq = format == :latex ? " = " : "="
         bindings = join(["$k$eq$(r(axes[k]))" for k in sort(collect(keys(axes)))], ", ")
         outv = node.output
@@ -662,7 +662,7 @@ function format_structural_op(node::OpExpr, format::Symbol)
         return "$name[$bindings]$out_str"
     elseif op == "apply_expression_template"
         name = node.name === nothing ? "" : node.name
-        binds = node.bindings === nothing ? Dict{String,Expr}() : node.bindings
+        binds = node.bindings === nothing ? Dict{String,ASTExpr}() : node.bindings
         eq = format == :latex ? " = " : "="
         inner = join(["$k$eq$(r(binds[k]))" for k in sort(collect(keys(binds)))], ", ")
         if format == :latex
@@ -674,7 +674,7 @@ function format_structural_op(node::OpExpr, format::Symbol)
         end
     elseif op == "makearray"
         regions = node.regions === nothing ? Vector{Vector{Vector{Int}}}() : node.regions
-        values = node.values === nothing ? Expr[] : node.values
+        values = node.values === nothing ? ASTExpr[] : node.values
         parts = String[]
         for (i, region) in enumerate(regions)
             reg_str = join(
@@ -752,7 +752,7 @@ _infix_separator(op::String, format::Symbol) =
     getproperty(_INFIX_SEPARATORS[op], format)
 
 """Format one operand of `op`, parenthesizing per [`needs_parentheses`](@ref)."""
-function _format_operand(op::String, arg::Expr, format::Symbol,
+function _format_operand(op::String, arg::ASTExpr, format::Symbol,
                          is_right_operand::Bool=false)
     result = format_expression(arg, format)
     return needs_parentheses(op, arg, is_right_operand) ? "($result)" : result
@@ -760,7 +760,7 @@ end
 
 # LaTeX function-call: `\left( \right)` only when the argument is tall
 # (contains a \frac), else plain parentheses.
-function _latex_func(name::AbstractString, arg::Expr)
+function _latex_func(name::AbstractString, arg::ASTExpr)
     la = format_expression_latex(arg)
     return occursin("\\frac", la) ? "$name\\left($la\\right)" : "$name($la)"
 end
@@ -1279,7 +1279,7 @@ to_ascii(target::Real) = format_number(target, :ascii)
 to_ascii(target::String) =
     convert_greek_letters(format_chemical_subscripts(target, :ascii), :ascii)
 
-to_ascii(target::Expr) = format_expression_ascii(target)
+to_ascii(target::ASTExpr) = format_expression_ascii(target)
 
 to_ascii(target::Equation) =
     "$(format_expression_ascii(target.lhs)) = $(format_expression_ascii(target.rhs))"
@@ -1298,7 +1298,7 @@ to_ascii(target::EsmFile) = "ESM v$(target.esm): $(target.metadata.name)"
     to_latex(target) -> String
 
 Format `target` as Unicode / LaTeX mathematical notation. Parallel to
-[`to_ascii`](@ref) for `Nothing`, `Real`, `String`, `Expr`, and `Equation`
+[`to_ascii`](@ref) for `Nothing`, `Real`, `String`, `ASTExpr`, and `Equation`
 targets, sharing its naming convention across the language bindings (see
 tests/display/RENDERING_CONTRACT.md). Unlike `to_ascii`, there are no
 summary methods for `Model`/`ReactionSystem`/`EsmFile` — those types throw
@@ -1310,7 +1310,7 @@ to_unicode(::Nothing) = "nothing"
 to_unicode(target::Real) = format_number(target, :unicode)
 to_unicode(target::String) =
     convert_greek_letters(format_chemical_subscripts(target, :unicode), :unicode)
-to_unicode(target::Expr) = format_expression_unicode(target)
+to_unicode(target::ASTExpr) = format_expression_unicode(target)
 to_unicode(target::Equation) =
     "$(format_expression_unicode(target.lhs)) = $(format_expression_unicode(target.rhs))"
 
@@ -1320,6 +1320,6 @@ to_latex(::Nothing) = "nothing"
 to_latex(target::Real) = format_number(target, :latex)
 to_latex(target::String) =
     convert_greek_letters(format_chemical_subscripts(target, :latex), :latex)
-to_latex(target::Expr) = format_expression_latex(target)
+to_latex(target::ASTExpr) = format_expression_latex(target)
 to_latex(target::Equation) =
     "$(format_expression_latex(target.lhs)) = $(format_expression_latex(target.rhs))"

@@ -61,8 +61,8 @@ function _resolve_one_index_set_ref(ref::IndexSetRef, index_sets::AbstractDict,
         # The offsets factor binds by BARE name in the model scope (§5.4);
         # `factor_scope` supplies the in-scope (possibly namespaced) variable.
         off = String(get(factor_scope, String(is.offsets), String(is.offsets)))
-        idx_args = Expr[VarExpr(off)]
-        append!(idx_args, Expr[VarExpr(p) for p in ref.of])
+        idx_args = ASTExpr[VarExpr(off)]
+        append!(idx_args, ASTExpr[VarExpr(p) for p in ref.of])
         return Any[1, OpExpr("index", idx_args)]
     elseif is.kind == "derived"
         # M4 (RFC §8.1): a derived index set names its producing FAQ node via
@@ -100,7 +100,7 @@ function _has_index_set_ref(expr::OpExpr)
     expr.upper !== nothing && _has_index_set_ref(expr.upper) && return true
     return false
 end
-_has_index_set_ref(::Expr) = false
+_has_index_set_ref(::ASTExpr) = false
 _has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_ref(eq.rhs)
 
 # Rewrite every IndexSetRef in the subtree's ranges to its resolved concrete
@@ -108,10 +108,10 @@ _has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_
 function _resolve_isr(expr::OpExpr, index_sets::AbstractDict,
                       derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
                       factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
-    new_args = Expr[_resolve_isr(a, index_sets, derived_extents, factor_scope) for a in expr.args]
+    new_args = ASTExpr[_resolve_isr(a, index_sets, derived_extents, factor_scope) for a in expr.args]
     new_body = expr.expr_body === nothing ? nothing : _resolve_isr(expr.expr_body, index_sets, derived_extents, factor_scope)
     new_values = expr.values === nothing ? nothing :
-                 Expr[_resolve_isr(v, index_sets, derived_extents, factor_scope) for v in expr.values]
+                 ASTExpr[_resolve_isr(v, index_sets, derived_extents, factor_scope) for v in expr.values]
     new_lower = expr.lower === nothing ? nothing : _resolve_isr(expr.lower, index_sets, derived_extents, factor_scope)
     new_upper = expr.upper === nothing ? nothing : _resolve_isr(expr.upper, index_sets, derived_extents, factor_scope)
     new_ranges = expr.ranges
@@ -126,7 +126,7 @@ function _resolve_isr(expr::OpExpr, index_sets::AbstractDict,
                        values=new_values, lower=new_lower, upper=new_upper,
                        ranges=new_ranges)
 end
-_resolve_isr(expr::Expr, ::AbstractDict, ::AbstractDict=_EMPTY_DERIVED_EXTENTS,
+_resolve_isr(expr::ASTExpr, ::AbstractDict, ::AbstractDict=_EMPTY_DERIVED_EXTENTS,
              ::AbstractDict=_EMPTY_FACTOR_SCOPE) = expr
 _resolve_isr(eq::Equation, index_sets::AbstractDict,
              derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
@@ -155,7 +155,7 @@ end
 # indices into the (already output-index-substituted) `body`, and guard
 # filter-rejected terms with a runtime `ifelse(pred, term, 0̄)` (§7.2). `emit!`
 # receives each surviving term; the caller owns what happens next (resolve to a
-# scalar Expr vs resolve+compile to a `_Node`) and how the terms are ⊕-combined.
+# scalar ASTExpr vs resolve+compile to a `_Node`) and how the terms are ⊕-combined.
 # With neither gates nor filter this is the unchanged M1 expansion.
 #
 # Dict reuse: `_sub_preserving`/`_join_admits` only READ these dicts (never
@@ -166,11 +166,11 @@ end
 # already carry the output-index substitution (only the contracted indices are
 # substituted here); `nothing` disables the guard, as a `nothing` `gates`
 # disables the join.
-function _foreach_aggregate_term(emit!::F, body::Expr,
+function _foreach_aggregate_term(emit!::F, body::ASTExpr,
         contract_names::Vector{String}, contract_iters,
         gates, filt, zerobar::Float64,
         out_env::Union{Nothing,Dict{String,Int}}=nothing) where {F}
-    k_exprs = Dict{String,Expr}()
+    k_exprs = Dict{String,ASTExpr}()
     binding = gates === nothing ? nothing :
               (out_env === nothing ? Dict{String,Int}() : Dict{String,Int}(out_env))
     for k_tuple in Iterators.product(contract_iters...)
@@ -186,7 +186,7 @@ function _foreach_aggregate_term(emit!::F, body::Expr,
         term = _sub_preserving(body, k_exprs)
         if filt !== nothing
             fsub = _sub_preserving(filt, k_exprs)
-            term = OpExpr("ifelse", Expr[fsub, term, NumExpr(zerobar)])
+            term = OpExpr("ifelse", ASTExpr[fsub, term, NumExpr(zerobar)])
         end
         emit!(term)
     end
@@ -214,8 +214,8 @@ _expand_contract_range(rspec, idx_env::Dict{String,Int}, const_arrays::AbstractD
 # substituting the output_idx values and unrolling contracted indices at
 # build time. Mirrors the LHS-arrayop expansion (`_compile_arrayop_percell!`,
 # the `_is_arrayop_D_lhs` branch of the derivative loop) but produces a scalar
-# Expr instead of writing to rhs_list.
-function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
+# ASTExpr instead of writing to rhs_list.
+function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{ASTExpr},
                                     array_var_info, var_map, const_arrays,
                                     pgather::AbstractDict=_EMPTY_PGATHER,
                                     memo::_MaybeMemo=nothing)
@@ -233,7 +233,7 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
 
     # Substitute concrete output-index values into body.
     k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
-    idx_exprs = Dict{String,Expr}(
+    idx_exprs = Dict{String,ASTExpr}(
         output_idx_strs[d] => IntExpr(Int64(k_vals[d]))
         for d in 1:length(output_idx_strs))
     sub_body = _sub_preserving(body, idx_exprs)
@@ -257,7 +257,7 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
     # Join/filter expansion via the shared core; the filter carries the (fixed)
     # output-index substitution already, matching the hoisted `sub_body`.
     filt = filt0 === nothing ? nothing : _sub_preserving(filt0, idx_exprs)
-    terms = Expr[]
+    terms = ASTExpr[]
     _foreach_aggregate_term(sub_body, contract_names, contract_iters,
                             gates, filt, zerobar, _out_idx_env) do term
         push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
@@ -270,20 +270,20 @@ end
 # selecting the value expression whose region covers (k1, k2, ...).
 # Later regions overwrite earlier ones, matching the Python reference
 # semantics (`_eval_makearray` in numpy_interpreter.py).
-function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Expr},
+function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{ASTExpr},
                                       array_var_info, var_map, const_arrays,
                                       pgather::AbstractDict=_EMPTY_PGATHER,
                                       memo::_MaybeMemo=nothing)
     regions = makearray_expr.regions === nothing ?
               Vector{Vector{Vector{Int}}}() : makearray_expr.regions
-    values  = makearray_expr.values  === nothing ? Expr[] : makearray_expr.values
+    values  = makearray_expr.values  === nothing ? ASTExpr[] : makearray_expr.values
     length(regions) == length(values) ||
         throw(TreeWalkError("E_TREEWALK_MAKEARRAY_MISMATCH",
               "makearray regions/values length mismatch " *
               "($(length(regions)) vs $(length(values)))"))
     k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
     ndim   = length(k_vals)
-    result_expr::Expr = NumExpr(0.0)  # default: 0 if no region covers the point
+    result_expr::ASTExpr = NumExpr(0.0)  # default: 0 if no region covers the point
     result_region = nothing
     for (region, val_expr) in zip(regions, values)
         length(region) == ndim ||
@@ -318,7 +318,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Ex
                       "axis/axes of $(ndim) total"))
             k_vals[nonsingleton]
         end
-        sel_exprs = Expr[IntExpr(Int64(v)) for v in sel]
+        sel_exprs = ASTExpr[IntExpr(Int64(v)) for v in sel]
         return re.op == "makearray" ?
             _resolve_index_of_makearray(re, sel_exprs, array_var_info, var_map,
                                         const_arrays, pgather) :
@@ -328,7 +328,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Ex
     return _resolve_indices(result_expr, array_var_info, var_map, const_arrays, pgather, memo)
 end
 
-# Expand a scalar arrayop (empty output_idx) to a plain scalar Expr by
+# Expand a scalar arrayop (empty output_idx) to a plain scalar ASTExpr by
 # unrolling all contracted indices at build time and combining them with the
 # declared reducer. This is the build-time equivalent of an einsum over a
 # general expression body — compile once, evaluate cheaply at every RHS call.
@@ -361,7 +361,7 @@ function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, 
     if isempty(contract_names) && gates === nothing && filt0 === nothing
         return _resolve_indices(body, array_var_info, var_map, const_arrays, pgather, memo)
     end
-    terms = Expr[]
+    terms = ASTExpr[]
     _foreach_aggregate_term(body, contract_names, contract_iters,
                             gates, filt0, zerobar) do term
         push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
@@ -414,7 +414,7 @@ const _EMPTY_PGATHER = Dict{String,_PGatherArray}()
 # allocation) and `changed` is false, letting the caller keep its node verbatim;
 # only the first differing element triggers a single copy. Shared by the `index`
 # fallback and the generic-recurse arm of `_resolve_indices`.
-function _resolve_arg_vec(args::Vector{Expr},
+function _resolve_arg_vec(args::Vector{ASTExpr},
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict,
@@ -424,7 +424,7 @@ function _resolve_arg_vec(args::Vector{Expr},
     new_args = args
     @inbounds for i in eachindex(args)
         a = args[i]
-        # Manual union-split (see `_sub_arg_vec`): the abstract `Expr` element type
+        # Manual union-split (see `_sub_arg_vec`): the abstract `ASTExpr` element type
         # makes a bare `_resolve_indices(a, …)` a dynamic dispatch. `NumExpr`/
         # `IntExpr` resolve to themselves, so short-circuit them; `VarExpr` may
         # const-fold (scalar loader field) so it keeps its call; `OpExpr` recurses —
@@ -583,7 +583,7 @@ function _resolve_indices_op(expr::OpExpr,
                           "out of range [1, $(pg.dims[d])] on dim $(d)"))
             end
             lin = LinearIndices(Tuple(pg.dims))[int_indices...]
-            return OpExpr("index", Expr[]; value=_PGatherRef(pg.flat, lin))
+            return OpExpr("index", ASTExpr[]; value=_PGatherRef(pg.flat, lin))
         end
         # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays):
         # inline the value as a NumExpr literal.
@@ -627,13 +627,13 @@ function _resolve_indices_op(expr::OpExpr,
                       "euler_integral supports 1D integration only; " *
                       "'$vname' has $(length(lo_vec)) dimensions"))
             lo1 = lo_vec[1]; hi1 = hi_vec[1]
-            cells = Expr[VarExpr(_cell_key(vname, [i])) for i in lo1:hi1]
+            cells = ASTExpr[VarExpr(_cell_key(vname, [i])) for i in lo1:hi1]
             for c in cells
                 cname = (c::VarExpr).name
                 haskey(var_map, cname) ||
                     throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
             end
-            return OpExpr("*", Expr[VarExpr("d$(iv)"), OpExpr("+", cells)])
+            return OpExpr("*", ASTExpr[VarExpr("d$(iv)"), OpExpr("+", cells)])
         end
     end
     # Scalar aggregate (empty output_idx) in expression position: expand inline.
@@ -731,7 +731,7 @@ function _discover_array_cells(
         vname => sort(collect(cset)) for (vname, cset) in cells)
 end
 
-function _scan_lhs_cells!(cells, lhs::Expr, array_var_names::Set{String})
+function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
     if lhs isa OpExpr && lhs.op == "D" && lhs.wrt == "t" &&
            length(lhs.args) == 1 && lhs.args[1] isa OpExpr &&
            lhs.args[1].op == "index"
@@ -813,7 +813,7 @@ end
 
 # Extract the scalar body from an arrayop node (or return expr unchanged).
 # Used to unwrap the RHS of an arrayop equation.
-function _extract_arrayop_body(expr::Expr)
+function _extract_arrayop_body(expr::ASTExpr)
     if expr isa OpExpr && _is_aggregate_op(expr.op)
         expr.expr_body !== nothing && return expr.expr_body
     end

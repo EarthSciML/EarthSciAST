@@ -45,9 +45,9 @@ end
             "k" => ModelVariable(ParameterVariable; default=k_val),
         )
         eq = Equation(
-            OpExpr("D", ESM.Expr[VarExpr("x")], wrt="t"),
-            OpExpr("*", ESM.Expr[
-                OpExpr("-", ESM.Expr[VarExpr("k")]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt="t"),
+            OpExpr("*", ESM.ASTExpr[
+                OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
                 VarExpr("x"),
             ]),
         )
@@ -82,20 +82,20 @@ end
         )
         # dA/dt = -k1*A + k2*B
         eqA = Equation(
-            OpExpr("D", ESM.Expr[VarExpr("A")], wrt="t"),
-            OpExpr("+", ESM.Expr[
-                OpExpr("-", ESM.Expr[
-                    OpExpr("*", ESM.Expr[VarExpr("k1"), VarExpr("A")]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("A")], wrt="t"),
+            OpExpr("+", ESM.ASTExpr[
+                OpExpr("-", ESM.ASTExpr[
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("A")]),
                 ]),
-                OpExpr("*", ESM.Expr[VarExpr("k2"), VarExpr("B")]),
+                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("B")]),
             ]),
         )
         # dB/dt =  k1*A - k2*B
         eqB = Equation(
-            OpExpr("D", ESM.Expr[VarExpr("B")], wrt="t"),
-            OpExpr("-", ESM.Expr[
-                OpExpr("*", ESM.Expr[VarExpr("k1"), VarExpr("A")]),
-                OpExpr("*", ESM.Expr[VarExpr("k2"), VarExpr("B")]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("B")], wrt="t"),
+            OpExpr("-", ESM.ASTExpr[
+                OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("A")]),
+                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("B")]),
             ]),
         )
         model = Model(vars, [eqA, eqB])
@@ -186,7 +186,7 @@ end
         )
         _n(x) = NumExpr(x)
         _v(n) = VarExpr(n)
-        _op(op, args...; kw...) = OpExpr(op, ESM.Expr[args...]; kw...)
+        _op(op, args...; kw...) = OpExpr(op, ESM.ASTExpr[args...]; kw...)
 
         # dA/dt = -0.04*A + 1e4*B*C
         eqA = Equation(

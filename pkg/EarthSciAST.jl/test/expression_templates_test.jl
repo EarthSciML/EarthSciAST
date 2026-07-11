@@ -223,7 +223,7 @@ const ARRHENIUS_FIXTURE_JSON = """
               _normj(expanded_dict.coupling)
         @test _normj(expanded_via_pass.data["models"]) ==
               _normj(expanded_dict.models)
-        # Typed load: the expanded transform arrives as an Expr operator node.
+        # Typed load: the expanded transform arrives as an ASTExpr operator node.
         f = EarthSciAST.load(joinpath(case, "fixture.esm"))
         entry = f.coupling[1]
         @test entry isa CouplingVariableMap

@@ -154,7 +154,7 @@ struct _BareSource end
         # The hot per-step path only READS the buffer; refresh happens at the
         # boundary (the affect). After a refresh, f! must still allocate nothing.
         N = 8
-        _ao1(body, idx, lo, hi) = OpExpr("arrayop", ESM.Expr[];
+        _ao1(body, idx, lo, hi) = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any[idx], expr_body=body, ranges=Dict(idx => [lo, hi]))
         model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
             [ESM.Equation(_ao1(_op("D", _idx("u", _v("i")); wrt="t"), "i", 1, N),

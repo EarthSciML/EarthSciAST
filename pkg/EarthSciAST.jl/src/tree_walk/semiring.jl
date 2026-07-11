@@ -72,7 +72,7 @@ end
 # For "max"/"min" we emit left-folded binary OpExprs to avoid adding n-ary
 # variants to _eval_node_op (which already handles them as ≥2-arg ops, but
 # the build-time fold keeps runtime dispatch uniform).
-function _combine_with_reducer(oplus::String, zerobar::Float64, terms::Vector{Expr})
+function _combine_with_reducer(oplus::String, zerobar::Float64, terms::Vector{ASTExpr})
     isempty(terms) && return NumExpr(zerobar)
     length(terms) == 1 && return terms[1]
     if oplus == "+"
@@ -82,13 +82,13 @@ function _combine_with_reducer(oplus::String, zerobar::Float64, terms::Vector{Ex
     elseif oplus == "max"
         result = terms[1]
         for i in 2:length(terms)
-            result = OpExpr("max", Expr[result, terms[i]])
+            result = OpExpr("max", ASTExpr[result, terms[i]])
         end
         return result
     elseif oplus == "min"
         result = terms[1]
         for i in 2:length(terms)
-            result = OpExpr("min", Expr[result, terms[i]])
+            result = OpExpr("min", ASTExpr[result, terms[i]])
         end
         return result
     else
@@ -335,7 +335,7 @@ function _expr_has_join(expr::OpExpr)
     expr.filter !== nothing && _expr_has_join(expr.filter) && return true
     return false
 end
-_expr_has_join(::Expr) = false
+_expr_has_join(::ASTExpr) = false
 _eq_has_join(eq::Equation) = _expr_has_join(eq.lhs) || _expr_has_join(eq.rhs)
 
 # Rewrite each aggregate node's `join` clauses into build-time `join_gates`
@@ -345,10 +345,10 @@ _eq_has_join(eq::Equation) = _expr_has_join(eq.lhs) || _expr_has_join(eq.rhs)
 # unchanged (serialization round-trips them); only the internal `join_gates` is
 # populated.
 function _resolve_join_in_expr(expr::OpExpr, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS)
-    new_args = Expr[_resolve_join_in_expr(a, index_sets, vi_maps) for a in expr.args]
+    new_args = ASTExpr[_resolve_join_in_expr(a, index_sets, vi_maps) for a in expr.args]
     new_body = expr.expr_body === nothing ? nothing : _resolve_join_in_expr(expr.expr_body, index_sets, vi_maps)
     new_values = expr.values === nothing ? nothing :
-                 Expr[_resolve_join_in_expr(v, index_sets, vi_maps) for v in expr.values]
+                 ASTExpr[_resolve_join_in_expr(v, index_sets, vi_maps) for v in expr.values]
     new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps)
     new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps)
     new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps)
@@ -358,7 +358,7 @@ function _resolve_join_in_expr(expr::OpExpr, index_sets::AbstractDict, vi_maps=_
                        values=new_values, lower=new_lower, upper=new_upper,
                        filter=new_filter, join_gates=gates)
 end
-_resolve_join_in_expr(expr::Expr, ::AbstractDict, vi_maps=_EMPTY_VI_MAPS) = expr
+_resolve_join_in_expr(expr::ASTExpr, ::AbstractDict, vi_maps=_EMPTY_VI_MAPS) = expr
 
 _resolve_join_in_eq(eq::Equation, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS) =
     Equation(_resolve_join_in_expr(eq.lhs, index_sets, vi_maps),

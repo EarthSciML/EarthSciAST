@@ -33,7 +33,7 @@ const ESM = EarthSciAST
     # (field, json, expected-parsed-value, construction op/args/kwargs).
     # The spec list itself must cover every wire field (op/args are structural
     # and always present; join_gates is internal).
-    E(x...) = ESM.Expr[x...]
+    E(x...) = ESM.ASTExpr[x...]
     specs = [
         (field = :wrt,
          json = """{"op":"D","args":["x"],"wrt":"t"}""",
@@ -115,9 +115,9 @@ const ESM = EarthSciAST
          cop = "table_lookup", cargs = E(), kw = (table = "T",)),
         (field = :table_axes,
          json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5}}""",
-         expected = Dict{String,ESM.Expr}("x" => NumExpr(2.5)),
+         expected = Dict{String,ESM.ASTExpr}("x" => NumExpr(2.5)),
          cop = "table_lookup", cargs = E(),
-         kw = (table_axes = Dict{String,ESM.Expr}("x" => NumExpr(2.5)),)),
+         kw = (table_axes = Dict{String,ESM.ASTExpr}("x" => NumExpr(2.5)),)),
         (field = :output,
          json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5},"output":"a"}""",
          expected = "a",
@@ -154,9 +154,9 @@ const ESM = EarthSciAST
          cop = "argmin", cargs = E(), kw = (arg = "g",)),
         (field = :bindings,
          json = """{"op":"aggregate","args":[],"bindings":{"f":"u"}}""",
-         expected = Dict{String,ESM.Expr}("f" => VarExpr("u")),
+         expected = Dict{String,ESM.ASTExpr}("f" => VarExpr("u")),
          cop = "aggregate", cargs = E(),
-         kw = (bindings = Dict{String,ESM.Expr}("f" => VarExpr("u")),)),
+         kw = (bindings = Dict{String,ESM.ASTExpr}("f" => VarExpr("u")),)),
     ]
 
     # The spec list must cover every field except op/args (structural) and
@@ -177,14 +177,14 @@ const ESM = EarthSciAST
             for carrier in (raw, ESM._to_native_json(raw))
                 parsed = parse_expression(carrier)
                 got = getfield(parsed, s.field)
-                if s.expected isa ESM.Expr
-                    @test got isa ESM.Expr && exprs_equal(got, s.expected)
+                if s.expected isa ESM.ASTExpr
+                    @test got isa ESM.ASTExpr && exprs_equal(got, s.expected)
                 elseif s.expected isa AbstractDict &&
-                       !isempty(s.expected) && first(values(s.expected)) isa ESM.Expr
+                       !isempty(s.expected) && first(values(s.expected)) isa ESM.ASTExpr
                     @test got isa AbstractDict && keys(got) == keys(s.expected)
                     @test all(exprs_equal(got[k], s.expected[k]) for k in keys(s.expected))
                 elseif s.expected isa AbstractVector && !isempty(s.expected) &&
-                       first(s.expected) isa ESM.Expr
+                       first(s.expected) isa ESM.ASTExpr
                     @test length(got) == length(s.expected)
                     @test all(exprs_equal(g, e) for (g, e) in zip(got, s.expected))
                 else

@@ -1,6 +1,6 @@
 using Test
 using EarthSciAST
-const ESM_Expr = EarthSciAST.Expr
+const ESM_Expr = EarthSciAST.ASTExpr
 
 @testset "canonicalize per RFC §5.4" begin
 
@@ -155,7 +155,7 @@ const ESM_Expr = EarthSciAST.Expr
     end
 
     @testset "E_CANONICAL_BAD_CONST for unsupported const value types" begin
-        n = OpExpr("const", EarthSciAST.Expr[]; value=Dict("a" => 1))
+        n = OpExpr("const", EarthSciAST.ASTExpr[]; value=Dict("a" => 1))
         err = try
             canonical_json(n)
             nothing
@@ -165,7 +165,7 @@ const ESM_Expr = EarthSciAST.Expr
         @test err isa CanonicalizeError
         @test err.code == "E_CANONICAL_BAD_CONST"
         # supported payloads still emit canonically
-        okv = OpExpr("const", EarthSciAST.Expr[]; value=Any[1, 2.5])
+        okv = OpExpr("const", EarthSciAST.ASTExpr[]; value=Any[1, 2.5])
         @test canonical_json(okv) == "{\"args\":[],\"op\":\"const\",\"value\":[1,2.5]}"
     end
 
@@ -174,12 +174,12 @@ const ESM_Expr = EarthSciAST.Expr
         # Julia storage. `[1, 2.5]` is a Vector{Float64} — the integral 1.0
         # must still emit as the integer token `1` (mirroring JSON3's numeric
         # narrowing and the Rust/Python emitters for integer-token sources).
-        fv = OpExpr("const", EarthSciAST.Expr[]; value=[1, 2.5])
+        fv = OpExpr("const", EarthSciAST.ASTExpr[]; value=[1, 2.5])
         @test canonical_json(fv) == "{\"args\":[],\"op\":\"const\",\"value\":[1,2.5]}"
         # -0.0 narrows to 0 (JSON3.read("-0.0") == Int64 0); out-of-Int64-range
         # integral floats keep the RFC float layout; AST NumExpr literals keep
         # the trailing-.0 disambiguation (§5.4.6) — narrowing is const-data-only.
-        edge = OpExpr("const", EarthSciAST.Expr[]; value=Any[-0.0, 1.0e21])
+        edge = OpExpr("const", EarthSciAST.ASTExpr[]; value=Any[-0.0, 1.0e21])
         @test canonical_json(edge) == "{\"args\":[],\"op\":\"const\",\"value\":[0,1e21]}"
         @test canonical_json(NumExpr(1.0)) == "1.0"
     end

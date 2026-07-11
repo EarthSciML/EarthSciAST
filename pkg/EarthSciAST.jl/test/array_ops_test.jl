@@ -21,15 +21,15 @@ const MTK2 = ModelingToolkit
 _var(name::AbstractString) = ESM2.VarExpr(String(name))
 _num(x) = ESM2.NumExpr(Float64(x))
 _op(op::AbstractString, args...; kwargs...) =
-    ESM2.OpExpr(String(op), ESM2.Expr[args...]; kwargs...)
+    ESM2.OpExpr(String(op), ESM2.ASTExpr[args...]; kwargs...)
 
 # Build an `index(u, idxs...)` node.
 _idx(arr::AbstractString, idxs...) =
     _op("index", _var(arr), (i isa Integer ? _num(i) : i for i in idxs)...)
 
 # Build a 1-D `arrayop` node with a single range declaration `i in lo:hi`.
-function _arrayop1d(body::ESM2.Expr, idx_name::AbstractString, lo::Int, hi::Int)
-    return ESM2.OpExpr("arrayop", ESM2.Expr[];
+function _arrayop1d(body::ESM2.ASTExpr, idx_name::AbstractString, lo::Int, hi::Int)
+    return ESM2.OpExpr("arrayop", ESM2.ASTExpr[];
         output_idx=Any[String(idx_name)],
         expr_body=body,
         ranges=Dict{String,Vector{Int}}(String(idx_name) => [lo, hi]))
@@ -37,10 +37,10 @@ end
 
 # Build a 2-D `arrayop` node with ranges `i in 1:M, j in 1:N` — output shape
 # is `(M, N)` when both indices appear in `output_idx`.
-function _arrayop2d(body::ESM2.Expr,
+function _arrayop2d(body::ESM2.ASTExpr,
                     i_name::AbstractString, ilo::Int, ihi::Int,
                     j_name::AbstractString, jlo::Int, jhi::Int)
-    return ESM2.OpExpr("arrayop", ESM2.Expr[];
+    return ESM2.OpExpr("arrayop", ESM2.ASTExpr[];
         output_idx=Any[String(i_name), String(j_name)],
         expr_body=body,
         ranges=Dict{String,Vector{Int}}(
@@ -343,7 +343,7 @@ end
     # ================================================================
     @testset "Parse/serialize round trip for all 7 array ops" begin
         # arrayop
-        node1 = ESM2.OpExpr("arrayop", ESM2.Expr[_var("A"), _var("B")];
+        node1 = ESM2.OpExpr("arrayop", ESM2.ASTExpr[_var("A"), _var("B")];
             output_idx=Any["i", "j"],
             expr_body=_op("*",
                 _op("index", _var("A"), _var("i"), _var("k")),
@@ -360,38 +360,38 @@ end
         @test rt1.expr_body isa ESM2.OpExpr
 
         # makearray
-        node2 = ESM2.OpExpr("makearray", ESM2.Expr[];
+        node2 = ESM2.OpExpr("makearray", ESM2.ASTExpr[];
             regions=[[[1, 2]], [[3, 3]]],
-            values=ESM2.Expr[_var("x"), _num(0)])
+            values=ESM2.ASTExpr[_var("x"), _num(0)])
         j2 = ESM2.serialize_expression(node2)
         rt2 = ESM2.parse_expression(j2)
         @test rt2.regions == [[[1, 2]], [[3, 3]]]
         @test length(rt2.values) == 2
 
         # index
-        node3 = ESM2.OpExpr("index", ESM2.Expr[_var("u"), _num(1), _num(2)])
+        node3 = ESM2.OpExpr("index", ESM2.ASTExpr[_var("u"), _num(1), _num(2)])
         j3 = ESM2.serialize_expression(node3)
         rt3 = ESM2.parse_expression(j3)
         @test rt3.op == "index"
         @test length(rt3.args) == 3
 
         # broadcast
-        node4 = ESM2.OpExpr("broadcast", ESM2.Expr[_var("A"), _var("B")]; fn="+")
+        node4 = ESM2.OpExpr("broadcast", ESM2.ASTExpr[_var("A"), _var("B")]; fn="+")
         rt4 = ESM2.parse_expression(ESM2.serialize_expression(node4))
         @test rt4.fn == "+"
 
         # reshape
-        node5 = ESM2.OpExpr("reshape", ESM2.Expr[_var("A")]; shape=Any[1, 9])
+        node5 = ESM2.OpExpr("reshape", ESM2.ASTExpr[_var("A")]; shape=Any[1, 9])
         rt5 = ESM2.parse_expression(ESM2.serialize_expression(node5))
         @test rt5.shape == Any[1, 9]
 
         # transpose
-        node6 = ESM2.OpExpr("transpose", ESM2.Expr[_var("T")]; perm=[2, 0, 1])
+        node6 = ESM2.OpExpr("transpose", ESM2.ASTExpr[_var("T")]; perm=[2, 0, 1])
         rt6 = ESM2.parse_expression(ESM2.serialize_expression(node6))
         @test rt6.perm == [2, 0, 1]
 
         # concat
-        node7 = ESM2.OpExpr("concat", ESM2.Expr[_var("A"), _var("B")]; axis=1)
+        node7 = ESM2.OpExpr("concat", ESM2.ASTExpr[_var("A"), _var("B")]; axis=1)
         rt7 = ESM2.parse_expression(ESM2.serialize_expression(node7))
         @test rt7.axis == 1
     end

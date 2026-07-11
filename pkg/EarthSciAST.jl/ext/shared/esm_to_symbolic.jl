@@ -1,4 +1,4 @@
-# Shared ESM Expr → Symbolics scalar-interpreter core.
+# Shared ESM ASTExpr → Symbolics scalar-interpreter core.
 #
 # This file is `include`d by BOTH EarthSciASTMTKExt and EarthSciASTCatalystExt
 # (each extension module compiles its own copy), so it may only reference
@@ -22,7 +22,7 @@
     _esm_to_symbolic_core(expr, recurse; number_value, resolve_var,
                           unary_ops, extended_op)
 
-Lower the extension-independent scalar arms of an ESM `Expr` — integer /
+Lower the extension-independent scalar arms of an ESM `ASTExpr` — integer /
 number / variable leaves; n-ary `+`/`-`/`*` and binary `/`/`^`; the
 mechanical unary elementwise ops in `unary_ops`; n-ary `min`/`max` — and
 recurse through children via `recurse(child)`. Every other `OpExpr` is

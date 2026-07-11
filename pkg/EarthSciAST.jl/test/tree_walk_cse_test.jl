@@ -23,7 +23,7 @@ const ESM = EarthSciAST
 
 _cse_n(x) = NumExpr(Float64(x))
 _cse_v(n) = VarExpr(n)
-_cse_op(op, args...; kw...) = OpExpr(op, ESM.Expr[args...]; kw...)
+_cse_op(op, args...; kw...) = OpExpr(op, ESM.ASTExpr[args...]; kw...)
 _cse_D(varname) = _cse_op("D", _cse_v(varname); wrt="t")
 
 @testset "tree_walk common-subexpression elimination (ess-r7h)" begin

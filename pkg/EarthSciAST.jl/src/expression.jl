@@ -6,7 +6,7 @@ This module provides functions for working with ESM format expressions:
 - Free variable analysis
 - Expression simplification through constant folding
 
-All operations are non-mutating and return new Expr objects.
+All operations are non-mutating and return new ASTExpr objects.
 
 Numerical evaluation lives in `tree_walk.jl` (`evaluate_expr` /
 `build_evaluator`) — the official EarthSciAST Julia evaluator — so this module
@@ -20,7 +20,7 @@ transparently extends the folder.
 # ========================================
 
 """
-    child_exprs(e::Expr) -> Vector{Expr}
+    child_exprs(e::ASTExpr) -> Vector{ASTExpr}
 
 All immediate sub-expressions of `e`, drawn from EVERY expression-bearing
 `OpExpr` field — not just `args`. This is the ONE shared traversal used by
@@ -33,17 +33,17 @@ bounds (`lower`/`upper`), makearray `values`, table-lookup axis inputs
 
 Non-expression fields (`wrt`, `dim`, `int_var`, `output_idx`, `join`,
 `regions`, `shape`, `perm`, `axis`, `fn`, `name`, `value`, `table`, `output`,
-`id`, `manifold`, `distinct`, …) carry strings/ints/const data, not `Expr`
+`id`, `manifold`, `distinct`, …) carry strings/ints/const data, not `ASTExpr`
 sub-trees, and are not traversed. `wrt` names a variable and is handled
 separately by `free_variables`/`contains`. Literal and variable leaves have no
 children.
 """
-child_exprs(::NumExpr) = Expr[]
-child_exprs(::IntExpr) = Expr[]
-child_exprs(::VarExpr) = Expr[]
+child_exprs(::NumExpr) = ASTExpr[]
+child_exprs(::IntExpr) = ASTExpr[]
+child_exprs(::VarExpr) = ASTExpr[]
 
-function child_exprs(e::OpExpr)::Vector{Expr}
-    out = Expr[]
+function child_exprs(e::OpExpr)::Vector{ASTExpr}
+    out = ASTExpr[]
     append!(out, e.args)
     for f in (e.lower, e.upper, e.expr_body, e.filter, e.key)
         f === nothing || push!(out, f)
@@ -63,7 +63,7 @@ function child_exprs(e::OpExpr)::Vector{Expr}
             v = e.ranges[k]
             if v isa AbstractVector
                 for x in v
-                    x isa Expr && push!(out, x)
+                    x isa ASTExpr && push!(out, x)
                 end
             end
         end
@@ -72,7 +72,7 @@ function child_exprs(e::OpExpr)::Vector{Expr}
 end
 
 """
-    foreach_subexpr(f, expr::Expr) -> Nothing
+    foreach_subexpr(f, expr::ASTExpr) -> Nothing
 
 Apply `f` to `expr` and to every descendant expression node, depth-first,
 parent before children, drawing children from [`child_exprs`](@ref) — so `f`
@@ -89,7 +89,7 @@ expression-bearing `OpExpr` field then has to be patched into every copy.
 field list; this is the corresponding whole-subtree visitor. Internal —
 read-only traversal; for structure-preserving rewrites use `map_children`.
 """
-function foreach_subexpr(f, expr::Expr)
+function foreach_subexpr(f, expr::ASTExpr)
     f(expr)
     for c in child_exprs(expr)
         foreach_subexpr(f, c)
@@ -121,7 +121,7 @@ end
 # ========================================
 
 """
-    map_children(f, e::Expr) -> Expr
+    map_children(f, e::ASTExpr) -> ASTExpr
 
 Return a copy of `e` with `f` applied to each immediate sub-expression, preserving
 `e`'s concrete type and every non-expression field. Leaf nodes (`NumExpr`,
@@ -136,20 +136,20 @@ This is the ONE field-preserving structural-rewrite primitive: `substitute`,
 expression-bearing field list lives in exactly one place (here and its read-only
 twin `child_exprs`).
 """
-map_children(f, e::NumExpr)::Expr = e
-map_children(f, e::IntExpr)::Expr = e
-map_children(f, e::VarExpr)::Expr = e
+map_children(f, e::NumExpr)::ASTExpr = e
+map_children(f, e::IntExpr)::ASTExpr = e
+map_children(f, e::VarExpr)::ASTExpr = e
 
-function map_children(f, e::OpExpr)::Expr
+function map_children(f, e::OpExpr)::ASTExpr
     mapf(x) = x === nothing ? nothing : f(x)
-    new_args = Expr[f(arg) for arg in e.args]
+    new_args = ASTExpr[f(arg) for arg in e.args]
     new_values = e.values === nothing ? nothing :
-        Expr[f(v) for v in e.values]
+        ASTExpr[f(v) for v in e.values]
     new_table_axes = e.table_axes === nothing ? nothing :
-        Dict{String,Expr}(k => f(v) for (k, v) in e.table_axes)
+        Dict{String,ASTExpr}(k => f(v) for (k, v) in e.table_axes)
     new_ranges = e.ranges === nothing ? nothing :
         Dict{String,Any}(k => (v isa AbstractVector ?
-                Any[x isa Expr ? f(x) : x for x in v] : v)
+                Any[x isa ASTExpr ? f(x) : x for x in v] : v)
             for (k, v) in e.ranges)
     return reconstruct(e;
         args = new_args,
@@ -164,11 +164,11 @@ end
 # ========================================
 
 """
-    substitute(expr::Expr, bindings::Dict{String,Expr})::Expr
+    substitute(expr::ASTExpr, bindings::Dict{String,ASTExpr})::ASTExpr
 
 Recursively replace variables in an expression with provided bindings.
 Supports scoped reference resolution - if a variable is not found in bindings,
-it remains unchanged. Returns a new Expr object (non-mutating).
+it remains unchanged. Returns a new ASTExpr object (non-mutating).
 
 # Arguments
 - `expr`: The expression to perform substitution on
@@ -188,15 +188,15 @@ nested = OpExpr("*", [OpExpr("+", [x, NumExpr(1.0)]), y])
 result = substitute(nested, bindings)  # OpExpr("*", [OpExpr("+", [NumExpr(2.0), NumExpr(1.0)]), VarExpr("y")])
 ```
 """
-function substitute(expr::NumExpr, bindings::Dict{String,Expr})::Expr
+function substitute(expr::NumExpr, bindings::Dict{String,ASTExpr})::ASTExpr
     return expr  # Numeric literals are unchanged
 end
 
-function substitute(expr::IntExpr, bindings::Dict{String,Expr})::Expr
+function substitute(expr::IntExpr, bindings::Dict{String,ASTExpr})::ASTExpr
     return expr  # Integer literals are unchanged
 end
 
-function substitute(expr::VarExpr, bindings::Dict{String,Expr})::Expr
+function substitute(expr::VarExpr, bindings::Dict{String,ASTExpr})::ASTExpr
     return get(bindings, expr.name, expr)  # Replace if bound, otherwise keep original
 end
 
@@ -210,7 +210,7 @@ end
 # silently dropped. Bound locals (index vars, `int_var`) are short local symbols
 # never present in `bindings` (namespaced globals / parameter names), so
 # recursing cannot capture them.
-substitute(expr::OpExpr, bindings::Dict{String,Expr})::Expr =
+substitute(expr::OpExpr, bindings::Dict{String,ASTExpr})::ASTExpr =
     map_children(x -> substitute(x, bindings), expr)
 
 # ========================================
@@ -218,7 +218,7 @@ substitute(expr::OpExpr, bindings::Dict{String,Expr})::Expr =
 # ========================================
 
 """
-    free_variables(expr::Expr)::Set{String}
+    free_variables(expr::ASTExpr)::Set{String}
 
 Extract all free (unbound) variable names from an expression.
 Returns a set of variable names that appear in the expression.
@@ -275,7 +275,7 @@ end
 # ========================================
 
 """
-    Base.contains(expr::Expr, var::String)::Bool
+    Base.contains(expr::ASTExpr, var::String)::Bool
 
 Check if an expression contains a specific variable name.
 Returns true if the variable appears anywhere in the expression — including
@@ -350,10 +350,10 @@ Base.showerror(io::IO, e::UnboundVariableError) =
 # ========================================
 
 """
-    simplify(expr::Expr)::Expr
+    simplify(expr::ASTExpr)::ASTExpr
 
 Perform constant folding and algebraic simplification on an expression.
-Returns a new simplified Expr object (non-mutating).
+Returns a new simplified ASTExpr object (non-mutating).
 
 # Simplification Rules
 - Constant folding: `2 + 3` → `5`
@@ -373,27 +373,27 @@ expr = OpExpr("*", [VarExpr("x"), NumExpr(1.0)])
 result = simplify(expr)  # VarExpr("x")
 ```
 """
-function simplify(expr::NumExpr)::Expr
+function simplify(expr::NumExpr)::ASTExpr
     return expr  # Already simplified
 end
 
-function simplify(expr::IntExpr)::Expr
+function simplify(expr::IntExpr)::ASTExpr
     return expr  # Already simplified
 end
 
-function simplify(expr::VarExpr)::Expr
+function simplify(expr::VarExpr)::ASTExpr
     return expr  # Already simplified
 end
 
 """
-    is_literal(expr::Expr)::Bool
+    is_literal(expr::ASTExpr)::Bool
 
 True iff `expr` is a numeric literal (either integer or float node).
 """
-is_literal(expr::Expr)::Bool = isa(expr, NumExpr) || isa(expr, IntExpr)
+is_literal(expr::ASTExpr)::Bool = isa(expr, NumExpr) || isa(expr, IntExpr)
 
 """
-    literal_value(expr::Expr)
+    literal_value(expr::ASTExpr)
 
 Return the numeric value of a literal node, as `Float64`. Throws on non-literals.
 """
@@ -431,7 +431,7 @@ _foldable_failure(err) =
     err isa DomainError || err isa DivideError ||
     err isa OverflowError || err isa InexactError
 
-function simplify(expr::OpExpr)::Expr
+function simplify(expr::OpExpr)::ASTExpr
     # Recurse into EVERY sub-expression via the shared field-preserving rewrite,
     # so folding and identity rules also reach aggregate/arrayop bodies, filter
     # predicates, integral bounds, makearray values, table axes, and dense range
@@ -480,7 +480,7 @@ function simplify(expr::OpExpr)::Expr
         elseif length(non_zero_args) == 1
             return non_zero_args[1]
         else
-            return reconstruct(recursed; args=Expr[non_zero_args...])
+            return reconstruct(recursed; args=ASTExpr[non_zero_args...])
         end
 
     elseif op == "*"
@@ -498,7 +498,7 @@ function simplify(expr::OpExpr)::Expr
         elseif length(non_one_args) == 1
             return non_one_args[1]
         else
-            return reconstruct(recursed; args=Expr[non_one_args...])
+            return reconstruct(recursed; args=ASTExpr[non_one_args...])
         end
 
     elseif op == "^" && length(simplified_args) == 2

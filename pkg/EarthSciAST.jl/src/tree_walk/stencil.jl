@@ -56,7 +56,7 @@ end
 struct _LaneRecipe
     kind::_LaneKind
     var_name::String        # array / const / pgather variable name
-    idx_args::Vector{Expr}  # index-argument expressions (per-cell `_eval_const_int`)
+    idx_args::Vector{ASTExpr}  # index-argument expressions (per-cell `_eval_const_int`)
     lo::Vector{Int}         # array_var_info bounds (LANE_STATE ghost test)
     hi::Vector{Int}
     arr::Any                # const-array values (LANE_CONST) / _PGatherArray (LANE_PGATHER)
@@ -80,7 +80,7 @@ _lane_name(k::Int) = string(_LANE_PREFIX, k)
 _stencil_disabled() = get(ENV, "ESS_STENCIL_DISABLE", "") == "1"
 
 # Does `expr` reference any of the output loop indices in `idxset`? EXHAUSTIVE
-# over every `Expr`-typed field of `OpExpr` via the shared `child_exprs`
+# over every `ASTExpr`-typed field of `OpExpr` via the shared `child_exprs`
 # traversal (`foreach_subexpr`, expression.jl) — args / expr_body / lower /
 # upper / values / filter / key / table_axes / ranges bounds — so a loop index
 # buried in an aggregate body, a reduction bound, or a table-axis map routes
@@ -88,7 +88,7 @@ _stencil_disabled() = get(ENV, "ESS_STENCIL_DISABLE", "") == "1"
 # negative would return an unsubstituted loop var to resolve → a hard build
 # error instead of a fallback). Cold path — called once per branch template,
 # not per cell (the per-cell guard is the memoized `_refs_idxset`).
-function _refs_loop_var(e::Expr, idxset::Set{String})
+function _refs_loop_var(e::ASTExpr, idxset::Set{String})
     found = false
     foreach_subexpr(e) do x
         found || (x isa VarExpr && x.name in idxset && (found = true))
@@ -141,7 +141,7 @@ _stencilize(e::NumExpr, ::_StencilCtx) = e
 _stencilize(e::IntExpr, ::_StencilCtx) = e
 function _stencilize(e::VarExpr, ctx::_StencilCtx)
     if e.name in ctx.idxset
-        push!(ctx.recipes, _LaneRecipe(LANE_LOOPLIT, "", Expr[], Int[], Int[], nothing, e.name))
+        push!(ctx.recipes, _LaneRecipe(LANE_LOOPLIT, "", ASTExpr[], Int[], Int[], nothing, e.name))
         return VarExpr(_lane_name(length(ctx.recipes)))
     end
     return e
@@ -154,7 +154,7 @@ function _stencilize(e::OpExpr, ctx::_StencilCtx)
     elseif op == "fn"
         # Closed function: recurse into the (scalar) query args; the const-array
         # table/axis args are loop-invariant and returned verbatim by recursion.
-        new_args = Expr[_stencilize(a, ctx) for a in e.args]
+        new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
         return reconstruct(e; args=new_args)
     elseif op in _STENCIL_ELEMENTWISE_OPS
         # Pure elementwise op — must carry no sub-expression structure (a defensive
@@ -163,7 +163,7 @@ function _stencilize(e::OpExpr, ctx::_StencilCtx)
          e.output_idx === nothing && e.filter === nothing && e.lower === nothing &&
          e.upper === nothing && e.table_axes === nothing && e.key === nothing) ||
             throw(_StencilFallback("elementwise op '$op' carries structural fields"))
-        new_args = Expr[_stencilize(a, ctx) for a in e.args]
+        new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
         return reconstruct(e; args=new_args)
     end
     throw(_StencilFallback("unsupported loop-var-dependent op '$op'"))
@@ -214,12 +214,12 @@ end
 # producer, or a scalar value used directly). For a non-contracting `aggregate`,
 # bind its output indices to `kargs` and stencilize the body. Contraction /
 # joins / filters / reduced-rank region values are NOT modelled — fall back.
-function _stencilize_indexed(producer::OpExpr, kargs::Vector{Expr}, ctx::_StencilCtx)
+function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_StencilCtx)
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, ctx.idx_env, ctx.const_arrays) for a in kargs]
         r, _ = _select_region(producer, kvals)
         r == 0 && return NumExpr(0.0)   # no region covers → makearray default
-        values = producer.values === nothing ? Expr[] : producer.values
+        values = producer.values === nothing ? ASTExpr[] : producer.values
         sel = values[r]
         if _is_array_producer(sel)
             re = sel::OpExpr
@@ -244,7 +244,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{Expr}, ctx::_Stenci
         throw(_StencilFallback("index(aggregate) with contracted index"))
     body = producer.expr_body
     body === nothing && throw(_StencilFallback("index(aggregate) with no body"))
-    idx_exprs = Dict{String,Expr}(oi[d] => kargs[d] for d in 1:length(oi))
+    idx_exprs = Dict{String,ASTExpr}(oi[d] => kargs[d] for d in 1:length(oi))
     sub_body = _sub_preserving(body, idx_exprs)
     return _stencilize(sub_body, ctx)
 end
@@ -312,7 +312,7 @@ function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_array
         end
     end
 end
-function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{Expr},
+function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTExpr},
                               idxset::Set{String}, idx_env, const_arrays,
                               memo::IdDict{OpExpr,Set{String}})
     if producer.op == "makearray"
@@ -320,7 +320,7 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{Expr
         r, _ = _select_region(producer, kvals)
         print(io, 'M', r, ';')
         r == 0 && return
-        values = producer.values === nothing ? Expr[] : producer.values
+        values = producer.values === nothing ? ASTExpr[] : producer.values
         sel = values[r]
         if _is_array_producer(sel)
             _branch_key_indexed!(io, sel::OpExpr, kargs, idxset, idx_env, const_arrays, memo)
@@ -516,7 +516,7 @@ end
 # and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
 # TreeWalkError here also fires in the fallback path, so it propagates rather
 # than falling back.
-function _build_branch_template(body::Expr, ctx_proto::_StencilCtx,
+function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
                                 var_map::Dict{String,Int},
                                 param_sym_set, reg_funcs)::_StencilBranch
     rs = _LaneRecipe[]
@@ -538,9 +538,9 @@ end
 # returns `nothing` (nothing observable has happened yet — `covered` is not
 # touched until the commit step); a real TreeWalkError propagates, exactly as it
 # would from the per-cell path.
-function _collect_stencil_groups(body::Expr, idx_names::Vector{String},
+function _collect_stencil_groups(body::ASTExpr, idx_names::Vector{String},
                                  range_iters, lhs_var::String,
-                                 lhs_idx_args::Vector{Expr},
+                                 lhs_idx_args::Vector{ASTExpr},
                                  ctx_proto::_StencilCtx, var_map::Dict{String,Int},
                                  param_sym_set, reg_funcs)::Union{_StencilGroups,Nothing}
     st = _StencilGroups(Dict{String,_StencilBranch}(), String[],
@@ -628,9 +628,9 @@ end
 # observeds (here), the group-collection sweep (`_collect_stencil_groups`, which
 # owns the `_StencilFallback` rewind), and the covered-marking / kernel-lowering
 # commit (`_commit_stencil_kernels`).
-function _try_symbolic_stencil(rhs_body::Expr, idx_names::Vector{String},
+function _try_symbolic_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                                range_iters, lhs_body::OpExpr,
-                               resolved_obs::Dict{String,Expr},
+                               resolved_obs::Dict{String,ASTExpr},
                                array_var_info, var_map::Dict{String,Int},
                                const_arrays::AbstractDict, pgather::AbstractDict,
                                param_sym_set, reg_funcs, covered::BitVector)

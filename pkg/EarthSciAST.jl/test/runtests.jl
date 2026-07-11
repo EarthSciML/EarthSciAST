@@ -199,7 +199,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                             if case isa JSON3.Object && haskey(case, :input) &&
                                case[:input] isa JSON3.Object
                                 expr = EarthSciAST.parse_expression(case[:input])
-                                @test expr isa EarthSciAST.Expr
+                                @test expr isa EarthSciAST.ASTExpr
                             elseif case isa JSON3.Object && haskey(case, :tests)
                                 @test case[:tests] isa JSON3.Array
                             end

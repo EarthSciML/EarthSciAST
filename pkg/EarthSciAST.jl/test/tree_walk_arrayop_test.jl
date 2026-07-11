@@ -19,7 +19,7 @@ const ESM = EarthSciAST
 const _REPO_ROOT = TESTUTILS_REPO_ROOT
 
 # ---- builder helper derived from the testutils.jl quartet ----
-_arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
+_arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     output_idx=Any[i, j], expr_body=body,
     ranges=Dict(i => [ilo, ihi], j => [jlo, jhi]))
 
@@ -310,10 +310,10 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
         N = 3
         # arrayop(index(x, j), output_idx=[], ranges={j:[1,N]}, reduce=op)
         _idx_x_j = _op("index", _v("x"), _v("j"))
-        _ao_plus = OpExpr("arrayop", ESM.Expr[];
+        _ao_plus = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any[], expr_body=_idx_x_j, reduce="+",
             ranges=Dict("j" => [1, N]))
-        _ao_max  = OpExpr("arrayop", ESM.Expr[];
+        _ao_max  = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any[], expr_body=_idx_x_j, reduce="max",
             ranges=Dict("j" => [1, N]))
         eqs = [
@@ -341,7 +341,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
     @testset "14. Scalar arrayop max/min reducers" begin
         vars = Dict("z_max" => ModelVariable(StateVariable),
                     "z_min" => ModelVariable(StateVariable))
-        _ao(body, idx, lo, hi, reduce_op) = OpExpr("arrayop", ESM.Expr[];
+        _ao(body, idx, lo, hi, reduce_op) = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any[], expr_body=body, reduce=reduce_op,
             ranges=Dict(idx => [lo, hi]))
         eqs = [
@@ -396,9 +396,9 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
         N = 5
         vars = Dict("u" => ModelVariable(StateVariable))
         # makearray: region1=[1:5]=1.0, region2=[2:4]=2.0
-        makearray_node = OpExpr("makearray", ESM.Expr[];
+        makearray_node = OpExpr("makearray", ESM.ASTExpr[];
             regions = [[[1,5]], [[2,4]]],
-            values  = ESM.Expr[_n(1.0), _n(2.0)])
+            values  = ESM.ASTExpr[_n(1.0), _n(2.0)])
         eqs = ESM.Equation[]
         for k in 1:N
             rhs = _op("index", makearray_node, _i(k))
@@ -467,11 +467,11 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
         u_c        = _op("index", _v("u"), _c)
         body       = _op("*", coeff_idx, _op("-", u_nb, u_c))
 
-        lhs = OpExpr("arrayop", ESM.Expr[];
+        lhs = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any["c"],
             expr_body=_D_idx("u", _c),
             ranges=Dict("c" => [1, N_c]))
-        rhs = OpExpr("arrayop", ESM.Expr[];
+        rhs = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any["c"],
             reduce="+",
             ranges=Dict("c" => [1, N_c], "k" => [1, max_k]),
@@ -543,11 +543,11 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
         # Per-cell DYNAMIC reduction bound: k ∈ [1, index(n_edges_on_cell, c)].
         k_bound = _op("index", _v("n_edges_on_cell"), _c)
 
-        lhs = OpExpr("arrayop", ESM.Expr[];
+        lhs = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any["c"],
             expr_body=_D_idx("u", _c),
             ranges=Dict("c" => [1, N_c]))
-        rhs = OpExpr("arrayop", ESM.Expr[];
+        rhs = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any["c"],
             reduce="+",
             ranges=Dict("c" => Any[1, N_c], "k" => Any[1, k_bound]),
@@ -585,7 +585,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
         # range [1, max_k] and zeroed-padding coeff/sentinel neighbour table.
         cells_pad = [2.0 0.0; 1.0 3.0; 2.0 4.0; 3.0 0.0]   # 0 sentinel padding
         coeff_pad = [1.0 0.0; 1.0 1.0; 1.0 1.0; 1.0 0.0]   # zeroed padding
-        rhs_const = OpExpr("arrayop", ESM.Expr[];
+        rhs_const = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any["c"], reduce="+",
             ranges=Dict("c" => Any[1, N_c], "k" => Any[1, max_k]),
             expr_body=body)

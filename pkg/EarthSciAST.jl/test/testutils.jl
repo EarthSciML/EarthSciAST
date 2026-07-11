@@ -28,7 +28,7 @@ _n(x) = EarthSciAST.NumExpr(Float64(x))
 _i(x) = EarthSciAST.IntExpr(Int64(x))
 _v(n) = EarthSciAST.VarExpr(String(n))
 _op(op, args...; kw...) =
-    EarthSciAST.OpExpr(String(op), EarthSciAST.Expr[args...]; kw...)
+    EarthSciAST.OpExpr(String(op), EarthSciAST.ASTExpr[args...]; kw...)
 _idx(v, is...) = _op("index", _v(v), is...)
 
 # Derived shorthands shared by the tree-walk / data-refresh test files
@@ -40,11 +40,11 @@ _D(v) = _op("D", _v(v); wrt="t")
 _Didx(v, is...) = _op("D", _idx(v, is...); wrt="t")
 _D_idx(v, is...) = _Didx(v, is...)
 _ao1(body, idx, lo, hi) = EarthSciAST.OpExpr("arrayop",
-    EarthSciAST.Expr[];
+    EarthSciAST.ASTExpr[];
     output_idx=Any[idx], expr_body=body, ranges=Dict(idx => [lo, hi]))
 _arrayop1d(body, idx, lo, hi) = _ao1(body, idx, lo, hi)
 _const(val) = EarthSciAST.OpExpr("const",
-    EarthSciAST.Expr[]; value=val)
+    EarthSciAST.ASTExpr[]; value=val)
 
 # 1-D second-difference stencil arrayop over the FULL range, so the two end
 # cells gather an out-of-range (ghost) neighbour and form their own boundary

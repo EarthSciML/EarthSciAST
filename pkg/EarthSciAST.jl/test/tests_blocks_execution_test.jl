@@ -51,7 +51,7 @@ function _resolve_tol(model_tol, test_tol, assertion_tol)
 end
 
 function _run_one_test(simp, system_name::Symbol,
-                       model_tol, t::_ESM_TB.Test)
+                       model_tol, t::_ESM_TB.InlineTest)
     u0_map = Dict{Any,Float64}()
     for (name, val) in t.initial_conditions
         u0_map[_find_sym(simp, system_name, name)] = Float64(val)

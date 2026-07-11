@@ -1,5 +1,5 @@
 using EarthSciAST
-using EarthSciAST: Expr as ESMExpr
+using EarthSciAST: ASTExpr as ESMExpr
 using Test
 import ModelingToolkit
 
@@ -25,8 +25,8 @@ function _find_eq(flat::FlattenedSystem, dep::String)
     return nothing
 end
 
-# Does an Expr tree contain a VarExpr whose name matches `target`?
-function _uses_var(expr::EarthSciAST.Expr, target::String)
+# Does an ASTExpr tree contain a VarExpr whose name matches `target`?
+function _uses_var(expr::EarthSciAST.ASTExpr, target::String)
     if expr isa EarthSciAST.VarExpr
         return expr.name == target
     elseif expr isa EarthSciAST.OpExpr
@@ -35,8 +35,8 @@ function _uses_var(expr::EarthSciAST.Expr, target::String)
     return false
 end
 
-# Does an Expr tree contain any OpExpr matching `op_name`?
-function _has_op(expr::EarthSciAST.Expr, op_name::String)
+# Does an ASTExpr tree contain any OpExpr matching `op_name`?
+function _has_op(expr::EarthSciAST.ASTExpr, op_name::String)
     if expr isa EarthSciAST.OpExpr
         expr.op == op_name && return true
         return any(a -> _has_op(a, op_name), expr.args)
@@ -541,9 +541,9 @@ end
         # A `_var` template whose RHS carries a table_lookup (table/table_axes)
         # and an aggregate with filter/bounds — fields the old hand-listed
         # rebuild dropped and never recursed into.
-        tl = E.OpExpr("table_lookup", E.Expr[]; table="fuel", output=1,
-            table_axes=Dict{String,E.Expr}("code" => _V("_var")))
-        agg = E.OpExpr("aggregate", E.Expr[];
+        tl = E.OpExpr("table_lookup", E.ASTExpr[]; table="fuel", output=1,
+            table_axes=Dict{String,E.ASTExpr}("code" => _V("_var")))
+        agg = E.OpExpr("aggregate", E.ASTExpr[];
             output_idx=Any[],
             ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
             expr_body=_op("*", _V("_var"), _V("w")),

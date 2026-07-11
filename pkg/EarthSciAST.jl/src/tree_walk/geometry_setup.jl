@@ -37,7 +37,7 @@ _expr_has_intersect_polygon(e::OpExpr) =
     e.op == "intersect_polygon" ||
     any(_expr_has_intersect_polygon, e.args) ||
     (e.expr_body !== nothing && _expr_has_intersect_polygon(e.expr_body))
-_expr_has_intersect_polygon(::Expr) = false
+_expr_has_intersect_polygon(::ASTExpr) = false
 _equations_have_intersect_polygon(eqs) =
     any(eq -> _expr_has_intersect_polygon(eq.lhs) || _expr_has_intersect_polygon(eq.rhs), eqs)
 
@@ -46,14 +46,14 @@ _equations_have_intersect_polygon(eqs) =
 # evaluator reads `variable.expression` directly).
 function _model_has_intersect_polygon(model::Model)
     for (_, v) in model.variables
-        v.expression isa Expr && _expr_has_intersect_polygon(v.expression) && return true
+        v.expression isa ASTExpr && _expr_has_intersect_polygon(v.expression) && return true
     end
     return _equations_have_intersect_polygon(model.equations)
 end
 
 # Resolve an intersect_polygon polygon operand to its const-array matrix. The clip
 # runs at setup, so each operand must be a variable name supplied in `const_arrays`.
-function _geometry_operand(arg::Expr, const_arrays_kw::AbstractDict, who::AbstractString)
+function _geometry_operand(arg::ASTExpr, const_arrays_kw::AbstractDict, who::AbstractString)
     arg isa VarExpr || throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
         "intersect_polygon operand for '$who' must be a polygon variable name"))
     name = (arg::VarExpr).name
@@ -136,13 +136,13 @@ _expr_has_polygon_intersection_area(e::OpExpr) =
     e.op == "polygon_intersection_area" ||
     any(_expr_has_polygon_intersection_area, e.args) ||
     (e.expr_body !== nothing && _expr_has_polygon_intersection_area(e.expr_body))
-_expr_has_polygon_intersection_area(::Expr) = false
+_expr_has_polygon_intersection_area(::ASTExpr) = false
 
 # An intersection-area leaf may live in an equation LHS/RHS or in an observed
 # variable's `expression` field (the shared fixtures use the latter).
 function _model_has_polygon_intersection_area(model::Model, equations)
     for (_, v) in model.variables
-        v.expression isa Expr && _expr_has_polygon_intersection_area(v.expression) && return true
+        v.expression isa ASTExpr && _expr_has_polygon_intersection_area(v.expression) && return true
     end
     for eq in equations
         (_expr_has_polygon_intersection_area(eq.lhs) ||
@@ -165,7 +165,7 @@ function _collect_pia_operands!(e::OpExpr, acc::Set{String})
     e.expr_body !== nothing && _collect_pia_operands!(e.expr_body, acc)
     return acc
 end
-_collect_pia_operands!(::Expr, acc::Set{String}) = acc
+_collect_pia_operands!(::ASTExpr, acc::Set{String}) = acc
 
 # A `const`-op node's stored (nested-vector) value → a dense `[nrows, ncols]`
 # Float64 vertex-ring matrix. The rank-2 wrapper over the general ND
@@ -229,7 +229,7 @@ end
 # Resolve a polygon_intersection_area operand to its const polygon-ring matrix. The
 # fused leaf is build-time-evaluable, so each operand must be a const-array variable
 # name (supplied via `const_arrays` or a materialized `const`-op observed).
-function _pia_operand_ring(arg::Expr, const_arrays::AbstractDict)
+function _pia_operand_ring(arg::ASTExpr, const_arrays::AbstractDict)
     arg isa VarExpr && haskey(const_arrays, (arg::VarExpr).name) &&
         return const_arrays[(arg::VarExpr).name]
     throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
@@ -1031,7 +1031,7 @@ end
 
 function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
                               live_params)
-    defs = Dict{String,Expr}()
+    defs = Dict{String,ASTExpr}()
     for eq in equations
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs

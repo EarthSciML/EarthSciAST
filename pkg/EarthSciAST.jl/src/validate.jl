@@ -340,7 +340,7 @@ function validate_model_references(file::EsmFile, model::Model, path::String)::V
 end
 
 """
-    validate_expression_references(file::EsmFile, expr::Expr, path::String) -> Vector{StructuralError}
+    validate_expression_references(file::EsmFile, expr::ASTExpr, path::String) -> Vector{StructuralError}
 
 Validate that operator references in an expression can be resolved.
 
@@ -349,7 +349,7 @@ scoped variable resolution (deciding whether a name is a local variable, a
 subsystem-qualified reference, or undefined in context) is out of scope for
 this validator today. Only `operator_apply` operator names are checked.
 """
-function validate_expression_references(file::EsmFile, expr::Expr, path::String)::Vector{StructuralError}
+function validate_expression_references(file::EsmFile, expr::ASTExpr, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
     if isa(expr, VarExpr)
@@ -808,7 +808,7 @@ function _collect_coordinate_units(file::EsmFile, model::Model)::Union{Dict{Stri
     return coord_units
 end
 
-function _check_gradient_ops(expr::Expr, coord_units::Dict{String,Union{String,Nothing}},
+function _check_gradient_ops(expr::ASTExpr, coord_units::Dict{String,Union{String,Nothing}},
                              eq_path::String)::Vector{StructuralError}
     errors = StructuralError[]
     if expr isa OpExpr
@@ -892,7 +892,7 @@ function validate_single_event_consistency(model::Model, event::EventType, event
 
     if isa(event, ContinuousEvent)
         # Continuous event conditions should be mathematical expressions (zero-crossing)
-        # This is automatically satisfied by the type system (Vector{Expr})
+        # This is automatically satisfied by the type system (Vector{ASTExpr})
 
         # Validate affect variable declarations
         for (j, affect) in enumerate(event.affects)

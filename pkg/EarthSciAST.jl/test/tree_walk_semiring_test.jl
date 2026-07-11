@@ -22,7 +22,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     _n(x)   = NumExpr(Float64(x))
     _i(x)   = IntExpr(Int64(x))
     _v(n)   = VarExpr(String(n))
-    _op(op, args...; kw...) = OpExpr(String(op), ESM.Expr[args...]; kw...)
+    _op(op, args...; kw...) = OpExpr(String(op), ESM.ASTExpr[args...]; kw...)
     _idx(var, ix...)  = _op("index", _v(var), ix...)
     _D_idx(var, ix...) = _op("D", _idx(var, ix...); wrt="t")
 
@@ -52,14 +52,14 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     #     semiring's 0̄ for an empty ⊕-reduction (§5.1).
     # ------------------------------------------------------------------
     @testset "(a) empty-reduction identity element" begin
-        empty = ESM.Expr[]
+        empty = ESM.ASTExpr[]
         @test ESM._combine_with_reducer("+",   0.0,  empty) isa NumExpr
         @test (ESM._combine_with_reducer("+",   0.0,  empty)).value == 0.0
         @test (ESM._combine_with_reducer("max", -Inf, empty)).value == -Inf
         @test (ESM._combine_with_reducer("min",  Inf, empty)).value ==  Inf
         @test (ESM._combine_with_reducer("*",    1.0, empty)).value ==  1.0
         # bool_and_or (⊕=or) is index-set-producing (§5.5) — out of M1 scope.
-        @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.Expr[_n(1.0), _n(0.0)])
+        @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[_n(1.0), _n(0.0)])
     end
 
     # ------------------------------------------------------------------
@@ -71,7 +71,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                                ("max_product", -Inf), ("max_sum", -Inf))
             vars = Dict("z" => ModelVariable(StateVariable))
             # D(z) = aggregate_{k ∈ [1,0]} 1   (empty range ⇒ 0̄)
-            rhs = OpExpr("aggregate", ESM.Expr[];
+            rhs = OpExpr("aggregate", ESM.ASTExpr[];
                 output_idx=Any[], semiring=sr, expr_body=_n(1.0),
                 ranges=Dict("k" => Any[1, 0]))
             model = ESM.Model(vars, [ESM.Equation(_op("D", _v("z"); wrt="t"), rhs)])
@@ -89,10 +89,10 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         vars = Dict("x" => ModelVariable(StateVariable),
                     "z" => ModelVariable(StateVariable),
                     "w" => ModelVariable(StateVariable))
-        agg_min = OpExpr("aggregate", ESM.Expr[];
+        agg_min = OpExpr("aggregate", ESM.ASTExpr[];
             output_idx=Any[], semiring="min_sum",
             expr_body=_idx("x", _v("j")), ranges=Dict("j" => Any[1, 5]))
-        agg_max = OpExpr("aggregate", ESM.Expr[];
+        agg_max = OpExpr("aggregate", ESM.ASTExpr[];
             output_idx=Any[], semiring="max_product",
             expr_body=_idx("x", _v("j")), ranges=Dict("j" => Any[1, 5]))
         eqs = [ESM.Equation(_op("D", _v("z"); wrt="t"), agg_min),
@@ -113,9 +113,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         vars = Dict("u" => ModelVariable(StateVariable))
         ics = Dict("u[$i]" => Float64(i) for i in 1:N)
         mk(tag) = ESM.Model(vars, [ESM.Equation(
-            OpExpr(tag, ESM.Expr[]; output_idx=Any["i"],
+            OpExpr(tag, ESM.ASTExpr[]; output_idx=Any["i"],
                    expr_body=_D_idx("u", _v("i")), ranges=Dict("i" => Any[1, N])),
-            OpExpr(tag, ESM.Expr[]; output_idx=Any["i"], reduce="+",
+            OpExpr(tag, ESM.ASTExpr[]; output_idx=Any["i"], reduce="+",
                    expr_body=_op("-", _idx("u", _v("i"))), ranges=Dict("i" => Any[1, N])))])
         fa!, ua, pa, _, va = build_evaluator(mk("arrayop");   initial_conditions=ics)
         fb!, ub, pb, _, vb = build_evaluator(mk("aggregate"); initial_conditions=ics)
@@ -139,15 +139,15 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         eqs = [
             # D(u[i]) = -u[i]  for i ∈ cells
             ESM.Equation(
-                OpExpr("aggregate", ESM.Expr[]; output_idx=Any["i"],
+                OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["i"],
                        expr_body=_D_idx("u", _v("i")),
                        ranges=Dict("i" => ESM.IndexSetRef("cells"))),
-                OpExpr("aggregate", ESM.Expr[]; output_idx=Any["i"], semiring="sum_product",
+                OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["i"], semiring="sum_product",
                        expr_body=_op("-", _idx("u", _v("i"))),
                        ranges=Dict("i" => ESM.IndexSetRef("cells")))),
             # D(total) = Σ_{i ∈ cells} u[i]
             ESM.Equation(_op("D", _v("total"); wrt="t"),
-                OpExpr("aggregate", ESM.Expr[]; output_idx=Any[], semiring="sum_product",
+                OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
                        expr_body=_idx("u", _v("i")),
                        ranges=Dict("i" => ESM.IndexSetRef("cells")))),
         ]
@@ -172,7 +172,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             ESM.IndexSet("categorical"; members=["Champaign", "Cook", "Sangamon"]))
         # D(total) = Σ_{c ∈ county} pop[c]   (pop is a categorical-keyed table)
         eq = ESM.Equation(_op("D", _v("total"); wrt="t"),
-            OpExpr("aggregate", ESM.Expr[]; output_idx=Any[], semiring="sum_product",
+            OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
                    expr_body=_idx("pop", _v("c")),
                    ranges=Dict("c" => ESM.IndexSetRef("county"))))
         model = ESM.Model(vars, [eq])
@@ -199,17 +199,17 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         body = _op("*", _op("index", _v("coeff"), _c, _k),
                    _op("-", _op("index", _v("u"), _op("index", _v("cells_on_cell"), _c, _k)),
                             _idx("u", _c)))
-        lhs = OpExpr("aggregate", ESM.Expr[]; output_idx=Any["c"],
+        lhs = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["c"],
                      expr_body=_D_idx("u", _c), ranges=Dict("c" => Any[1, N_c]))
         # Registry form: k ∈ {from: edges_of_cell, of: [c]}.
         index_sets = Dict("edges_of_cell" => ESM.IndexSet("ragged";
             of=["cells"], offsets="n_edges_on_cell", values="cells_on_cell"))
-        rhs_reg = OpExpr("aggregate", ESM.Expr[]; output_idx=Any["c"], reduce="+",
+        rhs_reg = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["c"], reduce="+",
             ranges=Dict("c" => Any[1, N_c], "k" => ESM.IndexSetRef("edges_of_cell"; of=["c"])),
             expr_body=body)
         model_reg = ESM.Model(vars, [ESM.Equation(lhs, rhs_reg)])
         # Explicit form: k ∈ [1, index(n_edges_on_cell, c)].
-        rhs_exp = OpExpr("aggregate", ESM.Expr[]; output_idx=Any["c"], reduce="+",
+        rhs_exp = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["c"], reduce="+",
             ranges=Dict("c" => Any[1, N_c],
                         "k" => Any[1, _op("index", _v("n_edges_on_cell"), _c)]),
             expr_body=body)
@@ -237,7 +237,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         vars = Dict("u" => ModelVariable(StateVariable),
                     "total" => ModelVariable(StateVariable))
         eq = ESM.Equation(_op("D", _v("total"); wrt="t"),
-            OpExpr("aggregate", ESM.Expr[]; output_idx=Any[], semiring="sum_product",
+            OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
                    expr_body=_idx("u", _v("i")),
                    ranges=Dict("i" => ESM.IndexSetRef("not_declared"))))
         # No registry at all.
@@ -258,7 +258,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # Round-trip: semiring / index_sets / {from} ranges survive parse↔serialize.
     # ------------------------------------------------------------------
     @testset "round-trip semiring + index_sets + {from} ranges" begin
-        agg = OpExpr("aggregate", ESM.Expr[]; output_idx=Any[], semiring="min_sum",
+        agg = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="min_sum",
                      expr_body=_idx("u", _v("i")),
                      ranges=Dict("i" => ESM.IndexSetRef("cells"; of=String[])))
         j = ESM.serialize_expression(agg)

@@ -52,7 +52,7 @@ _ot_argval(op) = op == "acosh" ? 1.5 : 0.5
 function _ot_node(op::String)
     haskey(_OT_ARITY, op) || error("op-table test: no arity entry for op '" *
         op * "' — add it to _OT_ARITY in tree_walk_op_table_test.jl")
-    args = ESM.Expr[NumExpr(_ot_argval(op)) for _ in 1:_OT_ARITY[op]]
+    args = ESM.ASTExpr[NumExpr(_ot_argval(op)) for _ in 1:_OT_ARITY[op]]
     return ESM._compile(OpExpr(op, args), Dict{String,Int}(), Set{Symbol}(),
                         Dict{String,Any}())
 end
@@ -177,14 +177,14 @@ end
         )
         _v(n) = VarExpr(n)
         _i(x) = IntExpr(Int64(x))
-        _o(op, a...; kw...) = OpExpr(op, ESM.Expr[a...]; kw...)
+        _o(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         deqx = ESM.Equation(_o("D", _v("x"); wrt="t"),
                             _o("*", _v("k"), _v("x")))
         body_lhs = _o("D", _o("index", _v("u"), _v("i")); wrt="t")
-        lhs = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i"],
+        lhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
                      ranges=Dict{String,Any}("i" => [1, 4]),
                      expr_body=body_lhs)
-        rhs = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i"],
+        rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
                      ranges=Dict{String,Any}("i" => [1, 4]),
                      expr_body=_o("*", _o("index", _v("w"), _v("i")),
                                   _o("index", _v("u"), _v("i"))))

@@ -162,7 +162,7 @@ function rename_variable(model::Model, old_name::String, new_name::String)::Mode
     new_variables[new_name] = variable
 
     # Update equations
-    substitution = Dict{String, Expr}(old_name => VarExpr(new_name))
+    substitution = Dict{String, ASTExpr}(old_name => VarExpr(new_name))
     new_equations = [
         Equation(
             substitute(eq.lhs, substitution),
@@ -192,7 +192,7 @@ end
 
 """
     remove_equation(model::Model, index::Int) -> Model
-    remove_equation(model::Model, lhs_pattern::Expr) -> Model
+    remove_equation(model::Model, lhs_pattern::ASTExpr) -> Model
 
 Remove an equation from a model.
 
@@ -211,10 +211,10 @@ function remove_equation(model::Model, index::Int)::Model
     return _rebuild(model; equations=new_equations)
 end
 
-function remove_equation(model::Model, lhs_pattern::Expr)::Model
+function remove_equation(model::Model, lhs_pattern::ASTExpr)::Model
     # Find equation with matching LHS
     for (i, eq) in enumerate(model.equations)
-        if eq.lhs == lhs_pattern  # This requires Expr equality to be defined
+        if eq.lhs == lhs_pattern  # This requires ASTExpr equality to be defined
             return remove_equation(model, i)
         end
     end
@@ -223,13 +223,13 @@ function remove_equation(model::Model, lhs_pattern::Expr)::Model
 end
 
 """
-    substitute_in_equations(model::Model, bindings::Dict{String, Expr}) -> Model
+    substitute_in_equations(model::Model, bindings::Dict{String, ASTExpr}) -> Model
 
 Apply substitutions across all equations in a model.
 
 Replaces variables according to the bindings dictionary.
 """
-function substitute_in_equations(model::Model, bindings::Dict{String, Expr})::Model
+function substitute_in_equations(model::Model, bindings::Dict{String, ASTExpr})::Model
     new_equations = [
         Equation(
             substitute(eq.lhs, bindings),
@@ -429,11 +429,11 @@ end
 
 Convenience function to create a variable_map coupling entry that forwards a
 variable reference `from` into `to`. `transform` names the transform function
-(e.g. `"identity"`, `"affine"`) or is an `Expr` operator node evaluated on the
+(e.g. `"identity"`, `"affine"`) or is an `ASTExpr` operator node evaluated on the
 source value (esm-spec §10.4 expression transform).
 """
 function map_variable(file::EsmFile, from::String, to::String;
-                      transform::Union{String,Expr}="identity")::EsmFile
+                      transform::Union{String,ASTExpr}="identity")::EsmFile
     coupling_entry = CouplingVariableMap(from, to, transform)
     return add_coupling(file, coupling_entry)
 end

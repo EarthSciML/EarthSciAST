@@ -25,22 +25,19 @@ const ESM_FORMAT_VERSION = "0.8.0"
 # ========================================
 
 """
-    abstract type Expr end
+    abstract type ASTExpr end
 
 Abstract base type for all mathematical expressions in the ESM format.
 Expressions can be numeric literals, variable references, or operator nodes.
 """
-# NAME SHADOWING — deliberate and permanent: `EarthSciAST.Expr` shadows
-# `Core.Expr` (Julia's own AST node type) inside this module and for any
-# consumer that does `using EarthSciAST` (the name is exported). It is kept
-# because the exported API is frozen — renaming would break every downstream
-# `::Expr` annotation — and because the ESM spec calls this concept
-# "Expression"/"Expr" in all five bindings. Consequences to be aware of:
-# module-internal code that needs Julia's type must write `Core.Expr`
-# (see codegen.jl), and struct fields that would naturally be called `expr`
-# use `expr_body`-style names (e.g. `OpExpr.expr_body` for the wire key
-# "expr") to avoid confusing the two vocabularies.
-abstract type Expr end
+# NAMING: this abstract type is spelled `ASTExpr` (not `Expr`) specifically so
+# it does NOT shadow `Core.Expr` (Julia's own AST node type) inside this module
+# or for consumers that `using EarthSciAST`. Module-internal code that builds
+# Julia AST still writes `Core.Expr` explicitly (see codegen.jl and the package
+# extensions), and struct fields that would naturally be called `expr` use
+# `expr_body`-style names (e.g. `OpExpr.expr_body` for the wire key "expr") to
+# keep the ESM and Julia AST vocabularies distinct.
+abstract type ASTExpr end
 
 """
     NumExpr(value::Float64)
@@ -53,7 +50,7 @@ integral and `Int64`-representable — however it was spelled (`1`, `1.0`,
 `2.5e1`) — parses as an `IntExpr`, so `parse_expression` never produces
 `NumExpr(1.0)`; such a node can only be built directly in Julia code.
 """
-struct NumExpr <: Expr
+struct NumExpr <: ASTExpr
     value::Float64
 end
 
@@ -68,7 +65,7 @@ integer and float nodes: `IntExpr(1)` and `NumExpr(1.0)` are different values,
 and canonicalization never auto-promotes one to the other (RFC §5.4.1); on the
 wire an `IntExpr` serializes as an integer literal (no `.`/`e`).
 """
-struct IntExpr <: Expr
+struct IntExpr <: ASTExpr
     value::Int64
 end
 
@@ -77,7 +74,7 @@ end
 
 Variable or parameter reference expression containing a name string.
 """
-struct VarExpr <: Expr
+struct VarExpr <: ASTExpr
     name::String
 end
 
@@ -96,7 +93,7 @@ struct _JoinGate
 end
 
 """
-    OpExpr(op::String, args::Vector{Expr}; wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce, ranges, regions, values, shape, perm, axis, fn)
+    OpExpr(op::String, args::Vector{ASTExpr}; wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce, ranges, regions, values, shape, perm, axis, fn)
 
 Operator expression node containing:
 - `op`: operator name (e.g., "+", "*", "log", "D", "arrayop")
@@ -109,8 +106,8 @@ Operator expression node containing:
 - `output_idx`: for `arrayop`, list of result index symbols (String) or literal
   singleton dimensions (Int 1). Mirrors SymbolicUtils.ArrayOp.output_idx.
 - `expr_body`: for `arrayop`, the scalar body evaluated at each index point
-  (a nested `Expr` tree). Named `expr_body` — not `expr` — to avoid shadowing
-  the `EarthSciAST.Expr` abstract type.
+  (a nested `ASTExpr` tree). Named `expr_body` — not `expr` — to avoid shadowing
+  the `EarthSciAST.ASTExpr` abstract type.
 - `reduce`: for `arrayop`/`aggregate`, the reduction operator applied to
   contracted indices (one of "+", "*", "max", "min"; default "+"). Names the
   semiring ⊕ only; it is the shorthand retained for files that omit `semiring`
@@ -156,21 +153,21 @@ Operator expression node containing:
 # and default `==` was already non-structural for trees — two distinct-but-equal
 # `OpExpr`s compared `false` because their `args` `Vector`s differ by identity — so
 # pointer `==` matches the pre-existing de-facto behaviour.
-mutable struct OpExpr <: Expr
+mutable struct OpExpr <: ASTExpr
     op::String
-    args::Vector{Expr}
+    args::Vector{ASTExpr}
     wrt::Union{String,Nothing}
     dim::Union{String,Nothing}
     int_var::Union{String,Nothing}
-    lower::Union{Expr,Nothing}
-    upper::Union{Expr,Nothing}
+    lower::Union{ASTExpr,Nothing}
+    upper::Union{ASTExpr,Nothing}
     output_idx::Union{Vector{Any},Nothing}
-    expr_body::Union{Expr,Nothing}
+    expr_body::Union{ASTExpr,Nothing}
     reduce::Union{String,Nothing}
     semiring::Union{String,Nothing}
     ranges::Union{Dict{String,Any},Nothing}
     regions::Union{Vector{Vector{Vector{Int}}},Nothing}
-    values::Union{Vector{Expr},Nothing}
+    values::Union{Vector{ASTExpr},Nothing}
     shape::Union{Vector{Any},Nothing}
     perm::Union{Vector{Int},Nothing}
     axis::Union{Int,Nothing}
@@ -183,7 +180,7 @@ mutable struct OpExpr <: Expr
     table::Union{String,Nothing}
     # Per-axis input-coordinate expression map for a table_lookup node.
     # Stored under the JSON key ``axes`` on the wire.
-    table_axes::Union{Dict{String,Expr},Nothing}
+    table_axes::Union{Dict{String,ASTExpr},Nothing}
     # Output selector for a multi-output table_lookup. Either a non-negative
     # integer (0-based index) or a string (entry of the table's outputs).
     output::Any
@@ -207,7 +204,7 @@ mutable struct OpExpr <: Expr
     #            `_resolve_join_gates` against the document index-set registry;
     #            never parsed or serialized (the wire form is `join`).
     join::Union{Vector{Any},Nothing}
-    filter::Union{Expr,Nothing}
+    filter::Union{ASTExpr,Nothing}
     join_gates::Union{Vector{_JoinGate},Nothing}
 
     # ── M4 geometry kernel (RFC semiring-faq-unified-ir §8.1 / Appendix B;
@@ -237,7 +234,7 @@ mutable struct OpExpr <: Expr
     #              document's producer is still recognised (else the derived set is
     #              never sized and the producer's ODE equation is not dropped).
     distinct::Union{Bool,Nothing}
-    key::Union{Expr,Nothing}
+    key::Union{ASTExpr,Nothing}
 
     # ── Arg-witness / expression-template display fields ──
     # `arg`      — for `argmin`/`argmax`, the witnessing index symbol name whose
@@ -249,9 +246,9 @@ mutable struct OpExpr <: Expr
     #              parsing, but the node is renderable directly so the pretty-printer
     #              can emit `name⟨p=e, …⟩` byte-identically to the other bindings.
     arg::Union{String,Nothing}
-    bindings::Union{Dict{String,Expr},Nothing}
+    bindings::Union{Dict{String,ASTExpr},Nothing}
 
-    OpExpr(op::String, args::Vector{Expr};
+    OpExpr(op::String, args::Vector{ASTExpr};
            wrt=nothing, dim=nothing,
            int_var=nothing, lower=nothing, upper=nothing,
            output_idx=nothing, expr_body=nothing, reduce=nothing,
@@ -283,7 +280,7 @@ mutable struct OpExpr <: Expr
     # positional form drops the per-node NamedTuple allocation entirely. The 32
     # arguments MUST stay in exact struct-field order; there is no other 32-arg
     # `OpExpr` method, so the positional call is unambiguous.
-    global _reconstruct_opexpr(op::String, args::Vector{Expr}, wrt, dim, int_var,
+    global _reconstruct_opexpr(op::String, args::Vector{ASTExpr}, wrt, dim, int_var,
             lower, upper, output_idx, expr_body, reduce, semiring, ranges, regions,
             values, shape, perm, axis, fn, name, value, table, table_axes, output,
             join, filter, join_gates, id, manifold, distinct, key, arg, bindings) =
@@ -294,12 +291,12 @@ mutable struct OpExpr <: Expr
             id, manifold, distinct, key, arg, bindings)
 end
 
-# Accept any AbstractVector of Expr-subtypes (e.g. Vector{VarExpr},
-# Vector{OpExpr}, mixed Any arrays) and widen to Vector{Expr}. This keeps
-# call sites terse — callers don't need to annotate `Expr[...]` when they
+# Accept any AbstractVector of ASTExpr-subtypes (e.g. Vector{VarExpr},
+# Vector{OpExpr}, mixed Any arrays) and widen to Vector{ASTExpr}. This keeps
+# call sites terse — callers don't need to annotate `ASTExpr[...]` when they
 # construct a homogeneous argument list.
 function OpExpr(op::String, args::AbstractVector; kwargs...)
-    widened = Vector{Expr}(undef, length(args))
+    widened = Vector{ASTExpr}(undef, length(args))
     for (i, a) in enumerate(args)
         widened[i] = a
     end
@@ -343,11 +340,11 @@ function reconstruct(e::OpExpr;
         distinct = e.distinct, key = e.key,
         arg = e.arg, bindings = e.bindings)
     # Positional (NamedTuple-free) construction on the hot path. `args` defaults to
-    # the `Vector{Expr}` field and callers overwrite it with `Vector{Expr}`s, so the
+    # the `Vector{ASTExpr}` field and callers overwrite it with `Vector{ASTExpr}`s, so the
     # `isa` fast path is the norm; the widening branch preserves the historical
-    # acceptance of any `AbstractVector` of `Expr` (matching the keyword ctor's
+    # acceptance of any `AbstractVector` of `ASTExpr` (matching the keyword ctor's
     # `OpExpr(op, args::AbstractVector)` widening overload).
-    argv = args isa Vector{Expr} ? args : Vector{Expr}(args)
+    argv = args isa Vector{ASTExpr} ? args : Vector{ASTExpr}(args)
     return _reconstruct_opexpr(op, argv, wrt, dim, int_var, lower, upper,
         output_idx, expr_body, reduce, semiring, ranges, regions, values, shape,
         perm, axis, fn, name, value, table, table_axes, output, join, filter,
@@ -359,23 +356,23 @@ end
 # ========================================
 
 """
-    Equation(lhs::Expr, rhs::Expr; _comment=nothing)
+    Equation(lhs::ASTExpr, rhs::ASTExpr; _comment=nothing)
 
 Mathematical equation with left-hand side and right-hand side expressions.
 Used for differential equations and algebraic constraints.
 Optional `_comment` provides a human-readable description.
 """
 struct Equation
-    lhs::Expr
-    rhs::Expr
+    lhs::ASTExpr
+    rhs::ASTExpr
     _comment::Union{String,Nothing}
 
-    Equation(lhs::Expr, rhs::Expr; _comment=nothing) =
+    Equation(lhs::ASTExpr, rhs::ASTExpr; _comment=nothing) =
         new(lhs, rhs, _comment)
 end
 
 """
-    AffectEquation(lhs::String, rhs::Expr)
+    AffectEquation(lhs::String, rhs::ASTExpr)
 
 Assignment equation for discrete events.
 - `lhs`: target variable name (string)
@@ -383,7 +380,7 @@ Assignment equation for discrete events.
 """
 struct AffectEquation
     lhs::String
-    rhs::Expr
+    rhs::ASTExpr
 end
 
 # ========================================
@@ -405,12 +402,12 @@ Abstract base type for discrete event triggers.
 abstract type DiscreteEventTrigger end
 
 """
-    ConditionTrigger(expression::Expr)
+    ConditionTrigger(expression::ASTExpr)
 
 Trigger based on boolean condition expression.
 """
 struct ConditionTrigger <: DiscreteEventTrigger
-    expression::Expr
+    expression::ASTExpr
 end
 
 """
@@ -444,11 +441,11 @@ Functional affect for discrete events.
 """
 struct FunctionalAffect
     target::String
-    expression::Expr
+    expression::ASTExpr
     operation::String  # "set", "add", "multiply", etc.
 
     # Constructor with default operation
-    FunctionalAffect(target::String, expression::Expr; operation="set") =
+    FunctionalAffect(target::String, expression::ASTExpr; operation="set") =
         new(target, expression, operation)
 end
 
@@ -462,12 +459,12 @@ end
 Event triggered by zero-crossing of condition expressions.
 """
 struct ContinuousEvent <: EventType
-    conditions::Vector{Expr}
+    conditions::Vector{ASTExpr}
     affects::Vector{AffectEquation}
     description::Union{String,Nothing}
 
     # Constructor with optional description
-    ContinuousEvent(conditions::Vector{Expr}, affects::Vector{AffectEquation}; description=nothing) =
+    ContinuousEvent(conditions::Vector{ASTExpr}, affects::Vector{AffectEquation}; description=nothing) =
         new(conditions, affects, description)
 end
 
@@ -530,7 +527,7 @@ struct ModelVariable
     type::ModelVariableType
     default::Union{Float64,Nothing}
     description::Union{String,Nothing}
-    expression::Union{Expr,Nothing}
+    expression::Union{ASTExpr,Nothing}
     units::Union{String,Nothing}
     default_units::Union{String,Nothing}
     # Arrayed-variable shape: ordered dimension names drawn from the
@@ -611,13 +608,13 @@ end
 """
     Assertion(variable::String, time::Float64, expected::Float64, tolerance, coords, reduce, reference)
 
-A scalar `(variable, time, expected)` check used inside a `Test`.
+A scalar `(variable, time, expected)` check used inside a `InlineTest`.
 
 PDE-aware variants (gt-vzwk):
 - `coords`: pin a spatial point as `dim => coordinate` (mutually exclusive with `reduce`).
 - `reduce`: collapse the spatial field to a scalar — one of `integral`, `mean`,
   `max`, `min`, `L2_error`, `Linf_error`. Mutually exclusive with `coords`.
-- `reference`: required for error-norm reductions; either an `Expr` AST evaluated
+- `reference`: required for error-norm reductions; either an `ASTExpr` AST evaluated
   over the domain coordinates, or a `Dict` representing the `{type: from_file,
   path, format?}` shape.
 """
@@ -655,21 +652,18 @@ struct Assertion
 end
 
 """
-    Test(id, time_span, assertions; description, initial_conditions, parameter_overrides, tolerance)
+    InlineTest(id, time_span, assertions; description, initial_conditions, parameter_overrides, tolerance)
 
 Inline validation test for a Model (schema gt-cc1). Defines the run
 configuration — initial conditions, parameter overrides, simulation time
 span — and a list of scalar assertions that must hold.
 """
-# NAME SHADOWING — deliberate: `EarthSciAST.Test` collides with the `Test`
-# STANDARD-LIBRARY MODULE, which every test suite brings in via `using Test`.
-# The type is intentionally NOT exported, and internal code + test code always
-# write it qualified (`EarthSciAST.Test`) so the stdlib module keeps the bare
-# name. The name itself is kept (rather than e.g. `InlineTest`) because it is
-# the schema's own name for the construct (`models.*.tests`, gt-cc1) and is
-# referenced as `EarthSciAST.Test` by downstream model repositories — renaming
-# would be an API break for no wire-level gain.
-struct Test
+# NAMING: this struct is spelled `InlineTest` (not `Test`) so it does NOT
+# collide with the `Test` STANDARD-LIBRARY MODULE that every test suite brings
+# in via `using Test`. It is the schema's inline-validation-test construct
+# (`models.*.tests`, gt-cc1; esm-spec §6.6); not exported — reach it qualified
+# as `EarthSciAST.InlineTest`.
+struct InlineTest
     id::String
     description::Union{String,Nothing}
     initial_conditions::Dict{String,Float64}
@@ -685,7 +679,7 @@ struct Test
     # survive `parse → emit`. Empty for a non-PDE / agnostic-free test.
     expression_template_imports::Vector{Any}
 
-    function Test(id::AbstractString, time_span::TimeSpan, assertions::Vector{Assertion};
+    function InlineTest(id::AbstractString, time_span::TimeSpan, assertions::Vector{Assertion};
                   description=nothing,
                   initial_conditions=Dict{String,Float64}(),
                   parameter_overrides=Dict{String,Float64}(),
@@ -798,18 +792,18 @@ struct Model
     continuous_events::Vector{ContinuousEvent}
     subsystems::Dict{String,Any}
     tolerance::Union{Tolerance,Nothing}
-    tests::Vector{Test}
+    tests::Vector{InlineTest}
     initialization_equations::Vector{Equation}
-    guesses::Dict{String,Union{Float64,Expr}}
+    guesses::Dict{String,Union{Float64,ASTExpr}}
     system_kind::Union{String,Nothing}
 
     # Primary constructor with separate event arrays
     Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation},
           discrete_events::Vector{DiscreteEvent}, continuous_events::Vector{ContinuousEvent},
           subsystems::AbstractDict{String};
-          tolerance=nothing, tests=Test[],
+          tolerance=nothing, tests=InlineTest[],
           initialization_equations=Equation[],
-          guesses=Dict{String,Union{Float64,Expr}}(),
+          guesses=Dict{String,Union{Float64,ASTExpr}}(),
           system_kind=nothing) =
         new(Dict{String,ModelVariable}(variables), equations,
             discrete_events, continuous_events, Dict{String,Any}(subsystems),
@@ -826,9 +820,9 @@ struct Model
                    events=nothing,
                    subsystems=Dict{String,Any}(),
                    tolerance=nothing,
-                   tests=Test[],
+                   tests=InlineTest[],
                    initialization_equations=Equation[],
-                   guesses=Dict{String,Union{Float64,Expr}}(),
+                   guesses=Dict{String,Union{Float64,ASTExpr}}(),
                    system_kind=nothing)
         if events !== nothing
             discrete_events = DiscreteEvent[]
@@ -974,27 +968,27 @@ end
     CouplingVariableMap <: CouplingEntry
 
 Replace a parameter in one system with a variable from another, or — when
-`transform` is an `Expr` operator node rather than one of the named transform
+`transform` is an `ASTExpr` operator node rather than one of the named transform
 strings — with a derived value computed from it (esm-spec §10.4: the target
 parameter becomes an observed whose defining expression is the transform,
 evaluated in the flattened coupled system's scope; §8.6/§10.5 regridding form).
-An `Expr` transform takes no `factor` (fold scaling into the expression).
+An `ASTExpr` transform takes no `factor` (fold scaling into the expression).
 """
 struct CouplingVariableMap <: CouplingEntry
     from::String
     to::String
-    transform::Union{String,Expr}
+    transform::Union{String,ASTExpr}
     factor::Union{Float64,Nothing}
     description::Union{String,Nothing}
     lifting::Union{String,Nothing}
 
-    function CouplingVariableMap(from::String, to::String, transform::Union{String,Expr};
+    function CouplingVariableMap(from::String, to::String, transform::Union{String,ASTExpr};
                                  factor=nothing, description=nothing, lifting=nothing)
         # SINGLE enforcement point for the "expression transform takes no
         # factor" invariant. The parser (`coerce_variable_map`, parse.jl) does
         # not pre-check; it catches this ArgumentError and rebrands it as a
         # ParseError so `load` keeps its historical error type/message.
-        if transform isa Expr && factor !== nothing
+        if transform isa ASTExpr && factor !== nothing
             throw(ArgumentError("variable_map: an expression `transform` takes no `factor` (fold the scaling into the expression)"))
         end
         new(from, to, transform, factor, description, lifting)
@@ -1035,7 +1029,7 @@ Cross-system event involving variables from multiple coupled systems.
 """
 struct CouplingEvent <: CouplingEntry
     event_type::String
-    conditions::Union{Vector{Expr},Nothing}
+    conditions::Union{Vector{ASTExpr},Nothing}
     trigger::Union{DiscreteEventTrigger,Nothing}
     affects::Vector{AffectEquation}
     affect_neg::Union{Vector{AffectEquation},Nothing}
@@ -1114,7 +1108,7 @@ A variable exposed by a DataLoader, mapped from a source-file variable.
 struct DataLoaderVariable
     file_variable::String
     units::String
-    unit_conversion::Union{Float64,Expr,Nothing}
+    unit_conversion::Union{Float64,ASTExpr,Nothing}
     description::Union{String,Nothing}
     reference::Union{Reference,Nothing}
 
@@ -1234,12 +1228,12 @@ struct Reaction
     name::Union{String,Nothing}
     substrates::Union{Vector{StoichiometryEntry},Nothing}  # null for source reactions (∅ → X)
     products::Union{Vector{StoichiometryEntry},Nothing}    # null for sink reactions (X → ∅)
-    rate::Expr
+    rate::ASTExpr
     reference::Union{Reference,Nothing}
 
     # Constructor with optional parameters
     Reaction(id::String, substrates::Union{Vector{StoichiometryEntry},Nothing},
-             products::Union{Vector{StoichiometryEntry},Nothing}, rate::Expr;
+             products::Union{Vector{StoichiometryEntry},Nothing}, rate::ASTExpr;
              name=nothing, reference=nothing) =
         new(id, name, substrates, products, rate, reference)
 end
@@ -1255,12 +1249,12 @@ struct ReactionSystem
     parameters::Vector{Parameter}
     subsystems::Dict{String,ReactionSystem}
     tolerance::Union{Tolerance,Nothing}
-    tests::Vector{Test}
+    tests::Vector{InlineTest}
 
     # Constructor with optional parameters and subsystems
     ReactionSystem(species::Vector{Species}, reactions::Vector{Reaction};
                    parameters=Parameter[], subsystems=Dict{String,ReactionSystem}(),
-                   tolerance=nothing, tests=Test[]) =
+                   tolerance=nothing, tests=InlineTest[]) =
         new(species, reactions, parameters, subsystems, tolerance, tests)
 end
 
@@ -1667,14 +1661,14 @@ _stable_json(x::AbstractString) = repr(String(x))
 _stable_json(x) = string(x)
 
 """
-    Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::Expr; reversible=false) -> Reaction
+    Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::ASTExpr; reversible=false) -> Reaction
 
 Legacy constructor for backward compatibility. Creates a reaction with an
 auto-generated, content-derived id: the same reactants, products, and rate
 always produce the same id (deterministic across sessions and Julia versions,
 unlike `Base.hash`).
 """
-function Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::Expr; reversible=false)
+function Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::ASTExpr; reversible=false)
     # Content-derived id: sorted species:stoichiometry lists plus a
     # deterministic rendering of the rate AST, digested with FNV-1a.
     fmt(d) = join(sort!(["$(k):$(Float64(v))" for (k, v) in d]), ",")

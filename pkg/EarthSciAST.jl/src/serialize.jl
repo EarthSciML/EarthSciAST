@@ -29,7 +29,7 @@ function _serialize_range_value(v)
         isempty(v.of) || (d["of"] = v.of)
         return d
     end
-    return [x isa Expr ? serialize_expression(x) : x for x in v]
+    return [x isa ASTExpr ? serialize_expression(x) : x for x in v]
 end
 
 """
@@ -91,12 +91,12 @@ function _serialize_opexpr_field(field::Symbol, v)
 end
 
 """
-    serialize_expression(expr::Expr) -> Any
+    serialize_expression(expr::ASTExpr) -> Any
 
 Serialize an Expression to JSON-compatible format.
 Handles the union type discrimination.
 """
-function serialize_expression(expr::Expr)
+function serialize_expression(expr::ASTExpr)
     if isa(expr, IntExpr)
         # Int64 → JSON3 emits as integer token (no decimal). Preserves §5.4.6
         # round-trip: on parse, a token without '.'/'e' recovers as IntExpr.
@@ -380,7 +380,7 @@ function serialize_model(model::Model)::Dict{String,Any}
     if !isempty(model.guesses)
         guesses_out = Dict{String,Any}()
         for (k, v) in model.guesses
-            guesses_out[k] = v isa Expr ?
+            guesses_out[k] = v isa ASTExpr ?
                 serialize_expression(v) : v
         end
         result["guesses"] = guesses_out
@@ -433,7 +433,7 @@ function serialize_assertion(a::Assertion)::Dict{String,Any}
         result["reduce"] = a.reduce
     end
     if a.reference !== nothing
-        if a.reference isa Expr
+        if a.reference isa ASTExpr
             result["reference"] = serialize_expression(a.reference)
         elseif a.reference isa AbstractDict
             # from_file shape: round-trip its keys verbatim
@@ -450,9 +450,9 @@ function serialize_assertion(a::Assertion)::Dict{String,Any}
 end
 
 """
-    serialize_test(t::Test) -> Dict{String,Any}
+    serialize_test(t::InlineTest) -> Dict{String,Any}
 """
-function serialize_test(t::EarthSciAST.Test)::Dict{String,Any}
+function serialize_test(t::EarthSciAST.InlineTest)::Dict{String,Any}
     result = Dict{String,Any}(
         "id" => t.id,
         "time_span" => serialize_time_span(t.time_span),
@@ -785,7 +785,7 @@ function serialize_variable_map(entry::CouplingVariableMap)::Dict{String,Any}
         "type" => "variable_map",
         "from" => entry.from,
         "to" => entry.to,
-        "transform" => entry.transform isa Expr ?
+        "transform" => entry.transform isa ASTExpr ?
             serialize_expression(entry.transform) : entry.transform
     )
 

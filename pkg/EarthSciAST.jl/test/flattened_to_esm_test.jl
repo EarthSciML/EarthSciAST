@@ -14,23 +14,23 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
 
 @testset "Canonical reconstruct + lossless flatten + flattened_to_esm" begin
     @testset "reconstruct copies every OpExpr field; rewrites preserve them" begin
-        tl = E.OpExpr("table_lookup", E.Expr[]; table="fuel", output=2,
-                      table_axes=Dict{String,E.Expr}("code" => V("fm")))
-        agg = E.OpExpr("aggregate", E.Expr[]; semiring="sum_product", output_idx=Any[],
+        tl = E.OpExpr("table_lookup", E.ASTExpr[]; table="fuel", output=2,
+                      table_axes=Dict{String,E.ASTExpr}("code" => V("fm")))
+        agg = E.OpExpr("aggregate", E.ASTExpr[]; semiring="sum_product", output_idx=Any[],
                        ranges=Dict{String,Any}("i" => E.IndexSetRef("src_cells")),
-                       expr_body=E.OpExpr("*", E.Expr[V("A"), V("F")]),
-                       join=Any[[("a","b")]], filter=E.OpExpr(">", E.Expr[V("A"), N(0.0)]),
+                       expr_body=E.OpExpr("*", E.ASTExpr[V("A"), V("F")]),
+                       join=Any[[("a","b")]], filter=E.OpExpr(">", E.ASTExpr[V("A"), N(0.0)]),
                        id="prod", manifold=nothing)
         # override-only semantics
         r = E.reconstruct(agg; semiring="min_plus")
         @test r.semiring == "min_plus" && r.ranges === agg.ranges && r.join === agg.join
         # each rewrite keeps table/axes/output and semiring/ranges/id
-        for f in (ESS.substitute(tl, Dict{String,E.Expr}("fm"=>N(1.0))),
+        for f in (ESS.substitute(tl, Dict{String,E.ASTExpr}("fm"=>N(1.0))),
                   ESS.namespace_expr(tl, "M", Set{String}(["fm"])),
                   ESS.simplify(tl))
             @test f.table == "fuel" && f.output == 2 && haskey(f.table_axes, "code")
         end
-        for f in (ESS.substitute(agg, Dict{String,E.Expr}("F"=>N(2.0))),
+        for f in (ESS.substitute(agg, Dict{String,E.ASTExpr}("F"=>N(2.0))),
                   ESS.namespace_expr(agg, "M", Set{String}(["A","F"])),
                   ESS.simplify(agg))
             @test f.semiring == "sum_product" && f.id == "prod" && f.expr_body !== nothing

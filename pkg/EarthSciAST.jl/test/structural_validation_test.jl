@@ -48,7 +48,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             )
 
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.VarExpr("y"))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.VarExpr("y"))
                 # Missing equation for state variable y
             ]
 
@@ -104,11 +104,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
             ]
             events = [
                 EarthSciAST.ContinuousEvent(
-                    EarthSciAST.Expr[EarthSciAST.OpExpr("-", EarthSciAST.Expr[EarthSciAST.VarExpr("x"), EarthSciAST.NumExpr(10.0)])],
+                    EarthSciAST.ASTExpr[EarthSciAST.OpExpr("-", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x"), EarthSciAST.NumExpr(10.0)])],
                     [EarthSciAST.AffectEquation("undefined_var", EarthSciAST.NumExpr(0.0))]
                 )
             ]
@@ -128,7 +128,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.5)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.VarExpr("k"))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.VarExpr("k"))
             ]
             model = EarthSciAST.Model(variables, equations)
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
@@ -146,7 +146,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
             ]
             model = EarthSciAST.Model(variables, equations)
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
@@ -164,7 +164,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 "y" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=2.0)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
                 # Missing equation for y
             ]
             model = EarthSciAST.Model(variables, equations)
@@ -182,7 +182,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "CouplingOperatorCompose validation" begin
             model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)),
-                                  [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
+                                  [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
 
             # Valid system reference
@@ -232,7 +232,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "CouplingVariableMap validation" begin
             model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)),
-                                  [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
+                                  [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
 
             # Valid variable mapping
@@ -357,7 +357,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ObservedVariable;
                     units="Pa",
                     expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.Expr[
+                        EarthSciAST.ASTExpr[
                             EarthSciAST.NumExpr(50000.0),
                             EarthSciAST.VarExpr("p_atm"),
                         ])),
@@ -380,7 +380,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ObservedVariable;
                     units="Pa",
                     expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.Expr[
+                        EarthSciAST.ASTExpr[
                             EarthSciAST.NumExpr(101325.0),
                             EarthSciAST.VarExpr("p_atm"),
                         ])),
@@ -400,7 +400,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ObservedVariable;
                     units="K",
                     expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.Expr[
+                        EarthSciAST.ASTExpr[
                             EarthSciAST.NumExpr(1.0),
                             EarthSciAST.VarExpr("T_C"),
                         ])),
@@ -421,7 +421,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ObservedVariable;
                     units="m",
                     expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.Expr[
+                        EarthSciAST.ASTExpr[
                             EarthSciAST.NumExpr(2.0),
                             EarthSciAST.VarExpr("p_atm"),
                         ])),
@@ -469,9 +469,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             equations = [
                 EarthSciAST.Equation(
                     EarthSciAST.OpExpr(
-                        "D", EarthSciAST.Expr[EarthSciAST.VarExpr("c")]; wrt="t"),
+                        "D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; wrt="t"),
                     EarthSciAST.OpExpr(
-                        "grad", EarthSciAST.Expr[EarthSciAST.VarExpr("c")]; dim="x")),
+                        "grad", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; dim="x")),
             ]
             EarthSciAST.Model(variables, equations)
         end

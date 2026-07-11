@@ -348,7 +348,7 @@ function _lower_slice_sources_to_bcs!(flat::FlattenedSystem,
     return bcs, drop
 end
 
-"Substitute every `VarExpr(old)` with `VarExpr(new)` in an Expr tree."
+"Substitute every `VarExpr(old)` with `VarExpr(new)` in an ASTExpr tree."
 function _substitute_varname(expr::EsmExpr, old::AbstractString, new::AbstractString)
     if expr isa VarExpr
         return expr.name == old ? VarExpr(String(new)) : expr
@@ -373,8 +373,8 @@ end
 
 """
 Look for a diffusion term `D_coeff * Differential(dim)(Differential(dim)(base))`
-in an Expr tree and return `D_coeff` as an Expr. Very simple pattern matcher:
-expects the Expr to be a `*` with two operands or a `+`/`-` with one operand
+in an ASTExpr tree and return `D_coeff` as an ASTExpr. Very simple pattern matcher:
+expects the ASTExpr to be a `*` with two operands or a `+`/`-` with one operand
 shaped this way. Returns `nothing` if not found.
 """
 function _extract_diffusion_coefficient(expr::EsmExpr, base_name::String,

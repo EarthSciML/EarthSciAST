@@ -5,7 +5,7 @@ using JSON3
 const ESS = EarthSciAST
 const SE = EarthSciAST.StoichiometryEntry
 
-# Structural equality for Expr trees. OpExpr's Vector{Expr} field makes
+# Structural equality for ASTExpr trees. OpExpr's Vector{ASTExpr} field makes
 # default struct `==` (which falls back to `===`) fail for freshly-built
 # equal trees — compare field-by-field recursively instead.
 _expr_equal(a::NumExpr, b::NumExpr) = a.value == b.value
@@ -21,12 +21,12 @@ function _expr_equal(a::OpExpr, b::OpExpr)
     end
     return true
 end
-_expr_equal(::ESS.Expr, ::ESS.Expr) = false
+_expr_equal(::ESS.ASTExpr, ::ESS.ASTExpr) = false
 
 # Small helpers so each testset can build a fresh fixture.
 function _make_eq(lhs_name::String, coef::Float64)
-    lhs = OpExpr("D", ESS.Expr[VarExpr(lhs_name)], wrt="t")
-    rhs = OpExpr("*", ESS.Expr[NumExpr(coef), VarExpr(lhs_name)])
+    lhs = OpExpr("D", ESS.ASTExpr[VarExpr(lhs_name)], wrt="t")
+    rhs = OpExpr("*", ESS.ASTExpr[NumExpr(coef), VarExpr(lhs_name)])
     return Equation(lhs, rhs)
 end
 
@@ -41,7 +41,7 @@ end
 
 function _make_reaction_system()
     species = [Species("A", default=1.0), Species("B", default=0.0)]
-    rate = OpExpr("*", ESS.Expr[VarExpr("k"), VarExpr("A")])
+    rate = OpExpr("*", ESS.ASTExpr[VarExpr("k"), VarExpr("A")])
     rxn = Reaction("r1", [SE("A", 1)], [SE("B", 1)], rate)
     return ReactionSystem(species, [rxn]; parameters=[Parameter("k", 0.1)])
 end
@@ -58,7 +58,7 @@ end
         init_eqs = Equation[Equation(VarExpr("x"), NumExpr(1.0))]
         m = Model(vars, Equation[_make_eq("x", 2.0)];
                   initialization_equations=init_eqs,
-                  guesses=Dict{String,Union{Float64,ESS.Expr}}("x" => 0.5),
+                  guesses=Dict{String,Union{Float64,ESS.ASTExpr}}("x" => 0.5),
                   system_kind="ode")
 
         m2 = add_variable(m, "y", ModelVariable(StateVariable, default=0.0))
@@ -174,13 +174,13 @@ end
         @test remaining.lhs.args[1].name == "k"
 
         # Pattern with no match: throws EditError
-        bogus = OpExpr("D", ESS.Expr[VarExpr("nonexistent")], wrt="t")
+        bogus = OpExpr("D", ESS.ASTExpr[VarExpr("nonexistent")], wrt="t")
         @test_throws ESS.EditError remove_equation(m2, bogus)
     end
 
     @testset "substitute_in_equations rewrites expression trees" begin
         m = _make_model()  # D(x) = 2*x
-        bindings = Dict{String, ESS.Expr}("x" => NumExpr(42.0))
+        bindings = Dict{String, ESS.ASTExpr}("x" => NumExpr(42.0))
         m2 = substitute_in_equations(m, bindings)
 
         @test length(m2.equations) == 1
@@ -202,7 +202,7 @@ end
     # system, and assert that stoichiometry/coupling references are preserved.
     @testset "substitute rewrites rate expressions (simple)" begin
         # Rate: k * param_rate, bindings: param_rate -> A
-        rate = OpExpr("*", ESS.Expr[VarExpr("k"), VarExpr("param_rate")])
+        rate = OpExpr("*", ESS.ASTExpr[VarExpr("k"), VarExpr("param_rate")])
         rxn = Reaction("R1", [SE("A", 1)], [SE("B", 1)], rate)
         sys = ReactionSystem(
             [Species("A"), Species("B")],
@@ -210,7 +210,7 @@ end
             parameters=[Parameter("k", 0.1)],
         )
 
-        bindings = Dict{String,ESS.Expr}("param_rate" => VarExpr("A"))
+        bindings = Dict{String,ESS.ASTExpr}("param_rate" => VarExpr("A"))
         new_rate = substitute(sys.reactions[1].rate, bindings)
 
         @test new_rate isa OpExpr
@@ -231,13 +231,13 @@ end
 
     @testset "substitute rewrites rate expressions (nested operators)" begin
         # Rate: k * temp^2, bindings: k -> 0.1, temp -> T
-        inner = OpExpr("^", ESS.Expr[VarExpr("temp"), NumExpr(2.0)])
-        rate = OpExpr("*", ESS.Expr[VarExpr("k"), inner])
+        inner = OpExpr("^", ESS.ASTExpr[VarExpr("temp"), NumExpr(2.0)])
+        rate = OpExpr("*", ESS.ASTExpr[VarExpr("k"), inner])
         # Source reaction (no substrates) to mirror the Python fixture shape.
         rxn = Reaction("R1", nothing, [SE("A", 1)], rate)
         sys = ReactionSystem([Species("A")], [rxn])
 
-        bindings = Dict{String,ESS.Expr}(
+        bindings = Dict{String,ESS.ASTExpr}(
             "k" => NumExpr(0.1),
             "temp" => VarExpr("T"),
         )
@@ -269,7 +269,7 @@ end
             parameters=[Parameter("k", 0.1; units="1/s")],
         )
 
-        bindings = Dict{String,ESS.Expr}("param" => VarExpr("k"))
+        bindings = Dict{String,ESS.ASTExpr}("param" => VarExpr("k"))
         new_rate = substitute(sys.reactions[1].rate, bindings)
 
         # Rewritten rate is the bound VarExpr.
@@ -332,7 +332,7 @@ end
             description="reset",
         )
         cont = ContinuousEvent(
-            ESS.Expr[VarExpr("x")],
+            ESS.ASTExpr[VarExpr("x")],
             [AffectEquation("x", NumExpr(1.0))],
             description="bounce",
         )
@@ -498,7 +498,7 @@ end
             for case in cases
                 input_expr = ESS.parse_expression(case[:input])
                 expected_expr = ESS.parse_expression(case[:expected])
-                bindings = Dict{String, ESS.Expr}(
+                bindings = Dict{String, ESS.ASTExpr}(
                     string(k) => ESS.parse_expression(v)
                     for (k, v) in pairs(case[:bindings])
                 )
@@ -533,11 +533,11 @@ end
                                          units="1/s"),
             )
             # D(x) = param
-            lhs = OpExpr("D", ESS.Expr[VarExpr("x")], wrt="t")
+            lhs = OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt="t")
             rhs = VarExpr("param")
             model = Model(vars, Equation[Equation(lhs, rhs)])
 
-            bindings = Dict{String,ESS.Expr}("param" => NumExpr(0.5))
+            bindings = Dict{String,ESS.ASTExpr}("param" => NumExpr(0.5))
             result = substitute_in_equations(model, bindings)
 
             # Equations rewritten
@@ -568,7 +568,7 @@ end
             )
             model = Model(vars, Equation[])
 
-            result = substitute_in_equations(model, Dict{String,ESS.Expr}("a" => VarExpr("b")))
+            result = substitute_in_equations(model, Dict{String,ESS.ASTExpr}("a" => VarExpr("b")))
             @test isempty(result.equations)
             @test result.variables == model.variables
         end
@@ -584,12 +584,12 @@ end
                 "k" => ModelVariable(ParameterVariable, default=0.1, units="1/s"),
             )
             eq1 = Equation(
-                OpExpr("D", ESS.Expr[VarExpr("C")], wrt="t"),
-                OpExpr("*", ESS.Expr[NumExpr(-1.0), VarExpr("k"), VarExpr("C")]),
+                OpExpr("D", ESS.ASTExpr[VarExpr("C")], wrt="t"),
+                OpExpr("*", ESS.ASTExpr[NumExpr(-1.0), VarExpr("k"), VarExpr("C")]),
             )
             eq2 = Equation(
                 VarExpr("C"),
-                OpExpr("*", ESS.Expr[NumExpr(2.0), VarExpr("C")]),
+                OpExpr("*", ESS.ASTExpr[NumExpr(2.0), VarExpr("C")]),
             )
             model = Model(vars, Equation[eq1, eq2])
 

@@ -91,7 +91,7 @@ export
     ReferenceGraph, ReferenceVertex, ReferenceEdge, ReferenceResolutionError,
     build_reference_graph, resolve_references,
     # Expression types
-    Expr, NumExpr, IntExpr, VarExpr, OpExpr,
+    ASTExpr, NumExpr, IntExpr, VarExpr, OpExpr,
     # Literal predicates (RFC §5.4.1 int/float distinction)
     is_literal, literal_value,
     # Equation types

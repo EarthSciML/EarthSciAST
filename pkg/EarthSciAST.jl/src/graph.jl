@@ -65,7 +65,7 @@ struct DependencyEdge
     target::String
     relationship::String  # 'additive' | 'rate' | 'stoichiometric' | 'coupling'
     equation_index::Union{Int, Nothing}
-    expression::Union{Expr, Nothing}
+    expression::Union{ASTExpr, Nothing}
 end
 
 # Graph analysis methods
@@ -290,7 +290,7 @@ end
     expression_graph(system::ReactionSystem) -> Graph{VariableNode, DependencyEdge}
     expression_graph(equation::Equation) -> Graph{VariableNode, DependencyEdge}
     expression_graph(reaction::Reaction) -> Graph{VariableNode, DependencyEdge}
-    expression_graph(expr::Expr) -> Graph{VariableNode, DependencyEdge}
+    expression_graph(expr::ASTExpr) -> Graph{VariableNode, DependencyEdge}
 
 Generate expression-level dependency graph showing variable relationships.
 
@@ -298,7 +298,7 @@ Creates nodes for variables and edges for dependencies based on expressions.
 Supports different scoping levels from individual expressions to full files.
 
 # Arguments
-- Input can be EsmFile, Model, ReactionSystem, Equation, Reaction, or Expr
+- Input can be EsmFile, Model, ReactionSystem, Equation, Reaction, or ASTExpr
 
 # Returns
 - `Graph{VariableNode, DependencyEdge}`: Variable dependency graph
@@ -386,7 +386,7 @@ function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
                         coupling.to,
                         "coupling",
                         nothing,
-                        nothing  # transform field doesn't exist in EarthSciAST.Expr
+                        nothing  # transform field doesn't exist in EarthSciAST.ASTExpr
                     )
                     push!(edges, (source=from_node, target=to_node, data=coupling_edge))
                 end
@@ -630,7 +630,7 @@ function expression_graph(reaction::Reaction)::Graph{VariableNode, DependencyEdg
     return Graph{VariableNode, DependencyEdge}(nodes, edges)
 end
 
-function expression_graph(expr::Expr)::Graph{VariableNode, DependencyEdge}
+function expression_graph(expr::ASTExpr)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
     edges = _GraphEdge{VariableNode, DependencyEdge}[]
 

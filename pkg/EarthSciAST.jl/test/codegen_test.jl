@@ -50,8 +50,8 @@ const _CG = EarthSciAST
                         ),
                         [
                             Equation(
-                                OpExpr("D", EarthSciAST.Expr[VarExpr("O3")]),
-                                OpExpr("*", EarthSciAST.Expr[VarExpr("k1"), VarExpr("O3")])
+                                OpExpr("D", EarthSciAST.ASTExpr[VarExpr("O3")]),
+                                OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k1"), VarExpr("O3")])
                             )
                         ]
                     )
@@ -72,7 +72,7 @@ const _CG = EarthSciAST
         a = VarExpr("a")
         b = VarExpr("b")
         c = VarExpr("c")
-        E = EarthSciAST.Expr
+        E = EarthSciAST.ASTExpr
         plus = OpExpr("+", E[a, b])
         prod_ab = OpExpr("*", E[a, b])
 
@@ -146,7 +146,7 @@ const _CG = EarthSciAST
             # Single-letter species "A" must NOT be re-declared as a parameter;
             # the non-species rate symbol must be.
             species = [Species("A")]
-            rate = OpExpr("*", EarthSciAST.Expr[VarExpr("k_fast"), VarExpr("A")])
+            rate = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k_fast"), VarExpr("A")])
             rxn = Reaction("r1", [SE("A", 1)], nothing, rate)
             sys = ReactionSystem(species, [rxn]; parameters=[Parameter("k_fast", 1.0)])
 

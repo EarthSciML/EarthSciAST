@@ -28,9 +28,9 @@ const MTK3 = ModelingToolkit
     # ---------- Helpers ----------
     _v(name) = ESM3.VarExpr(String(name))
     _n(x)    = ESM3.NumExpr(Float64(x))
-    _const(v) = ESM3.OpExpr("const", ESM3.Expr[]; value=v)
+    _const(v) = ESM3.OpExpr("const", ESM3.ASTExpr[]; value=v)
     _fn(name, args...) =
-        ESM3.OpExpr("fn", ESM3.Expr[args...]; name=String(name))
+        ESM3.OpExpr("fn", ESM3.ASTExpr[args...]; name=String(name))
 
     # Build a Model whose state derivative is `interp.linear(table, axis, x_var)`.
     function _linear_model(table::Vector{Float64}, axis::Vector{Float64};
@@ -62,7 +62,7 @@ const MTK3 = ModelingToolkit
         return ESM3.Model(vars, eqs)
     end
 
-    _op_D(name) = ESM3.OpExpr("D", ESM3.Expr[_v(name)]; wrt="t")
+    _op_D(name) = ESM3.OpExpr("D", ESM3.ASTExpr[_v(name)]; wrt="t")
 
     # --------------------------------------------------------------
     # 1. interp.linear lowers + compiles; the registered op appears
@@ -121,7 +121,7 @@ const MTK3 = ModelingToolkit
             "z" => ESM3.ModelVariable(ESM3.StateVariable;     default=0.0),
         )
         # Sum 100 interp.bilinear calls.
-        sum_args = ESM3.Expr[]
+        sum_args = ESM3.ASTExpr[]
         for k in 1:N_CALLS
             push!(sum_args, _fn("interp.bilinear",
                 _const(tables[k]),
@@ -135,7 +135,7 @@ const MTK3 = ModelingToolkit
         sys  = MTK3.System(model; name=:BilinearPerf)
         # Warm-up call to remove first-time MTK compilation costs from the
         # measurement (precompile @register_symbolic dispatch tables, etc.).
-        let warm = ESM3.OpExpr("+", ESM3.Expr[
+        let warm = ESM3.OpExpr("+", ESM3.ASTExpr[
                 _fn("interp.bilinear", _const(tables[1]), _const(axis_x),
                     _const(axis_y), _v("x"), _v("y"))])
             wmodel = ESM3.Model(vars,

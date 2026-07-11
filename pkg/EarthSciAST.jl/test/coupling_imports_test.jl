@@ -4,8 +4,8 @@ import JSON3
 
 include("testutils.jl")  # _op/_v/_n/_D builders + TESTUTILS_REPO_ROOT
 
-# Does an Expr tree contain a VarExpr whose name matches `target`?
-function _uses_var(expr::EarthSciAST.Expr, target::String)
+# Does an ASTExpr tree contain a VarExpr whose name matches `target`?
+function _uses_var(expr::EarthSciAST.ASTExpr, target::String)
     if expr isa EarthSciAST.VarExpr
         return expr.name == target
     elseif expr isa EarthSciAST.OpExpr

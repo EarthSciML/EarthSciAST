@@ -10,7 +10,7 @@ const MTK = ModelingToolkit
 
 # Evaluate an expression via a throw-away build_evaluator call so the
 # unit tests exercise the same code path as real ODE solves.
-function _eval1(expr::ESM.Expr; u_vals=Dict{String,Float64}(),
+function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
                 p_vals=Dict{String,Float64}(), t=0.0,
                 registered_functions=Dict{String,Function}())
     vars = Dict{String,ModelVariable}()
@@ -129,7 +129,7 @@ end
         @test _eval1(expr_year) == 2026.0
 
         # `interp.searchsorted` with const-array second arg.
-        const_xs = OpExpr("const", ESM.Expr[]; value=[1.0, 2.0, 3.0, 4.0, 5.0])
+        const_xs = OpExpr("const", ESM.ASTExpr[]; value=[1.0, 2.0, 3.0, 4.0, 5.0])
         expr_ss = _op("fn", _n(2.5), const_xs; name="interp.searchsorted")
         @test _eval1(expr_ss) == 3.0  # smallest 1-based i with xs[i] >= 2.5
 
@@ -223,7 +223,7 @@ end
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
-        tests = [ESM.Test("default_span",
+        tests = [ESM.InlineTest("default_span",
                        ESM.TimeSpan(0.0, 25.0),
                        ESM.Assertion[]; description="default")]
         model = ESM.Model(vars, [eq]; tests=tests)
