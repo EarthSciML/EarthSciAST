@@ -25,14 +25,15 @@ a `RefreshError` naming what to load.
 """
 module EarthSciASTEarthSciIOExt
 
-import EarthSciAST as ESS
 using EarthSciAST: RefreshError
+# Explicit imports so we can add the extension methods to these generics.
+import EarthSciAST: provider_refresh_times, provider_sample
 import EarthSciIO
 
 # The cadence anchors, straight from the provider (empty ⇒ CONST, which makes the
 # default `provider_is_const` — `isempty(provider_refresh_times(p))` — report true
 # with no extra method).
-ESS.provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
+provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
 
 # One forcing field at cadence tick `t`, in the source's NATIVE layout (no
 # reorder — see the module docstring). `providers` is keyed one entry per consumer
@@ -40,7 +41,7 @@ ESS.provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
 # is a binding error the caller must split (ESS can't know which field a bare
 # array means). Returns the bare `AbstractArray` that `_write_forcing!` /
 # `_provider_const_field` expect for a single-variable sample.
-function ESS.provider_sample(p::EarthSciIO.Provider, t::Real)
+function provider_sample(p::EarthSciIO.Provider, t::Real)
     nds = EarthSciIO.refresh(p, Float64(t))          # == materialize(p, t)
     vars = EarthSciIO.variable_names(nds)
     length(vars) == 1 || throw(RefreshError(

@@ -92,8 +92,10 @@ Fields:
 - `species::Vector{String}`: species names.
 - `parameters::Vector{String}`: parameter names.
 - `reactions::Vector{String}`: string-rendered reactions (e.g. `"A + B → C, rate: k*A*B"`).
-- `events::Vector{String}`: string summaries of any reaction-system events.
-- `constraints::Vector{String}`: string dump of any constraint equations.
+- `events::Vector{String}`: reserved; currently always empty (the mock
+  derives no events from the reaction system).
+- `constraints::Vector{String}`: reserved; currently always empty (the mock
+  derives no constraint equations).
 - `metadata::Dict{String,Any}`: provenance.
 """
 struct MockCatalystSystem
@@ -124,6 +126,28 @@ function _has_spatial_ivs(flat::FlattenedSystem)
     return !(length(flat.independent_variables) == 1 &&
              flat.independent_variables[1] == :t)
 end
+
+"""
+    _use_pde_ctor_msg(flat, pde_ctor, ode_ctor) -> String
+
+Error text for calling an ODE-only constructor (`ode_ctor`, e.g.
+`"MockMTKSystem"` or `"ModelingToolkit.System"`) on a flattened system with
+spatial independent variables. Shared by the mock constructors and the MTK
+extension so the redirect wording stays identical on both paths.
+"""
+_use_pde_ctor_msg(flat::FlattenedSystem, pde_ctor::String, ode_ctor::String) =
+    "Flattened system has independent variables $(flat.independent_variables), " *
+    "which indicates a PDE. Use $(pde_ctor)(...) instead of $(ode_ctor)(...)."
+
+"""
+    _use_ode_ctor_msg(ode_ctor, pde_ctor) -> String
+
+Mirror of [`_use_pde_ctor_msg`](@ref): error text for calling a PDE-only
+constructor (`pde_ctor`) on a pure-ODE flattened system.
+"""
+_use_ode_ctor_msg(ode_ctor::String, pde_ctor::String) =
+    "Flattened system has independent variables [t] only — this is a " *
+    "pure ODE system. Use $(ode_ctor)(...) instead of $(pde_ctor)(...)."
 
 """
     _event_summaries(flat::FlattenedSystem) -> Vector{String}
@@ -180,6 +204,28 @@ function _equation_string(eq::Equation)
     return "$(_expr_to_string(eq.lhs)) ~ $(_expr_to_string(eq.rhs))"
 end
 
+"""
+    _mock_common(flat::FlattenedSystem) -> NamedTuple
+
+The field extraction shared by the `MockMTKSystem` and `MockPDESystem`
+constructors: variable-name vectors, rendered equations, event summaries,
+and the provenance metadata dict.
+"""
+function _mock_common(flat::FlattenedSystem)
+    state_vars = collect(keys(flat.state_variables))
+    params = collect(keys(flat.parameters))
+    obs_vars = collect(keys(flat.observed_variables))
+    equations = [_equation_string(eq) for eq in flat.equations]
+    events = _event_summaries(flat)
+    metadata = Dict{String,Any}(
+        "creation_time" => string(Dates.now()),
+        "source_systems" => flat.metadata.source_systems,
+        "coupling_rules_applied" => flat.metadata.coupling_rules_applied,
+        "mock_system" => true,
+    )
+    return (; state_vars, params, obs_vars, equations, events, metadata)
+end
+
 # ========================================
 # MockMTKSystem constructors (ODE path)
 # ========================================
@@ -195,27 +241,13 @@ function MockMTKSystem(flat::FlattenedSystem;
                        name::Union{Symbol,AbstractString}=:anonymous)
     if _has_spatial_ivs(flat)
         throw(ArgumentError(
-            "Flattened system has independent variables $(flat.independent_variables), " *
-            "which indicates a PDE. Use MockPDESystem(...) instead of MockMTKSystem(...)."
-        ))
+            _use_pde_ctor_msg(flat, "MockPDESystem", "MockMTKSystem")))
     end
 
-    state_vars = collect(keys(flat.state_variables))
-    params = collect(keys(flat.parameters))
-    obs_vars = collect(keys(flat.observed_variables))
-    equations = [_equation_string(eq) for eq in flat.equations]
+    c = _mock_common(flat)
 
-    events = _event_summaries(flat)
-
-    metadata = Dict{String,Any}(
-        "creation_time" => string(Dates.now()),
-        "source_systems" => flat.metadata.source_systems,
-        "coupling_rules_applied" => flat.metadata.coupling_rules_applied,
-        "mock_system" => true,
-    )
-
-    return MockMTKSystem(_sym_name(name), state_vars, params, obs_vars,
-                         equations, events, metadata)
+    return MockMTKSystem(_sym_name(name), c.state_vars, c.params, c.obs_vars,
+                         c.equations, c.events, c.metadata)
 end
 
 """
@@ -245,15 +277,10 @@ function MockPDESystem(flat::FlattenedSystem;
                        name::Union{Symbol,AbstractString}=:anonymous)
     if !_has_spatial_ivs(flat)
         throw(ArgumentError(
-            "Flattened system has independent variables [t] only — this is a " *
-            "pure ODE system. Use MockMTKSystem(...) instead of MockPDESystem(...)."
-        ))
+            _use_ode_ctor_msg("MockMTKSystem", "MockPDESystem")))
     end
 
-    state_vars = collect(keys(flat.state_variables))
-    params = collect(keys(flat.parameters))
-    obs_vars = collect(keys(flat.observed_variables))
-    equations = [_equation_string(eq) for eq in flat.equations]
+    c = _mock_common(flat)
 
     # `boundary_conditions` is reserved: the mock derives no BCs (see the
     # struct docstring), so it is always empty.
@@ -270,18 +297,9 @@ function MockPDESystem(flat::FlattenedSystem;
         end
     end
 
-    events = _event_summaries(flat)
-
-    metadata = Dict{String,Any}(
-        "creation_time" => string(Dates.now()),
-        "source_systems" => flat.metadata.source_systems,
-        "coupling_rules_applied" => flat.metadata.coupling_rules_applied,
-        "mock_system" => true,
-    )
-
     return MockPDESystem(_sym_name(name), flat.independent_variables,
-                         state_vars, params, obs_vars,
-                         equations, bcs, ics, events, flat.domain, metadata)
+                         c.state_vars, c.params, c.obs_vars,
+                         c.equations, bcs, ics, c.events, flat.domain, c.metadata)
 end
 
 """

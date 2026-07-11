@@ -20,14 +20,15 @@ untyped fallback and wins whenever a real ODE algorithm is passed.
 """
 module EarthSciASTSimulateExt
 
-import EarthSciAST as ESS
-using EarthSciAST: SimulationResult
+using EarthSciAST: SimulationResult, DEFAULT_SIM_RELTOL, DEFAULT_SIM_ABSTOL
+# Explicit import so we can add the extension method to this generic.
+import EarthSciAST: _simulate_solve
 import SciMLBase
 
-function ESS._simulate_solve(f!, u0, tspan, p, alg::SciMLBase.AbstractODEAlgorithm,
-                             var_map; callback = nothing, tstops = Float64[],
-                             reltol = ESS.DEFAULT_SIM_RELTOL,
-                             abstol = ESS.DEFAULT_SIM_ABSTOL, saveat = nothing)
+function _simulate_solve(f!, u0, tspan, p, alg::SciMLBase.AbstractODEAlgorithm,
+                         var_map; callback = nothing, tstops = Float64[],
+                         reltol = DEFAULT_SIM_RELTOL,
+                         abstol = DEFAULT_SIM_ABSTOL, saveat = nothing)
     prob = SciMLBase.ODEProblem(f!, u0, tspan, p)
     kw = Dict{Symbol,Any}(:reltol => reltol, :abstol => abstol)
     callback === nothing || (kw[:callback] = callback)
