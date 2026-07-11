@@ -9,6 +9,10 @@
  * handler updates each frame, so the SVG animates as the layout settles.
  * Nodes are draggable via pointer move/up listeners, and the panels are
  * styled with plain CSS (coupling-graph.css) — no Tailwind dependency.
+ *
+ * Immutability: d3-force mutates x/y/vx/vy/fx/fy/index on the node objects it
+ * owns. We therefore hand it shallow copies of the caller's `ComponentNode`s
+ * (see `toSimulationNode`) so `props.graph.nodes` is never mutated in place.
  */
 
 import { Component, createSignal, createMemo, createEffect, on, onMount, onCleanup, Show, For } from 'solid-js';
@@ -49,26 +53,52 @@ interface GraphEdge extends SimulationLinkDatum<GraphNode> {
 /** Node position snapshot published by the simulation tick handler */
 type PositionMap = Map<string, { x: number; y: number }>;
 
+/**
+ * Fill color per component type, kept in one map so the minimap and tests read
+ * from a single source instead of hex literals scattered through the render.
+ */
+export const NODE_FILL: Record<ComponentNode['type'] | 'default', string> = {
+  model: '#4CAF50',
+  data_loader: '#2196F3',
+  reaction_system: '#9C27B0',
+  default: '#607D8B'
+};
+
+/** Stroke dash pattern per coupling edge type. */
+export const EDGE_DASH: Record<string, string> = {
+  variable_map: 'none',
+  operator_compose: '5,5',
+  couple: '10,2'
+};
+
+const NODE_STROKE = '#333';
+const EDGE_STROKE = '#999';
+
+/** Shallow-copy a caller node into a simulation-owned object (see header). */
+const toSimulationNode = (node: ComponentNode): GraphNode => ({ ...node });
+
 export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   // Default dimensions
   const width = () => props.width ?? 800;
   const height = () => props.height ?? 600;
 
-  // Reactive graph data
-  const nodes = createMemo(() => [...props.graph.nodes] as GraphNode[]);
-  const edges = createMemo(() =>
+  // Reactive graph data. Nodes are copied so d3-force never mutates the
+  // caller-owned ComponentNode objects behind our backs.
+  const nodes = createMemo(() => props.graph.nodes.map(toSimulationNode));
+  const edges = createMemo<GraphEdge[]>(() =>
     props.graph.edges.map(edge => ({
       source: edge.source,
       target: edge.target,
       data: edge.data
-    })) as GraphEdge[]
+    }))
   );
 
   // Component state
   const [selectedNode, setSelectedNode] = createSignal<ComponentNode | null>(null);
   const [selectedEdge, setSelectedEdge] = createSignal<CouplingEdge | null>(null);
   const [hoveredElement, setHoveredElement] = createSignal<string | null>(null);
-  const [transform, setTransform] = createSignal({ x: 0, y: 0, k: 1 });
+  // Only zoom (k) is interactive; there is no pan handler, so no x/y offset.
+  const [transform, setTransform] = createSignal({ k: 1 });
 
   // Node positions, written by the simulation tick handler and read by the
   // JSX below — this is what makes the force layout animate.
@@ -114,54 +144,47 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
     publishPositions();
   };
 
-  // Node styling based on type
+  // Node styling based on type (colors from the NODE_FILL map above)
   const getNodeStyle = (node: ComponentNode) => {
     const baseStyle = {
-      stroke: '#333',
+      stroke: NODE_STROKE,
       'stroke-width': selectedNode()?.id === node.id ? 3 : 1,
       cursor: 'pointer',
       filter: hoveredElement() === node.id ? 'brightness(1.2)' : 'none'
     };
-
-    switch (node.type) {
-      case 'model':
-        return { ...baseStyle, fill: '#4CAF50', rx: 5, ry: 5 }; // Green rectangle
-      case 'data_loader':
-        return { ...baseStyle, fill: '#2196F3' }; // Blue ellipse
-      case 'reaction_system':
-        return { ...baseStyle, fill: '#9C27B0' }; // Purple rectangle
-      default:
-        return { ...baseStyle, fill: '#607D8B' };
-    }
+    const fill = NODE_FILL[node.type] ?? NODE_FILL.default;
+    // `model` renders as a rounded rectangle; the other shapes take no radius.
+    return node.type === 'model'
+      ? { ...baseStyle, fill, rx: 5, ry: 5 }
+      : { ...baseStyle, fill };
   };
 
-  // Edge styling based on coupling type
+  // Edge styling based on coupling type (dash patterns from EDGE_DASH above)
   const getEdgeStyle = (edge: CouplingEdge) => {
     const baseStyle = {
-      stroke: '#999',
+      stroke: EDGE_STROKE,
       'stroke-width': selectedEdge()?.id === edge.id ? 3 : 1,
       cursor: 'pointer',
       'marker-end': 'url(#arrowhead)',
       filter: hoveredElement() === edge.id ? 'brightness(1.5)' : 'none'
     };
-
-    switch (edge.type) {
-      case 'variable_map':
-        return { ...baseStyle, 'stroke-dasharray': 'none' };
-      case 'operator_compose':
-        return { ...baseStyle, 'stroke-dasharray': '5,5' };
-      case 'couple':
-        return { ...baseStyle, 'stroke-dasharray': '10,2' };
-      default:
-        return baseStyle;
-    }
+    return { ...baseStyle, 'stroke-dasharray': EDGE_DASH[edge.type] ?? 'none' };
   };
 
+  /**
+   * The caller's original node for an id. Selection state and `onNodeSelect`
+   * hand back the props object, never the simulation's mutable copy, so the
+   * copy's transient x/y/vx/… fields don't leak to consumers.
+   */
+  const originalNode = (id: string): ComponentNode | undefined =>
+    props.graph.nodes.find(n => n.id === id);
+
   // Event handlers
-  const handleNodeClick = (node: ComponentNode) => {
-    setSelectedNode(prev => prev?.id === node.id ? null : node);
+  const handleNodeClick = (node: GraphNode) => {
+    const original = originalNode(node.id) ?? node;
+    setSelectedNode(prev => prev?.id === original.id ? null : original);
     setSelectedEdge(null);
-    props.onNodeSelect?.(node);
+    props.onNodeSelect?.(original);
   };
 
   const handleEdgeClick = (edge: CouplingEdge) => {
@@ -217,15 +240,11 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
     endActiveDrag = handleMouseUp;
   };
 
-  // Zoom and pan functionality
+  // Zoom (wheel) — pan is not implemented, so only the scale factor changes.
   const handleWheel = (event: WheelEvent) => {
     event.preventDefault();
     const delta = event.deltaY > 0 ? 0.9 : 1.1;
-    const newTransform = transform();
-    setTransform({
-      ...newTransform,
-      k: Math.max(0.1, Math.min(3, newTransform.k * delta))
-    });
+    setTransform({ k: Math.max(0.1, Math.min(3, transform().k * delta)) });
   };
 
   // Lifecycle management
@@ -353,15 +372,15 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
                 cx={pos(node.id).x * scale()}
                 cy={pos(node.id).y * scale()}
                 r="2"
-                fill={getNodeStyle(node).fill as string}
+                fill={NODE_FILL[node.type] ?? NODE_FILL.default}
               />
             )}
           </For>
 
-          {/* Viewport indicator */}
+          {/* Viewport indicator (no panning, so the viewport is anchored at 0,0) */}
           <rect
-            x={-transform().x * scale()}
-            y={-transform().y * scale()}
+            x={0}
+            y={0}
             width={width() * scale() / transform().k}
             height={height() * scale() / transform().k}
             fill="none"
@@ -379,7 +398,7 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
         ref={(el) => (svgRef = el)}
         width={width()}
         height={height()}
-        style={`transform: translate(${transform().x}px, ${transform().y}px) scale(${transform().k})`}
+        style={`transform: scale(${transform().k})`}
         class="coupling-graph-svg"
       >
         {/* Arrow marker definition */}
@@ -394,7 +413,7 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
           >
             <polygon
               points="0 0, 10 3.5, 0 7"
-              fill="#999"
+              fill={EDGE_STROKE}
             />
           </marker>
         </defs>

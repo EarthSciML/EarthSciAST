@@ -6,24 +6,15 @@
  */
 
 import { Component, JSX } from 'solid-js';
+import { MathLayoutProps, buildClasses } from './shared';
 import './radical.css';
 
-export interface RadicalProps {
+export interface RadicalProps extends MathLayoutProps {
   /** The content under the radical */
   content: JSX.Element;
 
   /** The index of the radical (for nth roots, default is 2 for square root) */
   index?: JSX.Element;
-
-  /** Additional CSS classes to apply */
-  class?: string;
-
-  /** Callback for click events */
-  onClick?: (e: MouseEvent) => void;
-
-  /** Callback for hover events */
-  onMouseEnter?: (e: MouseEvent) => void;
-  onMouseLeave?: (e: MouseEvent) => void;
 }
 
 /**
@@ -31,12 +22,8 @@ export interface RadicalProps {
  * Uses CSS borders and pseudo-elements to create the radical symbol.
  */
 export const Radical: Component<RadicalProps> = (props) => {
-  const classes = () => {
-    const baseClasses = ['esm-radical'];
-    if (props.index) baseClasses.push('esm-radical-with-index');
-    if (props.class) baseClasses.push(props.class);
-    return baseClasses.join(' ');
-  };
+  const classes = () =>
+    buildClasses('esm-radical', !!props.index && 'esm-radical-with-index', props.class);
 
   return (
     <span
@@ -59,5 +46,3 @@ export const Radical: Component<RadicalProps> = (props) => {
     </span>
   );
 };
-
-export default Radical;

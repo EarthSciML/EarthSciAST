@@ -7,13 +7,19 @@
  * This is distinct from EquationEditor which shows "left = right" format.
  */
 
-import { Component, createSignal, createMemo, Show } from 'solid-js';
+import { Component, createSignal, Show } from 'solid-js';
 import type { Expression } from '@earthsciml/ast';
 import { ExpressionNode } from './ExpressionNode';
 import { ExpressionPalette } from './ExpressionPalette';
+import { createMergedHighlight } from './merged-highlight';
+import { replaceExpressionAtPath } from '../primitives/path-utils';
 
 export interface ExpressionEditorProps {
-  /** The initial expression to display and edit */
+  /**
+   * The expression to display and edit. This is a controlled prop: the parent
+   * owns the expression and receives edits through {@link onChange}. (The name
+   * is retained for API compatibility; it is not merely an initial value.)
+   */
   initialExpression: Expression;
 
   /** Callback when the expression is modified */
@@ -22,13 +28,19 @@ export interface ExpressionEditorProps {
   /** Currently highlighted variable equivalence class */
   highlightedVars?: Set<string>;
 
-  /** Whether the editor is in read-only mode */
+  /**
+   * Whether editing is permitted. Defaults to enabled; pass `false` for a
+   * read-only view (the inverse of the sibling editors' `readonly` prop).
+   */
   allowEditing?: boolean;
 
   /** Whether to show the expression palette */
   showPalette?: boolean;
 
-  /** Whether to show validation errors */
+  /**
+   * Reserved: whether to show a validation panel. Currently renders an empty
+   * container that a parent may populate; no validation is computed here yet.
+   */
   showValidation?: boolean;
 
   /** CSS class for styling */
@@ -42,21 +54,12 @@ export interface ExpressionEditorProps {
  * Main ExpressionEditor component
  */
 export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
-  const [currentExpression, setCurrentExpression] = createSignal<Expression>(props.initialExpression);
   const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
   const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
   const [showPalettePanel, setShowPalettePanel] = createSignal(props.showPalette ?? false);
 
-  // Create reactive highlighted vars set that includes hovered variable
-  const highlightedVars = createMemo(() => {
-    const baseHighlighted = props.highlightedVars || new Set<string>();
-    const hovered = hoveredVar();
-
-    if (hovered && !baseHighlighted.has(hovered)) {
-      return new Set([...baseHighlighted, hovered]);
-    }
-    return baseHighlighted;
-  });
+  // Base highlight set merged with the locally hovered variable.
+  const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar);
 
   // Handle selection of expression nodes
   const handleSelect = (path: (string | number)[]) => {
@@ -68,29 +71,14 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
     setHoveredVar(varName);
   };
 
-  // Handle replacement of expression parts
+  // Handle replacement of expression parts. Paths are pure expression-dialect
+  // (rooted at the expression itself), so the shared path-utils replace applies
+  // directly. Controlled: the new value flows out via onChange, not internal
+  // state.
   const handleReplace = (path: (string | number)[], newExpr: Expression) => {
     if (props.allowEditing === false) return;
 
-    let updatedExpression: Expression;
-
-    if (path.length === 0) {
-      // Replacing the root expression
-      updatedExpression = newExpr;
-    } else {
-      // Clone the expression and update the specified path
-      updatedExpression = structuredClone(currentExpression());
-
-      // Navigate to the path and replace the expression
-      let current: any = updatedExpression;
-      for (let i = 0; i < path.length - 1; i++) {
-        current = current[path[i]];
-      }
-
-      current[path[path.length - 1]] = newExpr;
-    }
-
-    setCurrentExpression(updatedExpression);
+    const updatedExpression = replaceExpressionAtPath(props.initialExpression, path, newExpr);
     props.onChange?.(updatedExpression);
   };
 
@@ -119,9 +107,9 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
         {/* Main expression display */}
         <div class="expression-main">
           <ExpressionNode
-            expr={currentExpression()}
+            expr={props.initialExpression}
             path={[]}
-            highlightedVars={() => highlightedVars()}
+            highlightedVars={highlightedVars()}
             onHoverVar={handleHoverVar}
             onSelect={handleSelect}
             onReplace={handleReplace}
@@ -153,12 +141,10 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
         </div>
       </Show>
 
-      {/* Optional validation display */}
+      {/* Reserved validation slot: an empty container a parent may populate.
+          No validation is computed here yet (see showValidation prop doc). */}
       <Show when={props.showValidation}>
-        <div class="expression-validation">
-          {/* Placeholder for validation errors - would be populated by parent */}
-          {/* This could show syntax errors, type mismatches, undefined variables, etc. */}
-        </div>
+        <div class="expression-validation" />
       </Show>
     </div>
   );

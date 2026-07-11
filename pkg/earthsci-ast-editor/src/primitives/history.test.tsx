@@ -18,9 +18,10 @@ describe('History Management', () => {
     vi.useRealTimers();
   });
 
+  // Real-schema fixture (`esm`, `metadata`, `models`, `reaction_systems`,
+  // `coupling`) so history snapshots round-trip genuinely conformant files.
   const createTestFile = (name: string): EsmFile => ({
     esm: "0.8.0",
-    schema_version: "1.0",
     metadata: {
       name,
       description: "Test model",
@@ -28,7 +29,8 @@ describe('History Management', () => {
       created: new Date().toISOString(),
       modified: new Date().toISOString()
     },
-    components: {},
+    models: {},
+    reaction_systems: {},
     coupling: []
   });
 

@@ -71,22 +71,18 @@ export interface ValidationSignals {
 }
 
 /**
- * Get severity level for a validation error
+ * Severity by error category: schema and structural errors are hard errors;
+ * unit checks surface as warnings.
  */
-function getErrorSeverity(_error: ValidationError, type: 'schema' | 'structural' | 'unit'): 'error' | 'warning' {
-  // Unit errors are typically warnings
-  if (type === 'unit') {
-    return 'warning';
-  }
+const SEVERITY_BY_TYPE: Record<'schema' | 'structural' | 'unit', 'error' | 'warning'> = {
+  schema: 'error',
+  structural: 'error',
+  unit: 'warning'
+};
 
-  // Schema errors are always errors
-  if (type === 'schema') {
-    return 'error';
-  }
-
-  // Structural errors could be warnings in some cases
-  // For now, treating all as errors, but could be enhanced based on error code
-  return 'error';
+/** Get severity level for a validation error category. */
+function getErrorSeverity(type: 'schema' | 'structural' | 'unit'): 'error' | 'warning' {
+  return SEVERITY_BY_TYPE[type];
 }
 
 /** Empty (valid) validation result */
@@ -211,7 +207,7 @@ export function createValidationSignals(
     (result.schema_errors || []).forEach(error => {
       errors.push({
         ...error,
-        severity: getErrorSeverity(error, 'schema'),
+        severity: getErrorSeverity('schema'),
         type: 'schema',
         highlighted: highlighted === error.path
       });
@@ -221,7 +217,7 @@ export function createValidationSignals(
     (result.structural_errors || []).forEach(error => {
       errors.push({
         ...error,
-        severity: getErrorSeverity(error, 'structural'),
+        severity: getErrorSeverity('structural'),
         type: 'structural',
         highlighted: highlighted === error.path
       });
@@ -240,7 +236,7 @@ export function createValidationSignals(
       };
       errors.push({
         ...asError,
-        severity: getErrorSeverity(asError, 'unit'),
+        severity: getErrorSeverity('unit'),
         type: 'unit',
         highlighted: highlighted === path
       });

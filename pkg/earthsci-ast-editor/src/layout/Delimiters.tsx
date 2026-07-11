@@ -5,31 +5,22 @@
  * Supports various delimiter types (parentheses, brackets, braces) with CSS scaling.
  */
 
-import { Component, JSX, createEffect } from 'solid-js';
+import { Component, JSX, createEffect, onCleanup } from 'solid-js';
+import { MathLayoutProps, buildClasses } from './shared';
 import './delimiters.css';
 
-export interface DelimitersProps {
+export interface DelimitersProps extends MathLayoutProps {
   /** The content to wrap with delimiters */
   content: JSX.Element;
 
   /** Type of delimiters to use */
   type?: 'parentheses' | 'brackets' | 'braces' | 'absolute' | 'angle';
 
-  /** Additional CSS classes to apply */
-  class?: string;
-
   /** Whether delimiters should auto-size based on content (default true) */
   autoSize?: boolean;
 
   /** Manual size override ('small', 'medium', 'large', 'xlarge') */
   size?: 'small' | 'medium' | 'large' | 'xlarge';
-
-  /** Callback for click events */
-  onClick?: (e: MouseEvent) => void;
-
-  /** Callback for hover events */
-  onMouseEnter?: (e: MouseEvent) => void;
-  onMouseLeave?: (e: MouseEvent) => void;
 }
 
 /**
@@ -43,13 +34,14 @@ export const Delimiters: Component<DelimitersProps> = (props) => {
   const autoSize = () => props.autoSize !== false;
   const manualSize = () => props.size;
 
-  const classes = () => {
-    const baseClasses = ['esm-delimiters', `esm-delimiters-${delimiterType()}`];
-    if (autoSize()) baseClasses.push('esm-delimiters-auto');
-    if (manualSize()) baseClasses.push(`esm-delimiters-${manualSize()}`);
-    if (props.class) baseClasses.push(props.class);
-    return baseClasses.join(' ');
-  };
+  const classes = () =>
+    buildClasses(
+      'esm-delimiters',
+      `esm-delimiters-${delimiterType()}`,
+      autoSize() && 'esm-delimiters-auto',
+      manualSize() && `esm-delimiters-${manualSize()}`,
+      props.class,
+    );
 
   const getDelimiterChars = () => {
     switch (delimiterType()) {
@@ -92,7 +84,7 @@ export const Delimiters: Component<DelimitersProps> = (props) => {
       };
 
       // Initial sizing
-      setTimeout(updateSize, 0);
+      const initialTimer = setTimeout(updateSize, 0);
 
       // Set up ResizeObserver for dynamic sizing
       const observer = new ResizeObserver(updateSize);
@@ -101,12 +93,15 @@ export const Delimiters: Component<DelimitersProps> = (props) => {
         observer.observe(contentElement);
       }
 
-      // Cleanup
-      return () => observer.disconnect();
+      // Cleanup. Solid ignores values returned from createEffect (unlike React's
+      // useEffect), so cleanup MUST be registered via onCleanup or the observer
+      // leaks on every effect re-run and on disposal.
+      onCleanup(() => {
+        clearTimeout(initialTimer);
+        observer.disconnect();
+      });
     }
   });
-
-  const { left, right } = getDelimiterChars();
 
   return (
     <span
@@ -119,16 +114,14 @@ export const Delimiters: Component<DelimitersProps> = (props) => {
       aria-label={`${delimiterType()} delimiters`}
     >
       <span class="esm-delimiters-left">
-        {left}
+        {getDelimiterChars().left}
       </span>
       <span class="esm-delimiters-content">
         {props.content}
       </span>
       <span class="esm-delimiters-right">
-        {right}
+        {getDelimiterChars().right}
       </span>
     </span>
   );
 };
-
-export default Delimiters;

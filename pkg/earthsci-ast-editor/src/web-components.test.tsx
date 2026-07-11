@@ -1,18 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { registerWebComponents } from './web-components';
+import { installCustomElementsMock } from './test-setup';
 import type { EsmFile, Expression, Model, ReactionSystem } from '@earthsciml/ast';
 
 describe('Web Components', () => {
   beforeEach(() => {
-    // Clear any existing custom elements
-    Object.defineProperty(window, 'customElements', {
-      value: {
-        define: vi.fn(),
-        get: vi.fn(),
-        whenDefined: vi.fn().mockResolvedValue(undefined)
-      },
-      writable: true
-    });
+    // Install a fresh customElements stub (define/get/whenDefined) for each test.
+    installCustomElementsMock();
   });
 
   describe('registerWebComponents', () => {

@@ -6,7 +6,7 @@
  * and scoped reference normalization for different highlighting modes.
  */
 
-import { createContext, useContext, createSignal, createMemo, Accessor, Setter } from 'solid-js';
+import { createContext, useContext, createSignal, createMemo, Accessor, Setter, JSX } from 'solid-js';
 import type { EsmFile, CouplingEntry } from '@earthsciml/ast';
 
 // Types for the highlighting context
@@ -72,30 +72,19 @@ class UnionFind {
     }
   }
 
-  // Get all variables in the same equivalence class
-  getEquivalenceClass(variable: string): Set<string> {
-    const root = this.find(variable);
-    const equivalentVars = new Set<string>();
-
-    // Find all variables with the same root
-    for (const var_ of this.parent.keys()) {
-      if (this.find(var_) === root) {
-        equivalentVars.add(var_);
-      }
-    }
-
-    return equivalentVars;
-  }
-
-  // Get all equivalence classes
+  // Get all equivalence classes in a single grouping pass (each variable is
+  // routed to its root's set once — O(n·α(n)) rather than O(n²)).
   getAllEquivalenceClasses(): Map<string, Set<string>> {
     const classes = new Map<string, Set<string>>();
 
     for (const variable of this.parent.keys()) {
       const root = this.find(variable);
-      if (!classes.has(root)) {
-        classes.set(root, this.getEquivalenceClass(variable));
+      let members = classes.get(root);
+      if (!members) {
+        members = new Set<string>();
+        classes.set(root, members);
       }
+      members.add(variable);
     }
 
     return classes;
@@ -197,7 +186,7 @@ const HighlightContext = createContext<HighlightContextValue>();
  * Provider component props
  */
 export interface HighlightProviderProps {
-  children: any;
+  children: JSX.Element;
   file: EsmFile;
   currentModelContext?: string;
   scopingMode?: ScopingMode;
@@ -244,21 +233,10 @@ function shouldIncludeInHighlighting(
   scopingMode: ScopingMode,
   _currentModelContext?: string
 ): boolean {
-  switch (scopingMode) {
-    case 'equation':
-      // Only highlight exact literal matches within the current equation
-      return variable === hoveredVariable;
-
-    case 'model':
-      // In model mode, include all equivalent variables regardless of their model context
-      // The scoping only affects the initial normalization, but equivalent variables
-      // from other models should still be highlighted to show coupling relationships
-      return true;
-
-    case 'file':
-      // Highlight across all models with equivalence resolution
-      return true;
-  }
+  // Only 'equation' mode restricts to exact literal matches within the current
+  // equation. 'model' and 'file' both include every equivalent variable (so
+  // coupling relationships across models stay highlighted).
+  return scopingMode === 'equation' ? variable === hoveredVariable : true;
 }
 
 /**
@@ -296,7 +274,7 @@ export function createHighlightContext(
     if (!hovered) return new Set<string>();
 
     const equiv = equivalences();
-    const modelContext = currentModelContext === undefined ? undefined : access(currentModelContext);
+    const modelContext = access(currentModelContext);
     const mode = access(scopingMode);
     const normalizedRefs = normalizeScopedReference(hovered, modelContext, mode);
     const allEquivalent = new Set<string>();

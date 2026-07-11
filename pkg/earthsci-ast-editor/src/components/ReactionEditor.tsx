@@ -15,11 +15,42 @@
  * dialogs.
  */
 
-import { Component, createSignal, createMemo, For, Show } from 'solid-js';
+import { Component, createSignal, For, Show } from 'solid-js';
 import type { ReactionSystem, Reaction, Species, Parameter, Expression } from '@earthsciml/ast';
 import { ExpressionNode } from './ExpressionNode';
 import { InlineForm } from './InlineForm';
+import { CollapsiblePanel } from './CollapsiblePanel';
+import { EmptyState } from './EmptyState';
+import { createMergedHighlight } from './merged-highlight';
+import { replaceAtDocumentPath } from './document-path';
 import { renderChemicalName } from '../primitives/chemical-formula';
+
+/**
+ * Coerce a plain `Reaction[]` into the schema's non-empty-tuple `reactions`
+ * type. The editor UI permits a transient empty list — it renders an explicit
+ * empty state and an "Add first reaction" affordance — so min-1 schema
+ * conformance is enforced at save/validate time, not on every edit. This is the
+ * single place that bridges that gap, replacing three scattered ad-hoc casts.
+ */
+function asReactions(reactions: Reaction[]): ReactionSystem['reactions'] {
+  return reactions as ReactionSystem['reactions'];
+}
+
+/**
+ * Render a substrate/product list in chemical notation (e.g. `2NO + O₃`).
+ * Shared by the reactants and products sides, which are byte-identical.
+ */
+function renderSpeciesList(entries: Reaction['substrates'] | Reaction['products']): string {
+  if (!entries) return '';
+
+  return entries
+    .map((entry) => {
+      const formula = renderChemicalName(entry.species);
+      const stoichiometry = entry.stoichiometry ?? 1;
+      return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`;
+    })
+    .join(' + ');
+}
 
 export interface ReactionEditorProps {
   /** The reaction system to display and edit */
@@ -65,44 +96,8 @@ const ReactionItem: Component<{
   const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
   const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
 
-  // Create reactive highlighted vars set
-  const highlightedVars = createMemo(() => {
-    const baseHighlighted = props.highlightedVars || new Set<string>();
-    const hovered = hoveredVar();
-
-    if (hovered && !baseHighlighted.has(hovered)) {
-      return new Set([...baseHighlighted, hovered]);
-    }
-    return baseHighlighted;
-  });
-
-  // Render substrates (reactants) with chemical notation
-  const renderSubstrates = () => {
-    if (!props.reaction.substrates) return '';
-
-    return props.reaction.substrates
-      .map((substrate) => {
-        const formula = renderChemicalName(substrate.species);
-        const stoichiometry = substrate.stoichiometry !== undefined ? substrate.stoichiometry : 1;
-
-        return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`;
-      })
-      .join(' + ');
-  };
-
-  // Render products with chemical notation
-  const renderProducts = () => {
-    if (!props.reaction.products) return '';
-
-    return props.reaction.products
-      .map((product) => {
-        const formula = renderChemicalName(product.species);
-        const stoichiometry = product.stoichiometry !== undefined ? product.stoichiometry : 1;
-
-        return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`;
-      })
-      .join(' + ');
-  };
+  // Base highlight set merged with the locally hovered variable.
+  const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar);
 
   // Handle rate expression editing
   const handleRateClick = () => {
@@ -118,6 +113,16 @@ const ReactionItem: Component<{
     props.onEditReaction(props.index, newReaction);
   };
 
+  // Apply an edit from anywhere in the rate subtree. Paths are rooted at the
+  // reaction (`['rate']`, `['rate', 'args', 0]`, …); nested edits previously
+  // fell through a `path === ['rate']` guard and were silently dropped.
+  const handleReplace = (path: (string | number)[], newExpr: Expression) => {
+    if (props.readonly || !props.onEditReaction) return;
+
+    const newReaction = replaceAtDocumentPath(props.reaction, path, newExpr);
+    props.onEditReaction(props.index, newReaction);
+  };
+
   const handleRemove = () => {
     if (!props.readonly) {
       props.onRemoveReaction?.(props.index);
@@ -129,7 +134,7 @@ const ReactionItem: Component<{
       <div class="reaction-header">
         <div class="reaction-equation">
           {/* Substrates (reactants) */}
-          <span class="reactants">{renderSubstrates()}</span>
+          <span class="reactants">{renderSpeciesList(props.reaction.substrates)}</span>
 
           {/* Arrow with rate */}
           <span class="reaction-arrow">
@@ -144,7 +149,7 @@ const ReactionItem: Component<{
           </span>
 
           {/* Products */}
-          <span class="products">{renderProducts()}</span>
+          <span class="products">{renderSpeciesList(props.reaction.products)}</span>
         </div>
 
         <div class="reaction-controls">
@@ -196,15 +201,10 @@ const ReactionItem: Component<{
               <ExpressionNode
                 expr={props.reaction.rate!}
                 path={['rate']}
-                highlightedVars={() => highlightedVars()}
+                highlightedVars={highlightedVars()}
                 onHoverVar={setHoveredVar}
                 onSelect={setSelectedPath}
-                onReplace={(path, newExpr) => {
-                  // Only update if the path is for the rate expression
-                  if (path.length === 1 && path[0] === 'rate') {
-                    handleRateChange(newExpr);
-                  }
-                }}
+                onReplace={handleReplace}
                 selectedPath={selectedPath()}
               />
             </Show>
@@ -255,10 +255,13 @@ const SpeciesPanel: Component<{
   };
 
   return (
-    <div class="species-panel">
-      <div class="panel-header" onClick={() => setIsExpanded(!isExpanded())}>
-        <span class={`expand-icon ${isExpanded() ? 'expanded' : ''}`}>▶</span>
-        <h3>Species ({(props.species || []).length})</h3>
+    <CollapsiblePanel
+      panelClass="species-panel"
+      contentClass="species-content"
+      expanded={isExpanded()}
+      onToggle={() => setIsExpanded(!isExpanded())}
+      title={<h3>Species ({(props.species || []).length})</h3>}
+      actions={
         <Show when={!props.readonly}>
           <button
             class="add-btn"
@@ -269,11 +272,9 @@ const SpeciesPanel: Component<{
             +
           </button>
         </Show>
-      </div>
-
-      <Show when={isExpanded()}>
-        <div class="species-content">
-          <Show when={isAdding()}>
+      }
+    >
+      <Show when={isAdding()}>
             <InlineForm
               title="Add species"
               fields={[
@@ -339,20 +340,16 @@ const SpeciesPanel: Component<{
             )}
           </For>
 
-          <Show when={(props.species || []).length === 0 && !isAdding()}>
-            <div class="empty-state">
-              <div class="empty-icon">🧪</div>
-              <div class="empty-text">No species defined</div>
-              <Show when={!props.readonly}>
-                <button class="add-first-btn" onClick={startAdding}>
-                  Add first species
-                </button>
-              </Show>
-            </div>
+      <Show when={(props.species || []).length === 0 && !isAdding()}>
+        <EmptyState icon="🧪" text="No species defined">
+          <Show when={!props.readonly}>
+            <button class="add-first-btn" onClick={startAdding}>
+              Add first species
+            </button>
           </Show>
-        </div>
+        </EmptyState>
       </Show>
-    </div>
+    </CollapsiblePanel>
   );
 };
 
@@ -413,10 +410,13 @@ const ParametersPanel: Component<{
   };
 
   return (
-    <div class="parameters-panel">
-      <div class="panel-header" onClick={() => setIsExpanded(!isExpanded())}>
-        <span class={`expand-icon ${isExpanded() ? 'expanded' : ''}`}>▶</span>
-        <h3>Parameters ({(props.parameters || []).length})</h3>
+    <CollapsiblePanel
+      panelClass="parameters-panel"
+      contentClass="parameters-content"
+      expanded={isExpanded()}
+      onToggle={() => setIsExpanded(!isExpanded())}
+      title={<h3>Parameters ({(props.parameters || []).length})</h3>}
+      actions={
         <Show when={!props.readonly}>
           <button
             class="add-btn"
@@ -427,11 +427,9 @@ const ParametersPanel: Component<{
             +
           </button>
         </Show>
-      </div>
-
-      <Show when={isExpanded()}>
-        <div class="parameters-content">
-          <Show when={isAdding()}>
+      }
+    >
+      <Show when={isAdding()}>
             <InlineForm
               title="Add parameter"
               fields={[
@@ -502,20 +500,16 @@ const ParametersPanel: Component<{
             )}
           </For>
 
-          <Show when={(props.parameters || []).length === 0 && !isAdding()}>
-            <div class="empty-state">
-              <div class="empty-icon">⚗️</div>
-              <div class="empty-text">No parameters defined</div>
-              <Show when={!props.readonly}>
-                <button class="add-first-btn" onClick={startAdding}>
-                  Add first parameter
-                </button>
-              </Show>
-            </div>
+      <Show when={(props.parameters || []).length === 0 && !isAdding()}>
+        <EmptyState icon="⚗️" text="No parameters defined">
+          <Show when={!props.readonly}>
+            <button class="add-first-btn" onClick={startAdding}>
+              Add first parameter
+            </button>
           </Show>
-        </div>
+        </EmptyState>
       </Show>
-    </div>
+    </CollapsiblePanel>
   );
 };
 
@@ -531,27 +525,36 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
     props.onReactionSystemChange(newReactionSystem);
   };
 
+  // First `R{n}` id not already taken. Using `reactions.length + 1` collides
+  // after a deletion (e.g. delete R2 of R1/R2/R3 → next id R3, already in use).
+  const nextReactionId = (): string => {
+    const existing = new Set((props.reactionSystem.reactions || []).map((r) => r.id));
+    let n = 1;
+    while (existing.has(`R${n}`)) n++;
+    return `R${n}`;
+  };
+
   // Reaction management handlers
   const handleAddReaction = () => {
     const newReaction: Reaction = {
-      id: `R${(props.reactionSystem.reactions || []).length + 1}`,
+      id: nextReactionId(),
       substrates: [{ species: 'A', stoichiometry: 1 }],
       products: [{ species: 'B', stoichiometry: 1 }],
       rate: 'k_rate'
     };
     const newReactions = [...(props.reactionSystem.reactions || []), newReaction];
-    handleReactionSystemChange({ reactions: newReactions as ReactionSystem['reactions'] });
+    handleReactionSystemChange({ reactions: asReactions(newReactions) });
   };
 
   const handleEditReaction = (index: number, reaction: Reaction) => {
     const newReactions = [...(props.reactionSystem.reactions || [])];
     newReactions[index] = reaction;
-    handleReactionSystemChange({ reactions: newReactions as unknown as ReactionSystem['reactions'] });
+    handleReactionSystemChange({ reactions: asReactions(newReactions) });
   };
 
   const handleRemoveReaction = (index: number) => {
     const newReactions = (props.reactionSystem.reactions || []).filter((_, i) => i !== index);
-    handleReactionSystemChange({ reactions: newReactions as unknown as ReactionSystem['reactions'] });
+    handleReactionSystemChange({ reactions: asReactions(newReactions) });
   };
 
   // Species management handlers
@@ -660,15 +663,13 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
             </For>
 
             <Show when={(props.reactionSystem.reactions || []).length === 0}>
-              <div class="empty-state">
-                <div class="empty-icon">⚛️</div>
-                <div class="empty-text">No reactions defined</div>
+              <EmptyState icon="⚛️" text="No reactions defined">
                 <Show when={!props.readonly}>
                   <button class="add-first-btn" onClick={handleAddReaction}>
                     Add first reaction
                   </button>
                 </Show>
-              </div>
+              </EmptyState>
             </Show>
           </div>
         </div>

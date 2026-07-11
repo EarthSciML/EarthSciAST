@@ -17,9 +17,11 @@ describe('AST Store', () => {
     }
     vi.useRealTimers();
   });
+  // Fixture shaped against the REAL ESM schema (`esm`, `metadata`, `models`,
+  // `reaction_systems`, `coupling`) — and structurally valid, so it exercises
+  // the store's core-backed validation as a genuinely conformant file.
   const createTestFile = (name: string = "Test Model"): EsmFile => ({
     esm: "0.8.0",
-    schema_version: "1.0",
     metadata: {
       name,
       description: "Test model",
@@ -27,24 +29,30 @@ describe('AST Store', () => {
       created: new Date().toISOString(),
       modified: new Date().toISOString()
     },
-    components: {
+    models: {
       "Chemistry": {
-        type: "model",
         variables: {
           "O3": {
             type: "state",
             units: "mol/mol",
             description: "Ozone concentration"
+          },
+          "k1": {
+            type: "parameter",
+            units: "1/s",
+            default: 0.001,
+            description: "Ozone loss rate constant"
           }
         },
         equations: [
           {
-            expression: "-k1 * O3",
-            description: "Ozone loss"
+            lhs: { op: "D", args: ["O3"], wrt: "t" },
+            rhs: { op: "*", args: [{ op: "-", args: ["k1"] }, "O3"] }
           }
         ]
       }
     },
+    reaction_systems: {},
     coupling: []
   });
 
@@ -54,9 +62,10 @@ describe('AST Store', () => {
         cleanup = dispose;
         const store = createAstStore();
 
-        expect(store.file.schema_version).toBe("1.0");
+        expect(store.file.esm).toBe("0.8.0");
         expect(store.file.metadata.name).toBe("Untitled Model");
-        expect(store.file.components).toEqual({});
+        expect(store.file.models).toEqual({});
+        expect(store.file.reaction_systems).toEqual({});
         expect(store.file.coupling).toEqual([]);
         expect(store.isValid()).toBe(true);
       });
@@ -68,7 +77,7 @@ describe('AST Store', () => {
         const store = createAstStore({ initialFile });
 
         expect(store.file.metadata.name).toBe("My Model");
-        expect(store.file.components).toHaveProperty("Chemistry");
+        expect(store.file.models).toHaveProperty("Chemistry");
 
         dispose();
       });
@@ -79,8 +88,8 @@ describe('AST Store', () => {
         const store = createAstStore({ initialFile: createTestFile() });
 
         expect(store.getPath(['metadata', 'name'])).toBe("Test Model");
-        expect(store.getPath(['schema_version'])).toBe("1.0");
-        expect(store.getPath(['components', 'Chemistry', 'type'])).toBe("model");
+        expect(store.getPath(['esm'])).toBe("0.8.0");
+        expect(store.getPath(['models', 'Chemistry', 'variables', 'O3', 'type'])).toBe("state");
         expect(store.getPath(['nonexistent'])).toBeUndefined();
 
         dispose();
@@ -96,13 +105,13 @@ describe('AST Store', () => {
         expect(store.file.metadata.name).toBe("Updated Model");
 
         // Set nested property
-        store.setPath(['components', 'Chemistry', 'description'], "Updated chemistry");
-        expect((store.file.components as any).Chemistry.description).toBe("Updated chemistry");
+        store.setPath(['models', 'Chemistry', 'variables', 'O3', 'description'], "Updated ozone");
+        expect((store.file.models as any).Chemistry.variables.O3.description).toBe("Updated ozone");
 
         // Set new property
-        store.setPath(['components', 'NewComponent'], { type: "data_loader" });
-        expect(store.file.components).toHaveProperty("NewComponent");
-        expect((store.file.components as any).NewComponent.type).toBe("data_loader");
+        store.setPath(['models', 'NewModel'], { variables: {}, equations: [] });
+        expect(store.file.models).toHaveProperty("NewModel");
+        expect((store.file.models as any).NewModel.equations).toEqual([]);
 
         dispose();
       });
@@ -132,15 +141,15 @@ describe('AST Store', () => {
         const store = createAstStore();
 
         // Set deeply nested path that doesn't exist
-        store.setPath(['components', 'NewModel', 'variables', 'CO2'], {
+        store.setPath(['models', 'NewModel', 'variables', 'CO2'], {
           type: "state",
           units: "ppmv"
         });
 
-        expect(store.file.components).toHaveProperty("NewModel");
-        expect((store.file.components as any).NewModel).toHaveProperty("variables");
-        expect((store.file.components as any).NewModel.variables).toHaveProperty("CO2");
-        expect((store.file.components as any).NewModel.variables.CO2.units).toBe("ppmv");
+        expect(store.file.models).toHaveProperty("NewModel");
+        expect((store.file.models as any).NewModel).toHaveProperty("variables");
+        expect((store.file.models as any).NewModel.variables).toHaveProperty("CO2");
+        expect((store.file.models as any).NewModel.variables.CO2.units).toBe("ppmv");
 
         dispose();
       });
@@ -226,19 +235,19 @@ describe('AST Store', () => {
           historyConfig: { debounceMs: 0, registerKeyboardShortcuts: false }
         });
 
-        expect(store.file.components).not.toHaveProperty("NewComponent");
+        expect(store.file.models).not.toHaveProperty("NewModel");
 
         // Add a new key after the initial snapshot
-        store.setPath(['components', 'NewComponent'], { type: "data_loader" });
-        expect(store.file.components).toHaveProperty("NewComponent");
+        store.setPath(['models', 'NewModel'], { variables: {}, equations: [] });
+        expect(store.file.models).toHaveProperty("NewModel");
         vi.advanceTimersByTime(10);
 
         // Undo must remove the added key (requires reconcile-based restore;
         // Solid's default merging setter would leave the key behind)
         store.history.undo();
-        expect(store.file.components).not.toHaveProperty("NewComponent");
-        expect((store.file.components as any).NewComponent).toBeUndefined();
-        expect(store.file.components).toHaveProperty("Chemistry");
+        expect(store.file.models).not.toHaveProperty("NewModel");
+        expect((store.file.models as any).NewModel).toBeUndefined();
+        expect(store.file.models).toHaveProperty("Chemistry");
       });
     });
 
@@ -252,7 +261,7 @@ describe('AST Store', () => {
         expect(validStore.isValid()).toBe(true);
         expect(validStore.validationErrors()).toHaveLength(0);
 
-        // Invalid file missing metadata
+        // Invalid file missing metadata — the core schema requires `metadata`
         const invalidFile = { ...createTestFile() };
         delete (invalidFile as any).metadata;
 
@@ -261,7 +270,7 @@ describe('AST Store', () => {
           enableValidation: true
         });
         expect(invalidStore.isValid()).toBe(false);
-        expect(invalidStore.validationErrors()).toContain("Missing metadata");
+        expect(invalidStore.validationErrors().some(e => e.includes("metadata"))).toBe(true);
 
         dispose();
       });
@@ -276,10 +285,10 @@ describe('AST Store', () => {
 
         expect(store.isValid()).toBe(true);
 
-        // Make file invalid by removing required field
+        // Make file invalid by nulling a required field
         store.setPath(['metadata'], null);
         expect(store.isValid()).toBe(false);
-        expect(store.validationErrors()).toContain("Missing metadata");
+        expect(store.validationErrors().length).toBeGreaterThan(0);
 
         dispose();
       });
@@ -342,30 +351,28 @@ describe('AST Store', () => {
       expect(CommonPaths.metadataDescription()).toEqual(['metadata', 'description']);
     });
 
-    it('provides component paths', () => {
-      expect(CommonPaths.components()).toEqual(['components']);
-      expect(CommonPaths.component('Chemistry')).toEqual(['components', 'Chemistry']);
-      expect(CommonPaths.componentType('Chemistry')).toEqual(['components', 'Chemistry', 'type']);
+    it('provides model paths', () => {
+      expect(CommonPaths.models()).toEqual(['models']);
+      expect(CommonPaths.model('Chemistry')).toEqual(['models', 'Chemistry']);
+      expect(CommonPaths.modelVariables('Chemistry')).toEqual(['models', 'Chemistry', 'variables']);
+      expect(CommonPaths.modelVariable('Chemistry', 'O3')).toEqual(['models', 'Chemistry', 'variables', 'O3']);
+      expect(CommonPaths.modelEquations('Chemistry')).toEqual(['models', 'Chemistry', 'equations']);
+      expect(CommonPaths.modelEquation('Chemistry', 2)).toEqual(['models', 'Chemistry', 'equations', 2]);
+    });
+
+    it('provides reaction system paths', () => {
+      expect(CommonPaths.reactionSystems()).toEqual(['reaction_systems']);
+      expect(CommonPaths.reactionSystem('Reactions')).toEqual(['reaction_systems', 'Reactions']);
+      expect(CommonPaths.reactionSpecies('Reactions')).toEqual(['reaction_systems', 'Reactions', 'species']);
+      expect(CommonPaths.reactionSpeciesEntry('Reactions', 'O3')).toEqual(['reaction_systems', 'Reactions', 'species', 'O3']);
+      expect(CommonPaths.reactions('Reactions')).toEqual(['reaction_systems', 'Reactions', 'reactions']);
+      expect(CommonPaths.reaction('Reactions', 0)).toEqual(['reaction_systems', 'Reactions', 'reactions', 0]);
     });
 
     it('provides coupling paths', () => {
       expect(CommonPaths.coupling()).toEqual(['coupling']);
       expect(CommonPaths.couplingEntry(0)).toEqual(['coupling', 0]);
       expect(CommonPaths.couplingEntry(5)).toEqual(['coupling', 5]);
-    });
-
-    it('provides model-specific paths', () => {
-      expect(CommonPaths.modelVariables('Chemistry')).toEqual(['components', 'Chemistry', 'variables']);
-      expect(CommonPaths.modelVariable('Chemistry', 'O3')).toEqual(['components', 'Chemistry', 'variables', 'O3']);
-      expect(CommonPaths.modelEquations('Chemistry')).toEqual(['components', 'Chemistry', 'equations']);
-      expect(CommonPaths.modelEquation('Chemistry', 2)).toEqual(['components', 'Chemistry', 'equations', 2]);
-    });
-
-    it('provides reaction system paths', () => {
-      expect(CommonPaths.reactionSpecies('Reactions')).toEqual(['components', 'Reactions', 'species']);
-      expect(CommonPaths.reactionSpeciesEntry('Reactions', 'O3')).toEqual(['components', 'Reactions', 'species', 'O3']);
-      expect(CommonPaths.reactions('Reactions')).toEqual(['components', 'Reactions', 'reactions']);
-      expect(CommonPaths.reaction('Reactions', 0)).toEqual(['components', 'Reactions', 'reactions', 0]);
     });
   });
 });

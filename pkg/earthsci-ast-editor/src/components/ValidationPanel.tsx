@@ -31,30 +31,31 @@ export interface ValidationPanelProps {
 /** A validation item with UI metadata */
 interface ValidationItem extends ValidationError {
   severity: 'error' | 'warning';
-  type: 'schema' | 'structural' | 'unit';
 }
 
 /**
  * One titled, clickable list of validation items. Rendered once per
- * category (schema errors, structural errors, warnings).
+ * category (schema errors, structural errors, warnings). The section's
+ * severity is taken from its items (each list is homogeneous), so the item's
+ * own `severity` is the single source of truth.
  */
 const ErrorSection: Component<{
   title: string;
   items: ValidationItem[];
-  severity: 'error' | 'warning';
   onErrorClick: (error: ValidationError) => void;
 }> = (props) => {
+  const sectionSeverity = () => props.items[0]?.severity ?? 'error';
   return (
     <Show when={props.items.length > 0}>
       <div class="error-section">
-        <h4 class={`error-section-title ${props.severity === 'warning' ? 'warning-title' : 'error-title'}`}>
+        <h4 class={`error-section-title ${sectionSeverity() === 'warning' ? 'warning-title' : 'error-title'}`}>
           {props.title} ({props.items.length})
         </h4>
         <div class="error-list">
           <For each={props.items}>
             {(error) => (
               <div
-                class={`error-item ${props.severity === 'warning' ? 'warning-severity' : 'error-severity'} clickable`}
+                class={`error-item ${error.severity === 'warning' ? 'warning-severity' : 'error-severity'} clickable`}
                 onClick={() => props.onErrorClick(error)}
                 role="button"
                 tabIndex={0}
@@ -66,7 +67,7 @@ const ErrorSection: Component<{
                 }}
               >
                 <div class="error-header">
-                  <span class="error-icon">{props.severity === 'warning' ? '🟡' : '🔴'}</span>
+                  <span class="error-icon">{error.severity === 'warning' ? '🟡' : '🔴'}</span>
                   <span class="error-code">{error.code}</span>
                   <span class="error-path" title={`Path: ${error.path}`}>
                     {error.path || '$'}
@@ -107,16 +108,14 @@ export const ValidationPanel: Component<ValidationPanelProps> = (props) => {
   const schemaErrors = createMemo((): ValidationItem[] =>
     (validationResult().schema_errors || []).map(error => ({
       ...error,
-      severity: 'error' as const,
-      type: 'schema' as const
+      severity: 'error' as const
     }))
   );
 
   const structuralErrors = createMemo((): ValidationItem[] =>
     (validationResult().structural_errors || []).map(error => ({
       ...error,
-      severity: 'error' as const,
-      type: 'structural' as const
+      severity: 'error' as const
     }))
   );
 
@@ -129,8 +128,7 @@ export const ValidationPanel: Component<ValidationPanelProps> = (props) => {
         message: warning.message,
         code: 'unit_warning',
         details,
-        severity: 'warning' as const,
-        type: 'unit' as const
+        severity: 'warning' as const
       };
     })
   );
@@ -208,21 +206,18 @@ export const ValidationPanel: Component<ValidationPanelProps> = (props) => {
           <ErrorSection
             title="Schema Errors"
             items={schemaErrors()}
-            severity="error"
             onErrorClick={handleErrorClick}
           />
 
           <ErrorSection
             title="Structural Errors"
             items={structuralErrors()}
-            severity="error"
             onErrorClick={handleErrorClick}
           />
 
           <ErrorSection
             title="Warnings"
             items={unitWarnings()}
-            severity="warning"
             onErrorClick={handleErrorClick}
           />
         </div>

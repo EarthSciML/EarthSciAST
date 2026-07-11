@@ -1,0 +1,17 @@
+{
+  // Declaration-emit build. `tsconfig.json` is type-check only (`noEmit: true`);
+  // this config emits the `.d.ts` bundle that package.json's `types`/`exports`
+  // point at, without pulling in a bundler dts plugin. Only `src/index.ts` (and
+  // whatever it imports) is compiled, so tests are excluded from the public API.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "references": [],
+  "include": ["src/index.ts"],
+  "exclude": ["dist", "node_modules"]
+}

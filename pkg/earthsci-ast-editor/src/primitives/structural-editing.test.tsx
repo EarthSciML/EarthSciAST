@@ -190,9 +190,11 @@ describe('Structural editing operations', () => {
 
       fireEvent.click(screen.getByRole('button'));
 
+      // Binary operator: wrapped as a well-formed 2-argument node (operand plus
+      // a placeholder the user then edits), respecting WRAP_OPERATORS arity.
       expect(onRootReplace).toHaveBeenCalledWith({
         op: '+',
-        args: ['x']
+        args: ['x', 0]
       });
     });
   });
@@ -433,13 +435,13 @@ describe('Structural editing operations', () => {
         return (
           <div>
             <div data-testid="can-delete-from-addition">
-              {structuralEditing.canDeleteTerm(1, ['args', 0]) ? 'yes' : 'no'}
+              {structuralEditing.canDeleteTerm(['args', 0]) ? 'yes' : 'no'}
             </div>
             <div data-testid="can-delete-from-multiplication">
-              {structuralEditing.canDeleteTerm(2, ['args', 1, 'args', 0]) ? 'yes' : 'no'}
+              {structuralEditing.canDeleteTerm(['args', 1, 'args', 0]) ? 'yes' : 'no'}
             </div>
             <div data-testid="can-delete-from-sin">
-              {structuralEditing.canDeleteTerm('x', ['args', 2, 'args', 0]) ? 'yes' : 'no'}
+              {structuralEditing.canDeleteTerm(['args', 2, 'args', 0]) ? 'yes' : 'no'}
             </div>
           </div>
         );

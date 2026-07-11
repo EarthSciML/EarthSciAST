@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@solidjs/testing-library';
+import { render, screen, fireEvent, within } from '@solidjs/testing-library';
 import type { Model } from '@earthsciml/ast';
 import { ModelEditor } from './ModelEditor';
 
@@ -50,11 +50,14 @@ describe('ModelEditor', () => {
   });
 
   it('renders variables panel with grouped variables', () => {
-    render(() => <ModelEditor {...mockProps} />);
+    const { container } = render(() => <ModelEditor {...mockProps} />);
 
-    expect(screen.getByText(/Variables \(2\)/)).toBeInTheDocument();
-    expect(screen.getAllByText('x')).toHaveLength(3); // One in variable list, one in equation, one in palette
-    expect(screen.getAllByText('k_rate')).toHaveLength(2); // One in variable list, one in palette
+    // Scope the assertions to the variables panel so unrelated occurrences (in
+    // the equation list or the palette) don't make the counts brittle.
+    const panel = within(container.querySelector('.variables-panel') as HTMLElement);
+    expect(panel.getByText(/Variables \(2\)/)).toBeInTheDocument();
+    expect(panel.getAllByText('x')).toHaveLength(1);
+    expect(panel.getAllByText('k_rate')).toHaveLength(1);
   });
 
   it('renders equations panel', () => {

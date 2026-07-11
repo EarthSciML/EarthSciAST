@@ -13,7 +13,7 @@
  * a mutation so the pre-mutation state becomes the undo point.
  */
 
-import { createSignal, onCleanup, untrack } from 'solid-js';
+import { createSignal, onCleanup, untrack, type Accessor, type Setter } from 'solid-js';
 import type { EsmFile } from '@earthsciml/ast';
 
 /**
@@ -61,6 +61,16 @@ export interface UndoHistory {
 }
 
 /**
+ * Internal stack entry: a public {@link HistoryEntry} plus its serialized form,
+ * computed once when the entry is created so change-detection and duplicate
+ * skipping never re-stringify a full snapshot.
+ */
+interface StackEntry extends HistoryEntry {
+  /** `JSON.stringify(state)`, cached at push time. */
+  stateJson: string;
+}
+
+/**
  * Deep clone an EsmFile to create an independent snapshot.
  * Works for both plain objects and Solid store proxies.
  */
@@ -84,33 +94,42 @@ export function createUndoHistory(
   const {
     maxEntries = 100,
     debounceMs = 500,
-    registerKeyboardShortcuts = true
+    // Off by default: each instance would otherwise register its OWN global
+    // document keydown listener, so two stores double-fire undo/redo and the
+    // listener leaks when `createUndoHistory` runs outside a reactive root
+    // (no `onCleanup` owner). Opt in per instance, or call
+    // `createUndoKeyboardHandler` once at the app root.
+    registerKeyboardShortcuts = false
   } = config;
 
-  // History stacks
-  const [undoStack, setUndoStack] = createSignal<HistoryEntry[]>([]);
-  const [redoStack, setRedoStack] = createSignal<HistoryEntry[]>([]);
+  // History stacks (entries carry a cached `stateJson` — see StackEntry)
+  const [undoStack, setUndoStack] = createSignal<StackEntry[]>([]);
+  const [redoStack, setRedoStack] = createSignal<StackEntry[]>([]);
 
   // Track if we're currently applying a history change to avoid capturing it
   let isApplyingHistory = false;
   let debounceTimeout: number | null = null;
   // Snapshot waiting for its debounced push (earliest snapshot of the burst)
   let pendingEntry: { snapshot: EsmFile; description?: string } | null = null;
-  // Last state pushed onto the undo stack, for change detection
-  let lastCapturedFile: EsmFile | null = null;
+  // Serialized form of the last state pushed, for O(1) change detection
+  let lastCapturedJson: string | null = null;
 
   /**
    * Push a snapshot onto the undo stack (skipping no-op captures) and
    * clear the redo stack.
    */
   function pushEntry(snapshot: EsmFile, description?: string) {
+    // Serialize once; reuse for change-detection and for the entry's cache.
+    const snapshotJson = JSON.stringify(snapshot);
+
     // Don't capture if the state hasn't actually changed since the last push
-    if (lastCapturedFile && JSON.stringify(snapshot) === JSON.stringify(lastCapturedFile)) {
+    if (lastCapturedJson !== null && snapshotJson === lastCapturedJson) {
       return;
     }
 
-    const entry: HistoryEntry = {
+    const entry: StackEntry = {
       state: snapshot,
+      stateJson: snapshotJson,
       timestamp: Date.now(),
       description
     };
@@ -127,7 +146,7 @@ export function createUndoHistory(
     // Clear redo stack when new change is made
     setRedoStack([]);
 
-    lastCapturedFile = cloneEsmFile(snapshot);
+    lastCapturedJson = snapshotJson;
   }
 
   /**
@@ -174,80 +193,66 @@ export function createUndoHistory(
   }
 
   /**
-   * Undo the last change
+   * Restore the newest state on `sourceStack` that differs from the current
+   * file, saving the current state onto `destStack` first. Shared body for
+   * undo (undo→redo) and redo (redo→undo), which are mirror images differing
+   * only in the stacks involved and the saved entry's description.
    */
-  function undo() {
+  function restoreFrom(
+    sourceStack: Accessor<StackEntry[]>,
+    setSourceStack: Setter<StackEntry[]>,
+    setDestStack: Setter<StackEntry[]>,
+    destDescription: string
+  ) {
     flushPending();
 
-    const stack = undoStack();
+    const stack = sourceStack();
     const currentFile = untrack(() => file());
     if (!currentFile || stack.length === 0) return;
 
     // Skip over entries identical to the current state (e.g. the capture of
-    // the state we are currently in) so a single undo visibly changes state.
+    // the state we are currently in) so a single step visibly changes state.
     const currentJson = untrack(() => JSON.stringify(currentFile));
     let idx = stack.length - 1;
-    while (idx >= 0 && JSON.stringify(stack[idx].state) === currentJson) {
+    while (idx >= 0 && stack[idx].stateJson === currentJson) {
       idx--;
     }
     if (idx < 0) return;
 
-    const previousEntry = stack[idx];
+    const targetEntry = stack[idx];
 
-    // Save current state to redo stack
-    setRedoStack(prev => [...prev, {
+    // Save the current state onto the destination stack (reusing currentJson)
+    setDestStack(prev => [...prev, {
       state: untrack(() => cloneEsmFile(currentFile)),
+      stateJson: currentJson,
       timestamp: Date.now(),
-      description: 'Current state'
+      description: destDescription
     }]);
 
-    // Remove the restored entry (and any skipped duplicates) from undo stack
-    setUndoStack(stack.slice(0, idx));
+    // Remove the restored entry (and any skipped duplicates) from the source
+    setSourceStack(stack.slice(0, idx));
 
-    // Apply the previous state
+    // Apply the target state
     isApplyingHistory = true;
-    setFile(cloneEsmFile(previousEntry.state));
+    setFile(cloneEsmFile(targetEntry.state));
     isApplyingHistory = false;
 
     // The next capture should always be pushed relative to the restored state
-    lastCapturedFile = null;
+    lastCapturedJson = null;
+  }
+
+  /**
+   * Undo the last change
+   */
+  function undo() {
+    restoreFrom(undoStack, setUndoStack, setRedoStack, 'Current state');
   }
 
   /**
    * Redo the next change
    */
   function redo() {
-    flushPending();
-
-    const stack = redoStack();
-    const currentFile = untrack(() => file());
-    if (!currentFile || stack.length === 0) return;
-
-    const currentJson = untrack(() => JSON.stringify(currentFile));
-    let idx = stack.length - 1;
-    while (idx >= 0 && JSON.stringify(stack[idx].state) === currentJson) {
-      idx--;
-    }
-    if (idx < 0) return;
-
-    const nextEntry = stack[idx];
-
-    // Save current state to undo stack
-    setUndoStack(prev => [...prev, {
-      state: untrack(() => cloneEsmFile(currentFile)),
-      timestamp: Date.now(),
-      description: 'Redo checkpoint'
-    }]);
-
-    // Remove the restored entry (and any skipped duplicates) from redo stack
-    setRedoStack(stack.slice(0, idx));
-
-    // Apply the next state
-    isApplyingHistory = true;
-    setFile(cloneEsmFile(nextEntry.state));
-    isApplyingHistory = false;
-
-    lastCapturedFile = null;
+    restoreFrom(redoStack, setRedoStack, setUndoStack, 'Redo checkpoint');
   }
 
   /**
@@ -289,7 +294,10 @@ export function createUndoHistory(
   // Capture the initial state so the first mutation can be undone.
   captureState('Initial state');
 
-  // Register keyboard shortcuts if enabled (single, shared handler)
+  // Register keyboard shortcuts only when explicitly opted in. Each call
+  // installs its OWN document keydown listener bound to THIS history, so
+  // enabling it on multiple instances double-fires; prefer a single call at
+  // the app root. Off by default (see `registerKeyboardShortcuts`).
   if (registerKeyboardShortcuts && typeof window !== 'undefined') {
     createUndoKeyboardHandler(undo, redo, canUndo, canRedo);
   }

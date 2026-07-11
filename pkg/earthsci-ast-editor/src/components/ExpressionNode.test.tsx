@@ -6,7 +6,7 @@ import { ExpressionNode } from './ExpressionNode';
 describe('ExpressionNode', () => {
   const mockProps = {
     path: ['test'],
-    highlightedVars: () => new Set<string>(),
+    highlightedVars: new Set<string>(),
     onHoverVar: vi.fn(),
     onSelect: vi.fn(),
     onReplace: vi.fn(),
@@ -62,7 +62,7 @@ describe('ExpressionNode', () => {
       <ExpressionNode
         expr="x"
         {...mockProps}
-        highlightedVars={highlightedVars}
+        highlightedVars={highlightedVars()}
       />
     ));
 

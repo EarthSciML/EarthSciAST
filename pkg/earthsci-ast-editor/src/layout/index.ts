@@ -6,7 +6,8 @@
  * rendering without external libraries like KaTeX or MathJax.
  */
 
-// Export all layout components
+// Export all layout components. Each component imports its own stylesheet, so
+// the CSS is bundled transitively — no separate CSS imports needed here.
 export { Fraction } from './Fraction';
 export type { FractionProps } from './Fraction';
 
@@ -22,9 +23,5 @@ export type { RadicalProps } from './Radical';
 export { Delimiters } from './Delimiters';
 export type { DelimitersProps } from './Delimiters';
 
-// Import all CSS files to ensure they're bundled
-import './fraction.css';
-import './superscript.css';
-import './subscript.css';
-import './radical.css';
-import './delimiters.css';
+// `shared.ts` (MathLayoutProps base + buildClasses) is an internal helper the
+// components import directly; it is intentionally not re-exported here.

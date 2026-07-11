@@ -8,28 +8,28 @@
  * - Inline editing for variables (double-click to autocomplete dropdown)
  * - onReplace callback integration for updating the store
  *
- * `createSelectionContext` is the single implementation; `SelectionProvider`
- * simply wraps it in a SolidJS context provider.
+ * Within this primitive, `createSelectionContext` is the single source of
+ * selection + inline-editing state; `SelectionProvider` simply wraps it in a
+ * SolidJS context provider. (It is NOT the only selection code in the editor —
+ * some components maintain their own selection state independently.)
  */
 
-import { createSignal, createMemo, Accessor, Setter, createContext, useContext } from 'solid-js';
+import { createSignal, createMemo, Accessor, Setter, createContext, useContext, JSX } from 'solid-js';
 import type { Expression, ExpressionNode as ExprNode, EsmFile } from '@earthsciml/ast';
-import { getExpressionAtPath, replaceExpressionAtPath, pathsEqual } from './path-utils';
-
-export { pathsEqual, pathToString, stringToPath } from './path-utils';
+import { getExpressionAtPath, replaceExpressionAtPath, pathsEqual, type Path } from './path-utils';
 
 // Types for selection context
 export interface SelectionContextValue {
   /** Currently selected AST path */
-  selectedPath: Accessor<(string | number)[] | null>;
+  selectedPath: Accessor<Path | null>;
   /** Set the currently selected AST path */
-  setSelectedPath: Setter<(string | number)[] | null>;
+  setSelectedPath: Setter<Path | null>;
   /** Check if a path is currently selected */
-  isSelected: (path: (string | number)[]) => boolean;
+  isSelected: (path: Path) => boolean;
   /** Get detail panel data for the selected node */
   selectedNodeDetails: Accessor<NodeDetails | null>;
   /** Callback when replacing a node with new expression */
-  onReplace: (path: (string | number)[], newExpr: Expression) => void;
+  onReplace: (path: Path, newExpr: Expression) => void;
   /** Start inline editing for the selected node */
   startInlineEdit: () => void;
   /** Cancel inline editing */
@@ -62,7 +62,7 @@ export interface NodeDetails {
   /** Available actions for this node type */
   availableActions: string[];
   /** Path to this node in the AST */
-  path: (string | number)[];
+  path: Path;
   /** Full expression being edited */
   expression: Expression;
 }
@@ -71,19 +71,17 @@ export interface NodeDetails {
 const SelectionContext = createContext<SelectionContextValue>();
 
 export interface SelectionProviderProps {
-  children: any;
+  children: JSX.Element;
   /** Root expression being edited */
   rootExpression: Accessor<Expression>;
   /** Callback when the root expression is replaced */
   onRootReplace: (newExpr: Expression) => void;
-  /** ESM file for variable suggestions */
-  esmFile?: Accessor<EsmFile | null>;
 }
 
 /**
  * Get parent context information for a given path
  */
-function getParentContext(expr: Expression, path: (string | number)[]): NodeDetails['parentContext'] {
+function getParentContext(expr: Expression, path: Path): NodeDetails['parentContext'] {
   if (path.length === 0) {
     return { type: 'root' };
   }
@@ -160,18 +158,19 @@ function extractVariableNames(esmFile: EsmFile | null): string[] {
 /**
  * Create selection context state and actions.
  *
- * This is the single implementation of selection + inline editing;
- * `SelectionProvider` delegates to it.
+ * This backs the selection primitive: `SelectionProvider` delegates to it, and
+ * it is the single source of state for consumers of this context. (Other
+ * editor components may still track selection independently of this context.)
  */
 export function createSelectionContext(
   rootExpression: Accessor<Expression>,
   onRootReplace: (newExpr: Expression) => void
 ): SelectionContextValue {
-  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
+  const [selectedPath, setSelectedPath] = createSignal<Path | null>(null);
   const [isInlineEditing, setIsInlineEditing] = createSignal(false);
   const [inlineEditValue, setInlineEditValue] = createSignal('');
 
-  const isSelected = (path: (string | number)[]) => {
+  const isSelected = (path: Path) => {
     const selected = selectedPath();
     if (!selected) return false;
     return pathsEqual(selected, path);
@@ -202,7 +201,7 @@ export function createSelectionContext(
     };
   });
 
-  const onReplace = (path: (string | number)[], newExpr: Expression) => {
+  const onReplace = (path: Path, newExpr: Expression) => {
     const rootExpr = rootExpression();
     const newRoot = replaceExpressionAtPath(rootExpr, path, newExpr);
     onRootReplace(newRoot);

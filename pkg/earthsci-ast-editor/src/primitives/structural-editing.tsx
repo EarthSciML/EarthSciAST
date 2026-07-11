@@ -11,7 +11,17 @@
 
 import { createSignal, Accessor, Setter, createContext, useContext, JSX, For, Show } from 'solid-js';
 import type { Expression, ExpressionNode as ExprNode } from '@earthsciml/ast';
-import { getExpressionAtPath, replaceExpressionAtPath } from './path-utils';
+import { getExpressionAtPath, replaceExpressionAtPath, pathsEqual, type Path } from './path-utils';
+// Stylesheet for the structural-editing menu (`.structural-editing-menu`,
+// `.wrap-operator-btn`, …). Co-located CSS import, matching the editor's other
+// components; previously orphaned in styles/ and never applied.
+import '../styles/structural-editing.css';
+
+/**
+ * Placeholder operand used to pad a node wrapped in a binary operator up to
+ * its declared arity, giving a well-formed 2-argument node the user then edits.
+ */
+const WRAP_PLACEHOLDER: Expression = 0;
 
 // Common operators available for wrapping
 export const WRAP_OPERATORS = [
@@ -34,30 +44,30 @@ export const COMMUTATIVE_OPERATORS = new Set(['+', '*']);
 // Types for structural editing
 export interface StructuralEditingContextValue {
   /** Replace the selected node with a new expression */
-  replaceNode: (path: (string | number)[], newExpr: Expression) => void;
+  replaceNode: (path: Path, newExpr: Expression) => void;
 
   /** Wrap the selected node in an operator */
-  wrapNode: (path: (string | number)[], operator: string) => void;
+  wrapNode: (path: Path, operator: string) => void;
 
   /** Unwrap a unary operation (replace with its argument) */
-  unwrapNode: (path: (string | number)[]) => boolean;
+  unwrapNode: (path: Path) => boolean;
 
   /** Delete a term from a commutative operation */
-  deleteTerm: (path: (string | number)[]) => boolean;
+  deleteTerm: (path: Path) => boolean;
 
   /** Reorder arguments in a commutative operation */
-  reorderArgs: (path: (string | number)[], fromIndex: number, toIndex: number) => boolean;
+  reorderArgs: (path: Path, fromIndex: number, toIndex: number) => boolean;
 
   /** Check if an operation can be unwrapped */
   canUnwrap: (expr: Expression) => boolean;
 
-  /** Check if a term can be deleted */
-  canDeleteTerm: (expr: Expression, path: (string | number)[]) => boolean;
+  /** Check if the term at `path` can be deleted from its commutative parent */
+  canDeleteTerm: (path: Path) => boolean;
 
   /** Check if arguments can be reordered */
   canReorderArgs: (expr: Expression) => boolean;
 
-  /** Get available wrap operations for current selection */
+  /** Get the full list of wrap operators (independent of the current selection) */
   getWrapOperators: () => typeof WRAP_OPERATORS[number][];
 
   /** Drag and drop state */
@@ -67,16 +77,16 @@ export interface StructuralEditingContextValue {
 
 export interface DragState {
   isDragging: boolean;
-  dragPath: (string | number)[] | null;
+  dragPath: Path | null;
   dragIndex: number | null;
-  dropTarget: { path: (string | number)[], index: number } | null;
+  dropTarget: { path: Path, index: number } | null;
 }
 
 // Context for structural editing
 const StructuralEditingContext = createContext<StructuralEditingContextValue>();
 
 export interface StructuralEditingProviderProps {
-  children: any;
+  children: JSX.Element;
   /** Root expression being edited */
   rootExpression: Accessor<Expression>;
   /** Callback when the root expression is replaced */
@@ -114,8 +124,8 @@ function isCommutativeOp(expr: Expression): expr is ExprNode {
  */
 function getParentInfo(
   rootExpr: Expression,
-  path: (string | number)[]
-): { parent: Expression | null; parentPath: (string | number)[]; argIndex: number | null } {
+  path: Path
+): { parent: Expression | null; parentPath: Path; argIndex: number | null } {
   if (path.length < 2) {
     return { parent: null, parentPath: [], argIndex: null };
   }
@@ -144,29 +154,36 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
   });
 
   // Replace node operation
-  const replaceNode = (path: (string | number)[], newExpr: Expression) => {
+  const replaceNode = (path: Path, newExpr: Expression) => {
     const rootExpr = props.rootExpression();
     const newRoot = replaceExpressionAtPath(rootExpr, path, newExpr);
     props.onRootReplace(newRoot);
   };
 
   // Wrap node operation
-  const wrapNode = (path: (string | number)[], operator: string) => {
+  const wrapNode = (path: Path, operator: string) => {
     const rootExpr = props.rootExpression();
     const currentExpr = getExpressionAtPath(rootExpr, path);
-    if (!currentExpr) return;
+    // Strict null check so a falsy-but-valid operand (e.g. the number 0) wraps.
+    if (currentExpr === null) return;
 
-    const wrappedExpr: ExprNode = {
-      op: operator,
-      args: [currentExpr]
-    };
+    // Respect the operator's declared arity: a binary operator is wrapped as a
+    // well-formed 2-argument node (operand + placeholder), not a malformed
+    // single-argument node.
+    const arity = WRAP_OPERATORS.find(o => o.op === operator)?.arity ?? 1;
+    const args: Expression[] = [currentExpr];
+    while (args.length < arity) {
+      args.push(WRAP_PLACEHOLDER);
+    }
+
+    const wrappedExpr: ExprNode = { op: operator, args };
 
     const newRoot = replaceExpressionAtPath(rootExpr, path, wrappedExpr);
     props.onRootReplace(newRoot);
   };
 
   // Unwrap node operation
-  const unwrapNode = (path: (string | number)[]): boolean => {
+  const unwrapNode = (path: Path): boolean => {
     const rootExpr = props.rootExpression();
     const expr = getExpressionAtPath(rootExpr, path);
 
@@ -181,7 +198,7 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
   };
 
   // Delete term operation
-  const deleteTerm = (path: (string | number)[]): boolean => {
+  const deleteTerm = (path: Path): boolean => {
     const rootExpr = props.rootExpression();
     const { parent, parentPath, argIndex } = getParentInfo(rootExpr, path);
 
@@ -191,8 +208,13 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
 
     const parentNode = parent as ExprNode;
     if (parentNode.args.length <= 2) {
-      // If only 2 args, remove the parent and keep the other arg
+      // Two-or-fewer args: deleting one leaves a single operand, so replace the
+      // whole operation with that remaining operand (index 1 - argIndex for the
+      // 2-arg case). Guard against a malformed 1-arg node with no sibling.
       const remainingArg = parentNode.args[1 - argIndex];
+      if (remainingArg === undefined) {
+        return false;
+      }
       const newRoot = replaceExpressionAtPath(rootExpr, parentPath, remainingArg);
       props.onRootReplace(newRoot);
     } else {
@@ -208,7 +230,7 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
   };
 
   // Reorder arguments operation
-  const reorderArgs = (path: (string | number)[], fromIndex: number, toIndex: number): boolean => {
+  const reorderArgs = (path: Path, fromIndex: number, toIndex: number): boolean => {
     const rootExpr = props.rootExpression();
     const expr = getExpressionAtPath(rootExpr, path);
 
@@ -234,8 +256,8 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
     return isUnwrappableUnaryOp(expr);
   };
 
-  // Check if term can be deleted
-  const canDeleteTerm = (_expr: Expression, path: (string | number)[]): boolean => {
+  // Check if term can be deleted (depends only on the parent at `path`)
+  const canDeleteTerm = (path: Path): boolean => {
     const rootExpr = props.rootExpression();
     const { parent } = getParentInfo(rootExpr, path);
     return parent !== null && isCommutativeOp(parent);
@@ -246,7 +268,7 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
     return isCommutativeOp(expr) && (expr as ExprNode).args.length > 1;
   };
 
-  // Get available wrap operators
+  // Return the full wrap-operator list (not filtered by the current selection)
   const getWrapOperators = () => {
     return [...WRAP_OPERATORS];
   };
@@ -296,7 +318,7 @@ export function useMaybeStructuralEditingContext(): StructuralEditingContextValu
  */
 export interface StructuralEditingMenuProps {
   /** Currently selected path */
-  selectedPath: (string | number)[] | null;
+  selectedPath: Path | null;
   /** Currently selected expression */
   selectedExpr: Expression | null;
   /** Show/hide the menu */
@@ -334,7 +356,7 @@ export function StructuralEditingMenu(props: StructuralEditingMenuProps) {
   const canDelete = () =>
     props.selectedPath !== null &&
     props.selectedExpr !== null &&
-    structuralEditing.canDeleteTerm(props.selectedExpr, props.selectedPath);
+    structuralEditing.canDeleteTerm(props.selectedPath);
 
   return (
     <Show when={props.isVisible && props.selectedPath && props.selectedExpr !== null}>
@@ -409,9 +431,9 @@ export function StructuralEditingMenu(props: StructuralEditingMenuProps) {
  */
 export interface DraggableExpressionProps {
   children: JSX.Element;
-  path: (string | number)[];
+  path: Path;
   index: number;
-  parentPath: (string | number)[];
+  parentPath: Path;
   canDrag: boolean;
 }
 
@@ -468,7 +490,7 @@ export function DraggableExpression(props: DraggableExpressionProps) {
 
     try {
       const dragInfo = JSON.parse(data);
-      if (dragInfo.index !== props.index && dragInfo.parentPath.join('.') === props.parentPath.join('.')) {
+      if (dragInfo.index !== props.index && pathsEqual(dragInfo.parentPath as Path, props.parentPath)) {
         structuralEditing.reorderArgs(props.parentPath, dragInfo.index, props.index);
       }
     } catch (error) {

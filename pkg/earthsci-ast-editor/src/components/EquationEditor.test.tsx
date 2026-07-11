@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { render, screen } from '@solidjs/testing-library';
+import { render, screen, fireEvent } from '@solidjs/testing-library';
 import { EquationEditor } from './EquationEditor';
 
 describe('EquationEditor', () => {
@@ -27,13 +27,29 @@ describe('EquationEditor', () => {
     expect(screen.getByText('+')).toBeInTheDocument();
   });
 
-  it('handles equation changes', () => {
+  it('handles equation changes, including nested edits deep in the RHS tree', () => {
+    // Edit a `D` node nested inside the RHS (path ['rhs','args',0]) and confirm
+    // the change is applied via the shared document-path replace — nested edits
+    // used to be dropped by a hand-rolled walker.
+    const equation = {
+      lhs: 'x',
+      rhs: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 't' }, 'k'] }
+    };
     const onEquationChange = vi.fn();
-    render(() => <EquationEditor {...mockProps} onEquationChange={onEquationChange} />);
+    const { container } = render(() => (
+      <EquationEditor {...mockProps} equation={equation} onEquationChange={onEquationChange} />
+    ));
 
-    // This is a basic test - more complex interaction testing would require
-    // mocking the ExpressionNode component's replace functionality
-    expect(screen.getByText('x')).toBeInTheDocument();
+    const nestedD = container.querySelector('[data-path="rhs.args.0"]')!;
+    fireEvent.click(nestedD);
+    fireEvent.click(screen.getByTitle('Edit D fields'));
+    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } });
+    fireEvent.click(screen.getByText('Apply'));
+
+    expect(onEquationChange).toHaveBeenCalledWith({
+      lhs: 'x',
+      rhs: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 'x' }, 'k'] }
+    });
   });
 
   it('respects readonly mode', () => {

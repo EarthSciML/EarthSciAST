@@ -9,14 +9,19 @@
  *   (Fraction, Superscript, Radical) for mathematical typography
  */
 
-import { Component, Accessor, createSignal, createMemo, Show, Switch, Match, Index, JSX } from 'solid-js';
+import { Component, createSignal, createMemo, Show, Switch, Match, Index, JSX } from 'solid-js';
 import type { Expression, ExpressionNode as ExprNode } from '@earthsciml/ast';
 import { useMaybeStructuralEditingContext, DraggableExpression, StructuralEditingMenu, COMMUTATIVE_OPERATORS } from '../primitives/structural-editing';
 import { renderChemicalName } from '../primitives/chemical-formula';
+import { pathsEqual, pathToString } from '../primitives/path-utils';
 import { NodeFieldEditor, opHasFieldEditor } from './NodeFieldEditor';
+import { isNumericString, formatNumber } from './number-format';
 import { Fraction } from '../layout/Fraction';
 import { Superscript } from '../layout/Superscript';
 import { Radical } from '../layout/Radical';
+
+/** Operators rendered as infix comparison chains (e.g. `a > b`). */
+const COMPARISON_OPS = ['>', '<', '>=', '<=', '==', '!='];
 
 export interface ExpressionNodeProps {
   /** The expression to render (reactive from Solid store) */
@@ -26,7 +31,7 @@ export interface ExpressionNodeProps {
   path: (string | number)[];
 
   /** Currently highlighted variable equivalence class */
-  highlightedVars: Accessor<Set<string>>;
+  highlightedVars: Set<string>;
 
   /** Callback when hovering over a variable */
   onHoverVar: (name: string | null) => void;
@@ -55,7 +60,7 @@ export interface ExpressionNodeProps {
 function OperatorLayout(props: {
   node: ExprNode;
   path: (string | number)[];
-  highlightedVars: Accessor<Set<string>>;
+  highlightedVars: Set<string>;
   onHoverVar: (name: string | null) => void;
   onSelect: (path: (string | number)[]) => void;
   onReplace: (path: (string | number)[], newExpr: Expression) => void;
@@ -131,14 +136,13 @@ function OperatorLayout(props: {
     </span>
   );
 
-  const COMPARISON_OPS = ['>', '<', '>=', '<=', '==', '!='];
-  const NAMED_FUNCTION_OPS = ['exp', 'log', 'sin', 'cos', 'tan'];
-
   // Handle different operators with appropriate CSS layouts per Section 5.2.4
   return (
     <Switch
       fallback={
-        // Generic function notation for unknown operators
+        // Function notation: the fallback for every op without a dedicated
+        // typographic layout below (named functions like sin/exp and unknown
+        // ops alike render identically as `name(args…)`).
         <span class="esm-generic-function" data-operator={op()}>
           <span class="esm-function-name">{op()}</span>
           {functionArgs()}
@@ -181,19 +185,12 @@ function OperatorLayout(props: {
           <span class="esm-derivative-body">
             {child(() => args()[0], 0)}
           </span>
-          <Show when={(props.node as { wrt?: string }).wrt}>
+          <Show when={props.node.wrt}>
             <span class="esm-derivative-wrt">
               <span class="esm-d-operator">d</span>
-              <span class="esm-variable">{(props.node as { wrt?: string }).wrt}</span>
+              <span class="esm-variable">{props.node.wrt}</span>
             </span>
           </Show>
-        </span>
-      </Match>
-
-      <Match when={NAMED_FUNCTION_OPS.includes(op())}>
-        <span class="esm-function" data-operator={op()}>
-          <span class="esm-function-name">{op()}</span>
-          {functionArgs()}
         </span>
       </Match>
 
@@ -225,14 +222,12 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
 
   // Check if this variable should be highlighted
   const shouldHighlight = createMemo(() =>
-    isVariable() && props.highlightedVars().has(props.expr as string)
+    isVariable() && props.highlightedVars.has(props.expr as string)
   );
 
   // Check if this node is currently selected
   const isSelected = createMemo(() =>
-    props.selectedPath != null &&
-    props.selectedPath.length === props.path.length &&
-    props.selectedPath.every((segment, i) => segment === props.path[i])
+    props.selectedPath != null && pathsEqual(props.selectedPath, props.path)
   );
 
   // Check if this can be dragged (is in a commutative operation with siblings)
@@ -334,7 +329,7 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
         tabIndex={0}
         role="button"
         aria-label={ariaLabel()}
-        data-path={props.path.join('.')}
+        data-path={pathToString(props.path)}
       >
         <Switch fallback={<span class="esm-unknown">?</span>}>
           <Match when={typeof props.expr === 'number'}>
@@ -409,49 +404,5 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
     </Show>
   );
 };
-
-// Helper functions
-function isNumericString(str: string): boolean {
-  return /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(str);
-}
-
-function formatNumber(num: number): string {
-  // Format number according to ESM spec Section 6.1
-  if (num === 0) return '0';
-
-  const absNum = Math.abs(num);
-
-  // Use scientific notation for very small or large numbers
-  if (absNum < 0.01 || absNum >= 10000) {
-    const exp = num.toExponential();
-    const [mantissa, exponent] = exp.split('e');
-
-    // Convert to Unicode superscript notation
-    const cleanMantissa = parseFloat(mantissa).toString(); // Remove trailing zeros
-    const expNum = parseInt(exponent, 10);
-    const superscriptExp = formatSuperscript(expNum);
-
-    return `${cleanMantissa}×10${superscriptExp}`;
-  }
-
-  // For integers, show as plain integer
-  if (Number.isInteger(num)) {
-    return num.toString();
-  }
-
-  // For decimals, use standard notation
-  return num.toString();
-}
-
-function formatSuperscript(exp: number): string {
-  // Convert number to Unicode superscript
-  const superscriptMap: { [key: string]: string } = {
-    '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-    '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-    '-': '⁻', '+': '⁺'
-  };
-
-  return exp.toString().split('').map(char => superscriptMap[char] || char).join('');
-}
 
 export default ExpressionNode;

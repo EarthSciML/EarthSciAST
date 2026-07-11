@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@solidjs/testing-library';
+import { render, screen, fireEvent, within } from '@solidjs/testing-library';
 import type { ReactionSystem } from '@earthsciml/ast';
 import { ReactionEditor } from './ReactionEditor';
 
@@ -51,11 +51,14 @@ describe('ReactionEditor', () => {
   });
 
   it('renders chemical reaction in proper notation', () => {
-    render(() => <ReactionEditor {...mockProps} />);
+    const { container } = render(() => <ReactionEditor {...mockProps} />);
 
-    // Should render chemical formulas (multiple NO elements expected)
-    expect(screen.getAllByText(/NO/)).toHaveLength(6); // NO appears in reaction, species panel, etc.
-    expect(screen.getByText(/→/)).toBeInTheDocument();
+    // Scope to the reaction equation itself rather than counting NO across the
+    // whole document (species panel, etc.). NO appears on both sides: the NO
+    // reactant and the NO₂ product.
+    const equation = within(container.querySelector('.reaction-equation') as HTMLElement);
+    expect(equation.getAllByText(/NO/)).toHaveLength(2);
+    expect(equation.getByText(/→/)).toBeInTheDocument();
   });
 
   it('renders species panel', () => {
@@ -216,5 +219,71 @@ describe('ReactionEditor', () => {
     // Note: In JSDOM, Unicode subscripts might not render exactly as expected
     const speciesItems = screen.getAllByText(/O/);
     expect(speciesItems.length).toBeGreaterThan(0);
+  });
+
+  it('applies a nested edit inside the rate subtree (regression)', () => {
+    // The rate is an operator whose first argument is an editable-field op (D).
+    // Previously onReplace dropped every path other than exactly ['rate'], so
+    // editing the nested D was a silent no-op.
+    const nestedSystem = {
+      species: { u: {} },
+      parameters: {},
+      reactions: [
+        {
+          id: 'R1',
+          substrates: [{ species: 'u', stoichiometry: 1 }],
+          products: [{ species: 'u', stoichiometry: 1 }],
+          rate: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 't' }, 'k'] }
+        }
+      ]
+    } as unknown as ReactionSystem;
+
+    const onReactionSystemChange = vi.fn();
+    const { container } = render(() => (
+      <ReactionEditor {...mockProps} reactionSystem={nestedSystem} onReactionSystemChange={onReactionSystemChange} />
+    ));
+
+    // Expand the rate editor.
+    fireEvent.click(screen.getByText('[k]'));
+
+    // Select the nested D node (path ['rate','args',0]) so its field-editor
+    // button appears, then edit its `wrt`.
+    const nestedD = container.querySelector('[data-path="rate.args.0"]')!;
+    fireEvent.click(nestedD);
+    fireEvent.click(screen.getByTitle('Edit D fields'));
+    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } });
+    fireEvent.click(screen.getByText('Apply'));
+
+    expect(onReactionSystemChange).toHaveBeenCalledTimes(1);
+    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem;
+    expect(updated.reactions[0].rate).toEqual({
+      op: '+',
+      args: [{ op: 'D', args: ['u'], wrt: 'x' }, 'k']
+    });
+  });
+
+  it('assigns the first unused R-id when adding after a deletion (regression)', () => {
+    // R1 and R3 exist (R2 was deleted). The old `R${length+1}` scheme would
+    // reuse R3; the fix assigns the first free id, R2.
+    const gappedSystem = {
+      species: {},
+      parameters: {},
+      reactions: [
+        { id: 'R1', substrates: [{ species: 'A' }], products: [{ species: 'B' }], rate: 'k1' },
+        { id: 'R3', substrates: [{ species: 'C' }], products: [{ species: 'D' }], rate: 'k3' }
+      ]
+    } as unknown as ReactionSystem;
+
+    const onReactionSystemChange = vi.fn();
+    render(() => (
+      <ReactionEditor {...mockProps} reactionSystem={gappedSystem} onReactionSystemChange={onReactionSystemChange} />
+    ));
+
+    fireEvent.click(screen.getByText('+ Add Reaction'));
+
+    expect(onReactionSystemChange).toHaveBeenCalledTimes(1);
+    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem;
+    expect(updated.reactions).toHaveLength(3);
+    expect(updated.reactions[2].id).toBe('R2');
   });
 });

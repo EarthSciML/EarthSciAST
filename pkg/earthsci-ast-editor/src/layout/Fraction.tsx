@@ -7,27 +7,18 @@
  */
 
 import { Component, JSX } from 'solid-js';
+import { MathLayoutProps, buildClasses } from './shared';
 import './fraction.css';
 
-export interface FractionProps {
+export interface FractionProps extends MathLayoutProps {
   /** The numerator content */
   numerator: JSX.Element;
 
   /** The denominator content */
   denominator: JSX.Element;
 
-  /** Additional CSS classes to apply */
-  class?: string;
-
   /** Whether this fraction should display inline (default true) */
   inline?: boolean;
-
-  /** Callback for click events */
-  onClick?: (e: MouseEvent) => void;
-
-  /** Callback for hover events */
-  onMouseEnter?: (e: MouseEvent) => void;
-  onMouseLeave?: (e: MouseEvent) => void;
 }
 
 /**
@@ -35,12 +26,8 @@ export interface FractionProps {
  * Uses CSS Grid for proper fraction bar alignment and sizing.
  */
 export const Fraction: Component<FractionProps> = (props) => {
-  const classes = () => {
-    const baseClasses = ['esm-fraction'];
-    if (props.inline !== false) baseClasses.push('esm-fraction-inline');
-    if (props.class) baseClasses.push(props.class);
-    return baseClasses.join(' ');
-  };
+  const classes = () =>
+    buildClasses('esm-fraction', props.inline !== false && 'esm-fraction-inline', props.class);
 
   return (
     <span
@@ -61,5 +48,3 @@ export const Fraction: Component<FractionProps> = (props) => {
     </span>
   );
 };
-
-export default Fraction;

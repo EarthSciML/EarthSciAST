@@ -7,24 +7,15 @@
  */
 
 import { Component, JSX } from 'solid-js';
+import { MathLayoutProps, buildClasses } from './shared';
 import './superscript.css';
 
-export interface SuperscriptProps {
+export interface SuperscriptProps extends MathLayoutProps {
   /** The base expression */
   base: JSX.Element;
 
   /** The superscript/exponent content */
   exponent: JSX.Element;
-
-  /** Additional CSS classes to apply */
-  class?: string;
-
-  /** Callback for click events */
-  onClick?: (e: MouseEvent) => void;
-
-  /** Callback for hover events */
-  onMouseEnter?: (e: MouseEvent) => void;
-  onMouseLeave?: (e: MouseEvent) => void;
 }
 
 /**
@@ -32,11 +23,7 @@ export interface SuperscriptProps {
  * Handles proper positioning and scaling of exponents relative to base expressions.
  */
 export const Superscript: Component<SuperscriptProps> = (props) => {
-  const classes = () => {
-    const baseClasses = ['esm-superscript'];
-    if (props.class) baseClasses.push(props.class);
-    return baseClasses.join(' ');
-  };
+  const classes = () => buildClasses('esm-superscript', props.class);
 
   return (
     <span
@@ -56,5 +43,3 @@ export const Superscript: Component<SuperscriptProps> = (props) => {
     </span>
   );
 };
-
-export default Superscript;

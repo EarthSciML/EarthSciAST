@@ -29,6 +29,7 @@ type FieldType =
   | 'string' // free text stored as a string
   | 'select' // one-of a fixed option set, stored as a string
   | 'number' // parsed as a finite number
+  | 'int-or-string' // an integer if all-digits, else a string (e.g. table_lookup `output`)
   | 'const-value' // a number, or JSON for arrays (the `const` op's `value`)
   | 'json' // any JSON value / Expression subtree / object map
   | 'intlist' // comma-separated or JSON list of integers
@@ -76,7 +77,7 @@ const OP_FIELD_SPECS: Record<string, OpFieldSpec[]> = {
   table_lookup: [
     { name: 'table', label: 'Table id', type: 'string' },
     { name: 'axes', label: 'Axes (JSON map)', type: 'json', multiline: true, placeholder: '{"x": "temperature"}' },
-    { name: 'output', label: 'Output (optional)', type: 'string', optional: true }
+    { name: 'output', label: 'Output (optional)', type: 'int-or-string', optional: true }
   ],
   apply_expression_template: [
     { name: 'name', label: 'Template id', type: 'string' },
@@ -183,11 +184,13 @@ function parseField(raw: string, spec: OpFieldSpec): ParseResult {
     case 'string':
     case 'select': {
       if (empty) return spec.optional ? { omit: true } : { value: '' };
-      // `output` on table_lookup is an int-or-string selector.
-      if (spec.name === 'output' && /^\d+$/.test(trimmed)) {
-        return { value: Number(trimmed) };
-      }
       return { value: trimmed };
+    }
+
+    case 'int-or-string': {
+      // Stored as an integer when the input is all digits, else as a string.
+      if (empty) return spec.optional ? { omit: true } : { value: '' };
+      return /^\d+$/.test(trimmed) ? { value: Number(trimmed) } : { value: trimmed };
     }
 
     case 'number': {
@@ -303,6 +306,10 @@ export interface NodeFieldEditorProps {
  * input per field, validates on submit, and applies the rebuilt node.
  */
 export const NodeFieldEditor: Component<NodeFieldEditorProps> = (props) => {
+  // props.node is read once at setup to seed the form. Like InlineForm's
+  // initialValues, this snapshot is intentionally non-reactive: the editor is
+  // recreated (keyed on the selected node) when a different node is edited, so
+  // it never needs to track in-place changes to props.node.
   const specs = getOpFieldSpecs(props.node.op);
 
   const fields: InlineFormField[] = specs.map(spec => ({

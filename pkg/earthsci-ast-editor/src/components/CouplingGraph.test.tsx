@@ -1,7 +1,11 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
+import { createSignal } from 'solid-js';
 import { render, screen, fireEvent } from '@solidjs/testing-library';
-import { CouplingGraph } from './CouplingGraph';
+import { CouplingGraph, NODE_FILL } from './CouplingGraph';
 import type { ComponentNode, CouplingEdge, Graph } from '@earthsciml/ast';
+
+/** Query the model node's rendered shape by its fill (no hard-coded hex). */
+const modelRectSelector = `rect[fill="${NODE_FILL.model}"]`;
 
 // No need to mock d3-force since we're using manual implementation
 
@@ -112,7 +116,7 @@ describe('CouplingGraph', () => {
     render(() => <CouplingGraph graph={mockGraph} onNodeSelect={onNodeSelect} />);
 
     // Click on the atmospheric model node
-    const modelShapes = document.querySelectorAll('rect[fill="#4CAF50"]');
+    const modelShapes = document.querySelectorAll(modelRectSelector);
     expect(modelShapes.length).toBe(1);
     fireEvent.click(modelShapes[0]);
 
@@ -123,9 +127,16 @@ describe('CouplingGraph', () => {
     const onEdgeSelect = vi.fn();
     render(() => <CouplingGraph graph={mockGraph} onEdgeSelect={onEdgeSelect} />);
 
-    // Note: Edge clicking is harder to test without more complex setup
-    // This would require mocking SVG elements and click detection
-    expect(onEdgeSelect).toBeDefined();
+    // Edges render as <line> elements inside the .edges group, in edge order.
+    const lines = document.querySelectorAll('.edges line');
+    expect(lines.length).toBe(mockGraph.edges.length);
+
+    fireEvent.click(lines[0]);
+    expect(onEdgeSelect).toHaveBeenCalledWith(mockGraph.edges[0].data);
+
+    // Selecting the edge shows its details (label + coupling type).
+    expect(screen.getByText('Temperature Data')).toBeInTheDocument();
+    expect(screen.getByText(/Type:\s*variable_map/)).toBeInTheDocument();
   });
 
   it('displays node details when selected', () => {
@@ -135,7 +146,7 @@ describe('CouplingGraph', () => {
     expect(screen.queryByText('Variables:')).not.toBeInTheDocument();
 
     // Click on a node to select it
-    const modelShapes = document.querySelectorAll('rect[fill="#4CAF50"]');
+    const modelShapes = document.querySelectorAll(modelRectSelector);
     fireEvent.click(modelShapes[0]);
 
     // Details panel should appear - check for the specific details panel elements
@@ -144,17 +155,17 @@ describe('CouplingGraph', () => {
     expect(screen.getByText(/Equations:\s*3/)).toBeInTheDocument();
   });
 
-  it('handles hover effects', () => {
+  it('applies a brightness filter to the hovered node', () => {
     render(() => <CouplingGraph graph={mockGraph} />);
 
-    const modelShapes = document.querySelectorAll('rect[fill="#4CAF50"]');
+    const modelShape = document.querySelector(modelRectSelector) as SVGRectElement;
+    expect(modelShape.getAttribute('filter')).toBe('none');
 
-    // Test hover enter
-    fireEvent.mouseEnter(modelShapes[0]);
-    // Note: Testing visual hover effects would require more complex DOM inspection
+    fireEvent.mouseEnter(modelShape);
+    expect(modelShape.getAttribute('filter')).toBe('brightness(1.2)');
 
-    // Test hover leave
-    fireEvent.mouseLeave(modelShapes[0]);
+    fireEvent.mouseLeave(modelShape);
+    expect(modelShape.getAttribute('filter')).toBe('none');
   });
 
   it('respects width and height props', () => {
@@ -194,7 +205,7 @@ describe('CouplingGraph', () => {
     render(() => <CouplingGraph graph={mockGraph} />);
 
     // Select a node to open details panel
-    const modelShapes = document.querySelectorAll('rect[fill="#4CAF50"]');
+    const modelShapes = document.querySelectorAll(modelRectSelector);
     fireEvent.click(modelShapes[0]);
 
     // Details panel should be visible
@@ -208,23 +219,32 @@ describe('CouplingGraph', () => {
     expect(screen.queryByText('Close')).not.toBeInTheDocument();
   });
 
-  it('handles node dragging', () => {
-    render(() => <CouplingGraph graph={mockGraph} />);
+  it('drags a node so its shape follows the pointer', async () => {
+    const { waitFor } = await import('@solidjs/testing-library');
+    render(() => <CouplingGraph graph={mockGraph} showMinimap={false} />);
 
-    const modelShapes = document.querySelectorAll('rect[fill="#4CAF50"]');
+    const modelShape = document.querySelector(modelRectSelector) as SVGRectElement;
 
-    // Test mouse down event (simulating drag start)
-    fireEvent.mouseDown(modelShapes[0], { clientX: 100, clientY: 100 });
+    // mousedown pins the node, then a document mousemove drags it. jsdom's
+    // getBoundingClientRect returns 0s and k=1, so graph coords == client coords.
+    fireEvent.mouseDown(modelShape, { clientX: 0, clientY: 0 });
+    fireEvent.mouseMove(document, { clientX: 300, clientY: 200 });
 
-    // Note: Full drag testing would require more complex event simulation
-    // This basic test ensures the event handler is attached
+    // The rect is drawn at (x-25, y-15); pinned to (300, 200) it settles at
+    // (275, 185) once the simulation ticks.
+    await waitFor(() => {
+      expect(modelShape.getAttribute('x')).toBe('275');
+      expect(modelShape.getAttribute('y')).toBe('185');
+    }, { timeout: 3000 });
+
+    fireEvent.mouseUp(document);
   });
 
   it('animates node positions as the force simulation ticks', async () => {
     const { waitFor } = await import('@solidjs/testing-library');
     render(() => <CouplingGraph graph={mockGraph} showMinimap={false} />);
 
-    const modelShape = document.querySelector('rect[fill="#4CAF50"]') as SVGRectElement;
+    const modelShape = document.querySelector(modelRectSelector) as SVGRectElement;
     expect(modelShape).toBeTruthy();
     const initialX = modelShape.getAttribute('x');
     const initialY = modelShape.getAttribute('y');
@@ -239,12 +259,14 @@ describe('CouplingGraph', () => {
     }, { timeout: 3000 });
   });
 
-  it('updates simulation when graph data changes', () => {
-    const graphSignal = mockGraph;
-    render(() => <CouplingGraph graph={graphSignal} />);
+  it('renders newly added nodes when the graph prop changes', async () => {
+    const { waitFor } = await import('@solidjs/testing-library');
+    const [graph, setGraph] = createSignal(mockGraph);
+    render(() => <CouplingGraph graph={graph()} showMinimap={false} />);
 
-    // Add a new node
-    const newGraph = {
+    expect(screen.queryByText('New Node')).not.toBeInTheDocument();
+
+    setGraph({
       ...mockGraph,
       nodes: [
         ...mockGraph.nodes,
@@ -255,11 +277,40 @@ describe('CouplingGraph', () => {
           metadata: { var_count: 1, eq_count: 1, species_count: 0 }
         }
       ]
-    };
+    });
 
-    // This test is simplified since we can't easily test reactive updates in this setup
-    // In a real application, the graph updates would be handled by the parent component
-    expect(newGraph.nodes).toHaveLength(4);
+    await waitFor(() => {
+      expect(screen.getByText('New Node')).toBeInTheDocument();
+    });
+    // Existing nodes remain rendered after the reactive update.
     expect(screen.getByText('Atmospheric Model')).toBeInTheDocument();
+  });
+
+  it('does not mutate the caller-owned node objects (props stay immutable)', async () => {
+    const { waitFor } = await import('@solidjs/testing-library');
+    render(() => <CouplingGraph graph={mockGraph} showMinimap={false} />);
+
+    const modelShape = document.querySelector(modelRectSelector) as SVGRectElement;
+    const initialX = modelShape.getAttribute('x');
+    const initialY = modelShape.getAttribute('y');
+
+    // Let the force simulation run; it writes positions onto its own copies.
+    await waitFor(() => {
+      expect(
+        modelShape.getAttribute('x') !== initialX ||
+        modelShape.getAttribute('y') !== initialY
+      ).toBe(true);
+    }, { timeout: 3000 });
+
+    // d3-force adds x/y/vx/vy/index to the objects it owns; the caller's
+    // ComponentNode objects must be left untouched.
+    for (const node of mockGraph.nodes) {
+      const raw = node as unknown as Record<string, unknown>;
+      expect(raw.x).toBeUndefined();
+      expect(raw.y).toBeUndefined();
+      expect(raw.vx).toBeUndefined();
+      expect(raw.vy).toBeUndefined();
+      expect(raw.index).toBeUndefined();
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { render, screen } from '@solidjs/testing-library';
+import { render, screen, fireEvent } from '@solidjs/testing-library';
 import { createSignal } from 'solid-js';
+import type { Expression } from '@earthsciml/ast';
 import { ExpressionEditor } from './ExpressionEditor';
 
 describe('ExpressionEditor', () => {
@@ -30,12 +31,20 @@ describe('ExpressionEditor', () => {
   });
 
   it('handles expression changes', () => {
+    // Drive a real edit through the node's field editor and confirm the new
+    // expression flows out via onChange (controlled: parent owns the value).
     const onChange = vi.fn();
-    render(() => <ExpressionEditor {...mockProps} onChange={onChange} />);
+    const { container } = render(() => (
+      <ExpressionEditor {...mockProps} initialExpression={{ op: 'D', args: ['u'], wrt: 't' }} onChange={onChange} />
+    ));
 
-    // This is a basic test - more complex interaction testing would require
-    // mocking the ExpressionNode component's replace functionality
-    expect(screen.getByText('+')).toBeInTheDocument();
+    const rootNode = container.querySelector('.esm-expression-node')!;
+    fireEvent.click(rootNode);
+    fireEvent.click(screen.getByTitle('Edit D fields'));
+    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } });
+    fireEvent.click(screen.getByText('Apply'));
+
+    expect(onChange).toHaveBeenCalledWith({ op: 'D', args: ['u'], wrt: 'x' });
   });
 
   it('respects allowEditing=false mode', () => {
@@ -68,16 +77,18 @@ describe('ExpressionEditor', () => {
   });
 
   it('updates expression when initialExpression prop changes', () => {
-    const [expression] = createSignal(mockExpression);
+    // Controlled: the rendered expression tracks the prop, so a parent updating
+    // it re-renders the editor.
+    const [expression, setExpression] = createSignal<Expression>(7);
 
     render(() => <ExpressionEditor {...mockProps} initialExpression={expression()} />);
 
-    expect(screen.getByText('+')).toBeInTheDocument();
-    expect(screen.getByText('x')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
 
-    // Note: This test would need more sophisticated prop update handling
-    // in a real scenario, SolidJS components don't automatically re-render
-    // when props change like React components do
+    setExpression(9);
+
+    expect(screen.getByText('9')).toBeInTheDocument();
+    expect(screen.queryByText('7')).not.toBeInTheDocument();
   });
 
   it('applies custom CSS class', () => {

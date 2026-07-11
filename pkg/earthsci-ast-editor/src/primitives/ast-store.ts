@@ -13,6 +13,7 @@
 
 import { createStore, produce, reconcile, unwrap, Store, SetStoreFunction } from 'solid-js/store';
 import { createSignal } from 'solid-js';
+import { validate } from '@earthsciml/ast';
 import type { EsmFile } from '@earthsciml/ast';
 import { createUndoHistory, type UndoHistory, type UndoHistoryConfig } from './history.js';
 import { getValueAtPath, PathUtils, type Path, type PathSegment } from './path-utils.js';
@@ -40,9 +41,9 @@ export interface AstStore {
   /** Function to update the store (captures an undo point per mutation) */
   setFile: SetStoreFunction<EsmFile>;
   /** Get value at a specific path */
-  getPath: (path: Path) => any;
+  getPath: (path: Path) => unknown;
   /** Set value at a specific path */
-  setPath: (path: Path, value: any) => void;
+  setPath: (path: Path, value: unknown) => void;
   /** Update value at a specific path using a function */
   updatePath: <T>(path: Path, updateFn: (current: T) => T) => void;
   /** Undo/redo history management */
@@ -54,54 +55,50 @@ export interface AstStore {
 }
 
 /**
- * Default empty ESM file structure
+ * Default empty ESM file structure.
+ *
+ * Shaped against the REAL ESM schema (`esm`, `metadata`, `models`,
+ * `reaction_systems`, `coupling`) — a document with only `metadata` fails the
+ * schema (it requires at least one component collection), so the empty
+ * `models`/`reaction_systems` maps are load-bearing for validity.
  */
 function createDefaultEsmFile(): EsmFile {
+  const now = new Date().toISOString();
   return {
     esm: "0.8.0",
-    schema_version: "1.0",
     metadata: {
       name: "Untitled Model",
       description: "A new ESM model",
       authors: [],
-      created: new Date().toISOString(),
-      modified: new Date().toISOString()
+      created: now,
+      modified: now
     },
-    components: {},
+    models: {},
+    reaction_systems: {},
     coupling: []
   };
 }
 
 /**
- * Basic validation for ESM file structure
+ * Validate an ESM file, flattened to the `{ isValid, errors }` shape the store
+ * surfaces via `isValid()` / `validationErrors()`.
+ *
+ * Delegates to the core `validate` from @earthsciml/ast (schema + structural
+ * checks against the real format) instead of hand-rolling field checks against
+ * a fictional schema, so genuinely conformant files are reported valid.
  */
 function validateEsmFile(file: EsmFile): { isValid: boolean; errors: string[] } {
-  const errors: string[] = [];
-
-  if (!file.schema_version) {
-    errors.push("Missing schema_version");
+  try {
+    const result = validate(file);
+    const errors = [
+      ...(result.schema_errors ?? []),
+      ...(result.structural_errors ?? [])
+    ].map(e => e.message);
+    return { isValid: result.is_valid, errors };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { isValid: false, errors: [`Validation error: ${message}`] };
   }
-
-  if (!file.metadata) {
-    errors.push("Missing metadata");
-  } else {
-    if (!file.metadata.name) {
-      errors.push("Missing metadata.name");
-    }
-  }
-
-  if (!file.components) {
-    errors.push("Missing components");
-  }
-
-  if (!Array.isArray(file.coupling)) {
-    errors.push("coupling must be an array");
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors
-  };
 }
 
 /**
@@ -156,18 +153,18 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
   /**
    * Get value at a specific path in the file
    */
-  function getPath(path: Path): any {
+  function getPath(path: Path): unknown {
     return getValueAtPath(file, path);
   }
 
   /**
    * Set value at a specific path in the file
    */
-  function setPath(path: Path, value: any): void {
+  function setPath(path: Path, value: unknown): void {
     if (path.length === 0) {
       // Replacing the whole file: use reconcile so removed keys are dropped
       history.capture();
-      setFileRaw(reconcile(value));
+      setFileRaw(reconcile(value as EsmFile));
       revalidate();
       return;
     }
@@ -194,7 +191,7 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
    * Update value at a specific path using a function
    */
   function updatePath<T>(path: Path, updateFn: (current: T) => T): void {
-    const currentValue = getPath(path);
+    const currentValue = getPath(path) as T;
     const newValue = updateFn(currentValue);
     setPath(path, newValue);
   }
@@ -226,27 +223,35 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
 }
 
 /**
- * Common path patterns for ESM file structures
+ * Common path patterns for ESM file structures.
+ *
+ * Built from the REAL top-level keys — `models` and `reaction_systems`
+ * (keyed by component name) — not the fictional `components` map, so these
+ * paths resolve against genuinely conformant files.
  */
 export const CommonPaths = {
+  // Metadata
   metadata: (): Path => ['metadata'],
   metadataName: (): Path => ['metadata', 'name'],
   metadataDescription: (): Path => ['metadata', 'description'],
-  components: (): Path => ['components'],
-  component: (name: string): Path => ['components', name],
-  componentType: (name: string): Path => ['components', name, 'type'],
+
+  // Models (each entry is a Model keyed by name under the real `models` key)
+  models: (): Path => ['models'],
+  model: (modelName: string): Path => ['models', modelName],
+  modelVariables: (modelName: string): Path => ['models', modelName, 'variables'],
+  modelVariable: (modelName: string, varName: string): Path => ['models', modelName, 'variables', varName],
+  modelEquations: (modelName: string): Path => ['models', modelName, 'equations'],
+  modelEquation: (modelName: string, index: number): Path => ['models', modelName, 'equations', index],
+
+  // Reaction systems (keyed by name under the real `reaction_systems` key)
+  reactionSystems: (): Path => ['reaction_systems'],
+  reactionSystem: (systemName: string): Path => ['reaction_systems', systemName],
+  reactionSpecies: (systemName: string): Path => ['reaction_systems', systemName, 'species'],
+  reactionSpeciesEntry: (systemName: string, speciesName: string): Path => ['reaction_systems', systemName, 'species', speciesName],
+  reactions: (systemName: string): Path => ['reaction_systems', systemName, 'reactions'],
+  reaction: (systemName: string, index: number): Path => ['reaction_systems', systemName, 'reactions', index],
+
+  // Coupling
   coupling: (): Path => ['coupling'],
-  couplingEntry: (index: number): Path => ['coupling', index],
-
-  // Model-specific paths
-  modelVariables: (componentName: string): Path => ['components', componentName, 'variables'],
-  modelVariable: (componentName: string, varName: string): Path => ['components', componentName, 'variables', varName],
-  modelEquations: (componentName: string): Path => ['components', componentName, 'equations'],
-  modelEquation: (componentName: string, index: number): Path => ['components', componentName, 'equations', index],
-
-  // Reaction system paths
-  reactionSpecies: (componentName: string): Path => ['components', componentName, 'species'],
-  reactionSpeciesEntry: (componentName: string, speciesName: string): Path => ['components', componentName, 'species', speciesName],
-  reactions: (componentName: string): Path => ['components', componentName, 'reactions'],
-  reaction: (componentName: string, index: number): Path => ['components', componentName, 'reactions', index]
+  couplingEntry: (index: number): Path => ['coupling', index]
 };

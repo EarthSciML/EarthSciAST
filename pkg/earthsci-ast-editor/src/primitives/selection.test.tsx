@@ -5,11 +5,11 @@ import {
   SelectionProvider,
   useSelectionContext,
   createSelectionContext,
-  getVariableSuggestions,
-  pathsEqual,
-  pathToString,
-  stringToPath
+  getVariableSuggestions
 } from './selection';
+// Path helpers now have a single canonical source (path-utils); selection no
+// longer re-exports them.
+import { pathsEqual, pathToString, stringToPath } from './path-utils';
 import type { Expression, EsmFile } from '@earthsciml/ast';
 
 describe('Selection primitives', () => {
