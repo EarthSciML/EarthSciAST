@@ -51,7 +51,7 @@ using JSON3
             # 3. Round-trip.
             tmp = tempname() * ".esm"
             try
-                EarthSciAST.save(tmp, original)
+                EarthSciAST.save(original, tmp)
                 reloaded = EarthSciAST.load(tmp)
                 @test length(reloaded.data_loaders) == length(original.data_loaders)
                 for (name, orig_loader) in original.data_loaders

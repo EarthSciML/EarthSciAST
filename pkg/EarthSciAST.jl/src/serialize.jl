@@ -1041,23 +1041,16 @@ end
 
 """
     save(file::EsmFile, path::String)
-    save(path::String, file::EsmFile)
 
-Save an EsmFile object to a JSON file at the specified path.
-
-Both argument orders are accepted and part of the frozen public API — the
-`(path, file)` order matches the ergonomic "destination first" habit and
-cannot be removed without breaking callers. The CANONICAL order is
-`save(file, path)` (data first, like `write(io, x)` and the `save(file, io)`
-stream method below); prefer it in new code and documentation.
+Save an EsmFile object to a JSON file at the specified path. Argument order is
+data-first (`save(file, path)`), matching `write(io, x)` and the `save(file, io)`
+stream method below.
 """
 function save(file::EsmFile, path::String)
     open(path, "w") do io
         save(file, io)
     end
 end
-
-save(path::String, file::EsmFile) = save(file, path)
 
 """
     save(file::EsmFile, io::IO)

@@ -8,7 +8,7 @@ using EarthSciAST
         path = joinpath(fixture_dir, name)
         first = EarthSciAST.load(path)
         tmp = tempname() * ".esm"
-        EarthSciAST.save(tmp, first)
+        EarthSciAST.save(first, tmp)
         second = EarthSciAST.load(tmp)
         rm(tmp; force=true)
         return first, second
