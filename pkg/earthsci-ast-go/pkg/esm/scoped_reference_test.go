@@ -205,7 +205,8 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 	}
 
 	// Perform substitution with scoped reference support
-	result := SubstituteWithScoped(expr, bindings, file, "MainModel")
+	result, err := SubstituteWithScoped(expr, bindings, file, "MainModel")
+	assert.NoError(t, err)
 
 	// Verify the result
 	resultNode, ok := result.(ExprNode)

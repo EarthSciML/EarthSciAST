@@ -116,4 +116,5 @@ var (
 	_ DiagnosticError = (*RuleEngineError)(nil)
 	_ DiagnosticError = (*LowerEnumsError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
+	_ DiagnosticError = (*SubstitutionError)(nil)
 )

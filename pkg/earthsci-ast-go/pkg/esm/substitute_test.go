@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSubstituteSimpleVariable(t *testing.T) {
@@ -42,7 +43,8 @@ func TestSubstituteSimpleVariable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Substitute(tt.input, tt.bindings)
+			result, err := Substitute(tt.input, tt.bindings)
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -131,7 +133,8 @@ func TestSubstituteExprNode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Substitute(tt.input, tt.bindings)
+			result, err := Substitute(tt.input, tt.bindings)
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -162,7 +165,8 @@ func TestSubstituteRecursive(t *testing.T) {
 		},
 	}
 
-	result := Substitute(input, bindings)
+	result, err := Substitute(input, bindings)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
@@ -179,7 +183,8 @@ func TestSubstituteInEquation(t *testing.T) {
 		RHS: ExprNode{Op: "*", Args: []any{0.5, "x"}},
 	}
 
-	result := SubstituteInEquation(eq, bindings)
+	result, err := SubstituteInEquation(eq, bindings)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
@@ -196,7 +201,8 @@ func TestSubstituteInAffectEquation(t *testing.T) {
 		RHS: ExprNode{Op: "+", Args: []any{5.0, 1}},
 	}
 
-	result := SubstituteInAffectEquation(affect, bindings)
+	result, err := SubstituteInAffectEquation(affect, bindings)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
@@ -221,7 +227,8 @@ func TestSubstituteInModel(t *testing.T) {
 
 	bindings := map[string]Expression{"k": 0.1}
 
-	result := SubstituteInModel(model, bindings)
+	result, err := SubstituteInModel(model, bindings)
+	assert.NoError(t, err)
 
 	// Check equation substitution
 	expectedEqRHS := ExprNode{Op: "*", Args: []any{0.1, "x"}}
@@ -253,7 +260,8 @@ func TestSubstituteInReactionSystem(t *testing.T) {
 
 	bindings := map[string]Expression{"temperature": 298.15}
 
-	result := SubstituteInReactionSystem(system, bindings)
+	result, err := SubstituteInReactionSystem(system, bindings)
+	assert.NoError(t, err)
 
 	expectedRate := ExprNode{Op: "*", Args: []any{"k1", 298.15}}
 	assert.Equal(t, expectedRate, result.Reactions[0].Rate)
@@ -278,7 +286,8 @@ func TestPartialSubstitute(t *testing.T) {
 		Args: []any{1.0, "b", 3.0}, // 'b' should remain as variable
 	}
 
-	result := PartialSubstitute(input, bindings, keepSymbolic)
+	result, err := PartialSubstitute(input, bindings, keepSymbolic)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
@@ -298,7 +307,8 @@ func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 		"T":    298.15,
 	}
 
-	result := Substitute(input, bindings)
+	result, err := Substitute(input, bindings)
+	assert.NoError(t, err)
 
 	// The result should have 'rate' replaced with the complex expression
 	// and 'T' within that expression should be substituted with 298.15
@@ -316,22 +326,51 @@ func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 	assert.Equal(t, expected, result)
 }
 
-// A cyclic binding (x → f(x)) must not stack-overflow: the depth guard halts
-// the recursion and returns a bounded result instead of panicking (task 8).
-func TestSubstituteCyclicBindingTerminates(t *testing.T) {
+// A cyclic binding (x → f(x)) must not stack-overflow: cycle detection halts
+// the recursion and returns a SubstitutionError instead of panicking or looping.
+func TestSubstituteCyclicBindingErrors(t *testing.T) {
 	bindings := map[string]Expression{
 		"x": ExprNode{Op: "f", Args: []any{"x"}},
 	}
-	done := make(chan struct{})
+	type res struct {
+		out Expression
+		err error
+	}
+	done := make(chan res, 1)
 	go func() {
-		_ = Substitute("x", bindings) // must return, not crash or hang
-		close(done)
+		out, err := Substitute("x", bindings) // must return, not crash or hang
+		done <- res{out, err}
 	}()
 	select {
-	case <-done:
+	case r := <-done:
+		var se *SubstitutionError
+		require.ErrorAs(t, r.err, &se, "cyclic binding must surface a SubstitutionError")
+		assert.Equal(t, codeCyclicSubstitution, se.DiagnosticCode())
 	case <-time.After(10 * time.Second):
 		t.Fatal("Substitute did not terminate on a cyclic binding")
 	}
+}
+
+// A transitive cycle (x → y, y → x) is detected the same way.
+func TestSubstituteTransitiveCycleErrors(t *testing.T) {
+	bindings := map[string]Expression{
+		"x": ExprNode{Op: "+", Args: []any{"y", 1.0}},
+		"y": ExprNode{Op: "+", Args: []any{"x", 1.0}},
+	}
+	_, err := Substitute("x", bindings)
+	var se *SubstitutionError
+	require.ErrorAs(t, err, &se)
+}
+
+// A binding whose replacement mentions a variable twice in sibling positions
+// (not its own key) substitutes cleanly without a false-positive cycle.
+func TestSubstituteRepeatedVariableNotACycle(t *testing.T) {
+	bindings := map[string]Expression{
+		"x": ExprNode{Op: "*", Args: []any{"a", "a"}}, // a appears twice, no cycle
+	}
+	out, err := Substitute("x", bindings)
+	require.NoError(t, err)
+	assert.Equal(t, ExprNode{Op: "*", Args: []any{"a", "a"}}, out)
 }
 
 func TestSubstituteWithDerivativeWrtParameter(t *testing.T) {
@@ -345,7 +384,8 @@ func TestSubstituteWithDerivativeWrtParameter(t *testing.T) {
 		"time_var": "t",
 	}
 
-	result := Substitute(input, bindings)
+	result, err := Substitute(input, bindings)
+	assert.NoError(t, err)
 
 	expected := ExprNode{
 		Op:   "D",

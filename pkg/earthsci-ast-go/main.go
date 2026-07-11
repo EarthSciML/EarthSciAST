@@ -190,7 +190,10 @@ func substituteFile(filename string, substitutions []string) {
 	}
 
 	// Apply substitutions
-	newFile := esm.SubstituteInFile(*esmFile, bindings)
+	newFile, err := esm.SubstituteInFile(*esmFile, bindings)
+	if err != nil {
+		fatalf("Failed to substitute: %v", err)
+	}
 
 	// Serialize and print the result
 	jsonStr, err := esm.Serialize(&newFile)

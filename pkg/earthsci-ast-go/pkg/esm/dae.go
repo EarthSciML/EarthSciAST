@@ -168,16 +168,19 @@ func factorTrivialDAE(model *Model, indep string) int {
 		if idx < 0 {
 			return factored
 		}
+		// A single binding y -> f where y does not occur in f (guaranteed by the
+		// Contains guard above): acyclic by construction, so substitution here
+		// cannot return a SubstitutionError — the errors are safely discarded.
 		bindings := map[string]Expression{lhsName: rhsExpr}
 		for j := range model.Equations {
 			if j == idx {
 				continue
 			}
-			model.Equations[j] = SubstituteInEquation(model.Equations[j], bindings)
+			model.Equations[j], _ = SubstituteInEquation(model.Equations[j], bindings)
 		}
 		for vname, v := range model.Variables {
 			if v.Expression != nil {
-				v.Expression = Substitute(v.Expression, bindings)
+				v.Expression, _ = Substitute(v.Expression, bindings)
 				model.Variables[vname] = v
 			}
 		}
