@@ -114,7 +114,7 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 			}
 			residual++
 			residualPaths = append(residualPaths,
-				fmt.Sprintf("models.%s.equations[%d]", mname, i))
+				fmt.Sprintf("/models/%s/equations/%d", mname, i))
 		}
 		info.AlgebraicEquationCount += residual
 		info.PerModel[mname] = residual

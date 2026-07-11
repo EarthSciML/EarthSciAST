@@ -378,12 +378,12 @@ func TestValidateModelUnitsIntegration(t *testing.T) {
 		},
 	}
 	result := &StructuralValidationResult{}
-	validateModelUnits("M", &model, "$.models.M", nil, result)
+	validateModelUnits("M", &model, "/models/M", nil, result)
 	if len(result.UnitWarnings) != 1 {
 		t.Fatalf("expected 1 unit warning, got %d: %+v", len(result.UnitWarnings), result.UnitWarnings)
 	}
 	w := result.UnitWarnings[0]
-	if w.Path != "$.models.M.equations[1]" {
+	if w.Path != "/models/M/equations/1" {
 		t.Errorf("wrong path: %s", w.Path)
 	}
 }
@@ -415,7 +415,7 @@ func TestValidateFileUnitsEndToEnd(t *testing.T) {
 	}
 	found := false
 	for _, w := range result.UnitWarnings {
-		if w.Path == "$.models.M.equations[0]" {
+		if w.Path == "/models/M/equations/0" {
 			found = true
 			if w.LhsUnits == w.RhsUnits {
 				t.Errorf("mismatch warning has matching dims: %+v", w)

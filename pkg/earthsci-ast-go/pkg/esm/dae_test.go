@@ -187,7 +187,7 @@ func TestApplyDAEContract_NontrivialConstraint(t *testing.T) {
 	// Error message must name the offending equation path and the Julia
 	// escape hatch, per the RFC §12 contract.
 	wantSubstrings := []string{
-		"models.M.equations",
+		"/models/M/equations",
 		"Julia",
 		"RFC §12",
 	}

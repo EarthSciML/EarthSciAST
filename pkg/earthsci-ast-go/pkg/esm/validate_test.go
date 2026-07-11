@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +70,34 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 	assert.Len(t, result.Messages, 1)
 	assert.Contains(t, result.Messages[0].Message, "Unknown variable 'unknown_var'")
 	assert.Equal(t, "error", result.Messages[0].Level)
+}
+
+// TestValidationPathsAreJSONPointer pins that structural-error Paths are emitted
+// as RFC 6901 JSON Pointers (as SchemaError.Path and the shared invalid-fixture
+// goldens are), not the legacy JSONPath-ish "$.models.x.equations[0]" dialect.
+func TestValidationPathsAreJSONPointer(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "0.1.0",
+		Metadata: Metadata{Name: "TestModel", Authors: []string{"Test Author"}},
+		Models: map[string]Model{
+			"TestModel": {
+				Variables: map[string]ModelVariable{"x": {Type: "state"}},
+				Equations: []Equation{{
+					LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+					RHS: "unknown_var",
+				}},
+			},
+		},
+	}
+
+	result := ValidateStructuralWithCodes(esmFile)
+	require.NotEmpty(t, result.StructuralErrors)
+	for _, se := range result.StructuralErrors {
+		assert.Truef(t, strings.HasPrefix(se.Path, "/"), "path %q must start with '/'", se.Path)
+		assert.NotContainsf(t, se.Path, "$", "path %q must not use the '$' JSONPath root", se.Path)
+		assert.NotContainsf(t, se.Path, "[", "path %q must use '/index', not '[index]'", se.Path)
+		assert.Containsf(t, se.Path, "/models/TestModel", "path %q must locate the model", se.Path)
+	}
 }
 
 func TestValidateObservedVariableWithoutExpression(t *testing.T) {

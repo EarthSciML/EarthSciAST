@@ -14,12 +14,10 @@ type SchemaError struct {
 
 // StructuralError represents equation/unknown balance, reference integrity issues
 type StructuralError struct {
-	// Path locates the relevant component. It is currently emitted in one of
-	// three dialects depending on which check produced it: a JSONPath-like
-	// dotted form ("$.models.x.equations[0]"), an RFC 6901 JSON Pointer
-	// ("/reaction_systems/x/constraint_equations/0"), or a bare dotted form
-	// ("models.x.equations[0]"). Consumers must not assume a single format;
-	// unifying the dialects is deferred to preserve cross-language output.
+	// Path is an RFC 6901 JSON Pointer to the offending component
+	// ("/models/x/equations/0", "/reaction_systems/x/reactions/0/substrates/1/species"),
+	// matching SchemaError.Path and the shared invalid-fixture goldens. The
+	// document root is the empty string "".
 	Path    string         `json:"path"`
 	Code    string         `json:"code"`    // Machine-readable error code
 	Message string         `json:"message"` // Human-readable description
@@ -28,7 +26,7 @@ type StructuralError struct {
 
 // UnitWarning represents dimensional inconsistencies
 type UnitWarning struct {
-	Path     string `json:"path"`      // location of the equation or expression (same multi-dialect caveat as StructuralError.Path)
+	Path     string `json:"path"`      // RFC 6901 JSON Pointer to the equation/expression (see StructuralError.Path)
 	Message  string `json:"message"`   // Human-readable description
 	LhsUnits string `json:"lhs_units"` // Inferred units of the LHS
 	RhsUnits string `json:"rhs_units"` // Inferred units of the RHS
@@ -153,7 +151,7 @@ func ValidateStructural(file *ESMFile) *DetailedValidationResult {
 		result.Messages = append(result.Messages, ValidationMessage{
 			Level:   "error",
 			Message: fmt.Sprintf("Basic validation failed: %v", err),
-			Path:    "$",
+			Path:    "",
 		})
 		return result
 	}
@@ -180,7 +178,7 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 	// Basic struct validation (already done in types.go)
 	if err := file.ValidateStruct(); err != nil {
 		result.StructuralErrors = append(result.StructuralErrors, StructuralError{
-			Path:    "$",
+			Path:    "",
 			Code:    CodeValidationFailed,
 			Message: fmt.Sprintf("Basic validation failed: %v", err),
 			Details: map[string]any{},
@@ -196,11 +194,11 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 	// Unit/dimensional checks (code-bearing surface only).
 	for modelName, model := range file.Models {
 		model := model
-		validateModelUnits(modelName, &model, fmt.Sprintf("$.models.%s", modelName), file, result)
+		validateModelUnits(modelName, &model, fmt.Sprintf("/models/%s", modelName), file, result)
 	}
 	for systemName, system := range file.ReactionSystems {
 		system := system
-		validateReactionSystemUnits(systemName, &system, fmt.Sprintf("$.reaction_systems.%s", systemName), result)
+		validateReactionSystemUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), result)
 		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), result)
 	}
 
@@ -273,7 +271,7 @@ func collectStructuralErrors(file *ESMFile) ([]StructuralError, []ValidationMess
 
 // validateModel checks model-specific structural rules.
 func (s *structuralScan) validateModel(modelName string, model *Model) {
-	basePath := fmt.Sprintf("$.models.%s", modelName)
+	basePath := fmt.Sprintf("/models/%s", modelName)
 
 	allVars := make(map[string]bool)
 	for varName := range model.Variables {
@@ -281,9 +279,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	}
 
 	for i, eq := range model.Equations {
-		eqPath := fmt.Sprintf("%s.equations[%d]", basePath, i)
-		s.validateExpressionVariables(eq.LHS, allVars, fmt.Sprintf("%s.lhs", eqPath), modelName)
-		s.validateExpressionVariables(eq.RHS, allVars, fmt.Sprintf("%s.rhs", eqPath), modelName)
+		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
+		s.validateExpressionVariables(eq.LHS, allVars, fmt.Sprintf("%s/lhs", eqPath), modelName)
+		s.validateExpressionVariables(eq.RHS, allVars, fmt.Sprintf("%s/rhs", eqPath), modelName)
 	}
 
 	// Equation-unknown balance validation (Section 3.2.1).
@@ -293,7 +291,7 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	for varName, variable := range model.Variables {
 		if variable.Type == VarTypeObserved && variable.Expression == nil {
 			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s.variables.%s", basePath, varName),
+				Path:    fmt.Sprintf("%s/variables/%s", basePath, varName),
 				Code:    ErrorMissingObservedExpr,
 				Message: "Observed variable must have an expression",
 				Details: map[string]any{
@@ -306,11 +304,11 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 
 	for i, event := range model.DiscreteEvents {
 		event := event
-		s.validateDiscreteEvent(&event, allVars, fmt.Sprintf("%s.discrete_events[%d]", basePath, i), modelName)
+		s.validateDiscreteEvent(&event, allVars, fmt.Sprintf("%s/discrete_events/%d", basePath, i), modelName)
 	}
 	for i, event := range model.ContinuousEvents {
 		event := event
-		s.validateContinuousEvent(&event, allVars, fmt.Sprintf("%s.continuous_events[%d]", basePath, i), modelName)
+		s.validateContinuousEvent(&event, allVars, fmt.Sprintf("%s/continuous_events/%d", basePath, i), modelName)
 	}
 }
 
@@ -347,7 +345,7 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 		})
 	case ExprNode:
 		for i, arg := range e.Args {
-			s.validateExpressionVariables(arg, allVars, fmt.Sprintf("%s.args[%d]", path, i), currentSystem)
+			s.validateExpressionVariables(arg, allVars, fmt.Sprintf("%s/args/%d", path, i), currentSystem)
 		}
 	case float64, float32, int, int32, int64:
 		// Numeric literals are always valid. This mirrors the numeric types the
@@ -406,29 +404,29 @@ func (s *structuralScan) validateAffectTarget(lhs string, allVars map[string]boo
 // validateDiscreteEvent validates discrete event structure.
 func (s *structuralScan) validateDiscreteEvent(event *DiscreteEvent, allVars map[string]bool, path, currentSystem string) {
 	if event.Trigger.Type == "condition" && event.Trigger.Expression != nil {
-		s.validateExpressionVariables(event.Trigger.Expression, allVars, fmt.Sprintf("%s.trigger.expression", path), currentSystem)
+		s.validateExpressionVariables(event.Trigger.Expression, allVars, fmt.Sprintf("%s/trigger/expression", path), currentSystem)
 	}
 	for i, affect := range event.Affects {
-		affectPath := fmt.Sprintf("%s.affects[%d]", path, i)
-		s.validateAffectTarget(affect.LHS, allVars, currentSystem, fmt.Sprintf("%s.lhs", affectPath), "affect", "discrete")
-		s.validateExpressionVariables(affect.RHS, allVars, fmt.Sprintf("%s.rhs", affectPath), currentSystem)
+		affectPath := fmt.Sprintf("%s/affects/%d", path, i)
+		s.validateAffectTarget(affect.LHS, allVars, currentSystem, fmt.Sprintf("%s/lhs", affectPath), "affect", "discrete")
+		s.validateExpressionVariables(affect.RHS, allVars, fmt.Sprintf("%s/rhs", affectPath), currentSystem)
 	}
 }
 
 // validateContinuousEvent validates continuous event structure.
 func (s *structuralScan) validateContinuousEvent(event *ContinuousEvent, allVars map[string]bool, path, currentSystem string) {
 	for i, condition := range event.Conditions {
-		s.validateExpressionVariables(condition, allVars, fmt.Sprintf("%s.conditions[%d]", path, i), currentSystem)
+		s.validateExpressionVariables(condition, allVars, fmt.Sprintf("%s/conditions/%d", path, i), currentSystem)
 	}
 	for i, affect := range event.Affects {
-		affectPath := fmt.Sprintf("%s.affects[%d]", path, i)
-		s.validateAffectTarget(affect.LHS, allVars, currentSystem, fmt.Sprintf("%s.lhs", affectPath), "affect", "continuous")
-		s.validateExpressionVariables(affect.RHS, allVars, fmt.Sprintf("%s.rhs", affectPath), currentSystem)
+		affectPath := fmt.Sprintf("%s/affects/%d", path, i)
+		s.validateAffectTarget(affect.LHS, allVars, currentSystem, fmt.Sprintf("%s/lhs", affectPath), "affect", "continuous")
+		s.validateExpressionVariables(affect.RHS, allVars, fmt.Sprintf("%s/rhs", affectPath), currentSystem)
 	}
 	for i, affect := range event.AffectNeg {
-		affectPath := fmt.Sprintf("%s.affect_neg[%d]", path, i)
-		s.validateAffectTarget(affect.LHS, allVars, currentSystem, fmt.Sprintf("%s.lhs", affectPath), "affect_neg", "continuous")
-		s.validateExpressionVariables(affect.RHS, allVars, fmt.Sprintf("%s.rhs", affectPath), currentSystem)
+		affectPath := fmt.Sprintf("%s/affect_neg/%d", path, i)
+		s.validateAffectTarget(affect.LHS, allVars, currentSystem, fmt.Sprintf("%s/lhs", affectPath), "affect_neg", "continuous")
+		s.validateExpressionVariables(affect.RHS, allVars, fmt.Sprintf("%s/rhs", affectPath), currentSystem)
 	}
 }
 
@@ -512,7 +510,7 @@ func computeEquationBalance(model *Model, indep string) (nStates, nOdes int, mis
 
 // validateReactionSystem checks reaction system-specific structural rules.
 func (s *structuralScan) validateReactionSystem(systemName string, system *ReactionSystem) {
-	basePath := fmt.Sprintf("$.reaction_systems.%s", systemName)
+	basePath := fmt.Sprintf("/reaction_systems/%s", systemName)
 
 	allSpecies := make(map[string]bool)
 	for speciesName := range system.Species {
@@ -528,7 +526,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	}
 
 	for i, reaction := range system.Reactions {
-		reactionPath := fmt.Sprintf("%s.reactions[%d]", basePath, i)
+		reactionPath := fmt.Sprintf("%s/reactions/%d", basePath, i)
 
 		// A reaction with neither substrates nor products carries no mass
 		// transfer and is rejected.
@@ -553,7 +551,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 		for j, substrate := range reaction.Substrates {
 			if !allSpecies[substrate.Species] {
 				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s.substrates[%d].species", reactionPath, j),
+					Path:    fmt.Sprintf("%s/substrates/%d/species", reactionPath, j),
 					Code:    ErrorUndefinedSpecies,
 					Message: fmt.Sprintf("Undefined species '%s' in reaction substrate", substrate.Species),
 					Details: map[string]any{
@@ -568,7 +566,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 		for j, product := range reaction.Products {
 			if !allSpecies[product.Species] {
 				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s.products[%d].species", reactionPath, j),
+					Path:    fmt.Sprintf("%s/products/%d/species", reactionPath, j),
 					Code:    ErrorUndefinedSpecies,
 					Message: fmt.Sprintf("Undefined species '%s' in reaction product", product.Species),
 					Details: map[string]any{
@@ -581,7 +579,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 			}
 		}
 
-		s.validateExpressionVariables(reaction.Rate, allVars, fmt.Sprintf("%s.rate", reactionPath), systemName)
+		s.validateExpressionVariables(reaction.Rate, allVars, fmt.Sprintf("%s/rate", reactionPath), systemName)
 	}
 
 	// v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction
@@ -624,7 +622,7 @@ func (s *structuralScan) reportDuplicateSpecies(entries []SubstrateProduct, side
 	for i, entry := range entries {
 		if first, exists := seen[entry.Species]; exists {
 			s.addLegacyWarning(
-				fmt.Sprintf("%s.%s", reactionPath, side),
+				fmt.Sprintf("%s/%s", reactionPath, side),
 				fmt.Sprintf("Species '%s' appears multiple times in %s (positions %d and %d)", entry.Species, side, first, i),
 			)
 		}
@@ -643,7 +641,7 @@ func (s *structuralScan) validateCouplingReferences() {
 	}
 
 	for i, coupling := range s.file.Coupling {
-		basePath := fmt.Sprintf("$.coupling[%d]", i)
+		basePath := fmt.Sprintf("/coupling/%d", i)
 
 		switch c := coupling.(type) {
 		case OperatorComposeCoupling:
@@ -655,7 +653,7 @@ func (s *structuralScan) validateCouplingReferences() {
 			fromSystem := extractSystemFromScoped(c.From)
 			if !allSystems[fromSystem] {
 				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s.from", basePath),
+					Path:    fmt.Sprintf("%s/from", basePath),
 					Code:    ErrorUndefinedSystem,
 					Message: fmt.Sprintf("Undefined system '%s' in coupling (from '%s')", fromSystem, c.From),
 					Details: map[string]any{
@@ -670,7 +668,7 @@ func (s *structuralScan) validateCouplingReferences() {
 			toSystem := extractSystemFromScoped(c.To)
 			if !allSystems[toSystem] {
 				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s.to", basePath),
+					Path:    fmt.Sprintf("%s/to", basePath),
 					Code:    ErrorUndefinedSystem,
 					Message: fmt.Sprintf("Undefined system '%s' in coupling (to '%s')", toSystem, c.To),
 					Details: map[string]any{
@@ -687,7 +685,7 @@ func (s *structuralScan) validateCouplingReferences() {
 			// `operators` block. Surface a structural error if a v0.2.x file
 			// reaches this validator via direct unmarshaling.
 			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s.operator", basePath),
+				Path:    fmt.Sprintf("%s/operator", basePath),
 				Code:    ErrorUndefinedOperator,
 				Message: fmt.Sprintf("'operator_apply' coupling has been removed (v0.3.0); referenced operator '%s'", c.Operator),
 				Details: map[string]any{
@@ -712,7 +710,7 @@ func (s *structuralScan) validateCouplingSystems(systems []string, allSystems ma
 			continue
 		}
 		s.addErr(StructuralError{
-			Path:    fmt.Sprintf("%s.systems[%d]", basePath, j),
+			Path:    fmt.Sprintf("%s/systems/%d", basePath, j),
 			Code:    ErrorUndefinedSystem,
 			Message: fmt.Sprintf("Undefined system '%s' in coupling", sysName),
 			Details: map[string]any{
@@ -728,11 +726,11 @@ func (s *structuralScan) validateCouplingSystems(systems []string, allSystems ma
 // validateDataLoaderReferences validates data loader configurations.
 func (s *structuralScan) validateDataLoaderReferences() {
 	for loaderName, loader := range s.file.DataLoaders {
-		basePath := fmt.Sprintf("$.data_loaders.%s", loaderName)
+		basePath := fmt.Sprintf("/data_loaders/%s", loaderName)
 
 		if loader.Kind == "" {
 			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s.kind", basePath),
+				Path:    fmt.Sprintf("%s/kind", basePath),
 				Code:    CodeMissingLoaderKind,
 				Message: "Data loader kind is required",
 				Details: map[string]any{"loader": loaderName},
@@ -740,7 +738,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 		}
 		if loader.Source.URLTemplate == "" {
 			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s.source.url_template", basePath),
+				Path:    fmt.Sprintf("%s/source/url_template", basePath),
 				Code:    CodeMissingLoaderSourceURLTemplate,
 				Message: "Data loader source.url_template is required",
 				Details: map[string]any{"loader": loaderName},
@@ -748,7 +746,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 		}
 		if len(loader.Variables) == 0 {
 			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s.variables", basePath),
+				Path:    fmt.Sprintf("%s/variables", basePath),
 				Code:    CodeMissingLoaderVariables,
 				Message: "Data loader must expose at least one variable",
 				Details: map[string]any{"loader": loaderName},
@@ -757,7 +755,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 		for varName, dv := range loader.Variables {
 			if dv.FileVariable == "" {
 				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s.variables.%s.file_variable", basePath, varName),
+					Path:    fmt.Sprintf("%s/variables/%s/file_variable", basePath, varName),
 					Code:    CodeMissingLoaderVariableFileVariable,
 					Message: "Data loader variable missing file_variable",
 					Details: map[string]any{"loader": loaderName, "variable": varName},
@@ -765,7 +763,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 			}
 			if dv.Units == "" {
 				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s.variables.%s.units", basePath, varName),
+					Path:    fmt.Sprintf("%s/variables/%s/units", basePath, varName),
 					Code:    CodeMissingLoaderVariableUnits,
 					Message: "Data loader variable missing units",
 					Details: map[string]any{"loader": loaderName, "variable": varName},

@@ -703,12 +703,12 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 	env, bad := buildModelUnitEnv(model)
 	for name, err := range bad {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
-			Path:    fmt.Sprintf("%s.variables.%s.units", basePath, name),
+			Path:    fmt.Sprintf("%s/variables/%s/units", basePath, name),
 			Message: fmt.Sprintf("could not parse unit: %v", err),
 		})
 	}
 	for i, eq := range model.Equations {
-		eqPath := fmt.Sprintf("%s.equations[%d]", basePath, i)
+		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
 		if w := validateEquationDimensionsCoords(&eq, env, nil, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
@@ -726,7 +726,7 @@ func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEn
 
 	if lhsErr != nil {
 		return &UnitWarning{
-			Path:     path + ".lhs",
+			Path:     path + "/lhs",
 			Message:  "dimensional analysis failed on LHS: " + lhsErr.Error(),
 			LhsUnits: "error",
 			RhsUnits: dimString(rhs),
@@ -734,7 +734,7 @@ func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEn
 	}
 	if rhsErr != nil {
 		return &UnitWarning{
-			Path:     path + ".rhs",
+			Path:     path + "/rhs",
 			Message:  "dimensional analysis failed on RHS: " + rhsErr.Error(),
 			LhsUnits: dimString(lhs),
 			RhsUnits: "error",
@@ -1165,12 +1165,12 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 	env, bad := buildSystemUnitEnv(system)
 	for name, err := range bad {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
-			Path:    fmt.Sprintf("%s.%s.units", basePath, name),
+			Path:    fmt.Sprintf("%s/%s/units", basePath, name),
 			Message: fmt.Sprintf("could not parse unit: %v", err),
 		})
 	}
 	for i, rx := range system.Reactions {
-		rxPath := fmt.Sprintf("%s.reactions[%d].rate", basePath, i)
+		rxPath := fmt.Sprintf("%s/reactions/%d/rate", basePath, i)
 		if _, err := PropagateDimension(rx.Rate, env); err != nil {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:    rxPath,
@@ -1179,7 +1179,7 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 		}
 	}
 	for i, eq := range system.ConstraintEquations {
-		eqPath := fmt.Sprintf("%s.constraint_equations[%d]", basePath, i)
+		eqPath := fmt.Sprintf("%s/constraint_equations/%d", basePath, i)
 		if w := ValidateEquationDimensions(&eq, env, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
