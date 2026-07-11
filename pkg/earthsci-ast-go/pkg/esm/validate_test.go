@@ -162,6 +162,52 @@ func TestValidateReactionSystem(t *testing.T) {
 	assert.Empty(t, result.Messages)
 }
 
+// TestDuplicateSpeciesWarningBothTracks pins that a duplicated reaction species
+// is surfaced as an advisory warning on BOTH validation surfaces (previously the
+// coded track lacked it) and that the warning does NOT invalidate the document.
+func TestDuplicateSpeciesWarningBothTracks(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "0.1.0",
+		Metadata: Metadata{Name: "TestReactions", Authors: []string{"Test Author"}},
+		ReactionSystems: map[string]ReactionSystem{
+			"TestReactions": {
+				Species:    map[string]Species{"A": {Units: strPtr("mol/mol")}, "B": {Units: strPtr("mol/mol")}},
+				Parameters: map[string]Parameter{"k": {Units: strPtr("1/s")}},
+				Reactions: []Reaction{{
+					ID:         "R1",
+					Substrates: []SubstrateProduct{{Species: "A", Stoichiometry: 1}, {Species: "A", Stoichiometry: 1}},
+					Products:   []SubstrateProduct{{Species: "B", Stoichiometry: 1}},
+					Rate:       "k",
+				}},
+			},
+		},
+	}
+
+	// Coded surface: warning present, code stable, document still valid.
+	coded := ValidateStructuralWithCodes(esmFile)
+	assert.True(t, coded.Valid, "an advisory duplicate-species warning must not invalidate the document")
+	var found *StructuralError
+	for i := range coded.StructuralErrors {
+		if coded.StructuralErrors[i].Code == CodeDuplicateReactionSpecies {
+			found = &coded.StructuralErrors[i]
+		}
+	}
+	require.NotNil(t, found, "coded track must surface the duplicate-species warning")
+	assert.Equal(t, "warning", found.Level)
+	assert.Equal(t, "/reaction_systems/TestReactions/reactions/0/substrates", found.Path)
+
+	// Legacy surface: same finding rendered as a warning-level message.
+	legacy := Validate(esmFile)
+	assert.True(t, legacy.Valid)
+	sawWarning := false
+	for _, m := range legacy.Messages {
+		if m.Level == "warning" && strings.Contains(m.Message, "appears multiple times") {
+			sawWarning = true
+		}
+	}
+	assert.True(t, sawWarning, "legacy track must still surface the duplicate-species warning")
+}
+
 func TestValidateReactionWithUnknownSpecies(t *testing.T) {
 	esmFile := &ESMFile{
 		ESM: "0.1.0",

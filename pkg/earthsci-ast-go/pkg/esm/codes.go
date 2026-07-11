@@ -36,6 +36,11 @@ const (
 	CodeValidationFailed      = "validation_failed"
 	CodeUnknownExpressionType = "unknown_expression_type"
 
+	// CodeDuplicateReactionSpecies is a warning-level code: a species appears
+	// more than once in a reaction's substrate/product list. Advisory only —
+	// it does not invalidate the document.
+	CodeDuplicateReactionSpecies = "duplicate_reaction_species"
+
 	CodeMissingLoaderKind                 = "missing_loader_kind"
 	CodeMissingLoaderSourceURLTemplate    = "missing_loader_source_url_template"
 	CodeMissingLoaderVariables            = "missing_loader_variables"

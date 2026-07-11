@@ -22,6 +22,27 @@ type StructuralError struct {
 	Code    string         `json:"code"`    // Machine-readable error code
 	Message string         `json:"message"` // Human-readable description
 	Details map[string]any `json:"details"` // Additional context
+	// Level is "warning" for advisory findings that do NOT invalidate the
+	// document (e.g. a species listed twice in a reaction), or "" / "error"
+	// for hard errors. It is omitempty so hard errors keep their original wire
+	// shape; only warnings carry an explicit level.
+	Level string `json:"level,omitempty"`
+}
+
+// isWarning reports whether se is an advisory warning (Level "warning") rather
+// than a document-invalidating error (Level "" or "error").
+func (se StructuralError) isWarning() bool { return se.Level == "warning" }
+
+// countStructuralErrorLevel returns how many entries are hard errors (not
+// warnings) — the count that determines validity.
+func countStructuralErrorLevel(errs []StructuralError) int {
+	n := 0
+	for _, se := range errs {
+		if !se.isWarning() {
+			n++
+		}
+	}
+	return n
 }
 
 // UnitWarning represents dimensional inconsistencies
@@ -156,15 +177,14 @@ func ValidateStructural(file *ESMFile) *DetailedValidationResult {
 		return result
 	}
 
-	errs, legacyWarnings := collectStructuralErrors(file)
+	errs := collectStructuralErrors(file)
 	for _, se := range errs {
 		result.Messages = append(result.Messages, structuralErrorToLegacyMessage(se))
 	}
-	result.Messages = append(result.Messages, legacyWarnings...)
 
-	// A structural error (any adapted error-level message) invalidates the
-	// document; legacy-only warnings do not.
-	result.Valid = len(errs) == 0
+	// A hard structural error (error-level message) invalidates the document;
+	// warning-level findings do not.
+	result.Valid = countStructuralErrorLevel(errs) == 0
 	return result
 }
 
@@ -187,9 +207,10 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 		return result
 	}
 
-	// Single structural traversal (shared with the legacy surface).
-	errs, _ := collectStructuralErrors(file)
-	result.StructuralErrors = append(result.StructuralErrors, errs...)
+	// Single structural traversal (shared with the legacy surface). Includes
+	// warning-level entries (e.g. duplicate reaction species) so the coded
+	// surface has parity with the legacy one; warnings do not affect Valid.
+	result.StructuralErrors = append(result.StructuralErrors, collectStructuralErrors(file)...)
 
 	// Unit/dimensional checks (code-bearing surface only).
 	for modelName, model := range file.Models {
@@ -202,9 +223,10 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), result)
 	}
 
-	// Task 3.4: Valid is computed once from the accumulated errors so that
-	// checks appending StructuralErrors need not maintain the flag themselves.
-	result.Valid = len(result.StructuralErrors) == 0
+	// Valid is computed once from the accumulated errors so that checks
+	// appending StructuralErrors need not maintain the flag themselves;
+	// warning-level entries are excluded.
+	result.Valid = countStructuralErrorLevel(result.StructuralErrors) == 0
 	return result
 }
 
@@ -215,9 +237,11 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 //
 //   - reference checks emitted "Unknown …" where the code-bearing track emits
 //     "Undefined …"; the first such word is rewritten;
-//   - every structural error maps to level "error" (including
-//     unknown_expression_type, which the pre-unification legacy track logged as
-//     a warning — the unified contract treats it as an error in both tracks).
+//   - unknown_expression_type (which the pre-unification legacy track logged as
+//     a warning) is emitted at level "error" in both tracks;
+//   - a warning-level StructuralError (Level "warning", e.g. duplicate reaction
+//     species) is rendered as a "warning" message; every other error maps to
+//     level "error".
 //
 // All other wording is identical between the two tracks and passes through.
 func structuralErrorToLegacyMessage(se StructuralError) ValidationMessage {
@@ -226,33 +250,43 @@ func structuralErrorToLegacyMessage(se StructuralError) ValidationMessage {
 	case ErrorUndefinedVariable, ErrorUndefinedSpecies, ErrorUndefinedSystem, ErrorEventVarUndeclared:
 		msg = strings.Replace(msg, "Undefined", "Unknown", 1)
 	}
-	return ValidationMessage{Level: "error", Message: msg, Path: se.Path}
+	level := "error"
+	if se.isWarning() {
+		level = "warning"
+	}
+	return ValidationMessage{Level: level, Message: msg, Path: se.Path}
 }
 
 // structuralScan performs the single structural traversal that backs both
-// validation surfaces. It accumulates code-bearing StructuralErrors plus the
-// legacy-only warnings (duplicate substrate/product) that have no code-bearing
-// representation.
+// validation surfaces. It accumulates code-bearing StructuralErrors, some of
+// which are warning-level (Level "warning", e.g. duplicate substrate/product)
+// and advisory only.
 type structuralScan struct {
-	file           *ESMFile
-	indep          string
-	errors         []StructuralError
-	legacyWarnings []ValidationMessage
+	file   *ESMFile
+	indep  string
+	errors []StructuralError
 }
 
 func (s *structuralScan) addErr(se StructuralError) { s.errors = append(s.errors, se) }
 
-func (s *structuralScan) addLegacyWarning(path, message string) {
-	s.legacyWarnings = append(s.legacyWarnings, ValidationMessage{
-		Level:   "warning",
-		Message: message,
+// addWarning records an advisory, non-invalidating finding as a warning-level
+// StructuralError so both validation surfaces surface it uniformly.
+func (s *structuralScan) addWarning(code, path, message string, details map[string]any) {
+	if details == nil {
+		details = map[string]any{}
+	}
+	s.errors = append(s.errors, StructuralError{
 		Path:    path,
+		Code:    code,
+		Message: message,
+		Details: details,
+		Level:   "warning",
 	})
 }
 
 // collectStructuralErrors runs the unified structural traversal and returns the
-// code-bearing errors together with legacy-only warnings.
-func collectStructuralErrors(file *ESMFile) ([]StructuralError, []ValidationMessage) {
+// code-bearing errors (including any warning-level entries).
+func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s := &structuralScan{file: file, indep: fileIndepVar(file)}
 
 	for modelName, model := range file.Models {
@@ -266,7 +300,7 @@ func collectStructuralErrors(file *ESMFile) ([]StructuralError, []ValidationMess
 	s.validateCouplingReferences()
 	s.validateDataLoaderReferences()
 
-	return s.errors, s.legacyWarnings
+	return s.errors
 }
 
 // validateModel checks model-specific structural rules.
@@ -614,16 +648,19 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	}
 }
 
-// reportDuplicateSpecies records a legacy-only warning for each species that
-// appears more than once in a substrate/product list. side is "substrates" or
-// "products".
+// reportDuplicateSpecies records a warning-level StructuralError for each
+// species that appears more than once in a substrate/product list. side is
+// "substrates" or "products". The finding is advisory — it does not invalidate
+// the document — and is surfaced on both validation surfaces.
 func (s *structuralScan) reportDuplicateSpecies(entries []SubstrateProduct, side, reactionPath string) {
 	seen := make(map[string]int)
 	for i, entry := range entries {
 		if first, exists := seen[entry.Species]; exists {
-			s.addLegacyWarning(
+			s.addWarning(
+				CodeDuplicateReactionSpecies,
 				fmt.Sprintf("%s/%s", reactionPath, side),
 				fmt.Sprintf("Species '%s' appears multiple times in %s (positions %d and %d)", entry.Species, side, first, i),
+				map[string]any{"species": entry.Species, "side": side, "positions": []int{first, i}},
 			)
 		}
 		seen[entry.Species] = i
