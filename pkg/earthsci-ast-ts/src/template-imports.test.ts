@@ -16,7 +16,7 @@ import { load, validateSchema } from './parse.js'
 import { save } from './serialize.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import {
-  ExpressionTemplateError,
+  EsmMachineryError,
   MAX_TEMPLATE_EXPANSION_DEPTH,
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
@@ -46,7 +46,7 @@ function errCode(f: () => unknown): string | null {
     f()
     return null
   } catch (e) {
-    if (e instanceof ExpressionTemplateError) return e.code
+    if (e instanceof EsmMachineryError) return e.code
     throw e
   }
 }
@@ -56,7 +56,7 @@ async function errCodeAsync(f: () => Promise<unknown>): Promise<string | null> {
     await f()
     return null
   } catch (e) {
-    if (e instanceof ExpressionTemplateError) return e.code
+    if (e instanceof EsmMachineryError) return e.code
     throw e
   }
 }

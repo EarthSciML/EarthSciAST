@@ -141,6 +141,9 @@ export { lowerEnums, EnumLoweringError } from './lower-enums.js'
 export {
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
+  // Shared load-time machinery diagnostic (templates / imports / coupling / refs).
+  EsmMachineryError,
+  // @deprecated Same-class alias for `EsmMachineryError`; kept for external consumers.
   ExpressionTemplateError,
   MAX_TEMPLATE_EXPANSION_DEPTH,
 } from './lower-expression-templates.js'

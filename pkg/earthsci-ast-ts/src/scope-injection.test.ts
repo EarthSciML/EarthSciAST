@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
 import { load } from './parse.js'
 import { save } from './serialize.js'
 import { ephemeralInjectedFile, resolveSubsystemRefs } from './ref-loading.js'
-import { ExpressionTemplateError } from './lower-expression-templates.js'
+import { EsmMachineryError } from './lower-expression-templates.js'
 
 const repoRoot = path.resolve(__dirname, '../../..')
 const conf = (...parts: string[]) =>
@@ -44,7 +44,7 @@ function errCode(f: () => unknown): string | null {
     f()
     return null
   } catch (e) {
-    if (e instanceof ExpressionTemplateError) return e.code
+    if (e instanceof EsmMachineryError) return e.code
     throw e
   }
 }

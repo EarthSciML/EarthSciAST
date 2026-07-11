@@ -20,7 +20,7 @@
  * top-level `expression_templates` do not survive `parse → emit`; the emitted
  * form is the expanded, folded document.
  *
- * All diagnostics are raised as `ExpressionTemplateError` with the stable
+ * All diagnostics are raised as `EsmMachineryError` with the stable
  * §9.6.6 codes so they are machine-checkable across bindings. Mirrors the
  * Julia reference implementation (`EarthSciAST.jl/src/template_imports.jl`).
  *
@@ -32,7 +32,7 @@
  */
 
 import {
-  ExpressionTemplateError,
+  EsmMachineryError,
   composeTemplateBodies,
   deepEqual,
   rejectExpressionTemplatesPreV04,
@@ -144,7 +144,7 @@ export function rejectTemplateImportsPreV08(view: unknown): void {
     }
   }
   if (offences.length === 0) return
-  throw new ExpressionTemplateError(
+  throw new EsmMachineryError(
     ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
     `expression_template_imports / top-level expression_templates / metaparameters require esm >= 0.8.0; file declares ${esm}. Offending paths: ${offences.join(', ')}`,
   )
@@ -169,7 +169,7 @@ function requireInt(v: unknown, ctx: string): number {
   // no separate `typeof v === 'boolean'` guard is needed here.
   const i = asInt(v)
   if (i === undefined) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: value ${JSON.stringify(v)} is not an integer (esm-spec §9.7.6)`,
     )
@@ -183,20 +183,20 @@ function collectMetaparamDecls(raw: unknown, origin: string): JsonObject {
   const mp = raw.metaparameters
   if (mp === undefined || mp === null) return out
   if (!isObject(mp)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${origin}: \`metaparameters\` must be an object`,
     )
   }
   for (const [name, v] of Object.entries(mp)) {
     if (!isObject(v)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.METAPARAMETER_TYPE_ERROR,
         `${origin}: metaparameters.${name} must be an object with \`type: "integer"\``,
       )
     }
     if (String(v.type) !== 'integer') {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.METAPARAMETER_TYPE_ERROR,
         `${origin}: metaparameters.${name}: \`type\` must be "integer" (the only kind)`,
       )
@@ -275,7 +275,7 @@ const INT64_MAX = 2n ** 63n - 1n
 
 function checkedInt64(v: bigint, ctx: string): bigint {
   if (v < INT64_MIN || v > INT64_MAX) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: 64-bit integer overflow while folding a metaparameter expression`,
     )
@@ -300,13 +300,13 @@ function tryFold(x: Json, ctx: string): bigint | null {
   if (i !== undefined) return BigInt(i)
   if (typeof x === 'string') return null
   if (typeof x === 'number' || isNumericLiteral(x)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: non-integer literal ${JSON.stringify(isNumericLiteral(x) ? x.value : x)} in a structural integer site (esm-spec §9.7.6)`,
     )
   }
   if (!isObject(x)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: invalid metaparameter expression (expected integer, name, or {op, args})`,
     )
@@ -314,7 +314,7 @@ function tryFold(x: Json, ctx: string): bigint | null {
   const opRaw = x.op
   const args = x.args
   if (opRaw === undefined || !Array.isArray(args) || args.length === 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})`,
     )
@@ -324,7 +324,7 @@ function tryFold(x: Json, ctx: string): bigint | null {
   const ivals = vals as bigint[]
   const op = String(opRaw)
   if (!['+', '-', '*', '/'].includes(op)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: op '${op}' is not allowed in a metaparameter expression (only + - * /)`,
     )
@@ -342,13 +342,13 @@ function tryFold(x: Json, ctx: string): bigint | null {
       acc = checkedInt64(acc * v, ctx)
     } else {
       if (v === 0n) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.METAPARAMETER_TYPE_ERROR,
           `${ctx}: division by zero`,
         )
       }
       if (acc % v !== 0n) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.METAPARAMETER_TYPE_ERROR,
           `${ctx}: ${acc} / ${v} does not divide exactly (esm-spec §9.7.6)`,
         )
@@ -390,13 +390,13 @@ function validateMetaExpr(x: Json, ctx: string): void {
   if (i !== undefined) return // integer literal
   if (typeof x === 'string') return // metaparameter name
   if (typeof x === 'boolean' || typeof x === 'number' || isNumericLiteral(x)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: non-integer literal ${JSON.stringify(isNumericLiteral(x) ? x.value : x)} in a metaparameter expression (esm-spec §9.7.6)`,
     )
   }
   if (!isObject(x)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: invalid metaparameter expression (expected integer, name, or {op, args})`,
     )
@@ -408,7 +408,7 @@ function validateMetaExpr(x: Json, ctx: string): void {
     !Array.isArray(args) ||
     args.length === 0
   ) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `${ctx}: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})`,
     )
@@ -451,7 +451,7 @@ export function evalMetaExpr(expr: Json, env: Record<string, number>, ctx: strin
         collectNames(expr, []).filter((n) => !Object.prototype.hasOwnProperty.call(env, n)),
       ),
     ].sort()
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
       `${ctx}: metaparameter expression references ${
         free.join(', ') || 'a name'
@@ -533,7 +533,7 @@ function foldIndexSetSizes(indexSets: JsonObject, ctx: string, openPolicy: OpenS
     if (f === null) {
       if (openPolicy === 'reject') {
         const names = [...new Set(collectNames(sz, []))]
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.METAPARAMETER_UNBOUND,
           `${ctx}: index_sets.${name}.size references unbound name(s) ${names.join(', ')} (esm-spec §9.7.6)`,
         )
@@ -578,7 +578,7 @@ function mergeNamed(
     // Deep-equal redeclaration (a diamond import) dedups at first occurrence;
     // a non-equal collision is a conflict (esm-spec §9.7.4/§9.7.5).
     if (deepEqual(dst[name], decl)) return
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       code,
       `${origin}: ${what} '${name}' collides with a non-deep-equal existing definition (esm-spec §9.7.4/§9.7.5)`,
     )
@@ -652,7 +652,7 @@ function loadImportRaw(
     // The synchronous §9.7 resolver cannot fetch over the network (mirrors
     // the Rust binding's remote-ref stance): download the library first and
     // import it by local path.
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
       `${origin}: failed to load template-library ref '${ref}': remote refs are not fetchable from the synchronous loader; download the file and import it by local path`,
     )
@@ -662,7 +662,7 @@ function loadImportRaw(
   try {
     content = (opts.readFile ?? readFileSyncNode)(path)
   } catch (e) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
       `${origin}: template-library file not found or unreadable: ${path} (from ref '${ref}'): ${e instanceof Error ? e.message : String(e)}`,
     )
@@ -671,7 +671,7 @@ function loadImportRaw(
   try {
     raw = JSON.parse(content)
   } catch (e) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
       `${origin}: template-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
     )
@@ -703,20 +703,20 @@ function nameMap(raw: unknown, field: string, where: string): Record<string, str
   const out: Record<string, string> = {}
   if (raw === undefined || raw === null) return out
   if (!isObject(raw)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
       `${where}: \`${field}\` must be an object mapping names to names (esm-spec §9.7.7)`,
     )
   }
   for (const [k, v] of Object.entries(raw)) {
     if (k.length === 0) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
         `${where}: \`${field}\` has an empty key (esm-spec §9.7.7)`,
       )
     }
     if (!(typeof v === 'string' && isValidDottedName(v))) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
         `${where}: \`${field}\`.${k} target ${JSON.stringify(v)} is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)`,
       )
@@ -995,7 +995,7 @@ function parseEdgeRenameMaps(
     prefixRaw !== null &&
     !(typeof prefixRaw === 'string' && isValidDottedName(prefixRaw))
   ) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
       `${where}: \`prefix\` ${JSON.stringify(prefixRaw)} is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)`,
     )
@@ -1012,7 +1012,7 @@ function requireRenameKeysExported(
 ): void {
   for (const k of Object.keys(rename)) {
     if (!exported.has(k)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
         `${where}: \`rename\` names '${k}', which the target does not export at this edge (the surviving exports are templates after \`only\`, index sets, and metaparameters left open by this edge's \`bindings\`; esm-spec §9.7.7)`,
       )
@@ -1054,7 +1054,7 @@ function buildEdgeNameMaps(
     const seen: Record<string, string> = {}
     for (const [o, n] of Object.entries(m)) {
       if (Object.prototype.hasOwnProperty.call(seen, n)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
           `${where}: ${what} names '${seen[n]}' and '${o}' both map to '${n}' after renaming (esm-spec §9.7.7)`,
         )
@@ -1099,19 +1099,19 @@ function requireRebindKeysFree(
 ): void {
   for (const k of Object.keys(rebind)) {
     if (exported.has(k)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
         `${where}: \`rebind\` names '${k}', a declared name of the target (template / index set / metaparameter) — \`rebind\` addresses only free names; use \`rename\` for declared names (esm-spec §9.7.7)`,
       )
     }
     if (surviving.bound.has(k)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
         `${where}: \`rebind\` key '${k}' is a bound index symbol (\`output_idx\` / \`ranges\`) of an imported template, not a free name (esm-spec §9.7.7)`,
       )
     }
     if (!surviving.free.has(k)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
         `${where}: \`rebind\` names '${k}', which does not occur free in the imported declarations (esm-spec §9.7.7)`,
       )
@@ -1135,7 +1135,7 @@ function checkRenameFreshness(
   for (const [o, n] of Object.entries(rebind)) if (o !== n) newnames.push(n)
   for (const t of newnames) {
     if (taken.has(t)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
         `${where}: renamed/rebound name '${t}' collides with a name still in use inside the imported declarations (a remaining free name, a bound index symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)`,
       )
@@ -1207,14 +1207,14 @@ function resolveImportEntry(
   opts: TemplateResolveOptions,
 ): TemplateScope {
   if (!isObject(entry)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
       `${origin}: expression_template_imports entries must be objects with a \`ref\` field`,
     )
   }
   const refRaw = entry.ref
   if (typeof refRaw !== 'string' || refRaw.length === 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
       `${origin}: expression_template_imports entry requires a non-empty string \`ref\``,
     )
@@ -1223,7 +1223,7 @@ function resolveImportEntry(
   const canonical = normalizeRef(ref, baseDir)
   if (stack.includes(canonical)) {
     const cyc = [...stack.slice(stack.indexOf(canonical)), canonical]
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_CYCLE,
       `${origin}: import-graph cycle detected: ${cyc.join(' -> ')} (esm-spec §9.7.2)`,
     )
@@ -1238,20 +1238,20 @@ function resolveImportEntry(
   // a component/subsystem file, and a coupling-library file, are not importable
   // as a template library.
   if (isObject(raw) && 'coupling_roles' in raw) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
       `${origin}: import target '${ref}' is a coupling-library file (has \`coupling_roles\`), not a template library (esm-spec §10.9)`,
     )
   }
   if (!isTemplateLibraryDoc(raw)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
       `${origin}: import target '${ref}' lacks top-level \`expression_templates\` — not a template-library file (esm-spec §9.7.1)`,
     )
   }
   for (const k of LIBRARY_FORBIDDEN_KEYS) {
     if (isObject(raw) && k in raw) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
         `${origin}: import target '${ref}' declares \`${k}\` — not a pure template-library file (esm-spec §9.7.1)`,
       )
@@ -1260,7 +1260,7 @@ function resolveImportEntry(
   if (opts.validateSchema) {
     const schemaErrors = opts.validateSchema(raw)
     if (schemaErrors.length > 0) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
         `${origin}: import target '${ref}' failed schema validation: ${schemaErrors[0]!.path}: ${schemaErrors[0]!.message}`,
       )
@@ -1285,7 +1285,7 @@ function resolveImportEntry(
   if (isObject(bindingsRaw)) {
     for (const [name, v] of Object.entries(bindingsRaw)) {
       if (!Object.prototype.hasOwnProperty.call(scope.metaparams, name)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
           `${origin}: import of '${ref}' binds metaparameter '${name}', which the target neither declares nor re-exports (esm-spec §9.7.6)`,
         )
@@ -1307,7 +1307,7 @@ function resolveImportEntry(
     const keep = onlyRaw.map(String)
     for (const n of keep) {
       if (!Object.prototype.hasOwnProperty.call(scope.templates, n)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
           `${origin}: \`only\` names template '${n}', which '${ref}' does not declare (esm-spec §9.7.2)`,
         )
@@ -1458,7 +1458,7 @@ export function resolveTemplateMachinery(
 
   if (!hasImportMachinery(rawData)) {
     if (Object.keys(api).length > 0) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
         `loader API binds metaparameter(s) ${Object.keys(api).sort().join(', ')} but the document declares none (esm-spec §9.7.6)`,
       )
@@ -1594,7 +1594,7 @@ function resolvePerComponentImports(
 function closeMetaparameters(docMeta: JsonObject, api: Record<string, number>): Record<string, number> {
   for (const k of Object.keys(api).sort()) {
     if (!Object.prototype.hasOwnProperty.call(docMeta, k)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
         `loader API binds metaparameter '${k}', which the document does not declare (esm-spec §9.7.6)`,
       )
@@ -1615,7 +1615,7 @@ function closeMetaparameters(docMeta: JsonObject, api: Record<string, number>): 
     }
   }
   if (openNames.length > 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_UNBOUND,
       `metaparameter(s) ${openNames.join(', ')} still open after edge bindings, loader-API bindings, and defaults (esm-spec §9.7.6)`,
     )
@@ -1644,7 +1644,7 @@ function checkMetaparamNameCollisions(root: JsonObject, docMeta: JsonObject, doc
   }
   for (const name of Object.keys(docMeta)) {
     if (visible.has(name)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.METAPARAMETER_NAME_CONFLICT,
         `metaparameter '${name}' collides with a visible variable/parameter/species/index-set name (esm-spec §9.7.6)`,
       )
@@ -1879,7 +1879,7 @@ function applyCouplingInjections(root: JsonObject): void {
     const inj = entry.expression_template_imports
     if (inj === undefined || inj === null) continue
     if (!isObject(inj)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
         'coupling entry `expression_template_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)',
       )
@@ -1887,7 +1887,7 @@ function applyCouplingInjections(root: JsonObject): void {
     const referenced = couplingReferencedSystems(entry)
     for (const [tname, imports] of Object.entries(inj)) {
       if (!referenced.has(tname)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
           `coupling entry \`expression_template_imports\` key '${tname}' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: ${
             referenced.size === 0 ? '(none)' : [...referenced].sort().join(', ')
@@ -1900,24 +1900,24 @@ function applyCouplingInjections(root: JsonObject): void {
       } else if (hasKey(rsystems, tname)) {
         comp = (rsystems as JsonObject)[tname]
       } else if (hasKey(loaders, tname)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_INJECT_TARGET_IS_LOADER,
           `coupling entry \`expression_template_imports\` key '${tname}' resolves to a data loader, which is pure I/O with no expression positions to rewrite (esm-spec §9.7.10 / §14).`,
         )
       } else {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
           `coupling entry \`expression_template_imports\` key '${tname}' resolves to neither a top-level model, reaction system, nor data loader (esm-spec §9.7.10). Nested \`Parent.Child\` targets are out of scope.`,
         )
       }
       if (!isObject(comp)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
           `coupling entry \`expression_template_imports\` key '${tname}' does not name a component object (esm-spec §9.7.10).`,
         )
       }
       if (!Array.isArray(imports)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
           `coupling entry \`expression_template_imports\` value for '${tname}' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).`,
         )

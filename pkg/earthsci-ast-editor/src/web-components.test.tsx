@@ -103,8 +103,7 @@ describe('Web Components', () => {
     it('validates model editor props', () => {
       const validProps = {
         model: JSON.stringify(validModel),
-        'allow-editing': 'true',
-        'show-validation': 'true'
+        'allow-editing': 'true'
       };
 
       expect(() => JSON.parse(validProps.model)).not.toThrow();
@@ -125,8 +124,7 @@ describe('Web Components', () => {
     it('validates reaction editor props', () => {
       const validProps = {
         'reaction-system': JSON.stringify(validReactionSystem),
-        'allow-editing': 'true',
-        'show-validation': 'true'
+        'allow-editing': 'true'
       };
 
       expect(() => JSON.parse(validProps['reaction-system'])).not.toThrow();
@@ -212,14 +210,12 @@ describe('Web Components', () => {
       const expressionEditorProps = {
         expression: '{"op": "+", "args": [1, 2]}',
         'allow-editing': true,
-        'show-palette': true,
-        'show-validation': true
+        'show-palette': true
       };
 
       const modelEditorProps = {
         model: '{"type": "model", "variables": {}, "equations": []}',
         'allow-editing': true,
-        'show-validation': true,
         'validation-errors': '[]'
       };
 
@@ -227,8 +223,7 @@ describe('Web Components', () => {
         'esm-file': '{"schema_version": "1.0", "metadata": {}, "components": {}, "coupling": []}',
         'allow-editing': true,
         'enable-undo': true,
-        'show-summary': true,
-        'show-validation': true
+        'show-summary': true
       };
 
       // These should be valid prop objects

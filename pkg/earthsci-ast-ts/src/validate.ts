@@ -13,7 +13,7 @@ import {
   ROOT_PATH,
   type SchemaError,
 } from './parse.js'
-import { ExpressionTemplateError } from './lower-expression-templates.js'
+import { EsmMachineryError } from './lower-expression-templates.js'
 import { EnumLoweringError } from './lower-enums.js'
 import {
   LosslessJsonParseError,
@@ -1553,7 +1553,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 function loadErrorCode(error: Error): string {
   if (error instanceof SchemaValidationError) return ERROR_CODES.SCHEMA_VALIDATION_ERROR
   if (error instanceof ParseError) return ERROR_CODES.PARSE_ERROR
-  if (error instanceof ExpressionTemplateError) return ERROR_CODES.EXPRESSION_TEMPLATE_ERROR
+  if (error instanceof EsmMachineryError) return ERROR_CODES.EXPRESSION_TEMPLATE_ERROR
   if (error instanceof EnumLoweringError) return ERROR_CODES.ENUM_LOWERING_ERROR
   if (error instanceof LosslessJsonParseError) return ERROR_CODES.JSON_PARSE_ERROR
   if (error instanceof CanonicalNonfiniteError) return ERROR_CODES.NONFINITE_NUMBER

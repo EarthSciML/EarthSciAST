@@ -51,7 +51,7 @@ export const ERROR_CODES = {
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;
-  //      ExpressionTemplateError codes) ----
+  //      EsmMachineryError codes) ----
   APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH: 'apply_expression_template_bindings_mismatch',
   APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION: 'apply_expression_template_invalid_declaration',
   APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY: 'apply_expression_template_recursive_body',
@@ -84,14 +84,14 @@ export const ERROR_CODES = {
   GEOMETRY_MANIFOLD_INVALID: 'geometry_manifold_invalid',
   MAKEARRAY_REGION_INVERTED: 'makearray_region_inverted',
 
-  // ---- subsystem refs (ref-loading.ts; ExpressionTemplateError codes raised
+  // ---- subsystem refs (ref-loading.ts; EsmMachineryError codes raised
   //      while resolving `subsystem` references / library detection) ----
   SUBSYSTEM_INDEX_SET_CONFLICT: 'subsystem_index_set_conflict',
   SUBSYSTEM_REF_IS_COUPLING_LIBRARY: 'subsystem_ref_is_coupling_library',
   SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY: 'subsystem_ref_is_template_library',
 
   // ---- coupling: §9.7 coupling-library imports (coupling-imports.ts;
-  //      ExpressionTemplateError codes) ----
+  //      EsmMachineryError codes) ----
   COUPLING_EDGE_UNKNOWN_ROLE: 'coupling_edge_unknown_role',
   COUPLING_IMPORT_BIND_NOT_A_COMPONENT: 'coupling_import_bind_not_a_component',
   COUPLING_IMPORT_NOT_LIBRARY: 'coupling_import_not_library',
@@ -122,7 +122,7 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES]
  * Neutral base for EarthSciAST diagnostics: an `Error` carrying a stable `code`
  * string (from {@link ERROR_CODES}) and optional structured `details`. This is
  * purely additive — a single home for future diagnostics. It intentionally does
- * NOT touch the existing `ExpressionTemplateError` / `EnumLoweringError` /
+ * NOT touch the existing `EsmMachineryError` / `EnumLoweringError` /
  * `ClosedFunctionError` classes, which another file owns.
  */
 export class EsmDiagnosticError extends Error {

@@ -21,7 +21,7 @@
 
 import type { DataLoader, EsmFile, Model, ReactionSystem, SubsystemRef } from './types.js'
 import {
-  ExpressionTemplateError,
+  EsmMachineryError,
   deepEqual,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
@@ -148,7 +148,7 @@ function mergeSubsystemIndexSets(
   for (const [n, decl] of Object.entries(loadedIsets as Record<string, unknown>)) {
     if (Object.prototype.hasOwnProperty.call(registry, n)) {
       if (!deepEqual(registry[n], decl)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
           `index set '${n}' from subsystem ref '${ref}' collides with a non-deep-equal declaration in the importing document. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7).`,
         )
@@ -182,7 +182,7 @@ function readEdgeBindings(sub: { bindings?: unknown }, subName: string): Record<
   const raw = sub.bindings
   if (raw === undefined || raw === null) return out
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.METAPARAMETER_TYPE_ERROR,
       `subsystems.${subName}: \`bindings\` must be an object (esm-spec §9.7.6)`,
     )
@@ -205,7 +205,7 @@ function readEdgeInjectedImports(sub: { expression_template_imports?: unknown })
   const raw = sub.expression_template_imports
   if (raw === undefined || raw === null) return []
   if (!Array.isArray(raw)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
       'subsystem-ref `expression_template_imports` must be a list of §9.7.2 import entries (esm-spec §9.7.10)',
     )
@@ -238,13 +238,13 @@ function resolveRefDocument(
   injectedImports: readonly unknown[] = [],
 ): EsmFile {
   if (isTemplateLibraryDoc(parsed)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
       `Subsystem ref '${ref}' targets a template-library file; libraries are imported via expression_template_imports (esm-spec §9.7.1)`,
     )
   }
   if (isCouplingLibraryDoc(parsed)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
       `Subsystem ref '${ref}' targets a coupling-library file; libraries are imported via a coupling_import coupling entry (esm-spec §10.9)`,
     )
@@ -484,7 +484,7 @@ export async function ephemeralInjectedFile(
     raw = JSON.parse(save(file)) as Record<string, unknown>
   } else {
     // Caller/API precondition (not a document-level §9.6.6 diagnostic), so this
-    // stays a plain `Error` rather than a coded `ExpressionTemplateError`.
+    // stays a plain `Error` rather than a coded `EsmMachineryError`.
     throw new Error('ephemeralInjectedFile: one of `file` or `sourcePath` must be provided')
   }
 
@@ -503,9 +503,9 @@ export async function ephemeralInjectedFile(
   }
   if (!injected) {
     // A §9.7.10 injection target that names no top-level component: a coded
-    // diagnostic, consistent with the surrounding `ExpressionTemplateError`
+    // diagnostic, consistent with the surrounding `EsmMachineryError`
     // convention (message preserved).
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
       `component '${mname}' not found for per-run injection (esm-spec §9.7.10)`,
     )

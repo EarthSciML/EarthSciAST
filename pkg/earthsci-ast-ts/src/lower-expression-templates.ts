@@ -102,21 +102,31 @@ const GEOMETRY_MANIFOLD_SET_DISPLAY = `{${[...GEOMETRY_MANIFOLD_VALUES].join(', 
 const MAX_REWRITE_PASSES = 64
 
 /**
- * Diagnostic raised by §9.6 expression-template lowering (and, historically, by
- * the §9.7 template/coupling importers and §9.6.4 expanded-form validators that
- * reuse it as their shared coded-diagnostic class — validate.ts maps it to the
- * `expression_template_error` load-error kind). Extends the neutral
- * {@link EsmDiagnosticError} additively: the class NAME, the
- * `(code, message)` constructor signature, the `[code] message` text, and the
- * public `code` string property are all preserved byte-for-byte, so every
- * importer and `instanceof ExpressionTemplateError` check is unaffected.
+ * Shared load-time diagnostic for the §9.x machinery: expression-template
+ * lowering (§9.6), template-library imports (§9.7), coupling-library imports
+ * (§10.10), subsystem-ref loading, and the §9.6.4 expanded-form validators all
+ * raise it as their common coded-diagnostic class — validate.ts maps it (by
+ * `instanceof`) to the `expression_template_error` load-error kind. Extends the
+ * neutral {@link EsmDiagnosticError} additively: the `(code, message)`
+ * constructor signature, the `[code] message` text, and the public `code`
+ * string property are all preserved byte-for-byte, so the emitted diagnostic is
+ * unchanged and every `instanceof` check is unaffected.
  */
-export class ExpressionTemplateError extends EsmDiagnosticError {
+export class EsmMachineryError extends EsmDiagnosticError {
   constructor(code: string, message: string) {
     super(code, `[${code}] ${message}`)
-    this.name = 'ExpressionTemplateError'
+    this.name = 'EsmMachineryError'
   }
 }
+
+/**
+ * @deprecated Historical name for {@link EsmMachineryError}, kept as a same-class
+ * alias for backward compatibility. It is the SAME class object, so
+ * `instanceof ExpressionTemplateError` and `instanceof EsmMachineryError` are
+ * identical. Prefer {@link EsmMachineryError}, which reflects the class's true
+ * role as the shared load-time template/coupling/import/ref machinery diagnostic.
+ */
+export { EsmMachineryError as ExpressionTemplateError }
 
 type Json = unknown
 type TemplateDecl = {
@@ -337,7 +347,7 @@ function registeredWhere(
     const req = shp.map((s) => String(s))
     for (const s of req) {
       if (!isetNames.has(s)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
           `${scope}.expression_templates.${tname}: where.${p}.shape names index set '${s}', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)`,
         )
@@ -382,7 +392,7 @@ function assertNoNestedApply(body: Json, templateName: string, path: string): vo
   }
   if (isObject(body)) {
     if (body.op === APPLY_OP) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `expression_templates.${templateName}: \`match\` contains an 'apply_expression_template' node at ${path}; match patterns MUST NOT reference templates (esm-spec §9.7.3)`,
       )
@@ -406,7 +416,7 @@ export function validateTemplates(
 ): asserts templates is Templates {
   for (const [name, decl] of Object.entries(templates)) {
     if (!decl || typeof decl !== 'object') {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `${scope}.expression_templates.${name}: entry must be an object with params + body`,
       )
@@ -415,7 +425,7 @@ export function validateTemplates(
     // template is a named constant fragment (common in library files).
     const params = (decl as { params?: unknown }).params
     if (!Array.isArray(params)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `${scope}.expression_templates.${name}: 'params' must be an array of strings`,
       )
@@ -423,13 +433,13 @@ export function validateTemplates(
     const seen = new Set<string>()
     for (const p of params) {
       if (typeof p !== 'string' || p.length === 0) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: param names must be non-empty strings`,
         )
       }
       if (seen.has(p)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: param '${p}' is declared twice`,
         )
@@ -437,7 +447,7 @@ export function validateTemplates(
       seen.add(p)
     }
     if (!('body' in (decl as object))) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `${scope}.expression_templates.${name}: 'body' is required`,
       )
@@ -466,47 +476,47 @@ export function validateTemplates(
     const whr = (decl as { where?: unknown }).where
     if (whr !== undefined && whr !== null) {
       if (match === undefined) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: 'where' is only admissible alongside 'match' — constraints scope an auto-applied rewrite rule, not a named fragment (esm-spec §9.6.1)`,
         )
       }
       if (!isObject(whr) || Object.keys(whr).length === 0) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: 'where' must be a non-empty object mapping declared params to constraint objects`,
         )
       }
       for (const [p, cobj] of Object.entries(whr)) {
         if (!seen.has(p)) {
-          throw new ExpressionTemplateError(
+          throw new EsmMachineryError(
             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: 'where' constrains '${p}', which is not a declared param (esm-spec §9.6.1)`,
           )
         }
         if (!isObject(cobj)) {
-          throw new ExpressionTemplateError(
+          throw new EsmMachineryError(
             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: where.${p} must be a constraint object (v1 admits exactly the 'shape' kind)`,
           )
         }
         const ckeys = Object.keys(cobj)
         if (!(ckeys.length === 1 && ckeys[0] === 'shape')) {
-          throw new ExpressionTemplateError(
+          throw new EsmMachineryError(
             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: where.${p} carries constraint kind(s) ${[...ckeys].sort().join(', ')}; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)`,
           )
         }
         const shp = (cobj as { shape?: unknown }).shape
         if (!Array.isArray(shp) || shp.length === 0) {
-          throw new ExpressionTemplateError(
+          throw new EsmMachineryError(
             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: where.${p}.shape must be a non-empty array of index-set names`,
           )
         }
         for (const s of shp) {
           if (typeof s !== 'string' || s.length === 0) {
-            throw new ExpressionTemplateError(
+            throw new EsmMachineryError(
               ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
               `${scope}.expression_templates.${name}: where.${p}.shape entries must be non-empty strings`,
             )
@@ -591,13 +601,13 @@ export function composeTemplateBodies(templates: Record<string, unknown>, scope:
     for (const r of refs[name]!) {
       const tdecl = templates[r]
       if (!tdecl) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
           `${scope}.expression_templates.${name}: body references undeclared template '${r}' (esm-spec §9.7.3)`,
         )
       }
       if ((tdecl as { match?: Json }).match !== undefined) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
           `${scope}.expression_templates.${name}: body references '${r}', a \`match\` rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)`,
         )
@@ -615,7 +625,7 @@ export function composeTemplateBodies(templates: Record<string, unknown>, scope:
     const st = state[name] ?? 0
     if (st === 1) {
       const cyc = [...chain.slice(chain.indexOf(name)), name]
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
         `${scope}.expression_templates: template-body reference cycle ${cyc.join(' -> ')} (esm-spec §9.7.3)`,
       )
@@ -631,7 +641,7 @@ export function composeTemplateBodies(templates: Record<string, unknown>, scope:
     state[name] = 2
     depth[name] = d
     if (d > MAX_TEMPLATE_EXPANSION_DEPTH) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_BODY_EXPANSION_TOO_DEEP,
         `${scope}.expression_templates.${name}: body-reference chain of ${d} templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH=${MAX_TEMPLATE_EXPANSION_DEPTH} (esm-spec §9.7.3)`,
       )
@@ -659,21 +669,21 @@ export function composeTemplateBodies(templates: Record<string, unknown>, scope:
 function expandApply(node: Record<string, unknown>, templates: Templates, scope: string): Json {
   const name = node.name
   if (typeof name !== 'string' || name.length === 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
       `${scope}: apply_expression_template node missing or empty 'name'`,
     )
   }
   const decl = templates[name]
   if (!decl) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
       `${scope}: apply_expression_template references undeclared template '${name}'`,
     )
   }
   const bindings = node.bindings
   if (!isObject(bindings)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
       `${scope}: apply_expression_template '${name}' missing 'bindings' object`,
     )
@@ -682,7 +692,7 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
   const declared = new Set(decl.params)
   for (const p of decl.params) {
     if (!provided.has(p)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
         `${scope}: apply_expression_template '${name}' missing binding for param '${p}'`,
       )
@@ -690,7 +700,7 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
   }
   for (const p of provided) {
     if (!declared.has(p)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
         `${scope}: apply_expression_template '${name}' supplies unknown param '${p}'`,
       )
@@ -795,7 +805,7 @@ function rewriteToFixpoint(
     current = next
     if (!changed) return current // fixpoint reached
   }
-  throw new ExpressionTemplateError(
+  throw new EsmMachineryError(
     ERROR_CODES.REWRITE_RULE_NONTERMINATING,
     `${scope}: expression-template rewriting did not converge within ` +
       `MAX_REWRITE_PASSES=${MAX_REWRITE_PASSES} passes (last rewritten op ` +
@@ -873,7 +883,7 @@ export function rejectExpressionTemplatesPreV04(view: unknown): void {
   for (const path of findStrayApplyOps(view)) offences.push(path)
 
   if (offences.length > 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
       `expression_templates / apply_expression_template require esm >= 0.4.0; file declares ${(view as { esm?: string }).esm}. Offending paths: ${offences.join(', ')}`,
     )
@@ -964,7 +974,7 @@ function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
  * §9.6.1); by the time this validator runs on a loaded document every such
  * site has been substituted, so an out-of-set value here is a real defect
  * (e.g. a template invocation binding the manifold parameter to a non-member
- * literal). Throws `ExpressionTemplateError` with code
+ * literal). Throws `EsmMachineryError` with code
  * `geometry_manifold_invalid`.
  */
 export function validateGeometryManifolds(tree: unknown, path = ''): void {
@@ -977,7 +987,7 @@ export function validateGeometryManifolds(tree: unknown, path = ''): void {
   if (typeof node.op === 'string' && GEOMETRY_MANIFOLD_OPS.has(node.op) && 'manifold' in node) {
     const m = node.manifold
     if (!(typeof m === 'string' && GEOMETRY_MANIFOLD_VALUES.has(m))) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
         `${path}: \`${node.op}\` carries manifold ${JSON.stringify(m)}, not a member of the closed set ${GEOMETRY_MANIFOLD_SET_DISPLAY}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.`,
       )
@@ -1003,7 +1013,7 @@ export function validateGeometryManifolds(tree: unknown, path = ''): void {
  * silently treating it as empty would hide the defect. Template bodies are
  * skipped — pre-substitution bounds may legally carry metaparameter names
  * there; only concrete integer pairs are checked (a fully-folded document tree
- * carries nothing else in bound position). Throws `ExpressionTemplateError`
+ * carries nothing else in bound position). Throws `EsmMachineryError`
  * with code `makearray_region_inverted`.
  */
 export function validateMakearrayRegions(tree: unknown, path = ''): void {
@@ -1026,7 +1036,7 @@ export function validateMakearrayRegions(tree: unknown, path = ''): void {
           const hi = intBound(bounds[1])
           if (lo === undefined || hi === undefined) continue
           if (hi < lo - 1) {
-            throw new ExpressionTemplateError(
+            throw new EsmMachineryError(
               ERROR_CODES.MAKEARRAY_REGION_INVERTED,
               `${path}: makearray regions[${ri}] dimension ${di} bound pair [${lo}, ${hi}] is inverted (stop < start - 1). An empty bound is spelled [start, start-1] and contributes no elements (esm-spec §4.3.2); a further-inverted pair is an authoring error — e.g. an interior stencil region [2, N-1] instantiated at N below the scheme's minimum extent (§9.6.8).`,
             )
@@ -1168,7 +1178,7 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   // anywhere in the file.
   const strayApplyPathsPostExpansion = findStrayApplyOps(out)
   if (strayApplyPathsPostExpansion.length > 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
       `apply_expression_template ops remain after expansion at: ${strayApplyPathsPostExpansion.join(', ')} — likely referenced from a component lacking an expression_templates block`,
     )

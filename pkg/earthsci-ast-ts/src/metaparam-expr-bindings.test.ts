@@ -25,7 +25,7 @@ import * as path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { load } from './parse.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
-import { ExpressionTemplateError } from './lower-expression-templates.js'
+import { EsmMachineryError } from './lower-expression-templates.js'
 import { evalMetaExpr, requireMetaExpr, resolveTemplateMachinery } from './template-imports.js'
 
 let dir: string
@@ -44,13 +44,13 @@ function write(name: string, doc: unknown): string {
   return p
 }
 
-/** Return the thrown ExpressionTemplateError code, or null on success. */
+/** Return the thrown EsmMachineryError code, or null on success. */
 function errCode(fn: () => unknown): string | null {
   try {
     fn()
     return null
   } catch (e) {
-    if (e instanceof ExpressionTemplateError) return e.code
+    if (e instanceof EsmMachineryError) return e.code
     throw e
   }
 }
@@ -60,7 +60,7 @@ async function errCodeAsync(fn: () => Promise<unknown>): Promise<string | null> 
     await fn()
     return null
   } catch (e) {
-    if (e instanceof ExpressionTemplateError) return e.code
+    if (e instanceof EsmMachineryError) return e.code
     throw e
   }
 }

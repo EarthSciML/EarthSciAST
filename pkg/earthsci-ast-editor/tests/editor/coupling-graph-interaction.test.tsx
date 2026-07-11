@@ -1,30 +1,28 @@
 /**
- * Coupling Graph Interaction E2E Tests
+ * Coupling Graph Interaction Component Tests
  *
- * Browser automation tests for SolidJS earthsci-ast-editor coupling graph interactive capabilities.
- * Tests verify graph interaction, node selection, edge editing, drag-and-drop functionality,
- * and visual coupling relationship management.
+ * jsdom component tests (via @solidjs/testing-library) for the SolidJS
+ * earthsci-ast-editor coupling graph web component. Despite the historical
+ * "E2E" label these carried, they run in the same jsdom environment as the unit
+ * tests -- not a real browser. They verify graph interaction, node selection,
+ * edge editing, drag-and-drop, and visual coupling relationship management by
+ * dispatching events at the registered custom element.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@solidjs/testing-library';
 import '@testing-library/jest-dom';
 import { registerWebComponents } from '../../src/web-components.ts';
+import { installCustomElementsMock } from '../../src/test-setup.ts';
 
-// Mock DOM environment setup for E2E simulation
+// jsdom environment setup shared with the unit tests, plus Canvas/SVG stubs the
+// coupling graph's D3 force layout touches during render.
 beforeEach(async () => {
   cleanup();
   vi.clearAllMocks();
 
-  // Setup mock DOM environment with enhanced Canvas and SVG support
-  Object.defineProperty(global, 'customElements', {
-    value: {
-      define: vi.fn(),
-      get: vi.fn(),
-      whenDefined: vi.fn().mockResolvedValue(undefined),
-    },
-    writable: true,
-  });
+  // Install the shared customElements stub (define/get/whenDefined)
+  installCustomElementsMock();
 
   // Mock Canvas API for D3 force simulation
   global.HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
@@ -50,7 +48,7 @@ beforeEach(async () => {
   registerWebComponents();
 });
 
-describe('Coupling Graph Interaction E2E', () => {
+describe('Coupling Graph Interaction', () => {
   const complexEsmFile = {
     schema_version: '1.0',
     metadata: {

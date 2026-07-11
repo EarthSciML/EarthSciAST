@@ -20,7 +20,7 @@ import { numericValue } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { isRemoteRef, joinPath } from './path-utils.js'
 import { ERROR_CODES } from './errors.js'
-import { ExpressionTemplateError } from './lower-expression-templates.js'
+import { EsmMachineryError } from './lower-expression-templates.js'
 
 /**
  * The `coupling` entry `type` tag identifying a coupling-library import
@@ -328,7 +328,7 @@ function collectRoleSegments(edge: unknown): Set<string> {
 
 function defaultLoadRef(ref: string, basePath: string): unknown {
   if (isRemoteRef(ref)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
       `remote coupling_import ref '${ref}' cannot be loaded synchronously; download the file and import it by local path`,
     )
@@ -336,7 +336,7 @@ function defaultLoadRef(ref: string, basePath: string): unknown {
   const proc = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process
   const getBuiltin = proc?.getBuiltinModule
   if (typeof getBuiltin !== 'function') {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
       `synchronous file access is unavailable in this environment; supply CouplingImportOptions.loadRef (ref '${ref}')`,
     )
@@ -347,7 +347,7 @@ function defaultLoadRef(ref: string, basePath: string): unknown {
   try {
     content = fs.readFileSync(path, 'utf8')
   } catch (e) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
       `coupling-library file not found or unreadable: ${path} (from ref '${ref}'): ${e instanceof Error ? e.message : String(e)}`,
     )
@@ -355,7 +355,7 @@ function defaultLoadRef(ref: string, basePath: string): unknown {
   try {
     return JSON.parse(content)
   } catch (e) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
       `coupling-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
     )
@@ -378,7 +378,7 @@ function expandOne(
   file: EsmFile,
 ): CouplingEntry[] {
   if (!isCouplingLibraryDoc(lib)) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_NOT_LIBRARY,
       `coupling_import ref '${ref}' lacks top-level \`coupling_roles\` — not a coupling-library file (esm-spec §10.9)`,
     )
@@ -388,7 +388,7 @@ function expandOne(
   // Purity (esm-spec §10.9).
   for (const k of LIBRARY_FORBIDDEN_KEYS) {
     if (k in doc) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
         `coupling-library '${ref}' declares \`${k}\` — a coupling library is nothing but roles + wiring (esm-spec §10.9)`,
       )
@@ -397,14 +397,14 @@ function expandOne(
 
   const roles = isObject(doc.coupling_roles) ? Object.keys(doc.coupling_roles) : []
   if (roles.length === 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
       `coupling-library '${ref}' declares no roles (esm-spec §10.9: \`coupling_roles\` is required, non-empty)`,
     )
   }
   const edges = Array.isArray(doc.coupling) ? (doc.coupling as unknown[]) : []
   if (edges.length === 0) {
-    throw new ExpressionTemplateError(
+    throw new EsmMachineryError(
       ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
       `coupling-library '${ref}' has an empty \`coupling\` array (esm-spec §10.9: required, non-empty)`,
     )
@@ -417,26 +417,26 @@ function expandOne(
     if (!isObject(edge)) continue
     const type = edge.type
     if (type === COUPLING_IMPORT_TYPE) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_LIBRARY_NESTED_IMPORT,
         `coupling-library '${ref}' contains a nested coupling_import (v1 forbids layering, esm-spec §10.9)`,
       )
     }
     if (type === 'callback' || 'expression_template_imports' in edge) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
         `coupling-library '${ref}' edge of type '${String(type)}' is not role-substitutable (no callback entries or edge-level expression_template_imports, esm-spec §10.9)`,
       )
     }
     if (typeof type !== 'string' || !ROLE_BEARING_TYPES.has(type)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
         `coupling-library '${ref}' contains an unsupported edge type '${String(type)}' (esm-spec §10.9)`,
       )
     }
     for (const seg of collectRoleSegments(edge)) {
       if (!roleSet.has(seg)) {
-        throw new ExpressionTemplateError(
+        throw new EsmMachineryError(
           ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
           `coupling-library '${ref}': edge references '${seg}', which is not a declared role (esm-spec §10.9)`,
         )
@@ -446,7 +446,7 @@ function expandOne(
   }
   for (const role of roles) {
     if (!usedRoles.has(role)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_ROLE_UNUSED,
         `coupling-library '${ref}': role '${role}' is declared but referenced by no edge (esm-spec §10.9)`,
       )
@@ -456,7 +456,7 @@ function expandOne(
   // Binding — total and checked (esm-spec §10.10.1).
   for (const key of Object.keys(bind)) {
     if (!roleSet.has(key)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_IMPORT_UNKNOWN_ROLE,
         `coupling_import ref '${ref}': bind key '${key}' is not a declared role (esm-spec §10.10.1)`,
       )
@@ -464,13 +464,13 @@ function expandOne(
   }
   for (const role of roles) {
     if (!(role in bind)) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_IMPORT_ROLE_UNBOUND,
         `coupling_import ref '${ref}': role '${role}' has no bind entry (binding is total, esm-spec §10.10.1)`,
       )
     }
     if (!resolvesToComponent(file, bind[role])) {
-      throw new ExpressionTemplateError(
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_IMPORT_BIND_NOT_A_COMPONENT,
         `coupling_import ref '${ref}': bind '${role}' -> '${bind[role]}' does not resolve to a component (esm-spec §10.10.1)`,
       )
@@ -551,8 +551,8 @@ export function expandCouplingImports(
     try {
       lib = loadRef(ref, basePath)
     } catch (e) {
-      if (e instanceof ExpressionTemplateError) throw e
-      throw new ExpressionTemplateError(
+      if (e instanceof EsmMachineryError) throw e
+      throw new EsmMachineryError(
         ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
         `coupling_import ref '${ref}' failed to load: ${e instanceof Error ? e.message : String(e)}`,
       )

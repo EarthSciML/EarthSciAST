@@ -1,15 +1,19 @@
 /**
- * Validation Panel Live Updates E2E Tests
+ * Validation Panel Live Updates Component Tests
  *
- * Browser automation tests for SolidJS earthsci-ast-editor validation panel live update capabilities.
- * Tests verify real-time validation feedback, error highlighting, interactive error navigation,
- * and validation state synchronization across multiple editor components.
+ * jsdom component tests (via @solidjs/testing-library) for the SolidJS
+ * earthsci-ast-editor validation panel. Despite the historical "E2E" label
+ * these carried, they run in the same jsdom environment as the unit tests -- not
+ * a real browser. They verify real-time validation feedback, error highlighting,
+ * interactive error navigation, and validation-state synchronization across
+ * editor components by dispatching events at the registered custom elements.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@solidjs/testing-library';
 import '@testing-library/jest-dom';
 import { registerWebComponents } from '../../src/web-components.ts';
+import { installCustomElementsMock } from '../../src/test-setup.ts';
 
 // Mock validation system
 const mockValidationErrors = {
@@ -41,20 +45,13 @@ beforeEach(async () => {
   cleanup();
   vi.clearAllMocks();
 
-  // Setup mock DOM environment
-  Object.defineProperty(global, 'customElements', {
-    value: {
-      define: vi.fn(),
-      get: vi.fn(),
-      whenDefined: vi.fn().mockResolvedValue(undefined),
-    },
-    writable: true,
-  });
+  // Install the shared customElements stub (define/get/whenDefined)
+  installCustomElementsMock();
 
   registerWebComponents();
 });
 
-describe('Validation Panel Live Updates E2E', () => {
+describe('Validation Panel Live Updates', () => {
   const validEsmFile = {
     schema_version: '1.0',
     metadata: {
