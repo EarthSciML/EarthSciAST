@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm"
 )
@@ -34,23 +33,22 @@ func roundtripOne(path string) result {
 	// Use json.Unmarshal with interface{} to discover the shape, then
 	// re-cast operator nodes through esm.ExprNode to exercise the binding's
 	// typed path.
-	var raw_any interface{}
-	if err := json.Unmarshal(raw, &raw_any); err != nil {
+	var rawAny interface{}
+	if err := json.Unmarshal(raw, &rawAny); err != nil {
 		return result{OK: false, Error: fmt.Sprintf("decode error: %v", err)}
 	}
 
 	var expr esm.Expression
-	switch v := raw_any.(type) {
+	switch rawAny.(type) {
 	case map[string]interface{}:
 		var node esm.ExprNode
 		if err := json.Unmarshal(raw, &node); err != nil {
 			return result{OK: false, Error: fmt.Sprintf("node decode error: %v", err)}
 		}
 		expr = node
-		_ = v
 	default:
 		// Number / string literals pass through unchanged.
-		expr = raw_any
+		expr = rawAny
 	}
 
 	out, err := esm.SerializeExpressionCompact(expr)
@@ -65,22 +63,14 @@ func main() {
 	for _, arg := range os.Args[1:] {
 		results[filepath.Base(arg)] = roundtripOne(arg)
 	}
-	// Sort keys so output is deterministic.
-	names := make([]string, 0, len(results))
-	for k := range results {
-		names = append(names, k)
-	}
-	sort.Strings(names)
 
-	// Build an ordered map via manual encoding.
-	fmt.Print("{")
-	for i, name := range names {
-		if i > 0 {
-			fmt.Print(",")
-		}
-		keyJSON, _ := json.Marshal(name)
-		valJSON, _ := json.Marshal(results[name])
-		fmt.Printf("%s:%s", keyJSON, valJSON)
+	// encoding/json marshals map keys in sorted order, producing byte-identical
+	// (deterministic) output to the previous manual encoding — and it surfaces
+	// the marshal error the hand-rolled version discarded.
+	out, err := json.Marshal(results)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "encode error: %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Println("}")
+	fmt.Println(string(out))
 }

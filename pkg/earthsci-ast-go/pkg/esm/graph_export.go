@@ -8,17 +8,7 @@ import (
 )
 
 // ========================================
-// 1. Graph Export Interface
-// ========================================
-
-// GraphExporter defines the interface for exporting graphs
-type GraphExporter interface {
-	ExportComponentGraph(graph *ComponentGraph) (string, error)
-	ExportExpressionGraph(graph *ExpressionGraph) (string, error)
-}
-
-// ========================================
-// 2. DOT (Graphviz) Export
+// 1. DOT (Graphviz) Export
 // ========================================
 
 // DOTExporter exports graphs to DOT format
@@ -41,9 +31,7 @@ func (e *DOTExporter) ExportComponentGraph(graph *ComponentGraph) (string, error
 	// Sort nodes for consistent output
 	nodes := make([]ComponentNode, len(graph.Nodes))
 	copy(nodes, graph.Nodes)
-	sort.Slice(nodes, func(i, j int) bool {
-		return nodes[i].ID < nodes[j].ID
-	})
+	sortComponentNodes(nodes)
 
 	// Export nodes
 	for _, node := range nodes {
@@ -51,7 +39,7 @@ func (e *DOTExporter) ExportComponentGraph(graph *ComponentGraph) (string, error
 		label := formatComponentNodeLabel(node)
 
 		fmt.Fprintf(&builder, "  \"%s\" [label=\"%s\", fillcolor=\"%s\"];\n",
-			node.ID, label, color)
+			dotEscape(node.ID), dotEscape(label), color)
 	}
 
 	builder.WriteString("\n")
@@ -59,27 +47,23 @@ func (e *DOTExporter) ExportComponentGraph(graph *ComponentGraph) (string, error
 	// Sort edges for consistent output
 	edges := make([]GraphEdge[ComponentNode, CouplingEdge], len(graph.Edges))
 	copy(edges, graph.Edges)
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Source.ID != edges[j].Source.ID {
-			return edges[i].Source.ID < edges[j].Source.ID
-		}
-		return edges[i].Target.ID < edges[j].Target.ID
-	})
+	sortComponentEdges(edges)
 
-	// Export edges
+	// Export edges. A bidirectional coupling is a directed edge with
+	// dir=both — an undirected `--` edge is a syntax error inside a digraph.
 	for _, edge := range edges {
-		direction := "->"
-		if edge.Data.Bidirectional {
-			direction = "--"
-		}
-
 		label := edge.Data.Type
 		if edge.Data.Label != nil {
 			label = fmt.Sprintf("%s [%s]", edge.Data.Type, *edge.Data.Label)
 		}
 
-		fmt.Fprintf(&builder, "  \"%s\" %s \"%s\" [label=\"%s\"];\n",
-			edge.Source.ID, direction, edge.Target.ID, label)
+		attrs := fmt.Sprintf("label=\"%s\"", dotEscape(label))
+		if edge.Data.Bidirectional {
+			attrs += ", dir=both"
+		}
+
+		fmt.Fprintf(&builder, "  \"%s\" -> \"%s\" [%s];\n",
+			dotEscape(edge.Source.ID), dotEscape(edge.Target.ID), attrs)
 	}
 
 	builder.WriteString("}\n")
@@ -98,21 +82,16 @@ func (e *DOTExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, err
 	// Sort nodes for consistent output
 	nodes := make([]VariableNode, len(graph.Nodes))
 	copy(nodes, graph.Nodes)
-	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i].System != nodes[j].System {
-			return nodes[i].System < nodes[j].System
-		}
-		return nodes[i].Name < nodes[j].Name
-	})
+	sortVariableNodes(nodes)
 
 	// Export nodes
 	for _, node := range nodes {
 		color := getVariableNodeColor(node.Kind)
 		label := formatVariableNodeLabel(node)
-		nodeID := fmt.Sprintf("%s.%s", node.System, node.Name)
+		nodeID := variableNodeID(node, ".")
 
 		fmt.Fprintf(&builder, "  \"%s\" [label=\"%s\", fillcolor=\"%s\"];\n",
-			nodeID, label, color)
+			dotEscape(nodeID), dotEscape(label), color)
 	}
 
 	builder.WriteString("\n")
@@ -120,24 +99,15 @@ func (e *DOTExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, err
 	// Sort edges for consistent output
 	edges := make([]GraphEdge[VariableNode, DependencyEdge], len(graph.Edges))
 	copy(edges, graph.Edges)
-	sort.Slice(edges, func(i, j int) bool {
-		sourceID1 := fmt.Sprintf("%s.%s", edges[i].Source.System, edges[i].Source.Name)
-		sourceID2 := fmt.Sprintf("%s.%s", edges[j].Source.System, edges[j].Source.Name)
-		if sourceID1 != sourceID2 {
-			return sourceID1 < sourceID2
-		}
-		targetID1 := fmt.Sprintf("%s.%s", edges[i].Target.System, edges[i].Target.Name)
-		targetID2 := fmt.Sprintf("%s.%s", edges[j].Target.System, edges[j].Target.Name)
-		return targetID1 < targetID2
-	})
+	sortVariableEdges(edges, ".")
 
 	// Export edges
 	for _, edge := range edges {
-		sourceID := fmt.Sprintf("%s.%s", edge.Source.System, edge.Source.Name)
-		targetID := fmt.Sprintf("%s.%s", edge.Target.System, edge.Target.Name)
+		sourceID := variableNodeID(edge.Source, ".")
+		targetID := variableNodeID(edge.Target, ".")
 
 		fmt.Fprintf(&builder, "  \"%s\" -> \"%s\" [label=\"%s\"];\n",
-			sourceID, targetID, edge.Data.Relationship)
+			dotEscape(sourceID), dotEscape(targetID), dotEscape(edge.Data.Relationship))
 	}
 
 	builder.WriteString("}\n")
@@ -165,16 +135,15 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 	// Sort nodes for consistent output
 	nodes := make([]ComponentNode, len(graph.Nodes))
 	copy(nodes, graph.Nodes)
-	sort.Slice(nodes, func(i, j int) bool {
-		return nodes[i].ID < nodes[j].ID
-	})
+	sortComponentNodes(nodes)
 
-	// Export nodes with shapes and colors
+	// Export nodes with shapes and colors. The node ID is sanitized (as the
+	// expression export already does) and the shape's opening and closing
+	// tokens both surround the label so the token is well-formed.
 	for _, node := range nodes {
-		shape := getMermaidNodeShape(node.Type)
-		label := formatMermaidLabel(node.ID)
-
-		fmt.Fprintf(&builder, "    %s%s%s\n", node.ID, shape, label)
+		open, closeTok := getMermaidNodeShape(node.Type)
+		fmt.Fprintf(&builder, "    %s%s%s%s\n",
+			sanitizeMermaidID(node.ID), open, escapeMermaidLabel(node.ID), closeTok)
 	}
 
 	builder.WriteString("\n")
@@ -182,12 +151,7 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 	// Sort edges for consistent output
 	edges := make([]GraphEdge[ComponentNode, CouplingEdge], len(graph.Edges))
 	copy(edges, graph.Edges)
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Source.ID != edges[j].Source.ID {
-			return edges[i].Source.ID < edges[j].Source.ID
-		}
-		return edges[i].Target.ID < edges[j].Target.ID
-	})
+	sortComponentEdges(edges)
 
 	// Export edges
 	for _, edge := range edges {
@@ -202,7 +166,7 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 		}
 
 		fmt.Fprintf(&builder, "    %s %s|%s| %s\n",
-			edge.Source.ID, arrow, label, edge.Target.ID)
+			sanitizeMermaidID(edge.Source.ID), arrow, label, sanitizeMermaidID(edge.Target.ID))
 	}
 
 	// Add styling
@@ -210,11 +174,10 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 	builder.WriteString("    classDef model fill:#e1f5fe\n")
 	builder.WriteString("    classDef reaction_system fill:#f3e5f5\n")
 	builder.WriteString("    classDef data_loader fill:#e8f5e8\n")
-	builder.WriteString("    classDef operator fill:#fff3e0\n")
 
 	// Apply classes to nodes
 	for _, node := range nodes {
-		fmt.Fprintf(&builder, "    class %s %s\n", node.ID, node.Type)
+		fmt.Fprintf(&builder, "    class %s %s\n", sanitizeMermaidID(node.ID), node.Type)
 	}
 
 	return builder.String(), nil
@@ -229,17 +192,12 @@ func (e *MermaidExporter) ExportExpressionGraph(graph *ExpressionGraph) (string,
 	// Sort nodes for consistent output
 	nodes := make([]VariableNode, len(graph.Nodes))
 	copy(nodes, graph.Nodes)
-	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i].System != nodes[j].System {
-			return nodes[i].System < nodes[j].System
-		}
-		return nodes[i].Name < nodes[j].Name
-	})
+	sortVariableNodes(nodes)
 
 	// Export nodes
 	for _, node := range nodes {
-		nodeID := sanitizeMermaidID(fmt.Sprintf("%s_%s", node.System, node.Name))
-		label := formatMermaidLabel(node.Name)
+		nodeID := sanitizeMermaidID(variableNodeID(node, "_"))
+		label := "[" + escapeMermaidLabel(node.Name) + "]"
 
 		fmt.Fprintf(&builder, "    %s%s\n", nodeID, label)
 	}
@@ -249,21 +207,12 @@ func (e *MermaidExporter) ExportExpressionGraph(graph *ExpressionGraph) (string,
 	// Sort edges for consistent output
 	edges := make([]GraphEdge[VariableNode, DependencyEdge], len(graph.Edges))
 	copy(edges, graph.Edges)
-	sort.Slice(edges, func(i, j int) bool {
-		sourceID1 := fmt.Sprintf("%s_%s", edges[i].Source.System, edges[i].Source.Name)
-		sourceID2 := fmt.Sprintf("%s_%s", edges[j].Source.System, edges[j].Source.Name)
-		if sourceID1 != sourceID2 {
-			return sourceID1 < sourceID2
-		}
-		targetID1 := fmt.Sprintf("%s_%s", edges[i].Target.System, edges[i].Target.Name)
-		targetID2 := fmt.Sprintf("%s_%s", edges[j].Target.System, edges[j].Target.Name)
-		return targetID1 < targetID2
-	})
+	sortVariableEdges(edges, "_")
 
 	// Export edges
 	for _, edge := range edges {
-		sourceID := sanitizeMermaidID(fmt.Sprintf("%s_%s", edge.Source.System, edge.Source.Name))
-		targetID := sanitizeMermaidID(fmt.Sprintf("%s_%s", edge.Target.System, edge.Target.Name))
+		sourceID := sanitizeMermaidID(variableNodeID(edge.Source, "_"))
+		targetID := sanitizeMermaidID(variableNodeID(edge.Target, "_"))
 
 		fmt.Fprintf(&builder, "    %s -->|%s| %s\n",
 			sourceID, edge.Data.Relationship, targetID)
@@ -308,16 +257,8 @@ func (e *JSONExporter) ExportComponentGraph(graph *ComponentGraph) (string, erro
 	copy(sortedGraph.Nodes, graph.Nodes)
 	copy(sortedGraph.Edges, graph.Edges)
 
-	sort.Slice(sortedGraph.Nodes, func(i, j int) bool {
-		return sortedGraph.Nodes[i].ID < sortedGraph.Nodes[j].ID
-	})
-
-	sort.Slice(sortedGraph.Edges, func(i, j int) bool {
-		if sortedGraph.Edges[i].Source.ID != sortedGraph.Edges[j].Source.ID {
-			return sortedGraph.Edges[i].Source.ID < sortedGraph.Edges[j].Source.ID
-		}
-		return sortedGraph.Edges[i].Target.ID < sortedGraph.Edges[j].Target.ID
-	})
+	sortComponentNodes(sortedGraph.Nodes)
+	sortComponentEdges(sortedGraph.Edges)
 
 	data, err := json.MarshalIndent(sortedGraph, "", "  ")
 	if err != nil {
@@ -338,23 +279,8 @@ func (e *JSONExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, er
 	copy(sortedGraph.Nodes, graph.Nodes)
 	copy(sortedGraph.Edges, graph.Edges)
 
-	sort.Slice(sortedGraph.Nodes, func(i, j int) bool {
-		if sortedGraph.Nodes[i].System != sortedGraph.Nodes[j].System {
-			return sortedGraph.Nodes[i].System < sortedGraph.Nodes[j].System
-		}
-		return sortedGraph.Nodes[i].Name < sortedGraph.Nodes[j].Name
-	})
-
-	sort.Slice(sortedGraph.Edges, func(i, j int) bool {
-		sourceID1 := fmt.Sprintf("%s.%s", sortedGraph.Edges[i].Source.System, sortedGraph.Edges[i].Source.Name)
-		sourceID2 := fmt.Sprintf("%s.%s", sortedGraph.Edges[j].Source.System, sortedGraph.Edges[j].Source.Name)
-		if sourceID1 != sourceID2 {
-			return sourceID1 < sourceID2
-		}
-		targetID1 := fmt.Sprintf("%s.%s", sortedGraph.Edges[i].Target.System, sortedGraph.Edges[i].Target.Name)
-		targetID2 := fmt.Sprintf("%s.%s", sortedGraph.Edges[j].Target.System, sortedGraph.Edges[j].Target.Name)
-		return targetID1 < targetID2
-	})
+	sortVariableNodes(sortedGraph.Nodes)
+	sortVariableEdges(sortedGraph.Edges, ".")
 
 	data, err := json.MarshalIndent(sortedGraph, "", "  ")
 	if err != nil {
@@ -368,7 +294,8 @@ func (e *JSONExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, er
 // 5. Utility Functions
 // ========================================
 
-// getNodeColor returns appropriate color for different node types in DOT format
+// getNodeColor returns appropriate color for different node types in DOT format.
+// (The "operator" node type was removed in v0.3.0 and can no longer be produced.)
 func getNodeColor(nodeType string) string {
 	switch nodeType {
 	case "model":
@@ -377,8 +304,6 @@ func getNodeColor(nodeType string) string {
 		return "lightpink"
 	case "data_loader":
 		return "lightgreen"
-	case "operator":
-		return "lightyellow"
 	default:
 		return "white"
 	}
@@ -429,29 +354,30 @@ func formatVariableNodeLabel(node VariableNode) string {
 	return label
 }
 
-// getMermaidNodeShape returns appropriate shape for different node types in Mermaid format
-func getMermaidNodeShape(nodeType string) string {
+// getMermaidNodeShape returns the opening and closing shape tokens for a node
+// type in Mermaid. Both tokens must be emitted around the label so the node is
+// well-formed (e.g. model -> "[[…]]"). The "operator" node type was removed in
+// v0.3.0.
+func getMermaidNodeShape(nodeType string) (open, closeTok string) {
 	switch nodeType {
 	case "model":
-		return "["
+		return "[[", "]]"
 	case "reaction_system":
-		return "("
+		return "([", "])"
 	case "data_loader":
-		return "{"
-	case "operator":
-		return "[/"
+		return "{", "}"
 	default:
-		return "["
+		return "[", "]"
 	}
 }
 
-// formatMermaidLabel formats a label for Mermaid (escaping special characters)
-func formatMermaidLabel(text string) string {
-	// Escape special characters for Mermaid
+// escapeMermaidLabel escapes a label's special characters for Mermaid (the
+// caller supplies the surrounding node-shape tokens).
+func escapeMermaidLabel(text string) string {
 	text = strings.ReplaceAll(text, " ", "_")
 	text = strings.ReplaceAll(text, "-", "_")
 	text = strings.ReplaceAll(text, ".", "_")
-	return "[" + text + "]"
+	return text
 }
 
 // sanitizeMermaidID sanitizes an ID for use in Mermaid
@@ -467,6 +393,59 @@ func sanitizeMermaidID(id string) string {
 	}
 
 	return id
+}
+
+// dotEscape escapes the double-quote that would otherwise terminate a DOT
+// quoted string. Backslash sequences (notably the "\n" line break emitted in
+// node labels) are deliberately left intact.
+func dotEscape(s string) string {
+	return strings.ReplaceAll(s, "\"", "\\\"")
+}
+
+// variableNodeID returns the composite "system<sep>name" identifier for a
+// variable node; DOT/JSON use "." and Mermaid uses "_".
+func variableNodeID(node VariableNode, sep string) string {
+	return node.System + sep + node.Name
+}
+
+// sortComponentNodes sorts component nodes by ID for deterministic output.
+func sortComponentNodes(nodes []ComponentNode) {
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].ID < nodes[j].ID
+	})
+}
+
+// sortComponentEdges sorts component edges by (source ID, target ID).
+func sortComponentEdges(edges []GraphEdge[ComponentNode, CouplingEdge]) {
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].Source.ID != edges[j].Source.ID {
+			return edges[i].Source.ID < edges[j].Source.ID
+		}
+		return edges[i].Target.ID < edges[j].Target.ID
+	})
+}
+
+// sortVariableNodes sorts variable nodes by (system, name).
+func sortVariableNodes(nodes []VariableNode) {
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].System != nodes[j].System {
+			return nodes[i].System < nodes[j].System
+		}
+		return nodes[i].Name < nodes[j].Name
+	})
+}
+
+// sortVariableEdges sorts variable edges by (source ID, target ID) using the
+// given separator to build the composite IDs (matching each format's node IDs).
+func sortVariableEdges(edges []GraphEdge[VariableNode, DependencyEdge], sep string) {
+	sort.Slice(edges, func(i, j int) bool {
+		src1 := variableNodeID(edges[i].Source, sep)
+		src2 := variableNodeID(edges[j].Source, sep)
+		if src1 != src2 {
+			return src1 < src2
+		}
+		return variableNodeID(edges[i].Target, sep) < variableNodeID(edges[j].Target, sep)
+	})
 }
 
 // ========================================
