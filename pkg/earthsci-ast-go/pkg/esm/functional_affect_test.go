@@ -13,9 +13,9 @@ func TestFunctionalAffectSerialization(t *testing.T) {
 		ReadParams:     []string{"Kp", "Ki", "Kd"},
 		ModifiedParams: []string{"heater_power"},
 		Config: map[string]interface{}{
-			"anti_windup":    true,
-			"output_clamp":   []float64{0.0, 100.0},
-			"sampling_rate":  60.0,
+			"anti_windup":   true,
+			"output_clamp":  []float64{0.0, 100.0},
+			"sampling_rate": 60.0,
 		},
 	}
 
@@ -93,8 +93,8 @@ func TestDiscreteEventWithFunctionalAffect(t *testing.T) {
 			ReadParams:     []string{"Kp", "Ki", "Kd"},
 			ModifiedParams: []string{"heater_power"},
 			Config: map[string]interface{}{
-				"anti_windup":   true,
-				"output_clamp":  []float64{0.0, 100.0},
+				"anti_windup":  true,
+				"output_clamp": []float64{0.0, 100.0},
 			},
 		},
 		Reinitialize: &[]bool{true}[0],
@@ -159,7 +159,7 @@ func TestDiscreteEventWithRegularAffects(t *testing.T) {
 			{
 				LHS: "x",
 				RHS: ExprNode{
-					Op:   "+",
+					Op: "+",
 					Args: []interface{}{
 						ExprNode{Op: "Pre", Args: []interface{}{"x"}},
 						1.0,

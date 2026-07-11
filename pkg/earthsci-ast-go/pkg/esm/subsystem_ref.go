@@ -360,13 +360,6 @@ func metaEnvFromDecls(declsRaw interface{}, overlay map[string]int64) map[string
 	return env
 }
 
-// extractRef checks if a value is a reference object (a map with a "ref" key)
-// and returns the ref string if so.
-func extractRef(value interface{}) (string, bool) {
-	ref, _, ok := extractRefWithBindings(value)
-	return ref, ok
-}
-
 // extractRefWithBindings checks if a value is a reference object (a map with
 // a "ref" key) and returns the ref string plus its optional metaparameter
 // `bindings` object (esm-spec §9.7.6 binding site 3).

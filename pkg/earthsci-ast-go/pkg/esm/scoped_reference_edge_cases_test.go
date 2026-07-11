@@ -218,9 +218,9 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 	expr := ExprNode{
 		Op: "+",
 		Args: []interface{}{
-			"x",                        // Direct variable in current system
-			"SubA.temp",               // Relative scoped reference
-			"ModelB.y",                // Absolute cross-model reference
+			"x",         // Direct variable in current system
+			"SubA.temp", // Relative scoped reference
+			"ModelB.y",  // Absolute cross-model reference
 			ExprNode{
 				Op:   "*",
 				Args: []interface{}{"SubA.temp", float64(2.0)},
