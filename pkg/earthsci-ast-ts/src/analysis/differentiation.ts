@@ -366,11 +366,11 @@ export function higherOrderDerivative(
   }
 
   let current = expr
-  const chainComponents: Array<{ expression: Expr; derivative: Expr }> = []
+  const derivativeSteps: Array<{ expression: Expr; derivative: Expr }> = []
 
   for (let i = 0; i < order; i++) {
     const derivative = computeDerivative(current, variable)
-    chainComponents.push({
+    derivativeSteps.push({
       expression: current,
       derivative,
     })
@@ -383,7 +383,7 @@ export function higherOrderDerivative(
     derivative: current,
     variable,
     simplified: deepEqualExpr(current, simplified) ? undefined : simplified,
-    chainComponents,
+    derivativeSteps,
   }
 }
 

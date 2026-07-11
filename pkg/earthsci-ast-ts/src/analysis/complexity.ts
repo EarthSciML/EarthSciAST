@@ -5,9 +5,9 @@
  * of expressions, including depth, operation counts, and estimated costs.
  */
 
-import type { Expr } from '../types.js'
+import type { Expr, ExpressionNode } from '../types.js'
 import type { ComplexityMetrics, StabilityIssue } from './types.js'
-import { freeVariables, isExprNode, forEachChild } from '../expression.js'
+import { isExprNode, forEachChild } from '../expression.js'
 import { numericValue } from '../numeric-literal.js'
 import { opCost } from '../op-registry.js'
 
@@ -70,50 +70,133 @@ const PARALLELIZABLE_OPS: ReadonlySet<string> = new Set([
  * @returns Complexity metrics
  */
 export function analyzeComplexity(expr: Expr): ComplexityMetrics {
+  return computeMetricsTree(expr).metrics
+}
+
+/**
+ * What a single bottom-up post-order visit produces for one node.
+ *
+ * `freeVars` is the node's free-variable set (unioned over `args` children
+ * only, exactly matching {@link freeVariables}); the parent unions it to build
+ * its own `variableCount` without ever re-walking the subtree.
+ */
+interface SubtreeAnalysis {
+  metrics: ComplexityMetrics
+  freeVars: Set<string>
+}
+
+/**
+ * Compute the complexity metrics of `expr` (and every op-node subtree beneath
+ * it) in a SINGLE bottom-up post-order pass.
+ *
+ * Each node is visited exactly once: a node's metrics are assembled from its
+ * children's already-computed metrics rather than by re-walking the subtree.
+ * This replaces the previous per-subtree {@link analyzeComplexity} rescans that
+ * made subtree-cost queries O(n²).
+ *
+ * The result for any node is byte-for-byte identical to calling
+ * {@link analyzeComplexity} on that node directly:
+ *   - `operationCount`, `constantCount`, `operationTypes` accumulate over ALL
+ *     expression children ({@link forEachChild}: args, aggregate bodies, ...);
+ *   - `depth` is `1 + max(childDepth)` (or 0 for a childless node), matching the
+ *     old max-depth recursion;
+ *   - `variableCount` counts UNIQUE free variables, unioned over `args` children
+ *     only — the exact traversal {@link freeVariables} performs.
+ *
+ * When `costCache` is supplied, each op node's `computationalCost` is recorded
+ * (keyed by node reference) so repeated subtree-cost lookups become O(1).
+ */
+function computeMetricsTree(
+  expr: Expr,
+  costCache?: Map<ExpressionNode, number>,
+): SubtreeAnalysis {
+  // Leaf: constant (plain number OR tagged NumericLiteral from canonical mode).
+  if (numericValue(expr) !== undefined) {
+    return { metrics: makeMetrics(0, 0, 0, 1, {}), freeVars: new Set() }
+  }
+
+  // Leaf: variable reference. Contributes one unique free variable, no ops.
+  if (typeof expr === 'string') {
+    return { metrics: makeMetrics(0, 0, 1, 0, {}), freeVars: new Set([expr]) }
+  }
+
+  if (isExprNode(expr)) {
+    let operationCount = 1
+    let constantCount = 0
+    // Bounded by the operator vocabulary (~30 symbols), so per-node merge is O(1).
+    const operationTypes: Record<string, number> = { [expr.op]: 1 }
+    // -1 sentinel distinguishes "no expression children" (depth 0) from real depth.
+    let maxChildDepth = -1
+    const freeVars = new Set<string>()
+
+    forEachChild(expr, (child, key) => {
+      const childAnalysis = computeMetricsTree(child, costCache)
+      const cm = childAnalysis.metrics
+      operationCount += cm.operationCount
+      constantCount += cm.constantCount
+      for (const [op, count] of Object.entries(cm.operationTypes)) {
+        operationTypes[op] = (operationTypes[op] || 0) + count
+      }
+      maxChildDepth = Math.max(maxChildDepth, cm.depth)
+      // Unique variables are counted over `args` only, mirroring freeVariables.
+      if (key === 'args') {
+        childAnalysis.freeVars.forEach((v) => freeVars.add(v))
+      }
+    })
+
+    const depth = maxChildDepth < 0 ? 0 : maxChildDepth + 1
+    const metrics = makeMetrics(depth, operationCount, freeVars.size, constantCount, operationTypes)
+    costCache?.set(expr, metrics.computationalCost)
+    return { metrics, freeVars }
+  }
+
+  // Non-expression leaf (should not occur): empty metrics.
+  return { metrics: makeMetrics(0, 0, 0, 0, {}), freeVars: new Set() }
+}
+
+/**
+ * Assemble a {@link ComplexityMetrics} from raw counts, deriving the two cost
+ * aggregates through the same weight functions {@link analyzeComplexity} has
+ * always used (so there is a single source of truth for the formulae).
+ */
+function makeMetrics(
+  depth: number,
+  operationCount: number,
+  variableCount: number,
+  constantCount: number,
+  operationTypes: Record<string, number>,
+): ComplexityMetrics {
   const metrics: ComplexityMetrics = {
-    depth: 0,
-    operationCount: 0,
-    variableCount: 0,
-    constantCount: 0,
-    operationTypes: {},
+    depth,
+    operationCount,
+    variableCount,
+    constantCount,
+    operationTypes,
     computationalCost: 0,
     memoryUsage: 0,
   }
-
-  // Analyze the expression recursively
-  analyzeExpressionRecursive(expr, metrics, 0)
-
-  // Count unique variables
-  metrics.variableCount = freeVariables(expr).size
-
-  // Calculate final costs
   metrics.computationalCost = calculateComputationalCost(metrics)
   metrics.memoryUsage = calculateMemoryUsage(metrics)
-
   return metrics
 }
 
 /**
- * Recursively analyze expression structure
+ * Compute every op-node subtree's {@link ComplexityMetrics.computationalCost}
+ * in one bottom-up pass, keyed by node reference. Lets callers that must query
+ * many nested subtrees (common-subexpression extraction,
+ * {@link findExpensiveSubexpressions}) do O(1) lookups instead of re-running
+ * {@link analyzeComplexity} on each subtree.
+ *
+ * @param expr Root expression to walk
+ * @param cache Cache to populate (pass one to accumulate across several trees)
+ * @returns The populated cache (op node → computational cost)
  */
-function analyzeExpressionRecursive(expr: Expr, metrics: ComplexityMetrics, depth: number) {
-  // Update maximum depth
-  metrics.depth = Math.max(metrics.depth, depth)
-
-  // Constants: plain numbers AND tagged NumericLiteral leaves ({kind, value})
-  // produced by canonical-mode parsing.
-  if (numericValue(expr) !== undefined) {
-    metrics.constantCount++
-  } else if (isExprNode(expr)) {
-    // Operation node
-    metrics.operationCount++
-    metrics.operationTypes[expr.op] = (metrics.operationTypes[expr.op] || 0) + 1
-
-    // Recursively analyze every child (args, aggregate bodies, ...).
-    forEachChild(expr, (child) => analyzeExpressionRecursive(child, metrics, depth + 1))
-  }
-  // Variable-reference strings contribute no operation/constant here; unique
-  // variables are counted via freeVariables in analyzeComplexity.
+export function collectSubtreeCosts(
+  expr: Expr,
+  cache: Map<ExpressionNode, number> = new Map(),
+): Map<ExpressionNode, number> {
+  computeMetricsTree(expr, cache)
+  return cache
 }
 
 /**
@@ -234,8 +317,20 @@ export function findExpensiveSubexpressions(
 }> {
   const results: Array<{ expression: Expr; cost: number; path: string[] }> = []
 
+  // One bottom-up pass memoizes every op-node subtree's cost; the pre-order
+  // walk below then reads costs in O(1) instead of rescanning each subtree.
+  const costCache = collectSubtreeCosts(expr)
+
+  const costOf = (node: Expr): number =>
+    isExprNode(node)
+      ? costCache.get(node)!
+      : // Leaves (never above the threshold) aren't cached; cost them directly.
+        typeof node === 'string'
+        ? VARIABLE_LOOKUP_COST
+        : CONSTANT_COST
+
   function analyzeRecursive(currentExpr: Expr, path: string[]) {
-    const cost = analyzeComplexity(currentExpr).computationalCost
+    const cost = costOf(currentExpr)
 
     // Only include expressions that are worth optimizing
     if (cost > EXPENSIVE_COST_THRESHOLD) {

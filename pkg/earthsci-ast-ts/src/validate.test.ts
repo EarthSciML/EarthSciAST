@@ -493,3 +493,58 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
     expect(err!.details.variable).toBe('missing_var')
   })
 })
+
+describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => {
+  // validate() parses string input through the same `losslessJsonParse`
+  // machinery `load()` uses (tagged leaves stripped back to plain numbers),
+  // rather than a divergent bare `JSON.parse`. A malformed string is still
+  // reported in the historical `json_parse_error` envelope — same code, `$`
+  // path, `details.error` shape, and `Invalid JSON: ` message prefix.
+  it('reports malformed JSON in the json_parse_error envelope', () => {
+    const result = validate('{ "esm": "0.1.0", ')
+
+    expect(result.is_valid).toBe(false)
+    expect(result.structural_errors).toEqual([])
+    expect(result.unit_warnings).toEqual([])
+    expect(result.schema_errors).toHaveLength(1)
+    const err = result.schema_errors[0]
+    expect(err.code).toBe('json_parse_error')
+    expect(err.path).toBe('$')
+    expect(err.message.startsWith('Invalid JSON: ')).toBe(true)
+    expect(typeof err.details.error).toBe('string')
+    expect(err.message).toBe(`Invalid JSON: ${err.details.error}`)
+  })
+
+  it('rejects trailing content after the JSON document', () => {
+    const result = validate('{"esm":"0.1.0","metadata":{"name":"x"}} trailing')
+
+    expect(result.is_valid).toBe(false)
+    expect(result.schema_errors).toHaveLength(1)
+    expect(result.schema_errors[0].code).toBe('json_parse_error')
+  })
+
+  it('parses a valid string identically to the equivalent object', () => {
+    const obj = {
+      esm: '0.1.0',
+      metadata: { name: 'parse_parity' },
+      models: {
+        M: {
+          variables: {
+            x: { type: 'state', default: 1.0 },
+            k: { type: 'parameter', default: 2.0 },
+          },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'k' }],
+        },
+      },
+    }
+
+    const fromString = validate(JSON.stringify(obj))
+    const fromObject = validate(obj)
+
+    // Routing the string through the lossless parser (then stripping tagged
+    // leaves back to plain numbers) yields the same result as the object path.
+    expect(fromString).toEqual(fromObject)
+    expect(fromString.is_valid).toBe(true)
+    expect(fromString.structural_errors).toEqual([])
+  })
+})

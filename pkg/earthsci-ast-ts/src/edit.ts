@@ -117,10 +117,9 @@ export function removeVariable(model: Model, name: string): Model {
   }
 
   const { [name]: _removed, ...remainingVariables } = model.variables
-  return {
-    ...model,
-    variables: remainingVariables,
-  }
+  // Drop-when-empty (see `withCollection`): removing the last variable omits the
+  // `variables` key rather than leaving `{}`.
+  return withCollection(model, 'variables', remainingVariables)
 }
 
 /**
@@ -207,10 +206,9 @@ export function removeEquation(model: Model, indexOrLhs: number | Expr): Model {
   }
 
   const newEquations = equations.filter((_, i) => i !== indexToRemove)
-  return {
-    ...model,
-    equations: newEquations,
-  }
+  // Drop-when-empty (see `withCollection`): removing the last equation omits the
+  // `equations` key rather than leaving `[]`.
+  return withCollection(model, 'equations', newEquations)
 }
 
 /**
@@ -341,10 +339,9 @@ export function removeSpecies(system: ReactionSystem, name: string): ReactionSys
   }
 
   const { [name]: _removed, ...remainingSpecies } = system.species
-  return {
-    ...system,
-    species: remainingSpecies,
-  }
+  // Drop-when-empty (see `withCollection`): removing the last species omits the
+  // `species` key rather than leaving `{}`.
+  return withCollection(system, 'species', remainingSpecies)
 }
 
 // =============================================================================
@@ -386,8 +383,8 @@ export function addDiscreteEvent(model: Model, event: DiscreteEvent): Model {
  * the first. Containers are tried in order — if any continuous event matches,
  * only continuous events are filtered; otherwise discrete events are filtered
  * (a name present in both containers is removed only from `continuous_events`).
- * The emptied array is kept as `[]` rather than dropped (pinned by
- * `edit.test.ts`).
+ * If the filtered container ends up empty, its key is dropped per the
+ * module-wide drop-when-empty convention (see `withCollection`).
  *
  * @param model Model to remove event(s) from
  * @param name Event name to remove
@@ -396,17 +393,19 @@ export function addDiscreteEvent(model: Model, event: DiscreteEvent): Model {
  */
 export function removeEvent(model: Model, name: string): Model {
   if (model.continuous_events?.some((e) => e.name === name)) {
-    return {
-      ...model,
-      continuous_events: model.continuous_events.filter((e) => e.name !== name),
-    }
+    return withCollection(
+      model,
+      'continuous_events',
+      model.continuous_events.filter((e) => e.name !== name),
+    )
   }
 
   if (model.discrete_events?.some((e) => e.name === name)) {
-    return {
-      ...model,
-      discrete_events: model.discrete_events.filter((e) => e.name !== name),
-    }
+    return withCollection(
+      model,
+      'discrete_events',
+      model.discrete_events.filter((e) => e.name !== name),
+    )
   }
 
   throw new EntityNotFoundError('Event', name)
@@ -444,16 +443,11 @@ export function removeCoupling(file: EsmFile, index: number): EsmFile {
     throw new EntityNotFoundError('Coupling', `index ${index}`)
   }
 
-  // NOTE: empty-collection convention is deliberately drop-to-`undefined` here
-  // (pinned by `edit.test.ts` — `coupling` is optional at the file root), which
-  // differs from `removeEvent`/`removeEquation` that keep an emptied `[]` (also
-  // test-pinned). The two shapes cannot be unified without breaking a pinned
-  // test, so each op keeps its established, tested convention.
+  // Drop-when-empty (see `withCollection`): removing the last coupling entry
+  // omits the `coupling` key rather than leaving `[]`. This is the single
+  // convention shared by every editing op in this module.
   const newCoupling = coupling.filter((_, i) => i !== index)
-  return {
-    ...file,
-    coupling: newCoupling.length > 0 ? newCoupling : undefined,
-  }
+  return withCollection(file, 'coupling', newCoupling)
 }
 
 /**
@@ -509,22 +503,24 @@ export function mapVariable(
  * @returns New ESM file with merged content
  */
 export function merge(fileA: EsmFile, fileB: EsmFile): EsmFile {
-  return {
-    ...fileA,
-    models: {
-      ...fileA.models,
-      ...fileB.models,
-    },
-    reaction_systems: {
-      ...fileA.reaction_systems,
-      ...fileB.reaction_systems,
-    },
-    data_loaders: {
-      ...fileA.data_loaders,
-      ...fileB.data_loaders,
-    },
-    coupling: [...(fileA.coupling || []), ...(fileB.coupling || [])],
-  }
+  // Drop-when-empty (see `withCollection`): a merged collection that is empty
+  // (neither input contributed one) is omitted rather than materialized as an
+  // empty `{}`/`[]`, matching the convention used by every remove op above.
+  let result: EsmFile = { ...fileA }
+  result = withCollection(result, 'models', { ...fileA.models, ...fileB.models })
+  result = withCollection(result, 'reaction_systems', {
+    ...fileA.reaction_systems,
+    ...fileB.reaction_systems,
+  })
+  result = withCollection(result, 'data_loaders', {
+    ...fileA.data_loaders,
+    ...fileB.data_loaders,
+  })
+  result = withCollection(result, 'coupling', [
+    ...(fileA.coupling || []),
+    ...(fileB.coupling || []),
+  ])
+  return result
 }
 
 /**
@@ -571,6 +567,38 @@ export { deriveODEs } from './reactions.js'
 // =============================================================================
 // Utility Functions
 // =============================================================================
+
+/**
+ * Apply the module-wide **drop-when-empty** convention to a single
+ * collection-valued key.
+ *
+ * Every editing op in this module represents an emptied collection the SAME
+ * way: by OMITTING its key entirely, never by leaving behind an empty `[]` or
+ * `{}`. This returns a shallow clone of `base` in which `key` holds
+ * `collection` when it is non-empty, or is absent when `collection` is empty —
+ * so an op that removes the last element yields an object where that key reads
+ * back as `undefined` (`toBeUndefined()`). The convention is applied uniformly
+ * whether the field is optional (`coupling`, `continuous_events`, …) or
+ * required in the schema type (`variables`, `equations`, `species`): edit.ts is
+ * a TS-local API, deliberately NOT part of cross-language conformance, so an
+ * emptied required collection is dropped rather than materialized empty.
+ */
+function withCollection<T extends object, K extends keyof T>(
+  base: T,
+  key: K,
+  collection: readonly unknown[] | Record<string, unknown>,
+): T {
+  const isEmpty = Array.isArray(collection)
+    ? collection.length === 0
+    : Object.keys(collection).length === 0
+  const clone = { ...base } as Record<string, unknown>
+  if (isEmpty) {
+    delete clone[key as string]
+  } else {
+    clone[key as string] = collection
+  }
+  return clone as unknown as T
+}
 
 /**
  * Enumerate every EXPRESSION read-site in a model, in a single documented

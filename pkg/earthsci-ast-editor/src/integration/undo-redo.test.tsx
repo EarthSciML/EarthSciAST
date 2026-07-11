@@ -161,7 +161,7 @@ describe('Undo/Redo Integration', () => {
           <ExpressionEditor
             initialExpression={currentExpression()}
             onChange={handleExpressionChange}
-            allowEditing={true}
+            readonly={false}
           />
           <div class="history-controls">
             <button
@@ -485,7 +485,7 @@ describe('Undo/Redo Integration', () => {
                 updateAppState({ model: newModel });
               }
             }}
-            allowEditing={true}
+            readonly={false}
             highlightedVars={new Set([appState().selectedVariable])}
           />
 

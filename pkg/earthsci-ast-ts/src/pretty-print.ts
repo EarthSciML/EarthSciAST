@@ -315,6 +315,45 @@ function latexChemicalInner(formula: string): string {
   )
 }
 
+/**
+ * Peel one leading `\mathrm{` and one trailing `}` (independently), reproducing
+ * the historical `.replace(/^\\mathrm\{|\}$/g, '')` byte-for-byte without a
+ * regex. Used only by {@link formatChemicalSuffixInner} for the degenerate
+ * embedded-markup case.
+ */
+function stripOuterMathrm(s: string): string {
+  const inner = s.startsWith('\\mathrm{') ? s.slice('\\mathrm{'.length) : s
+  return inner.endsWith('}') ? inner.slice(0, -1) : inner
+}
+
+/**
+ * Inner content of a chemical / element-bearing SUFFIX embedded in a larger
+ * variable's subscript — the text that belongs INSIDE the enclosing
+ * `\mathrm{...}`. Returns that content directly (the "render inner tokens" step,
+ * split from the "wrap in `\mathrm{}`" step) so the mixed LaTeX path no longer
+ * formats a full `\mathrm{...}` only to regex-strip its own wrapper.
+ *
+ * Precondition: `hasElementPattern(variable)` holds — guaranteed by
+ * {@link getChemicalSuffix} at the sole call site in {@link formatChemicalLatex}.
+ *
+ * Common cases return their inner content with no wrapper: a bare element symbol
+ * stays italic; a pure formula becomes {@link latexChemicalInner}. The one path
+ * that cannot avoid a wrapper is a suffix that itself embeds LaTeX markup (e.g.
+ * `{NO_O3}` from a variable named `k_{NO_O3}`, or a stray leading digit as in
+ * `2CO2`): it recursively splits into a further prefix + chemical part, whose
+ * mixed rendering is `prefix_{\mathrm{...}}`; {@link stripOuterMathrm} peels the
+ * outer markup to keep output byte-identical to the former regex surgery.
+ */
+function formatChemicalSuffixInner(variable: string): string {
+  if (getChemicalSuffix(variable)) {
+    return stripOuterMathrm(formatChemicalLatex(variable))
+  }
+  // Bare element symbol without digits (e.g. "N") renders italic, unwrapped.
+  if (ELEMENTS.has(variable) && !/\d/.test(variable)) return variable
+  // Pure chemical formula: digit runs → subscripts, no wrapper.
+  return latexChemicalInner(variable)
+}
+
 /** LaTeX chemical/variable subscript formatting (see {@link formatChemicalSubscripts}). */
 function formatChemicalLatex(variable: string): string {
   const hasElements = hasElementPattern(variable)
@@ -350,12 +389,11 @@ function formatChemicalLatex(variable: string): string {
       }
     }
 
-    // `suffix` here need NOT be a clean pure formula: variable names may
-    // themselves contain LaTeX markup, and the recursion can return arbitrary
-    // (non-`\mathrm{...}`-wrapped) content, so this strip of a leading
-    // `\mathrm{` and trailing `}` is load-bearing for byte-identical output —
-    // do NOT replace it with `latexChemicalInner`.
-    const innerContent = formatChemicalLatex(suffix).replace(/^\\mathrm\{|\}$/g, '')
+    // Render the suffix's inner tokens directly (no format-then-strip). The
+    // suffix need NOT be a clean pure formula — a variable name may embed LaTeX
+    // markup — which {@link formatChemicalSuffixInner} handles so output stays
+    // byte-identical.
+    const innerContent = formatChemicalSuffixInner(suffix)
     // Wrap multi-char prefix in \mathrm{}, single-char stays italic
     const formattedPrefix = prefix.length > 1 ? `\\mathrm{${prefix}}` : prefix
     return `${formattedPrefix}_{\\mathrm{${innerContent}}}`

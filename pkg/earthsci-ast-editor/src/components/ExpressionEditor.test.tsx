@@ -11,9 +11,8 @@ describe('ExpressionEditor', () => {
     initialExpression: mockExpression,
     onChange: vi.fn(),
     highlightedVars: new Set<string>(),
-    allowEditing: true,
+    readonly: false,
     showPalette: false,
-    showValidation: false,
   };
 
   beforeEach(() => {
@@ -47,8 +46,8 @@ describe('ExpressionEditor', () => {
     expect(onChange).toHaveBeenCalledWith({ op: 'D', args: ['u'], wrt: 'x' });
   });
 
-  it('respects allowEditing=false mode', () => {
-    render(() => <ExpressionEditor {...mockProps} allowEditing={false} />);
+  it('respects readonly=true mode', () => {
+    render(() => <ExpressionEditor {...mockProps} readonly={true} />);
 
     const editor = screen.getByRole('button', { name: /\+/ });
     expect(editor).toBeInTheDocument();
@@ -67,13 +66,6 @@ describe('ExpressionEditor', () => {
 
     const paletteToggle = screen.queryByTitle('Toggle expression palette');
     expect(paletteToggle).not.toBeInTheDocument();
-  });
-
-  it('shows validation container when showValidation=true', () => {
-    render(() => <ExpressionEditor {...mockProps} showValidation={true} />);
-
-    const validationContainer = document.querySelector('.expression-validation');
-    expect(validationContainer).toBeInTheDocument();
   });
 
   it('updates expression when initialExpression prop changes', () => {
@@ -99,8 +91,8 @@ describe('ExpressionEditor', () => {
     expect(editor).toHaveClass('custom-expression-editor');
   });
 
-  it('applies readonly class when allowEditing=false', () => {
-    render(() => <ExpressionEditor {...mockProps} allowEditing={false} />);
+  it('applies readonly class when readonly=true', () => {
+    render(() => <ExpressionEditor {...mockProps} readonly={true} />);
 
     const editor = document.querySelector('.expression-editor');
     expect(editor).toHaveClass('readonly');

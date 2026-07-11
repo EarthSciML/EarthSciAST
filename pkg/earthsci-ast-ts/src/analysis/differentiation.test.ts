@@ -335,10 +335,10 @@ describe('Symbolic Differentiation', () => {
       const result = higherOrderDerivative(expr, 'x', 2)
 
       expect(result.variable).toBe('x')
-      expect(result.chainComponents).toHaveLength(2)
+      expect(result.derivativeSteps).toHaveLength(2)
 
       // First derivative: 4x³
-      expect(result.chainComponents![0].derivative).toEqual({
+      expect(result.derivativeSteps![0].derivative).toEqual({
         op: '*',
         args: [4, { op: '^', args: ['x', 3] }, 1],
       })

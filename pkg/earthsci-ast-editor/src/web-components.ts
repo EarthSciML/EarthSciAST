@@ -55,8 +55,6 @@ export interface EsmExpressionEditorProps {
   'allow-editing'?: boolean;
   /** Whether to show the expression palette */
   'show-palette'?: boolean;
-  /** Whether to show validation errors */
-  'show-validation'?: boolean;
 }
 
 /**
@@ -232,14 +230,11 @@ export const EsmExpressionEditorComponent = (
         },
         onChange: (newExpr: Expression) =>
           dispatch(props.element, 'change', { expression: newExpr }),
-        get allowEditing() {
-          return attrBool(props['allow-editing']);
+        get readonly() {
+          return !attrBool(props['allow-editing']);
         },
         get showPalette() {
           return attrBool(props['show-palette']);
-        },
-        get showValidation() {
-          return attrBool(props['show-validation']);
         }
       });
     }
@@ -409,8 +404,7 @@ export function registerWebComponents() {
     customElement('esm-expression-editor', {
       expression: '',
       'allow-editing': true,
-      'show-palette': true,
-      'show-validation': true
+      'show-palette': true
     }, (props, { element }) =>
       EsmExpressionEditorComponent(mergeProps(props, { element: element as unknown as HTMLElement })));
 

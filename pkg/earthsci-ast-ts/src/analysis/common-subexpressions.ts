@@ -7,7 +7,7 @@
 
 import type { Expr, ExpressionNode, Model, EsmFile } from '../types.js'
 import type { CommonSubexpression, ExpressionLocation } from './types.js'
-import { analyzeComplexity } from './complexity.js'
+import { collectSubtreeCosts } from './complexity.js'
 import { isExprNode, forEachChild } from '../expression.js'
 import { canonicalJson } from '../canonicalize.js'
 
@@ -50,11 +50,19 @@ function collectCommonSubexpressions(
     { expression: Expr; locations: ExpressionLocation[]; count: number }
   >()
 
+  // Memoize every op-node subtree's cost across ALL items in one bottom-up pass
+  // per item, so the walks below read costs in O(1) instead of re-running
+  // analyzeComplexity on every subtree (which made this O(n²)).
+  const costCache = new Map<ExpressionNode, number>()
+  for (const item of items) {
+    collectSubtreeCosts(item.expr, costCache)
+  }
+
   for (const item of items) {
     const visit = (currentExpr: Expr, path: string[], context?: Expr): void => {
       if (!isExprNode(currentExpr)) return
 
-      const complexity = analyzeComplexity(currentExpr).computationalCost
+      const complexity = costCache.get(currentExpr)!
       if (complexity >= minComplexity) {
         const key = subexpressionKey(currentExpr)
 
@@ -81,7 +89,9 @@ function collectCommonSubexpressions(
   const results: CommonSubexpression[] = []
   for (const data of subexpressionMap.values()) {
     if (data.count > 1) {
-      const complexity = analyzeComplexity(data.expression).computationalCost
+      // data.expression is always an op node (only isExprNode nodes are added),
+      // so its cost is in the cache from the pass above.
+      const complexity = costCache.get(data.expression as ExpressionNode)!
       const savings = complexity * (data.count - 1) // Cost saved by factoring out.
       results.push({
         expression: data.expression,

@@ -61,8 +61,7 @@ describe('Cross-Component Integration', () => {
               setSelectedExpression(newExpr);
               logChange('expression', newExpr);
             }}
-            allowEditing={true}
-            showValidation={true}
+            readonly={false}
           />
           <ModelEditor
             model={currentModel()}
@@ -93,7 +92,7 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={{ op: '+', args: ['O3', 'NO'] }}
             onChange={() => {}}
-            allowEditing={true}
+            readonly={false}
             highlightedVars={highlightedVars()}
           />
           <ModelEditor
@@ -150,8 +149,7 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={currentExpression()}
             onChange={onExpressionChange}
-            allowEditing={true}
-            showValidation={true}
+            readonly={false}
           />
         </div>
       ));
@@ -201,7 +199,7 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={appState().expression}
             onChange={(newExpr) => updateState({ expression: newExpr })}
-            allowEditing={true}
+            readonly={false}
           />
           <button onClick={undo} data-testid="undo-button">
             Undo
@@ -285,7 +283,7 @@ describe('Cross-Component Integration', () => {
               };
               updateGlobalState({ model: updatedModel });
             }}
-            allowEditing={true}
+            readonly={false}
             highlightedVars={new Set([globalState().selectedVariable])}
           />
           {/* Validation would be handled by a validation panel component */}
@@ -319,7 +317,7 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={{ op: '+', args: [1, 2] }}
             onChange={(newExpr) => logEvent('expression-change', { expression: newExpr })}
-            allowEditing={true}
+            readonly={false}
           />
         </div>
       ));

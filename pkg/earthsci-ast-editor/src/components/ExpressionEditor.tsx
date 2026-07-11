@@ -29,19 +29,14 @@ export interface ExpressionEditorProps {
   highlightedVars?: Set<string>;
 
   /**
-   * Whether editing is permitted. Defaults to enabled; pass `false` for a
-   * read-only view (the inverse of the sibling editors' `readonly` prop).
+   * Whether the editor is read-only. Defaults to `false` (editing enabled);
+   * pass `true` for a read-only view. Matches the sibling editors' `readonly`
+   * convention.
    */
-  allowEditing?: boolean;
+  readonly?: boolean;
 
   /** Whether to show the expression palette */
   showPalette?: boolean;
-
-  /**
-   * Reserved: whether to show a validation panel. Currently renders an empty
-   * container that a parent may populate; no validation is computed here yet.
-   */
-  showValidation?: boolean;
 
   /** CSS class for styling */
   class?: string;
@@ -76,7 +71,7 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
   // directly. Controlled: the new value flows out via onChange, not internal
   // state.
   const handleReplace = (path: (string | number)[], newExpr: Expression) => {
-    if (props.allowEditing === false) return;
+    if (props.readonly) return;
 
     const updatedExpression = replaceExpressionAtPath(props.initialExpression, path, newExpr);
     props.onChange?.(updatedExpression);
@@ -96,7 +91,7 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
 
   const editorClasses = () => {
     const classes = ['expression-editor'];
-    if (props.allowEditing === false) classes.push('readonly');
+    if (props.readonly) classes.push('readonly');
     if (props.class) classes.push(props.class);
     return classes.join(' ');
   };
@@ -118,7 +113,7 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
         </div>
 
         {/* Optional palette toggle button */}
-        <Show when={props.showPalette && props.allowEditing !== false}>
+        <Show when={props.showPalette && !props.readonly}>
           <button
             class="palette-toggle-btn"
             onClick={() => setShowPalettePanel(prev => !prev)}
@@ -131,7 +126,7 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
       </div>
 
       {/* Optional expression palette */}
-      <Show when={showPalettePanel() && props.showPalette && props.allowEditing !== false}>
+      <Show when={showPalettePanel() && props.showPalette && !props.readonly}>
         <div class="expression-palette-container">
           <ExpressionPalette
             visible={showPalettePanel()}
@@ -139,12 +134,6 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
             class="expression-editor-palette"
           />
         </div>
-      </Show>
-
-      {/* Reserved validation slot: an empty container a parent may populate.
-          No validation is computed here yet (see showValidation prop doc). */}
-      <Show when={props.showValidation}>
-        <div class="expression-validation" />
       </Show>
     </div>
   );
