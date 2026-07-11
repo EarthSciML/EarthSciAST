@@ -21,6 +21,8 @@ use earthsci_ast::{
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
+mod common;
+
 // ============================================================================
 // Test helpers
 // ============================================================================
@@ -514,8 +516,7 @@ fn test_robertson_stiff_problem() {
 /// simulate pipeline end-to-end.
 #[test]
 fn test_round_trip_simple_ode_fixture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/simulation/simple_ode.esm");
+    let path = common::repo_fixture("simulation/simple_ode.esm");
     let json = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) => {
@@ -573,8 +574,7 @@ fn test_round_trip_simple_ode_fixture() {
 /// without error and returns finite, conservative-looking output.
 #[test]
 fn test_round_trip_stiff_vdp_fixture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/simulation/stiff_ode_system.esm");
+    let path = common::repo_fixture("simulation/stiff_ode_system.esm");
     let json = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) => {

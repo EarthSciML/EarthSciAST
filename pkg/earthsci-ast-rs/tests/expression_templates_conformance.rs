@@ -14,17 +14,11 @@ use earthsci_ast::lower_expression_templates::{
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+mod common;
+
 /// Repo-root-relative path into the shared conformance fixture directory.
 fn conf(fixture: &str) -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("repo root from CARGO_MANIFEST_DIR")
-        .to_path_buf();
-    repo_root
-        .join("tests/conformance/expression_templates")
-        .join(fixture)
+    common::repo_fixture("conformance/expression_templates").join(fixture)
 }
 
 /// Parse `fixture.esm` and run the load-time rewrite engine to a fixpoint.

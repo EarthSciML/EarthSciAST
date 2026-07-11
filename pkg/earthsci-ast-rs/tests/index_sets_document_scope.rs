@@ -13,9 +13,11 @@ use earthsci_ast::aggregate::resolve_aggregate_ranges;
 use earthsci_ast::{EsmFile, load};
 use std::collections::HashMap;
 
+mod common;
+
 fn fixture(rel: &str) -> String {
-    let path = format!("{}/../../tests/{}", env!("CARGO_MANIFEST_DIR"), rel);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
+    let path = common::repo_fixture(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 /// The aggregate fixture declares a top-level `index_sets` registry; it lands on

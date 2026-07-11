@@ -21,11 +21,10 @@ use std::path::PathBuf;
 use earthsci_ast::geometry::{self, Manifold};
 use earthsci_ast::load;
 
+mod common;
+
 fn geometry_fixture_dir(kind: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests")
-        .join(kind)
-        .join("geometry")
+    common::repo_fixture(kind).join("geometry")
 }
 
 fn esm_fixtures(dir: &PathBuf) -> Vec<PathBuf> {

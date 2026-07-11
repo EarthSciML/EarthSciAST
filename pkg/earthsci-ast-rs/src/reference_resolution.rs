@@ -25,8 +25,12 @@
 //!
 //! Like the Julia and Python bindings, this pass operates on the **raw parsed
 //! document** ([`serde_json::Value`]) rather than the typed [`crate::types`]
-//! structs: the typed layer deliberately drops `index_sets`, node `id`,
-//! `ranges[*].from` and `join`, so the references live only in the raw JSON.
+//! structs — not because the typed layer lacks these fields (it carries every
+//! one: `EsmFile.index_sets`, `ExpressionNode.id`, the `from` of
+//! `RangeSpec::IndexSetRef`, and `ExpressionNode.join`) but for parity with the
+//! Julia and Python passes, which have no typed layer and resolve references
+//! straight from the parsed JSON. Working the same raw shape keeps the three
+//! bindings byte-for-byte in step.
 //! The pass is self-contained and additive — a document using none of these
 //! features yields an empty-but-valid graph.
 //!
@@ -292,8 +296,6 @@ impl ReferenceGraph {
     }
 }
 
-const AGGREGATE_OPS: [&str; 1] = ["aggregate"];
-
 fn node_key(addr: &str) -> String {
     format!("node:{addr}")
 }
@@ -345,7 +347,7 @@ fn register_and_process(
 ) -> Result<(), ReferenceError> {
     let op = map.get("op").and_then(|v| v.as_str());
     let nid = nonempty_str(map.get("id"));
-    let is_agg = op.map(|o| AGGREGATE_OPS.contains(&o)).unwrap_or(false);
+    let is_agg = op.map(crate::aggregate::is_aggregate_op).unwrap_or(false);
     // only aggregate / FAQ nodes and any node carrying an explicit id become
     // addressable vertices.
     if !is_agg && nid.is_none() {
@@ -491,11 +493,45 @@ pub fn build_reference_graph(
     model: &Value,
     model_name: &str,
 ) -> Result<ReferenceGraph, ReferenceError> {
+    build_reference_graph_with_index_sets(model, model_name, None)
+}
+
+/// As [`build_reference_graph`], but also honours the **document-scoped**
+/// `index_sets` registry.
+///
+/// Since v0.8.0 the `index_sets` registry is a sibling of `models`, shared by
+/// every model, rather than nested inside each model (mirrors
+/// [`crate::cadence::model_with_loaders`]). [`resolve_references`] passes that
+/// document-level registry here so a schema-conformant document's
+/// `ranges[*].from` still resolves against it. Any (pre-0.8.0) model-nested
+/// `index_sets` is *merged* on top — a model-level entry wins on a key
+/// collision — so the older nested shape keeps working unchanged.
+pub fn build_reference_graph_with_index_sets(
+    model: &Value,
+    model_name: &str,
+    doc_index_sets: Option<&Map<String, Value>>,
+) -> Result<ReferenceGraph, ReferenceError> {
     let mut graph = ReferenceGraph {
         model: model_name.to_string(),
         ..Default::default()
     };
-    let index_sets = model.get("index_sets").and_then(|v| v.as_object());
+
+    // Merge the document-scoped registry (v0.8.0+) with any model-nested one
+    // (pre-0.8.0); model-level entries take precedence on a key collision.
+    let model_index_sets = model.get("index_sets").and_then(|v| v.as_object());
+    let merged_index_sets: Option<Map<String, Value>> = match (doc_index_sets, model_index_sets) {
+        (None, None) => None,
+        (Some(d), None) => Some(d.clone()),
+        (None, Some(m)) => Some(m.clone()),
+        (Some(d), Some(m)) => {
+            let mut merged = d.clone();
+            for (k, v) in m {
+                merged.insert(k.clone(), v.clone());
+            }
+            Some(merged)
+        }
+    };
+    let index_sets = merged_index_sets.as_ref();
 
     // Pass 1 — register declared index sets as vertices.
     if let Some(is) = index_sets {
@@ -557,8 +593,11 @@ pub fn resolve_references(
         Some(m) => m,
         None => return Ok(out),
     };
+    // Since v0.8.0 the index_sets registry is document-scoped (a sibling of
+    // `models`); thread it down so each model's ranges[*].from resolves.
+    let doc_index_sets = document.get("index_sets").and_then(|v| v.as_object());
     for (model_name, model) in models {
-        let graph = build_reference_graph(model, model_name)?;
+        let graph = build_reference_graph_with_index_sets(model, model_name, doc_index_sets)?;
         if let Some(cyc) = graph.detect_cycle() {
             return Err(ReferenceError::ReferenceCycle { path: cyc });
         }
@@ -803,5 +842,47 @@ mod tests {
         assert_eq!(graphs.len(), 2);
         assert_eq!(graphs["A"].edges_of_kind(EdgeKind::RangeFrom).len(), 1);
         assert!(graphs["B"].edges.is_empty());
+    }
+
+    // Since v0.8.0 the index_sets registry is document-scoped (a sibling of
+    // `models`); ranges[*].from must resolve against it even when the model
+    // itself declares no index_sets. -------------------------------------
+
+    #[test]
+    fn document_scoped_index_sets_resolve() {
+        let node = agg(json!({"output_idx": ["i"], "ranges": {"i": {"from": "cells"}}}));
+        let doc = json!({
+            "index_sets": {"cells": {"kind": "interval", "size": 4}},
+            "models": {"M": {"equations": [{"lhs": node, "rhs": 0}]}}
+        });
+        let graphs = resolve_references(&doc).unwrap();
+        let g = &graphs["M"];
+        let rf = g.edges_of_kind(EdgeKind::RangeFrom);
+        assert_eq!(rf.len(), 1);
+        assert_eq!(rf[0].target, "index_set:cells");
+        // The document-scoped index set is registered as a vertex too.
+        assert!(g.vertices.contains_key("index_set:cells"));
+    }
+
+    #[test]
+    fn document_and_model_scoped_index_sets_merge() {
+        // A `faces` set at the document scope and a `cells` set nested in the
+        // model (pre-0.8.0 shape) must both resolve — merge, don't replace.
+        let node = agg(json!({
+            "output_idx": ["i"],
+            "ranges": {"i": {"from": "cells"}, "f": {"from": "faces"}}
+        }));
+        let doc = json!({
+            "index_sets": {"faces": {"kind": "interval", "size": 8}},
+            "models": {"M": {
+                "index_sets": {"cells": {"kind": "interval", "size": 4}},
+                "equations": [{"lhs": node, "rhs": 0}]
+            }}
+        });
+        let graphs = resolve_references(&doc).unwrap();
+        let g = &graphs["M"];
+        assert_eq!(g.edges_of_kind(EdgeKind::RangeFrom).len(), 2);
+        assert!(g.vertices.contains_key("index_set:faces"));
+        assert!(g.vertices.contains_key("index_set:cells"));
     }
 }

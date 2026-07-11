@@ -25,10 +25,6 @@ pub enum EsmError {
     #[error("Unit validation error: {0}")]
     UnitValidation(String),
 
-    /// I/O error
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// Failed to read a file from disk (I/O error with the offending path).
     #[error("failed to read {path}: {source}")]
     FileRead {
@@ -42,6 +38,3 @@ pub enum EsmError {
     #[error("{0}")]
     Other(String),
 }
-
-/// Result type alias for convenience
-pub type Result<T> = std::result::Result<T, EsmError>;

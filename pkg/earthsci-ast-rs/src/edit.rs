@@ -1,8 +1,8 @@
 //! Immutable editing operations for ESM models
 
 use crate::{
-    ContinuousEvent, CouplingEntry, DiscreteEvent, Equation, EsmFile, Expr, ExpressionNode, Model,
-    ModelVariable, Reaction, ReactionSystem, Species,
+    ContinuousEvent, CouplingEntry, DiscreteEvent, Equation, EsmFile, Expr, Model, ModelVariable,
+    Reaction, ReactionSystem, Species,
 };
 use std::collections::HashMap;
 
@@ -22,8 +22,8 @@ pub enum EditError {
     EquationIndexError(usize),
     /// Species not found
     SpeciesNotFound(String),
-    /// Reaction not found
-    ReactionNotFound(String),
+    /// Reaction index out of bounds
+    ReactionIndexError(usize),
     /// Event index out of bounds
     EventIndexError(usize),
     /// Coupling index out of bounds
@@ -40,7 +40,9 @@ impl std::fmt::Display for EditError {
                 write!(f, "Equation index out of bounds: {idx}")
             }
             EditError::SpeciesNotFound(name) => write!(f, "Species not found: {name}"),
-            EditError::ReactionNotFound(name) => write!(f, "Reaction not found: {name}"),
+            EditError::ReactionIndexError(idx) => {
+                write!(f, "Reaction index out of bounds: {idx}")
+            }
             EditError::EventIndexError(idx) => write!(f, "Event index out of bounds: {idx}"),
             EditError::CouplingIndexError(idx) => {
                 write!(f, "Coupling index out of bounds: {idx}")
@@ -350,9 +352,7 @@ pub fn add_reaction(system: &ReactionSystem, reaction: Reaction) -> EditResult<R
 /// * `EditResult<ReactionSystem>` - New reaction system without the reaction
 pub fn remove_reaction(system: &ReactionSystem, index: usize) -> EditResult<ReactionSystem> {
     if index >= system.reactions.len() {
-        return Err(EditError::InvalidOperation(format!(
-            "Reaction index {index} out of bounds"
-        )));
+        return Err(EditError::ReactionIndexError(index));
     }
 
     let mut new_system = system.clone();
@@ -389,7 +389,16 @@ pub fn update_model_metadata(
     Ok(new_model)
 }
 
-/// Create a copy of an expression with variable substitution
+/// Create a copy of an expression with variable substitution.
+///
+/// **Deprecated:** thin wrapper retained for backward compatibility. The
+/// previous inline implementation rebuilt operator nodes from only
+/// `op`/`args`/`wrt`/`dim`, silently dropping every other [`ExpressionNode`]
+/// field (`broadcast_fn`, `value`, `table`, `axes`, `ranges`, `filter`,
+/// `expr`, `key`, `bindings`, …) and never recursing into non-`args`
+/// expression positions. This now delegates to
+/// [`crate::substitute::substitute`], which traverses the full expression tree
+/// and preserves all operator-node metadata.
 ///
 /// # Arguments
 ///
@@ -399,33 +408,9 @@ pub fn update_model_metadata(
 /// # Returns
 ///
 /// * `Expr` - New expression with substitutions applied
+#[deprecated(note = "use substitute::substitute; this dropped operator metadata")]
 pub fn substitute_in_expression(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {
-    match expr {
-        Expr::Number(n) => Expr::Number(*n),
-        Expr::Integer(n) => Expr::Integer(*n),
-        Expr::Variable(var) => {
-            if let Some(replacement) = substitutions.get(var) {
-                replacement.clone()
-            } else {
-                Expr::Variable(var.clone())
-            }
-        }
-        Expr::Operator(node) => {
-            let new_args = node
-                .args
-                .iter()
-                .map(|arg| substitute_in_expression(arg, substitutions))
-                .collect();
-
-            Expr::Operator(ExpressionNode {
-                op: node.op.clone(),
-                args: new_args,
-                wrt: node.wrt.clone(),
-                dim: node.dim.clone(),
-                ..Default::default()
-            })
-        }
-    }
+    crate::substitute::substitute(expr, substitutions)
 }
 
 /// Add a discrete event to a model
@@ -574,7 +559,7 @@ pub fn replace_coupling(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Metadata, VariableType};
+    use crate::{ExpressionNode, Metadata, VariableType};
     use std::collections::HashMap;
 
     fn create_empty_esm_file() -> EsmFile {
@@ -751,6 +736,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_substitute_in_expression() {
         let expr = Expr::Operator(ExpressionNode {
             op: "+".to_string(),

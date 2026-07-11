@@ -178,34 +178,10 @@ pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFil
     crate::lower_enums::lower_enums(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
-    // Emit deprecation warnings for any domain-level boundary_conditions
-    // (v0.2.0 transitional shim per RFC §10.1 + gt-2fvs mayor decision).
-    warn_deprecated_domain_bc(&json_value);
-
     // Deserialize into our types
     let esm_file: EsmFile = serde_json::from_value(json_value).map_err(EsmError::JsonParse)?;
 
     Ok(esm_file)
-}
-
-/// Check for v0.1.0 domain-level boundary_conditions and emit
-/// E_DEPRECATED_DOMAIN_BC via `log::warn!` (or `eprintln!` if the `log`
-/// feature is not configured). A follow-up bead will flip this to a hard
-/// error once the migration tool (gt-fmrq) lands and in-tree fixtures are
-/// migrated.
-fn warn_deprecated_domain_bc(json_value: &Value) {
-    let Some(domains) = json_value.get("domains").and_then(|v| v.as_object()) else {
-        return;
-    };
-    for (domain_name, domain) in domains {
-        if domain.get("boundary_conditions").is_some() {
-            eprintln!(
-                "[E_DEPRECATED_DOMAIN_BC] domains.{domain_name}.boundary_conditions is \
-                 deprecated; migrate to models.<M>.boundary_conditions \
-                 (docs/rfcs/discretization.md §9)."
-            );
-        }
-    }
 }
 
 /// Load an ESM file from a filesystem path.
@@ -289,7 +265,7 @@ pub fn validate_schema(json_value: &Value) -> Result<(), EsmError> {
 // bindings).
 
 /// Run every post-schema structural check, collecting errors and returning
-/// `EsmError::SchemaValidation` if any check fires.
+/// `EsmError::StructuralValidation` if any check fires.
 fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
     let mut errors: Vec<String> = Vec::new();
 
@@ -308,7 +284,7 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(EsmError::SchemaValidation(format!(
+        Err(EsmError::StructuralValidation(format!(
             "Structural validation failed: {}",
             errors.join("; ")
         )))
@@ -680,6 +656,18 @@ fn check_event_variable_references(obj: &serde_json::Map<String, Value>, errors:
         return;
     };
 
+    // Names declared as document-level template metaparameters (esm-spec §9.7).
+    // They fold to integer constants during `apply_expression_template`
+    // lowering, so a metaparameter name reached through an unlowered node's
+    // `bindings` (which `collect_variable_refs` descends, running BEFORE that
+    // lowering) is NOT an undeclared model variable. Excluding them here keeps
+    // the newly-widened walk from raising a false `EventVarUndeclared`.
+    let metaparameters: std::collections::HashSet<&str> = obj
+        .get("metaparameters")
+        .and_then(|v| v.as_object())
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+
     for (mname, mv) in models {
         let Some(m) = mv.as_object() else { continue };
         let Some(vars) = m.get("variables").and_then(|v| v.as_object()) else {
@@ -712,7 +700,7 @@ fn check_event_variable_references(obj: &serde_json::Map<String, Value>, errors:
                         let mut refs: Vec<String> = Vec::new();
                         collect_variable_refs(cond, &mut refs);
                         for r in refs {
-                            if r.contains('.') {
+                            if r.contains('.') || metaparameters.contains(r.as_str()) {
                                 continue;
                             }
                             if !declared.contains(r.as_str()) {
@@ -753,7 +741,7 @@ fn check_event_variable_references(obj: &serde_json::Map<String, Value>, errors:
                     let mut refs: Vec<String> = Vec::new();
                     collect_variable_refs(expression, &mut refs);
                     for r in refs {
-                        if r.contains('.') {
+                        if r.contains('.') || metaparameters.contains(r.as_str()) {
                             continue;
                         }
                         if !declared.contains(r.as_str()) {
@@ -828,32 +816,48 @@ fn check_event_discrete_parameters(obj: &serde_json::Map<String, Value>, errors:
 
 /// Collect every bare `Expr::Variable`-style string out of an expression tree.
 ///
-/// Descends the same expression-bearing operator-node fields as the typed
-/// walker [`crate::types::ExpressionNode::for_each_child`]: `args`, `lower`,
-/// `upper`, `expr`, `filter`, `values`, and `axes` — so references hidden in
-/// aggregate bodies, filter predicates, integral bounds, and table-lookup
-/// axes are not missed. Non-expression metadata keys (`ranges`, `output_idx`,
-/// `regions`, …) are deliberately not descended: their strings are index
-/// symbols and set names, not variable references.
+/// Descends EXACTLY the expression-bearing operator-node fields visited by the
+/// typed walker [`crate::types::ExpressionNode::for_each_child`], enumerated
+/// here through the shared [`crate::types::EXPR_ARRAY_CHILD_KEYS`] /
+/// [`EXPR_SCALAR_CHILD_KEYS`](crate::types::EXPR_SCALAR_CHILD_KEYS) /
+/// [`EXPR_MAP_CHILD_KEYS`](crate::types::EXPR_MAP_CHILD_KEYS) constants so the
+/// raw-JSON and typed traversals cannot drift: `args`, `values`, `lower`,
+/// `upper`, `expr`, `filter`, `key`, `axes`, and `bindings`. This ensures
+/// references hidden in aggregate bodies, filter predicates, integral bounds,
+/// grouping `key`s, table-lookup `axes`, and template `bindings` are not
+/// missed. Non-expression metadata keys (`ranges`, `output_idx`, `regions`, …)
+/// are deliberately not descended: their strings are index symbols and set
+/// names, not variable references.
+///
+/// This runs at LOAD time, BEFORE `apply_expression_template` lowering — it
+/// feeds `check_event_variable_references` / `check_circular_model_dependencies`.
+/// It therefore also collects the argument strings inside a `bindings` map and
+/// any bound index symbols inside a `key`/body. A caller that flags bare
+/// undeclared names (`check_event_variable_references`) must exclude names that
+/// are not model variables at this point — notably template metaparameters,
+/// which fold to constants during lowering — rather than relying on this
+/// collector to omit them (see the metaparameter guard there).
 fn collect_variable_refs(expr: &Value, out: &mut Vec<String>) {
     match expr {
         Value::String(s) => out.push(s.clone()),
         Value::Object(obj) => {
-            for key in ["args", "values"] {
+            for key in crate::types::EXPR_ARRAY_CHILD_KEYS {
                 if let Some(items) = obj.get(key).and_then(|v| v.as_array()) {
                     for a in items {
                         collect_variable_refs(a, out);
                     }
                 }
             }
-            for key in ["lower", "upper", "expr", "filter"] {
+            for key in crate::types::EXPR_SCALAR_CHILD_KEYS {
                 if let Some(child) = obj.get(key) {
                     collect_variable_refs(child, out);
                 }
             }
-            if let Some(axes) = obj.get("axes").and_then(|v| v.as_object()) {
-                for axis_expr in axes.values() {
-                    collect_variable_refs(axis_expr, out);
+            for key in crate::types::EXPR_MAP_CHILD_KEYS {
+                if let Some(map) = obj.get(key).and_then(|v| v.as_object()) {
+                    for child in map.values() {
+                        collect_variable_refs(child, out);
+                    }
                 }
             }
         }

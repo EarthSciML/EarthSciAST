@@ -256,30 +256,24 @@ pub(crate) fn resolve_expr_ranges(
         }
     }
 
-    // Recurse into every expression-bearing child.
-    for a in &mut node.args {
-        resolve_expr_ranges(a, index_sets)?;
-    }
-    if let Some(b) = &mut node.expr {
-        resolve_expr_ranges(b, index_sets)?;
-    }
-    if let Some(l) = &mut node.lower {
-        resolve_expr_ranges(l, index_sets)?;
-    }
-    if let Some(u) = &mut node.upper {
-        resolve_expr_ranges(u, index_sets)?;
-    }
-    if let Some(vals) = &mut node.values {
-        for v in vals.iter_mut() {
-            resolve_expr_ranges(v, index_sets)?;
+    // Recurse into every expression-bearing child via the canonical walker
+    // (args, lower, upper, expr, filter, values, axes, key, bindings) so that
+    // ranges nested in a `filter` predicate, a grouping `key`, or a template
+    // `bindings` value are resolved too — not just the hand-picked subset this
+    // used to enumerate. `for_each_child_mut`'s closure cannot return, so the
+    // first resolution error is captured and propagated afterwards.
+    let mut err: Option<CompileError> = None;
+    node.for_each_child_mut(&mut |child| {
+        if err.is_none()
+            && let Err(e) = resolve_expr_ranges(child, index_sets)
+        {
+            err = Some(e);
         }
+    });
+    match err {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
-    if let Some(axes) = &mut node.axes {
-        for v in axes.values_mut() {
-            resolve_expr_ranges(v, index_sets)?;
-        }
-    }
-    Ok(())
 }
 
 /// The outcome of resolving one `{ from, of }` reference: either a static dense

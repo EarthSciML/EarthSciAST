@@ -36,10 +36,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-const GEOMETRY_DIR: &str = "../../tests/valid/geometry";
+mod common;
 
 fn geometry_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GEOMETRY_DIR)
+    common::repo_fixture("valid/geometry")
 }
 
 /// Geometry fixtures that carry at least one inline model `tests` block — the

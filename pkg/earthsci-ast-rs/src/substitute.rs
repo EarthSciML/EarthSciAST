@@ -335,10 +335,23 @@ impl ScopedContext {
         rs.parameters.contains_key(&full_name)
     }
 
-    /// Search for the reference in all available contexts
+    /// Search for the reference in all available contexts.
+    ///
+    /// Candidate systems are visited in a deterministic order — models before
+    /// reaction systems, and within each category by system name sorted
+    /// lexicographically — rather than in `HashMap` iteration order. This
+    /// upholds the cross-binding determinism contract: a bare
+    /// (single-component) name declared in more than one system always resolves
+    /// to the same, stable qualified name across runs (first by sorted system
+    /// name). Ambiguity is resolved by that stable choice rather than raised as
+    /// an error, matching the sibling Go/TypeScript bindings, which do not
+    /// report cross-system bare-name collisions.
     fn search_in_available_contexts(&self, components: &[&str]) -> Option<String> {
-        // Search in models
-        for (model_name, model) in &self.models {
+        // Search in models (deterministic: sorted by model name).
+        let mut model_names: Vec<&String> = self.models.keys().collect();
+        model_names.sort();
+        for model_name in model_names {
+            let model = &self.models[model_name];
             if components.len() == 1 && model.variables.contains_key(components[0]) {
                 return Some(format!("{}.{}", model_name, components[0]));
             }
@@ -350,8 +363,11 @@ impl ScopedContext {
             }
         }
 
-        // Search in reaction systems
-        for (rs_name, rs) in &self.reaction_systems {
+        // Search in reaction systems (deterministic: sorted by system name).
+        let mut rs_names: Vec<&String> = self.reaction_systems.keys().collect();
+        rs_names.sort();
+        for rs_name in rs_names {
+            let rs = &self.reaction_systems[rs_name];
             if components.len() == 1 {
                 if rs.species.contains_key(components[0]) {
                     return Some(format!("{}.{}", rs_name, components[0]));

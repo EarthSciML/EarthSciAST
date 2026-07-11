@@ -20,6 +20,8 @@ use earthsci_ast::aggregate::resolve_aggregate_ranges;
 use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
 use std::collections::HashMap;
 
+mod common;
+
 /// Build a one-variable contraction model. `agg` is the RHS aggregation
 /// attribute(s) with a trailing comma (e.g. `"reduce": "+",` or
 /// `"semiring": "max_sum",`); `op` is the node tag; `body` is the scalar body
@@ -299,12 +301,7 @@ fn undeclared_from_name_is_rejected() {
 /// of the M1 deltas.)
 #[test]
 fn shared_valid_aggregate_fixture_parses_and_resolves() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/valid/aggregate/aggregate_semiring_indexset.esm"
-    );
-    let json = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let file = load(&json).unwrap_or_else(|e| panic!("load fixture: {e}"));
+    let file = common::load_repo_fixture("valid/aggregate/aggregate_semiring_indexset.esm");
 
     let model = file
         .models
@@ -338,13 +335,8 @@ fn shared_valid_aggregate_fixture_parses_and_resolves() {
 /// (the `resolver_only` entry).
 #[test]
 fn shared_invalid_undeclared_from_fixture_is_rejected() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/invalid/aggregate/undeclared_from_name.esm"
-    );
-    let json = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     // Schema-valid: the loader accepts it.
-    let file = load(&json).unwrap_or_else(|e| panic!("schema-valid fixture should load: {e}"));
+    let file = common::load_repo_fixture("invalid/aggregate/undeclared_from_name.esm");
 
     let mut model = file
         .models

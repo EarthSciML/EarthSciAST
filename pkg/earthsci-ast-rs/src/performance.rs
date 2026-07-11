@@ -318,7 +318,10 @@ pub enum CompactNode {
 pub struct CompactExpr {
     /// Flattened expression tree using small vectors for cache efficiency
     pub nodes: smallvec::SmallVec<[CompactNode; 8]>,
-    /// Variable name cache for quick lookups
+    /// Variable name → first-seen index, populated at compile time by
+    /// [`CompactExpr::from_expr`]. Currently unused by [`CompactExpr::evaluate_fast`]
+    /// (which resolves each `Variable` node by name against the supplied map), but
+    /// kept because it is part of the serialized / WASM-exposed surface.
     pub var_cache: HashMap<String, usize>,
 }
 
@@ -415,7 +418,7 @@ impl CompactExpr {
                     "/" => {
                         let (a, b) = pop2(&mut stack)?;
                         if b == 0.0 {
-                            return Err(PerformanceError::ParallelError(
+                            return Err(PerformanceError::EvalError(
                                 "Division by zero".to_string(),
                             ));
                         }
@@ -440,14 +443,14 @@ impl CompactExpr {
                     "log" => {
                         let a = pop1(&mut stack)?;
                         if a <= 0.0 {
-                            return Err(PerformanceError::ParallelError(
+                            return Err(PerformanceError::EvalError(
                                 "Invalid log argument".to_string(),
                             ));
                         }
                         stack.push(a.ln());
                     }
                     _ => {
-                        return Err(PerformanceError::ParallelError(format!(
+                        return Err(PerformanceError::EvalError(format!(
                             "Unsupported operator: {op}"
                         )));
                     }
@@ -456,7 +459,7 @@ impl CompactExpr {
         }
 
         if stack.len() != 1 {
-            return Err(PerformanceError::ParallelError(
+            return Err(PerformanceError::EvalError(
                 "Invalid expression".to_string(),
             ));
         }

@@ -84,9 +84,7 @@ pub(crate) fn validate_model(
     // any. Used by `grad`/`div`/`laplacian` propagation to divide by the
     // declared coordinate units rather than a hardcoded metre denominator
     // (gt-ui96). Coordinates declared without units are stored as
-    // dimensionless so the downstream propagator falls back to metres;
-    // `validate_model_gradient_units` separately emits the
-    // `unit_inconsistency` structural error for that case.
+    // dimensionless so the downstream propagator falls back to metres.
     let coord_env = build_coordinate_unit_env(esm_file, model);
     let coord_env_ref = coord_env.as_ref();
 
@@ -272,83 +270,6 @@ fn collect_coordinate_units(
     _model: &crate::Model,
 ) -> Option<HashMap<String, Option<String>>> {
     None
-}
-
-/// Walk equation expressions looking for `grad`/`div`/`laplacian` nodes whose
-/// `dim` names a coordinate that the enclosing model's domain declares without
-/// units. When found, emit a structured `unit_inconsistency` error mirroring
-/// the TypeScript binding (see `pkg/earthsci-ast-ts/src/units.ts`) and
-/// the Julia binding (`validate.jl::_check_gradient_ops`, gt-sosg).
-///
-/// Coordinates present in `domain.spatial` but absent from this lookup, and
-/// models without a resolvable domain, are left to the legacy metre-denominator
-/// fallback in `units.rs` — matching other bindings' silent behaviour in those
-/// cases.
-pub(crate) fn validate_model_gradient_units(
-    esm_file: &EsmFile,
-    model_name: &str,
-    model: &crate::Model,
-    errors: &mut Vec<StructuralError>,
-) {
-    let Some(coords) = collect_coordinate_units(esm_file, model) else {
-        return;
-    };
-    for (eq_idx, equation) in model.equations.iter().enumerate() {
-        let eq_path = format!("/models/{model_name}/equations/{eq_idx}");
-        check_gradient_ops(&equation.lhs, &coords, model, &eq_path, eq_idx, errors);
-        check_gradient_ops(&equation.rhs, &coords, model, &eq_path, eq_idx, errors);
-    }
-}
-
-fn check_gradient_ops(
-    expr: &crate::Expr,
-    coords: &HashMap<String, Option<String>>,
-    model: &crate::Model,
-    eq_path: &str,
-    eq_index: usize,
-    errors: &mut Vec<StructuralError>,
-) {
-    let crate::Expr::Operator(node) = expr else {
-        return;
-    };
-    if matches!(node.op.as_str(), "grad" | "div" | "laplacian")
-        && let Some(dim_name) = node.dim.as_deref()
-        && let Some(entry) = coords.get(dim_name)
-        && entry.is_none()
-    {
-        // Coordinate declared in the domain but without units — we cannot
-        // infer the result's dimension, so flag it rather than silently
-        // assuming metres.
-        let (variable, variable_units) = match node.args.first() {
-            Some(crate::Expr::Variable(v)) => (
-                Some(v.clone()),
-                model.variables.get(v).and_then(|mv| mv.units.clone()),
-            ),
-            _ => (None, None),
-        };
-        let mut details = serde_json::json!({
-            "operator": node.op,
-            "dim": dim_name,
-            "coordinate_units": serde_json::Value::Null,
-            "equation_index": eq_index,
-        });
-        if let Some(v) = variable {
-            details["variable"] = serde_json::Value::String(v);
-        }
-        if let Some(u) = variable_units {
-            details["variable_units"] = serde_json::Value::String(u);
-        }
-        errors.push(StructuralError {
-            path: eq_path.to_string(),
-            code: StructuralErrorCode::UnitInconsistency,
-            message: "Gradient operator applied to variable with incompatible spatial units"
-                .to_string(),
-            details,
-        });
-    }
-    node.for_each_child(&mut |child| {
-        check_gradient_ops(child, coords, model, eq_path, eq_index, errors)
-    });
 }
 
 /// Returns true if the expression references a variable by exact name
@@ -736,6 +657,32 @@ fn reaction_rate_units_str(rate: &crate::Expr, rs: &crate::ReactionSystem) -> St
     String::new()
 }
 
+/// The index / integration symbols an operator node BINDS for its own body:
+/// `output_idx` and `ranges` keys (`aggregate`/`arrayop`), the `integral` op's
+/// `var`, and the `argmin`/`argmax` witness `arg`. These are in scope for the
+/// node's child expressions (the aggregate body, filter predicate, grouping
+/// key, integral bounds) but are NOT model/parameter declarations, so a
+/// reference-checking walk that descends into those children (via
+/// [`crate::types::ExpressionNode::for_each_child`], which enumerates children
+/// only) must treat them as defined to avoid spurious "undefined" errors on
+/// bound loop indices such as the `i` in `index(u, i)`.
+fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
+    let mut syms = Vec::new();
+    if let Some(idx) = &node.output_idx {
+        syms.extend(idx.iter().cloned());
+    }
+    if let Some(ranges) = &node.ranges {
+        syms.extend(ranges.keys().cloned());
+    }
+    if let Some(v) = &node.int_var {
+        syms.push(v.clone());
+    }
+    if let Some(a) = &node.arg {
+        syms.push(a.clone());
+    }
+    syms
+}
+
 fn validate_rate_expression(
     rate: &crate::Expr,
     defined_parameters: &HashSet<String>,
@@ -761,14 +708,27 @@ fn validate_rate_expression(
             }
         }
         crate::Expr::Operator(op_node) => {
-            for arg in &op_node.args {
-                validate_rate_expression(
-                    arg,
-                    defined_parameters,
-                    reaction_path,
-                    reaction_id,
-                    errors,
-                );
+            // Descend every expression-bearing child (not just `args`), adding
+            // any index symbols the node BINDS to the in-scope parameter set so
+            // a bound loop index inside the body is not mistaken for an
+            // undeclared parameter.
+            let bound = bound_index_symbols(op_node);
+            if bound.is_empty() {
+                op_node.for_each_child(&mut |arg| {
+                    validate_rate_expression(
+                        arg,
+                        defined_parameters,
+                        reaction_path,
+                        reaction_id,
+                        errors,
+                    )
+                });
+            } else {
+                let mut scope = defined_parameters.clone();
+                scope.extend(bound);
+                op_node.for_each_child(&mut |arg| {
+                    validate_rate_expression(arg, &scope, reaction_path, reaction_id, errors)
+                });
             }
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {
@@ -810,11 +770,7 @@ pub(crate) fn validate_expression_references_with_systems(
     match expr {
         crate::Expr::Variable(var_name) => {
             // Skip derivatives, time variable, and built-in functions
-            if var_name.starts_with("d(")
-                || var_name.starts_with("t")
-                || var_name == "t"
-                || is_builtin_function(var_name)
-            {
+            if var_name.starts_with("d(") || var_name == "t" || is_builtin_function(var_name) {
                 return; // These are always valid
             }
 
@@ -881,17 +837,41 @@ pub(crate) fn validate_expression_references_with_systems(
             }
         }
         crate::Expr::Operator(op_node) => {
-            // Recursively validate operands
-            for arg in &op_node.args {
-                validate_expression_references_with_systems(
-                    arg,
-                    defined_vars,
-                    system_refs,
-                    local_scoped,
-                    base_path,
-                    equation_index,
-                    errors,
-                );
+            // Recursively validate every expression-bearing child via the
+            // canonical walker — args PLUS the sidecar fields (integral bounds,
+            // aggregate/arrayop bodies, filter predicates, table axes,
+            // aggregate keys, template bindings) — so a reference hidden
+            // outside `args` is not missed. Index symbols the node BINDS
+            // (`output_idx`/`ranges`/`var`/`arg`) are added to the in-scope set
+            // for the descent so a bound loop index is not flagged as
+            // undefined.
+            let bound = bound_index_symbols(op_node);
+            if bound.is_empty() {
+                op_node.for_each_child(&mut |child| {
+                    validate_expression_references_with_systems(
+                        child,
+                        defined_vars,
+                        system_refs,
+                        local_scoped,
+                        base_path,
+                        equation_index,
+                        errors,
+                    )
+                });
+            } else {
+                let mut scope = defined_vars.clone();
+                scope.extend(bound);
+                op_node.for_each_child(&mut |child| {
+                    validate_expression_references_with_systems(
+                        child,
+                        &scope,
+                        system_refs,
+                        local_scoped,
+                        base_path,
+                        equation_index,
+                        errors,
+                    )
+                });
             }
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {
@@ -1071,8 +1051,7 @@ fn validate_event_expression(
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
-            if !var_name.starts_with("t")
-                && var_name != "t"
+            if var_name != "t"
                 && !is_builtin_function(var_name)
                 && !defined_vars.contains(var_name)
             {
@@ -1176,9 +1155,12 @@ fn extract_model_dependencies(expr: &crate::Expr, deps: &mut HashSet<String>) {
             }
         }
         crate::Expr::Operator(op_node) => {
-            for arg in &op_node.args {
-                extract_model_dependencies(arg, deps);
-            }
+            // Walk every expression-bearing child (args plus the sidecar
+            // fields) so cross-model scoped refs hidden in aggregate bodies,
+            // filter predicates, integral bounds, etc. are picked up. Only
+            // dotted `System.var` refs matter here, so the node's bound index
+            // symbols (bare names) are naturally ignored.
+            op_node.for_each_child(&mut |arg| extract_model_dependencies(arg, deps));
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {
             // Numbers don't reference models
@@ -1231,8 +1213,11 @@ fn find_cycle_path(
     path: &mut Vec<String>,
     visited: &mut HashSet<String>,
 ) -> bool {
-    if path.contains(&current.to_string()) {
-        // Found cycle - include the current node to complete the cycle
+    if let Some(start) = path.iter().position(|n| n.as_str() == current) {
+        // Found cycle. Drop the acyclic prefix that led INTO the cycle so the
+        // reported path names only nodes actually on the cycle, then repeat the
+        // start node to close it (e.g. `B -> C -> B`, not `A -> B -> C -> B`).
+        path.drain(..start);
         path.push(current.to_string());
         return true;
     }

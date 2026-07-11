@@ -26,10 +26,7 @@ use earthsci_ast::{SimulateOptions, Solution, SolverChoice};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/valid/advection_reaction_loaded_ic_bc.esm"
-);
+mod common;
 
 /// A `[lon, lat]` grid field from a slice of `[lat0, lat1]` rows (row=lon).
 fn grid(rows: &[[f64; 2]]) -> ArrayD<f64> {
@@ -128,7 +125,8 @@ fn close(actual: f64, expected: f64, abs: f64, rel: f64) -> bool {
 #[test]
 fn loaded_ic_bc_simulation_provider_injection() {
     // ---- Full lowering pipeline (no pre-discretized shortcut) ----------------
-    let file = load_path(FIXTURE).expect("load fixture");
+    let file = load_path(common::repo_fixture("valid/advection_reaction_loaded_ic_bc.esm"))
+        .expect("load fixture");
     let flat = flatten(&file).expect("flatten");
 
     // The scoped-`ic` equations were classified out of the ODE set.

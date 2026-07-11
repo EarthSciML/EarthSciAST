@@ -34,14 +34,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-const FIXTURE_DIR: &str = "../../tests/conformance/refresh";
+mod common;
 const FIELD_RTOL: f64 = 1e-9;
 const FIELD_ATOL: f64 = 1e-11;
 const TRAJ_RTOL: f64 = 1e-4;
 const TRAJ_ATOL: f64 = 1e-6;
 
 fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_DIR)
+    common::repo_fixture("conformance/refresh")
 }
 
 fn read_json(path: &PathBuf) -> Value {

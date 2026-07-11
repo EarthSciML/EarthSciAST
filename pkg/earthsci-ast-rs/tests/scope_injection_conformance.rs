@@ -13,16 +13,10 @@ use earthsci_ast::{load_path, save};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("repo root from CARGO_MANIFEST_DIR")
-        .to_path_buf()
-}
+mod common;
 
 fn conf(parts: &[&str]) -> PathBuf {
-    let mut p = repo_root().join("tests/conformance/expression_templates");
+    let mut p = common::repo_fixture("conformance/expression_templates");
     for part in parts {
         p = p.join(part);
     }

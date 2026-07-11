@@ -71,6 +71,17 @@ const VI_BODY_OPS: [&str; 3] = ["skolem", "rank", "distinct"];
 /// `_VI_ARGWITNESS_OPS`.
 const VI_ARGWITNESS_OPS: [&str; 2] = ["argmin", "argmax"];
 
+/// True iff a value-invention `:map` node's body is an arg-witness reducer
+/// (`argmin` / `argmax`) — i.e. it emits the witnessing INDEX rather than a
+/// value. Checks the raw `expr.op` against [`VI_ARGWITNESS_OPS`].
+fn is_argwitness(node: &Value) -> bool {
+    node.get("expr")
+        .and_then(|b| b.get("op"))
+        .and_then(|v| v.as_str())
+        .map(|o| VI_ARGWITNESS_OPS.contains(&o))
+        .unwrap_or(false)
+}
+
 /// Per-dimension boundary policy for an out-of-range const-array stencil gather
 /// (bead ess-gj4). Mirrors the Julia `_CONST_BOUNDARY_KINDS` (`:periodic` /
 /// `:clamp` / `:error`): a gather at a 1-based index outside `1..=n` resolves
@@ -294,6 +305,39 @@ fn vi_index_targets(node: &Value, out: &mut HashSet<String>) {
     }
 }
 
+/// Scan a `join` array's `on` pairs for the pair that binds `gsym` to a partner
+/// name accepted by `is_known`, returning that partner (the non-`gsym` element of
+/// the pair). Shared by [`vi_grouped_key`] (partner ∈ VI var names) and
+/// [`vi_materialize_grouped`] (partner ∈ materialised buffers). Returns the FIRST
+/// such partner in join / pair order.
+fn vi_join_partner(
+    join: &[Value],
+    gsym: &str,
+    mut is_known: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    for clause in join {
+        let Some(pairs) = clause.get("on").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for pair in pairs {
+            let Some(p) = pair.as_array() else { continue };
+            if p.len() != 2 {
+                continue;
+            }
+            let (Some(a), Some(b)) = (p[0].as_str(), p[1].as_str()) else {
+                continue;
+            };
+            if a == gsym && is_known(b) {
+                return Some(b.to_string());
+            }
+            if b == gsym && is_known(a) {
+                return Some(a.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// The group KEY of a GROUPED reduction, or `None`. The SCVT group-by signature
 /// is precise (mirror of Julia `_vi_grouped_key`): a single-output-index
 /// `aggregate` whose `join.on` pairs the OUTPUT index symbol with a known VI
@@ -310,27 +354,7 @@ fn vi_grouped_key(node: &Value, vi_var_names: &HashSet<String>) -> Option<String
     }
     let gsym = oi[0].as_str()?;
     let join = node.get("join").and_then(|v| v.as_array())?;
-    for clause in join {
-        let Some(pairs) = clause.get("on").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for pair in pairs {
-            let Some(p) = pair.as_array() else { continue };
-            if p.len() != 2 {
-                continue;
-            }
-            let (Some(a), Some(b)) = (p[0].as_str(), p[1].as_str()) else {
-                continue;
-            };
-            if a == gsym && vi_var_names.contains(b) {
-                return Some(b.to_string());
-            }
-            if b == gsym && vi_var_names.contains(a) {
-                return Some(a.to_string());
-            }
-        }
-    }
-    None
+    vi_join_partner(join, gsym, |n| vi_var_names.contains(n))
 }
 
 /// True iff `node` is an elementwise DERIVED buffer over known VI buffers
@@ -642,6 +666,17 @@ fn vi_index(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Value
         let resolved = resolve_const_index(ctx, name, d, one_based, n)?;
         idx.push((resolved - 1) as usize);
     }
+    // Rank guard: `arr[IxDyn(&idx)]` panics unless the number of supplied indices
+    // equals the array rank. Too-MANY indices already error inside the loop above
+    // (an extra dim has extent 0 → `resolve_const_index` fails), but too FEW would
+    // reach ndarray and panic — surface it as a diagnostic instead.
+    if idx.len() != arr.ndim() {
+        return err(format!(
+            "value-invention index target {name:?} has rank {}, but {} index(es) were supplied",
+            arr.ndim(),
+            idx.len()
+        ));
+    }
     Ok(Val::Float(arr[IxDyn(&idx)]))
 }
 
@@ -803,10 +838,44 @@ fn vi_range_values(
             let vals = ctx.const_arrays.get(values_name).ok_or_else(|| {
                 ValueInventionError(format!("ragged values factor {values_name:?} not supplied"))
             })?;
-            let nmem = offs[IxDyn(&[(parent - 1) as usize])] as i64;
+            // `offs` / `vals` are caller-supplied ndarray factors and `parent`
+            // comes from the enumeration binding, so every index into them must be
+            // bounds-checked before use: an out-of-shape parent, a `values` factor
+            // narrower than the member count, or a negative/zero parent (which
+            // would wrap `(parent-1) as usize`) must surface as a diagnostic, never
+            // a slice-index panic (see the boundary-policy note above).
+            if parent < 1 {
+                return err(format!(
+                    "ragged value-invention range {from:?}: parent index {parent} is out of \
+                     range (1-based parent must be >= 1)"
+                ));
+            }
+            let prow = (parent - 1) as usize;
+            let offs_len = offs.shape().first().copied().unwrap_or(0);
+            if offs.ndim() != 1 || prow >= offs_len {
+                return err(format!(
+                    "ragged value-invention range {from:?}: parent {parent} is outside offsets \
+                     factor {offsets_name:?} (shape {:?})",
+                    offs.shape()
+                ));
+            }
+            let nmem = offs[IxDyn(&[prow])] as i64;
+            if nmem < 0 {
+                return err(format!(
+                    "ragged value-invention range {from:?}: offsets factor {offsets_name:?} gives \
+                     a negative member count {nmem} for parent {parent}"
+                ));
+            }
+            let vshape = vals.shape();
+            if vals.ndim() != 2 || prow >= vshape[0] || nmem as usize > vshape[1] {
+                return err(format!(
+                    "ragged value-invention range {from:?}: values factor {values_name:?} (shape \
+                     {vshape:?}) is too small for parent {parent} member count {nmem}"
+                ));
+            }
             let mut out = Vec::with_capacity(nmem as usize);
             for l in 1..=nmem {
-                let v = vals[IxDyn(&[(parent - 1) as usize, (l - 1) as usize])];
+                let v = vals[IxDyn(&[prow, (l - 1) as usize])];
                 out.push(Val::Float(v).key_int()?);
             }
             Ok(out)
@@ -1059,11 +1128,7 @@ fn vi_materialize_map(
         .and_then(|v| v.as_object())
         .unwrap_or(&empty);
     let sym = output_idx[0].clone();
-    let is_arg = body
-        .get("op")
-        .and_then(|v| v.as_str())
-        .map(|o| VI_ARGWITNESS_OPS.contains(&o))
-        .unwrap_or(false);
+    let is_arg = is_argwitness(node);
     let mut out: HashMap<i64, Val> = HashMap::new();
     // Borrow the body / ranges via a const reference inside the closure; collect
     // into `out`, then store it on the context after enumeration completes.
@@ -1229,28 +1294,7 @@ fn vi_materialize_grouped(
     })?;
     // The group KEY buffer: the join column paired with the output index that
     // names a materialised VI buffer (`assign`).
-    let mut keyvar: Option<String> = None;
-    for clause in join {
-        let Some(pairs) = clause.get("on").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for pair in pairs {
-            let Some(p) = pair.as_array() else { continue };
-            if p.len() != 2 {
-                continue;
-            }
-            let (Some(a), Some(b)) = (p[0].as_str(), p[1].as_str()) else {
-                continue;
-            };
-            if b == gsym && ctx.maps.contains_key(a) {
-                keyvar = Some(a.to_string());
-            }
-            if a == gsym && ctx.maps.contains_key(b) {
-                keyvar = Some(b.to_string());
-            }
-        }
-    }
-    let keyvar = keyvar.ok_or_else(|| {
+    let keyvar = vi_join_partner(join, &gsym, |n| ctx.maps.contains_key(n)).ok_or_else(|| {
         ValueInventionError(format!(
             "grouped aggregate {vname:?} join.on must pair a materialised value-invention buffer \
              with the output index {gsym:?}"
@@ -1467,12 +1511,7 @@ pub fn materialize_value_invention(
     // topology would change every step (out of scope for v1, like a continuous
     // `distinct`).
     for (vname, node) in &det.maps {
-        let is_arg = node
-            .get("expr")
-            .and_then(|b| b.get("op"))
-            .and_then(|v| v.as_str())
-            .map(|o| VI_ARGWITNESS_OPS.contains(&o))
-            .unwrap_or(false);
+        let is_arg = is_argwitness(node);
         if !is_arg {
             continue;
         }
@@ -1495,12 +1534,7 @@ pub fn materialize_value_invention(
     // assignment), dense in output-index order, for byte-identity assertions and
     // the downstream grouped reduction the SCVT step consumes.
     for (vname, node) in &det.maps {
-        let is_arg = node
-            .get("expr")
-            .and_then(|b| b.get("op"))
-            .and_then(|v| v.as_str())
-            .map(|o| VI_ARGWITNESS_OPS.contains(&o))
-            .unwrap_or(false);
+        let is_arg = is_argwitness(node);
         if !is_arg {
             continue;
         }

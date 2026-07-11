@@ -110,6 +110,17 @@ fn migrate_species_units(
     Ok(file.clone())
 }
 
+/// True iff a *structural* migration rule is registered for `from → to`.
+///
+/// The single truth source `migrate` and [`get_supported_migration_targets`]
+/// both consult, so a bare version-label bump is never applied as if it were a
+/// real migration. Today the only registered rule is the 0.0.5 → 0.1.x
+/// species-unit conversion (ppbv → mol/mol; see [`migrate_species_units`]);
+/// extend this predicate as further rules land.
+fn has_registered_migration(from: &VersionInfo, to: &VersionInfo) -> bool {
+    from.major == 0 && from.minor == 0 && from.patch == 5 && to.major == 0 && to.minor >= 1
+}
+
 /// Add migration notes to the metadata
 fn add_migration_notes(file: &EsmFile, from_version: &str, to_version: &str) -> EsmFile {
     let mut new_file = file.clone();
@@ -166,6 +177,21 @@ pub fn migrate(file: &EsmFile, target_version: &str) -> Result<EsmFile, Migratio
         });
     }
 
+    // Only relabel + transform when a structural migration rule is actually
+    // registered for this pair. Otherwise `migrate` would silently rewrite the
+    // `esm` version label without performing any structural migration, producing
+    // a document mislabeled as a version it was never migrated to.
+    if !has_registered_migration(&current, &target) {
+        return Err(MigrationError {
+            message: format!(
+                "no registered migration rule from {current_version} to {target_version}; \
+                 refusing to relabel the document without a structural migration"
+            ),
+            from_version: current_version.clone(),
+            to_version: target_version.to_string(),
+        });
+    }
+
     let mut migrated_file = file.clone();
 
     // Update the version
@@ -198,35 +224,23 @@ pub fn can_migrate(from_version: &str, to_version: &str) -> bool {
     compare_versions(from_version, to_version).is_ok_and(|cmp| cmp <= 0)
 }
 
-/// Get supported migration paths from a given version
+/// Get supported migration paths from a given version.
+///
+/// Returns only targets that `migrate` would genuinely succeed on — those with
+/// a registered structural migration rule ([`has_registered_migration`]) — so a
+/// caller never sees a target that would then fail to migrate. Today the sole
+/// rule is the 0.0.5 → 0.1.0 species-unit conversion (ppbv → mol/mol); extend
+/// this alongside `has_registered_migration` as more rules land.
 pub fn get_supported_migration_targets(from_version: &str) -> Vec<String> {
     let Ok(from_ver) = parse_version(from_version) else {
         return vec![];
     };
 
-    // For now, support migration to any later version in the same major version
-    // In a real implementation, this would be based on available migration rules
     let mut targets = Vec::new();
-
-    // Add some common target versions (this could be made more sophisticated)
-    if from_ver.major == 0 {
-        if from_ver.minor == 0 {
-            targets.push("0.1.0".to_string());
-        }
-        if from_ver.minor <= 1 {
-            targets.extend(vec![
-                "0.1.0".to_string(),
-                "0.1.1".to_string(),
-                "0.2.0".to_string(),
-            ]);
-        }
+    if from_ver.major == 0 && from_ver.minor == 0 && from_ver.patch == 5 {
+        targets.push("0.1.0".to_string());
     }
-
-    // Filter to only include versions that are later than the from version
     targets
-        .into_iter()
-        .filter(|target| compare_versions(from_version, target).is_ok_and(|cmp| cmp < 0))
-        .collect()
 }
 
 #[cfg(test)]

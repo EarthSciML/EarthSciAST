@@ -117,6 +117,88 @@ fn merge_subsystem_index_sets(
     Ok(())
 }
 
+/// Wording for [`load_ref_document`]'s diagnostics, so each call site keeps its
+/// original error strings while sharing the load sequence.
+struct RefNoun {
+    /// Plural noun for the remote-URL rejection (e.g. `"subsystem refs"`).
+    remote_plural: &'static str,
+    /// Singular noun for the cycle message (e.g. `"subsystem reference"`).
+    cycle_singular: &'static str,
+    /// Item noun for the resolve / read / parse messages (e.g. `"ref"`).
+    item: &'static str,
+}
+
+/// A subsystem `{ "ref": ... }` edge (used by [`resolve_value`]).
+const SUBSYSTEM_REF: RefNoun = RefNoun {
+    remote_plural: "subsystem refs",
+    cycle_singular: "subsystem reference",
+    item: "ref",
+};
+
+/// A top-level `models.<k>` mount edge (used by [`inline_toplevel_model_refs`]).
+const TOPLEVEL_MODEL_REF: RefNoun = RefNoun {
+    remote_plural: "top-level model refs",
+    cycle_singular: "top-level model reference",
+    item: "top-level model ref",
+};
+
+/// The shared "load a referenced .esm document" sequence both ref-resolvers run:
+/// reject a remote URL, canonicalize `ref_str` against `base`, guard against a
+/// cycle, mark the path visited, then read + parse it. Returns the canonical
+/// path (still marked visited) and the parsed JSON.
+///
+/// On success the CALLER owns the visited mark: it recurses into the loaded
+/// document (so nested refs see this path on the stack) and must
+/// `visited.remove(&canonical)` when done — mirroring the manual insert/remove
+/// this used to duplicate at both sites. On any failure here the mark is not
+/// left dangling (it is removed before returning a read/parse error, and is
+/// never inserted on the URL / canonicalize / cycle errors).
+fn load_ref_document(
+    ref_str: &str,
+    base: &Path,
+    visited: &mut HashSet<PathBuf>,
+    noun: &RefNoun,
+) -> Result<(PathBuf, Value), String> {
+    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+        return Err(format!(
+            "Remote {} are not supported in the Rust loader; \
+             download {ref_str:?} to a local file first",
+            noun.remote_plural
+        ));
+    }
+
+    let canonical = base
+        .join(ref_str)
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve {} {ref_str:?}: {e}", noun.item))?;
+
+    if visited.contains(&canonical) {
+        return Err(format!(
+            "circular {} detected: {}",
+            noun.cycle_singular,
+            canonical.display()
+        ));
+    }
+    visited.insert(canonical.clone());
+
+    let loaded = (|| -> Result<Value, String> {
+        let content = std::fs::read_to_string(&canonical)
+            .map_err(|e| format!("failed to read {} {}: {}", noun.item, canonical.display(), e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("failed to parse {} {}: {}", noun.item, canonical.display(), e))
+    })();
+
+    match loaded {
+        Ok(parsed) => Ok((canonical, parsed)),
+        Err(e) => {
+            // Read/parse failed after we marked it visited — un-mark so the set
+            // is not left with a dangling entry.
+            visited.remove(&canonical);
+            Err(e)
+        }
+    }
+}
+
 fn walk_top_level(
     value: &mut Value,
     base_path: &Path,
@@ -221,40 +303,14 @@ fn inline_toplevel_model_refs(
             .get("ref")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "top-level model ref must be a string".to_string())?;
-        if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-            return Err(format!(
-                "Remote top-level model refs are not supported in the Rust loader; \
-                 download {ref_str:?} to a local file first"
-            ));
-        }
-        let canonical = base_path
-            .join(ref_str)
-            .canonicalize()
-            .map_err(|e| format!("failed to resolve top-level model ref {ref_str:?}: {e}"))?;
-        if visited.contains(&canonical) {
-            return Err(format!(
-                "circular top-level model reference detected: {}",
-                canonical.display()
-            ));
-        }
-        visited.insert(canonical.clone());
+        let (canonical, mut comp) =
+            load_ref_document(ref_str, base_path, visited, &TOPLEVEL_MODEL_REF)?;
         let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
 
-        let result: Result<(Value, Value), String> = (|| {
-            let content = std::fs::read_to_string(&canonical).map_err(|e| {
-                format!(
-                    "failed to read top-level model ref {}: {}",
-                    canonical.display(),
-                    e
-                )
-            })?;
-            let mut comp: Value = serde_json::from_str(&content).map_err(|e| {
-                format!(
-                    "failed to parse top-level model ref {}: {}",
-                    canonical.display(),
-                    e
-                )
-            })?;
+        // `comp` stays owned here; the closure only borrows it (so the visited
+        // mark can be removed and `comp`'s by-name blocks merged below on every
+        // exit path), and yields the spliced model.
+        let build: Result<Value, String> = (|| {
             // Component-of-component: inline the leaf's own top-level model-refs.
             if let Some(comp_obj) = comp.as_object_mut() {
                 inline_toplevel_model_refs(comp_obj, &leaf_dir, visited)?;
@@ -280,10 +336,10 @@ fn inline_toplevel_model_refs(
                     injected,
                 );
             }
-            Ok((model, comp))
+            Ok(model)
         })();
         visited.remove(&canonical);
-        let (model, comp) = result?;
+        let model = build?;
 
         // Splice the resolved model back under the same key, then merge the
         // leaf's by-name blocks (parent wins on a clash).
@@ -509,30 +565,8 @@ fn resolve_value(
             .as_str()
             .ok_or_else(|| "subsystem ref must be a string".to_string())?;
 
-        if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-            return Err(format!(
-                "Remote subsystem refs are not supported in the Rust loader; \
-                     download {ref_str:?} to a local file first"
-            ));
-        }
-
-        let resolved_path = base_path.join(ref_str);
-        let canonical = resolved_path
-            .canonicalize()
-            .map_err(|e| format!("failed to resolve ref {ref_str:?}: {e}"))?;
-
-        if visited.contains(&canonical) {
-            return Err(format!(
-                "circular subsystem reference detected: {}",
-                canonical.display()
-            ));
-        }
-        visited.insert(canonical.clone());
-
-        let content = std::fs::read_to_string(&canonical)
-            .map_err(|e| format!("failed to read ref {}: {}", canonical.display(), e))?;
-        let mut parsed: Value = serde_json::from_str(&content)
-            .map_err(|e| format!("failed to parse ref {}: {}", canonical.display(), e))?;
+        let (canonical, mut parsed) =
+            load_ref_document(ref_str, base_path, visited, &SUBSYSTEM_REF)?;
 
         // A §4.7 subsystem ref MUST NOT target a template-library file — the
         // two reference mechanisms are disjoint (esm-spec §9.7.1).

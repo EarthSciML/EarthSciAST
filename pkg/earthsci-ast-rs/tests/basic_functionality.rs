@@ -1,3 +1,4 @@
+#![allow(deprecated)] // exercises the deprecated `substitute_in_expression` alias on purpose
 //! Basic functionality tests
 //!
 //! Tests basic parsing, serialization, and core functionality with simple valid examples.

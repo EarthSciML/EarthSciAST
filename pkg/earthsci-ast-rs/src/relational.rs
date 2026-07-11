@@ -64,7 +64,6 @@
 use crate::canonicalize::format_canonical_float;
 use indexmap::IndexMap;
 use std::cmp::Ordering;
-use std::fmt;
 
 /// Raised when a relational key contains a floating-point (or otherwise
 /// non-integer / out-of-domain) component, violating `CONFORMANCE_SPEC.md`
@@ -75,16 +74,9 @@ use std::fmt;
 /// variant — so this error only arises at the untyped JSON boundary
 /// ([`Key::try_from_json`]), the analogue of the Julia/Python reference's
 /// per-primitive `assert_key` runtime check.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("FloatKeyError: {0}")]
 pub struct FloatKeyError(pub String);
-
-impl fmt::Display for FloatKeyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FloatKeyError: {}", self.0)
-    }
-}
-
-impl std::error::Error for FloatKeyError {}
 
 /// A relational **key** component: an integer / categorical ID, or a tuple
 /// thereof. This is the orderable, float-free domain over which the five

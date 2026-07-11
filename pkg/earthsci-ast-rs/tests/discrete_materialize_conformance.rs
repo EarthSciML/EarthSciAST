@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-const FIXTURE_DIR: &str = "../../tests/conformance/discrete_materialize";
+mod common;
 
 /// Manifest trajectory band (`manifest.json` `tolerances`).
 const TRAJ_RTOL: f64 = 1e-4;
@@ -40,7 +40,7 @@ const TRAJ_ATOL: f64 = 1e-6;
 const SRC_KEY: &str = "M.src";
 
 fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_DIR)
+    common::repo_fixture("conformance/discrete_materialize")
 }
 
 fn read_json(path: &PathBuf) -> serde_json::Value {

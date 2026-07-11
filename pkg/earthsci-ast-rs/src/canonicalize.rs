@@ -53,12 +53,35 @@ pub fn canonical_json(expr: &Expr) -> Result<String, CanonicalizeError> {
 }
 
 fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
-    let mut new_args = Vec::with_capacity(node.args.len());
-    for a in &node.args {
-        new_args.push(canonicalize(a)?);
-    }
     let mut work = node.clone();
-    work.args = new_args;
+    // Canonicalize EVERY expression-bearing child — `args` plus the sidecar
+    // bodies (`lower`/`upper`/`expr`/`filter`/`values`/`axes`/`key`/`bindings`),
+    // enumerated once by `ExpressionNode::for_each_child_mut` (the crate's single
+    // source of truth for which fields carry child `Expr`s). This guarantees a
+    // non-finite float or `0/0` buried in an aggregate body, integral bound,
+    // `filter` predicate, `table_lookup` axis, or template binding is caught by
+    // the same `NonFinite`/`DivByZero` guards as one in `args` — previously only
+    // `args` was descended, so such a NaN escaped the guard.
+    //
+    // Sidecar fields are NOT part of the emitted canonical JSON (see
+    // `emit_node_json`, which emits only op/args/wrt/dim/fn/name/value — the
+    // closed cross-binding field set the TS/Python/Julia siblings pin), so
+    // normalizing the sidecar sub-trees here never changes `canonical_json`
+    // bytes; it only strengthens the finiteness guard and normalizes the
+    // returned tree. See the module-level note on the field-coverage gap.
+    let mut err: Option<CanonicalizeError> = None;
+    work.for_each_child_mut(&mut |child| {
+        if err.is_some() {
+            return;
+        }
+        match canonicalize(&*child) {
+            Ok(c) => *child = c,
+            Err(e) => err = Some(e),
+        }
+    });
+    if let Some(e) = err {
+        return Err(e);
+    }
     match work.op.as_str() {
         "+" => canon_add(&mut work),
         "*" => canon_mul(&mut work),
@@ -144,7 +167,6 @@ fn canon_sub(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
         // -(x, 0) -> x (type-preserving: float-zero with int x promotes)
         if is_zero_any(&b) {
             if matches!(b, Expr::Number(_))
-                && matches!(a, Expr::Integer(_))
                 && let Expr::Integer(i) = a
             {
                 return Ok(Expr::Number(i as f64));
@@ -172,7 +194,6 @@ fn canon_div(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     }
     if is_one_any(&b) {
         if matches!(b, Expr::Number(_))
-            && matches!(a, Expr::Integer(_))
             && let Expr::Integer(i) = a
         {
             return Ok(Expr::Number(i as f64));
@@ -339,6 +360,28 @@ fn emit_canonical_json(e: &Expr) -> String {
     }
 }
 
+// Emit the canonical JSON object for an operator node.
+//
+// Emissible field set (CLOSED, cross-binding-pinned): exactly
+// `op`/`args`/`wrt`/`dim`/`fn`/`name`/`value`. This is the identical set the
+// sibling bindings serialize — Julia's `_EMISSIBLE_FIELDS` tuple, and the
+// `emitNodeJson`/`_emit_node_json` emitters in TS/Python — and it is the set the
+// cross-binding `tests/conformance/canonical/` fixtures pin. Extending it is a
+// coordinated cross-binding format change, NEVER a Rust-local edit: emitting an
+// extra field here would make this binding's `canonical_json` bytes diverge from
+// the siblings and break the byte contract.
+//
+// DEFERRED field-coverage gap (do NOT "fix" unilaterally here): a node's other
+// set fields — aggregate `expr`/`ranges`/`output_idx`/`reduce`/`semiring`/
+// `join`/`filter`, `makearray` `regions`/`values`, `table`/`axes`/`output`,
+// `reshape`/`transpose`/`concat` shape/perm/axis, geometry `id`/`manifold`,
+// `key`/`distinct`/`bindings`, … — have NO slot here, so two nodes differing
+// ONLY in those fields currently produce byte-identical canonical JSON. Python
+// and TS share this exact gap; Julia instead FAILS CLOSED, throwing
+// `E_CANONICAL_UNSUPPORTED_FIELD` when a non-emissible field is set rather than
+// emitting ambiguous bytes. Closing the gap portably requires agreeing an
+// emission encoding (or the fail-closed guard) across all four bindings plus new
+// conformance fixtures — tracked as a cross-binding item, not landed here.
 fn emit_node_json(n: &ExpressionNode) -> String {
     let mut entries: Vec<(String, String)> = Vec::new();
     entries.push(("op".into(), json_string(&n.op)));
@@ -401,8 +444,21 @@ fn emit_canonical_json_value(v: &serde_json::Value) -> String {
 /// Format a finite f64 per RFC §5.4.6.
 pub fn format_canonical_float(f: f64) -> String {
     if !f.is_finite() {
-        // Caller is responsible for guarding; render a stable token.
-        return "NaN".into();
+        // Non-finite floats have NO canonical JSON form: `canonicalize` /
+        // `canonical_json` reject them with `E_CANONICAL_NONFINITE` before any
+        // value reaches here (the TS/Python/Julia siblings `throw`/`raise` at the
+        // equivalent point). This helper returns `String`, so it cannot signal an
+        // error; if an unguarded external caller does reach this branch, emit a
+        // DISTINCT, human-readable token per value — never a valid JSON number, so
+        // it can never masquerade as finite — instead of collapsing +Inf, -Inf,
+        // and NaN to the same misleading `"NaN"`.
+        return if f.is_nan() {
+            "NaN".into()
+        } else if f > 0.0 {
+            "Infinity".into()
+        } else {
+            "-Infinity".into()
+        };
     }
     if f == 0.0 {
         return if f.is_sign_negative() {
@@ -420,26 +476,17 @@ pub fn format_canonical_float(f: f64) -> String {
         // Strip leading + (Rust doesn't emit it but be safe) and leading exponent zeros.
         normalize_exponent(&s)
     } else {
-        // Plain decimal — use Rust default Display which is the shortest round-trip
-        // but may print `1` for `1.0`. Add trailing `.0` if no `.` present.
-        let s = shortest_float_plain(f);
+        // Plain decimal — Rust's `Display` gives the shortest round-trip and, in
+        // the `[1e-6, 1e21)` range, always emits plain decimal (never exponent
+        // form). It may print an integer-valued float as e.g. `1` (no `.`), so add
+        // a trailing `.0` when no decimal point is present.
+        let s = format!("{f}");
         if !s.contains('.') {
             format!("{s}.0")
         } else {
             s
         }
     }
-}
-
-/// Render a float in plain (non-exponent) shortest round-trip form.
-fn shortest_float_plain(f: f64) -> String {
-    // Rust's Display for f64 may switch to exponent notation only for very large/small;
-    // for the [1e-6, 1e21) range it emits plain decimal. But integer-valued floats
-    // are printed as e.g. "1" (without decimal) — handled by the caller adding ".0".
-    let s = format!("{f}");
-    // For values like 1e20, Rust may print "100000000000000000000" — that's fine.
-    // For 1e-5, Rust prints "0.00001" — also fine.
-    s
 }
 
 fn normalize_exponent(s: &str) -> String {

@@ -24,14 +24,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::simulate::Solution;
-use earthsci_ast::{EsmFile, Model, ModelTest, SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{EsmFile, Model, ModelTest, SimulateOptions, SolverChoice, simulate};
 use std::collections::HashMap;
-use std::fs;
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/valid/wildfire_atmosphere_ocean.esm"
-);
+mod common;
 
 fn model<'a>(file: &'a EsmFile, name: &str) -> &'a Model {
     file.models
@@ -91,8 +87,7 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
 /// every assertion within its declared tolerance.
 #[test]
 fn wildfire_ocean_inline_tests() {
-    let json = fs::read_to_string(FIXTURE).expect("read fixture");
-    let file = load(&json).expect("load fixture");
+    let file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
     let ocean = model(&file, "OceanDynamics");
     let tests = ocean
         .tests
@@ -137,8 +132,7 @@ fn wildfire_ocean_inline_tests() {
 /// `heat_release`).
 #[test]
 fn wildfire_regrid_trajectory_and_constant_states() {
-    let json = fs::read_to_string(FIXTURE).expect("read fixture");
-    let file = load(&json).expect("load fixture");
+    let file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
     let opts = SimulateOptions {
         solver: SolverChoice::Bdf,
         abstol: 1e-12,

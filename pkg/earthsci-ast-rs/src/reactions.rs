@@ -15,10 +15,6 @@ use thiserror::Error;
 /// Error type for ODE derivation operations
 #[derive(Error, Debug)]
 pub enum DeriveError {
-    /// Unit conversion error
-    #[error("Unit conversion error: {0}")]
-    UnitConversion(String),
-
     /// Invalid stoichiometry
     #[error("Invalid stoichiometry: {0}")]
     InvalidStoichiometry(String),
@@ -26,14 +22,6 @@ pub enum DeriveError {
     /// Missing rate law
     #[error("Missing or invalid rate law: {0}")]
     InvalidRateLaw(String),
-
-    /// Constraint equation error
-    #[error("Constraint equation error: {0}")]
-    ConstraintEquation(String),
-
-    /// Generic derivation error
-    #[error("Derivation error: {0}")]
-    Other(String),
 }
 
 /// Lower a reaction network to an ODE equation list.
@@ -116,7 +104,7 @@ pub fn lower_reactions_to_equations(
                 let enhanced_rate = enhance_rate_with_mass_action(
                     &reaction.rate,
                     reaction.substrates.as_deref().unwrap_or(&[]),
-                )?;
+                );
 
                 if net_stoichiometry == 1.0 {
                     rate_terms.push(enhanced_rate);
@@ -227,13 +215,17 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
 /// The full rate law is always `k * product(substrates^stoichiometry)` — the
 /// runner unconditionally multiplies the coefficient by the substrate product.
 /// Source reactions (no substrates) return the coefficient unchanged.
+///
+/// Infallible — every path yields an [`Expr`] (the mass-action lowering cannot
+/// fail once the substrates are known), so it returns a bare `Expr` rather than
+/// a `Result`.
 fn enhance_rate_with_mass_action(
     rate: &Expr,
     substrates: &[crate::StoichiometricEntry],
-) -> Result<Expr, DeriveError> {
+) -> Expr {
     // If no substrates (source reaction), return rate as-is
     if substrates.is_empty() {
-        return Ok(rate.clone());
+        return rate.clone();
     }
 
     // Enhance with mass action kinetics (spec §7.4): `∏ [Sᵢ]^nᵢ`. Mirrors
@@ -274,15 +266,15 @@ fn enhance_rate_with_mass_action(
     all_factors.extend(concentration_factors);
 
     if all_factors.len() == 1 {
-        Ok(all_factors.into_iter().next().unwrap())
+        all_factors.into_iter().next().unwrap()
     } else {
-        Ok(Expr::Operator(ExpressionNode {
+        Expr::Operator(ExpressionNode {
             op: "*".to_string(),
             args: all_factors,
             wrt: None,
             dim: None,
             ..Default::default()
-        }))
+        })
     }
 }
 
