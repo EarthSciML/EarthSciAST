@@ -455,7 +455,7 @@ func TestModelSummary(t *testing.T) {
 				},
 			},
 		},
-		Coupling: []any{
+		Coupling: []CouplingEntry{
 			OperatorComposeCoupling{
 				Type:    "operator_compose",
 				Systems: [2]string{"SimpleOzone", "Advection"},

@@ -66,7 +66,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 			},
 		},
-		Coupling: []any{
+		Coupling: []CouplingEntry{
 			VariableMapCoupling{
 				Type:      "variable_map",
 				From:      "TestLoader.temp",

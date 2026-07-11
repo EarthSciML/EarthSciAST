@@ -129,7 +129,7 @@ func lowerReactionSystemEnums(rs *ReactionSystem, enums map[string]map[string]in
 // lowerCouplingEntryEnums lowers enum ops inside a coupling entry's connector
 // equations, returning the (possibly updated) entry. Only CouplingCouple
 // entries carry connector equations; any other entry is returned unchanged.
-func lowerCouplingEntryEnums(ce any, enums map[string]map[string]int) (any, error) {
+func lowerCouplingEntryEnums(ce CouplingEntry, enums map[string]map[string]int) (CouplingEntry, error) {
 	cc, ok := ce.(CouplingCouple)
 	if !ok {
 		return ce, nil

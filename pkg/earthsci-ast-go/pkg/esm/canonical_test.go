@@ -182,7 +182,7 @@ func TestSaveTypedFloatFields(t *testing.T) {
 				Equations: []Equation{{LHS: "x", RHS: int64(0)}},
 			},
 		},
-		Coupling: []any{
+		Coupling: []CouplingEntry{
 			VariableMapCoupling{Type: "variable_map", From: "a.x", To: "b.y", Transform: "multiplicative", Factor: &factor},
 		},
 	}

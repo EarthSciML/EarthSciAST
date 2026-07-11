@@ -697,7 +697,7 @@ type ESMFile struct {
 	// a map from symbolic names (strings) to positive integers. Lowering
 	// (resolution to `const`-op integers) happens at load time.
 	Enums    map[string]map[string]int `json:"enums,omitempty"`
-	Coupling []any                     `json:"coupling,omitempty"` // Properly deserialized coupling entries
+	Coupling []CouplingEntry           `json:"coupling,omitempty"` // deserialized coupling entries (discriminated union)
 	// CouplingRoles is present only in a coupling-library file (esm-spec §10.9):
 	// the map of formal component roles a role-scoped `coupling` array wires.
 	// Presence of this key is the sole positive identifier of the

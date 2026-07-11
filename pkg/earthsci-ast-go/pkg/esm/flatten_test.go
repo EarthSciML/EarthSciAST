@@ -117,7 +117,7 @@ func TestFlatten_RecordsCouplingRules(t *testing.T) {
 				Equations: []Equation{},
 			},
 		},
-		Coupling: []any{
+		Coupling: []CouplingEntry{
 			VariableMapCoupling{
 				Type:      "variable_map",
 				From:      "A.x",

@@ -481,7 +481,7 @@ func resolvesToComponent(file *ESMFile, value string) bool {
 // has no `coupling` block. Non-import entries pass through untouched; a file
 // with no `coupling_import` entries needs no options and returns `file.Coupling`
 // verbatim.
-func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]any, error) {
+func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]CouplingEntry, error) {
 	if file == nil {
 		return nil, nil
 	}
@@ -492,7 +492,7 @@ func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]any, er
 
 	hasImport := false
 	for _, e := range coupling {
-		if ce, ok := e.(CouplingEntry); ok && ce.CouplingType() == "coupling_import" {
+		if e != nil && e.CouplingType() == "coupling_import" {
 			hasImport = true
 			break
 		}
@@ -510,7 +510,7 @@ func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]any, er
 		basePath = "."
 	}
 
-	out := make([]any, 0, len(coupling))
+	out := make([]CouplingEntry, 0, len(coupling))
 	for _, e := range coupling {
 		var imp CouplingImport
 		switch v := e.(type) {

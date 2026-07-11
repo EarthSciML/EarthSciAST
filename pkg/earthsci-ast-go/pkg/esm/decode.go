@@ -476,14 +476,14 @@ func (esm *ESMFile) UnmarshalJSON(data []byte) error {
 }
 
 // UnmarshalCouplingArray handles the deserialization of the coupling array
-func UnmarshalCouplingArray(data []byte) ([]any, error) {
+func UnmarshalCouplingArray(data []byte) ([]CouplingEntry, error) {
 	// First unmarshal as a slice of raw messages
 	var rawEntries []json.RawMessage
 	if err := json.Unmarshal(data, &rawEntries); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal coupling array: %w", err)
 	}
 
-	var result []any
+	var result []CouplingEntry
 	for i, rawEntry := range rawEntries {
 		entry, err := UnmarshalCouplingEntry(rawEntry)
 		if err != nil {

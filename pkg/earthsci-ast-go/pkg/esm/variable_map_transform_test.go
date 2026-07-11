@@ -346,7 +346,7 @@ func TestFlatten_ExpressionTransformDoesNotError(t *testing.T) {
 				Equations: []Equation{},
 			},
 		},
-		Coupling: []any{
+		Coupling: []CouplingEntry{
 			VariableMapCoupling{
 				Type: "variable_map",
 				From: "Src.F",
