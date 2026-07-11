@@ -56,9 +56,11 @@ func LowerEnums(file *EsmFile) error {
 		}
 	}
 	for i := range file.Coupling {
-		if err := lowerCouplingEntryEnums(&file.Coupling[i], enums); err != nil {
+		lowered, err := lowerCouplingEntryEnums(file.Coupling[i], enums)
+		if err != nil {
 			return err
 		}
+		file.Coupling[i] = lowered
 	}
 	return nil
 }
@@ -124,24 +126,24 @@ func lowerReactionSystemEnums(rs *ReactionSystem, enums map[string]map[string]in
 	return nil
 }
 
-func lowerCouplingEntryEnums(ce *interface{}, enums map[string]map[string]int) error {
-	cc, ok := (*ce).(CouplingCouple)
+// lowerCouplingEntryEnums lowers enum ops inside a coupling entry's connector
+// equations, returning the (possibly updated) entry. Only CouplingCouple
+// entries carry connector equations; any other entry is returned unchanged.
+func lowerCouplingEntryEnums(ce interface{}, enums map[string]map[string]int) (interface{}, error) {
+	cc, ok := ce.(CouplingCouple)
 	if !ok {
-		return nil
+		return ce, nil
 	}
-	if cc.Connector.Equations != nil {
-		for i := range cc.Connector.Equations {
-			if cc.Connector.Equations[i].Expression != nil {
-				lowered, err := lowerExprEnums(cc.Connector.Equations[i].Expression, enums)
-				if err != nil {
-					return err
-				}
-				cc.Connector.Equations[i].Expression = lowered
+	for i := range cc.Connector.Equations {
+		if cc.Connector.Equations[i].Expression != nil {
+			lowered, err := lowerExprEnums(cc.Connector.Equations[i].Expression, enums)
+			if err != nil {
+				return ce, err
 			}
+			cc.Connector.Equations[i].Expression = lowered
 		}
-		*ce = cc
 	}
-	return nil
+	return cc, nil
 }
 
 // lowerExprEnums recursively lowers `enum` ops to `const` integer nodes.
@@ -161,7 +163,7 @@ func lowerExprEnums(expr Expression, enums map[string]map[string]int) (Expressio
 }
 
 func lowerExprNodeEnums(node ExprNode, enums map[string]map[string]int) (Expression, error) {
-	if node.Op == "enum" {
+	if node.Op == OpEnum {
 		// esm-spec §4.5: args are exactly two strings — the enum name and
 		// the symbolic key.
 		if len(node.Args) != 2 {
@@ -188,41 +190,17 @@ func lowerExprNodeEnums(node ExprNode, enums map[string]map[string]int) (Express
 			return nil, newLowerEnumsError("unknown_enum_symbol",
 				fmt.Sprintf("symbol %q is not declared under enum %q", symName, enumName))
 		}
-		return ExprNode{Op: "const", Args: []interface{}{}, Value: int64(v)}, nil
+		return ExprNode{Op: OpConst, Args: []interface{}{}, Value: int64(v)}, nil
 	}
-	// Recurse — lower children and rebuild.
-	newArgs := make([]interface{}, len(node.Args))
-	for i, a := range node.Args {
-		la, err := lowerExprEnums(a, enums)
-		if err != nil {
-			return nil, err
-		}
-		newArgs[i] = la
-	}
-	// Recurse into table_lookup axes (per-axis input expressions).
-	var newTableAxes map[string]Expression
-	if node.TableAxes != nil {
-		newTableAxes = make(map[string]Expression, len(node.TableAxes))
-		for k, v := range node.TableAxes {
-			lv, err := lowerExprEnums(v, enums)
-			if err != nil {
-				return nil, err
-			}
-			newTableAxes[k] = lv
-		}
-	}
-	out := ExprNode{
-		Op:        node.Op,
-		Args:      newArgs,
-		Wrt:       node.Wrt,
-		Dim:       node.Dim,
-		Name:      node.Name,
-		Value:     node.Value,
-		Table:     node.Table,
-		TableAxes: newTableAxes,
-		Output:    node.Output,
-	}
-	return out, nil
+	// Recurse — lower every child through the shared field-preserving walker.
+	// The old rebuild covered only Args + TableAxes, so an `enum` op nested in
+	// an aggregate body, integral bound, join/filter clause, makearray region,
+	// etc. survived to evaluation ("should have been lowered at load"); routing
+	// through mapExprChildren lowers those positions too and preserves every
+	// other field.
+	return mapExprChildren(node, func(child Expression) (Expression, error) {
+		return lowerExprEnums(child, enums)
+	})
 }
 
 // stringFromArg accepts either a bare string (a `VarExpr`-equivalent in

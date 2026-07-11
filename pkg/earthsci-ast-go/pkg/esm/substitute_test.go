@@ -2,6 +2,7 @@ package esm
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -313,6 +314,24 @@ func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 	}
 
 	assert.Equal(t, expected, result)
+}
+
+// A cyclic binding (x → f(x)) must not stack-overflow: the depth guard halts
+// the recursion and returns a bounded result instead of panicking (task 8).
+func TestSubstituteCyclicBindingTerminates(t *testing.T) {
+	bindings := map[string]Expression{
+		"x": ExprNode{Op: "f", Args: []interface{}{"x"}},
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = Substitute("x", bindings) // must return, not crash or hang
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Substitute did not terminate on a cyclic binding")
+	}
 }
 
 func TestSubstituteWithDerivativeWrtParameter(t *testing.T) {

@@ -211,3 +211,69 @@ func TestDivZeroByZero(t *testing.T) {
 		t.Errorf("0/0: err=%v want ErrCanonicalDivByZero", err)
 	}
 }
+
+// Canonicalize must PRESERVE structural fields on non-arithmetic op nodes
+// (the confirmed integral bug: canonOp used to rebuild from an
+// Op/Args/Wrt/Dim/Fn/Name/Value subset, dropping Var/Lower/Upper/…), and
+// emitExprNodeJSON must EMIT them.
+func TestCanonicalizePreservesStructuralFields(t *testing.T) {
+	varName := "s"
+	node := ExprNode{
+		Op:    "integral",
+		Args:  []interface{}{"f"},
+		Var:   &varName,
+		Lower: int64(0),
+		Upper: 1.0,
+	}
+	c, err := Canonicalize(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, ok := c.(ExprNode)
+	if !ok {
+		t.Fatalf("expected ExprNode, got %T", c)
+	}
+	if out.Var == nil || *out.Var != "s" {
+		t.Errorf("Var dropped by Canonicalize: %v", out.Var)
+	}
+	if out.Lower != int64(0) {
+		t.Errorf("Lower not preserved: %v (%T)", out.Lower, out.Lower)
+	}
+	if out.Upper != 1.0 {
+		t.Errorf("Upper not preserved: %v (%T)", out.Upper, out.Upper)
+	}
+
+	got, err := CanonicalJSON(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"args":["f"],"lower":0,"op":"integral","upper":1.0,"var":"s"}`
+	if string(got) != want {
+		t.Errorf("canonical JSON:\n got %s\nwant %s", got, want)
+	}
+}
+
+// Distinct expressions that differ only in a previously-dropped field
+// (table_lookup's `table`) must now produce distinct canonical JSON — the
+// canonical bytes are also the sortArgs sort key, so collapsing them was a
+// latent correctness hazard.
+func TestCanonicalDistinctTableLookups(t *testing.T) {
+	tA, tB := "tableA", "tableB"
+	nodeA := ExprNode{Op: "table_lookup", Args: []interface{}{}, Table: &tA}
+	nodeB := ExprNode{Op: "table_lookup", Args: []interface{}{}, Table: &tB}
+	ja, err := CanonicalJSON(nodeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jb, err := CanonicalJSON(nodeB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ja) == string(jb) {
+		t.Fatalf("distinct table_lookup nodes collapsed to same canonical JSON: %s", ja)
+	}
+	want := `{"args":[],"op":"table_lookup","table":"tableA"}`
+	if string(ja) != want {
+		t.Errorf("got %s, want %s", ja, want)
+	}
+}
