@@ -51,7 +51,7 @@ export type {
 export * from './analysis/index.js'
 
 // Export pretty-printing utilities
-export { toUnicode, toLatex, toAscii, toMathML } from './pretty-print.js'
+export { toUnicode, toLatex, toAscii, toMathML, formatChemicalName } from './pretty-print.js'
 
 // Export substitution utilities
 export { substitute, substituteInModel, substituteInReactionSystem } from './substitute.js'
@@ -78,9 +78,13 @@ export {
 } from './unit-conversion.js'
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
-// Export the official TypeScript runner (AST → JS lowering / scalar
-// evaluator) per AGENTS.md.
-export { compileExpression, evaluateExpression, UnloweredOperatorError } from './codegen.js'
+// Export the tree-walking scalar evaluator (esm-spec closed-core semantics).
+export {
+  compileExpression,
+  evaluateExpression,
+  UnloweredOperatorError,
+  EvaluatorError,
+} from './codegen.js'
 export type { CompiledExpression } from './codegen.js'
 
 // Export migration functionality
