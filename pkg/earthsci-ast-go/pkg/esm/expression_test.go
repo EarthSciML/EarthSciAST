@@ -116,88 +116,88 @@ func TestSimplify(t *testing.T) {
 			expected: "x",
 		},
 		{
-			name: "constant addition",
-			expr: ExprNode{Op: "+", Args: []interface{}{2.0, 3.0}},
+			name:     "constant addition",
+			expr:     ExprNode{Op: "+", Args: []interface{}{2.0, 3.0}},
 			expected: 5.0,
 		},
 		{
-			name: "addition with zero",
-			expr: ExprNode{Op: "+", Args: []interface{}{"x", 0.0}},
+			name:     "addition with zero",
+			expr:     ExprNode{Op: "+", Args: []interface{}{"x", 0.0}},
 			expected: "x",
 		},
 		{
-			name: "zero plus variable",
-			expr: ExprNode{Op: "+", Args: []interface{}{0.0, "x"}},
+			name:     "zero plus variable",
+			expr:     ExprNode{Op: "+", Args: []interface{}{0.0, "x"}},
 			expected: "x",
 		},
 		{
-			name: "addition all zeros",
-			expr: ExprNode{Op: "+", Args: []interface{}{0.0, 0.0, 0.0}},
+			name:     "addition all zeros",
+			expr:     ExprNode{Op: "+", Args: []interface{}{0.0, 0.0, 0.0}},
 			expected: 0.0,
 		},
 		{
-			name: "multiplication with one",
-			expr: ExprNode{Op: "*", Args: []interface{}{"x", 1.0}},
+			name:     "multiplication with one",
+			expr:     ExprNode{Op: "*", Args: []interface{}{"x", 1.0}},
 			expected: "x",
 		},
 		{
-			name: "multiplication with zero",
-			expr: ExprNode{Op: "*", Args: []interface{}{"x", 0.0}},
+			name:     "multiplication with zero",
+			expr:     ExprNode{Op: "*", Args: []interface{}{"x", 0.0}},
 			expected: 0.0,
 		},
 		{
-			name: "constant multiplication",
-			expr: ExprNode{Op: "*", Args: []interface{}{2.0, 3.0}},
+			name:     "constant multiplication",
+			expr:     ExprNode{Op: "*", Args: []interface{}{2.0, 3.0}},
 			expected: 6.0,
 		},
 		{
-			name: "subtraction with zero",
-			expr: ExprNode{Op: "-", Args: []interface{}{"x", 0.0}},
+			name:     "subtraction with zero",
+			expr:     ExprNode{Op: "-", Args: []interface{}{"x", 0.0}},
 			expected: "x",
 		},
 		{
-			name: "constant subtraction",
-			expr: ExprNode{Op: "-", Args: []interface{}{5.0, 2.0}},
+			name:     "constant subtraction",
+			expr:     ExprNode{Op: "-", Args: []interface{}{5.0, 2.0}},
 			expected: 3.0,
 		},
 		{
-			name: "division by one",
-			expr: ExprNode{Op: "/", Args: []interface{}{"x", 1.0}},
+			name:     "division by one",
+			expr:     ExprNode{Op: "/", Args: []interface{}{"x", 1.0}},
 			expected: "x",
 		},
 		{
-			name: "zero divided by something",
-			expr: ExprNode{Op: "/", Args: []interface{}{0.0, "x"}},
+			name:     "zero divided by something",
+			expr:     ExprNode{Op: "/", Args: []interface{}{0.0, "x"}},
 			expected: 0.0,
 		},
 		{
-			name: "constant division",
-			expr: ExprNode{Op: "/", Args: []interface{}{6.0, 2.0}},
+			name:     "constant division",
+			expr:     ExprNode{Op: "/", Args: []interface{}{6.0, 2.0}},
 			expected: 3.0,
 		},
 		{
-			name: "power of zero",
-			expr: ExprNode{Op: "^", Args: []interface{}{"x", 0.0}},
+			name:     "power of zero",
+			expr:     ExprNode{Op: "^", Args: []interface{}{"x", 0.0}},
 			expected: 1.0,
 		},
 		{
-			name: "power of one",
-			expr: ExprNode{Op: "^", Args: []interface{}{"x", 1.0}},
+			name:     "power of one",
+			expr:     ExprNode{Op: "^", Args: []interface{}{"x", 1.0}},
 			expected: "x",
 		},
 		{
-			name: "one to any power",
-			expr: ExprNode{Op: "^", Args: []interface{}{1.0, "x"}},
+			name:     "one to any power",
+			expr:     ExprNode{Op: "^", Args: []interface{}{1.0, "x"}},
 			expected: 1.0,
 		},
 		{
-			name: "zero to positive power",
-			expr: ExprNode{Op: "^", Args: []interface{}{0.0, 2.0}},
+			name:     "zero to positive power",
+			expr:     ExprNode{Op: "^", Args: []interface{}{0.0, 2.0}},
 			expected: 0.0,
 		},
 		{
-			name: "constant exponentiation",
-			expr: ExprNode{Op: "^", Args: []interface{}{2.0, 3.0}},
+			name:     "constant exponentiation",
+			expr:     ExprNode{Op: "^", Args: []interface{}{2.0, 3.0}},
 			expected: 8.0,
 		},
 		{
@@ -257,28 +257,28 @@ func TestEvaluate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "addition",
-			expr: ExprNode{Op: "+", Args: []interface{}{"x", "y"}},
+			name:     "addition",
+			expr:     ExprNode{Op: "+", Args: []interface{}{"x", "y"}},
 			expected: 5.0,
 		},
 		{
-			name: "subtraction",
-			expr: ExprNode{Op: "-", Args: []interface{}{"x", "y"}},
+			name:     "subtraction",
+			expr:     ExprNode{Op: "-", Args: []interface{}{"x", "y"}},
 			expected: -1.0,
 		},
 		{
-			name: "unary minus",
-			expr: ExprNode{Op: "-", Args: []interface{}{"x"}},
+			name:     "unary minus",
+			expr:     ExprNode{Op: "-", Args: []interface{}{"x"}},
 			expected: -2.0,
 		},
 		{
-			name: "multiplication",
-			expr: ExprNode{Op: "*", Args: []interface{}{"x", "y"}},
+			name:     "multiplication",
+			expr:     ExprNode{Op: "*", Args: []interface{}{"x", "y"}},
 			expected: 6.0,
 		},
 		{
-			name: "division",
-			expr: ExprNode{Op: "/", Args: []interface{}{"y", "x"}},
+			name:     "division",
+			expr:     ExprNode{Op: "/", Args: []interface{}{"y", "x"}},
 			expected: 1.5,
 		},
 		{
@@ -287,18 +287,18 @@ func TestEvaluate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "exponentiation",
-			expr: ExprNode{Op: "^", Args: []interface{}{"x", "y"}},
+			name:     "exponentiation",
+			expr:     ExprNode{Op: "^", Args: []interface{}{"x", "y"}},
 			expected: 8.0, // 2^3
 		},
 		{
-			name: "exponential function",
-			expr: ExprNode{Op: "exp", Args: []interface{}{1.0}},
+			name:     "exponential function",
+			expr:     ExprNode{Op: "exp", Args: []interface{}{1.0}},
 			expected: math.E,
 		},
 		{
-			name: "natural logarithm",
-			expr: ExprNode{Op: "log", Args: []interface{}{math.E}},
+			name:     "natural logarithm",
+			expr:     ExprNode{Op: "log", Args: []interface{}{math.E}},
 			expected: 1.0,
 		},
 		{
@@ -307,8 +307,8 @@ func TestEvaluate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "square root",
-			expr: ExprNode{Op: "sqrt", Args: []interface{}{4.0}},
+			name:     "square root",
+			expr:     ExprNode{Op: "sqrt", Args: []interface{}{4.0}},
 			expected: 2.0,
 		},
 		{
@@ -317,38 +317,38 @@ func TestEvaluate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "absolute value",
-			expr: ExprNode{Op: "abs", Args: []interface{}{-3.0}},
+			name:     "absolute value",
+			expr:     ExprNode{Op: "abs", Args: []interface{}{-3.0}},
 			expected: 3.0,
 		},
 		{
-			name: "sine",
-			expr: ExprNode{Op: "sin", Args: []interface{}{0.0}},
+			name:     "sine",
+			expr:     ExprNode{Op: "sin", Args: []interface{}{0.0}},
 			expected: 0.0,
 		},
 		{
-			name: "cosine",
-			expr: ExprNode{Op: "cos", Args: []interface{}{0.0}},
+			name:     "cosine",
+			expr:     ExprNode{Op: "cos", Args: []interface{}{0.0}},
 			expected: 1.0,
 		},
 		{
-			name: "tangent",
-			expr: ExprNode{Op: "tan", Args: []interface{}{0.0}},
+			name:     "tangent",
+			expr:     ExprNode{Op: "tan", Args: []interface{}{0.0}},
 			expected: 0.0,
 		},
 		{
-			name: "sign positive",
-			expr: ExprNode{Op: "sign", Args: []interface{}{5.0}},
+			name:     "sign positive",
+			expr:     ExprNode{Op: "sign", Args: []interface{}{5.0}},
 			expected: 1.0,
 		},
 		{
-			name: "sign negative",
-			expr: ExprNode{Op: "sign", Args: []interface{}{-5.0}},
+			name:     "sign negative",
+			expr:     ExprNode{Op: "sign", Args: []interface{}{-5.0}},
 			expected: -1.0,
 		},
 		{
-			name: "sign zero",
-			expr: ExprNode{Op: "sign", Args: []interface{}{0.0}},
+			name:     "sign zero",
+			expr:     ExprNode{Op: "sign", Args: []interface{}{0.0}},
 			expected: 0.0,
 		},
 		{
@@ -363,13 +363,13 @@ func TestEvaluate(t *testing.T) {
 			expected: 7.0,
 		},
 		{
-			name: "n-ary addition",
-			expr: ExprNode{Op: "+", Args: []interface{}{"x", "y", "z"}},
+			name:     "n-ary addition",
+			expr:     ExprNode{Op: "+", Args: []interface{}{"x", "y", "z"}},
 			expected: 9.0, // 2 + 3 + 4
 		},
 		{
-			name: "n-ary multiplication",
-			expr: ExprNode{Op: "*", Args: []interface{}{"x", "y", 2.0}},
+			name:     "n-ary multiplication",
+			expr:     ExprNode{Op: "*", Args: []interface{}{"x", "y", 2.0}},
 			expected: 12.0, // 2 * 3 * 2
 		},
 		// n-ary min/max (esm-spec §4.2 — arity ≥ 2; esm-2is)
@@ -425,6 +425,52 @@ func TestEvaluate(t *testing.T) {
 				t.Errorf("Evaluate() = %v, expected %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+// Unified op-spec table (task 5): folding now covers the same ops the
+// evaluator does, including min/max/floor/ceil and the `**` alias, which the
+// old drifted folding table left untouched.
+func TestSimplifyFoldsExtendedOps(t *testing.T) {
+	cases := []struct {
+		name string
+		expr Expression
+		want Expression
+	}{
+		{"min folds", ExprNode{Op: "min", Args: []interface{}{2.0, 3.0}}, 2.0},
+		{"max folds", ExprNode{Op: "max", Args: []interface{}{2.0, 3.0}}, 3.0},
+		{"floor folds", ExprNode{Op: "floor", Args: []interface{}{2.7}}, 2.0},
+		{"ceil folds", ExprNode{Op: "ceil", Args: []interface{}{2.1}}, 3.0},
+		{"** alias folds", ExprNode{Op: "**", Args: []interface{}{2.0, 3.0}}, 8.0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Simplify(c.expr)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("Simplify() = %v (%T), want %v (%T)", got, got, c.want, c.want)
+			}
+		})
+	}
+}
+
+// Strict numeric coercion (task 6): a variable literally named "0" is a symbol,
+// never the number zero, so identity elimination must not drop it.
+func TestSimplifyStrictNumericCoercion(t *testing.T) {
+	expr := ExprNode{Op: "+", Args: []interface{}{"0", "x"}}
+	got := Simplify(expr)
+	want := ExprNode{Op: "+", Args: []interface{}{"0", "x"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Simplify(+(\"0\",x)) = %v, want %v (string \"0\" must not fold as zero)", got, want)
+	}
+}
+
+// Domain-violating constants are left unfolded (folding treats an evaluator
+// error as "cannot fold") rather than folded to NaN.
+func TestSimplifyLeavesDomainErrorsUnfolded(t *testing.T) {
+	expr := ExprNode{Op: "log", Args: []interface{}{-1.0}}
+	got := Simplify(expr)
+	if !reflect.DeepEqual(got, expr) {
+		t.Errorf("Simplify(log(-1)) = %v, want unchanged %v", got, expr)
 	}
 }
 

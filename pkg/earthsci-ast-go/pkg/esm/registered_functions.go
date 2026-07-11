@@ -25,7 +25,17 @@ package esm
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
+)
+
+// Time-decomposition constants for the datetime.* closed functions
+// (esm-spec §9.2). Named to replace the inline magic literals the audit
+// flagged in toUnixDateTime / datetimeJulianDay.
+const (
+	secondsPerDay     = 86400.0 // seconds in a UTC day (floor-divmod split)
+	secondsPerHalfDay = 43200.0 // noon offset for the continuous Julian Day
+	nanosPerSecond    = 1e9     // fractional-second → nanosecond scale
 )
 
 // ClosedFunctionError carries the spec-defined diagnostic codes pinned by
@@ -78,12 +88,7 @@ func ClosedFunctionNames() []string {
 	for k := range closedFunctionNames {
 		out = append(out, k)
 	}
-	// Stable order for diagnostic output.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1] > out[j]; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-		}
-	}
+	sort.Strings(out) // stable order for diagnostic output
 	return out
 }
 
@@ -91,6 +96,21 @@ func ClosedFunctionNames() []string {
 func IsClosedFunction(name string) bool {
 	_, ok := closedFunctionNames[name]
 	return ok
+}
+
+// datetimeFieldAccessors maps the seven datetime.* field-extraction functions
+// (esm-spec §9.2) to their calendar accessor. Each takes a single UTC-scalar
+// argument, decomposes it via toUnixDateTime, and returns a signed 32-bit
+// integer (range-checked uniformly through checkInt32 — the small calendar
+// fields never overflow, so this only ever matters for datetime.year).
+var datetimeFieldAccessors = map[string]func(time.Time) int{
+	"datetime.year":        func(t time.Time) int { return t.Year() },
+	"datetime.month":       func(t time.Time) int { return int(t.Month()) },
+	"datetime.day":         func(t time.Time) int { return t.Day() },
+	"datetime.hour":        func(t time.Time) int { return t.Hour() },
+	"datetime.minute":      func(t time.Time) int { return t.Minute() },
+	"datetime.second":      func(t time.Time) int { return t.Second() },
+	"datetime.day_of_year": func(t time.Time) int { return t.YearDay() },
 }
 
 // EvaluateClosedFunction dispatches a closed function call. `name` is the
@@ -109,70 +129,21 @@ func EvaluateClosedFunction(name string, args []interface{}) (interface{}, error
 				"(esm-spec §9.2). Adding a primitive requires a spec rev.", name))
 	}
 
+	// The seven single-field datetime.* accessors share one shape
+	// (arity 1 → toUnixDateTime → calendar field → Int32), so they are
+	// table-driven rather than repeated as seven near-identical switch arms.
+	if accessor, ok := datetimeFieldAccessors[name]; ok {
+		if err := expectArity(name, args, 1); err != nil {
+			return nil, err
+		}
+		t, err := toUnixDateTime(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return checkInt32(name, int64(accessor(t)))
+	}
+
 	switch name {
-	case "datetime.year":
-		if err := expectArity(name, args, 1); err != nil {
-			return nil, err
-		}
-		t, err := toUnixDateTime(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return checkInt32(name, int64(t.Year()))
-	case "datetime.month":
-		if err := expectArity(name, args, 1); err != nil {
-			return nil, err
-		}
-		t, err := toUnixDateTime(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return int32(t.Month()), nil
-	case "datetime.day":
-		if err := expectArity(name, args, 1); err != nil {
-			return nil, err
-		}
-		t, err := toUnixDateTime(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return int32(t.Day()), nil
-	case "datetime.hour":
-		if err := expectArity(name, args, 1); err != nil {
-			return nil, err
-		}
-		t, err := toUnixDateTime(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return int32(t.Hour()), nil
-	case "datetime.minute":
-		if err := expectArity(name, args, 1); err != nil {
-			return nil, err
-		}
-		t, err := toUnixDateTime(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return int32(t.Minute()), nil
-	case "datetime.second":
-		if err := expectArity(name, args, 1); err != nil {
-			return nil, err
-		}
-		t, err := toUnixDateTime(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return int32(t.Second()), nil
-	case "datetime.day_of_year":
-		if err := expectArity(name, args, 1); err != nil {
-			return nil, err
-		}
-		t, err := toUnixDateTime(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return int32(t.YearDay()), nil
 	case "datetime.julian_day":
 		if err := expectArity(name, args, 1); err != nil {
 			return nil, err
@@ -204,7 +175,7 @@ func EvaluateClosedFunction(name string, args []interface{}) (interface{}, error
 			return nil, newClosedFunctionError("closed_function_arity",
 				fmt.Sprintf("%s: first argument (x) must be numeric, got %T", name, args[0]))
 		}
-		xs, err := toFloat64Slice(name, args[1])
+		xs, err := toFloat64Array(name, "xs", args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -213,11 +184,11 @@ func EvaluateClosedFunction(name string, args []interface{}) (interface{}, error
 		if err := expectArity(name, args, 3); err != nil {
 			return nil, err
 		}
-		table, err := toInterpAxisOrTable(name, "table", args[0])
+		table, err := toFloat64Array(name, "table", args[0])
 		if err != nil {
 			return nil, err
 		}
-		axis, err := toInterpAxisOrTable(name, "axis", args[1])
+		axis, err := toFloat64Array(name, "axis", args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -235,11 +206,11 @@ func EvaluateClosedFunction(name string, args []interface{}) (interface{}, error
 		if err != nil {
 			return nil, err
 		}
-		axisX, err := toInterpAxisOrTable(name, "axis_x", args[1])
+		axisX, err := toFloat64Array(name, "axis_x", args[1])
 		if err != nil {
 			return nil, err
 		}
-		axisY, err := toInterpAxisOrTable(name, "axis_y", args[2])
+		axisY, err := toFloat64Array(name, "axis_y", args[2])
 		if err != nil {
 			return nil, err
 		}
@@ -298,10 +269,10 @@ func toUnixDateTime(v interface{}) (time.Time, error) {
 	whole := math.Floor(f)
 	frac := f - whole
 	sec := int64(whole)
-	nsec := int64(math.Round(frac * 1e9))
-	if nsec >= 1e9 {
+	nsec := int64(math.Round(frac * nanosPerSecond))
+	if nsec >= nanosPerSecond {
 		sec++
-		nsec -= 1e9
+		nsec -= nanosPerSecond
 	}
 	return time.Unix(sec, nsec).UTC(), nil
 }
@@ -323,11 +294,11 @@ func datetimeJulianDay(tUTC float64) float64 {
 		d - 32075
 	// JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
 	// to a fractional offset relative to noon.
-	secondsInDay := math.Mod(tUTC, 86400.0)
+	secondsInDay := math.Mod(tUTC, secondsPerDay)
 	if secondsInDay < 0 {
-		secondsInDay += 86400.0
+		secondsInDay += secondsPerDay
 	}
-	return float64(jdn) + (secondsInDay-43200.0)/86400.0
+	return float64(jdn) + (secondsInDay-secondsPerHalfDay)/secondsPerDay
 }
 
 // isLeapYear: proleptic-Gregorian. Pure integer arithmetic, exact zero
@@ -373,12 +344,20 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 	return checkInt32(name, int64(n+1))
 }
 
-// toFloat64Slice extracts a []float64 from an evaluated `const`-op array.
-// Accepts []interface{} (post-parse) and []float64 (programmatically built).
-// JSON literal "NaN" surfaces as the string "NaN" — the harness handles
-// that via the canonical fixture path; this helper accepts numeric entries
-// only, leaving NaN injection to higher layers.
-func toFloat64Slice(name string, v interface{}) ([]float64, error) {
+// toFloat64Array extracts a 1-D []float64 from an evaluated `const`-op array
+// argument to a closed function (the `xs` table of interp.searchsorted; the
+// table / axes of interp.linear / interp.bilinear). Accepts []float64
+// (programmatically built) and []interface{} (post-parse). NaN entries are
+// preserved: NaN string literals are already coerced to a float64 NaN by
+// toFloat64 (strconv.ParseFloat accepts "NaN"/"nan"), and downstream validators
+// reject NaN where the spec forbids it (searchsorted_nan_in_table,
+// interp_nan_in_axis). `role` names the argument in diagnostics.
+//
+// This replaces the former toFloat64Slice + toInterpAxisOrTable pair, which
+// were behaviorally identical (their explicit NaN-string branches were
+// unreachable once toFloat64 handles "NaN"); their doc claim of distinctness
+// was false.
+func toFloat64Array(name, role string, v interface{}) ([]float64, error) {
 	switch xs := v.(type) {
 	case []float64:
 		out := make([]float64, len(xs))
@@ -387,45 +366,6 @@ func toFloat64Slice(name string, v interface{}) ([]float64, error) {
 	case []interface{}:
 		out := make([]float64, len(xs))
 		for i, e := range xs {
-			f, ok := toFloat64(e)
-			if !ok {
-				// Allow case-insensitive "NaN" string for the conformance
-				// fixtures that JSON-encode NaN as a string literal.
-				if s, isStr := e.(string); isStr && (s == "NaN" || s == "nan" || s == "NAN") {
-					out[i] = math.NaN()
-					continue
-				}
-				return nil, newClosedFunctionError("closed_function_arity",
-					fmt.Sprintf("%s: xs[%d] is not numeric (%T)", name, i+1, e))
-			}
-			out[i] = f
-		}
-		return out, nil
-	default:
-		return nil, newClosedFunctionError("closed_function_arity",
-			fmt.Sprintf("%s: xs argument must be an array, got %T", name, v))
-	}
-}
-
-// toInterpAxisOrTable extracts a 1-D []float64 from an evaluated `const`-op
-// array argument to interp.linear / interp.bilinear. Distinct from
-// toFloat64Slice in that it preserves NaN entries (the spec rejects NaN
-// in axes at load time via `interp_nan_in_axis`, but those entries must
-// reach the validator first; the same path serves table arguments where
-// NaN entries are legal).
-func toInterpAxisOrTable(name, role string, v interface{}) ([]float64, error) {
-	switch xs := v.(type) {
-	case []float64:
-		out := make([]float64, len(xs))
-		copy(out, xs)
-		return out, nil
-	case []interface{}:
-		out := make([]float64, len(xs))
-		for i, e := range xs {
-			if s, isStr := e.(string); isStr && (s == "NaN" || s == "nan" || s == "NAN") {
-				out[i] = math.NaN()
-				continue
-			}
 			f, ok := toFloat64(e)
 			if !ok {
 				return nil, newClosedFunctionError("closed_function_arity",
@@ -456,7 +396,7 @@ func toInterpMatrix(name, role string, v interface{}) ([][]float64, error) {
 	case []interface{}:
 		out := make([][]float64, len(outer))
 		for i, row := range outer {
-			r, err := toInterpAxisOrTable(name, fmt.Sprintf("%s[%d]", role, i+1), row)
+			r, err := toFloat64Array(name, fmt.Sprintf("%s[%d]", role, i+1), row)
 			if err != nil {
 				return nil, err
 			}
