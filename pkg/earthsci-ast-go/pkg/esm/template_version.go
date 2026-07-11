@@ -47,7 +47,7 @@ func RejectTemplateImportsPreV08(view map[string]any) error {
 	if len(offences) > 0 {
 		return newETErr(
 			"template_import_version_too_old",
-			fmt.Sprintf("expression_template_imports / top-level expression_templates / metaparameters require esm >= 0.8.0; file declares %s. Offending paths: %s",
+			fmt.Sprintf("expression_template_imports / top-level expression_templates / metaparameters require esm >= 0.8.0; file declares %s (offending paths: %s)",
 				esmRaw, strings.Join(offences, ", ")),
 		)
 	}

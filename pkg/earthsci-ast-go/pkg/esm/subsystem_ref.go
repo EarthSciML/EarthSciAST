@@ -106,7 +106,7 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, 
 		if existing, has := registry[n]; has {
 			if !indexSetDeepEqual(existing, decl) {
 				return newETErr("subsystem_index_set_conflict",
-					fmt.Sprintf("index set '%s' from subsystem ref '%s' collides with a non-deep-equal declaration in the importing document. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7).", n, ref))
+					fmt.Sprintf("index set '%s' from subsystem ref '%s' collides with a non-deep-equal declaration in the importing document (subsystem index_sets merge into the importing registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error — esm-spec §4.7)", n, ref))
 			}
 			continue
 		}

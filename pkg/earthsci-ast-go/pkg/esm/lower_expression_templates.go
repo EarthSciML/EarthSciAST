@@ -1125,7 +1125,7 @@ func RejectExpressionTemplatesPreV04(view map[string]any) error {
 	if len(offences) > 0 {
 		return newETErr(
 			"apply_expression_template_version_too_old",
-			fmt.Sprintf("expression_templates / apply_expression_template require esm >= 0.4.0; file declares %s. Offending paths: %s", esmRaw, strings.Join(offences, ", ")),
+			fmt.Sprintf("expression_templates / apply_expression_template require esm >= 0.4.0; file declares %s (offending paths: %s)", esmRaw, strings.Join(offences, ", ")),
 		)
 	}
 	return nil
