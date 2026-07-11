@@ -6,8 +6,15 @@ import (
 )
 
 // resolveScopedReference resolves a scoped reference like "Model.Subsystem.var"
-// by walking the subsystem hierarchy to find the actual variable
-// Returns the resolved variable name and whether it was found
+// by walking the subsystem hierarchy to the variable it names.
+//
+// The second result reports whether resolution succeeded. On success the first
+// result is the resolved LEAF variable name (the final path segment); a bare
+// (dot-less) input is returned unchanged with ok=true. On failure the first
+// result is a best-effort remainder — the original reference when the top-level
+// system is unknown, or the joined unresolved remaining path when navigation
+// fails partway down a subsystem chain — and callers must not treat it as a
+// resolved name.
 func resolveScopedReference(scopedRef string, file *EsmFile, currentSystem string) (string, bool) {
 	if !strings.Contains(scopedRef, ".") {
 		// Not a scoped reference, return as-is
@@ -68,17 +75,29 @@ func resolveScopedInModel(path []string, model *Model) (string, bool) {
 
 	if model.Subsystems != nil {
 		if subsystemData, exists := model.Subsystems[subsystemName]; exists {
-			// Try to unmarshal the subsystem as a Model
-			var subsystem Model
-			if bytes, err := json.Marshal(subsystemData); err == nil {
-				if err := json.Unmarshal(bytes, &subsystem); err == nil {
-					return resolveScopedInModel(remainingPath, &subsystem)
-				}
+			if subsystem, ok := decodeSubsystemAs[Model](subsystemData); ok {
+				return resolveScopedInModel(remainingPath, &subsystem)
 			}
 		}
 	}
 
 	return strings.Join(path, "."), false
+}
+
+// decodeSubsystemAs re-decodes a raw subsystem value (a generic JSON map, as it
+// is stored in Model/ReactionSystem.Subsystems) into the typed component T
+// (Model or ReactionSystem) via a marshal→unmarshal round-trip. It reports false
+// if the value cannot be marshaled or decoded into T.
+func decodeSubsystemAs[T any](raw interface{}) (T, bool) {
+	var out T
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return out, false
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return out, false
+	}
+	return out, true
 }
 
 // resolveScopedInReactionSystem resolves a scoped reference within a reaction system
@@ -106,112 +125,11 @@ func resolveScopedInReactionSystem(path []string, system *ReactionSystem) (strin
 
 	if system.Subsystems != nil {
 		if subsystemData, exists := system.Subsystems[subsystemName]; exists {
-			// Try to unmarshal the subsystem as a ReactionSystem
-			var subsystem ReactionSystem
-			if bytes, err := json.Marshal(subsystemData); err == nil {
-				if err := json.Unmarshal(bytes, &subsystem); err == nil {
-					return resolveScopedInReactionSystem(remainingPath, &subsystem)
-				}
+			if subsystem, ok := decodeSubsystemAs[ReactionSystem](subsystemData); ok {
+				return resolveScopedInReactionSystem(remainingPath, &subsystem)
 			}
 		}
 	}
 
 	return strings.Join(path, "."), false
-}
-
-// getAllAvailableVariables returns a map of all variables available in a given system context
-// This includes variables from the current system and all accessible subsystem variables
-func getAllAvailableVariables(file *EsmFile, systemName string) map[string]bool {
-	allVars := make(map[string]bool)
-
-	// Helper function to collect variables from a model
-	var collectFromModel func(model *Model, prefix string)
-	collectFromModel = func(model *Model, prefix string) {
-		// Add direct variables
-		for varName := range model.Variables {
-			if prefix == "" {
-				allVars[varName] = true
-			} else {
-				allVars[prefix+"."+varName] = true
-			}
-		}
-
-		// Recursively collect from subsystems
-		if model.Subsystems != nil {
-			for subsystemName, subsystemData := range model.Subsystems {
-				var subsystem Model
-				if bytes, err := json.Marshal(subsystemData); err == nil {
-					if err := json.Unmarshal(bytes, &subsystem); err == nil {
-						newPrefix := subsystemName
-						if prefix != "" {
-							newPrefix = prefix + "." + subsystemName
-						}
-						collectFromModel(&subsystem, newPrefix)
-					}
-				}
-			}
-		}
-	}
-
-	// Helper function to collect variables from a reaction system
-	var collectFromReactionSystem func(system *ReactionSystem, prefix string)
-	collectFromReactionSystem = func(system *ReactionSystem, prefix string) {
-		// Add species
-		for speciesName := range system.Species {
-			if prefix == "" {
-				allVars[speciesName] = true
-			} else {
-				allVars[prefix+"."+speciesName] = true
-			}
-		}
-
-		// Add parameters
-		for paramName := range system.Parameters {
-			if prefix == "" {
-				allVars[paramName] = true
-			} else {
-				allVars[prefix+"."+paramName] = true
-			}
-		}
-
-		// Recursively collect from subsystems
-		if system.Subsystems != nil {
-			for subsystemName, subsystemData := range system.Subsystems {
-				var subsystem ReactionSystem
-				if bytes, err := json.Marshal(subsystemData); err == nil {
-					if err := json.Unmarshal(bytes, &subsystem); err == nil {
-						newPrefix := subsystemName
-						if prefix != "" {
-							newPrefix = prefix + "." + subsystemName
-						}
-						collectFromReactionSystem(&subsystem, newPrefix)
-					}
-				}
-			}
-		}
-	}
-
-	// Collect variables from the specified system
-	if model, exists := file.Models[systemName]; exists {
-		collectFromModel(&model, "")
-	}
-
-	if system, exists := file.ReactionSystems[systemName]; exists {
-		collectFromReactionSystem(&system, "")
-	}
-
-	// Also collect variables from other systems (for cross-system references)
-	for modelName, model := range file.Models {
-		if modelName != systemName {
-			collectFromModel(&model, modelName)
-		}
-	}
-
-	for sysName, system := range file.ReactionSystems {
-		if sysName != systemName {
-			collectFromReactionSystem(&system, sysName)
-		}
-	}
-
-	return allVars
 }

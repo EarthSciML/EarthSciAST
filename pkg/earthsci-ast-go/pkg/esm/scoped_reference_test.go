@@ -18,7 +18,7 @@ func TestResolveScopedReference(t *testing.T) {
 				Subsystems: map[string]interface{}{
 					"SubsystemA": map[string]interface{}{
 						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
+							"temp":     map[string]interface{}{"type": "state"},
 							"pressure": map[string]interface{}{"type": "parameter"},
 						},
 						"subsystems": map[string]interface{}{
@@ -56,11 +56,11 @@ func TestResolveScopedReference(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		scopedRef      string
-		currentSystem  string
-		expectedVar    string
-		expectedFound  bool
+		name          string
+		scopedRef     string
+		currentSystem string
+		expectedVar   string
+		expectedFound bool
 	}{
 		{
 			name:          "Direct variable in model",
@@ -129,47 +129,6 @@ func TestResolveScopedReference(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGetAllAvailableVariables(t *testing.T) {
-	// Create a test ESM file
-	file := &EsmFile{
-		Models: map[string]Model{
-			"MainModel": {
-				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"y": {Type: "parameter"},
-				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
-						},
-					},
-				},
-			},
-			"OtherModel": {
-				Variables: map[string]ModelVariable{
-					"z": {Type: "state"},
-				},
-			},
-		},
-	}
-
-	allVars := getAllAvailableVariables(file, "MainModel")
-
-	// Should include direct variables from MainModel
-	assert.True(t, allVars["x"], "Should include direct variable 'x'")
-	assert.True(t, allVars["y"], "Should include direct variable 'y'")
-
-	// Should include subsystem variables with proper scoping
-	assert.True(t, allVars["SubsystemA.temp"], "Should include scoped subsystem variable")
-
-	// Should include variables from other systems with full scoping
-	assert.True(t, allVars["OtherModel.z"], "Should include cross-system scoped variable")
-
-	// Should not include non-existent variables
-	assert.False(t, allVars["nonexistent"], "Should not include non-existent variable")
 }
 
 func TestValidationWithScopedReferences(t *testing.T) {
@@ -257,4 +216,3 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 	// The scoped reference should be resolved and substituted
 	assert.Equal(t, float64(25.0), resultNode.Args[1])
 }
-

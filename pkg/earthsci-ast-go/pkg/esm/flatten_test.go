@@ -147,6 +147,36 @@ func TestFlatten_RecordsCouplingRules(t *testing.T) {
 	}
 }
 
+func TestReplaceVarToken_RespectsTokenBoundaries(t *testing.T) {
+	// "A.x" must not corrupt the distinct tokens "A.x2" and "BA.x" the way a
+	// naive strings.ReplaceAll would (esm audit bug).
+	if got, want := replaceVarToken("A.x + A.x2 + BA.x", "A.x", "Z"), "Z + A.x2 + BA.x"; got != want {
+		t.Errorf("replaceVarToken = %q; want %q", got, want)
+	}
+	// A whole-token match inside a function wrapper is still replaced.
+	if got, want := replaceVarToken("D(A.x, t)", "A.x", "Z"), "D(Z, t)"; got != want {
+		t.Errorf("replaceVarToken = %q; want %q", got, want)
+	}
+	// A deeper path names a different variable and must be left intact.
+	if got, want := replaceVarToken("A.x.y", "A.x", "Z"), "A.x.y"; got != want {
+		t.Errorf("replaceVarToken = %q; want %q", got, want)
+	}
+}
+
+func TestNamespaceExpression_PowIsLeftAssociative(t *testing.T) {
+	// (a^b)^c must not render as a^b^c, which reparses as a^(b^c).
+	inner := ExprNode{Op: "^", Args: []interface{}{"a", "b"}}
+	node := ExprNode{Op: "^", Args: []interface{}{inner, "c"}}
+	if got, want := namespaceExpression(node, "S", map[string]bool{}), "(a^b)^c"; got != want {
+		t.Errorf("namespaceExpression = %q; want %q", got, want)
+	}
+	// A pow exponent needs no parens: a^(b^c) renders as a^b^c.
+	node2 := ExprNode{Op: "^", Args: []interface{}{"a", ExprNode{Op: "^", Args: []interface{}{"b", "c"}}}}
+	if got, want := namespaceExpression(node2, "S", map[string]bool{}), "a^b^c"; got != want {
+		t.Errorf("namespaceExpression = %q; want %q", got, want)
+	}
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, h := range haystack {
 		if h == needle {
