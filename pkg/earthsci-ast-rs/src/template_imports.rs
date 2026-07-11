@@ -56,7 +56,7 @@ const LIBRARY_FORBIDDEN_KEYS: [&str; 5] = [
 /// substituted as bare variable-reference strings, so structural string
 /// fields must not be rewritten. Template `params` shadowing is handled
 /// separately in [`substitute_metaparams_decl`].
-const META_SUBST_SKIP_KEYS: [&str; 12] = [
+const META_SUBST_SKIP_KEYS: [&str; 13] = [
     "metadata",
     "params",
     "type",
@@ -64,7 +64,11 @@ const META_SUBST_SKIP_KEYS: [&str; 12] = [
     "kind",
     "description",
     "name",
+    // `wrt`/`dim` name an AXIS / index set (a structural namespace), never an
+    // expression position — both axis-name fields are protected identically
+    // (Julia reference: axis fields ⊂ `_META_SUBST_SKIP_KEYS`).
     "wrt",
+    "dim",
     "expression_template_imports",
     "metaparameters",
     "only",
@@ -1426,7 +1430,15 @@ fn lexical_normalize(p: &Path) -> PathBuf {
         match comp {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !out.pop() {
+                // `PathBuf::pop` succeeds on a trailing `..`, so a naive
+                // `if !out.pop()` wrongly collapses consecutive parent
+                // segments (e.g. `../../x` → `x`). Only pop a real (normal)
+                // tail; if `out` is empty or already ends in `..`, the `..`
+                // escapes the base and must survive — this value is BOTH the
+                // import-cycle key and the path read by `load_import_raw`.
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else {
                     out.push("..");
                 }
             }
@@ -2467,6 +2479,26 @@ mod tests {
             PathBuf::from("lib/tpl.json")
         );
         // A leading `..` that cannot be popped is preserved.
+        assert_eq!(lexical_normalize(Path::new("../x")), PathBuf::from("../x"));
+    }
+
+    #[test]
+    fn lexical_normalize_preserves_consecutive_parent_components() {
+        // `PathBuf::pop` succeeds on a trailing `..`, so a naive `if !out.pop()`
+        // wrongly collapses consecutive parent segments. Because this value is
+        // BOTH the import-cycle key and the path `load_import_raw` reads, every
+        // `..` that cannot be cancelled must survive (esm-spec §9.7.2).
+        assert_eq!(
+            lexical_normalize(Path::new("../../x")),
+            PathBuf::from("../../x")
+        );
+        // `a` cancels the first `..`; the second `..` then escapes the base.
+        assert_eq!(
+            lexical_normalize(Path::new("a/../../x")),
+            PathBuf::from("../x")
+        );
+        assert_eq!(lexical_normalize(Path::new("./../x")), PathBuf::from("../x"));
+        // The single-`..` case is unchanged.
         assert_eq!(lexical_normalize(Path::new("../x")), PathBuf::from("../x"));
     }
 

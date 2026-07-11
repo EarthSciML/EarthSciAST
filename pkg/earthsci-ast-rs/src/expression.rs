@@ -69,7 +69,13 @@ pub fn simplify(expr: &Expr) -> Expr {
     }
 }
 
-fn collect_variables(expr: &Expr, vars: &mut HashSet<String>) {
+/// Insert every variable name referenced anywhere in `expr` into `vars`,
+/// walking the canonical child set via
+/// [`crate::types::ExpressionNode::for_each_child`]. This is the single
+/// crate-internal implementation of expression variable collection (it backs
+/// [`free_variables`]); other modules should reuse it rather than hand-rolling
+/// another walker.
+pub(crate) fn collect_variables(expr: &Expr, vars: &mut HashSet<String>) {
     match expr {
         Expr::Variable(name) => {
             vars.insert(name.clone());

@@ -21,10 +21,10 @@ use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+mod common;
+
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/arrayop")
-        .join(name)
+    common::repo_fixture("fixtures/arrayop").join(name)
 }
 
 fn compile_fixture(name: &str) -> ArrayCompiled {

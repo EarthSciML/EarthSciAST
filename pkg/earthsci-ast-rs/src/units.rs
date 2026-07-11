@@ -19,7 +19,7 @@
 
 use crate::types::{Equation, Expr, ExpressionNode};
 use std::collections::HashMap;
-use std::fmt;
+use thiserror::Error;
 
 /// Represents a physical unit with dimensions
 #[derive(Debug, Clone, PartialEq)]
@@ -43,24 +43,15 @@ pub enum Dimension {
 }
 
 /// Error types for unit operations
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum UnitError {
+    #[error("Parse error: {0}")]
     ParseError(String),
+    #[error("Dimension mismatch: {0}")]
     DimensionMismatch(String),
+    #[error("Unknown unit: {0}")]
     UnknownUnit(String),
 }
-
-impl fmt::Display for UnitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            UnitError::ParseError(msg) => write!(f, "Parse error: {msg}"),
-            UnitError::DimensionMismatch(msg) => write!(f, "Dimension mismatch: {msg}"),
-            UnitError::UnknownUnit(unit) => write!(f, "Unknown unit: {unit}"),
-        }
-    }
-}
-
-impl std::error::Error for UnitError {}
 
 impl Unit {
     /// Create a dimensionless unit
@@ -628,9 +619,7 @@ fn propagate_array(
 /// to `Length^power` (the legacy metre denominator) when the coordinate map
 /// is absent, the dim is unspecified, or the dim is not present in the map.
 /// A coordinate entry that is dimensionless (declared without units) also
-/// falls back to metres — the structural error for that case is emitted by
-/// `validate_model_gradient_units` in validate.rs; here we only care about
-/// propagation.
+/// falls back to metres; here we only care about propagation.
 fn coord_denominator(
     op: &ExpressionNode,
     coords: Option<&HashMap<String, Unit>>,
@@ -654,8 +643,16 @@ fn coord_denominator(
 
 /// Build a `HashMap<String, Unit>` environment from model variable metadata.
 ///
-/// Unparseable unit strings are skipped. Variables without declared units are
-/// treated as dimensionless.
+/// Variables without declared units are treated as dimensionless. Unparseable
+/// unit strings are *also* coerced to dimensionless — a lenient fallback that
+/// matches the TypeScript binding's `parseUnit` (which swallows parse errors
+/// and returns a dimensionless unit). Be aware this suppresses
+/// [`UnitError::DimensionMismatch`] detection for the affected variable, since
+/// a dimensionless unit is compatible with nothing but other dimensionless
+/// units. The Julia (`@warn`) and Python (error) bindings instead surface the
+/// failure, but doing so here would require this function to return a `Result`
+/// or a warning list, changing its caller in `structural.rs`; the lenient
+/// behavior is therefore retained.
 pub fn build_unit_env(variables: &HashMap<String, crate::ModelVariable>) -> HashMap<String, Unit> {
     let mut env = HashMap::new();
     for (name, var) in variables {
@@ -755,24 +752,28 @@ pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
     Err(UnitError::UnknownUnit(unit_str.to_string()))
 }
 
-/// Find the right-most occurrence of `needle` at depth 0 (outside any
-/// parenthesised group). Returns `None` if no such occurrence exists.
+/// Find the *last* occurrence of `needle` at depth 0 (outside any
+/// parenthesised group), or `None` if there is none.
 ///
-/// Right-most so that `a*b/c*d` parses as `(a*b)/c*d` is avoided — we split
-/// once at the last `/` giving `(a*b/c) / (d)`? Actually we use left-most for
-/// '/' to get left-associative `a/b/c = (a/b)/c`.
+/// `parse_unit` splits at this index and recurses on the *left* substring, so
+/// returning the last top-level occurrence makes the operator left-associative:
+/// `a/b/c` splits as `(a/b) / c` and `a*b*c` as `(a*b) * c`. This gives the
+/// conventional reading of `W/m^2/K` as `W/(m^2*K)` and matches the
+/// left-associative division of the sibling parsers (Python/pint, TypeScript's
+/// numerator-then-denominators split, and Julia's Unitful `uparse`).
 fn find_top_level(s: &str, needle: char) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth = 0i32;
+    let mut last = None;
     for (i, &b) in bytes.iter().enumerate() {
         match b as char {
             '(' => depth += 1,
             ')' => depth -= 1,
-            c if c == needle && depth == 0 => return Some(i),
+            c if c == needle && depth == 0 => last = Some(i),
             _ => {}
         }
     }
-    None
+    last
 }
 
 fn parens_balance(s: &str) -> bool {
@@ -1052,6 +1053,40 @@ mod tests {
     fn test_parse_negative_power() {
         let inv_s = parse_unit("s^-1").unwrap();
         assert_eq!(inv_s.dimensions.get(&Dimension::Time), Some(&-1));
+    }
+
+    #[test]
+    fn test_division_is_left_associative() {
+        // `W/m^2/K` must parse as `(W/m^2)/K = W/(m^2*K)`, not the
+        // right-associative `W/(m^2/K) = W*K/m^2`. W = kg*m^2/s^3, so the
+        // correct result is kg*s^-3*K^-1: Temperature power -1 (a +1 would
+        // betray the old right-associative bug).
+        let u = parse_unit("W/m^2/K").unwrap();
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-3));
+        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&-1));
+        // Length cancels: m^2 (from W) divided by m^2 leaves power 0 (absent).
+        assert_eq!(u.dimensions.get(&Dimension::Length), None);
+    }
+
+    #[test]
+    fn test_find_top_level_splits_at_last_occurrence() {
+        // `a/b/c` splits at the *last* top-level '/' so parse_unit recurses on
+        // the left `a/b`, yielding left-associative `(a/b)/c`.
+        assert_eq!(find_top_level("a/b/c", '/'), Some(3));
+        assert_eq!(find_top_level("a*b*c", '*'), Some(3));
+        // Separators inside parentheses are hidden from the top-level scan.
+        assert_eq!(find_top_level("a/(b/c)", '/'), Some(1));
+        assert_eq!(find_top_level("kg", '/'), None);
+    }
+
+    #[test]
+    fn test_parse_mixed_product_quotient() {
+        // Mixed `kg*m/s^2` is the Newton: mass^1 length^1 time^-2.
+        let u = parse_unit("kg*m/s^2").unwrap();
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-2));
     }
 
     #[test]

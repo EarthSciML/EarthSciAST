@@ -72,7 +72,13 @@ pub struct StructuralError {
 }
 
 /// Error codes for structural validation
+///
+/// Serialized in `snake_case` so the wasm-boundary JSON matches this type's
+/// [`std::fmt::Display`] output and the cross-binding contract in
+/// `tests/invalid/expected_errors.json` (e.g. `undefined_variable`, not the
+/// default PascalCase `UndefinedVariable`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StructuralErrorCode {
     /// Undefined variable reference
     UndefinedVariable,
@@ -205,12 +211,6 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
                 &mut structural_errors,
                 &mut unit_warnings,
             );
-            crate::structural::validate_model_gradient_units(
-                esm_file,
-                model_name,
-                model,
-                &mut structural_errors,
-            );
         }
 
         // Check for circular dependencies between models
@@ -339,13 +339,23 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     if let Some(ref models) = esm_file.models {
         for (name, model) in models {
             let variables: HashSet<String> = model.variables.keys().cloned().collect();
+            // Parameter-typed variables also resolve as scoped `Model.param`
+            // refs; expose them in `parameters` too so the reference map
+            // classifies them correctly (structural.rs / coupling.rs read
+            // `system.parameters`).
+            let parameters: HashSet<String> = model
+                .variables
+                .iter()
+                .filter(|(_, v)| v.var_type == crate::VariableType::Parameter)
+                .map(|(k, _)| k.clone())
+                .collect();
             systems.insert(
                 name.clone(),
                 SystemInfo {
                     _system_type: SystemType::Model,
                     variables,
                     species: HashSet::new(),
-                    parameters: HashSet::new(),
+                    parameters,
                 },
             );
         }
@@ -355,13 +365,16 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         for (name, rs) in reaction_systems {
             let species: HashSet<String> = rs.species.keys().cloned().collect();
+            // Reaction-system parameters (rate constants, etc.) resolve as
+            // scoped `RS.k1` refs; structural.rs reads `system.parameters`.
+            let parameters: HashSet<String> = rs.parameters.keys().cloned().collect();
             systems.insert(
                 name.clone(),
                 SystemInfo {
                     _system_type: SystemType::ReactionSystem,
                     variables: HashSet::new(),
                     species,
-                    parameters: HashSet::new(),
+                    parameters,
                 },
             );
         }

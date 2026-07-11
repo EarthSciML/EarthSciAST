@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-const FIXTURE_DIR: &str = "../../tests/valid/aggregate";
+mod common;
 
 fn effective_tolerance(
     assertion: Option<&Tolerance>,
@@ -178,8 +178,7 @@ fn check_assertion(
 }
 
 fn fixture(name: &str) -> PathBuf {
-    let manifest = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest).join(FIXTURE_DIR).join(name)
+    common::repo_fixture("valid/aggregate").join(name)
 }
 
 /// Assert the named worked-example fixture carries an executable model and

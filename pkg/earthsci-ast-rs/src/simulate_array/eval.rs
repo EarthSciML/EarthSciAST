@@ -94,6 +94,19 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // return an array (with ndarray broadcasting).
         "+" | "-" | "*" | "/" | "^" => eval_arith(&node.op, &node.args, ctx),
 
+        // Canonical unary negation: `canonicalize.rs` emits `neg`, so a
+        // canonicalized expression can reach this oracle, and the vectorized
+        // overlay already handles it (`vec_negate` / `affine_terms`). Route it
+        // through `negate` — the same primitive the unary-minus arm of
+        // `eval_arith` uses — so oracle and overlay agree. Unary only; a
+        // non-unary `neg` is malformed ⇒ the NaN sentinel.
+        "neg" => {
+            if node.args.len() != 1 {
+                return Value::Scalar(f64::NAN);
+            }
+            negate(eval(&node.args[0], ctx))
+        }
+
         // Unary / scalar transcendentals.
         "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
         | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
@@ -133,15 +146,24 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Rewrite-target sugar ops must be lowered to a stencil by a `match`
         // rewrite rule before reaching the simulator (esm-spec §4.2 / §9.6.8).
         // The compile-time `check_no_spatial_ops` walk in `from_model` catches
-        // these with the uniform `unlowered_operator` code; panicking here is
-        // defense-in-depth in case the build path is bypassed.
-        op if UNLOWERED_SPATIAL_OPS.contains(&op) => panic!(
-            "unlowered_operator: rewrite-target operator '{}' reached evaluation without being \
-             lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8).",
-            node.op
-        ),
+        // these with the uniform `unlowered_operator` code. But the public
+        // `eval_expression` entry point bypasses that gate, so this arm IS
+        // reachable — surface the NaN sentinel (the module's convention for an
+        // unevaluable node; the solver reads it as a step failure) rather than
+        // panicking.
+        op if UNLOWERED_SPATIAL_OPS.contains(&op) => Value::Scalar(f64::NAN),
 
-        "Pre" => eval(&node.args[0], ctx),
+        // `Pre` (previous-value marker) is only meaningful under event handling;
+        // on the RHS it passes its argument through. Guard the arity so a
+        // malformed `Pre` node from `eval_expression` yields the NaN sentinel
+        // rather than panicking on `args[0]`.
+        "Pre" => {
+            if node.args.is_empty() {
+                Value::Scalar(f64::NAN)
+            } else {
+                eval(&node.args[0], ctx)
+            }
+        }
 
         // Inline literal (esm-spec §4): a number → scalar; a nested numeric
         // array → a row-major array (e.g. a polygon's `[verts, 2]` lon/lat ring
@@ -264,7 +286,11 @@ pub(super) fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
             .iter()
             .map(|v| match v {
                 Value::Scalar(s) => *s,
-                _ => unreachable!(),
+                // The `values.iter().all(matches Scalar)` guard just above proves
+                // every operand here is a `Scalar`; a non-scalar is impossible.
+                _ => unreachable!(
+                    "eval_arith scalar fast path: operand proven Scalar by the all-scalar guard"
+                ),
             })
             .collect();
         return Value::Scalar(fold_scalar(op, &scalars));
@@ -495,7 +521,12 @@ pub(super) fn pad_trailing(arr: &ArrayD<f64>, target_rank: usize) -> ArrayD<f64>
 }
 
 pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
-    let v = eval(&args[0], ctx);
+    // A malformed unary node (no operand) from the public `eval_expression`
+    // surfaces the NaN sentinel rather than panicking on `args[0]`.
+    let Some(arg0) = args.first() else {
+        return Value::Scalar(f64::NAN);
+    };
+    let v = eval(arg0, ctx);
     match v {
         Value::Scalar(s) => Value::Scalar(apply_unary(op, s)),
         Value::Array(a) => Value::Array(a.mapv(|x| apply_unary(op, x))),
@@ -1212,7 +1243,10 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
 }
 
 pub(super) fn eval_reshape(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    let v = eval(&node.args[0], ctx);
+    let Some(arg0) = node.args.first() else {
+        return Value::Scalar(f64::NAN);
+    };
+    let v = eval(arg0, ctx);
     let arr = match v {
         Value::Array(a) => a,
         Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
@@ -1227,11 +1261,38 @@ pub(super) fn eval_reshape(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // Column-major reshape: flatten in column-major order, reinterpret
     // under the new shape in column-major order.
     let flat = arrayd_to_col_major(&arr);
+    // `col_major_to_arrayd` `.expect`s a matching element count; a user `shape`
+    // whose product disagrees with the data length is a malformed node ⇒ the NaN
+    // sentinel (module convention) rather than a panic.
+    if target.iter().product::<usize>() != flat.len() {
+        return Value::Scalar(f64::NAN);
+    }
     Value::Array(col_major_to_arrayd(&flat, &target))
 }
 
+/// True iff `perm` is a permutation of `0..ndim` (correct length, every axis in
+/// range, no duplicates) — the precondition `ndarray::permuted_axes` panics on if
+/// violated. A user-supplied `transpose` `perm` is untrusted, so it is validated
+/// before use.
+fn is_valid_permutation(perm: &[usize], ndim: usize) -> bool {
+    if perm.len() != ndim {
+        return false;
+    }
+    let mut seen = vec![false; ndim];
+    for &ax in perm {
+        if ax >= ndim || seen[ax] {
+            return false;
+        }
+        seen[ax] = true;
+    }
+    true
+}
+
 pub(super) fn eval_transpose(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    let v = eval(&node.args[0], ctx);
+    let Some(arg0) = node.args.first() else {
+        return Value::Scalar(f64::NAN);
+    };
+    let v = eval(arg0, ctx);
     let arr = match v {
         Value::Array(a) => a,
         Value::Scalar(s) => return Value::Scalar(s),
@@ -1242,6 +1303,12 @@ pub(super) fn eval_transpose(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         // Default: reverse axes.
         (0..arr.ndim()).rev().collect()
     };
+    // `permuted_axes` panics unless `perm` is a permutation of the array's axes
+    // (right length, in-range, no duplicates). Validate the untrusted `perm`
+    // first and surface the NaN sentinel for a malformed permutation.
+    if !is_valid_permutation(&perm, arr.ndim()) {
+        return Value::Scalar(f64::NAN);
+    }
     Value::Array(arr.permuted_axes(perm).as_standard_layout().into_owned())
 }
 

@@ -42,6 +42,16 @@ jsonschema = { version = "0.19", default-features = false }
 thiserror = "2.0"
 indexmap = { version = "2", features = ["serde"] }
 ndarray = "0.16"
+# diffsol (gt-5ws) — the ODE simulation backend, on BOTH native and wasm32: its
+# Faer backend is pure Rust and cross-compiles (spike S1), so the in-browser
+# `simulate` export (src/wasm.rs) can run pure-ODE / 0-D box models client-side.
+# diffsol's default features `["nalgebra", "faer"]` are both kept: diffsol 0.11.0's
+# lib.rs has unconditional `pub use` of the nalgebra modules even when that feature
+# is off (so `default-features = false` fails to compile). The simulate module
+# always selects FaerMat / FaerLU at the call site, so we still get the faer path;
+# nalgebra is just along for the ride at compile time. The heavyweight optional
+# features (LLVM / Cranelift / DiffSL / CUDA / SuiteSparse / Sundials) are excluded.
+diffsol = "0.11"
 clap = { version = "4.0", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
@@ -66,38 +76,17 @@ criterion = { version = "0.5", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
-# diffsol (gt-5ws) is also available on wasm32 so the in-browser `simulate`
-# export (src/wasm.rs) can run pure-ODE / 0-D box models client-side. Its Faer
-# backend is pure Rust and cross-compiles to wasm (spike S1). s2bindings stays
-# native-only below, so array-op / spatial files still route to the native
-# `simulate_array` backend (which is `cfg`-gated off wasm).
-diffsol = "0.11"
 
-# Native-only ODE simulation backend (gt-5ws). diffsol's default features are
-# `["nalgebra", "faer"]`; we keep both because diffsol 0.11.0's lib.rs has
-# unconditional `pub use` statements that reference the nalgebra modules even
-# when the nalgebra feature is disabled (so `default-features = false` fails
-# to compile). The simulate module always selects FaerMat / FaerLU at the
-# call site, so we still get the faer code path; nalgebra is just along for
-# the ride at compile time. We exclude the heavyweight optional features
-# (LLVM / Cranelift / DiffSL / CUDA / SuiteSparse / Sundials).
-#
-# Gated to non-wasm targets so the WASM build (which has its own follow-up
-# bead for simulate exposure) does not pull diffsol in.
-#
 # s2bindings (ess-my4.4.11): the spherical geometry kernel behind the
 # `intersect_polygon` leaf op (RFC semiring-faq-unified-ir §8.1, Appendix B.2).
 # FFI over Google's s2geometry C++ engine — the same S2 core Python's `spherely`
 # wraps, giving Rust↔Python tight cross-binding agreement (CONFORMANCE_SPEC.md
 # §5.8). Pinned to a tag for reproducibility. Native-only: the crate compiles
 # vendored abseil + s2geometry from source (CMake superbuild) and cannot build
-# on wasm32, so it is gated alongside diffsol.
+# on wasm32. (diffsol, which used to be gated here alongside it, is now an
+# unconditional `[dependencies]` entry since its Faer backend cross-compiles.)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-diffsol = "0.11"
 s2bindings = { git = "https://github.com/EarthSciML/s2bindings.rs", tag = "v0.1.0" }
-
-[dev-dependencies]
-serde_test = "1.0"
 
 # Native-only dev-dependencies. `criterion` pulls `wait-timeout` (whose `imp`
 # module is unix/windows-only and fails to compile for wasm32), and

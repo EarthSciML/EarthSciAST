@@ -17,6 +17,26 @@
 //! equations (trivial or otherwise), [`apply_dae_contract`] returns
 //! `E_NO_DAE_SUPPORT` — this matches the shared RFC §12 contract all
 //! bindings implement.
+//!
+//! # Relationship to [`crate::simulate`]
+//!
+//! Both this module and `simulate.rs` handle the same class of *trivial
+//! algebraic* equations (`var ~ expr`, `var` absent from `expr`), but by two
+//! independent mechanisms for two different purposes:
+//!
+//! * **`dae.rs` (`discretize()` front-door)** *eliminates* them — it
+//!   symbolically substitutes `var -> expr` into the remaining equations and
+//!   drops the algebraic equation, producing a pure-ODE [`EsmFile`] (and
+//!   rejects any residual, non-trivial algebraic equation with
+//!   `E_NONTRIVIAL_DAE`). This is a document-to-document rewrite.
+//! * **`simulate.rs` (`Compiled` build)** *keeps* them — it topologically
+//!   orders observed / trivially-algebraic states (`resolve_observed` /
+//!   `order_algebraic_states`) and re-evaluates them each step, rather than
+//!   substituting them away.
+//!
+//! So `discretize()` here is not a prerequisite for `simulate()`; each has its
+//! own self-contained handling of trivial-algebraic equations. Keep the two in
+//! sync when the definition of "trivially factorable" changes.
 
 use std::collections::HashMap;
 
@@ -26,7 +46,8 @@ use crate::types::{DaeInfo, Domain, Equation, EsmFile, Expr, Model};
 
 /// Error returned by [`apply_dae_contract`] / [`discretize`] when the
 /// RFC §12 DAE binding contract cannot be satisfied.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error("{code}: {message}")]
 pub struct DaeError {
     /// Normative error code (`E_NO_DAE_SUPPORT` or `E_NONTRIVIAL_DAE`).
     pub code: String,
@@ -34,14 +55,6 @@ pub struct DaeError {
     /// and the binding's disable knob.
     pub message: String,
 }
-
-impl std::fmt::Display for DaeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for DaeError {}
 
 /// Options for [`discretize`]. The §11 pipeline options (max passes,
 /// strict unrewritten) will be added when that pipeline lands; today

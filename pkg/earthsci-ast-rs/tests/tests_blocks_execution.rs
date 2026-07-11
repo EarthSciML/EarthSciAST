@@ -25,10 +25,12 @@
 use earthsci_ast::types::{EsmFile, Metadata};
 use earthsci_ast::{Compiled, SimulateOptions, SolverChoice, Tolerance, load_path};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+mod common;
 
 fn simulation_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/simulation")
+    common::repo_fixture("simulation")
 }
 
 /// Fixtures skipped from numerical execution in the Rust binding. Each entry

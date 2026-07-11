@@ -4,10 +4,16 @@
 //! [`EsmFile`] with multiple coupled components into a single [`FlattenedSystem`]
 //! with dot-namespaced variables and real [`Expr`]-tree equations.
 //!
-//! The Rust implementation targets the **Core tier** only: it supports
-//! `broadcast` and `identity` dimension mappings and raises
-//! [`FlattenError::UnsupportedMapping`] if the source file requires `slice`,
-//! `project`, or `regrid`. Unlowered rewrite-target operators (the sugar ops
+//! The Rust implementation targets the **Core tier** only. It does NOT inspect
+//! `dimension_mapping` declarations at all: there is no `slice` / `project` /
+//! `regrid` handling, and no dimension-promotion graph is built. The
+//! dimension-mapping error variants ([`FlattenError::UnsupportedMapping`],
+//! [`FlattenError::DimensionPromotion`], [`FlattenError::UnmappedDomain`],
+//! [`FlattenError::DomainUnitMismatch`], [`FlattenError::DomainExtentMismatch`])
+//! and [`DimensionPromotionRecord`] are reserved for cross-language parity —
+//! defined so a sibling binding (or a future Rust tier) can raise / populate
+//! them under the same names, but never currently constructed by this crate.
+//! Unlowered rewrite-target operators (the sugar ops
 //! `grad` / `div` / `laplacian` / `curl` / `∇`, or a spatial `D` with
 //! `wrt != "t"`) raise [`FlattenError::UnloweredOperator`] with the uniform
 //! `unlowered_operator` code (esm-spec §4.2 / §9.6.8): they must first be
@@ -50,11 +56,19 @@ pub enum FlattenError {
 
     /// Dimension promotion could not be completed given the available
     /// interface rules (Core tier).
+    ///
+    /// **Reserved / parity-only — never currently raised.** This crate builds
+    /// no dimension-promotion graph, so it never constructs this variant; it is
+    /// defined for cross-language parity with the sibling bindings.
     #[error("Dimension promotion failed: {message}")]
     DimensionPromotion { message: String },
 
     /// Two systems of differing dimensionality were coupled without an
     /// `Interface` naming their dimension mapping.
+    ///
+    /// **Reserved / parity-only — never currently raised.** This crate does not
+    /// compare system dimensionality or resolve Interfaces, so it never
+    /// constructs this variant; defined for cross-language parity.
     #[error(
         "Unmapped domain: systems {systems:?} have different dimensionality but no Interface defines their dimension mapping; candidate target domains: {candidate_targets:?}"
     )]
@@ -63,9 +77,14 @@ pub enum FlattenError {
         candidate_targets: Vec<String>,
     },
 
-    /// A `dimension_mapping` type or spatial operator that is not supported
-    /// at the current (Rust Core) tier was encountered. The specific type
-    /// name is included — e.g. `"slice"`, `"project"`, `"regrid"`, `"grad"`.
+    /// The channel for a `dimension_mapping` type unsupported at the current
+    /// (Rust Core) tier — e.g. `"slice"`, `"project"`, `"regrid"`.
+    ///
+    /// **Reserved / parity-only — never currently raised.** This crate never
+    /// inspects `dimension_mapping` declarations, so it does not construct this
+    /// variant; it exists so a sibling binding (or a future Rust tier) reports
+    /// the same failure under the same name. Unlowered spatial operators are
+    /// rejected separately via [`FlattenError::UnloweredOperator`], not here.
     #[error(
         "Unsupported mapping type '{mapping_type}' at Rust Core tier (supported: broadcast, identity). Reason: {reason}"
     )]
@@ -90,6 +109,9 @@ pub enum FlattenError {
     UnloweredOperator { op: String },
 
     /// Incompatible units across a shared independent variable.
+    ///
+    /// **Reserved / parity-only — never currently raised.** This crate performs
+    /// no domain unit checking; defined for cross-language parity.
     #[error(
         "Domain unit mismatch on independent variable '{variable}': source units '{source_units}' vs target units '{target_units}'"
     )]
@@ -101,6 +123,9 @@ pub enum FlattenError {
 
     /// Coordinate extent mismatch on a shared independent variable under the
     /// `identity` mapping.
+    ///
+    /// **Reserved / parity-only — never currently raised.** This crate performs
+    /// no coordinate-extent checking; defined for cross-language parity.
     #[error("Domain extent mismatch on independent variable '{variable}' under identity mapping")]
     DomainExtentMismatch { variable: String },
 
@@ -147,6 +172,39 @@ pub enum FlattenError {
     #[error("{0}")]
     CouplingImport(#[from] crate::diagnostic::DiagnosticError),
 
+    /// A `couple` connector equation carried an `lhs`/`rhs` that was absent or
+    /// failed to deserialize as an [`Expr`] (esm-spec §4.7.2). Rather than
+    /// silently dropping the malformed equation, flattening reports it so the
+    /// coupling is not quietly degraded.
+    #[error(
+        "Malformed connector equation in couple({systems}): '{side}' is absent or did not deserialize as an expression"
+    )]
+    MalformedConnectorEquation { systems: String, side: String },
+
+    /// The pointwise spatial lift (esm-spec §10.5) could not determine the grid
+    /// loop variables for a lifted species from its operator `makearray`
+    /// interior stencil, so the merged reaction/operator ODE could not be
+    /// array-ified onto the operator grid.
+    #[error(
+        "Pointwise lift failed for species '{species}': could not determine the spatial loop variables from its operator makearray"
+    )]
+    PointwiseLiftFailed { species: String },
+
+    /// A model subsystem that structurally declares itself a [`DataLoader`] —
+    /// it carries the discriminating `kind` / `source` keys — failed to
+    /// deserialize as one. Distinguished from a nested model or a
+    /// `{ "ref": … }` reference, which are legitimately not loaders and are
+    /// left for the array runtime (esm-spec §4.6; RFC `pure-io-data-loaders`
+    /// §4.3).
+    #[error(
+        "Malformed data-loader subsystem '{subsystem}' in model '{system}': carries loader keys but did not deserialize as a DataLoader: {reason}"
+    )]
+    MalformedLoaderSubsystem {
+        system: String,
+        subsystem: String,
+        reason: String,
+    },
+
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
     Empty,
@@ -158,18 +216,19 @@ pub enum FlattenError {
 
 /// Record of a dimension promotion applied during flattening.
 ///
-/// Populated in [`FlattenMetadata::dimension_promotions_applied`] whenever a
-/// `broadcast` or `identity` mapping rewrites a variable onto a different
-/// spatial domain. Rust Core tier currently only populates this for
-/// `broadcast` (identity is a no-op) and only if the source file defines
-/// matching spatial domains — rarely populated at Rust's Core flatten tier.
+/// **Reserved / parity-only — never currently populated.** [`flatten`] always
+/// emits an empty [`FlattenMetadata::dimension_promotions_applied`]: this crate
+/// inspects no `dimension_mapping` declarations and rewrites no variable onto a
+/// different spatial domain. The struct is defined so the metadata shape matches
+/// the sibling bindings (which may populate it) and so a future Rust tier can
+/// fill it without a wire-format change.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DimensionPromotionRecord {
     pub variable: String,
     pub source_domain: String,
     pub target_domain: String,
-    /// `"broadcast"` | `"identity"` — slice/project/regrid raise
-    /// [`FlattenError::UnsupportedMapping`] instead of being recorded here.
+    /// `"broadcast"` | `"identity"` (parity value set). Never recorded in
+    /// practice — see the struct-level note.
     pub mapping_type: String,
 }
 
@@ -180,8 +239,8 @@ pub struct FlattenMetadata {
     pub source_systems: Vec<String>,
     /// Human-readable descriptions of the coupling rules applied, in order.
     pub coupling_rules_applied: Vec<String>,
-    /// Every dimension promotion applied during flattening (Core tier:
-    /// broadcast and identity).
+    /// Every dimension promotion applied during flattening. Always empty at the
+    /// Rust Core tier — see [`DimensionPromotionRecord`] (reserved / parity-only).
     pub dimension_promotions_applied: Vec<DimensionPromotionRecord>,
     /// Whether the pipeline had to synthesize an implicit Interface because
     /// the source file didn't declare one. Always `false` at Rust Core tier.
@@ -257,8 +316,9 @@ pub struct FlattenedSystem {
 ///
 /// 1. Lower every reaction system to ODE equations ([`crate::reactions::lower_reactions_to_equations`]).
 /// 2. Namespace every variable, parameter, and equation by dot-notation.
-/// 3. Reject spatial operators and unsupported dimension mappings
-///    ([`FlattenError::UnsupportedMapping`]).
+/// 3. Reject unlowered spatial / rewrite-target operators
+///    ([`FlattenError::UnloweredOperator`]). No `dimension_mapping` inspection
+///    is performed — `slice` / `project` / `regrid` are not checked at this tier.
 /// 4. Apply coupling rules in order: `operator_compose`, `couple`,
 ///    `variable_map` (see §4.7.1–§4.7.4).
 /// 5. Detect [`FlattenError::ConflictingDerivative`] — species that end up
@@ -732,26 +792,43 @@ struct SystemBlock {
 /// Returns `(observeds, subsys_keys)`. `subsys_keys` is the set of loader
 /// subsystem names whose bare dotted references (`raw.k`) must be
 /// model-namespaced (`Box.raw.k`) by [`namespace_expr_with_subsys`]. A nested
-/// MODEL subsystem — one that does not parse as a [`DataLoader`] — is left
+/// MODEL subsystem — one that structurally is not a [`DataLoader`] (it carries
+/// none of the discriminating `kind` / `source` loader keys) — is left
 /// untouched here (and out of `subsys_keys`); the array runtime mounts those via
-/// its own `mount_subsystems`. Byte-identical (empty result) for a model with no
+/// its own `mount_subsystems`. A subsystem that DOES declare itself a loader
+/// (carries `kind`/`source`) but fails to deserialize is surfaced as
+/// [`FlattenError::MalformedLoaderSubsystem`] rather than being silently
+/// misread as a nested model. Byte-identical (empty result) for a model with no
 /// subsystems.
 fn lower_loader_subsystems(
     system_name: &str,
     model: &Model,
-) -> (IndexMap<String, ModelVariable>, HashSet<String>) {
+) -> Result<(IndexMap<String, ModelVariable>, HashSet<String>), FlattenError> {
     let mut observeds = IndexMap::new();
     let mut keys = HashSet::new();
     let Some(subs) = &model.subsystems else {
-        return (observeds, keys);
+        return Ok((observeds, keys));
     };
     let mut sub_names: Vec<&String> = subs.keys().collect();
     sub_names.sort();
     for sub_name in sub_names {
-        // A DataLoader subsystem round-trips through `DataLoader`; anything else
-        // (a nested model, a `{ "ref": … }`) does not and is skipped.
-        let Ok(loader) = serde_json::from_value::<DataLoader>(subs[sub_name].clone()) else {
-            continue;
+        // A DataLoader subsystem round-trips through `DataLoader`; a nested
+        // model or a `{ "ref": … }` does not. Distinguish a deserialize failure
+        // on something that DECLARES itself a loader (discriminating `kind` /
+        // `source` keys) — a real error — from a subsystem that structurally
+        // isn't one, which is legitimately skipped here.
+        let loader = match serde_json::from_value::<DataLoader>(subs[sub_name].clone()) {
+            Ok(loader) => loader,
+            Err(err) => {
+                if declares_data_loader(&subs[sub_name]) {
+                    return Err(FlattenError::MalformedLoaderSubsystem {
+                        system: system_name.to_string(),
+                        subsystem: sub_name.clone(),
+                        reason: err.to_string(),
+                    });
+                }
+                continue;
+            }
         };
         keys.insert(sub_name.clone());
         let mut var_names: Vec<&String> = loader.variables.keys().collect();
@@ -777,7 +854,16 @@ fn lower_loader_subsystems(
             );
         }
     }
-    (observeds, keys)
+    Ok((observeds, keys))
+}
+
+/// Heuristic: a subsystem JSON value "declares itself" a [`DataLoader`] when it
+/// carries a discriminating loader key (`kind` or `source`) — both required by
+/// the loader schema and absent from a nested model or a `{ "ref": … }`
+/// reference. Used to tell an invalid-fields loader apart from a subsystem that
+/// is legitimately not a loader.
+fn declares_data_loader(value: &serde_json::Value) -> bool {
+    value.get("kind").is_some() || value.get("source").is_some()
 }
 
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
@@ -791,7 +877,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // bare references (`raw.k`) must be model-namespaced (`Box.raw.k`), which the
     // generic `namespace_expr` — treating any dotted reference as
     // already-namespaced — would otherwise leave untouched.
-    let (loader_observeds, subsys_keys) = lower_loader_subsystems(system_name, model);
+    let (loader_observeds, subsys_keys) = lower_loader_subsystems(system_name, model)?;
 
     let mut var_names: Vec<&String> = model.variables.keys().collect();
     var_names.sort();
@@ -1200,7 +1286,7 @@ fn apply_coupling_entry(
             connector,
             description,
         } => {
-            apply_couple(systems, connector, per_system);
+            apply_couple(systems, connector, per_system)?;
             coupling_rules_applied.push(
                 description
                     .clone()
@@ -1232,7 +1318,7 @@ fn apply_coupling_entry(
                             to: to.clone(),
                         });
                     }
-                    if !node.any_child(&mut |e| expr_references_variable(e, from)) {
+                    if !node.any_child(&mut |e| crate::expression::contains(e, from)) {
                         return Err(FlattenError::VariableMapExpressionMissingFrom {
                             from: from.clone(),
                             to: to.clone(),
@@ -1365,24 +1451,16 @@ fn apply_couple(
     systems: &[String],
     connector: &serde_json::Value,
     per_system: &mut Vec<SystemBlock>,
-) {
+) -> Result<(), FlattenError> {
     let Some(eqs_json) = connector.get("equations").and_then(|e| e.as_array()) else {
-        return;
+        return Ok(());
     };
     let block_name = format!("couple({})", systems.join(","));
     let mut new_equations = Vec::new();
     for eq_val in eqs_json {
-        let lhs = eq_val
-            .get("lhs")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Expr>(v).ok());
-        let rhs = eq_val
-            .get("rhs")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Expr>(v).ok());
-        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-            new_equations.push(Equation { lhs, rhs });
-        }
+        let lhs = parse_connector_side(eq_val, "lhs", systems)?;
+        let rhs = parse_connector_side(eq_val, "rhs", systems)?;
+        new_equations.push(Equation { lhs, rhs });
     }
     if !new_equations.is_empty() {
         per_system.push(SystemBlock {
@@ -1396,6 +1474,25 @@ fn apply_couple(
             discrete_events: Vec::new(),
         });
     }
+    Ok(())
+}
+
+/// Deserialize one side (`lhs` / `rhs`) of a `couple` connector equation as an
+/// [`Expr`]. An absent side or a value that does not parse is a
+/// [`FlattenError::MalformedConnectorEquation`] rather than a silent drop.
+fn parse_connector_side(
+    eq_val: &serde_json::Value,
+    side: &str,
+    systems: &[String],
+) -> Result<Expr, FlattenError> {
+    eq_val
+        .get(side)
+        .cloned()
+        .and_then(|v| serde_json::from_value::<Expr>(v).ok())
+        .ok_or_else(|| FlattenError::MalformedConnectorEquation {
+            systems: systems.join(","),
+            side: side.to_string(),
+        })
 }
 
 /// Apply a NAMED-transform `variable_map` rule by substituting `from` for
@@ -1423,10 +1520,17 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
         }),
         _ => Expr::Variable(from.to_string()),
     };
+    // One single-target substitution map, reused across equations, observeds,
+    // AND events through the canonical `crate::substitute` traversal (which
+    // preserves every array-node metadata field via `map_children`). Hand-rolled
+    // walkers previously drifted — the local `substitute_var` covered equations
+    // and observeds but not events, so an event condition / affect RHS
+    // referencing the removed `to` parameter kept a dangling reference.
+    let subs: HashMap<String, Expr> = std::iter::once((to.to_string(), replacement)).collect();
     for block in per_system.iter_mut() {
         for eq in &mut block.equations {
-            eq.lhs = substitute_var(&eq.lhs, to, &replacement);
-            eq.rhs = substitute_var(&eq.rhs, to, &replacement);
+            eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
+            eq.rhs = crate::substitute::substitute(&eq.rhs, &subs);
         }
         // A `variable_map` also removes the mapped parameter from the system, so
         // it must reach OBSERVED-variable expressions too — otherwise an observed
@@ -1436,47 +1540,20 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
         // evaluates to NaN. Mirrors the equation rewrite above.
         for var in block.observed_vars.values_mut() {
             if let Some(expr) = &var.expression {
-                var.expression = Some(substitute_var(expr, to, &replacement));
+                var.expression = Some(crate::substitute::substitute(expr, &subs));
             }
         }
-    }
-}
-
-/// Substitute every occurrence of the variable named `target` with the
-/// expression `replacement` in `expr`.
-///
-/// Array nodes (`makearray`/`arrayop`/`aggregate`/`integral`/…) carry their
-/// value/body sub-expressions in out-of-band fields (`values`, `expr`, `filter`,
-/// `lower`, `upper`, `axes`) plus structural metadata (`regions`, `output_idx`,
-/// `ranges`, …). [`ExpressionNode::map_children`] preserves every field by
-/// cloning first, then recursively substitutes the expression-bearing ones —
-/// otherwise a `variable_map` binding could not reach a loaded inflow field
-/// referenced inside a `makearray`'s `values` (the boundary stencil), and a
-/// `..Default::default()` rebuild would silently drop `regions`/`values` and
-/// corrupt the discretized operator.
-fn substitute_var(expr: &Expr, target: &str, replacement: &Expr) -> Expr {
-    match expr {
-        Expr::Number(n) => Expr::Number(*n),
-        Expr::Integer(n) => Expr::Integer(*n),
-        Expr::Variable(name) if name == target => replacement.clone(),
-        Expr::Variable(name) => Expr::Variable(name.clone()),
-        Expr::Operator(node) => {
-            Expr::Operator(node.map_children(&mut |a| substitute_var(a, target, replacement)))
+        // ...and event conditions / affect RHS (continuous + discrete), for the
+        // same reason: an event whose condition or affect referenced the removed
+        // `to` parameter would otherwise keep a dangling reference. The event
+        // helpers rewrite conditions, affect RHS, affect_neg RHS, and the trigger
+        // expression, leaving affect LHS (a bare variable name) untouched.
+        for ev in &mut block.continuous_events {
+            *ev = crate::substitute::substitute_in_continuous_event(ev, &subs);
         }
-    }
-}
-
-/// Does `expr` reference the variable `name` anywhere — including inside
-/// aggregate/arrayop bodies (`expr`), `filter` predicates, integral bounds
-/// (`lower`/`upper`), makearray `values`, and `table_lookup` axes? The
-/// traversal is [`ExpressionNode::any_child`], the same field set walked by
-/// [`substitute_var`]. Used to enforce the esm-spec §10.4 contract that a
-/// `variable_map` expression transform references its `from` variable.
-fn expr_references_variable(expr: &Expr, name: &str) -> bool {
-    match expr {
-        Expr::Number(_) | Expr::Integer(_) => false,
-        Expr::Variable(v) => v == name,
-        Expr::Operator(node) => node.any_child(&mut |e| expr_references_variable(e, name)),
+        for ev in &mut block.discrete_events {
+            *ev = crate::substitute::substitute_in_discrete_event(ev, &subs);
+        }
     }
 }
 
@@ -1748,11 +1825,8 @@ fn apply_pointwise_lift(
                 break;
             }
         }
-        let loops = loops.ok_or_else(|| FlattenError::UnsupportedMapping {
-            mapping_type: "pointwise".to_string(),
-            reason: format!(
-                "could not determine the spatial loop variables for species '{species}' from its operator makearray"
-            ),
+        let loops = loops.ok_or_else(|| FlattenError::PointwiseLiftFailed {
+            species: species.clone(),
         })?;
 
         let extents = makearray_extents(first_ma);

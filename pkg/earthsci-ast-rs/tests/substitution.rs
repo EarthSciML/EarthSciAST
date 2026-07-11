@@ -1,3 +1,4 @@
+#![allow(deprecated)] // exercises the deprecated `substitute_in_expression` alias on purpose
 //! Substitution tests matching fixtures
 //!
 //! Tests the variable and expression substitution functionality.

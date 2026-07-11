@@ -256,6 +256,21 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
             &mut ops,
         )?
     };
+    // A top-level array *View* means the body reduced to a bare whole-array
+    // variable read (`out[i] = w`, an `ifelse`/`broadcast` returning a bare array
+    // operand, …): every mapped `index(...)`, arithmetic, or `makearray` construct
+    // yields an `Owned` buffer or a `Scalar`, so only a bare variable reaches here
+    // as a `View`. The per-cell oracle scalarizes the pure-map body via
+    // `eval(body, ctx).as_scalar()`, which is `NaN` for an array (eval.rs
+    // `reduce_contraction`), so returning the whole array here would DIVERGE from
+    // the oracle. Bail to the per-cell oracle — the correctness reference — which
+    // rejects such a body uniformly (esm audit #3). The `contract_names`-empty
+    // fold never produces a `View` (its accumulator is always `Owned`), so this
+    // only fires on the pure-map path it targets.
+    if matches!(v, VecValue::View { .. }) {
+        v.release(pool);
+        return None;
+    }
     // The top-level result must already cover the output box exactly. A bare
     // scalar is broadcast over the box.
     let matches_box = match v.shape() {
@@ -554,9 +569,9 @@ pub(super) fn eval_vec_op<'a>(
         },
         // Scalar comparisons and `ifelse` over *scalar* operands — the einsum
         // weight idiom `ifelse(k==0,-2,1)` folds to a constant per contraction
-        // tuple. Bit-identical to the oracle's `eval_op` (same `==`-via-abs and
-        // `c != 0.0` branch test). An *array* operand (a per-cell-varying
-        // condition) is not on the fast path and bails to the oracle.
+        // tuple. Bit-identical to the oracle's `eval_op` (same exact-equality
+        // `scalar_compare` and `c != 0.0` branch test). An *array* operand (a
+        // per-cell-varying condition) is not on the fast path and bails to the oracle.
         "==" | "!=" | "<" | "<=" | ">" | ">=" => {
             if node.args.len() != 2 {
                 return None;
@@ -598,13 +613,14 @@ pub(super) fn eval_vec_op<'a>(
                 }
             }
         }
-        // Unary transcendentals / rounding over the whole box — bit-identical to
-        // the oracle's `eval_unary` (same `apply_unary` kernel). Keeping these on
-        // the fast path is what lets a level-set / upwind stencil whose speed uses
-        // `sqrt`/`abs` (Godunov `|∇φ|`) avoid scalarizing.
+        // Unary transcendentals / rounding + the logical `not` over the whole box
+        // — bit-identical to the oracle's `eval_unary` (same `apply_unary` kernel,
+        // which handles `not`). Keeping these on the fast path is what lets a
+        // level-set / upwind stencil whose speed uses `sqrt`/`abs` (Godunov
+        // `|∇φ|`) — or a mask that negates a per-cell predicate — avoid scalarizing.
         "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
         | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-        | "acosh" | "atanh" => {
+        | "acosh" | "atanh" | "not" => {
             if node.args.len() != 1 {
                 return None;
             }
@@ -634,13 +650,16 @@ pub(super) fn eval_vec_op<'a>(
 }
 
 
-/// Scalar comparison, bit-identical to the oracle's `eval_op` arm: `==`/`!=`
-/// test exact equality via `(a-b).abs()`, the orderings use the native `f64`
-/// relops; result is `1.0` (true) / `0.0` (false).
+/// The shared scalar-comparison kernel: the per-cell oracle (`apply_binary`,
+/// eval.rs) and this vectorized overlay both route through it, so the two paths
+/// are bit-identical by construction. `==`/`!=` test EXACT equality with the
+/// native `f64` relops (`a == b` / `a != b`) — the pinned cross-binding semantic
+/// (Python `np.equal` / `np.not_equal`), including `inf == inf ⇒ true`. The
+/// orderings use the native relops too. Result is `1.0` (true) / `0.0` (false).
 pub(super) fn scalar_compare(op: &str, a: f64, b: f64) -> f64 {
     let t = match op {
-        "==" => (a - b).abs() == 0.0,
-        "!=" => (a - b).abs() != 0.0,
+        "==" => a == b,
+        "!=" => a != b,
         "<" => a < b,
         "<=" => a <= b,
         ">" => a > b,

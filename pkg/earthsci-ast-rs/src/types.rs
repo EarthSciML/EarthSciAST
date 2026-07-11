@@ -258,7 +258,6 @@ pub enum Expr {
     Operator(ExpressionNode),
 }
 
-/// Expression node representing an operator with operands
 /// A single `arrayop`/`aggregate` index range (RFC semiring-faq-unified-ir
 /// §5.2). Either a dense inclusive integer interval `[lo, hi]` (the original,
 /// and still the most common form) or a reference to a declared index set.
@@ -361,6 +360,7 @@ pub struct JoinClause {
     pub on: Vec<[String; 2]>,
 }
 
+/// Expression node representing an operator with operands.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExpressionNode {
     /// Operator name (e.g., "+", "-", "*", "/", "sin", "cos", etc.)
@@ -544,21 +544,42 @@ pub struct ExpressionNode {
     pub key: Option<Box<Expr>>,
 }
 
+/// The JSON keys of every child-`Expr`-bearing [`ExpressionNode`] field,
+/// partitioned by wire shape. This is the serde_json mirror of the typed
+/// field set visited by [`ExpressionNode::for_each_child`]; the pre-lowering
+/// walker in [`crate::parse`] iterates these so the raw-JSON and typed
+/// traversals cannot drift (a hand-rolled walker that missed one of these is
+/// exactly the class of bug `for_each_child` was introduced to prevent). Keep
+/// them in lockstep with `for_each_child`: if you add a child-bearing field,
+/// add its JSON key here AND visit it in the `for_each_child` family.
+///
+/// Single-child slots (`Option<Box<Expr>>`).
+pub(crate) const EXPR_SCALAR_CHILD_KEYS: [&str; 5] = ["lower", "upper", "expr", "filter", "key"];
+/// Array-of-children slots (`Vec<Expr>` / `Option<Vec<Expr>>`).
+pub(crate) const EXPR_ARRAY_CHILD_KEYS: [&str; 2] = ["args", "values"];
+/// Name→child-`Expr` map slots (`Option<HashMap<String, Expr>>`), visited in
+/// sorted-key order.
+pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 2] = ["axes", "bindings"];
+
 impl ExpressionNode {
     /// Visit every expression-bearing child of this node, in deterministic
-    /// order: `args` first, then the sidecar expression fields in struct
-    /// declaration order (`lower`, `upper`, `expr`, `filter`, `values`), then
-    /// `axes` entries sorted by axis name.
+    /// order: `args` first, then the single-child sidecar fields `lower`,
+    /// `upper`, `expr`, `filter`, then `values`, then `axes` entries sorted by
+    /// axis name, then `key`, then `bindings` entries sorted by key.
     ///
     /// This is the ONE canonical definition of which fields carry child
     /// `Expr`s. Every AST traversal in this crate must go through this (or
     /// [`Self::map_children`] / [`Self::any_child`]) rather than enumerating
     /// fields by hand — hand-rolled walkers have historically each covered a
     /// different subset and missed variables hidden in aggregate bodies,
-    /// `filter` predicates, integral bounds, or `table_lookup` axes.
+    /// `filter` predicates, integral bounds, `table_lookup` axes, aggregate
+    /// `key`s, or template `bindings`. The raw-JSON counterpart of this field
+    /// set lives in the crate-internal `EXPR_SCALAR_CHILD_KEYS` /
+    /// `EXPR_ARRAY_CHILD_KEYS` / `EXPR_MAP_CHILD_KEYS` constants; keep the two
+    /// in sync.
     ///
-    /// Note: this enumerates children only. `output_idx`, `ranges`, and
-    /// `int_var` *bind* index symbols for the node's body; callers that
+    /// Note: this enumerates children only. `output_idx`, `ranges`, `int_var`
+    /// (and `arg`) *bind* index symbols for the node's body; callers that
     /// resolve variable names decide how to treat bound symbols.
     pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Expr)) {
         for a in &self.args {
@@ -1705,18 +1726,6 @@ pub struct CouplingRole {
     /// Human-readable description of the role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-}
-
-/// Variable mapping between systems
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VariableMapping {
-    /// Source variable name
-    pub source_var: String,
-    /// Target variable name
-    pub target_var: String,
-    /// Optional scaling factor
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factor: Option<f64>,
 }
 
 /// Spatial/temporal domain specification

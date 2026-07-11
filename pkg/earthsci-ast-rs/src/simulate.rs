@@ -857,7 +857,17 @@ fn resolve_observed(
         .iter()
         .enumerate()
         .map(|(i, raw)| {
-            let expr = raw.as_ref().unwrap_or(&Expr::Number(0.0));
+            // An observed variable with no defining expression (no equation and no
+            // `variable.expression`) is undefined. Fail the build naming it, rather
+            // than silently substituting the constant 0.0 — which turned a modelling
+            // mistake into a plausible-looking zero trajectory.
+            let expr = raw.as_ref().ok_or_else(|| CompileError::InterpreterBuildError {
+                details: format!(
+                    "Observed variable '{}' has no defining expression (no \
+                     equation and no `expression` field); cannot simulate.",
+                    observed_names[i]
+                ),
+            })?;
             resolve_expr(expr, state_index, param_index, &observed_index, Some(i))
         })
         .collect::<Result<_, _>>()?;
@@ -1066,6 +1076,33 @@ where
     Ok((times, state_rows))
 }
 
+/// Whether `file` must route to the array/spatial runtime
+/// ([`crate::simulate_array`]) rather than the scalar ODE interpreter: it has
+/// array-op nodes or spatial model structure. The three public entry points
+/// ([`simulate`], [`simulate_with_inspection`], [`simulate_with_providers_inspect`])
+/// share this predicate so their routing cannot drift apart.
+fn is_array_file(file: &EsmFile) -> bool {
+    crate::simulate_array::file_has_array_ops(file)
+        || crate::simulate_array::file_has_spatial_model(file)
+}
+
+/// Build the array/spatial runtime for `file`. A coupled (multi-model) file has
+/// no single raw `Model` for `ArrayCompiled::from_file` to consume — it rejects
+/// `models.len() != 1` — so flatten the coupling into one namespaced system first
+/// and build from that (ess-14f.8). The single-model path is byte-identical to
+/// the original `from_file` call. Shared by all three public entry points.
+fn build_array_compiled(
+    file: &EsmFile,
+) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
+    let model_count = file.models.as_ref().map_or(0, |m| m.len());
+    if model_count > 1 {
+        let flat = flatten(file).map_err(CompileError::from)?;
+        Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
+    } else {
+        Ok(crate::simulate_array::ArrayCompiled::from_file(file)?)
+    }
+}
+
 /// One-shot convenience: flatten -> compile -> simulate.
 ///
 /// Dispatches to the array-op interpreter ([`crate::simulate_array`]) when
@@ -1097,21 +1134,8 @@ pub fn simulate(
     // spherical/geodesic geometry op degrades to a runtime `GeometryError` via
     // the `crate::geometry` wasm stub rather than a compile failure. Pure-ODE
     // files still fall through to the scalar path below.
-    if crate::simulate_array::file_has_array_ops(file)
-        || crate::simulate_array::file_has_spatial_model(file)
-    {
-        // A coupled (multi-model) file has no single raw `Model` for the array
-        // runtime to consume — `ArrayCompiled::from_file` rejects `models.len()
-        // != 1`. Flatten the coupling into one namespaced system first, then
-        // build the array runtime from that flatten output (ess-14f.8). The
-        // single-model array path is left byte-identical (`from_file`).
-        let model_count = file.models.as_ref().map_or(0, |m| m.len());
-        let compiled = if model_count > 1 {
-            let flat = flatten(file).map_err(CompileError::from)?;
-            crate::simulate_array::ArrayCompiled::from_flattened(&flat)?
-        } else {
-            crate::simulate_array::ArrayCompiled::from_file(file)?
-        };
+    if is_array_file(file) {
+        let compiled = build_array_compiled(file)?;
         return compiled.simulate(tspan, params, initial_conditions, opts);
     }
     let compiled = Compiled::from_file(file)?;
@@ -1137,16 +1161,8 @@ pub fn simulate_with_inspection(
     opts: &SimulateOptions,
     inspect: &mut crate::simulate_array::BuildInspection,
 ) -> Result<Solution, SimulateError> {
-    if crate::simulate_array::file_has_array_ops(file)
-        || crate::simulate_array::file_has_spatial_model(file)
-    {
-        let model_count = file.models.as_ref().map_or(0, |m| m.len());
-        let compiled = if model_count > 1 {
-            let flat = flatten(file).map_err(CompileError::from)?;
-            crate::simulate_array::ArrayCompiled::from_flattened(&flat)?
-        } else {
-            crate::simulate_array::ArrayCompiled::from_file(file)?
-        };
+    if is_array_file(file) {
+        let compiled = build_array_compiled(file)?;
         return compiled.simulate_inspect(tspan, params, initial_conditions, opts, Some(inspect));
     }
     let compiled = Compiled::from_file(file)?;
@@ -1183,9 +1199,7 @@ pub fn simulate_with_providers_inspect(
     providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
     inspect: Option<&mut crate::simulate_array::BuildInspection>,
 ) -> Result<Solution, SimulateError> {
-    if !(crate::simulate_array::file_has_array_ops(file)
-        || crate::simulate_array::file_has_spatial_model(file))
-    {
+    if !is_array_file(file) {
         // Providers feed loader fields, which only exist on the array/spatial
         // runtime; a pure-scalar file has nowhere to put them.
         if let Some((name, _)) = providers.iter().next() {
@@ -1199,13 +1213,7 @@ pub fn simulate_with_providers_inspect(
         return compiled.simulate(tspan, params, initial_conditions, opts);
     }
 
-    let model_count = file.models.as_ref().map_or(0, |m| m.len());
-    let compiled = if model_count > 1 {
-        let flat = flatten(file).map_err(CompileError::from)?;
-        crate::simulate_array::ArrayCompiled::from_flattened(&flat)?
-    } else {
-        crate::simulate_array::ArrayCompiled::from_file(file)?
-    };
+    let compiled = build_array_compiled(file)?;
 
     // Provider management via the ONE RefreshExecutor (the same executor the
     // model-declared `data_loaders` seam uses): classify each provider by cadence,
@@ -1813,20 +1821,13 @@ fn eval_op(
         ">" => f64::from(v(0) > v(1)),
         "<=" => f64::from(v(0) <= v(1)),
         ">=" => f64::from(v(0) >= v(1)),
-        "==" => {
-            if (v(0) - v(1)).abs() < f64::EPSILON {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        "!=" => {
-            if (v(0) - v(1)).abs() >= f64::EPSILON {
-                1.0
-            } else {
-                0.0
-            }
-        }
+        // Exact equality (esm-spec §4.2). The pinned cross-binding semantic is
+        // `a == b` — Python `np.equal` / `np.not_equal` and the array runtime's
+        // shared `scalar_compare` kernel (simulate_array). The former absolute
+        // `EPSILON` tolerance here diverged from every sibling (loose near 0,
+        // exact for operands ≥ 2), so use the native relop and agree with them.
+        "==" => f64::from(v(0) == v(1)),
+        "!=" => f64::from(v(0) != v(1)),
 
         // logical
         "and" => {

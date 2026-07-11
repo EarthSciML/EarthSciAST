@@ -179,9 +179,13 @@ pub use value_invention::{
 pub use edit::{
     EditError, add_coupling, add_equation, add_model, add_reaction, add_reaction_system,
     add_species, add_variable, remove_coupling, remove_equation, remove_model, remove_reaction,
-    remove_species, remove_variable, replace_coupling, replace_equation, substitute_in_expression,
-    update_model_metadata,
+    remove_species, remove_variable, replace_coupling, replace_equation, update_model_metadata,
 };
+// Deprecated alias kept for backward compatibility; delegates to
+// `substitute::substitute`. Re-exported behind `allow(deprecated)` so the
+// re-export itself does not warn.
+#[allow(deprecated)]
+pub use edit::substitute_in_expression;
 pub use error::EsmError;
 pub use lower_enums::{EnumLoweringError, lower_enums};
 pub use migration::{MigrationError, can_migrate, get_supported_migration_targets, migrate};
