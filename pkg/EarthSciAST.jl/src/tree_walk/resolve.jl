@@ -145,77 +145,34 @@ function _resolve_index_set_ranges(eqs::Vector{Equation}, index_sets::AbstractDi
     return Equation[_resolve_isr(eq, index_sets, derived_extents, factor_scope) for eq in eqs]
 end
 
-# Resolve index(arrayop(...), k1, k2, ...) in expression position by
-# substituting the output_idx values and unrolling contracted indices at
-# build time. Mirrors the LHS-arrayop expansion (the `_is_arrayop_D_lhs`
-# branch of `_build_evaluator_impl`'s derivative loop) but produces a scalar
-# Expr instead of writing to rhs_list.
-function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
-                                    array_var_info, var_map, const_arrays,
-                                    pgather::AbstractDict=_EMPTY_PGATHER,
-                                    memo::_MaybeMemo=nothing)
-    output_idx_raw = arrayop_expr.output_idx === nothing ? Any[] : arrayop_expr.output_idx
-    output_idx_strs = [String(s) for s in output_idx_raw if s isa AbstractString]
-    length(output_idx_strs) == length(idx_args) ||
-        throw(TreeWalkError("E_TREEWALK_ARRAYOP_INDEX_NDIM",
-              "arrayop output_idx has $(length(output_idx_strs)) dims " *
-              "but $(length(idx_args)) index args"))
-    body = arrayop_expr.expr_body
-    body === nothing &&
-        throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
-                            "arrayop requires an expr body"))
-    ranges_dict = arrayop_expr.ranges === nothing ? Dict{String,Any}() : arrayop_expr.ranges
-    oplus, zerobar = _aggregate_oplus_identity(arrayop_expr.semiring, arrayop_expr.reduce)
-
-    # Substitute concrete output-index values into body.
-    k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
-    idx_exprs = Dict{String,Expr}(
-        output_idx_strs[d] => IntExpr(Int64(k_vals[d]))
-        for d in 1:length(output_idx_strs))
-    sub_body = _sub_preserving(body, idx_exprs)
-
-    # Contracted indices: all range keys NOT appearing in output_idx.
-    output_idx_set = Set(output_idx_strs)
-    contract_names = sort!(String[n for n in keys(ranges_dict) if !(n in output_idx_set)])
-    # A contracted bound may be *expression-valued*: a RAGGED index-set range
-    # (`{from: <ragged>, of: [i]}`, esm-spec §4.3.1 / RFC §5.2) resolves to the
-    # per-cell dynamic upper bound `index(offsets, i)` whose parent index `i` is
-    # one of THIS gather's (now concrete) output indices. Evaluate such bounds
-    # under the output-index environment via the same `_expand_int_range_dyn`
-    # primitive the LHS-arrayop einsum uses (variable-valence segment reduction
-    # over the CSR offsets keyed factor — a const array; no host-side padding).
-    # Constant bounds keep the unchanged fast path.
-    _out_idx_env = Dict{String,Int}(output_idx_strs[d] => k_vals[d]
-                                    for d in 1:length(output_idx_strs))
-    contract_iters = [collect(_is_const_int_range(ranges_dict[n]) ?
-                              _expand_int_range(ranges_dict[n]) :
-                              _expand_int_range_dyn(ranges_dict[n], _out_idx_env,
-                                                    const_arrays))
-                      for n in contract_names]
-
-    # M2 (§5.3 / §7.2): value-equality join gates + filter predicate. Resolved at
-    # build time for the join (drop non-matching combinations) and compiled to a
-    # runtime `ifelse(pred, term, 0̄)` for the filter. With neither, this is the
-    # unchanged M1 expansion.
-    gates = arrayop_expr.join_gates
-    filt0 = arrayop_expr.filter
-    if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather, memo)
-    end
-
-    terms = Expr[]
-    # Reused across the product: `_sub_preserving`/`_join_admits` only READ these
-    # dicts (never retain them), and the key SET is identical every iteration — only
-    # the values change — so overwriting in place avoids a fresh `Dict` allocation
-    # (and its string hashing) per contracted tuple. `binding` additionally holds the
-    # (fixed) output indices, seeded once here.
+# ---- Shared aggregate/einsum expansion core (one spelling, three sites) --------
+# The three aggregate expansions — the LHS-arrayop einsum
+# (`_compile_arrayop_percell!`), the expression-position gather
+# (`_resolve_index_of_arrayop`), and the scalar reduction
+# (`_resolve_scalar_arrayop`) — all unroll the same product: iterate the
+# Cartesian product of the contracted-index iterators, drop join-rejected
+# combinations at build time (M2, §5.3), substitute the concrete contracted
+# indices into the (already output-index-substituted) `body`, and guard
+# filter-rejected terms with a runtime `ifelse(pred, term, 0̄)` (§7.2). `emit!`
+# receives each surviving term; the caller owns what happens next (resolve to a
+# scalar Expr vs resolve+compile to a `_Node`) and how the terms are ⊕-combined.
+# With neither gates nor filter this is the unchanged M1 expansion.
+#
+# Dict reuse: `_sub_preserving`/`_join_admits` only READ these dicts (never
+# retain them), and the key SET is identical every iteration — only the values
+# change — so `k_exprs` is overwritten in place instead of allocating a fresh
+# `Dict` (and its string hashing) per contracted tuple. `binding` additionally
+# holds the (fixed) output indices, seeded once from `out_env`. `filt` must
+# already carry the output-index substitution (only the contracted indices are
+# substituted here); `nothing` disables the guard, as a `nothing` `gates`
+# disables the join.
+function _foreach_aggregate_term(emit!::F, body::Expr,
+        contract_names::Vector{String}, contract_iters,
+        gates, filt, zerobar::Float64,
+        out_env::Union{Nothing,Dict{String,Int}}=nothing) where {F}
     k_exprs = Dict{String,Expr}()
-    binding = gates === nothing ? nothing : Dict{String,Int}()
-    if binding !== nothing
-        for d in 1:length(output_idx_strs)
-            binding[output_idx_strs[d]] = k_vals[d]
-        end
-    end
+    binding = gates === nothing ? nothing :
+              (out_env === nothing ? Dict{String,Int}() : Dict{String,Int}(out_env))
     for k_tuple in Iterators.product(contract_iters...)
         if binding !== nothing
             for d in 1:length(contract_names)
@@ -226,12 +183,85 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
         for d in 1:length(contract_names)
             k_exprs[contract_names[d]] = IntExpr(Int64(k_tuple[d]))
         end
-        term = _sub_preserving(sub_body, k_exprs)
-        if filt0 !== nothing
-            filt = _sub_preserving(_sub_preserving(filt0, idx_exprs), k_exprs)
-            term = OpExpr("ifelse", Expr[filt, term, NumExpr(zerobar)])
+        term = _sub_preserving(body, k_exprs)
+        if filt !== nothing
+            fsub = _sub_preserving(filt, k_exprs)
+            term = OpExpr("ifelse", Expr[fsub, term, NumExpr(zerobar)])
         end
-        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays, pgather, memo))
+        emit!(term)
+    end
+    return nothing
+end
+
+# Contracted (reduction) index names of an aggregate: the `ranges` keys NOT in
+# `output_idx`, sorted so the expansion (and hence ⊕-accumulation) order is
+# deterministic and identical across the three expansion sites.
+_contracted_index_names(ranges_dict, output_idx) =
+    sort!(String[n for n in keys(ranges_dict) if !(n in output_idx)])
+
+# Expand one contracted-range spec to its concrete iteration vector. A constant
+# `[lo,hi]`/`[lo,step,hi]` bound expands directly; an *expression-valued* bound —
+# a RAGGED index-set range (`{from: <ragged>, of: [i]}`, esm-spec §4.3.1 /
+# RFC §5.2) resolved to the per-cell dynamic upper bound `index(offsets, i)` —
+# is evaluated under the current output-index environment `idx_env` via
+# `_expand_int_range_dyn` (variable-valence segment reduction over the CSR
+# offsets keyed factor — a const array; no host-side padding).
+_expand_contract_range(rspec, idx_env::Dict{String,Int}, const_arrays::AbstractDict) =
+    collect(_is_const_int_range(rspec) ? _expand_int_range(rspec) :
+            _expand_int_range_dyn(rspec, idx_env, const_arrays))
+
+# Resolve index(arrayop(...), k1, k2, ...) in expression position by
+# substituting the output_idx values and unrolling contracted indices at
+# build time. Mirrors the LHS-arrayop expansion (`_compile_arrayop_percell!`,
+# the `_is_arrayop_D_lhs` branch of the derivative loop) but produces a scalar
+# Expr instead of writing to rhs_list.
+function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
+                                    array_var_info, var_map, const_arrays,
+                                    pgather::AbstractDict=_EMPTY_PGATHER,
+                                    memo::_MaybeMemo=nothing)
+    output_idx_strs = _output_idx_strings(arrayop_expr)
+    length(output_idx_strs) == length(idx_args) ||
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_INDEX_NDIM",
+              "arrayop output_idx has $(length(output_idx_strs)) dims " *
+              "but $(length(idx_args)) index args"))
+    body = arrayop_expr.expr_body
+    body === nothing &&
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
+                            "arrayop requires an expr body"))
+    ranges_dict = _ranges_dict(arrayop_expr)
+    oplus, zerobar = _aggregate_oplus_identity(arrayop_expr.semiring, arrayop_expr.reduce)
+
+    # Substitute concrete output-index values into body.
+    k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
+    idx_exprs = Dict{String,Expr}(
+        output_idx_strs[d] => IntExpr(Int64(k_vals[d]))
+        for d in 1:length(output_idx_strs))
+    sub_body = _sub_preserving(body, idx_exprs)
+
+    # Contracted indices: all range keys NOT appearing in output_idx. A
+    # contracted bound may be *expression-valued* — see `_expand_contract_range`;
+    # the parent index of a ragged bound is one of THIS gather's (now concrete)
+    # output indices, so the bounds evaluate under the output-index environment.
+    contract_names = _contracted_index_names(ranges_dict, output_idx_strs)
+    _out_idx_env = Dict{String,Int}(output_idx_strs[d] => k_vals[d]
+                                    for d in 1:length(output_idx_strs))
+    contract_iters = [_expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
+                      for n in contract_names]
+
+    gates = arrayop_expr.join_gates
+    filt0 = arrayop_expr.filter
+    if isempty(contract_names) && gates === nothing && filt0 === nothing
+        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather, memo)
+    end
+
+    # Join/filter expansion via the shared core; the filter carries the (fixed)
+    # output-index substitution already, matching the hoisted `sub_body`.
+    filt = filt0 === nothing ? nothing : _sub_preserving(filt0, idx_exprs)
+    terms = Expr[]
+    _foreach_aggregate_term(sub_body, contract_names, contract_iters,
+                            gates, filt, zerobar, _out_idx_env) do term
+        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
+                                      pgather, memo))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -274,7 +304,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Ex
         re = result_expr::OpExpr
         rank = re.op == "makearray" ?
             ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-            count(s -> s isa AbstractString, re.output_idx)
+            length(_output_idx_strings(re))
         sel = if rank == ndim
             k_vals
         else
@@ -309,48 +339,33 @@ function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, 
     body === nothing &&
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
                             "arrayop requires an expr body"))
-    ranges_dict  = arrayop_expr.ranges === nothing ? Dict{String,Any}() : arrayop_expr.ranges
+    ranges_dict = _ranges_dict(arrayop_expr)
     oplus, zerobar = _aggregate_oplus_identity(arrayop_expr.semiring, arrayop_expr.reduce)
-    contract_names = sort!(String[n for n in keys(ranges_dict)])
+    # Every range key contracts (a scalar aggregate has no output indices).
+    contract_names = _contracted_index_names(ranges_dict, ())
     # A contracted range bound may be a per-cell INDEX EXPRESSION (e.g. the
     # variable-valence unstructured reduction's `index(n_edges_on_cell, i)`).
     # This scalar-arrayop resolver is reached from `_resolve_indices` AFTER the
     # outer loop variable has been substituted to a literal in `body`/`ranges`,
     # so the bound is evaluable now via `_eval_const_int` against `const_arrays`
-    # with an empty idx_env (any surviving symbol would be unbound — an error,
+    # with the empty idx_env (any surviving symbol would be unbound — an error,
     # as before). Constant bounds pass through unchanged (backward compatible).
-    _empty_idx = Dict{String,Int}()
-    contract_iters = [collect(_is_const_int_range(ranges_dict[n]) ?
-                              _expand_int_range(ranges_dict[n]) :
-                              _expand_int_range_dyn(ranges_dict[n], _empty_idx, const_arrays))
+    contract_iters = [_expand_contract_range(ranges_dict[n], _EMPTY_IDX_ENV, const_arrays)
                       for n in contract_names]
     # M2 (§5.3 / §7.2): build-time join gates + runtime filter guard. Every join
     # key of a scalar aggregate is a contracted symbol, so the binding is the
-    # contraction tuple. With neither join nor filter, this is the unchanged M1
-    # scalar expansion.
+    # contraction tuple (no output-index seed). With neither join nor filter,
+    # this is the unchanged M1 scalar expansion.
     gates = arrayop_expr.join_gates
     filt0 = arrayop_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
         return _resolve_indices(body, array_var_info, var_map, const_arrays, pgather, memo)
     end
     terms = Expr[]
-    for k_tuple in Iterators.product(contract_iters...)
-        if gates !== nothing
-            binding = Dict{String,Int}()
-            for d in 1:length(contract_names)
-                binding[contract_names[d]] = k_tuple[d]
-            end
-            _join_admits(gates, binding) || continue
-        end
-        k_exprs = Dict{String,Expr}(
-            contract_names[d] => IntExpr(Int64(k_tuple[d]))
-            for d in 1:length(contract_names))
-        term = _sub_preserving(body, k_exprs)
-        if filt0 !== nothing
-            filt = _sub_preserving(filt0, k_exprs)
-            term = OpExpr("ifelse", Expr[filt, term, NumExpr(zerobar)])
-        end
-        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays, pgather, memo))
+    _foreach_aggregate_term(body, contract_names, contract_iters,
+                            gates, filt0, zerobar) do term
+        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
+                                      pgather, memo))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -625,9 +640,7 @@ function _resolve_indices_op(expr::OpExpr,
     # Non-scalar aggregate (non-empty output_idx) must be wrapped in index() —
     # handled by the _resolve_indices index-of-aggregate branch above.
     if _is_aggregate_op(expr.op)
-        output_idx_raw = expr.output_idx === nothing ? Any[] : expr.output_idx
-        output_idx_strs = [s for s in output_idx_raw if s isa AbstractString]
-        if isempty(output_idx_strs)
+        if isempty(_output_idx_strings(expr))
             return _resolve_scalar_arrayop(expr, array_var_info, var_map, const_arrays, pgather, memo)
         end
         # Non-scalar arrayop without index() — pass through (will become a
@@ -753,11 +766,8 @@ function _scan_lhs_cells!(cells, lhs::Expr, array_var_names::Set{String})
         first_arg.name in array_var_names || return
         vname = first_arg.name
 
-        idx_names = String[]
-        for sym in (lhs.output_idx === nothing ? Any[] : lhs.output_idx)
-            (sym isa String || sym isa AbstractString) && push!(idx_names, String(sym))
-        end
-        ranges_dict = lhs.ranges === nothing ? Dict{String,Any}() : lhs.ranges
+        idx_names = _output_idx_strings(lhs)
+        ranges_dict = _ranges_dict(lhs)
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
 
         if !haskey(cells, vname); cells[vname] = Set{Vector{Int}}(); end
