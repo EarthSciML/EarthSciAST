@@ -400,6 +400,37 @@ Return the numeric value of a literal node, as `Float64`. Throws on non-literals
 literal_value(expr::NumExpr) = expr.value
 literal_value(expr::IntExpr) = Float64(expr.value)
 
+# Int64-representability of an integral Float64 — TWO deliberately different
+# bounds, each pinned by its caller's behavior:
+#
+#  - `_int64_maybe_representable(f)`: `abs(f) <= Float64(typemax(Int64))`.
+#    `Float64(typemax(Int64))` rounds UP to 2^63, so `f == 2^63` passes and the
+#    caller's subsequent `Int64(f)` throws `InexactError` — which `simplify`'s
+#    fold deliberately catches as "decline to fold" (algebraic fallthrough, NOT
+#    a `NumExpr` fold). Tightening the bound would change that path's result.
+#
+#  - `_int64_exactly_representable(f)`: half-open signed range
+#    `Float64(typemin(Int64)) <= f < 2^63` — every passing integral value
+#    converts via `Int64(f)` without error. Used by the canonical `const`-value
+#    emitter (canonicalize.jl), which must never throw on the boundary.
+_int64_maybe_representable(f::Float64)::Bool = abs(f) <= Float64(typemax(Int64))
+_int64_exactly_representable(f::Float64)::Bool =
+    Float64(typemin(Int64)) <= f < Float64(typemax(Int64))
+
+# Exception types `simplify`'s constant-folding step treats as "decline to
+# fold" (fall through to the algebraic rules) rather than a bug:
+#  - `UnboundVariableError` / `TreeWalkError` — a node `evaluate_expr` cannot
+#    compile or evaluate without bindings (e.g. an aggregate whose empty `args`
+#    are vacuously "all literal", or a `table_lookup` with no table registry);
+#  - `DomainError` (`sqrt`/`log` of a negative literal), `DivideError`,
+#    `OverflowError` — literal math outside the reals / machine range;
+#  - `InexactError` — the `Int64(result_value)` boundary case admitted by
+#    `_int64_maybe_representable` (`f == 2^63`).
+_foldable_failure(err) =
+    err isa UnboundVariableError || err isa TreeWalkError ||
+    err isa DomainError || err isa DivideError ||
+    err isa OverflowError || err isa InexactError
+
 function simplify(expr::OpExpr)::Expr
     # Recurse into EVERY sub-expression via the shared field-preserving rewrite,
     # so folding and identity rules also reach aggregate/arrayop bodies, filter
@@ -424,12 +455,15 @@ function simplify(expr::OpExpr)::Expr
             result_value = evaluate_expr(recursed, Dict{String,Float64}())
             all_int = all(arg -> isa(arg, IntExpr), simplified_args)
             if all_int && isfinite(result_value) && result_value == trunc(result_value) &&
-               abs(result_value) <= Float64(typemax(Int64))
+               _int64_maybe_representable(result_value)
                 return IntExpr(Int64(result_value))
             end
             return NumExpr(result_value)
-        catch
-            # If evaluation fails, continue with algebraic simplification
+        catch err
+            # An EXPECTED evaluation failure means "decline to fold" — continue
+            # with algebraic simplification below. Anything else (including
+            # InterruptException) is a real bug/signal and propagates.
+            _foldable_failure(err) || rethrow()
         end
     end
 

@@ -34,9 +34,17 @@ include("validate.jl")
 # set). Pure data, no AST dependency; must precede tree_walk.jl, whose derived
 # consts are computed at include time.
 include("op_registry.jl")
-# Flattening pipeline (reactions → equations, subsystem flattening, shapes)
+# Flattening pipeline (reactions → equations, subsystem flattening, shapes).
+# flatten()'s stages live in sibling files: error taxonomy, namespacing +
+# per-system collection, coupling application, pointwise lift, orchestrator,
+# and the standalone array-shape-inference pass.
 include("reactions.jl")
+include("flatten_errors.jl")
+include("namespacing.jl")
+include("coupling_apply.jl")
+include("pointwise_lift.jl")
 include("flatten.jl")
+include("array_shape_inference.jl")
 include("shape_promotion.jl")
 include("mock_systems.jl")
 # Load-time lowering passes (closed registry, templates, imports) and their

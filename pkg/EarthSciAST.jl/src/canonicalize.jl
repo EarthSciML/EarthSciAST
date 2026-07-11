@@ -21,6 +21,9 @@ field carries a stable error code:
 - `E_CANONICAL_BAD_CONST` — Julia-local: a `const`-op `value` payload of an
   unsupported Julia type reached the canonical emitter (internal misuse, not
   an authoring error).
+- `E_CANONICAL_BAD_NODE` — Julia-local: an `Expr` subtype unknown to the
+  canonical emitter reached `_emit_json` (defensively unreachable for the four
+  concrete node types; internal misuse, not an authoring error).
 """
 struct CanonicalizeError <: Exception
     code::String
@@ -299,7 +302,11 @@ function _emit_json(e::Expr)::String
     elseif e isa OpExpr
         return _emit_node_json(e)
     end
-    error("cannot canonicalize value of type $(typeof(e))")
+    # Defensively unreachable: the four branches above cover every concrete
+    # `Expr` subtype. Typed like the rest of the canonicalizer's failures so a
+    # future node type surfaces as a CanonicalizeError, not an ErrorException.
+    throw(CanonicalizeError("E_CANONICAL_BAD_NODE",
+        "cannot canonicalize value of type $(typeof(e))"))
 end
 
 # OpExpr fields WITH a pinned slot in the cross-binding canonical JSON node
@@ -398,8 +405,7 @@ function _emit_canonical_value(v)::String
         return string(v)
     elseif v isa AbstractFloat
         f = Float64(v)
-        if isfinite(f) && isinteger(f) &&
-           -9.223372036854776e18 <= f < 9.223372036854776e18
+        if isfinite(f) && isinteger(f) && _int64_exactly_representable(f)
             return string(Int64(f))
         end
         return format_canonical_float(f)
