@@ -454,6 +454,13 @@ function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,Abst
     return f
 end
 
+# Relative slack when matching an assertion's `time` against the solver's
+# saved time points: `saveat` hits the requested times only to solver/Float64
+# precision, so accept the nearest saved point within this relative tolerance
+# (scaled by `max(1, |t|)`). 1e-9 sits far above Float64 roundoff accumulation
+# yet far below any two distinct assertion times in practice.
+const _SAVED_TIME_RTOL = 1e-9
+
 # ---------------------------------------------------------------------------
 # Per-assertion evaluation — the §6.6.5 scalar-selection / reduction machinery,
 # split out of `run_pde_tests` so the driver stays a flat loop. Returns the
@@ -464,7 +471,7 @@ function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
                              mname::AbstractString,
                              resolved_base::AbstractString)::Float64
     ti = argmin(abs.(sim.t .- a.time))
-    abs(sim.t[ti] - a.time) <= 1e-9 * max(1.0, abs(a.time)) ||
+    abs(sim.t[ti] - a.time) <= _SAVED_TIME_RTOL * max(1.0, abs(a.time)) ||
         throw(PdeTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
     state = sim.u[ti]
 
@@ -523,6 +530,57 @@ function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
     return field_reduce(a.reduce, field; reference=ref)
 end
 
+# esm-spec §9.7.10 form C: resolve the `(run_file, run_model)` pair test `t`
+# runs against. A test that injects a discretization runs against an EPHEMERAL
+# instance of component `mname` with the test's imports appended to its scope
+# and its rewrite-targets lowered; the persisted `file` is never mutated. A
+# test with no injection runs against the file/model as loaded. Returns the
+# failure message `String` when the ephemeral build could not be built.
+function _resolve_test_target(file::EsmFile, input, mname::AbstractString,
+                              model, t, resolved_base::AbstractString)
+    isempty(t.expression_template_imports) && return (file, model)
+    try
+        src = input isa AbstractString ? String(input) : nothing
+        run_file = _ephemeral_injected_file(file, src, String(mname),
+            t.expression_template_imports, resolved_base)
+        rm = run_file.models === nothing ? nothing :
+            get(run_file.models, String(mname), nothing)
+        rm === nothing && throw(PdeTestError(
+            "component '$(mname)' vanished from the ephemeral build"))
+        return (run_file, rm)
+    catch err
+        return "per-test discretization injection failed: " *
+               "$(sprint(showerror, err))"
+    end
+end
+
+# Run test `t` against `run_file` through the official tree-walk simulation
+# pathway. `simulate` flattens the file (models + coupling) into ONE runnable
+# system named "Flattened", so no model_name is passed here; element names
+# keep their owning-model prefix, which the `_state_cells` / `_scalar_slot`
+# lookups resolve per assertion. Returns the successful
+# [`SimulationResult`](@ref), or the failure message `String` when the
+# build/solve raised or the solver retcode was unsuccessful — one Union return
+# instead of the coupled `sim` / `sim_err` sentinel pair.
+function _simulate_for_test(run_file::EsmFile, t, times::Vector{Float64},
+                            insp::BuildInspection; alg, reltol::Float64,
+                            abstol::Float64)::Union{SimulationResult,String}
+    local sim
+    try
+        sim = simulate(run_file, (t.time_span.start, t.time_span.stop);
+                       alg=alg, reltol=reltol, abstol=abstol, saveat=times,
+                       parameters=t.parameter_overrides,
+                       initial_conditions=t.initial_conditions,
+                       inspect=insp)
+    catch err
+        return "simulate failed: $(sprint(showerror, err))"
+    end
+    if !sim.success
+        return "solver retcode $(sim.retcode): $(sim.message)"
+    end
+    return sim
+end
+
 """
     run_pde_tests(input; model_name=nothing, alg=nothing,
                   reltol=DEFAULT_TEST_RELTOL, abstol=DEFAULT_TEST_ABSTOL,
@@ -572,64 +630,38 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
         isempty(model.tests) && continue
         for t in model.tests
             times = sort!(unique(Float64[a.time for a in t.assertions]))
-            sim = nothing
-            sim_err = ""
-            # esm-spec §9.7.10 form C: a test that injects a discretization runs
-            # against an EPHEMERAL instance of this component with the test's
-            # imports appended to its scope and its rewrite-targets lowered; the
-            # persisted `file` is untouched. A test with no injection runs
-            # against the file as loaded.
-            run_file::Union{EsmFile,Nothing} = file
-            run_model = model
-            if !isempty(t.expression_template_imports)
-                try
-                    src = input isa AbstractString ? String(input) : nothing
-                    run_file = _ephemeral_injected_file(file, src, String(mname),
-                        t.expression_template_imports, resolved_base)
-                    rm = run_file.models === nothing ? nothing :
-                        get(run_file.models, String(mname), nothing)
-                    rm === nothing && throw(PdeTestError(
-                        "component '$(mname)' vanished from the ephemeral build"))
-                    run_model = rm
-                catch err
-                    sim_err = "per-test discretization injection failed: " *
-                              "$(sprint(showerror, err))"
-                    run_file = nothing
-                end
-            end
+            target = _resolve_test_target(file, input, String(mname), model, t,
+                                          resolved_base)
             # Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
             # slot) evaluate their resolved expression from here (`_observed_field`).
             insp = BuildInspection()
-            if run_file !== nothing
-                try
-                    # `simulate` flattens the file (models + coupling) into ONE
-                    # runnable system named "Flattened", so no model_name is passed
-                    # here; element names keep their owning-model prefix, which the
-                    # `_state_cells` / `_scalar_slot` lookups resolve per assertion.
-                    sim = simulate(run_file, (t.time_span.start, t.time_span.stop);
-                                   alg=alg, reltol=reltol, abstol=abstol, saveat=times,
-                                   parameters=t.parameter_overrides,
-                                   initial_conditions=t.initial_conditions,
-                                   inspect=insp)
-                    sim.success || (sim_err = "solver retcode $(sim.retcode): $(sim.message)"; sim = nothing)
-                catch err
-                    sim_err = "simulate failed: $(sprint(showerror, err))"
-                    sim = nothing
-                end
+            local run_model, eval_file
+            local outcome::Union{SimulationResult,String}
+            if target isa String
+                # Injection failed: assertions error with the injection
+                # message; tolerances resolve against the ORIGINAL model.
+                outcome = target
+                run_model = model
+                eval_file = file
+            else
+                run_file, run_model = target
+                eval_file = run_file
+                outcome = _simulate_for_test(run_file, t, times, insp;
+                                             alg=alg, reltol=reltol,
+                                             abstol=abstol)
             end
-            eval_file = run_file === nothing ? file : run_file
             for (i, a) in enumerate(t.assertions)
                 rtol, atol = _resolve_tolerance(run_model.tolerance, t.tolerance, a.tolerance)
-                if sim === nothing
+                if outcome isa String
                     push!(results, PdeAssertionResult(String(mname), t.id, i,
                         a.variable, a.time, a.reduce, a.expected, nothing,
-                        rtol, atol, ERROR, sim_err))
+                        rtol, atol, ERROR, outcome))
                     continue
                 end
                 actual::Union{Float64,Nothing} = nothing
                 msg = ""
                 try
-                    actual = _evaluate_assertion(a, sim, insp, eval_file,
+                    actual = _evaluate_assertion(a, outcome, insp, eval_file,
                                                  String(mname), resolved_base)
                 catch err
                     msg = "assertion evaluation failed: $(sprint(showerror, err))"
@@ -640,8 +672,8 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                         rtol, atol, ERROR, msg))
                 else
                     ok = _check_assertion(actual, a.expected, rtol, atol)
-                    ok || (msg = "actual=$(actual) expected=$(a.expected) " *
-                                 "(rtol=$(rtol), atol=$(atol))")
+                    ok || (msg = _assertion_fail_message(actual, a.expected,
+                                                         rtol, atol))
                     push!(results, PdeAssertionResult(String(mname), t.id, i,
                         a.variable, a.time, a.reduce, a.expected, actual,
                         rtol, atol, ok ? PASS : FAIL, msg))

@@ -97,6 +97,33 @@ function run_validation_tests(tests_dir::String)
 end
 
 """
+    for_each_json_fixture(f, dir) -> Dict{String, Any}
+
+Shared fixture-directory skeleton for the display / substitution suites:
+parse every `*.json` fixture in `dir` (a missing directory yields an empty
+result) and record `f(test_data)` under the fixture's filename. A fixture
+whose read / parse / processing throws is recorded as an
+`{"error", "success" => false}` entry instead of aborting the sweep.
+"""
+function for_each_json_fixture(f, dir::String)
+    results = Dict{String, Any}()
+    isdir(dir) || return results
+    for filename in filter(n -> endswith(n, ".json"), readdir(dir))
+        filepath = joinpath(dir, filename)
+        try
+            test_data = JSON3.read(read(filepath, String))
+            results[filename] = f(test_data)
+        catch e
+            results[filename] = Dict(
+                "error" => string(e),
+                "success" => false
+            )
+        end
+    end
+    return results
+end
+
+"""
 Test pretty-printing and display format generation.
 
 All three output fields (`output_unicode` / `output_latex` / `output_ascii`)
@@ -105,157 +132,123 @@ expectations echoed back — so the cross-language comparator can detect
 genuine Julia divergence.
 """
 function run_display_tests(tests_dir::String)
-    display_results = Dict{String, Any}()
+    return for_each_json_fixture(joinpath(tests_dir, "display")) do test_data
+        test_results = Dict{String, Any}()
 
-    display_dir = joinpath(tests_dir, "display")
-    if isdir(display_dir)
-        for filename in filter(f -> endswith(f, ".json"), readdir(display_dir))
-            filepath = joinpath(display_dir, filename)
-            try
-                test_data = JSON3.read(read(filepath, String))
-                test_results = Dict{String, Any}()
+        # Test chemical formula rendering
+        if haskey(test_data, "chemical_formulas")
+            formula_results = []
+            for formula_test in test_data["chemical_formulas"]
+                if haskey(formula_test, "input")
+                    input_formula = String(formula_test["input"])
+                    try
+                        unicode_result = EarthSciAST.render_chemical_formula(input_formula)
+                        # Actual renderer output for latex/ascii too
+                        # (previously the fixture's own expected_latex
+                        # and the raw input were echoed back, so the
+                        # comparator could never see Julia diverge).
+                        latex_result = EarthSciAST.format_chemical_subscripts(
+                            input_formula, :latex)
+                        ascii_result = EarthSciAST.format_chemical_subscripts(
+                            input_formula, :ascii)
 
-                # Test chemical formula rendering
-                if haskey(test_data, "chemical_formulas")
-                    formula_results = []
-                    for formula_test in test_data["chemical_formulas"]
-                        if haskey(formula_test, "input")
-                            input_formula = String(formula_test["input"])
-                            try
-                                unicode_result = EarthSciAST.render_chemical_formula(input_formula)
-                                # Actual renderer output for latex/ascii too
-                                # (previously the fixture's own expected_latex
-                                # and the raw input were echoed back, so the
-                                # comparator could never see Julia diverge).
-                                latex_result = EarthSciAST.format_chemical_subscripts(
-                                    input_formula, :latex)
-                                ascii_result = EarthSciAST.format_chemical_subscripts(
-                                    input_formula, :ascii)
-
-                                push!(formula_results, Dict(
-                                    "input" => input_formula,
-                                    "output_unicode" => unicode_result,
-                                    "output_latex" => latex_result,
-                                    "output_ascii" => ascii_result,
-                                    "success" => true
-                                ))
-                            catch e
-                                push!(formula_results, Dict(
-                                    "input" => input_formula,
-                                    "error" => string(e),
-                                    "success" => false
-                                ))
-                            end
-                        end
+                        push!(formula_results, Dict(
+                            "input" => input_formula,
+                            "output_unicode" => unicode_result,
+                            "output_latex" => latex_result,
+                            "output_ascii" => ascii_result,
+                            "success" => true
+                        ))
+                    catch e
+                        push!(formula_results, Dict(
+                            "input" => input_formula,
+                            "error" => string(e),
+                            "success" => false
+                        ))
                     end
-                    test_results["chemical_formulas"] = formula_results
                 end
-
-                # Test expression rendering
-                if haskey(test_data, "expressions")
-                    expression_results = []
-                    for expr_test in test_data["expressions"]
-                        if haskey(expr_test, "input")
-                            input_expr = expr_test["input"]
-                            try
-                                expr = EarthSciAST.parse_expression(input_expr)
-                                # Real renderer output (the previously called
-                                # `pretty_print` does not exist in this package,
-                                # so every expression test recorded an error).
-                                unicode_result = EarthSciAST.format_expression(expr, :unicode)
-                                latex_result = EarthSciAST.format_expression(expr, :latex)
-                                ascii_result = EarthSciAST.format_expression_ascii(expr)
-
-                                push!(expression_results, Dict(
-                                    "input" => input_expr,
-                                    "output_unicode" => unicode_result,
-                                    "output_latex" => latex_result,
-                                    "output_ascii" => ascii_result,
-                                    "success" => true
-                                ))
-                            catch e
-                                push!(expression_results, Dict(
-                                    "input" => input_expr,
-                                    "error" => string(e),
-                                    "success" => false
-                                ))
-                            end
-                        end
-                    end
-                    test_results["expressions"] = expression_results
-                end
-
-                display_results[filename] = test_results
-
-            catch e
-                display_results[filename] = Dict(
-                    "error" => string(e),
-                    "success" => false
-                )
             end
+            test_results["chemical_formulas"] = formula_results
         end
-    end
 
-    return display_results
+        # Test expression rendering
+        if haskey(test_data, "expressions")
+            expression_results = []
+            for expr_test in test_data["expressions"]
+                if haskey(expr_test, "input")
+                    input_expr = expr_test["input"]
+                    try
+                        expr = EarthSciAST.parse_expression(input_expr)
+                        # Real renderer output (the previously called
+                        # `pretty_print` does not exist in this package,
+                        # so every expression test recorded an error).
+                        unicode_result = EarthSciAST.format_expression(expr, :unicode)
+                        latex_result = EarthSciAST.format_expression(expr, :latex)
+                        ascii_result = EarthSciAST.format_expression_ascii(expr)
+
+                        push!(expression_results, Dict(
+                            "input" => input_expr,
+                            "output_unicode" => unicode_result,
+                            "output_latex" => latex_result,
+                            "output_ascii" => ascii_result,
+                            "success" => true
+                        ))
+                    catch e
+                        push!(expression_results, Dict(
+                            "input" => input_expr,
+                            "error" => string(e),
+                            "success" => false
+                        ))
+                    end
+                end
+            end
+            test_results["expressions"] = expression_results
+        end
+
+        return test_results
+    end
 end
 
 "Test expression substitution functionality."
 function run_substitution_tests(tests_dir::String)
-    substitution_results = Dict{String, Any}()
+    return for_each_json_fixture(joinpath(tests_dir, "substitution")) do test_data
+        test_results = []
 
-    substitution_dir = joinpath(tests_dir, "substitution")
-    if isdir(substitution_dir)
-        for filename in filter(f -> endswith(f, ".json"), readdir(substitution_dir))
-            filepath = joinpath(substitution_dir, filename)
-            try
-                test_data = JSON3.read(read(filepath, String))
-                test_results = []
+        if haskey(test_data, "tests")
+            for test_case in test_data["tests"]
+                if haskey(test_case, "expression") && haskey(test_case, "substitutions")
+                    try
+                        expr = EarthSciAST.parse_expression(test_case["expression"])
+                        substitutions = Dict(
+                            k => EarthSciAST.parse_expression(v)
+                            for (k, v) in test_case["substitutions"]
+                        )
 
-                if haskey(test_data, "tests")
-                    for test_case in test_data["tests"]
-                        if haskey(test_case, "expression") && haskey(test_case, "substitutions")
-                            try
-                                expr = EarthSciAST.parse_expression(test_case["expression"])
-                                substitutions = Dict(
-                                    k => EarthSciAST.parse_expression(v)
-                                    for (k, v) in test_case["substitutions"]
-                                )
+                        result_expr = EarthSciAST.substitute(expr, substitutions)
+                        # ASCII rendering: deterministic and the most
+                        # portable cross-language comparison format
+                        # (`pretty_print` does not exist in this package).
+                        result_str = EarthSciAST.to_ascii(result_expr)
 
-                                result_expr = EarthSciAST.substitute(expr, substitutions)
-                                # ASCII rendering: deterministic and the most
-                                # portable cross-language comparison format
-                                # (`pretty_print` does not exist in this package).
-                                result_str = EarthSciAST.to_ascii(result_expr)
-
-                                push!(test_results, Dict(
-                                    "input" => test_case["expression"],
-                                    "substitutions" => test_case["substitutions"],
-                                    "result" => result_str,
-                                    "success" => true
-                                ))
-                            catch e
-                                push!(test_results, Dict(
-                                    "input" => get(test_case, "expression", ""),
-                                    "error" => string(e),
-                                    "success" => false
-                                ))
-                            end
-                        end
+                        push!(test_results, Dict(
+                            "input" => test_case["expression"],
+                            "substitutions" => test_case["substitutions"],
+                            "result" => result_str,
+                            "success" => true
+                        ))
+                    catch e
+                        push!(test_results, Dict(
+                            "input" => get(test_case, "expression", ""),
+                            "error" => string(e),
+                            "success" => false
+                        ))
                     end
                 end
-
-                substitution_results[filename] = test_results
-
-            catch e
-                substitution_results[filename] = Dict(
-                    "error" => string(e),
-                    "success" => false
-                )
             end
         end
-    end
 
-    return substitution_results
+        return test_results
+    end
 end
 
 # Resolve an `input_file` reference inside a graphs/ fixture. Per
@@ -462,59 +455,33 @@ function main()
     println("Output directory: $output_dir")
 
     errors = String[]
-    # Declare results up front so the `try`-block bindings are visible when
-    # we assemble the final ConformanceResults (Julia 1.11+ scoping).
-    validation_results = Dict{String, Any}()
-    display_results = Dict{String, Any}()
-    substitution_results = Dict{String, Any}()
-    graph_results = Dict{String, Any}()
-    math_results = Dict{String, Any}()
 
-    # Run all test categories
-    try
-        validation_results = run_validation_tests(tests_dir)
-        println("✓ Validation tests completed")
-    catch e
-        validation_results = Dict{String, Any}()
-        push!(errors, "Validation tests failed: $(string(e))")
-        println("✗ Validation tests failed: $e")
+    # Run all test categories through one (label, runner) loop — a category
+    # failure is recorded in `errors` (its results left empty) without
+    # aborting the others. The printed lines and error strings are
+    # byte-identical to the historical five copy-pasted try/catch blocks.
+    # Order matters: it matches the ConformanceResults field order.
+    categories = [
+        ("Validation tests", run_validation_tests),
+        ("Display tests", run_display_tests),
+        ("Substitution tests", run_substitution_tests),
+        ("Graph tests", run_graph_tests),
+        ("Mathematical-correctness tests", run_mathematical_correctness_tests),
+    ]
+    category_results = Dict{String, Any}[]
+    for (label, runner) in categories
+        result = Dict{String, Any}()
+        try
+            result = runner(tests_dir)
+            println("✓ $(label) completed")
+        catch e
+            push!(errors, "$(label) failed: $(string(e))")
+            println("✗ $(label) failed: $e")
+        end
+        push!(category_results, result)
     end
-
-    try
-        display_results = run_display_tests(tests_dir)
-        println("✓ Display tests completed")
-    catch e
-        display_results = Dict{String, Any}()
-        push!(errors, "Display tests failed: $(string(e))")
-        println("✗ Display tests failed: $e")
-    end
-
-    try
-        substitution_results = run_substitution_tests(tests_dir)
-        println("✓ Substitution tests completed")
-    catch e
-        substitution_results = Dict{String, Any}()
-        push!(errors, "Substitution tests failed: $(string(e))")
-        println("✗ Substitution tests failed: $e")
-    end
-
-    try
-        graph_results = run_graph_tests(tests_dir)
-        println("✓ Graph tests completed")
-    catch e
-        graph_results = Dict{String, Any}()
-        push!(errors, "Graph tests failed: $(string(e))")
-        println("✗ Graph tests failed: $e")
-    end
-
-    try
-        math_results = run_mathematical_correctness_tests(tests_dir)
-        println("✓ Mathematical-correctness tests completed")
-    catch e
-        math_results = Dict{String, Any}()
-        push!(errors, "Mathematical-correctness tests failed: $(string(e))")
-        println("✗ Mathematical-correctness tests failed: $e")
-    end
+    (validation_results, display_results, substitution_results, graph_results,
+        math_results) = category_results
 
     # Compile results
     results = ConformanceResults(

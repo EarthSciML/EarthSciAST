@@ -1,7 +1,7 @@
 """
     EarthSciAST.Cadence
 
-The **dependency-partition (cadence) pass** — the ESS analogue of
+The **dependency-partition (cadence) pass** — the EarthSciAST analogue of
 ModelingToolkit's `structural_simplify` / observed-variable elimination,
 generalised from two phases to three. It is the normative contract of
 `CONFORMANCE_SPEC.md` §5.7 (RFC `semiring-faq-unified-ir` §6.1), implemented for
@@ -95,6 +95,13 @@ Base.showerror(io::IO, e::CadenceError) = print(io, "CadenceError: ", e.msg)
 # Convert JSON3 structures to native `Dict{String,Any}` / `Vector{Any}` so node
 # access is uniform string-keyed `get`/`haskey` — a direct mirror of the
 # reference classifier (`scripts/run-cadence-conformance.py`).
+#
+# NOTE(idiom): this pass EAGERLY converts the whole document up front and then
+# assumes String keys everywhere. reference_graph.jl solves the same raw-JSON
+# access problem the opposite way: no conversion, with `_get` / `_haskey` /
+# `_str_keys` accessors that tolerate String- or Symbol-keyed dicts in place.
+# Two deliberate idioms for one problem — unify in a later wave if at all; do
+# not rewrite piecemeal.
 
 to_native(x::JSON3.Object) = Dict{String,Any}(String(k) => to_native(v) for (k, v) in pairs(x))
 to_native(x::JSON3.Array) = Any[to_native(v) for v in x]
@@ -376,6 +383,13 @@ function assert_acyclic_index_sets(model)
         end
     end
 
+    # Three-color (WHITE/GRAY/BLACK) DFS, RECURSIVE form over the implicit
+    # set→node→set edge relation (no materialized graph). Its iterative twin
+    # is `detect_cycle` (reference_graph.jl), which colors a built
+    # `ReferenceGraph`'s explicit adjacency. Sharing one utility would mean
+    # either materializing this implicit graph or abstracting neighbor
+    # iteration across the Cadence submodule boundary — deferred; see the
+    # cross-reference note at `detect_cycle`.
     WHITE, GRAY, BLACK = 0, 1, 2
     color = Dict{String,Int}()
 
