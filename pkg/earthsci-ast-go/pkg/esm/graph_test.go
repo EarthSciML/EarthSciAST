@@ -168,6 +168,47 @@ func TestExpressionGraphFromModel(t *testing.T) {
 	}
 }
 
+// TestExpressionGraphEquationIndex guards against the loop-variable capture bug:
+// under go 1.21 loopvar semantics, taking &i of the range variable made every
+// dependency edge report the last equation index. Each edge must carry its own
+// per-equation index (y->x from eq 0, x->z from eq 1).
+func TestExpressionGraphEquationIndex(t *testing.T) {
+	model := Model{
+		Variables: map[string]ModelVariable{
+			"x": {Type: "state"},
+			"y": {Type: "parameter"},
+			"z": {Type: "observed"},
+		},
+		Equations: []Equation{
+			{
+				LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+				RHS: "y",
+			},
+			{
+				LHS: "z",
+				RHS: ExprNode{Op: "*", Args: []interface{}{2.0, "x"}},
+			},
+		},
+	}
+
+	graph := ExpressionGraphFromModel(model, "TestSystem")
+
+	byTarget := make(map[string]int)
+	for _, edge := range graph.Edges {
+		if edge.Data.EquationIndex == nil {
+			t.Fatalf("edge %s->%s has nil EquationIndex", edge.Data.Source, edge.Data.Target)
+		}
+		byTarget[edge.Data.Target] = *edge.Data.EquationIndex
+	}
+
+	if got := byTarget["x"]; got != 0 {
+		t.Errorf("edge into x: expected equation_index 0, got %d", got)
+	}
+	if got := byTarget["z"]; got != 1 {
+		t.Errorf("edge into z: expected equation_index 1, got %d", got)
+	}
+}
+
 // TestExpressionGraphFromReactionSystem tests expression graph creation from a reaction system
 func TestExpressionGraphFromReactionSystem(t *testing.T) {
 	system := ReactionSystem{
@@ -262,8 +303,13 @@ func TestGraphExport(t *testing.T) {
 		t.Errorf("DOT output doesn't contain expected header")
 	}
 
-	if !strings.Contains(dotOutput, "\"A\" -- \"B\"") {
-		t.Errorf("DOT output doesn't contain expected bidirectional edge")
+	// A bidirectional coupling is a directed edge annotated with dir=both; an
+	// undirected `--` edge is a Graphviz syntax error inside a digraph.
+	if !strings.Contains(dotOutput, "\"A\" -> \"B\"") {
+		t.Errorf("DOT output doesn't contain expected directed edge")
+	}
+	if !strings.Contains(dotOutput, "dir=both") {
+		t.Errorf("DOT output doesn't mark the bidirectional edge with dir=both")
 	}
 
 	// Test Mermaid export
@@ -414,4 +460,3 @@ func TestExtractVariableFromLHS(t *testing.T) {
 		})
 	}
 }
-

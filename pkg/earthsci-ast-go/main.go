@@ -2,11 +2,19 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm"
 )
+
+// fatalf writes a formatted message to stderr and exits with status 1. It is the
+// single error-exit path for the CLI (no timestamps, no stdout).
+func fatalf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	os.Exit(1)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -18,54 +26,54 @@ func main() {
 	switch command {
 	case "parse", "load":
 		if len(os.Args) < 3 {
-			log.Fatal("Usage: esm-go parse <file>")
+			fatalf("Usage: esm-go parse <file>")
 		}
 		parseFile(os.Args[2])
 	case "validate":
 		if len(os.Args) < 3 {
-			log.Fatal("Usage: esm-go validate <file>")
+			fatalf("Usage: esm-go validate <file>")
 		}
 		validateFile(os.Args[2])
 	case "pretty-print":
 		if len(os.Args) < 3 {
-			log.Fatal("Usage: esm-go pretty-print <file> [format]")
+			fatalf("Usage: esm-go pretty-print <file> [format]")
 		}
-		format := "unicode"
+		format := esm.FmtUnicode
 		if len(os.Args) >= 4 {
 			format = os.Args[3]
 		}
 		prettyPrintFile(os.Args[2], format)
 	case "substitute":
 		if len(os.Args) < 4 {
-			log.Fatal("Usage: esm-go substitute <file> <var=value> [var=value...]")
+			fatalf("Usage: esm-go substitute <file> <var=value> [var=value...]")
 		}
 		substituteFile(os.Args[2], os.Args[3:])
 	case "save", "serialize":
 		if len(os.Args) < 4 {
-			log.Fatal("Usage: esm-go save <input-file> <output-file>")
+			fatalf("Usage: esm-go save <input-file> <output-file>")
 		}
 		saveFile(os.Args[2], os.Args[3])
 	case "summary":
 		if len(os.Args) < 3 {
-			log.Fatal("Usage: esm-go summary <file>")
+			fatalf("Usage: esm-go summary <file>")
 		}
 		summaryFile(os.Args[2])
 	default:
-		fmt.Printf("Unknown command: %s\n", command)
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
 		printUsage()
 		os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Println("Usage: esm-go <command> [args]")
-	fmt.Println("Commands:")
-	fmt.Println("  parse <file>                    - Parse and load an ESM file")
-	fmt.Println("  validate <file>                 - Validate an ESM file")
-	fmt.Println("  pretty-print <file> [format]    - Pretty-print expressions (format: unicode, latex, ascii)")
-	fmt.Println("  substitute <file> <var=value>   - Substitute variables in expressions")
-	fmt.Println("  save <input> <output>           - Save ESM file to new location")
-	fmt.Println("  summary <file>                  - Display structured model summary")
+	fmt.Fprintln(os.Stderr, "Usage: esm-go <command> [args]")
+	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "  parse <file>                    - Parse and load an ESM file")
+	fmt.Fprintln(os.Stderr, "  validate <file>                 - Validate an ESM file")
+	fmt.Fprintln(os.Stderr, "  pretty-print <file> [format]    - Pretty-print expressions (format: unicode, latex, ascii)")
+	fmt.Fprintln(os.Stderr, "  substitute <file> <var=value>   - Substitute variables in expressions")
+	fmt.Fprintln(os.Stderr, "  save <input> <output>           - Save ESM file to new location")
+	fmt.Fprintln(os.Stderr, "  summary <file>                  - Display structured model summary")
 }
 
 func parseFile(filename string) {
@@ -73,7 +81,7 @@ func parseFile(filename string) {
 
 	esmFile, err := esm.Load(filename)
 	if err != nil {
-		log.Fatalf("Failed to load ESM file: %v", err)
+		fatalf("Failed to load ESM file: %v", err)
 	}
 
 	fmt.Printf("Successfully parsed ESM file version %s\n", esmFile.Esm)
@@ -99,7 +107,7 @@ func validateFile(filename string) {
 
 	esmFile, err := esm.Load(filename)
 	if err != nil {
-		log.Fatalf("Failed to load ESM file: %v", err)
+		fatalf("Failed to load ESM file: %v", err)
 	}
 
 	result := esm.Validate(esmFile)
@@ -120,27 +128,15 @@ func prettyPrintFile(filename, format string) {
 
 	esmFile, err := esm.Load(filename)
 	if err != nil {
-		log.Fatalf("Failed to load ESM file: %v", err)
+		fatalf("Failed to load ESM file: %v", err)
 	}
 
 	// Pretty-print expressions from models
 	for modelName, model := range esmFile.Models {
 		fmt.Printf("\nModel: %s\n", modelName)
 		for i, eq := range model.Equations {
-			var lhsStr, rhsStr string
-
-			switch format {
-			case "latex":
-				lhsStr = esm.ToLatex(eq.LHS)
-				rhsStr = esm.ToLatex(eq.RHS)
-			case "ascii":
-				lhsStr = fmt.Sprintf("%v", eq.LHS)
-				rhsStr = fmt.Sprintf("%v", eq.RHS)
-			default:
-				lhsStr = esm.ToUnicode(eq.LHS)
-				rhsStr = esm.ToUnicode(eq.RHS)
-			}
-
+			lhsStr := renderExpression(eq.LHS, format)
+			rhsStr := renderExpression(eq.RHS, format)
 			fmt.Printf("  Equation %d: %s = %s\n", i+1, lhsStr, rhsStr)
 		}
 	}
@@ -149,19 +145,21 @@ func prettyPrintFile(filename, format string) {
 	for systemName, system := range esmFile.ReactionSystems {
 		fmt.Printf("\nReaction System: %s\n", systemName)
 		for _, reaction := range system.Reactions {
-			var rateStr string
-
-			switch format {
-			case "latex":
-				rateStr = esm.ToLatex(reaction.Rate)
-			case "ascii":
-				rateStr = fmt.Sprintf("%v", reaction.Rate)
-			default:
-				rateStr = esm.ToUnicode(reaction.Rate)
-			}
-
+			rateStr := renderExpression(reaction.Rate, format)
 			fmt.Printf("  Reaction %s: rate = %s\n", reaction.ID, rateStr)
 		}
+	}
+}
+
+// renderExpression pretty-prints an expression in the requested CLI format.
+func renderExpression(expr esm.Expression, format string) string {
+	switch format {
+	case esm.FmtLatex:
+		return esm.ToLatex(expr)
+	case esm.FmtAscii:
+		return esm.ToAscii(expr)
+	default:
+		return esm.ToUnicode(expr)
 	}
 }
 
@@ -170,7 +168,7 @@ func substituteFile(filename string, substitutions []string) {
 
 	esmFile, err := esm.Load(filename)
 	if err != nil {
-		log.Fatalf("Failed to load ESM file: %v", err)
+		fatalf("Failed to load ESM file: %v", err)
 	}
 
 	// Parse substitutions (var=value format)
@@ -178,7 +176,7 @@ func substituteFile(filename string, substitutions []string) {
 	for _, sub := range substitutions {
 		parts := parseSubstitution(sub)
 		if len(parts) != 2 {
-			log.Fatalf("Invalid substitution format: %s (expected var=value)", sub)
+			fatalf("Invalid substitution format: %s (expected var=value)", sub)
 		}
 
 		// Try to parse as number first, then as string
@@ -197,7 +195,7 @@ func substituteFile(filename string, substitutions []string) {
 	// Serialize and print the result
 	jsonStr, err := esm.Save(&newFile)
 	if err != nil {
-		log.Fatalf("Failed to serialize result: %v", err)
+		fatalf("Failed to serialize result: %v", err)
 	}
 
 	fmt.Println("\nResult:")
@@ -209,12 +207,12 @@ func saveFile(inputFile, outputFile string) {
 
 	esmFile, err := esm.Load(inputFile)
 	if err != nil {
-		log.Fatalf("Failed to load ESM file: %v", err)
+		fatalf("Failed to load ESM file: %v", err)
 	}
 
 	err = esm.SaveToFile(esmFile, outputFile)
 	if err != nil {
-		log.Fatalf("Failed to save file: %v", err)
+		fatalf("Failed to save file: %v", err)
 	}
 
 	fmt.Printf("Successfully saved to %s\n", outputFile)
@@ -223,7 +221,7 @@ func saveFile(inputFile, outputFile string) {
 func summaryFile(filename string) {
 	esmFile, err := esm.Load(filename)
 	if err != nil {
-		log.Fatalf("Failed to load ESM file: %v", err)
+		fatalf("Failed to load ESM file: %v", err)
 	}
 
 	summary := esm.ModelSummary(esmFile)
@@ -232,19 +230,17 @@ func summaryFile(filename string) {
 
 // Helper functions
 
+// parseSubstitution splits "var=value" on the first '=' into {var, value}; a
+// string with no '=' yields a single-element slice.
 func parseSubstitution(sub string) []string {
-	for i, char := range sub {
-		if char == '=' {
-			return []string{sub[:i], sub[i+1:]}
-		}
-	}
-	return []string{sub}
+	return strings.SplitN(sub, "=", 2)
 }
 
+// parseNumber returns the parsed float when s is a complete numeric literal, or
+// nil otherwise (strconv.ParseFloat rejects trailing garbage, unlike Sscanf).
 func parseNumber(s string) *float64 {
-	var num float64
-	n, err := fmt.Sscanf(s, "%g", &num)
-	if err != nil || n != 1 {
+	num, err := strconv.ParseFloat(s, 64)
+	if err != nil {
 		return nil
 	}
 	return &num
