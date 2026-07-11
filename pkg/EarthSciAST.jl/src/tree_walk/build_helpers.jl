@@ -41,6 +41,43 @@ const _EMPTY_IDX_ENV = Dict{String,Int}()
 # also scalar.
 _is_array_shape(shape) = shape !== nothing && !isempty(shape)
 
+# ---- Aggregate-node field accessors -------------------------------------------
+# The `output_idx` / `ranges` fields of an aggregate/arrayop/makearray node are
+# optional on the wire (`nothing` when absent), and `output_idx` may carry
+# non-string entries that every consumer skips. These accessors are the single
+# spelling of "the string output indices" and "a ranges table" (formerly
+# duplicated across the build/resolve expansion and cell-discovery sites).
+_output_idx_strings(op::OpExpr) = op.output_idx === nothing ? String[] :
+    String[String(s) for s in op.output_idx if s isa AbstractString]
+_ranges_dict(op::OpExpr) = op.ranges === nothing ? Dict{String,Any}() : op.ranges
+
+# ---- Kahn-style dependency ordering (shared ready-set loop) ---------------------
+# Order `names` so every name comes after the names it depends on. `deps(name)`
+# returns the subset of `names` that must precede it (recomputed per pass — cheap
+# at build time and keeps the callers' original shape); `on_cycle(done)` MUST
+# throw (each call site owns its error code/message) and is called when a full
+# pass over the remaining names makes no progress, i.e. the residue is cyclic.
+# Within a pass the scan follows the iteration order of `names`, so the result
+# is deterministic for a given input collection.
+function _dependency_order(names, deps::F; on_cycle::G) where {F,G}
+    order = String[]
+    done = Set{String}()
+    total = length(names)
+    while length(order) < total
+        progressed = false
+        for n in names
+            n in done && continue
+            if all(d -> d in done, deps(n))
+                push!(order, n)
+                push!(done, n)
+                progressed = true
+            end
+        end
+        progressed || on_cycle(done)
+    end
+    return order
+end
+
 # ---- Const-array boundary policy (ess-gj4) ----
 # A const array (Fornberg weights, mesh connectivity, a per-cell metric factor)
 # may carry a per-dimension boundary policy so that a stencil gather at an
@@ -119,8 +156,7 @@ end
 # ranges — a declared array state with a broadcast `ic` and no per-cell equation
 # otherwise resolves to no cells.
 function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
-        var_shapes::Dict{String,Vector{String}}, arrayvars::Set{String},
-        index_sets::AbstractDict)
+        var_shapes::Dict{String,Vector{String}}, arrayvars::Set{String})
     # `D(x)` where the whole (un-indexed) `x` is a declared array variable.
     is_wholearray_D(lhs) = lhs isa OpExpr && (lhs::OpExpr).op == "D" &&
         length((lhs::OpExpr).args) == 1 &&
@@ -229,21 +265,9 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
     # to producer observeds / params / state are leaves left in place.
     deps = Dict(name => intersect(free_variables(rhs), keys(targets))
                 for (name, rhs) in targets)
-    order = String[]
-    done = Set{String}()
-    while length(order) < length(targets)
-        progressed = false
-        for name in keys(targets)
-            name in done && continue
-            if all(d -> d in done, deps[name])
-                push!(order, name)
-                push!(done, name)
-                progressed = true
-            end
-        end
-        progressed || throw(TreeWalkError("E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
-            "cyclic elementwise array-observed dependency among $(collect(keys(targets)))"))
-    end
+    order = _dependency_order(collect(keys(targets)), name -> deps[name];
+        on_cycle=_ -> throw(TreeWalkError("E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
+            "cyclic elementwise array-observed dependency among $(collect(keys(targets)))")))
     resolved = Dict{String,Expr}()
     for name in order
         resolved[name] = substitute(targets[name], resolved)

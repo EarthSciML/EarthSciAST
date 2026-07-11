@@ -38,6 +38,22 @@ const _NK_CONTRACTION  = UInt8(6)   # runtime ⊕-reduction over children (seq. 
 const _NK_CACHED       = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
 const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: handler[idx] (ess-14f.3)
 
+# One compiled scalar-IR node. `kind` selects which fields are live. The
+# catch-all `handler::Any` slot carries a KIND-DEPENDENT runtime payload,
+# type-asserted at its read sites (`_eval_node` / `_eval_node_op`, and the
+# vectorized lowerings `_merge_nodes` / `_lower_template`, which mirror the
+# same field on `_VecNode` — the name is shared across both IRs):
+#   * `_NK_OP` with `op === :fn` — `(fname, const_args)::Tuple{String,Any}`:
+#     the closed-function name plus either `nothing` (all args scalar) or a
+#     `Vector{Any}` of pre-extracted const arrays in spec arg-position order
+#     (the `_FN_CONST_ARG_SPECS` protocol); every other `_NK_OP` carries
+#     `nothing`.
+#   * `_NK_PARAM_GATHER` — the aliased flat `Vector{Float64}` of a live
+#     forcing buffer (`_PGatherArray.flat`, ess-14f.3); `idx` holds the
+#     pre-linearized column-major offset.
+#   * `_NK_CACHED` — the shared CSE scratch `Vector{Float64}` (ess-r7h);
+#     `idx` holds the value-number slot.
+#   * every other kind — `nothing`.
 struct _Node
     kind::UInt8
     op::Symbol
@@ -91,6 +107,50 @@ function _mknode(; kind::UInt8, op::Symbol=Symbol(""),
     return _Node(kind, op, literal, idx, sym, handler, children)
 end
 
+# ---- interp.* const-arg protocol (one table, both ends) ------------------------
+# Which spec arg positions of each `interp.*` closed function are CONST-ARRAY
+# args. `_compile_op` pre-extracts those args into the node's `handler` payload
+# (`(fname, Vector{Any})`, in table order) and compiles only the remaining
+# scalar args as children (in spec order); the `:fn` arm of `_eval_node_op`
+# re-splices both back into spec arg-position order from this SAME table, so
+# the two ends of the protocol cannot drift. The vectorized `_merge_fn_node`
+# (vectorize.jl) consumes the handler payload layout pinned here. `const_errs`
+# are the pinned per-position diagnostics for a non-const argument.
+const _FN_CONST_ARG_SPECS = (
+    # Spec arg order: (x, xs) — xs const, x scalar.
+    (fname = "interp.searchsorted", arity = 2, const_positions = (2,),
+     const_errs = ("interp.searchsorted: 2nd arg must be a `const`-op array",)),
+    # Spec arg order: (table, axis, x) — table & axis const, x scalar.
+    (fname = "interp.linear", arity = 3, const_positions = (1, 2),
+     const_errs = ("interp.linear: `table` argument must be a `const`-op array node",
+                   "interp.linear: `axis` argument must be a `const`-op array node")),
+    # Spec arg order: (table, axis_x, axis_y, x, y) — first three const.
+    (fname = "interp.bilinear", arity = 5, const_positions = (1, 2, 3),
+     const_errs = ("interp.bilinear: `table` argument must be a `const`-op array node",
+                   "interp.bilinear: `axis_x` argument must be a `const`-op array node",
+                   "interp.bilinear: `axis_y` argument must be a `const`-op array node")),
+)
+
+# The `_FN_CONST_ARG_SPECS` entry for `fname`, or `nothing` for a closed
+# function whose args are all scalar. A linear scan over the length-3 const
+# tuple — string compares only, no runtime Dict lookup (the eval side also
+# calls this, staying in the same cost class as the ladder it replaced).
+@inline function _fn_const_arg_spec(fname::AbstractString)
+    for spec in _FN_CONST_ARG_SPECS
+        spec.fname == fname && return spec
+    end
+    return nothing
+end
+
+# A `const`-op array argument's payload, or throw the pinned per-position
+# diagnostic from `_FN_CONST_ARG_SPECS`.
+@inline function _const_array_arg(arg, errmsg::String)
+    if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
+        return arg.value
+    end
+    throw(TreeWalkError("E_TREEWALK_FN_ARG_NOT_CONST", errmsg))
+end
+
 # `param_syms` is a `Set{Symbol}` so parameters can be distinguished
 # from unbound-variable errors without another pass.
 function _compile(expr::NumExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
@@ -129,58 +189,33 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     if op_sym === :fn
         # Closed function registry (esm-spec §9.2 / esm-tzp). The function
         # name is captured in the node's `handler` slot as a tuple of
-        # (name::String, const_array_or_nothing). For
-        # `interp.searchsorted` the second arg is a const-op array which
-        # we pre-extract so the runtime hot path doesn't walk the AST.
+        # (name::String, const_args_or_nothing). For the `interp.*` functions
+        # the const-array args are pre-extracted per `_FN_CONST_ARG_SPECS` so
+        # the runtime hot path doesn't walk the AST.
         fname = expr.name
         fname === nothing &&
             throw(TreeWalkError("E_TREEWALK_FN_MISSING_NAME", expr.op))
         if !(fname in _CLOSED_FUNCTION_NAMES)
             throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION", fname))
         end
-        if fname == "interp.searchsorted"
-            length(expr.args) == 2 ||
-                throw(TreeWalkError("E_TREEWALK_FN_ARITY",
-                    "interp.searchsorted expects 2 args, got $(length(expr.args))"))
-            tab = expr.args[2]
-            if !(tab isa OpExpr && tab.op == "const" && tab.value isa AbstractVector)
-                throw(TreeWalkError("E_TREEWALK_FN_ARG_NOT_CONST",
-                    "interp.searchsorted: 2nd arg must be a `const`-op array"))
-            end
-            # Compile only the scalar first arg as a child; carry the
-            # constant array on the node so the runtime call is one
-            # _eval_node + one closed-function dispatch.
-            children = _Node[_compile(expr.args[1], var_map, param_syms, reg_funcs, memo)]
-            handler = (fname, Any[tab.value])
-        elseif fname == "interp.linear"
-            # Args = (table, axis, x). Const arrays at positions [1, 2];
-            # scalar query at [3]. Pre-extract the const arrays so the
-            # runtime hot path skips AST traversal.
-            length(expr.args) == 3 ||
-                throw(TreeWalkError("E_TREEWALK_FN_ARITY",
-                    "interp.linear expects 3 args, got $(length(expr.args))"))
-            tbl  = _require_const_array(expr.args[1], "interp.linear", "table")
-            axs  = _require_const_array(expr.args[2], "interp.linear", "axis")
-            children = _Node[_compile(expr.args[3], var_map, param_syms, reg_funcs, memo)]
-            handler = (fname, Any[tbl, axs])
-        elseif fname == "interp.bilinear"
-            # Args = (table, axis_x, axis_y, x, y). Const arrays at [1, 2, 3];
-            # scalar queries at [4, 5].
-            length(expr.args) == 5 ||
-                throw(TreeWalkError("E_TREEWALK_FN_ARITY",
-                    "interp.bilinear expects 5 args, got $(length(expr.args))"))
-            tbl  = _require_const_array(expr.args[1], "interp.bilinear", "table")
-            axx  = _require_const_array(expr.args[2], "interp.bilinear", "axis_x")
-            axy  = _require_const_array(expr.args[3], "interp.bilinear", "axis_y")
-            children = _Node[
-                _compile(expr.args[4], var_map, param_syms, reg_funcs, memo),
-                _compile(expr.args[5], var_map, param_syms, reg_funcs, memo),
-            ]
-            handler = (fname, Any[tbl, axx, axy])
-        else
+        spec = _fn_const_arg_spec(fname)
+        if spec === nothing
             children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
                              for a in expr.args]
             handler = (fname, nothing)
+        else
+            length(expr.args) == spec.arity ||
+                throw(TreeWalkError("E_TREEWALK_FN_ARITY",
+                    "$(fname) expects $(spec.arity) args, got $(length(expr.args))"))
+            # Validate + extract every const position first (matching the
+            # pre-table ladders, which never compiled a scalar arg before a
+            # failed const check), then compile the scalar args — in spec
+            # order — as the node's children.
+            const_args = Any[_const_array_arg(expr.args[pos], spec.const_errs[k])
+                             for (k, pos) in enumerate(spec.const_positions)]
+            children = _Node[_compile(expr.args[pos], var_map, param_syms, reg_funcs, memo)
+                             for pos in 1:spec.arity if !(pos in spec.const_positions)]
+            handler = (fname, const_args)
         end
         return _mknode(kind=_NK_OP, op=op_sym, children=children, handler=handler)
     end
@@ -670,49 +705,42 @@ function _eval_node_op(n::_Node, u, p, t)
     elseif op === :fn
         # `n.handler` is `(fname::String, const_args_or_nothing)`. The
         # tuple's second slot is `nothing` for closed functions whose args
-        # are all scalar (e.g. `datetime.*`). For closed functions with
-        # const-array args (`interp.searchsorted`, `interp.linear`,
-        # `interp.bilinear`) it is a `Vector{Any}` carrying the pre-extracted
-        # arrays in spec arg-position order; the remaining scalar args are
-        # the node's children, also in spec order.
+        # are all scalar (e.g. `datetime.*`): the children are the full
+        # spec-order arg list. For closed functions with const-array args it
+        # is a `Vector{Any}` carrying the pre-extracted arrays in
+        # `_FN_CONST_ARG_SPECS` order; re-splice them (at their table-pinned
+        # spec positions) with the evaluated scalar children (in child order)
+        # to rebuild the spec-order argument vector.
         fname, const_args = n.handler::Tuple{String,Any}
         if const_args === nothing
             args_evaluated = Any[_eval_node(ci, u, p, t) for ci in c]
             return Float64(evaluate_closed_function(fname, args_evaluated))
-        elseif fname == "interp.searchsorted"
-            # Spec arg order: (x, xs); xs is const, x is the only child.
-            x = _eval_node(c[1], u, p, t)
-            return Float64(evaluate_closed_function(fname, Any[x, const_args[1]]))
-        elseif fname == "interp.linear"
-            # Spec arg order: (table, axis, x); table & axis are const; x is the only child.
-            x = _eval_node(c[1], u, p, t)
-            return Float64(evaluate_closed_function(fname,
-                Any[const_args[1], const_args[2], x]))
-        elseif fname == "interp.bilinear"
-            # Spec arg order: (table, axis_x, axis_y, x, y); first three are
-            # const; x and y are children in order.
-            x = _eval_node(c[1], u, p, t)
-            y = _eval_node(c[2], u, p, t)
-            return Float64(evaluate_closed_function(fname,
-                Any[const_args[1], const_args[2], const_args[3], x, y]))
         end
-        # Unreachable if `_compile_op` and this arm agree on which closed
-        # functions carry pre-extracted const args — throw explicitly rather
-        # than falling through to an implicit `nothing`.
+        spec = _fn_const_arg_spec(fname)
+        if spec !== nothing
+            cas = const_args::Vector{Any}
+            args = Vector{Any}(undef, spec.arity)
+            for (k, pos) in enumerate(spec.const_positions)
+                args[pos] = cas[k]
+            end
+            ci = 0
+            for pos in 1:spec.arity
+                isassigned(args, pos) && continue
+                ci += 1
+                args[pos] = _eval_node(c[ci], u, p, t)
+            end
+            return Float64(evaluate_closed_function(fname, args))
+        end
+        # Unreachable if `_compile_op` and this arm agree (via
+        # `_FN_CONST_ARG_SPECS`) on which closed functions carry pre-extracted
+        # const args — throw explicitly rather than falling through to an
+        # implicit `nothing`.
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
             "fn '$(fname)' carries const args but has no interp.* eval arm"))
 
     else
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", String(op)))
     end
-end
-
-@inline function _require_const_array(arg, fname::String, arg_label::String)
-    if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
-        return arg.value
-    end
-    throw(TreeWalkError("E_TREEWALK_FN_ARG_NOT_CONST",
-        "$(fname): `$(arg_label)` argument must be a `const`-op array node"))
 end
 
 # `c` is a `Vector{_Node}` on the scalar path and a `Vector{_VecNode}` on the

@@ -1,9 +1,9 @@
 # ========================================================================
 # tree_walk/build.jl — part of the tree-walk evaluator (gt-e8yw).
 # Included by src/tree_walk.jl; see that file for the full layout and
-# include order. Sections 2/2b: BuildInspection, the extracted build-pipeline stages,
-# _build_evaluator_impl, the public build_evaluator entry points, and
-# evaluate_expr.
+# include order. Sections 2/2b/2c: BuildInspection, the extracted build-pipeline
+# stages, the four build phases + _build_evaluator_impl, the public
+# build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
 """
@@ -70,7 +70,7 @@ hot RHS gathers via the existing zero-alloc `_NK_PARAM_GATHER` path — exactly 
 it gathers a raw forcing buffer. The build fills it:
 
 * `caches::Dict{String,Array{Float64}}` — var name → its cache buffer (the SAME
-  object aliased into `_pgather`, captured by reference; a `materialize!` write
+  object aliased into `pgather`, captured by reference; a `materialize!` write
   shows through to the RHS with zero reallocation).
 * `materialize!::Function` — a `() -> nothing` closure that recomputes every
   cache from the (already-refreshed) raw forcing buffers + const arrays + upstream
@@ -126,7 +126,7 @@ DiscreteMaterializer() =
 #     hard-errors as the pipeline-violation guard requires. No-op for a model
 #     without a whole-array D.
 # Returns `(equations, folded_array_obs)`.
-function _prepare_model_equations(model::Model, index_sets::AbstractDict)
+function _prepare_model_equations(model::Model)
     equations = model.equations
     let synth = Equation[]
         for (name, v) in model.variables
@@ -144,8 +144,7 @@ function _prepare_model_equations(model::Model, index_sets::AbstractDict)
             var_shapes[n] = String[String(s) for s in v.shape]
         end
         arrayvars = Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
-        equations = _lift_wholearray_deriv_equations(equations, var_shapes,
-                                                     arrayvars, index_sets)
+        equations = _lift_wholearray_deriv_equations(equations, var_shapes, arrayvars)
     end
     return equations, folded_array_obs
 end
@@ -252,7 +251,7 @@ end
 # resolve each into a matrix (a `const_arrays` kwarg entry wins, else the
 # operand's own `const`-op observed value) so the leaf const-folds in
 # `_resolve_indices`. Each operand array observed is materialized into
-# `_const_arrays` and excluded from the ODE partition — it carries no state,
+# the const-array registry and excluded from the ODE partition — it carries no state,
 # exactly like an intersect_polygon clip ring (RFC §8.1). Empty (byte-identical)
 # for every file without a polygon_intersection_area node. (`has_pia` is
 # computed in `_discover_geometry_vars`, where it also arms the setup-geometry
@@ -349,10 +348,12 @@ end
 # Only chains ending at a `const`-op observed / caller `const_arrays` entry
 # resolve; any other alias keeps the existing unsupported-shape error. Empty
 # (byte-identical) for documents without bare-alias array observeds. Mutates
-# `const_obs_arrays` / `const_obs_vars` in place.
+# `const_obs_arrays` / `const_obs_vars` in place. The ownership-exclusion sets
+# are keyword-only: they are all same-typed `Set{String}`s, so positional
+# passing could silently swap two of them.
 function _register_bare_alias_arrays!(const_obs_arrays::Dict{String,Array{Float64}},
                                       const_obs_vars::Set{String},
-                                      model::Model, equations::Vector{Equation},
+                                      model::Model, equations::Vector{Equation};
                                       const_arrays::AbstractDict,
                                       pia_operand_vars, geom_ring_vars,
                                       geom_setup_vars, geom_inline_vars,
@@ -400,9 +401,11 @@ end
 # partition slot. Array-shaped parameters must be array-backed (const data or a
 # live `param_arrays` buffer — the scalar `p` NamedTuple stays homogeneous
 # Float64, see the JL-J0 note); array-shaped observeds are supported only as
-# intersect_polygon clip rings. Returns
-# `(param_names, observed_names, state_var_names)`.
-function _partition_variables(model::Model, vi_vars, geom_setup_vars,
+# intersect_polygon clip rings. The ownership-exclusion sets are keyword-only:
+# they are all same-typed `Set{String}`s, so positional passing could silently
+# swap two of them. Returns `(param_names, observed_names, state_var_names)`.
+function _partition_variables(model::Model;
+                              vi_vars, geom_setup_vars,
                               geom_inline_vars, array_inline_vars,
                               folded_array_obs, pia_operand_vars,
                               const_obs_vars, geom_ring_vars,
@@ -424,7 +427,7 @@ function _partition_variables(model::Model, vi_vars, geom_setup_vars,
         name in geom_inline_vars && continue
         name in array_inline_vars && continue
         # Discrete-cadence materialized array observeds: cut out of the per-step RHS
-        # into a cache buffer (filled per refresh) and gathered via `_pgather`; like
+        # into a cache buffer (filled per refresh) and gathered via `pgather`; like
         # an inline var, they carry no ODE partition slot.
         name in discrete_vars && continue
         # Elementwise array observeds folded into their readers (WS4): their
@@ -631,16 +634,11 @@ function _enumerate_array_cell_names(array_cells, array_var_info)
     for vname in sort(collect(keys(array_cells)))
         haskey(array_var_info, vname) || continue
         lo, hi = array_var_info[vname]
-        shape = hi .- lo .+ 1
-        ndim = length(lo)
-        for linear in 0:prod(shape)-1
-            indices = Vector{Int}(undef, ndim)
-            r = linear
-            for d in 1:ndim
-                indices[d] = lo[d] + (r % shape[d])
-                r = r ÷ shape[d]
-            end
-            push!(array_cell_names, _cell_key(vname, indices))
+        # `CartesianIndices` iterates the first index fastest — the same
+        # column-major order the sibling `_enumerate_declared_array_cells!`
+        # (and the manual linear-decode loop this replaced) produces.
+        for I in CartesianIndices(ntuple(d -> lo[d]:hi[d], length(lo)))
+            push!(array_cell_names, _cell_key(vname, collect(Int, Tuple(I))))
         end
     end
     return array_cell_names
@@ -833,10 +831,8 @@ function _seed_arrayop_init_u0!(u0::Vector{Float64}, init_equations,
         eq.rhs isa OpExpr && _is_aggregate_op((eq.rhs::OpExpr).op) || continue
         var_name = (eq.lhs::VarExpr).name
         rhs_op   = eq.rhs::OpExpr
-        idx_names_raw = rhs_op.output_idx === nothing ? Any[] : rhs_op.output_idx
-        idx_names = String[String(s) for s in idx_names_raw
-                           if s isa AbstractString || s isa String]
-        ranges_dict = rhs_op.ranges === nothing ? Dict{String,Any}() : rhs_op.ranges
+        idx_names = _output_idx_strings(rhs_op)
+        ranges_dict = _ranges_dict(rhs_op)
         body = rhs_op.expr_body
         body === nothing && continue
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
@@ -858,7 +854,7 @@ end
 
 # ---- Stage: discrete-cadence materialization split (the middle cadence phase) ----
 # From the set of INLINE-candidate array observeds (the geometry live-field taint
-# `_geom_inline_vars` ∪ the promoted-arrayop `_array_inline_vars`), pick the
+# `geom_inline_vars` ∪ the promoted-arrayop `array_inline_vars`), pick the
 # DISCRETE-cadence ones. A field is discrete-cadence iff BOTH:
 #   • it is PARAM-TAINTED — its defining expression (transitively, through the
 #     equation defs) reads a live `param_arrays` forcing buffer. A field over only
@@ -907,21 +903,10 @@ end
 # Dependency order over the discrete-materialize vars (a cache that gathers another
 # cache must fill AFTER it). Mirrors `_geom_setup_order`.
 function _discrete_fill_order(discrete_vars, discrete_defs)
-    order = String[]; done = Set{String}()
-    remaining = collect(discrete_vars)
-    while length(order) < length(discrete_vars)
-        progressed = false
-        for n in remaining
-            n in done && continue
-            deps = intersect(_referenced_var_names(discrete_defs[n]), discrete_vars)
-            if all(d -> d in done, deps)
-                push!(order, n); push!(done, n); progressed = true
-            end
-        end
-        progressed || throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
-            "cyclic dependency among discrete-cadence vars: $(setdiff(discrete_vars, done))"))
-    end
-    return order
+    return _dependency_order(collect(discrete_vars),
+        n -> intersect(_referenced_var_names(discrete_defs[n]), discrete_vars);
+        on_cycle=done -> throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+            "cyclic dependency among discrete-cadence vars: $(setdiff(discrete_vars, done))")))
 end
 
 # ---- Stage: discrete-cadence cache buffers + fill kernels ----
@@ -951,9 +936,8 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
                 "discrete-cadence var '$name' must be an arrayop/aggregate producer"))
         rop = rhs::OpExpr
-        idx_names = rop.output_idx === nothing ? String[] :
-            String[String(s) for s in rop.output_idx if s isa AbstractString || s isa String]
-        ranges = rop.ranges === nothing ? Dict{String,Any}() : rop.ranges
+        idx_names = _output_idx_strings(rop)
+        ranges = _ranges_dict(rop)
         rngs = Vector{Int}[collect(_expand_int_range(ranges[n])) for n in idx_names]
         for (d, r) in enumerate(rngs)
             (!isempty(r) && r == collect(1:length(r))) || throw(TreeWalkError(
@@ -1012,6 +996,435 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     mut.materialize! = materialize!
     mut.var_order = order
     return nothing
+end
+
+# ============================================================
+# 2c. Build phases
+# ============================================================
+# `_build_evaluator_impl` runs as four named phases, each a function of the
+# previous phases' NamedTuple-packed products (the packing only NAMES what used
+# to be ~20 locals threaded through one 400-line body; stage order and
+# semantics inside each phase are exactly the pre-split impl):
+#   1. `_build_lower_and_classify`        — equation pre-lowering + the
+#      build-owned variable classification (`cls`).
+#   2. `_build_partition_and_materialize` — the ODE variable partition, scalar
+#      parameter scope, setup-time geometry materialization, and the
+#      equation-stream rewrites down to the ic fold (`parts`).
+#   3. `_build_state_layout`              — array-cell discovery, the flat
+#      state-vector layout, u0 seeding, and the parameter NamedTuple (`layout`).
+#   4. `_build_compile_evaluator`         — observed split, const-array
+#      registry, forcing buffers, derivative compile + CSE, and the closure.
+
+# ---- Phase 1: equation pre-lowering + build-owned variable classification ----
+# Everything through the bare-alias registration: the synthesized/folded/lifted
+# equation stream plus the classification sets naming which array observeds are
+# owned by a setup/inline/materialize mechanism (and therefore carry no ODE
+# partition slot). `geom_inline_vars`/`array_inline_vars` are returned already
+# discrete-cut-adjusted when a `materialize_out` sink opted in.
+function _build_lower_and_classify(model::Model;
+        const_arrays::AbstractDict, param_arrays::AbstractDict,
+        vi_vars, has_value_invention::Bool, materialize_out)
+    # ---- Observed synthesis + equation pre-lowering ----
+    # (see `_prepare_model_equations`: expression-defined observed synthesis,
+    # WS4 elementwise array-observed fold, whole-array derivative lift)
+    equations, folded_array_obs = _prepare_model_equations(model)
+
+    # ---- Geometry variable discovery ----
+    # (see `_discover_geometry_vars`: direct clip rings, build-once setup vars,
+    # live-field inline vars, and the has_* gates)
+    geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars)
+    geom_inline_vars = geo.inline_vars
+
+    # ---- Promoted array observeds (shape-promotion inlining) ----
+    array_inline_vars = _collect_array_inline_vars(model, equations,
+        geo.setup_vars, geo.ring_vars, geom_inline_vars)
+
+    # ---- Discrete-cadence materialization split (the middle cadence phase) ----
+    # OPT-IN (gated on the `materialize_out` sink): pull the STATE-FREE live-field
+    # array observeds out of the inline sets — they change only at the refresh
+    # cadence and are materialized once per refresh into cache buffers (phase 4),
+    # rather than recomputed on every continuous step. Without the sink
+    # `discrete_vars` is empty and the inline sets are untouched (byte-identical
+    # to the pre-cut build).
+    discrete_vars = Set{String}()
+    if materialize_out !== nothing
+        pre_state = Set{String}(n for (n, v) in model.variables
+                                if v.type == StateVariable && !(n in vi_vars))
+        discrete_vars = _discrete_materialize_split(equations,
+            union(geom_inline_vars, array_inline_vars), pre_state,
+            Set{String}(String(k) for k in keys(param_arrays)))
+        setdiff!(geom_inline_vars, discrete_vars)
+        setdiff!(array_inline_vars, discrete_vars)
+    end
+
+    # ---- polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
+    pia_operand_vars, pia_operand_arrays =
+        _collect_pia_operand_arrays(model, equations, const_arrays, geo.has_pia)
+
+    # ---- const-op array observeds (in-file polygon rings / source fields) ----
+    const_obs_vars, const_obs_arrays = _collect_const_obs_arrays(model,
+        const_arrays, pia_operand_vars, geo.ring_vars,
+        geo.has_setup_geometry || has_value_invention)
+
+    # ---- bare-alias array observeds (keyed-factor re-exposure, esm-spec §4.6) ----
+    _register_bare_alias_arrays!(const_obs_arrays, const_obs_vars, model, equations;
+        const_arrays=const_arrays, pia_operand_vars=pia_operand_vars,
+        geom_ring_vars=geo.ring_vars, geom_setup_vars=geo.setup_vars,
+        geom_inline_vars=geom_inline_vars, array_inline_vars=array_inline_vars)
+
+    return (; equations, folded_array_obs,
+            has_geometry=geo.has_geometry,
+            has_setup_geometry=geo.has_setup_geometry,
+            geom_ring_vars=geo.ring_vars, geom_setup_vars=geo.setup_vars,
+            geom_defs=geo.defs, geom_inline_vars, array_inline_vars,
+            discrete_vars, pia_operand_vars, pia_operand_arrays,
+            const_obs_vars, const_obs_arrays)
+end
+
+# ---- Phase 2: ODE variable partition + setup materialization + equation rewrites ----
+# From the classified equation stream (`cls`) to the ODE-ready one: partition
+# the variables, resolve the scalar parameter scope, materialize the setup-time
+# geometry (clip rings / ranged clips / A_ij) and the derived index-set extents,
+# then run the equation rewrites in their pinned order — setup-equation drop,
+# join-gate resolution, index-set range resolution, value-invention drop,
+# discrete-cadence def extraction, and the `ic` fold.
+function _build_partition_and_materialize(model::Model, cls;
+        index_sets::AbstractDict, const_arrays::AbstractDict,
+        param_arrays::AbstractDict, parameter_overrides::AbstractDict,
+        registered_functions::AbstractDict, vi_vars, vi_extents::AbstractDict,
+        vi_maps, has_value_invention::Bool)
+    # ---- Partition variables ----
+    param_names, observed_names, state_var_names = _partition_variables(model;
+        vi_vars=vi_vars, geom_setup_vars=cls.geom_setup_vars,
+        geom_inline_vars=cls.geom_inline_vars,
+        array_inline_vars=cls.array_inline_vars,
+        folded_array_obs=cls.folded_array_obs,
+        pia_operand_vars=cls.pia_operand_vars,
+        const_obs_vars=cls.const_obs_vars, geom_ring_vars=cls.geom_ring_vars,
+        const_arrays=const_arrays, param_arrays=param_arrays,
+        discrete_vars=cls.discrete_vars)
+
+    # ---- Scalar parameter scope (load-time constants) ----
+    param_scope = _resolve_param_scope(model, param_names, parameter_overrides)
+
+    # ---- M4: materialize intersect_polygon clip rings at setup time ----
+    # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,
+    # registered in phase 4 as a 2D const_array; `derived_extents` maps each
+    # clip's `from_faq` key to its distinct-vertex count so the derived clip-ring
+    # index set resolves to `[1, n]` for the polygon_area FAQ.
+    geom_rings = Dict{String,Matrix{Float64}}()
+    derived_extents = (cls.has_geometry || has_value_invention) ?
+        Dict{String,Int}() : _EMPTY_DERIVED_EXTENTS
+    if cls.has_geometry
+        geom_rings, geom_extents =
+            _materialize_geometry_rings(cls.equations, const_arrays, cls.geom_ring_vars)
+        merge!(derived_extents, geom_extents)
+    end
+    # M4+: materialize the ranged-clip / per-pair-area / A_ij geometry into const
+    # arrays (and record the per-pair clip_ring extent) BEFORE index-set ranges are
+    # resolved, so the polygon_area FAQ's `clip_ring` range lowers to `[1, maxn]`.
+    geom_setup_arrays = Dict{String,AbstractArray{Float64}}()
+    if !isempty(cls.geom_setup_vars)
+        geom_setup_arrays = _materialize_geometry_setup(cls.geom_setup_vars,
+            cls.geom_defs, model, const_arrays, index_sets, derived_extents;
+            vi_maps=vi_maps.maps, param_overrides=parameter_overrides,
+            const_obs_arrays=cls.const_obs_arrays,
+            registered_functions=registered_functions)
+    end
+    # Value-invention derived index sets (skolem/distinct/rank) materialized via
+    # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
+    # supply each producer's distinct-set cardinality as the resolver's dense
+    # extent `[1, n]`, generalizing the geometry handoff to the relational engine.
+    merge!(derived_extents, Dict{String,Int}(String(k) => Int(v) for (k, v) in vi_extents))
+
+    # Geometry-setup vars (ranged clips / per-pair area / A_ij / their bin buffers)
+    # and direct clip rings are materialized at setup — drop their equations before
+    # the ODE-lowering passes so their join/filter/intersect_polygon nodes never
+    # reach the join-gate / index-set-range resolvers (those expect the relational/
+    # value-invention vocabulary, not the setup-geometry one).
+    # A polygon_intersection_area operand's const-ring equation is likewise dropped:
+    # its ring is materialized into const_arrays above, so its synthetic
+    # `operand = const(...)` equation must not reach the ODE-lowering passes.
+    ode_equations = Equation[eq for eq in cls.equations
+        if !(eq.lhs isa VarExpr && ((eq.lhs::VarExpr).name in cls.geom_ring_vars ||
+                                    (eq.lhs::VarExpr).name in cls.geom_setup_vars ||
+                                    (eq.lhs::VarExpr).name in cls.pia_operand_vars ||
+                                    (eq.lhs::VarExpr).name in cls.const_obs_vars))]
+
+    # ---- Resolve value-equality joins (RFC §5.3) ----
+    # Rewrite each aggregate's `join` clauses into build-time `join_gates` (a
+    # canonical bucket code per key-column position) BEFORE index-set ranges are
+    # resolved away — categorical members are read from the still-present
+    # `{from}` references here. No-op (byte-identical) for files without a join.
+    equations = _resolve_join_gates(ode_equations, index_sets, vi_maps)
+    init_equations = _resolve_join_gates(model.initialization_equations,
+                                         index_sets, vi_maps)
+
+    # ---- Resolve index-set references in ranges (RFC §5.2) ----
+    # Rewrite any `ranges[*]` `{from: <name>}` reference against the document's
+    # `index_sets` registry into the dense / dynamic-bound form the range
+    # machinery already consumes, BEFORE any range expansion runs. No-op (and
+    # therefore byte-identical) for files that use no `{from}` references.
+    #
+    # A RAGGED set's `offsets` keyed factor binds by BARE name in the model
+    # scope (§5.4; the grids' wiring contract), but flattening prefixes every
+    # variable with its owning component path while the document-scoped registry
+    # keeps the authored bare name. Map each bare factor name to its in-scope
+    # variable: an exact-name variable wins; otherwise the dot-suffix match at
+    # the SHALLOWEST namespace depth (the model's own re-exposed alias, not the
+    # mounted subsystem's original) — unique at that depth, else left bare so
+    # the existing unbound-name error surfaces. Empty (byte-identical) for
+    # documents without ragged index sets.
+    factor_scope = Dict{String,String}()
+    for (_, iset) in index_sets
+        (iset isa IndexSet && iset.kind == "ragged") || continue
+        for f in (iset.offsets, iset.values)
+            f === nothing && continue
+            fname = String(f)
+            (haskey(factor_scope, fname) || haskey(model.variables, fname)) && continue
+            cands = String[n for n in keys(model.variables)
+                           if endswith(n, "." * fname)]
+            isempty(cands) && continue
+            mindepth = minimum(count(==('.'), c) for c in cands)
+            best = String[c for c in cands if count(==('.'), c) == mindepth]
+            length(best) == 1 && (factor_scope[fname] = best[1])
+        end
+    end
+    equations = _resolve_index_set_ranges(equations, index_sets, derived_extents,
+                                          factor_scope)
+    init_equations = _resolve_index_set_ranges(init_equations,
+                                               index_sets, derived_extents,
+                                               factor_scope)
+
+    # ---- Drop value-invention equations from the ODE (RFC §6.1) ----
+    # The skolem/distinct/rank LHS vars are materialized at setup, not integrated;
+    # their defining equations (a relational aggregate RHS) must not reach the
+    # numeric pipeline. Their derived index-set extents were already harvested
+    # above, so the index-set ranges resolved before this filter.
+    if has_value_invention
+        equations = Equation[eq for eq in equations
+                             if !(_vi_typed_lhs_base(eq.lhs) in vi_vars)]
+        init_equations = Equation[eq for eq in init_equations
+                                  if !(_vi_typed_lhs_base(eq.lhs) in vi_vars)]
+    end
+
+    # ---- Extract discrete-cadence materialize defs (RANGE-RESOLVED) + drop them ----
+    # The discrete-cadence array observeds were kept through join-gate + index-set
+    # range resolution so their arrayop `ranges` lower to concrete `[1, n]`. Capture
+    # their resolved defining aggregates now (for the per-refresh fill kernels in
+    # phase 4) and remove their equations from the ODE stream — they are
+    # materialized into cache buffers, never compiled as observeds/derivatives.
+    # Empty (no-op) unless the `materialize_out` sink opted in.
+    discrete_defs = Dict{String,Expr}()
+    if !isempty(cls.discrete_vars)
+        kept = Equation[]
+        for eq in equations
+            if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in cls.discrete_vars
+                discrete_defs[(eq.lhs::VarExpr).name] = eq.rhs
+            else
+                push!(kept, eq)
+            end
+        end
+        equations = kept
+    end
+
+    # ---- Fold `ic(var) = <initial value>` equations into u0 (esm-spec v0.8.0) ----
+    # (see `_fold_ic_equations`; scoped-reference / array targets are deferred in
+    # `field_ics` and folded per cell by `_fold_field_ics!` once cells are known)
+    equations, eq_ics, field_ics =
+        _fold_ic_equations(equations, model, param_scope, registered_functions)
+
+    return (; param_names, observed_names, state_var_names, param_scope,
+            geom_rings, geom_setup_arrays, derived_extents,
+            equations, init_equations, discrete_defs, eq_ics, field_ics)
+end
+
+# ---- Phase 3: array-cell discovery + flat state layout + u0 / parameter tuple ----
+# Discover every array cell (declared shapes + `D(index(var,k))` usage), lay out
+# the flat state vector (scalars first, then array cells in column-major cell
+# order), fold the deferred field ics now that cells are known (mutating
+# `parts.eq_ics`), and seed u0 and the scalar-parameter NamedTuple.
+function _build_state_layout(model::Model, cls, parts;
+        initial_conditions::AbstractDict, index_sets::AbstractDict,
+        registered_functions::AbstractDict, const_arrays::AbstractDict, vi_vars)
+    # ---- Discover array cells from equations and initial conditions ----
+    # Array variable detection: a variable is treated as an array if it has
+    # an explicit non-empty shape, OR if it appears inside index(var, k...)
+    # in an equation LHS. This handles both declared-shape variables and the
+    # common pattern where shape=nothing but equations use D(index(var, k)). An
+    # explicit empty shape (`[]`, rank-0) is scalar, not an array.
+    array_var_names_declared = Set{String}(n for (n, v) in model.variables
+                                           if v.type == StateVariable &&
+                                              _is_array_shape(v.shape) &&
+                                              !(n in vi_vars))
+    # Detect array usage from equations even when shape is not declared.
+    array_var_names = _detect_array_vars(parts.equations, parts.state_var_names,
+                                         initial_conditions)
+    union!(array_var_names, array_var_names_declared)
+
+    # array_cells: var_name → sorted list of index-tuples (1-based)
+    array_cells = _discover_array_cells(parts.equations, initial_conditions,
+                                        array_var_names)
+    # Equation-less declared array states still get one u0 slot per cell.
+    _enumerate_declared_array_cells!(array_cells, model, index_sets,
+                                     parts.derived_extents, vi_vars)
+
+    # Scalar state variables: all state vars not treated as arrays.
+    scalar_state_names = String[]
+    for name in parts.state_var_names
+        name in array_var_names || push!(scalar_state_names, name)
+    end
+    sort!(scalar_state_names)
+
+    # Build per-var bounds for in-bounds / ghost-cell checks.
+    # array_var_info: var_name → (lo::Vector{Int}, hi::Vector{Int})
+    array_var_info = Dict{String, Tuple{Vector{Int},Vector{Int}}}()
+    for (vname, cells) in array_cells
+        isempty(cells) && continue
+        ndim = length(cells[1])
+        lo = [minimum(c[d] for c in cells) for d in 1:ndim]
+        hi = [maximum(c[d] for c in cells) for d in 1:ndim]
+        array_var_info[vname] = (lo, hi)
+    end
+
+    # ---- Fold scoped-reference / array `ic` equations into u0 (spec §11.4.1) ----
+    _fold_field_ics!(parts.eq_ics, parts.field_ics, array_cells, parts.param_scope,
+                     registered_functions, const_arrays)
+
+    # ---- Build flat state vector: scalars first, then array cells ----
+    array_cell_names = _enumerate_array_cell_names(array_cells, array_var_info)
+    all_state_names = vcat(scalar_state_names, array_cell_names)
+    var_map = Dict{String,Int}(name => i for (i, name) in enumerate(all_state_names))
+
+    # ---- Initial condition vector ----
+    u0 = _build_u0(model, scalar_state_names, array_cell_names,
+                   initial_conditions, parts.eq_ics)
+
+    # ---- Parameter NamedTuple ----
+    p_vals = Float64[]
+    p_syms = Symbol[]
+    for name in parts.param_names
+        push!(p_syms, Symbol(name))
+        push!(p_vals, parts.param_scope[name])  # resolved (override-or-default)
+    end
+    # Use `nothing` for parameter-free models: some SciMLBase versions enter
+    # an infinite recursion in SymbolicIndexingInterface when the problem
+    # carries an empty NamedTuple{(),()} as `p`. `nothing` is SciMLBase's
+    # canonical "no parameters" sentinel and avoids the dispatch loop.
+    p = isempty(p_syms) ? nothing :
+        NamedTuple{Tuple(p_syms)}(Tuple(p_vals))
+
+    return (; all_state_names, var_map, u0, p,
+            param_sym_set=Set(p_syms), array_var_info)
+end
+
+# ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
+# Observed substitution, the merged const-array registry, the live forcing
+# buffers, the (opt-in) discrete-cadence materializer, u0 seeding from
+# arrayop-valued initialization equations, the per-derivative compile + CSE,
+# and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
+function _build_compile_evaluator(model::Model, cls, parts, layout;
+        registered_functions::AbstractDict, const_arrays::AbstractDict,
+        const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
+        initial_conditions::AbstractDict, tspan, inspect, materialize_out)
+    u0 = layout.u0
+    p = layout.p
+    var_map = layout.var_map
+    param_sym_set = layout.param_sym_set
+    n_states = length(layout.all_state_names)
+
+    # ---- Observed substitution / derivative-equation split ----
+    derivative_eqs, resolved_obs = _split_observed_and_derivatives(parts.equations,
+        parts.observed_names, cls.geom_ring_vars, cls.geom_setup_vars,
+        cls.geom_inline_vars, cls.array_inline_vars)
+
+    # ---- Registered-function handlers ----
+    reg_funcs = Dict{String,Any}(String(k) => v
+                                 for (k, v) in registered_functions)
+
+    # ---- Const-array registry (caller arrays + boundaries + setup geometry) ----
+    const_registry = _register_const_arrays(const_arrays, const_array_boundaries,
+        parts.geom_rings, parts.geom_setup_arrays, cls.pia_operand_arrays,
+        cls.const_obs_arrays)
+
+    # ---- Build observability (the `inspect` kwarg; see BuildInspection) ----
+    # Copy the named build-time products into the caller's sink. Read-only with
+    # respect to the build: nothing downstream consults `inspect`.
+    if inspect !== nothing
+        for (k, arr) in parts.geom_setup_arrays
+            inspect.setup_arrays[String(k)] = Array{Float64}(arr)
+        end
+        for (k, arr) in const_registry
+            inspect.const_arrays[String(k)] = arr
+        end
+        for (k, e) in resolved_obs
+            inspect.observed_exprs[String(k)] = e
+        end
+        # Resolved scalar parameter values (load-time constants) so a build-time
+        # cellwise re-evaluation of a parameter-dependent observed / reference
+        # (§6.6.5) binds them — see `evaluate_cellwise(...; params=…)`.
+        for (k, val) in parts.param_scope
+            inspect.params[String(k)] = val
+        end
+    end
+
+    # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
+    # (see `_build_pgather` for the feasibility-gate design note)
+    pgather = _build_pgather(param_arrays)
+
+    # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
+    # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
+    # cache buffer added to `pgather`, so a downstream reader (a state RHS or a
+    # later discrete fill) GATHERS it live instead of inlining the whole met→physics
+    # stack. Runs BEFORE u0 seeding + derivative compile so both read the caches; the
+    # initial fill (inside) makes them valid immediately. No-op without the sink.
+    if materialize_out !== nothing
+        _build_discrete_materializer!(materialize_out, cls.discrete_vars,
+            parts.discrete_defs, resolved_obs, layout.array_var_info, var_map,
+            const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
+    end
+
+    # ---- Evaluate arrayop-valued initialization_equations into u0 ----
+    _seed_arrayop_init_u0!(u0, parts.init_equations, initial_conditions, var_map,
+                           layout.array_var_info, const_registry, pgather,
+                           param_sym_set, reg_funcs, p)
+
+    # ---- Build per-derivative compiled-IR list ----
+    # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
+    scalar_entries, vec_kernels = _compile_derivative_equations(derivative_eqs,
+        resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
+        param_sym_set, reg_funcs, n_states)
+    # States without a D(...) equation get du=0 (integrator leaves them
+    # at their initial value — a common pattern for reified constants).
+
+    # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
+    # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
+    # canonical_json key (within one RHS or across equations) are compiled once
+    # into a prelude that fills a per-call scratch cache, and each occurrence is a
+    # `_NK_CACHED` ref. Numerically identical to per-equation `_compile`; with no
+    # shared subexpressions the prelude is empty and the rhs nodes are byte-identical.
+    rhs_list, scalar_prelude, scalar_cache, cse_diag =
+        _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs)
+
+    # ---- Default tspan ----
+    tspan_default = _pick_tspan(tspan, model)
+
+    # ---- Closure ----
+    f! = _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
+
+    # Diagnostics for the N-independence property (ess-dhq acceptance #3): the
+    # number of array kernels and total compiled `_VecNode`s must be invariant
+    # across grid sizes; only the embedded slot/value vectors grow with N.
+    # `n_cse_slots` / `n_cse_occurrences` witness the CSE evaluate-once property
+    # (ess-r7h #2): distinct cached subexpressions vs total replaced occurrences.
+    diag = (; n_vec_kernels = length(vec_kernels),
+              n_scalar_entries = length(rhs_list),
+              template_node_count =
+                  sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
+              n_cse_slots = cse_diag.n_slots,
+              n_cse_occurrences = cse_diag.n_occurrences)
+
+    return f!, u0, p, tspan_default, var_map, diag
 end
 
 function _build_evaluator_impl(model::Model;
@@ -1073,352 +1486,31 @@ function _build_evaluator_impl(model::Model;
                          # the pre-cut behavior, byte-identical.
                          materialize_out::Union{Nothing,DiscreteMaterializer}=nothing)
     _has_value_invention = !isempty(_vi_vars)
-    # ---- Observed synthesis + equation pre-lowering ----
-    # (see `_prepare_model_equations`: expression-defined observed synthesis,
-    # WS4 elementwise array-observed fold, whole-array derivative lift)
-    _model_equations, _folded_array_obs = _prepare_model_equations(model, index_sets)
+    # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
+    cls = _build_lower_and_classify(model;
+        const_arrays=const_arrays, param_arrays=param_arrays, vi_vars=_vi_vars,
+        has_value_invention=_has_value_invention, materialize_out=materialize_out)
 
-    # ---- Geometry variable discovery ----
-    # (see `_discover_geometry_vars`: direct clip rings, build-once setup vars,
-    # live-field inline vars, and the has_* gates)
-    _geo = _discover_geometry_vars(model, _model_equations, param_arrays, _vi_vars)
-    _has_geometry = _geo.has_geometry
-    _has_setup_geometry = _geo.has_setup_geometry
-    _geom_ring_vars = _geo.ring_vars
-    _geom_setup_vars = _geo.setup_vars
-    _geom_defs = _geo.defs
-    _geom_inline_vars = _geo.inline_vars
+    # ---- Phase 2: ODE partition + setup materialization + equation rewrites ----
+    parts = _build_partition_and_materialize(model, cls;
+        index_sets=index_sets, const_arrays=const_arrays,
+        param_arrays=param_arrays, parameter_overrides=parameter_overrides,
+        registered_functions=registered_functions, vi_vars=_vi_vars,
+        vi_extents=_vi_extents, vi_maps=_vi_maps,
+        has_value_invention=_has_value_invention)
 
-    # ---- Promoted array observeds (shape-promotion inlining) ----
-    _array_inline_vars = _collect_array_inline_vars(model, _model_equations,
-        _geom_setup_vars, _geom_ring_vars, _geom_inline_vars)
+    # ---- Phase 3: array-cell discovery + flat state layout + u0/p ----
+    layout = _build_state_layout(model, cls, parts;
+        initial_conditions=initial_conditions, index_sets=index_sets,
+        registered_functions=registered_functions, const_arrays=const_arrays,
+        vi_vars=_vi_vars)
 
-    # ---- Discrete-cadence materialization split (the middle cadence phase) ----
-    # OPT-IN (gated on the `materialize_out` sink): pull the STATE-FREE live-field
-    # array observeds out of the inline sets — they change only at the refresh
-    # cadence and are materialized once per refresh into cache buffers (below),
-    # rather than recomputed on every continuous step. Without the sink `_discrete_vars`
-    # is empty and the inline sets are untouched (byte-identical to the pre-cut build).
-    _discrete_vars = Set{String}()
-    if materialize_out !== nothing
-        _pre_state = Set{String}(n for (n, v) in model.variables
-                                 if v.type == StateVariable && !(n in _vi_vars))
-        _discrete_vars = _discrete_materialize_split(_model_equations,
-            union(_geom_inline_vars, _array_inline_vars), _pre_state,
-            Set{String}(String(k) for k in keys(param_arrays)))
-        setdiff!(_geom_inline_vars, _discrete_vars)
-        setdiff!(_array_inline_vars, _discrete_vars)
-    end
-
-    # ---- polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
-    _pia_operand_vars, _pia_operand_arrays =
-        _collect_pia_operand_arrays(model, _model_equations, const_arrays, _geo.has_pia)
-
-    # ---- const-op array observeds (in-file polygon rings / source fields) ----
-    _const_obs_vars, _const_obs_arrays = _collect_const_obs_arrays(model,
-        const_arrays, _pia_operand_vars, _geom_ring_vars,
-        _has_setup_geometry || _has_value_invention)
-
-    # ---- bare-alias array observeds (keyed-factor re-exposure, esm-spec §4.6) ----
-    _register_bare_alias_arrays!(_const_obs_arrays, _const_obs_vars, model,
-        _model_equations, const_arrays, _pia_operand_vars, _geom_ring_vars,
-        _geom_setup_vars, _geom_inline_vars, _array_inline_vars)
-
-    # ---- Partition variables ----
-    scalar_state_names = String[]   # filled after array detection, below
-    param_names, observed_names, state_var_names = _partition_variables(model,
-        _vi_vars, _geom_setup_vars, _geom_inline_vars, _array_inline_vars,
-        _folded_array_obs, _pia_operand_vars, _const_obs_vars, _geom_ring_vars,
-        const_arrays, param_arrays, _discrete_vars)
-
-    # ---- Scalar parameter scope (load-time constants) ----
-    param_scope = _resolve_param_scope(model, param_names, parameter_overrides)
-
-    # ---- M4: materialize intersect_polygon clip rings at setup time ----
-    # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,
-    # registered below as a 2D const_array; `_derived_extents` maps each clip's
-    # `from_faq` key to its distinct-vertex count so the derived clip-ring index
-    # set resolves to `[1, n]` for the polygon_area FAQ.
-    _geom_rings = Dict{String,Matrix{Float64}}()
-    _derived_extents = (_has_geometry || _has_value_invention) ?
-        Dict{String,Int}() : _EMPTY_DERIVED_EXTENTS
-    if _has_geometry
-        _geom_rings, geom_extents =
-            _materialize_geometry_rings(_model_equations, const_arrays, _geom_ring_vars)
-        merge!(_derived_extents, geom_extents)
-    end
-    # M4+: materialize the ranged-clip / per-pair-area / A_ij geometry into const
-    # arrays (and record the per-pair clip_ring extent) BEFORE index-set ranges are
-    # resolved, so the polygon_area FAQ's `clip_ring` range lowers to `[1, maxn]`.
-    _geom_setup_arrays = Dict{String,AbstractArray{Float64}}()
-    if !isempty(_geom_setup_vars)
-        _geom_setup_arrays = _materialize_geometry_setup(_geom_setup_vars, _geom_defs,
-            model, const_arrays, index_sets, _derived_extents;
-            vi_maps=_vi_maps.maps, param_overrides=parameter_overrides,
-            const_obs_arrays=_const_obs_arrays,
-            registered_functions=registered_functions)
-    end
-    # Value-invention derived index sets (skolem/distinct/rank) materialized via
-    # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
-    # supply each producer's distinct-set cardinality as the resolver's dense
-    # extent `[1, n]`, generalizing the geometry handoff to the relational engine.
-    merge!(_derived_extents, Dict{String,Int}(String(k) => Int(v) for (k, v) in _vi_extents))
-
-    # Geometry-setup vars (ranged clips / per-pair area / A_ij / their bin buffers)
-    # and direct clip rings are materialized at setup — drop their equations before
-    # the ODE-lowering passes so their join/filter/intersect_polygon nodes never
-    # reach the join-gate / index-set-range resolvers (those expect the relational/
-    # value-invention vocabulary, not the setup-geometry one).
-    # A polygon_intersection_area operand's const-ring equation is likewise dropped:
-    # its ring is materialized into const_arrays above, so its synthetic
-    # `operand = const(...)` equation must not reach the ODE-lowering passes.
-    _ode_equations = Equation[eq for eq in _model_equations
-        if !(eq.lhs isa VarExpr && ((eq.lhs::VarExpr).name in _geom_ring_vars ||
-                                    (eq.lhs::VarExpr).name in _geom_setup_vars ||
-                                    (eq.lhs::VarExpr).name in _pia_operand_vars ||
-                                    (eq.lhs::VarExpr).name in _const_obs_vars))]
-
-    # ---- Resolve value-equality joins (RFC §5.3) ----
-    # Rewrite each aggregate's `join` clauses into build-time `join_gates` (a
-    # canonical bucket code per key-column position) BEFORE index-set ranges are
-    # resolved away — categorical members are read from the still-present
-    # `{from}` references here. No-op (byte-identical) for files without a join.
-    equations = _resolve_join_gates(_ode_equations, index_sets, _vi_maps)
-    init_equations = _resolve_join_gates(model.initialization_equations,
-                                         index_sets, _vi_maps)
-
-    # ---- Resolve index-set references in ranges (RFC §5.2) ----
-    # Rewrite any `ranges[*]` `{from: <name>}` reference against the document's
-    # `index_sets` registry into the dense / dynamic-bound form the range
-    # machinery already consumes, BEFORE any range expansion runs. No-op (and
-    # therefore byte-identical) for files that use no `{from}` references.
-    #
-    # A RAGGED set's `offsets` keyed factor binds by BARE name in the model
-    # scope (§5.4; the grids' wiring contract), but flattening prefixes every
-    # variable with its owning component path while the document-scoped registry
-    # keeps the authored bare name. Map each bare factor name to its in-scope
-    # variable: an exact-name variable wins; otherwise the dot-suffix match at
-    # the SHALLOWEST namespace depth (the model's own re-exposed alias, not the
-    # mounted subsystem's original) — unique at that depth, else left bare so
-    # the existing unbound-name error surfaces. Empty (byte-identical) for
-    # documents without ragged index sets.
-    _factor_scope = Dict{String,String}()
-    for (_, iset) in index_sets
-        (iset isa IndexSet && iset.kind == "ragged") || continue
-        for f in (iset.offsets, iset.values)
-            f === nothing && continue
-            fname = String(f)
-            (haskey(_factor_scope, fname) || haskey(model.variables, fname)) && continue
-            cands = String[n for n in keys(model.variables)
-                           if endswith(n, "." * fname)]
-            isempty(cands) && continue
-            mindepth = minimum(count(==('.'), c) for c in cands)
-            best = String[c for c in cands if count(==('.'), c) == mindepth]
-            length(best) == 1 && (_factor_scope[fname] = best[1])
-        end
-    end
-    equations = _resolve_index_set_ranges(equations, index_sets, _derived_extents,
-                                          _factor_scope)
-    init_equations = _resolve_index_set_ranges(init_equations,
-                                               index_sets, _derived_extents,
-                                               _factor_scope)
-
-    # ---- Drop value-invention equations from the ODE (RFC §6.1) ----
-    # The skolem/distinct/rank LHS vars are materialized at setup, not integrated;
-    # their defining equations (a relational aggregate RHS) must not reach the
-    # numeric pipeline. Their derived index-set extents were already harvested
-    # above, so the index-set ranges resolved before this filter.
-    if _has_value_invention
-        equations = Equation[eq for eq in equations
-                             if !(_vi_typed_lhs_base(eq.lhs) in _vi_vars)]
-        init_equations = Equation[eq for eq in init_equations
-                                  if !(_vi_typed_lhs_base(eq.lhs) in _vi_vars)]
-    end
-
-    # ---- Extract discrete-cadence materialize defs (RANGE-RESOLVED) + drop them ----
-    # The discrete-cadence array observeds were kept through join-gate + index-set
-    # range resolution so their arrayop `ranges` lower to concrete `[1, n]`. Capture
-    # their resolved defining aggregates now (for the per-refresh fill kernels below)
-    # and remove their equations from the ODE stream — they are materialized into
-    # cache buffers, never compiled as observeds/derivatives. Empty (no-op) unless
-    # the `materialize_out` sink opted in.
-    _discrete_defs = Dict{String,Expr}()
-    if !isempty(_discrete_vars)
-        _kept = Equation[]
-        for eq in equations
-            if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in _discrete_vars
-                _discrete_defs[(eq.lhs::VarExpr).name] = eq.rhs
-            else
-                push!(_kept, eq)
-            end
-        end
-        equations = _kept
-    end
-
-    # ---- Fold `ic(var) = <initial value>` equations into u0 (esm-spec v0.8.0) ----
-    # (see `_fold_ic_equations`; scoped-reference / array targets are deferred in
-    # `_field_ics` and folded per cell by `_fold_field_ics!` once cells are known)
-    equations, _eq_ics, _field_ics =
-        _fold_ic_equations(equations, model, param_scope, registered_functions)
-
-    # ---- Discover array cells from equations and initial conditions ----
-    # Array variable detection: a variable is treated as an array if it has
-    # an explicit non-empty shape, OR if it appears inside index(var, k...)
-    # in an equation LHS. This handles both declared-shape variables and the
-    # common pattern where shape=nothing but equations use D(index(var, k)). An
-    # explicit empty shape (`[]`, rank-0) is scalar, not an array.
-    array_var_names_declared = Set{String}(n for (n, v) in model.variables
-                                           if v.type == StateVariable &&
-                                              _is_array_shape(v.shape) &&
-                                              !(n in _vi_vars))
-    # Detect array usage from equations even when shape is not declared.
-    array_var_names = _detect_array_vars(equations, state_var_names,
-                                         initial_conditions)
-    union!(array_var_names, array_var_names_declared)
-
-    # array_cells: var_name → sorted list of index-tuples (1-based)
-    array_cells = _discover_array_cells(equations, initial_conditions,
-                                        array_var_names)
-    # Equation-less declared array states still get one u0 slot per cell.
-    _enumerate_declared_array_cells!(array_cells, model, index_sets,
-                                     _derived_extents, _vi_vars)
-
-    # Scalar state variables: all state vars not treated as arrays.
-    for name in state_var_names
-        name in array_var_names || push!(scalar_state_names, name)
-    end
-    sort!(scalar_state_names)
-
-    # Build per-var bounds for in-bounds / ghost-cell checks.
-    # array_var_info: var_name → (lo::Vector{Int}, hi::Vector{Int})
-    array_var_info = Dict{String, Tuple{Vector{Int},Vector{Int}}}()
-    for (vname, cells) in array_cells
-        isempty(cells) && continue
-        ndim = length(cells[1])
-        lo = [minimum(c[d] for c in cells) for d in 1:ndim]
-        hi = [maximum(c[d] for c in cells) for d in 1:ndim]
-        array_var_info[vname] = (lo, hi)
-    end
-
-    # ---- Fold scoped-reference / array `ic` equations into u0 (spec §11.4.1) ----
-    _fold_field_ics!(_eq_ics, _field_ics, array_cells, param_scope,
-                     registered_functions, const_arrays)
-
-    # ---- Build flat state vector: scalars first, then array cells ----
-    array_cell_names = _enumerate_array_cell_names(array_cells, array_var_info)
-    all_state_names = vcat(scalar_state_names, array_cell_names)
-    var_map = Dict{String,Int}(name => i for (i, name) in enumerate(all_state_names))
-
-    # ---- Initial condition vector ----
-    u0 = _build_u0(model, scalar_state_names, array_cell_names,
-                   initial_conditions, _eq_ics)
-
-    # ---- Parameter NamedTuple ----
-    p_vals = Float64[]
-    p_syms = Symbol[]
-    for name in param_names
-        push!(p_syms, Symbol(name))
-        push!(p_vals, param_scope[name])  # resolved above (override-or-default)
-    end
-    # Use `nothing` for parameter-free models: some SciMLBase versions enter
-    # an infinite recursion in SymbolicIndexingInterface when the problem
-    # carries an empty NamedTuple{(),()} as `p`. `nothing` is SciMLBase's
-    # canonical "no parameters" sentinel and avoids the dispatch loop.
-    p = isempty(p_syms) ? nothing :
-        NamedTuple{Tuple(p_syms)}(Tuple(p_vals))
-
-    # ---- Observed substitution / derivative-equation split ----
-    derivative_eqs, resolved_obs = _split_observed_and_derivatives(equations,
-        observed_names, _geom_ring_vars, _geom_setup_vars, _geom_inline_vars,
-        _array_inline_vars)
-
-    # ---- Registered-function handlers ----
-    reg_funcs = Dict{String,Any}(String(k) => v
-                                 for (k, v) in registered_functions)
-
-    # ---- Const-array registry (caller arrays + boundaries + setup geometry) ----
-    _const_arrays = _register_const_arrays(const_arrays, const_array_boundaries,
-        _geom_rings, _geom_setup_arrays, _pia_operand_arrays, _const_obs_arrays)
-
-    # ---- Build observability (the `inspect` kwarg; see BuildInspection) ----
-    # Copy the named build-time products into the caller's sink. Read-only with
-    # respect to the build: nothing downstream consults `inspect`.
-    if inspect !== nothing
-        for (k, arr) in _geom_setup_arrays
-            inspect.setup_arrays[String(k)] = Array{Float64}(arr)
-        end
-        for (k, arr) in _const_arrays
-            inspect.const_arrays[String(k)] = arr
-        end
-        for (k, e) in resolved_obs
-            inspect.observed_exprs[String(k)] = e
-        end
-        # Resolved scalar parameter values (load-time constants) so a build-time
-        # cellwise re-evaluation of a parameter-dependent observed / reference
-        # (§6.6.5) binds them — see `evaluate_cellwise(...; params=…)`.
-        for (k, val) in param_scope
-            inspect.params[String(k)] = val
-        end
-    end
-
-    # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
-    # (see `_build_pgather` for the feasibility-gate design note)
-    _pgather = _build_pgather(param_arrays)
-    param_sym_set = Set(p_syms)
-
-    # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
-    # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
-    # cache buffer added to `_pgather`, so a downstream reader (a state RHS or a
-    # later discrete fill) GATHERS it live instead of inlining the whole met→physics
-    # stack. Runs BEFORE u0 seeding + derivative compile so both read the caches; the
-    # initial fill (inside) makes them valid immediately. No-op without the sink.
-    if materialize_out !== nothing
-        _build_discrete_materializer!(materialize_out, _discrete_vars, _discrete_defs,
-            resolved_obs, array_var_info, var_map, _const_arrays, _pgather,
-            param_sym_set, reg_funcs, p, length(all_state_names))
-    end
-
-    # ---- Evaluate arrayop-valued initialization_equations into u0 ----
-    _seed_arrayop_init_u0!(u0, init_equations, initial_conditions, var_map,
-                           array_var_info, _const_arrays, _pgather,
-                           param_sym_set, reg_funcs, p)
-
-    # ---- Build per-derivative compiled-IR list ----
-    # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
-    scalar_entries, vec_kernels = _compile_derivative_equations(derivative_eqs,
-        resolved_obs, array_var_info, var_map, _const_arrays, _pgather,
-        param_sym_set, reg_funcs, length(all_state_names))
-    # States without a D(...) equation get du=0 (integrator leaves them
-    # at their initial value — a common pattern for reified constants).
-
-    # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
-    # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
-    # canonical_json key (within one RHS or across equations) are compiled once
-    # into a prelude that fills a per-call scratch cache, and each occurrence is a
-    # `_NK_CACHED` ref. Numerically identical to per-equation `_compile`; with no
-    # shared subexpressions the prelude is empty and the rhs nodes are byte-identical.
-    rhs_list, scalar_prelude, scalar_cache, cse_diag =
-        _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs)
-
-    # ---- Default tspan ----
-    tspan_default = _pick_tspan(tspan, model)
-
-    # ---- Closure ----
-    f! = _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
-
-    # Diagnostics for the N-independence property (ess-dhq acceptance #3): the
-    # number of array kernels and total compiled `_VecNode`s must be invariant
-    # across grid sizes; only the embedded slot/value vectors grow with N.
-    # `n_cse_slots` / `n_cse_occurrences` witness the CSE evaluate-once property
-    # (ess-r7h #2): distinct cached subexpressions vs total replaced occurrences.
-    diag = (; n_vec_kernels = length(vec_kernels),
-              n_scalar_entries = length(rhs_list),
-              template_node_count =
-                  sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
-              n_cse_slots = cse_diag.n_slots,
-              n_cse_occurrences = cse_diag.n_occurrences)
-
-    return f!, u0, p, tspan_default, var_map, diag
+    # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
+    return _build_compile_evaluator(model, cls, parts, layout;
+        registered_functions=registered_functions, const_arrays=const_arrays,
+        const_array_boundaries=const_array_boundaries, param_arrays=param_arrays,
+        initial_conditions=initial_conditions, tspan=tspan, inspect=inspect,
+        materialize_out=materialize_out)
 end
 
 # ---- Stage: per-derivative compiled-IR list ----
@@ -1432,8 +1524,8 @@ end
 # `_compile_arrayop_equation!`. Returns `(scalar_entries, vec_kernels)`.
 function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String,Expr}, array_var_info,
-        var_map::Dict{String,Int}, _const_arrays::AbstractDict,
-        _pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int)
+        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int)
     scalar_entries = Tuple{Int,Expr}[]
     vec_kernels = _VecKernel[]
     covered = falses(n_states)
@@ -1449,7 +1541,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             covered[idx] = true
             rhs = isempty(resolved_obs) ? eq.rhs :
                   _sub_preserving(eq.rhs, resolved_obs)
-            rhs_r = _resolve_indices(rhs, array_var_info, var_map, _const_arrays, _pgather)
+            rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_indexed_D_lhs(eq.lhs)
@@ -1470,13 +1562,13 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             covered[idx] = true
             rhs = isempty(resolved_obs) ? eq.rhs :
                   _sub_preserving(eq.rhs, resolved_obs)
-            rhs_r = _resolve_indices(rhs, array_var_info, var_map, _const_arrays, _pgather)
+            rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_arrayop_D_lhs(eq.lhs)
             _compile_arrayop_equation!(vec_kernels, covered, eq, resolved_obs,
-                                       array_var_info, var_map, _const_arrays,
-                                       _pgather, param_sym_set, reg_funcs)
+                                       array_var_info, var_map, const_registry,
+                                       pgather, param_sym_set, reg_funcs)
         end
     end
     return scalar_entries, vec_kernels
@@ -1489,23 +1581,19 @@ end
 # kernels (ess-dhq) rather than pushed individually into `rhs_list`; the
 # per-cell build logic (ghost cells, const-array inlining, joins/filters,
 # variable-valence bounds) is unchanged. Appends to `vec_kernels` and marks
-# `covered` for every cell it owns.
+# `covered` for every cell it owns. Two-branch dispatch: the symbolic-stencil
+# fast path when it applies, else the per-cell fallback
+# (`_compile_arrayop_percell!`).
 # (`vec_kernels` is a `Vector{_VecKernel}`; the annotation is omitted because
 # `_VecKernel` is defined in section 4b, after this build section.)
 function _compile_arrayop_equation!(vec_kernels,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,Expr},
         array_var_info, var_map::Dict{String,Int},
-        _const_arrays::AbstractDict, _pgather::AbstractDict,
+        const_registry::AbstractDict, pgather::AbstractDict,
         param_sym_set, reg_funcs)
-    cell_entries = Tuple{Int,_Node}[]
     lhs_op = eq.lhs::OpExpr
-    idx_names = String[]
-    for sym in (lhs_op.output_idx === nothing ? Any[] : lhs_op.output_idx)
-        (sym isa String || sym isa AbstractString) &&
-            push!(idx_names, String(sym))
-    end
-    ranges_dict = lhs_op.ranges === nothing ?
-                  Dict{String,Any}() : lhs_op.ranges
+    idx_names = _output_idx_strings(lhs_op)
+    ranges_dict = _ranges_dict(lhs_op)
     lhs_body = lhs_op.expr_body::OpExpr  # D(index(var, ...))
     rhs_body = _extract_arrayop_body(eq.rhs)
 
@@ -1519,29 +1607,31 @@ function _compile_arrayop_equation!(vec_kernels,
     # reduction, e.g. bound `index(n_edges_on_cell, i) - 1`).  We collect
     # the raw range spec for each contracted index and, for the constant
     # ones, precompute the global iterator; expression-valued ones
-    # (`contract_const[d] === nothing`) are expanded per output cell
-    # inside the loop below via `_expand_int_range_dyn`.
+    # (`contract_const[d] === nothing`) are expanded per output cell in the
+    # per-cell fallback via `_expand_contract_range`.
     contract_names = String[]
     contract_ranges = Vector{Any}[]            # raw [lo,hi]/[lo,step,hi]
     contract_const  = Union{Vector{Int},Nothing}[]  # nothing ⇒ per-cell
     # Semiring ⊕ and its 0̄ identity (§5.1). Default sum_product (+, 0̄=0).
     rhs_oplus = "+"
     rhs_zerobar = 0.0
+    # M2 join gates / filter predicate (§5.3 / §7.2) — constant per equation.
+    agg_gates = nothing
+    agg_filter = nothing
     if eq.rhs isa OpExpr && _is_aggregate_op((eq.rhs::OpExpr).op)
         rhs_op = eq.rhs::OpExpr
         rhs_oplus, rhs_zerobar =
             _aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce)
-        rhs_ranges = rhs_op.ranges === nothing ?
-                     Dict{String,Any}() : rhs_op.ranges
-        for n in sort!(collect(keys(rhs_ranges)))
-            if !(n in idx_names)
-                rspec = collect(rhs_ranges[n])
-                push!(contract_names, n)
-                push!(contract_ranges, rspec)
-                push!(contract_const,
-                      _is_const_int_range(rspec) ?
-                          collect(_expand_int_range(rspec)) : nothing)
-            end
+        agg_gates  = rhs_op.join_gates
+        agg_filter = rhs_op.filter
+        rhs_ranges = _ranges_dict(rhs_op)
+        contract_names = _contracted_index_names(rhs_ranges, idx_names)
+        for n in contract_names
+            rspec = collect(rhs_ranges[n])
+            push!(contract_ranges, rspec)
+            push!(contract_const,
+                  _is_const_int_range(rspec) ?
+                      collect(_expand_int_range(rspec)) : nothing)
         end
     end
 
@@ -1551,20 +1641,48 @@ function _compile_arrayop_equation!(vec_kernels,
     # per lane, instead of running sub→resolve→compile for every cell. Only
     # the no-contraction case qualifies; `_try_symbolic_stencil` returns
     # `nothing` (and leaves `covered` untouched) for anything it cannot model,
-    # so we fall back to the byte-identical per-cell loop below.
+    # so we fall back to the byte-identical per-cell loop.
     symbolic_kernels = (isempty(contract_names) && !_stencil_disabled()) ?
         _try_symbolic_stencil(rhs_body, idx_names, range_iters, lhs_body,
                               resolved_obs, array_var_info, var_map,
-                              _const_arrays, _pgather, param_sym_set, reg_funcs,
+                              const_registry, pgather, param_sym_set, reg_funcs,
                               covered) : nothing
     if symbolic_kernels !== nothing
         append!(vec_kernels, symbolic_kernels)
     else
-    # Per-cell fallback. Compile one representative per structural group: all
-    # cells of this equation share the same resolve/compile context, so a
-    # per-equation memo (a plain local, passed explicitly) lets every
-    # subexpression shared across cells resolve and compile exactly once
-    # instead of once per cell.
+        _compile_arrayop_percell!(vec_kernels, covered, lhs_body, rhs_body;
+            idx_names=idx_names, range_iters=range_iters,
+            contract_names=contract_names, contract_ranges=contract_ranges,
+            contract_const=contract_const, rhs_oplus=rhs_oplus,
+            rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
+            resolved_obs=resolved_obs, array_var_info=array_var_info,
+            var_map=var_map, const_registry=const_registry, pgather=pgather,
+            param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+    end
+    return nothing
+end
+
+# ---- Stage: arrayop per-cell fallback ----
+# Compile one representative per structural group: all cells of this equation
+# share the same resolve/compile context, so a per-equation memo (a plain
+# local, passed explicitly) lets every subexpression shared across cells
+# resolve and compile exactly once instead of once per cell. A contracted
+# (einsum) equation expands its reduction through the shared
+# `_foreach_aggregate_term` core and accumulates at runtime via
+# `_NK_CONTRACTION`; the per-cell nodes are then merged into whole-array
+# kernels (ess-dhq) — structurally-identical cells collapse to one template;
+# ghost boundaries / makearray regions / distinct valences form their own
+# (N-independent) groups. The equation-derived inputs are keyword-only (several
+# share a type, so positional passing could silently swap two of them).
+function _compile_arrayop_percell!(vec_kernels, covered::BitVector,
+        lhs_body::OpExpr, rhs_body::Expr;
+        idx_names::Vector{String}, range_iters,
+        contract_names::Vector{String}, contract_ranges, contract_const,
+        rhs_oplus::String, rhs_zerobar::Float64, agg_gates, agg_filter,
+        resolved_obs::Dict{String,Expr}, array_var_info,
+        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        pgather::AbstractDict, param_sym_set, reg_funcs)
+    cell_entries = Tuple{Int,_Node}[]
     cell_memo = _BuildMemo()
     for idx_tuple in Iterators.product(range_iters...)
         idx_env  = Dict{String,Int}(idx_names[d] => idx_tuple[d]
@@ -1600,7 +1718,7 @@ function _compile_arrayop_equation!(vec_kernels,
             # No contracted indices — standard unrolled-body path.
             sub_rhs = isempty(resolved_obs) ? sub_rhs_outer :
                       _sub_preserving(sub_rhs_outer, resolved_obs)
-            rhs_r = _resolve_indices(sub_rhs, array_var_info, var_map, _const_arrays, _pgather, cell_memo)
+            rhs_r = _resolve_indices(sub_rhs, array_var_info, var_map, const_registry, pgather, cell_memo)
             push!(cell_entries, (idx, _compile(rhs_r, var_map, param_sym_set, reg_funcs, cell_memo)))
         else
             # Generalized einsum: compile each contracted-index term
@@ -1616,43 +1734,26 @@ function _compile_arrayop_equation!(vec_kernels,
             for d in 1:length(contract_names)
                 cc = contract_const[d]
                 cell_contract_iters[d] = cc === nothing ?
-                    collect(_expand_int_range_dyn(contract_ranges[d],
-                                                  idx_env, _const_arrays)) :
+                    _expand_contract_range(contract_ranges[d], idx_env,
+                                           const_registry) :
                     cc
             end
-            # M2 (§5.3 / §7.2): the value-equality join gates (resolved at
-            # build time) and the boolean filter predicate restrict which
-            # contracted combinations contribute a ⊗-term. A join-rejected
-            # combination is dropped (so a degenerate join keeps every term
-            # and is byte-identical); a filter-rejected one contributes 0̄
-            # at runtime via an `ifelse` guard.
-            agg_gates  = eq.rhs isa OpExpr ? (eq.rhs::OpExpr).join_gates : nothing
-            agg_filter = eq.rhs isa OpExpr ? (eq.rhs::OpExpr).filter : nothing
+            # M2 (§5.3 / §7.2) via the shared `_foreach_aggregate_term` core:
+            # a join-rejected combination is dropped (so a degenerate join
+            # keeps every term and is byte-identical); a filter-rejected one
+            # contributes 0̄ at runtime via an `ifelse` guard. The filter
+            # carries this cell's (fixed) output-index substitution already,
+            # matching the hoisted `sub_rhs_outer`; the join binding seeds
+            # from this cell's `idx_env`.
+            filt_cell = agg_filter === nothing ? nothing :
+                        _sub_preserving(agg_filter, idx_exprs)
             k_nodes = _Node[]
-            # Reused across the contraction product (see the mirror in
-            # `_resolve_index_of_arrayop`): both dicts are read-only to their callees
-            # and carry a fixed key set, so overwrite-in-place beats a fresh `Dict`
-            # per tuple. `binding` seeds from this cell's `idx_env` once.
-            k_exprs = Dict{String,Expr}()
-            binding = agg_gates === nothing ? nothing : Dict{String,Int}(idx_env)
-            for k_tuple in Iterators.product(cell_contract_iters...)
-                if binding !== nothing
-                    for d in 1:length(contract_names)
-                        binding[contract_names[d]] = k_tuple[d]
-                    end
-                    _join_admits(agg_gates, binding) || continue
-                end
-                for d in 1:length(contract_names)
-                    k_exprs[contract_names[d]] = IntExpr(Int64(k_tuple[d]))
-                end
-                term = _sub_preserving(sub_rhs_outer, k_exprs)
-                if agg_filter !== nothing
-                    filt = _sub_preserving(_sub_preserving(agg_filter, idx_exprs), k_exprs)
-                    term = OpExpr("ifelse", Expr[filt, term, NumExpr(rhs_zerobar)])
-                end
+            _foreach_aggregate_term(sub_rhs_outer, contract_names,
+                                    cell_contract_iters, agg_gates, filt_cell,
+                                    rhs_zerobar, idx_env) do term
                 term = isempty(resolved_obs) ? term :
                        _sub_preserving(term, resolved_obs)
-                rhs_r = _resolve_indices(term, array_var_info, var_map, _const_arrays, _pgather, cell_memo)
+                rhs_r = _resolve_indices(term, array_var_info, var_map, const_registry, pgather, cell_memo)
                 push!(k_nodes, _compile(rhs_r, var_map, param_sym_set, reg_funcs, cell_memo))
             end
             if isempty(k_nodes)
@@ -1671,12 +1772,7 @@ function _compile_arrayop_equation!(vec_kernels,
             end
         end
     end
-    # Merge this equation's per-cell nodes into whole-array kernels
-    # (ess-dhq). Structurally-identical cells collapse to one template;
-    # ghost boundaries / makearray regions / distinct valences form their
-    # own (N-independent) groups.
     append!(vec_kernels, _vectorize_cell_entries(cell_entries))
-    end  # symbolic_kernels === nothing (per-cell fallback)
     return nothing
 end
 
