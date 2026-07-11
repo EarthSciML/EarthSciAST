@@ -25,26 +25,6 @@ const _AREA_DEG2RAD = π / 180
 _clip_col(idx::Expr, col::Int) =
     OpExpr("index", Expr[VarExpr("overlap_clip"), idx, IntExpr(col)])
 
-"""
-    _shoelace_area_faq(n) -> OpExpr
-
-The planar `polygon_area` FAQ over the closed clip ring: the Gauss–Green shoelace
-`0.5·Σ_v (x_v·y_{v+1} − x_{v+1}·y_v)` — an ordinary `sum_product` aggregate (§8.1),
-the same AST as `tests/valid/geometry/intersect_polygon_planar_area.esm`.
-"""
-function _shoelace_area_faq(n::Int)::OpExpr
-    v = VarExpr("v")
-    vnext = OpExpr("+", Expr[VarExpr("v"), IntExpr(1)])
-    cross = OpExpr("-", Expr[
-        OpExpr("*", Expr[_clip_col(v, 1), _clip_col(vnext, 2)]),
-        OpExpr("*", Expr[_clip_col(vnext, 1), _clip_col(v, 2)]),
-    ])
-    return OpExpr("aggregate", Expr[VarExpr("overlap_clip")];
-                  semiring="sum_product", output_idx=Any[],
-                  ranges=Dict{String,Any}("v" => [1, n]),
-                  expr_body=OpExpr("*", Expr[NumExpr(0.5), cross]))
-end
-
 # Unit 3-vector AST `(cosφ·cosλ, cosφ·sinλ, sinφ)` of clip-ring vertex `idx`.
 function _clip_unit_vec(idx::Expr)
     lon = OpExpr("*", Expr[_clip_col(idx, 1), NumExpr(_AREA_DEG2RAD)])
@@ -79,7 +59,8 @@ end
 The spherical `polygon_area` FAQ over the closed clip ring: the great-circle fan
 triangulation `Σ_v E(v_1, v_v, v_{v+1})` of Van Oosterom–Strackee spherical
 excesses — an ordinary `sum_product` aggregate (§8.1), the spherical sibling of
-[`_shoelace_area_faq`](@ref). Ranging the *full* closed ring is exact: the two
+the planar shoelace (evaluated directly by [`_planar_shoelace_area`](@ref) —
+see [`_polygon_area_via_faq`](@ref)). Ranging the *full* closed ring is exact: the two
 degenerate fan endpoints (`v=1` ⇒ `E(v_1,v_1,v_2)`, `v=n` ⇒ `E(v_1,v_n,v_1)`)
 carry zero excess, so the sum collapses to the `Σ_{i=2}^{n-1}` fan the oracle
 `_spherical_signed_area` computes. Unit sphere (radius 1).
@@ -97,23 +78,29 @@ end
 """
     _polygon_area_via_faq(closed_ring, manifold) -> Float64
 
-Evaluate the (unsigned) `polygon_area` FAQ for a CLOSED clip ring (`n+1` rows)
-through the generic aggregate machinery: register the ring as the `overlap_clip`
-const-array, build the planar shoelace / spherical-excess `sum_product` FAQ, and
-run it through `_resolve_indices` (→ `_resolve_scalar_arrayop`) + `evaluate_expr`
-— the same tree-walk path `build_evaluator` uses. Returns `0.0` for a degenerate
-(`< 3` distinct vertex) ring.
+Evaluate the (unsigned) `polygon_area` FAQ for a CLOSED clip ring (`n+1` rows).
+
+The SPHERICAL manifold routes through the generic aggregate machinery: register
+the ring as the `overlap_clip` const-array, build the spherical-excess
+`sum_product` FAQ ([`_spherical_area_faq`](@ref)), and run it through
+`_resolve_indices` (→ `_resolve_scalar_arrayop`) + `evaluate_expr` — the same
+tree-walk path `build_evaluator` uses.
+
+The PLANAR manifold BYPASSES the FAQ machinery entirely: it is evaluated
+directly by [`_planar_shoelace_area`](@ref) — the same operations, accumulation
+order, and per-term `0.5` factor as the symbolic shoelace `sum_product`
+aggregate routed through the generic machinery (bit-identical; verified
+bit-exact over random rings), with no AST or resolver allocation.
+
+Returns `0.0` for a degenerate (`< 3` distinct vertex) ring.
 """
 function _polygon_area_via_faq(closed_ring::AbstractMatrix, manifold::AbstractString)::Float64
     n = max(size(closed_ring, 1) - 1, 0)   # closed ring has n+1 rows
     n < 3 && return 0.0
-    # Planar fast path: evaluate the shoelace FAQ DIRECTLY (see
-    # `_planar_shoelace_area`) instead of building and resolving a fresh symbolic
-    # aggregate AST per polygon. In a conservative regrid this leaf runs once per
-    # overlapping cell pair; the AST build + `_resolve_indices` was ~70 KB and the
-    # bulk of the build-time area cost. The direct sum is byte-for-byte identical
-    # to routing `_shoelace_area_faq` through the generic machinery (verified
-    # bit-exact over random rings), so no result changes.
+    # Planar fast path — see the docstring: the direct shoelace sum, not the
+    # symbolic FAQ. In a conservative regrid this leaf runs once per overlapping
+    # cell pair; the per-polygon AST build + `_resolve_indices` was ~70 KB and
+    # the bulk of the build-time area cost.
     manifold == "planar" && return _planar_shoelace_area(closed_ring, n)
     faq = _spherical_area_faq(n)
     const_arrays = Dict{String,AbstractArray{Float64}}("overlap_clip" => Matrix{Float64}(closed_ring))
@@ -124,9 +111,11 @@ function _polygon_area_via_faq(closed_ring::AbstractMatrix, manifold::AbstractSt
 end
 
 # Direct evaluation of the planar shoelace `sum_product` FAQ over the closed clip
-# ring: `|0.5·Σ_{v=1}^{n} (x_v·y_{v+1} − x_{v+1}·y_v)|`. Same operations, same
-# accumulation order, same per-term `0.5` factor as `_shoelace_area_faq` evaluated
-# through `evaluate_expr` — bit-identical, but with no AST or resolver allocation.
+# ring: `|0.5·Σ_{v=1}^{n} (x_v·y_{v+1} − x_{v+1}·y_v)|` — the Gauss–Green
+# shoelace, the same AST semantics as
+# `tests/valid/geometry/intersect_polygon_planar_area.esm` evaluated through
+# `evaluate_expr` (same operations, same accumulation order, same per-term
+# `0.5` factor — bit-identical), but with no AST or resolver allocation.
 @inline function _planar_shoelace_area(closed_ring::AbstractMatrix, n::Int)::Float64
     acc = 0.0
     @inbounds for v in 1:n

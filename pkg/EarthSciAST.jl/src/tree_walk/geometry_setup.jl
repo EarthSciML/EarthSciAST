@@ -28,6 +28,11 @@
 # non-geometry file compiles byte-identically.
 
 # True iff any node in the subtree is an intersect_polygon op.
+# INTENTIONAL field subset (behavior-pinned — do NOT widen to `child_exprs`
+# coverage without a spec decision): walks args / expr_body only, NOT lower /
+# upper / filter / key / values / table_axes / ranges bounds. A clip nested in
+# e.g. a makearray region value would not seed the geometry-setup pass —
+# flagged for Wave 3.
 _expr_has_intersect_polygon(e::OpExpr) =
     e.op == "intersect_polygon" ||
     any(_expr_has_intersect_polygon, e.args) ||
@@ -58,6 +63,23 @@ function _geometry_operand(arg::Expr, const_arrays_kw::AbstractDict, who::Abstra
     return const_arrays_kw[name]
 end
 
+# Run one setup-time polygon clip, translating the geometry kernel's
+# `GeometryError` into the build-time diagnostic (`E_TREEWALK_GEOMETRY_CLIP`).
+# Shared by the single-ring materializer and the fused
+# `polygon_intersection_area` leaf. The RANGED clip
+# (`_materialize_ranged_clip`) deliberately does NOT use this wrapper: there a
+# failed / degenerate per-pair clip is a normal zero-area cell (RFC §5.8), not
+# an error.
+function _clip_or_treewalk_error(poly_a, poly_b, manifold::AbstractString)
+    try
+        return intersect_polygon(poly_a, poly_b, manifold)
+    catch err
+        err isa GeometryError &&
+            throw(TreeWalkError("E_TREEWALK_GEOMETRY_CLIP", err.msg))
+        rethrow()
+    end
+end
+
 # Evaluate every intersect_polygon clip ring at setup. Returns
 # `(rings, extents)`: observed-var-name → CLOSED ring matrix `[n+1, 2]`, and
 # `from_faq` key (the clip node `id` AND the observed var name) → distinct vertex
@@ -80,13 +102,7 @@ function _materialize_geometry_rings(equations, const_arrays_kw::AbstractDict,
             "intersect_polygon is strictly binary; '$vname' has $(length(op.args)) operand(s)"))
         poly_a = _geometry_operand(op.args[1], const_arrays_kw, vname)
         poly_b = _geometry_operand(op.args[2], const_arrays_kw, vname)
-        ring = try
-            intersect_polygon(poly_a, poly_b, manifold)
-        catch err
-            err isa GeometryError &&
-                throw(TreeWalkError("E_TREEWALK_GEOMETRY_CLIP", err.msg))
-            rethrow()
-        end
+        ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
         closed = close_ring(ring)
         rings[vname] = closed
         n = max(size(closed, 1) - 1, 0)   # closed ring has n+1 rows
@@ -114,6 +130,8 @@ end
 # machinery). This is the densely-evaluable narrow phase of a conservative regrid.
 
 # True iff any node in the subtree is a polygon_intersection_area op.
+# INTENTIONAL field subset — args / expr_body only, the exact mirror of
+# `_expr_has_intersect_polygon` above (see the Wave-3 note there).
 _expr_has_polygon_intersection_area(e::OpExpr) =
     e.op == "polygon_intersection_area" ||
     any(_expr_has_polygon_intersection_area, e.args) ||
@@ -203,13 +221,7 @@ generic `polygon_area` FAQ (`_polygon_area_via_faq`). Equals
 non-overlapping clip (`< 3` distinct vertices) has zero overlap area.
 """
 function _polygon_intersection_area(poly_a, poly_b, manifold::AbstractString)::Float64
-    ring = try
-        intersect_polygon(poly_a, poly_b, manifold)
-    catch err
-        err isa GeometryError &&
-            throw(TreeWalkError("E_TREEWALK_GEOMETRY_CLIP", err.msg))
-        rethrow()
-    end
+    ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
     size(ring, 1) < 3 && return 0.0
     return _polygon_area_via_faq(close_ring(ring), manifold)
 end
@@ -654,12 +666,27 @@ end
 # byte-identical; `min` / `max` / `prod` support a build-time BINNING-COORDINATE
 # projection over an in-file geometry array (e.g. `src_lon[i] = min_v src_poly[i,v,1]`,
 # RFC §8.6.1 broad phase) so the coordinate need not be supplied by the host.
+#
+# The identity VALUES are shared vocabulary with the runtime aggregate resolver:
+# sourced from `_OPLUS_IDENTITY` (tree_walk/semiring.jl) so the 0̄ constants live
+# in one table. Everything else DELIBERATELY diverges from
+# `_aggregate_oplus_identity` — behavior-pinned, flagged for a Wave-3 decision,
+# do not "unify" silently:
+#   * precedence: here `reduce` wins over `semiring`; the runtime resolver
+#     treats `semiring` as authoritative (§5.1);
+#   * spelling:  here the projection kinds `"sum"`/`"prod"` are accepted
+#     (`_REDUCE_PROJECTION_KINDS`); the runtime resolver speaks only ⊕
+#     spellings (`+`, `*`, `max`, `min`, `or`);
+#   * failure:   an unknown / absent spelling here silently falls back to the
+#     additive fold (so `semiring="sum_product"` — whose ⊕ IS `+` — and
+#     unspecified nodes keep their historical SUM); the runtime resolver throws
+#     E_TREEWALK_UNKNOWN_SEMIRING / E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE.
 function _geo_reduce_fold(reduce_spec, semiring_spec)
     r = reduce_spec !== nothing ? reduce_spec : semiring_spec
-    r == "min" && return (Inf, min)
-    r == "max" && return (-Inf, max)
-    (r == "prod" || r == "*") && return (1.0, *)
-    return (0.0, +)   # "+", "sum", "sum_product", or unspecified → additive fold
+    r == "min" && return (_OPLUS_IDENTITY["min"], min)
+    r == "max" && return (_OPLUS_IDENTITY["max"], max)
+    (r == "prod" || r == "*") && return (_OPLUS_IDENTITY["*"], *)
+    return (_OPLUS_IDENTITY["+"], +)   # "+", "sum", "sum_product", or unspecified → additive fold
 end
 
 # Materialize a geometry-derived array observed (e.g. `area[p]`, `A_ij[i,j]`) by
@@ -949,6 +976,12 @@ end
 # arrayop/aggregate as binding its references away — we need the array vars an
 # expression READS (intersected with declared variable names by the caller, which
 # drops bound loop indices). Used for the setup-geometry dependency closure.
+# INTENTIONAL field subset (behavior-pinned — do NOT widen to `child_exprs`
+# coverage without a spec decision): walks args / expr_body / lower / upper /
+# values, NOT filter / key / table_axes / ranges bounds. A variable read only
+# inside e.g. a filter predicate is therefore invisible to the setup-dependency
+# closure, the live-taint pass, and `_resolve_observed`'s inlining trigger —
+# flagged for Wave 3.
 function _referenced_var_names(expr, acc::Set{String}=Set{String}())
     if expr isa VarExpr
         push!(acc, expr.name)
@@ -966,6 +999,19 @@ function _referenced_var_names(expr, acc::Set{String}=Set{String}())
         end
     end
     return acc
+end
+
+# Run `sweep` — a `() -> Bool` "did this pass change anything" closure — until a
+# pass reports no change. The shared shape of the monotone set-propagation
+# passes in `_geometry_setup_vars` (live taint, scalar-observed block,
+# setup-forward, setup-backward) and the closure-materialization pass in
+# `_derive_binning_coords`: each caller owns its seed set(s) and grows them
+# inside `sweep`; saturation of a monotone pass over a finite universe always
+# terminates.
+function _saturate!(sweep::Function)
+    while sweep()
+    end
+    return nothing
 end
 
 function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
@@ -986,8 +1032,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
     # observed (inlined into its readers below), never pulled into setup where
     # F_src is unbound. Seed from the live param names, propagate through `defs`.
     tainted = Set{String}()
-    changed = true
-    while changed
+    _saturate!() do   # LIVE-TAINT pass: propagate live-param reads through `defs`
         changed = false
         for (n, rhs) in defs
             n in tainted && continue
@@ -996,6 +1041,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
                 push!(tainted, n); changed = true
             end
         end
+        changed
     end
     setup = Set{String}()
     for (n, _) in defs
@@ -1038,8 +1084,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
     # A no-op (byte-identical) for a pure-geometry regrid: nothing there reads a
     # computed scalar observed, so the block set is empty and setup is unchanged.
     blocked = Set{String}()
-    changed = true
-    while changed
+    _saturate!() do   # SCALAR-OBSERVED BLOCK pass: transitive setup-ineligibility
         changed = false
         for (n, rhs) in defs
             (is_arr_obs(n) && !(n in blocked)) || continue
@@ -1048,9 +1093,9 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
                 push!(blocked, n); changed = true
             end
         end
+        changed
     end
-    changed = true
-    while changed
+    _saturate!() do   # SETUP-FORWARD pass: state-free dependents of setup vars
         changed = false
         for (n, rhs) in defs
             (is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) &&
@@ -1061,6 +1106,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
                 push!(setup, n); changed = true
             end
         end
+        changed
     end
     # Backward pass: also materialize state-free array observeds REFERENCED BY a
     # setup var — the bin buffers a broad-phase `join` gates on (src_bin/tgt_bin),
@@ -1076,8 +1122,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
     # would hand `_materialize_geom_array` a bare `VarExpr` (no `output_idx` field)
     # and crash — a setup var reads the alias's value from `env`, it is not itself a
     # materialised aggregate.
-    changed = true
-    while changed
+    _saturate!() do   # SETUP-BACKWARD pass: state-free array observeds READ BY setup vars
         changed = false
         for n in collect(setup)
             for r in intersect(_referenced_var_names(defs[n]), mvars)
@@ -1089,6 +1134,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
                 push!(setup, r); changed = true
             end
         end
+        changed
     end
     return setup, defs, tainted
 end
@@ -1125,6 +1171,78 @@ function _vi_buf_vector(buf)
     return v
 end
 
+# The shared setup-time value environment (name → const array / scalar / bin
+# buffer) both build-time materializers read. Effective precedence, HIGHEST
+# first:
+#   vi_maps  >  param_overrides  >  scalar-param defaults  >  const_arrays_kw
+#            >  in-file `const`-op array observeds  >  const_obs_arrays
+# This one assembly serves both former copies because their outcomes were
+# already identical: `_materialize_geometry_setup` seeded kwarg-first and
+# guarded the `const`-op pass with `haskey` (kwarg wins); `_derive_binning_coords`
+# seeded `const`-op-first and let the kwarg pass overwrite (kwarg wins) — the
+# same final map for every key, differing only in Dict insertion order, which
+# nothing reads (every consumer does keyed lookups). The sources the binning
+# derivation never passes (`const_obs_arrays`, `vi_maps`) default to `nothing`
+# = skipped.
+#
+# Source notes (hoisted from the two call sites):
+#  * `const`-op array observeds (in-file polygon ring stacks / fields) are
+#    build-time literal data, seeded so a fused `polygon_intersection_area`
+#    aggregate can gather a per-cell ring via `index(src_poly, i)` at setup.
+#  * `const_obs_arrays` — resolved BARE-ALIAS const arrays
+#    (`src_poly := mesh.src_poly`) and other already-materialized const-op
+#    array observeds: a setup var reads the alias's VALUE from `env` (the alias
+#    is registered as a const array, never materialized as an aggregate).
+#  * scalar parameter OVERRIDES win over declared defaults: a setup-time node
+#    may reference `atol`/`dx`/`dy` (sliver floor / bin quantization) — known
+#    build-time constants that often have no `default`.
+#  * `vi_maps` — materialized value-invention bin buffers (`src_bin`/`tgt_bin`)
+#    a setup-time broad-phase `join` gates on; without the gate the denominator
+#    row-sum contracts DENSELY and picks up spurious sub-grid slivers, breaking
+#    the partition of unity (RFC §5.3 / §5.8).
+function _build_setup_env(model, const_arrays_kw;
+                          param_overrides=Dict{String,Float64}(),
+                          const_obs_arrays=nothing, vi_maps=nothing)
+    env = Dict{String,Any}()
+    for (k, v) in const_arrays_kw
+        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : v
+    end
+    for (n, v) in model.variables
+        (v.type == ObservedVariable && _is_array_shape(v.shape) && _is_const_op(v.expression)) || continue
+        haskey(env, n) && continue
+        env[n] = _const_op_to_array((v.expression::OpExpr).value)
+    end
+    if const_obs_arrays !== nothing
+        for (n, v) in const_obs_arrays
+            haskey(env, n) && continue
+            env[n] = v
+        end
+    end
+    for (n, v) in model.variables
+        v.type == ParameterVariable && !_is_array_shape(v.shape) && v.default !== nothing &&
+            (env[n] = Float64(v.default))
+    end
+    for (k, v) in param_overrides
+        env[String(k)] = Float64(v)
+    end
+    if vi_maps !== nothing
+        for (name, buf) in vi_maps
+            env[String(name)] = _vi_buf_vector(buf)
+        end
+    end
+    return env
+end
+
+# Declared shapes (index-set names per dim) — used to resolve join key columns.
+function _declared_var_shapes(model)
+    var_shapes = Dict{String,Vector{String}}()
+    for (n, v) in model.variables
+        v.shape === nothing && continue
+        var_shapes[n] = String[String(s) for s in v.shape if s isa AbstractString]
+    end
+    return var_shapes
+end
+
 # Evaluate the geometry-setup vars in dependency order into const arrays.
 # `vi_maps` carries any materialized value-invention bin buffers a setup-time
 # broad-phase `join` gates on (RFC §5.3); `param_overrides` carries scalar
@@ -1138,53 +1256,10 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
                                      registered_functions=Dict{String,Function}())
     out = Dict{String,AbstractArray{Float64}}()
     isempty(setup) && return out
-    env = Dict{String,Any}()
-    for (k, v) in const_arrays_kw
-        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : v
-    end
-    # `const`-op array observeds (in-file polygon ring stacks / fields) are
-    # build-time literal data: seed env with their materialized values so a fused
-    # `polygon_intersection_area` aggregate can gather a per-cell ring via
-    # `index(src_poly, i)` at setup. A const_arrays kwarg entry (if any) wins.
-    for (n, v) in model.variables
-        (v.type == ObservedVariable && _is_array_shape(v.shape) && _is_const_op(v.expression)) || continue
-        haskey(env, n) && continue
-        env[n] = _const_op_to_array((v.expression::OpExpr).value)
-    end
-    # Resolved BARE-ALIAS const arrays (`src_poly := mesh.src_poly`) and other
-    # already-materialized const-op array observeds: a setup var (an MPAS
-    # `polygon_intersection_area` over aliased mesh rings) reads the alias's value
-    # from `env`, since the alias is registered as a const array, not materialized
-    # as an aggregate. A `const`-op / kwarg entry already present wins.
-    for (n, v) in const_obs_arrays
-        haskey(env, n) && continue
-        env[n] = v
-    end
-    for (n, v) in model.variables
-        v.type == ParameterVariable && !_is_array_shape(v.shape) && v.default !== nothing &&
-            (env[n] = Float64(v.default))
-    end
-    # Scalar parameter OVERRIDES win over declared defaults: a setup-time geometry
-    # node may reference `atol`/`dx`/`dy` (the sliver floor / bin quantization),
-    # which are build-time constants known here but often have no `default`.
-    for (k, v) in param_overrides
-        env[String(k)] = Float64(v)
-    end
-    # Materialized value-invention bin buffers (`src_bin`/`tgt_bin`): a setup-time
-    # broad-phase `join` gate reads the per-cell bin key from these so the
-    # denominator row-sum (`A_j_w = Σ_i A_ij`) contracts over exactly the same
-    # candidate set as the numerator — without the gate it sums DENSELY and picks up
-    # the spurious sub-grid slivers a spherical clip emits for edge-adjacent cells,
-    # breaking the partition of unity (RFC §5.3 / §5.8).
-    for (name, buf) in vi_maps
-        env[String(name)] = _vi_buf_vector(buf)
-    end
-    # Declared shapes (index-set names per dim) — used to resolve join key columns.
-    var_shapes = Dict{String,Vector{String}}()
-    for (n, v) in model.variables
-        v.shape === nothing && continue
-        var_shapes[n] = String[String(s) for s in v.shape if s isa AbstractString]
-    end
+    env = _build_setup_env(model, const_arrays_kw;
+                           param_overrides=param_overrides,
+                           const_obs_arrays=const_obs_arrays, vi_maps=vi_maps)
+    var_shapes = _declared_var_shapes(model)
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
         arr = if _is_ranged_clip(rhs)
@@ -1234,32 +1309,15 @@ end
 # array, or another statically-determinable aggregate) still REJECT a genuinely
 # runtime coordinate — only §9.6.3-static build-time data becomes an index target.
 
-# A reduce-aggregate whose body reads only const-array factors already in `env`
-# (never a state / live field), contracting at least one non-output index — i.e. a
-# build-time coordinate projection eligible for the derivation above.
+# The `reduce` spellings that mark a 1-D aggregate observed as a build-time
+# coordinate-PROJECTION seed in `_derive_binning_coords` below (RFC §8.6.1).
+# The seed test there is deliberately the light check — reduce kind + declared
+# 1-D shape (or a value-invention index target); the heavier per-reference
+# state-freedom / build-time-constant checks run in the closure-materialization
+# pass, which is what actually gates evaluation. (A stricter up-front
+# `_is_reduce_projection_agg` predicate once duplicated those checks here; it
+# was dead — the seed test is the behavior — and has been removed.)
 const _REDUCE_PROJECTION_KINDS = ("min", "max", "sum", "prod")
-
-function _is_reduce_projection_agg(e, env, state_names)
-    (e isa OpExpr && _is_aggregate_op(e.op)) || return false
-    (e.reduce !== nothing && e.reduce in _REDUCE_PROJECTION_KINDS) || return false
-    (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
-    (e.ranges !== nothing && !isempty(e.ranges)) || return false
-    e.expr_body === nothing && return false
-    any(k -> !(k in e.output_idx), keys(e.ranges)) || return false   # genuine reduction
-    # Bound loop indices (the aggregate's own `ranges` / `output_idx` symbols) are
-    # not data references — only the FACTOR names the body gathers from must be
-    # build-time const arrays already in `env`.
-    bound = Set{String}(String(k) for k in keys(e.ranges))
-    for k in e.output_idx
-        push!(bound, String(k))
-    end
-    for r in _referenced_var_names(e)
-        r in bound && continue
-        r in state_names && return false        # must be build-time, not live state
-        haskey(env, r) || return false          # every referenced factor is a const array
-    end
-    return true
-end
 
 # The loop-bound symbols of an aggregate (its `ranges` keys + `output_idx`) — index
 # names, not data references.
@@ -1301,29 +1359,13 @@ end
 function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overrides,
                                 vi_index_targets=Set{String}())
     out = Dict{String,Vector{Float64}}()
-    env = Dict{String,Any}()
-    # In-file `const`-op array observeds (the `src_poly` / `tgt_poly` ring stacks) are
-    # build-time literal data the projection gathers per cell via `index(src_poly,i)`.
-    for (n, v) in model.variables
-        (v.type == ObservedVariable && _is_array_shape(v.shape) && _is_const_op(v.expression)) || continue
-        env[n] = _const_op_to_array((v.expression::OpExpr).value)
-    end
-    for (k, v) in const_arrays_kw
-        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : v
-    end
-    for (n, v) in model.variables
-        v.type == ParameterVariable && !_is_array_shape(v.shape) && v.default !== nothing &&
-            (env[n] = Float64(v.default))
-    end
-    for (k, v) in param_overrides
-        env[String(k)] = Float64(v)
-    end
+    # The shared setup env (see `_build_setup_env` for the precedence proof that
+    # this equals the assembly formerly inlined here): in-file `const`-op ring
+    # stacks the projection gathers per cell via `index(src_poly, i)`, the
+    # kwarg const arrays, and the scalar params/overrides.
+    env = _build_setup_env(model, const_arrays_kw; param_overrides=param_overrides)
     state_names = Set{String}(n for (n, v) in model.variables if v.type == StateVariable)
-    var_shapes = Dict{String,Vector{String}}()
-    for (n, v) in model.variables
-        v.shape === nothing && continue
-        var_shapes[n] = String[String(s) for s in v.shape if s isa AbstractString]
-    end
+    var_shapes = _declared_var_shapes(model)
 
     cand = _agg_array_obs_defs(model, env)   # materializable aggregate array observeds
     # Coordinate SEEDS: 1-D materializable coordinate buffers to derive.
@@ -1356,8 +1398,7 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
     # existing error). The fixpoint yields a valid topological order.
     derived_extents = Dict{String,Int}()
     accepted = Set{String}()
-    changed = true
-    while changed
+    _saturate!() do   # CLOSURE-MATERIALIZATION pass: accept once every dep resolves
         changed = false
         for n in want
             n in accepted && continue
@@ -1372,6 +1413,7 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
             env[n] = _materialize_geom_array(e, env, index_sets, derived_extents, var_shapes)
             push!(accepted, n); changed = true
         end
+        changed
     end
 
     # Return the 1-D coordinate seeds that materialised to a build-time constant.

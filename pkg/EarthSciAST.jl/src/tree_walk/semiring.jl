@@ -295,6 +295,12 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
     ranges = node.ranges === nothing ? Dict{String,Any}() : node.ranges
     sym_to_set = Dict{String,String}(
         s => spec.from for (s, spec) in ranges if spec isa IndexSetRef)
+    # `Vector{Any}`, not `_JoinGate[]`: the gates are stored on
+    # `OpExpr.join_gates::Union{Vector{Any},Nothing}` (types.jl — which is
+    # loaded before this file defines `_JoinGate`, so the field cannot name the
+    # concrete type). A typed vector here would just be converted (copied) to
+    # `Vector{Any}` at every `reconstruct`; the `g::_JoinGate` assert in
+    # `_join_admits` is the deliberate type-recovery point on the read side.
     gates = Vector{Any}()
     for clause in node.join            # clause :: Vector{Tuple{String,String}}
         for (lkey, rkey) in clause
@@ -310,7 +316,10 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
 end
 
 # True iff every join pair's key columns are equal under `binding` (symbol →
-# range position). `nothing` gates (no join) admit everything.
+# range position). `nothing` gates (no join) admit everything. The per-gate
+# `::_JoinGate` assert recovers the concrete type the `join_gates` field erases
+# (see the note in `_resolve_join_gates_for`) — required for a type-stable body
+# in the expansion product loops that call this per contracted tuple.
 function _join_admits(gates, binding::AbstractDict)
     gates === nothing && return true
     for g in gates
@@ -322,6 +331,11 @@ end
 
 # True if any node in the subtree carries a `join` clause — used to skip the
 # resolution pre-pass (and stay byte-identical) for join-free documents.
+# INTENTIONAL field subset (behavior-pinned — do NOT widen to `child_exprs`
+# coverage without a spec decision): walks args / expr_body / values / filter
+# only, NOT lower / upper / key / table_axes / ranges bounds. A join buried in
+# e.g. an integral bound would therefore skip the pre-pass even though
+# `_resolve_join_in_expr` does recurse those fields — flagged for Wave 3.
 function _expr_has_join(expr::OpExpr)
     expr.join !== nothing && return true
     any(_expr_has_join, expr.args) && return true
