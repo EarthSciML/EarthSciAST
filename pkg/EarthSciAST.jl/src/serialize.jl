@@ -57,6 +57,39 @@ function serialize_index_set(is::IndexSet)::Dict{String,Any}
     return d
 end
 
+# Wire encoding for one optional `OpExpr` field. Most fields are
+# identity-encoded JSON scalars/arrays; the exceptions carry bespoke encodings:
+#
+# - `lower` / `upper` / `expr_body` / `filter` / `key`: nested expression trees
+#   (`expr_body` lives under the JSON key "expr"; `key` is the value-invention
+#   producer's emitted skolem/tuple expression, RFC §5.5 / §6.1).
+# - `values`: one nested expression per `regions` entry (`makearray`).
+# - `ranges`: dense integer/expression tuples or index-set reference objects
+#   (`_serialize_range_value`, RFC §5.2).
+# - `table_axes`: the table_lookup per-axis input expression map, stored under
+#   the JSON key "axes" (esm-spec §9.5); `output` is preserved verbatim
+#   (Int or String) by the identity default.
+# - `join` (M2, RFC §5.3 / §7.2): round-trips back to the wire clause form
+#   `[{ "on": [[left, right], …] }, …]`.
+# - `bindings`: the expression-template parameter → argument-expression map.
+function _serialize_opexpr_field(field::Symbol, v)
+    if field === :lower || field === :upper || field === :expr_body ||
+       field === :filter || field === :key
+        return serialize_expression(v)
+    elseif field === :values
+        return [serialize_expression(x) for x in v]
+    elseif field === :ranges
+        return Dict{String,Any}(k => _serialize_range_value(x) for (k, x) in v)
+    elseif field === :table_axes || field === :bindings
+        return Dict{String,Any}(k => serialize_expression(x) for (k, x) in v)
+    elseif field === :join
+        return [Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
+                for clause in v]
+    else
+        return v
+    end
+end
+
 """
     serialize_expression(expr::Expr) -> Any
 
@@ -75,120 +108,24 @@ function serialize_expression(expr::Expr)
     elseif isa(expr, VarExpr)
         return expr.name
     elseif isa(expr, OpExpr)
+        # The optional-field portion is DRIVEN BY `OPEXPR_WIRE_KEYS` (parse.jl),
+        # the single OpExpr field ↔ wire-key contract, so a newly added struct
+        # field cannot be forgotten here: once it joins the table it is emitted
+        # under its wire key (identity-encoded unless `_serialize_opexpr_field`
+        # gives it a bespoke encoding), and `round_trip_regression_test.jl`
+        # pins the wire form field-by-field. Every optional field is emitted
+        # only when present (`!== nothing`) so nodes round-trip
+        # byte-identically; `join_gates` — the build-time resolved join — is
+        # deliberately absent from the table and is never serialized.
         result = Dict{String,Any}(
             "op" => expr.op,
             "args" => [serialize_expression(arg) for arg in expr.args]
         )
-        if expr.wrt !== nothing
-            result["wrt"] = expr.wrt
-        end
-        if expr.dim !== nothing
-            result["dim"] = expr.dim
-        end
-        if expr.int_var !== nothing
-            result["var"] = expr.int_var
-        end
-        if expr.lower !== nothing
-            result["lower"] = serialize_expression(expr.lower)
-        end
-        if expr.upper !== nothing
-            result["upper"] = serialize_expression(expr.upper)
-        end
-        if expr.output_idx !== nothing
-            result["output_idx"] = expr.output_idx
-        end
-        if expr.expr_body !== nothing
-            result["expr"] = serialize_expression(expr.expr_body)
-        end
-        if expr.reduce !== nothing
-            result["reduce"] = expr.reduce
-        end
-        if expr.semiring !== nothing
-            result["semiring"] = expr.semiring
-        end
-        if expr.ranges !== nothing
-            result["ranges"] = Dict{String,Any}(
-                k => _serialize_range_value(v) for (k, v) in expr.ranges
-            )
-        end
-        if expr.regions !== nothing
-            result["regions"] = expr.regions
-        end
-        if expr.values !== nothing
-            result["values"] = [serialize_expression(v) for v in expr.values]
-        end
-        if expr.shape !== nothing
-            result["shape"] = expr.shape
-        end
-        if expr.perm !== nothing
-            result["perm"] = expr.perm
-        end
-        if expr.axis !== nothing
-            result["axis"] = expr.axis
-        end
-        if expr.fn !== nothing
-            result["fn"] = expr.fn
-        end
-        if expr.name !== nothing
-            result["name"] = expr.name
-        end
-        if expr.value !== nothing
-            result["value"] = expr.value
-        end
-        # table_lookup (esm-spec §9.5, v0.4.0). Stored under JSON key "axes"
-        # on the wire. ``output`` is preserved verbatim (Int or String).
-        if expr.table !== nothing
-            result["table"] = expr.table
-        end
-        if expr.table_axes !== nothing
-            result["axes"] = Dict{String,Any}(
-                k => serialize_expression(v) for (k, v) in expr.table_axes
-            )
-        end
-        if expr.output !== nothing
-            result["output"] = expr.output
-        end
-        # M2 (RFC §5.3 / §7.2): value-equality `join` clauses and the boolean
-        # `filter` predicate. `join` round-trips back to the wire form
-        # `[{ "on": [[left, right], …] }, …]`; the internal resolved
-        # `join_gates` is a build artifact and is never serialized.
-        if expr.join !== nothing
-            result["join"] = [
-                Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
-                for clause in expr.join
-            ]
-        end
-        if expr.filter !== nothing
-            result["filter"] = serialize_expression(expr.filter)
-        end
-        # M4 geometry kernel (RFC §8.1): node `id` (§6.1) + `intersect_polygon`
-        # `manifold` — emitted only when present so non-geometry nodes round-trip
-        # byte-identically.
-        if expr.id !== nothing
-            result["id"] = expr.id
-        end
-        if expr.manifold !== nothing
-            result["manifold"] = expr.manifold
-        end
-        # Value-invention producer vocabulary (RFC §5.5 / §6.1): the `distinct`
-        # set-former flag and the emitted `key` expression. Emitted only when
-        # present so non-producer nodes round-trip byte-identically.
-        if expr.distinct !== nothing
-            result["distinct"] = expr.distinct
-        end
-        if expr.key !== nothing
-            result["key"] = serialize_expression(expr.key)
-        end
-        # Arg-witness index symbol (argmin/argmax) and expression-template
-        # bindings — emitted only when present so other nodes round-trip
-        # byte-identically.
-        if expr.arg !== nothing
-            result["arg"] = expr.arg
-        end
-        if expr.bindings !== nothing
-            result["bindings"] = Dict{String,Any}(
-                k => serialize_expression(v) for (k, v) in expr.bindings
-            )
+        for (field, wire_key) in pairs(OPEXPR_WIRE_KEYS)
+            (field === :op || field === :args) && continue
+            v = getfield(expr, field)
+            v === nothing && continue
+            result[string(wire_key)] = _serialize_opexpr_field(field, v)
         end
         return result
     else
@@ -768,7 +705,7 @@ function serialize_coupling_entry(entry::CouplingEntry)::Dict{String,Any}
     elseif entry isa CouplingCallback
         return serialize_callback(entry)
     elseif entry isa CouplingEvent
-        return serialize_event(entry)
+        return serialize_coupling_event(entry)
     elseif entry isa CouplingImport
         return serialize_coupling_import(entry)
     else
@@ -900,11 +837,17 @@ function serialize_callback(entry::CouplingCallback)::Dict{String,Any}
 end
 
 """
-    serialize_event(entry::CouplingEvent) -> Dict{String,Any}
+    serialize_coupling_event(entry::CouplingEvent) -> Dict{String,Any}
 
-Serialize event coupling entry.
+Serialize an `event` coupling entry. Named `serialize_coupling_event` —
+mirroring the parser's `coerce_coupling_event` — rather than a
+`serialize_event(::CouplingEvent)` method of the model-event serializer
+above: the two wire shapes are unrelated (this one carries the `type`/
+`event_type` discriminators), so sharing the generic name only invited
+accidental dispatch coupling. Internal (unexported); reached via
+`serialize_coupling_entry`.
 """
-function serialize_event(entry::CouplingEvent)::Dict{String,Any}
+function serialize_coupling_event(entry::CouplingEvent)::Dict{String,Any}
     result = Dict{String,Any}(
         "type" => "event",
         "event_type" => entry.event_type,
@@ -1119,7 +1062,12 @@ end
     save(path::String, file::EsmFile)
 
 Save an EsmFile object to a JSON file at the specified path.
-Accepts either argument order for ergonomics (file, path) or (path, file).
+
+Both argument orders are accepted and part of the frozen public API — the
+`(path, file)` order matches the ergonomic "destination first" habit and
+cannot be removed without breaking callers. The CANONICAL order is
+`save(file, path)` (data first, like `write(io, x)` and the `save(file, io)`
+stream method below); prefer it in new code and documentation.
 """
 function save(file::EsmFile, path::String)
     open(path, "w") do io

@@ -30,6 +30,16 @@ const ESM_FORMAT_VERSION = "0.8.0"
 Abstract base type for all mathematical expressions in the ESM format.
 Expressions can be numeric literals, variable references, or operator nodes.
 """
+# NAME SHADOWING — deliberate and permanent: `EarthSciAST.Expr` shadows
+# `Core.Expr` (Julia's own AST node type) inside this module and for any
+# consumer that does `using EarthSciAST` (the name is exported). It is kept
+# because the exported API is frozen — renaming would break every downstream
+# `::Expr` annotation — and because the ESM spec calls this concept
+# "Expression"/"Expr" in all five bindings. Consequences to be aware of:
+# module-internal code that needs Julia's type must write `Core.Expr`
+# (see codegen.jl), and struct fields that would naturally be called `expr`
+# use `expr_body`-style names (e.g. `OpExpr.expr_body` for the wire key
+# "expr") to avoid confusing the two vocabularies.
 abstract type Expr end
 
 """
@@ -637,6 +647,14 @@ Inline validation test for a Model (schema gt-cc1). Defines the run
 configuration — initial conditions, parameter overrides, simulation time
 span — and a list of scalar assertions that must hold.
 """
+# NAME SHADOWING — deliberate: `EarthSciAST.Test` collides with the `Test`
+# STANDARD-LIBRARY MODULE, which every test suite brings in via `using Test`.
+# The type is intentionally NOT exported, and internal code + test code always
+# write it qualified (`EarthSciAST.Test`) so the stdlib module keeps the bare
+# name. The name itself is kept (rather than e.g. `InlineTest`) because it is
+# the schema's own name for the construct (`models.*.tests`, gt-cc1) and is
+# referenced as `EarthSciAST.Test` by downstream model repositories — renaming
+# would be an API break for no wire-level gain.
 struct Test
     id::String
     description::Union{String,Nothing}
@@ -958,6 +976,10 @@ struct CouplingVariableMap <: CouplingEntry
 
     function CouplingVariableMap(from::String, to::String, transform::Union{String,Expr};
                                  factor=nothing, description=nothing, lifting=nothing)
+        # SINGLE enforcement point for the "expression transform takes no
+        # factor" invariant. The parser (`coerce_variable_map`, parse.jl) does
+        # not pre-check; it catches this ArgumentError and rebrands it as a
+        # ParseError so `load` keeps its historical error type/message.
         if transform isa Expr && factor !== nothing
             throw(ArgumentError("variable_map: an expression `transform` takes no `factor` (fold the scaling into the expression)"))
         end
@@ -1153,6 +1175,12 @@ end
 
 Registered runtime operator (by reference).
 Platform-specific computational kernels and operations.
+
+DEPRECATION NOTE: the top-level `operators` wire block was REMOVED in
+esm-spec v0.3.0 (§9 closure) — `load` rejects it as a hard `ParseError` and
+`serialize_esm_file` refuses to emit it. This type (and `EsmFile.operators`)
+survives for in-memory compatibility only: it remains exported public API and
+removing it would be a breaking change, but it can no longer reach the wire.
 """
 struct Operator
     operator_id::String
@@ -1179,6 +1207,9 @@ end
     RegisteredFunctionSignature
 
 Calling convention for a [`RegisteredFunction`](@ref). See esm-spec §9.2.
+
+DEPRECATION NOTE: in-memory compatibility surface only — see the note on
+[`RegisteredFunction`](@ref).
 """
 struct RegisteredFunctionSignature
     arg_count::Int
@@ -1198,6 +1229,14 @@ A named pure function that may be invoked inside expressions via the `call`
 op (see esm-spec §4.4 / §9.2). The serialized entry declares the calling
 contract only; the concrete implementation is supplied by the runtime through
 a handler registry (in Julia, via `@register_symbolic`).
+
+DEPRECATION NOTE: the `call` op and the top-level `registered_functions` wire
+block were REMOVED in esm-spec v0.3.0 (§9 closure, superseded by the CLOSED
+function registry reached via `fn` ops) — `load` rejects the block as a hard
+`ParseError` and `serialize_esm_file` refuses to emit it. This type (and
+`EsmFile.registered_functions`) survives for in-memory compatibility only: it
+remains exported public API and removing it would be a breaking change, but it
+can no longer reach the wire.
 """
 struct RegisteredFunction
     id::String
@@ -1375,6 +1414,12 @@ struct EsmFile
     models::Union{Dict{String,Model},Nothing}
     reaction_systems::Union{Dict{String,ReactionSystem},Nothing}
     data_loaders::Union{Dict{String,DataLoader},Nothing}
+    # DEPRECATION NOTE: `operators` / `registered_functions` were removed from
+    # the WIRE format in esm-spec v0.3.0 (§9 closure): `load` rejects the
+    # blocks and `serialize_esm_file` refuses to emit them, so both fields are
+    # always `nothing` for a loaded file. They survive here for in-memory
+    # compatibility only (removing them would break the exported constructor
+    # surface); see the notes on `Operator` / `RegisteredFunction`.
     operators::Union{Dict{String,Operator},Nothing}
     registered_functions::Union{Dict{String,RegisteredFunction},Nothing}
     coupling::Vector{CouplingEntry}
@@ -1432,6 +1477,9 @@ struct QualifiedReferenceError <: Exception
     reference::String
     path::Vector{String}
 end
+
+Base.showerror(io::IO, e::QualifiedReferenceError) =
+    print(io, "QualifiedReferenceError: ", e.message, " (reference: '", e.reference, "')")
 
 """
     ReferenceResolution
