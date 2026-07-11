@@ -155,11 +155,11 @@ Build a `ModelingToolkit.PDESystem` from a flattened ESM system. Errors with
 a clear redirect to `ModelingToolkit.System` when the flattened system is a
 pure ODE.
 
-Boundary conditions are derived from slice-derived surface source patterns
-(see below). Initial conditions are NOT passed to the PDESystem constructor:
-state-variable defaults ride along as default-value metadata on the symbolic
-variables themselves (attached in `_build_var_dict`), and downstream
-discretizers must read them from there.
+Boundary conditions are the slice-derived flux BCs (see below) plus the
+initial-condition equations `v(t=0, x…) ~ value` — one per state variable,
+from its explicit `ic(...)` equation if present, else its declared default. A
+`PDESystem` takes ICs as explicit equations, unlike the ODE path where a
+default rides into `ODEProblem` u0 as symbolic default-value metadata.
 
 ## Surface-source → flux boundary condition lowering
 
@@ -198,9 +198,14 @@ function ModelingToolkit.PDESystem(flat::FlattenedSystem;
     slice_bcs, slice_vars_to_drop = _lower_slice_sources_to_bcs!(
         flat, var_dict, t_sym, dim_dict)
 
+    # Route `ic(var) = value` equations out of the PDE set (as the ODE path
+    # does) — `_esm_to_symbolic` has no `ic` handler — collecting the explicit
+    # initial values.
+    ic_values, dyn_equations = _split_ic_equations(flat, var_dict, t_sym, dim_dict)
+
     MTKEquation = ModelingToolkit.Equation
     eqs = Vector{MTKEquation}()
-    for eq in flat.equations
+    for eq in dyn_equations
         # Skip ODEs on slice variables that were lowered to flux BCs
         if _is_odelhs_for_slice_var(eq, slice_vars_to_drop)
             continue
@@ -210,17 +215,23 @@ function ModelingToolkit.PDESystem(flat::FlattenedSystem;
         push!(eqs, lhs ~ rhs)
     end
 
-    # Initial conditions are deliberately NOT built as explicit `v ~ default`
-    # equations here (an earlier `ics` vector was assembled from
-    # state-variable defaults but never handed to the PDESystem constructor
-    # below, so it was dead code). State defaults are already attached as
-    # default-value metadata on the symbolic variables in `_build_var_dict`;
-    # actually passing IC equations to PDESystem would be a behavior change.
-
-    # The boundary conditions are exactly the slice-derived flux BCs — the
-    # ESM `Domain` carries no BC declarations at this seam, so there is
-    # nothing to merge them with.
-    bcs = slice_bcs
+    # Boundary conditions: the slice-derived flux BCs, plus one initial-
+    # condition equation `v(t=0, x…) ~ value` per state variable. A PDESystem
+    # takes ICs as explicit equations (the ODE path instead folds a default
+    # into `ODEProblem` u0 as symbolic default metadata). The value is the
+    # explicit `ic(...)` if present, else the state's declared default; slice
+    # variables lowered to flux BCs and states with no initial value are
+    # skipped. `flat.state_variables` is an OrderedDict, so the emitted IC
+    # order is deterministic.
+    ic_override = Dict{String,Any}(ic_values)
+    bcs = copy(slice_bcs)
+    for (vname, mvar) in flat.state_variables
+        vname in slice_vars_to_drop && continue
+        val = get(ic_override, vname, mvar.default)
+        (val === nothing || !haskey(var_dict, vname)) && continue
+        v_at_t0 = Symbolics.substitute(var_dict[vname], Dict(t_sym => 0.0))
+        push!(bcs, v_at_t0 ~ val)
+    end
 
     # Build the independent variable vector and domain specification
     iv_syms = [t_sym; spatial_syms...]

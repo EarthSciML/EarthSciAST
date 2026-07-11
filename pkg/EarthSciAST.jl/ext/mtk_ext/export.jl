@@ -654,20 +654,31 @@ end
 """
     mtk2esm_gaps(sys::ModelingToolkit.AbstractSystem) -> Vector{GapReport}
 
-Cheap pre-flight check that currently detects ONLY brownian variables
-(SDE noise, gt-kuxo). It does NOT replicate the full gap detection
-performed during a `mtk2esm` export (init equations, noise_eqs,
-registered-function calls, PDE domains); run `mtk2esm` itself for the
-complete gap report.
+Pre-flight gap scan: runs the SAME schema-gap detection as a full `mtk2esm`
+export (brownian/SDE noise, unknown variables, unsupported equations,
+registered-function calls, PDE domains) but WITHOUT building or serializing the
+ESM output, so migration tooling can gate models on the complete gap set.
 """
-# TODO(aspiration): grow this into the full pre-flight scan promised by the
-# original design — same gap coverage as mtk2esm without producing the
-# export — so migration tooling can gate models cheaply.
 function mtk2esm_gaps(sys::ModelingToolkit.AbstractSystem)
     gaps = GapReport[]
-    b = _mtk_brownians(sys)
-    isempty(b) || push!(gaps, GapReport("gt-kuxo",
-        "system has $(length(b)) brownian variable(s)",
-        "system.brownians"))
+    kind = _sys_kind(sys)
+    sys_name = _resolve_sys_name(sys, (;), "UnnamedSystem")
+    sys_name_prefix = sys_name * "_"
+    strip_ns = s -> startswith(s, sys_name_prefix) ?
+        s[length(sys_name_prefix)+1:end] : s
+
+    # Mirror `mtk2esm`'s detection sequence (steps 1–4), discarding the built
+    # ESM structures — only the collected `gaps` matter here.
+    esm_vars = Dict{String,ModelVariable}()
+    known_vars = Set{String}()
+    _export_variables!(esm_vars, known_vars, gaps, sys, strip_ns)
+    esm_equations = _export_equations(sys, known_vars, gaps, strip_ns)
+    _detect_registered_call_gaps!(gaps, esm_equations)
+    _export_events(sys, known_vars, gaps)
+    if kind == "PDESystem"
+        push!(gaps, GapReport("gt-vzwk",
+            "PDESystem domain specification is not yet serialized — see gt-vzwk",
+            "system.domain"))
+    end
     return gaps
 end

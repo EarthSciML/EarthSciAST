@@ -321,14 +321,13 @@ function validate_equation_dimensions(eq::Equation, var_units::AbstractDict)::Bo
     lhs_dim = get_expression_dimensions(eq.lhs, var_units)
     rhs_dim = get_expression_dimensions(eq.rhs, var_units)
 
-    # NOTE(contract tension): `get_expression_dimensions` returns `nothing`
-    # for UNKNOWN dimensions (not provably-wrong ones), yet this caller warns
-    # and counts the equation as failed. A future behavior decision may want
-    # "unknown" to skip rather than fail; kept as-is for behavior
-    # preservation (see the `get_expression_dimensions` docstring).
+    # `get_expression_dimensions` returns `nothing` for UNKNOWN dimensions (a
+    # variable without declared units, an unsupported op) — NOT for provably-
+    # wrong ones. A validator can only flag a PROVABLE inconsistency, so an
+    # equation whose dimensions cannot be fully determined is SKIPPED (counted
+    # consistent) rather than failed.
     if lhs_dim === nothing || rhs_dim === nothing
-        @warn "Cannot determine dimensions for equation: $(eq.lhs) = $(eq.rhs)"
-        return false
+        return true
     end
 
     if dimension(lhs_dim) != dimension(rhs_dim)
@@ -347,16 +346,13 @@ Validate dimensions for all equations in a model.
 Returns true if all equations are dimensionally consistent.
 """
 function validate_model_dimensions(model::Model)::Bool
-    # Build variable units dictionary.
-    # NOTE(contract tension): a variable with no declared units is seeded as
-    # `""` (dimensionless) here, so downstream it is NOT treated as unknown —
-    # unlike `get_expression_dimensions`, which treats a variable absent from
-    # `var_units` as unknown (`nothing`). Kept as-is for behavior
-    # preservation; a future behavior decision may want undeclared units to
-    # stay unknown instead.
+    # Build variable units dictionary. A variable with no declared units is
+    # left OUT — so `get_expression_dimensions` treats it as unknown (`nothing`),
+    # consistent with `validate_equation_dimensions` skipping unknowns rather
+    # than assuming dimensionless.
     var_units = Dict{String, String}()
     for (name, var) in model.variables
-        var_units[name] = var.units !== nothing ? var.units : ""
+        var.units !== nothing && (var_units[name] = var.units)
     end
 
     # Validate each equation
