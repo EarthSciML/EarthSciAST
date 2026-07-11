@@ -8,7 +8,7 @@
 # returning a `SimulationResult`, so a runner is `simulate(esm, tspan; …)`
 # rather than a hand-wired build/seed/solve block.
 #
-# `[[library-exposes-rhs-not-solver]]`: ESS never depends on a solver. The
+# `[[library-exposes-rhs-not-solver]]`: EarthSciAST never depends on a solver. The
 # orchestration here (coerce → build_evaluator → seed → callback) is
 # solver-free; the final `ODEProblem` + `solve` lives in a SciMLBase package
 # EXTENSION (EarthSciASTSimulateExt) and is reached through the
@@ -55,13 +55,6 @@ end
 The final state vector (empty if the solve produced no points).
 """
 final_state(r::SimulationResult) = isempty(r.u) ? Float64[] : r.u[end]
-
-"""
-    nelements(r::SimulationResult) -> Int
-
-Number of flat state elements in the result (`length(r.var_map)`).
-"""
-nelements(r::SimulationResult) = length(r.var_map)
 
 struct SimulateError <: Exception
     msg::String
@@ -205,7 +198,7 @@ providers, and integrate over `tspan = (t0, t1)`.
 
 Keyword arguments
 * `alg` — the ODE algorithm, e.g. `Tsit5()`. REQUIRED (the solve runs in the
-  SciMLBase extension; ESS itself carries no solver, `[[library-exposes-rhs-not-solver]]`).
+  SciMLBase extension; EarthSciAST itself carries no solver, `[[library-exposes-rhs-not-solver]]`).
 * `parameters::AbstractDict` — parameter overrides (→ `build_evaluator`'s
   `parameter_overrides`).
 * `initial_conditions::AbstractDict` — per-element or broadcast IC overrides,
@@ -229,6 +222,16 @@ Keyword arguments
 * `inspect::BuildInspection` — optional build-observability sink forwarded to
   `build_evaluator` (the materialized setup-time geometry arrays, the
   const-array registry, the resolved observed map). Never changes the run.
+* `materialize_out::DiscreteMaterializer` — optional sink for the
+  discrete-cadence materialization cut (the middle phase of the `const ⊏
+  discrete ⊏ continuous` cadence partition; see
+  [`DiscreteMaterializer`](@ref)). `simulate` always runs the cut, passing the
+  supplied sink (reused, and thus inspectable by the caller) or a fresh
+  internal one to `build_evaluator`; its `materialize!` is wired as the
+  refresh callback's `post_refresh` hook so state-free derived fields over
+  live forcing buffers recompute once per cadence boundary instead of on
+  every step. With no discrete-materialize variables the sink stays empty and
+  has no effect.
 
 Returns a [`SimulationResult`](@ref).
 """

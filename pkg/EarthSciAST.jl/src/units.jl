@@ -17,6 +17,11 @@ const _ESM_DIMENSIONLESS_UNITS = Set([
 
 # Unit strings we have already warned about. `parse_units` is called inside
 # per-reaction / per-equation loops, so warn only once per distinct string.
+# NOTE: this cache grows monotonically for the lifetime of the process (it is
+# never cleared; bounded in practice by the number of distinct unparseable
+# unit strings encountered) and is NOT thread-safe — concurrent `parse_units`
+# calls may race on the Set (worst case: a duplicate warning, or an undefined
+# mutation race). Acceptable for the current single-threaded validation paths.
 const _WARNED_UNIT_STRINGS = Set{String}()
 
 """
@@ -24,7 +29,7 @@ Parse a unit string into a Unitful.Units object.
 
 Handles common scientific units and compositions used in Earth system models.
 """
-function parse_units(unit_str::String)::Union{Unitful.Units, Nothing}
+function parse_units(unit_str::AbstractString)::Union{Unitful.Units, Nothing}
     if isempty(unit_str) || unit_str == "dimensionless" || unit_str == "1"
         return Unitful.NoUnits
     end
@@ -64,6 +69,211 @@ function parse_units(unit_str::String)::Union{Unitful.Units, Nothing}
     end
 end
 
+# ---------------------------------------------------------------------------
+# Per-operator dimensional rules for `get_expression_dimensions`.
+#
+# Each rule is `(expr::OpExpr, var_units) -> Union{Unitful.Units, Nothing}` and
+# is dispatched through the const `_DIMENSION_RULES` table below. Warning texts
+# and returned values are byte-identical to the historical op-string chain.
+# ---------------------------------------------------------------------------
+
+# Same-dimensions core shared by the "+"/"-" rule and the "min"/"max" rule
+# (historically two duplicated branches): every argument whose dimensions can
+# be determined must agree, and the result carries them. `describe(first_dim,
+# dim)` renders the op-family-specific inconsistency warning.
+function _same_dimensions_over(args, var_units, describe)
+    arg_dims = [get_expression_dimensions(arg, var_units) for arg in args]
+
+    # Filter out nothing values
+    valid_dims = filter(d -> d !== nothing, arg_dims)
+
+    if isempty(valid_dims)
+        return nothing
+    end
+
+    # Check all dimensions are the same
+    first_dim = valid_dims[1]
+    for dim in valid_dims[2:end]
+        if dimension(dim) != dimension(first_dim)
+            @warn describe(first_dim, dim)
+            return nothing
+        end
+    end
+
+    return first_dim
+end
+
+# "+" / "-": all arguments must have the same dimensions. (Subtraction has
+# always warned with the addition text — it historically delegated to the "+"
+# branch.)
+_same_dimension_rule(expr, var_units) =
+    _same_dimensions_over(expr.args, var_units,
+        (first_dim, dim) -> "Dimensional inconsistency in addition: $(dimension(first_dim)) + $(dimension(dim))")
+
+# "min" / "max" (esm-spec §4.2): all arguments must share dimensions; the
+# result carries them.
+_minmax_rule(expr, var_units) =
+    _same_dimensions_over(expr.args, var_units,
+        (first_dim, dim) -> "Dimensional inconsistency in $(expr.op): $(dimension(first_dim)) vs $(dimension(dim))")
+
+# "*": multiply dimensions (arguments of unknown dimension are skipped).
+function _product_rule(expr, var_units)
+    result = Unitful.NoUnits
+    for arg in expr.args
+        arg_dim = get_expression_dimensions(arg, var_units)
+        if arg_dim !== nothing
+            result = result * arg_dim
+        end
+    end
+    return result
+end
+
+# "/": divide dimensions.
+function _quotient_rule(expr, var_units)
+    if length(expr.args) != 2
+        @warn "Division operator requires exactly 2 arguments"
+        return nothing
+    end
+
+    num_dim = get_expression_dimensions(expr.args[1], var_units)
+    den_dim = get_expression_dimensions(expr.args[2], var_units)
+
+    if num_dim !== nothing && den_dim !== nothing
+        return num_dim / den_dim
+    end
+
+    return nothing
+end
+
+# "^" / "pow": raise dimension to power (exponent must be dimensionless).
+function _power_rule(expr, var_units)
+    if length(expr.args) != 2
+        @warn "Power operator requires exactly 2 arguments"
+        return nothing
+    end
+
+    base_dim = get_expression_dimensions(expr.args[1], var_units)
+    exp_dim = get_expression_dimensions(expr.args[2], var_units)
+
+    if base_dim !== nothing && exp_dim !== nothing
+        # Exponent should be dimensionless
+        if dimension(exp_dim) != dimension(Unitful.NoUnits)
+            @warn "Exponent in power operation should be dimensionless, got: $(dimension(exp_dim))"
+            return nothing
+        end
+
+        # For now, assume integer powers - could be extended for fractional powers
+        if expr.args[2] isa IntExpr
+            return base_dim^Int(expr.args[2].value)
+        elseif expr.args[2] isa NumExpr
+            power = expr.args[2].value
+            if power isa Number && isinteger(power)
+                return base_dim^Int(power)
+            end
+        end
+
+        @warn "Power operation with non-integer exponent not fully supported"
+        return base_dim  # Fallback
+    end
+
+    return nothing
+end
+
+# Transcendental functions: argument should be dimensionless, result is
+# dimensionless.
+function _dimensionless_arg_rule(expr, var_units)
+    if length(expr.args) != 1
+        @warn "Function $(expr.op) requires exactly 1 argument"
+        return nothing
+    end
+
+    arg_dim = get_expression_dimensions(expr.args[1], var_units)
+    if arg_dim !== nothing && dimension(arg_dim) != dimension(Unitful.NoUnits)
+        @warn "Argument to $(expr.op) should be dimensionless, got: $(dimension(arg_dim))"
+        return nothing
+    end
+
+    return Unitful.NoUnits
+end
+
+# "ifelse": ifelse(cond, a, b) — branches must share dimensions; the condition
+# is boolean and dimensionally irrelevant.
+function _ifelse_rule(expr, var_units)
+    length(expr.args) == 3 || return nothing
+    t_dim = get_expression_dimensions(expr.args[2], var_units)
+    f_dim = get_expression_dimensions(expr.args[3], var_units)
+    (t_dim === nothing || f_dim === nothing) && return nothing
+    if dimension(t_dim) != dimension(f_dim)
+        @warn "Dimensional inconsistency in ifelse branches: $(dimension(t_dim)) vs $(dimension(f_dim))"
+        return nothing
+    end
+    return t_dim
+end
+
+# "sign": strips dimensions — the result is a dimensionless -1/0/+1.
+_dimensionless_result_rule(expr, var_units) = Unitful.NoUnits
+
+# "abs": preserves dimensions.
+function _preserve_dimension_rule(expr, var_units)
+    length(expr.args) == 1 || return nothing
+    return get_expression_dimensions(expr.args[1], var_units)
+end
+
+# "D": derivative — dimensions of the differentiated variable over the
+# dimensions of the `wrt` variable (defaulting to time in seconds).
+function _derivative_rule(expr, var_units)
+    if length(expr.args) != 1
+        @warn "Derivative operator D requires exactly 1 argument"
+        return nothing
+    end
+
+    # Get dimensions of the variable being differentiated
+    var_dim = get_expression_dimensions(expr.args[1], var_units)
+
+    # Check what we're differentiating with respect to
+    wrt = expr.wrt !== nothing ? expr.wrt : "t"  # Default to time
+    wrt_unit_str = get(var_units, wrt, "s")  # Default to seconds
+    wrt_dim = parse_units(wrt_unit_str)
+
+    if var_dim !== nothing && wrt_dim !== nothing
+        return var_dim / wrt_dim
+    end
+
+    return nothing
+end
+
+# The transcendental / dimensionless-argument function names. Deliberately NOT
+# derived from the op registry (`_ops_with` / `_op_spec`): the registry's
+# unary `:elementary` rows include dimension-PRESERVING ops (`abs`, `sign`,
+# `floor`, `ceil`) and omit the spec-adjacent spellings this rule has always
+# accepted (`ln`, `log2`, `expm1`), so the memberships differ.
+const _TRANSCENDENTAL_OPS = Set(["sin", "cos", "tan", "exp", "log", "ln", "sqrt",
+                                 "log10", "log2", "tanh", "sinh", "cosh",
+                                 "asin", "acos", "atan", "expm1"])
+
+# Operator name → dimensional rule. Ops absent from this table have no
+# dimensional rule and degrade silently to `nothing` (see
+# `get_expression_dimensions`).
+const _DIMENSION_RULES = let rules = Dict{String, Function}(
+        "+"      => _same_dimension_rule,
+        "-"      => _same_dimension_rule,
+        "*"      => _product_rule,
+        "/"      => _quotient_rule,
+        "^"      => _power_rule,
+        "pow"    => _power_rule,
+        "min"    => _minmax_rule,
+        "max"    => _minmax_rule,
+        "ifelse" => _ifelse_rule,
+        "sign"   => _dimensionless_result_rule,
+        "abs"    => _preserve_dimension_rule,
+        "D"      => _derivative_rule,
+    )
+    for op in _TRANSCENDENTAL_OPS
+        rules[op] = _dimensionless_arg_rule
+    end
+    rules
+end
+
 """
 Get the dimensions of an expression by propagating units through operations.
 
@@ -72,10 +282,13 @@ evaluating an expression, assuming all variables have known units.
 
 Returns `nothing` when the dimensions cannot be determined — in particular for
 variables absent from `var_units` (unknown, NOT assumed dimensionless) and for
-operators without a dimensional rule; `nothing` propagates so callers can skip
-rather than emit false warnings.
+operators without a dimensional rule. `nothing` propagates upward through
+enclosing operations, but note that the callers do not uniformly treat it as
+"skip": [`validate_equation_dimensions`](@ref) warns and reports `false` for an
+equation whose side comes back `nothing`, and [`validate_model_dimensions`](@ref)
+seeds variables with no declared units as `""` (dimensionless) before checking.
 """
-function get_expression_dimensions(expr::Expr, var_units::Dict{String, String})::Union{Unitful.Units, Nothing}
+function get_expression_dimensions(expr::Expr, var_units::AbstractDict)::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
         # Numbers are dimensionless unless specified otherwise
         return Unitful.NoUnits
@@ -86,176 +299,13 @@ function get_expression_dimensions(expr::Expr, var_units::Dict{String, String}):
         unit_str === nothing && return nothing
         return parse_units(unit_str)
     elseif expr isa OpExpr
-        # Handle different operators
-        if expr.op == "+"
-            # Addition: all arguments must have same dimensions
-            arg_dims = [get_expression_dimensions(arg, var_units) for arg in expr.args]
-
-            # Filter out nothing values
-            valid_dims = filter(d -> d !== nothing, arg_dims)
-
-            if isempty(valid_dims)
-                return nothing
-            end
-
-            # Check all dimensions are the same
-            first_dim = valid_dims[1]
-            for dim in valid_dims[2:end]
-                if dimension(dim) != dimension(first_dim)
-                    @warn "Dimensional inconsistency in addition: $(dimension(first_dim)) + $(dimension(dim))"
-                    return nothing
-                end
-            end
-
-            return first_dim
-
-        elseif expr.op == "-"
-            # Subtraction: same as addition
-            return get_expression_dimensions(OpExpr("+", expr.args), var_units)
-
-        elseif expr.op == "*"
-            # Multiplication: multiply dimensions
-            result = Unitful.NoUnits
-            for arg in expr.args
-                arg_dim = get_expression_dimensions(arg, var_units)
-                if arg_dim !== nothing
-                    result = result * arg_dim
-                end
-            end
-            return result
-
-        elseif expr.op == "/"
-            # Division: divide dimensions
-            if length(expr.args) != 2
-                @warn "Division operator requires exactly 2 arguments"
-                return nothing
-            end
-
-            num_dim = get_expression_dimensions(expr.args[1], var_units)
-            den_dim = get_expression_dimensions(expr.args[2], var_units)
-
-            if num_dim !== nothing && den_dim !== nothing
-                return num_dim / den_dim
-            end
-
-            return nothing
-
-        elseif expr.op == "^" || expr.op == "pow"
-            # Power: raise dimension to power (exponent must be dimensionless)
-            if length(expr.args) != 2
-                @warn "Power operator requires exactly 2 arguments"
-                return nothing
-            end
-
-            base_dim = get_expression_dimensions(expr.args[1], var_units)
-            exp_dim = get_expression_dimensions(expr.args[2], var_units)
-
-            if base_dim !== nothing && exp_dim !== nothing
-                # Exponent should be dimensionless
-                if dimension(exp_dim) != dimension(Unitful.NoUnits)
-                    @warn "Exponent in power operation should be dimensionless, got: $(dimension(exp_dim))"
-                    return nothing
-                end
-
-                # For now, assume integer powers - could be extended for fractional powers
-                if expr.args[2] isa IntExpr
-                    return base_dim^Int(expr.args[2].value)
-                elseif expr.args[2] isa NumExpr
-                    power = expr.args[2].value
-                    if power isa Number && isinteger(power)
-                        return base_dim^Int(power)
-                    end
-                end
-
-                @warn "Power operation with non-integer exponent not fully supported"
-                return base_dim  # Fallback
-            end
-
-            return nothing
-
-        elseif expr.op in ["sin", "cos", "tan", "exp", "log", "ln", "sqrt",
-                           "log10", "log2", "tanh", "sinh", "cosh",
-                           "asin", "acos", "atan", "expm1"]
-            # Transcendental functions: argument should be dimensionless, result is dimensionless
-            if length(expr.args) != 1
-                @warn "Function $(expr.op) requires exactly 1 argument"
-                return nothing
-            end
-
-            arg_dim = get_expression_dimensions(expr.args[1], var_units)
-            if arg_dim !== nothing && dimension(arg_dim) != dimension(Unitful.NoUnits)
-                @warn "Argument to $(expr.op) should be dimensionless, got: $(dimension(arg_dim))"
-                return nothing
-            end
-
-            return Unitful.NoUnits
-
-        elseif expr.op == "min" || expr.op == "max"
-            # min/max (esm-spec §4.2): all arguments must share dimensions;
-            # the result carries them.
-            arg_dims = [get_expression_dimensions(arg, var_units) for arg in expr.args]
-            valid_dims = filter(d -> d !== nothing, arg_dims)
-            isempty(valid_dims) && return nothing
-
-            first_dim = valid_dims[1]
-            for dim in valid_dims[2:end]
-                if dimension(dim) != dimension(first_dim)
-                    @warn "Dimensional inconsistency in $(expr.op): $(dimension(first_dim)) vs $(dimension(dim))"
-                    return nothing
-                end
-            end
-            return first_dim
-
-        elseif expr.op == "ifelse"
-            # ifelse(cond, a, b): branches must share dimensions; the condition
-            # is boolean and dimensionally irrelevant.
-            length(expr.args) == 3 || return nothing
-            t_dim = get_expression_dimensions(expr.args[2], var_units)
-            f_dim = get_expression_dimensions(expr.args[3], var_units)
-            (t_dim === nothing || f_dim === nothing) && return nothing
-            if dimension(t_dim) != dimension(f_dim)
-                @warn "Dimensional inconsistency in ifelse branches: $(dimension(t_dim)) vs $(dimension(f_dim))"
-                return nothing
-            end
-            return t_dim
-
-        elseif expr.op == "sign"
-            # sign() strips dimensions: result is a dimensionless -1/0/+1.
-            return Unitful.NoUnits
-
-        elseif expr.op == "abs"
-            # abs() preserves dimensions.
-            length(expr.args) == 1 || return nothing
-            return get_expression_dimensions(expr.args[1], var_units)
-
-        elseif expr.op == "D"
-            # Derivative: check if it's a time derivative
-            if length(expr.args) != 1
-                @warn "Derivative operator D requires exactly 1 argument"
-                return nothing
-            end
-
-            # Get dimensions of the variable being differentiated
-            var_dim = get_expression_dimensions(expr.args[1], var_units)
-
-            # Check what we're differentiating with respect to
-            wrt = expr.wrt !== nothing ? expr.wrt : "t"  # Default to time
-            wrt_unit_str = get(var_units, wrt, "s")  # Default to seconds
-            wrt_dim = parse_units(wrt_unit_str)
-
-            if var_dim !== nothing && wrt_dim !== nothing
-                return var_dim / wrt_dim
-            end
-
-            return nothing
-
-        else
-            # Operator without a dimensional rule (comparisons, aggregate ops,
-            # registered-function calls, …): degrade silently — the result is
-            # unknown, not an authoring error worth a warning per evaluation.
-            @debug "No dimensional rule for operator: $(expr.op)"
-            return nothing
-        end
+        rule = get(_DIMENSION_RULES, expr.op, nothing)
+        rule !== nothing && return rule(expr, var_units)
+        # Operator without a dimensional rule (comparisons, aggregate ops,
+        # registered-function calls, …): degrade silently — the result is
+        # unknown, not an authoring error worth a warning per evaluation.
+        @debug "No dimensional rule for operator: $(expr.op)"
+        return nothing
     else
         @warn "Unknown expression type: $(typeof(expr))"
         return nothing
@@ -267,10 +317,15 @@ Validate that an equation is dimensionally consistent.
 
 Checks that the left-hand side and right-hand side have the same dimensions.
 """
-function validate_equation_dimensions(eq::Equation, var_units::Dict{String, String})::Bool
+function validate_equation_dimensions(eq::Equation, var_units::AbstractDict)::Bool
     lhs_dim = get_expression_dimensions(eq.lhs, var_units)
     rhs_dim = get_expression_dimensions(eq.rhs, var_units)
 
+    # NOTE(contract tension): `get_expression_dimensions` returns `nothing`
+    # for UNKNOWN dimensions (not provably-wrong ones), yet this caller warns
+    # and counts the equation as failed. A future behavior decision may want
+    # "unknown" to skip rather than fail; kept as-is for behavior
+    # preservation (see the `get_expression_dimensions` docstring).
     if lhs_dim === nothing || rhs_dim === nothing
         @warn "Cannot determine dimensions for equation: $(eq.lhs) = $(eq.rhs)"
         return false
@@ -292,7 +347,13 @@ Validate dimensions for all equations in a model.
 Returns true if all equations are dimensionally consistent.
 """
 function validate_model_dimensions(model::Model)::Bool
-    # Build variable units dictionary
+    # Build variable units dictionary.
+    # NOTE(contract tension): a variable with no declared units is seeded as
+    # `""` (dimensionless) here, so downstream it is NOT treated as unknown —
+    # unlike `get_expression_dimensions`, which treats a variable absent from
+    # `var_units` as unknown (`nothing`). Kept as-is for behavior
+    # preservation; a future behavior decision may want undeclared units to
+    # stay unknown instead.
     var_units = Dict{String, String}()
     for (name, var) in model.variables
         var_units[name] = var.units !== nothing ? var.units : ""
@@ -363,7 +424,7 @@ Infer appropriate units for a variable based on its usage in equations.
 
 This can help suggest units when they are not explicitly specified.
 """
-function infer_variable_units(var_name::String, equations::Vector{Equation}, known_units::Dict{String, String})::Union{String, Nothing}
+function infer_variable_units(var_name::AbstractString, equations::Vector{Equation}, known_units::AbstractDict)::Union{String, Nothing}
     # Look for equations where this variable appears
     for eq in equations
         lhs_vars = free_variables(eq.lhs)

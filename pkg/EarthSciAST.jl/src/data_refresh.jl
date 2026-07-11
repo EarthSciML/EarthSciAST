@@ -1,5 +1,5 @@
-# Discrete-cadence loader refresh — the ESS-Julia consumer surface (ess-14f.4,
-# JL-J1). Plan: mayor-dir esio-consumer-julia-plan-2026-06-26.md §1.
+# Discrete-cadence loader refresh — the EarthSciAST-Julia consumer surface
+# (ess-14f.4, JL-J1). Plan: mayor-dir esio-consumer-julia-plan-2026-06-26.md §1.
 #
 # The companion to the JL-J0 engine touch (`param_arrays` / `_NK_PARAM_GATHER`,
 # ess-14f.3). J0 made a forcing buffer readable LIVE by the RHS: a dense
@@ -10,20 +10,20 @@
 # from a data Provider, regrids them, and writes them into the SAME buffer
 # objects — once per cadence boundary, never on the hot per-step path.
 #
-# Principle `[[library-exposes-rhs-not-solver]]`: ESS returns the *pieces*
+# Principle `[[library-exposes-rhs-not-solver]]`: EarthSciAST returns the *pieces*
 # (`build_refresh_callback -> (cb, tstops)`); the USER attaches them to their own
-# `ODEProblem`/`solve`. ESS ships no `solve`, no `ODEProblem`, no solver. The
+# `ODEProblem`/`solve`. EarthSciAST ships no `solve`, no `ODEProblem`, no solver. The
 # callback constructor itself lives in a package extension gated on
 # `DiffEqCallbacks` + `SciMLBase` (see ext/EarthSciASTDataRefreshExt.jl)
 # so the base library never pulls a solver-adjacent stack into `[deps]`.
 #
 # This file (core) owns two decoupled seams; concrete implementations live
-# outside ESS, exactly like the GridAccessor / AbstractGrid traits:
+# outside EarthSciAST, exactly like the GridAccessor / AbstractGrid traits:
 #
 #   1. the Provider protocol  — `provider_refresh_times` / `provider_is_const` /
 #      `provider_sample`. Satisfied by the EarthSciIO Julia Provider
-#      (esio-9nb.5) via a thin adapter, or by a mock in tests. ESS never imports
-#      EarthSciIO; it calls these generics, which the data binding fills in.
+#      (esio-9nb.5) via a thin adapter, or by a mock in tests. EarthSciAST never
+#      imports EarthSciIO; it calls these generics, which the data binding fills in.
 #   2. `RefreshBuffers` — the registry of live forcing buffers, the SAME dense
 #      `Array{Float64}` objects passed to `build_evaluator`'s `param_arrays`.
 #      `affect!` writes the freshly sampled native forcing straight into them
@@ -50,11 +50,11 @@ Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.msg)
 # --------------------------------------------------------------------------- #
 #
 # A "provider" is any object that supplies a loader's native-grid arrays on the
-# solver time axis. ESS owns the contract (these three generics) and calls them;
-# the EarthSciIO Julia Provider satisfies it via an adapter, e.g.
+# solver time axis. EarthSciAST owns the contract (these three generics) and calls
+# them; the EarthSciIO Julia Provider satisfies it via an adapter, e.g.
 #
-#     ESS.provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
-#     ESS.provider_sample(p::EarthSciIO.Provider, t)     = EarthSciIO.refresh(p, t)
+#     EarthSciAST.provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
+#     EarthSciAST.provider_sample(p::EarthSciIO.Provider, t)     = EarthSciIO.refresh(p, t)
 #
 # (`provider_is_const` then comes free from the default below). The provider's
 # `refresh_times`/`refresh` already speak `Float64` seconds on the SAME axis as
@@ -89,7 +89,7 @@ provider_is_const(p) = isempty(provider_refresh_times(p))
     provider_sample(provider, t::Real) -> sample
 
 The native-grid data for `provider` at cadence tick `t` (solver seconds). The
-return value is opaque to ESS — it is handed straight to the forcing-write seam
+return value is opaque to EarthSciAST — it is handed straight to the forcing-write seam
 (`_write_forcing!`), which extracts a named variable from it.
 For the EarthSciIO provider this is `refresh(p, t)` returning a `NativeDataset`;
 for a mock it can be any per-variable container (e.g. a `Dict{String,Vector}`).
