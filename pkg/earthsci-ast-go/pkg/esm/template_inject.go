@@ -27,9 +27,9 @@ import (
 // appendComponentImports appends raw §9.7.2 import entries to a component's own
 // `expression_template_imports` (esm-spec §9.7.10 merge order: the target's own
 // imports first, then the injected list). `comp` is a mutable raw view.
-func appendComponentImports(comp map[string]interface{}, imports []interface{}) {
-	var base []interface{}
-	if existing, ok := comp["expression_template_imports"].([]interface{}); ok {
+func appendComponentImports(comp map[string]any, imports []any) {
+	var base []any
+	if existing, ok := comp["expression_template_imports"].([]any); ok {
 		base = append(base, existing...)
 	}
 	base = append(base, imports...)
@@ -45,18 +45,18 @@ func appendComponentImports(comp map[string]interface{}, imports []interface{}) 
 // referenced file has no expression positions, so the injection finds no home
 // and the mount fails cleanly downstream. Mirrors the Julia reference
 // `_apply_subsystem_ref_injection!`.
-func applySubsystemRefInjection(view map[string]interface{}, injected []interface{}) {
+func applySubsystemRefInjection(view map[string]any, injected []any) {
 	if len(injected) == 0 {
 		return
 	}
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok || len(comps) == 0 {
 			continue
 		}
 		// Exactly one component (§4.7); sortedKeys makes the pick deterministic.
 		for _, cname := range sortedKeys(comps) {
-			comp, ok := comps[cname].(map[string]interface{})
+			comp, ok := comps[cname].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -71,12 +71,12 @@ func applySubsystemRefInjection(view map[string]interface{}, injected []interfac
 // `systems`; `variable_map` → the owning systems of `from`/`to`; `event` →
 // owning systems of any scoped reference in the entry. A `callback` references
 // none. Mirrors the Julia reference `_coupling_referenced_systems`.
-func couplingReferencedSystems(entry map[string]interface{}) map[string]bool {
+func couplingReferencedSystems(entry map[string]any) map[string]bool {
 	out := map[string]bool{}
 	ctype, _ := entry["type"].(string)
 	switch ctype {
 	case "operator_compose", "couple":
-		if sys, ok := entry["systems"].([]interface{}); ok {
+		if sys, ok := entry["systems"].([]any); ok {
 			for _, s := range sys {
 				ss, ok := s.(string)
 				if !ok {
@@ -102,17 +102,17 @@ func couplingReferencedSystems(entry map[string]interface{}) map[string]bool {
 // scoped reference (a string of the form "System.var") to `out`. Used for
 // `event` entries whose system references are spread across conditions/affects.
 // Mirrors the Julia reference `_collect_scoped_owners!`.
-func collectScopedOwners(out map[string]bool, x interface{}) {
+func collectScopedOwners(out map[string]bool, x any) {
 	switch v := x.(type) {
 	case string:
 		if strings.Contains(v, ".") {
 			out[strings.SplitN(v, ".", 2)[0]] = true
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		for _, c := range v {
 			collectScopedOwners(out, c)
 		}
-	case []interface{}:
+	case []any:
 		for _, c := range v {
 			collectScopedOwners(out, c)
 		}
@@ -133,15 +133,15 @@ func collectScopedOwners(out map[string]bool, x interface{}) {
 // system targets are resolved by this binding — a nested `Parent.Child` key is
 // out of scope and reported as `template_inject_target_not_component`. Mirrors
 // the Julia reference `_apply_coupling_injections!`.
-func applyCouplingInjections(view map[string]interface{}) error {
-	coupling, ok := view["coupling"].([]interface{})
+func applyCouplingInjections(view map[string]any) error {
+	coupling, ok := view["coupling"].([]any)
 	if !ok {
 		return nil
 	}
-	models, _ := view["models"].(map[string]interface{})
-	rsystems, _ := view["reaction_systems"].(map[string]interface{})
-	loaders, _ := view["data_loaders"].(map[string]interface{})
-	topComp := func(d map[string]interface{}, k string) (map[string]interface{}, bool) {
+	models, _ := view["models"].(map[string]any)
+	rsystems, _ := view["reaction_systems"].(map[string]any)
+	loaders, _ := view["data_loaders"].(map[string]any)
+	topComp := func(d map[string]any, k string) (map[string]any, bool) {
 		if d == nil {
 			return nil, false
 		}
@@ -149,11 +149,11 @@ func applyCouplingInjections(view map[string]interface{}) error {
 		if !has {
 			return nil, false
 		}
-		cm, ok := c.(map[string]interface{})
+		cm, ok := c.(map[string]any)
 		return cm, ok
 	}
 	for _, entryRaw := range coupling {
-		entry, ok := entryRaw.(map[string]interface{})
+		entry, ok := entryRaw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -161,7 +161,7 @@ func applyCouplingInjections(view map[string]interface{}) error {
 		if !has || injRaw == nil {
 			continue
 		}
-		inj, ok := injRaw.(map[string]interface{})
+		inj, ok := injRaw.(map[string]any)
 		if !ok {
 			return newETErr("template_inject_target_not_component",
 				"coupling entry `expression_template_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)")
@@ -181,7 +181,7 @@ func applyCouplingInjections(view map[string]interface{}) error {
 				return newETErr("template_inject_target_unknown",
 					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: %s.", tname, refList))
 			}
-			var comp map[string]interface{}
+			var comp map[string]any
 			if c, ok := topComp(models, tname); ok {
 				comp = c
 			} else if c, ok := topComp(rsystems, tname); ok {
@@ -193,7 +193,7 @@ func applyCouplingInjections(view map[string]interface{}) error {
 				return newETErr("template_inject_target_not_component",
 					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' resolves to neither a top-level model, reaction system, nor data loader (esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope.", tname))
 			}
-			importsList, ok := inj[tname].([]interface{})
+			importsList, ok := inj[tname].([]any)
 			if !ok {
 				return newETErr("template_import_not_library",
 					fmt.Sprintf("coupling entry `expression_template_imports` value for '%s' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).", tname))

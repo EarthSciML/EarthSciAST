@@ -62,17 +62,17 @@ func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
 				Equations: []Equation{
 					{
 						// D(s_literal) = index(u, 2)
-						LHS: ExprNode{Op: "D", Args: []interface{}{"s_literal"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "index", Args: []interface{}{"u", 2}},
+						LHS: ExprNode{Op: "D", Args: []any{"s_literal"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "index", Args: []any{"u", 2}},
 					},
 					{
 						// D(s_composite) = index(u, 1+2)
-						LHS: ExprNode{Op: "D", Args: []interface{}{"s_composite"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"s_composite"}, Wrt: strPtr("t")},
 						RHS: ExprNode{
 							Op: "index",
-							Args: []interface{}{
+							Args: []any{
 								"u",
-								ExprNode{Op: "+", Args: []interface{}{1, 2}},
+								ExprNode{Op: "+", Args: []any{1, 2}},
 							},
 						},
 					},
@@ -90,7 +90,7 @@ func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
 	second, err := Save(reparsed)
 	require.NoError(t, err, "Save must succeed on reparsed payload")
 
-	var firstVal, secondVal interface{}
+	var firstVal, secondVal any
 	require.NoError(t, json.Unmarshal([]byte(first), &firstVal))
 	require.NoError(t, json.Unmarshal([]byte(second), &secondVal))
 	assert.Equal(t, firstVal, secondVal,
@@ -99,23 +99,23 @@ func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
 	// Semantic anchor: after the round-trip the two equations still carry
 	// {op:"index", ...} on the RHS, with the integer-literal and
 	// composite-arithmetic index arguments preserved.
-	var final map[string]interface{}
+	var final map[string]any
 	require.NoError(t, json.Unmarshal([]byte(second), &final))
-	model := final["models"].(map[string]interface{})["M"].(map[string]interface{})
-	eqs := model["equations"].([]interface{})
+	model := final["models"].(map[string]any)["M"].(map[string]any)
+	eqs := model["equations"].([]any)
 	require.Len(t, eqs, 2)
 
-	rhs0 := eqs[0].(map[string]interface{})["rhs"].(map[string]interface{})
+	rhs0 := eqs[0].(map[string]any)["rhs"].(map[string]any)
 	assert.Equal(t, "index", rhs0["op"])
-	args0 := rhs0["args"].([]interface{})
+	args0 := rhs0["args"].([]any)
 	assert.Equal(t, "u", args0[0])
 	// Integer literal: JSON unmarshal yields float64 in Go.
 	assert.Equal(t, float64(2), args0[1])
 
-	rhs1 := eqs[1].(map[string]interface{})["rhs"].(map[string]interface{})
+	rhs1 := eqs[1].(map[string]any)["rhs"].(map[string]any)
 	assert.Equal(t, "index", rhs1["op"])
-	args1 := rhs1["args"].([]interface{})
-	composite, ok := args1[1].(map[string]interface{})
+	args1 := rhs1["args"].([]any)
+	composite, ok := args1[1].(map[string]any)
 	require.True(t, ok, "composite index arg must survive as an ExprNode map")
 	assert.Equal(t, "+", composite["op"])
 }

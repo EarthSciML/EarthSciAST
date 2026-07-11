@@ -13,21 +13,21 @@ import (
 
 // ExprNode represents an operator node in the expression tree
 type ExprNode struct {
-	Op    string        `json:"op"`
-	Args  []interface{} `json:"args"`
-	Wrt   *string       `json:"wrt,omitempty"`   // for derivatives
-	Dim   *string       `json:"dim,omitempty"`   // for grad
-	Fn    *string       `json:"fn,omitempty"`    // for bc wrapper kind encoding
-	Var   *string       `json:"var,omitempty"`   // integration variable name (for integral)
-	Lower interface{}   `json:"lower,omitempty"` // lower integration bound (for integral)
-	Upper interface{}   `json:"upper,omitempty"` // upper integration bound (for integral)
+	Op    string  `json:"op"`
+	Args  []any   `json:"args"`
+	Wrt   *string `json:"wrt,omitempty"`   // for derivatives
+	Dim   *string `json:"dim,omitempty"`   // for grad
+	Fn    *string `json:"fn,omitempty"`    // for bc wrapper kind encoding
+	Var   *string `json:"var,omitempty"`   // integration variable name (for integral)
+	Lower any     `json:"lower,omitempty"` // lower integration bound (for integral)
+	Upper any     `json:"upper,omitempty"` // upper integration bound (for integral)
 	// Name carries the dotted module path of a closed-registry function
 	// (esm-spec §4.4 / §9.2) for `fn` op nodes — e.g. "datetime.julian_day".
 	Name *string `json:"name,omitempty"`
 	// Value carries the inline literal payload of a `const` op node
 	// (esm-spec §4.2 / §9.3); `Args` MUST be empty for a const node. Any
 	// JSON value (number, integer, or nested array thereof).
-	Value interface{} `json:"value,omitempty"`
+	Value any `json:"value,omitempty"`
 	// Table is the function_tables entry id targeted by a `table_lookup` op
 	// (esm-spec §9.5).
 	Table *string `json:"table,omitempty"`
@@ -40,7 +40,7 @@ type ExprNode struct {
 	// `table_lookup` op. Either a non-negative integer (0-based index into the
 	// leading data dimension) or a string (an entry of the table's Outputs
 	// list). Single-output tables MAY omit this (defaults to 0).
-	Output interface{} `json:"output,omitempty"`
+	Output any `json:"output,omitempty"`
 	// Attrs carries optional named scalar attributes for an OPEN rewrite-target
 	// op (esm-spec §4.2). Mirrors the fixed `dim`/`side`/`wrt` slots the core ops
 	// use, but is open: a custom op (e.g. `godunov_hamiltonian`) carries its
@@ -48,7 +48,7 @@ type ExprNode struct {
 	// lowering (loading is permissive) round-trips. Evaluable-core ops MUST NOT
 	// use `attrs`. Structural `match` rules bind `attrs.<key>` params to matched
 	// literals via generic object matching (esm-spec §9.6.1).
-	Attrs map[string]interface{} `json:"attrs,omitempty"`
+	Attrs map[string]any `json:"attrs,omitempty"`
 
 	// --- Structural / array-query op fields (esm-spec §4.2). These carry the
 	// defining data of the closed structural tier in fields OTHER than `args`,
@@ -58,49 +58,49 @@ type ExprNode struct {
 	// read. ---
 
 	// Bindings is the param→expression map of an `apply_expression_template` op.
-	Bindings map[string]interface{} `json:"bindings,omitempty"`
+	Bindings map[string]any `json:"bindings,omitempty"`
 	// Regions is the list of hyper-rectangular index regions of a `makearray`
 	// op; each region is a list of [lo, hi] bound pairs.
-	Regions [][][]interface{} `json:"regions,omitempty"`
+	Regions [][][]any `json:"regions,omitempty"`
 	// Values is the per-region value list of a `makearray` op (paired with
 	// Regions by position).
-	Values []interface{} `json:"values,omitempty"`
+	Values []any `json:"values,omitempty"`
 	// Shape is the target shape of a `reshape` op.
-	Shape []interface{} `json:"shape,omitempty"`
+	Shape []any `json:"shape,omitempty"`
 	// Perm is the optional permutation of a `transpose` op.
-	Perm []interface{} `json:"perm,omitempty"`
+	Perm []any `json:"perm,omitempty"`
 	// Axis is the concatenation axis of a `concat` op.
-	Axis interface{} `json:"axis,omitempty"`
+	Axis any `json:"axis,omitempty"`
 	// Manifold is the geometry manifold of `intersect_polygon` /
 	// `polygon_intersection_area` ops.
 	Manifold *string `json:"manifold,omitempty"`
 	// OutputIdx are the surviving (free) index names of an `aggregate` op.
-	OutputIdx []interface{} `json:"output_idx,omitempty"`
+	OutputIdx []any `json:"output_idx,omitempty"`
 	// Expr is the reduced sub-expression of an `aggregate` / `argmin` / `argmax`
 	// op.
-	Expr interface{} `json:"expr,omitempty"`
+	Expr any `json:"expr,omitempty"`
 	// Reduce is the scalar reduction operator of an `aggregate` op.
 	Reduce *string `json:"reduce,omitempty"`
 	// Semiring is the optional named semiring of an `aggregate` op.
 	Semiring *string `json:"semiring,omitempty"`
 	// Ranges maps a bound index name to its iteration range for `aggregate` /
 	// `argmin` / `argmax` ops.
-	Ranges map[string]interface{} `json:"ranges,omitempty"`
+	Ranges map[string]any `json:"ranges,omitempty"`
 	// Join is the optional list of join clauses of an `aggregate` op.
-	Join []interface{} `json:"join,omitempty"`
+	Join []any `json:"join,omitempty"`
 	// Filter is the optional predicate of an `aggregate` op.
-	Filter interface{} `json:"filter,omitempty"`
+	Filter any `json:"filter,omitempty"`
 	// Distinct marks an `aggregate` op as reducing over distinct values.
 	Distinct *bool `json:"distinct,omitempty"`
 	// Key is the optional grouping key of an `aggregate` op.
-	Key interface{} `json:"key,omitempty"`
+	Key any `json:"key,omitempty"`
 	// Arg is the witness index name of an `argmin` / `argmax` op.
 	Arg *string `json:"arg,omitempty"`
 }
 
 // Expression represents the union type: number | string | ExprNode
 // In Go, this is handled by using interface{} and custom unmarshaling
-type Expression interface{}
+type Expression any
 
 // Equation represents a mathematical equation with LHS and RHS
 type Equation struct {
@@ -125,11 +125,11 @@ type AffectEquation struct {
 // system to an SDE system. NoiseKind and CorrelationGroup apply only to
 // brownian variables.
 type ModelVariable struct {
-	Type        string      `json:"type"` // "state", "parameter", "observed", or "brownian"
-	Units       *string     `json:"units,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Description *string     `json:"description,omitempty"`
-	Expression  Expression  `json:"expression,omitempty"` // for observed variables
+	Type        string     `json:"type"` // "state", "parameter", "observed", or "brownian"
+	Units       *string    `json:"units,omitempty"`
+	Default     any        `json:"default,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	Expression  Expression `json:"expression,omitempty"` // for observed variables
 	// Shape lists index-set names for arrayed variables, drawn from the
 	// document-scoped `index_sets` registry (EsmFile.IndexSets). Nil means
 	// scalar. As of v0.8.0 the iteration domains named here live at document
@@ -154,7 +154,7 @@ type Model struct {
 	Equations        []Equation               `json:"equations"`
 	DiscreteEvents   []DiscreteEvent          `json:"discrete_events,omitempty"`
 	ContinuousEvents []ContinuousEvent        `json:"continuous_events,omitempty"`
-	Subsystems       map[string]interface{}   `json:"subsystems,omitempty"`
+	Subsystems       map[string]any           `json:"subsystems,omitempty"`
 	// Tolerance is the model-level default numerical tolerance applied to
 	// inline tests that do not override it (esm-spec §6.6).
 	Tolerance *Tolerance `json:"tolerance,omitempty"`
@@ -169,7 +169,7 @@ type Model struct {
 	// Guesses provides initial-guess seeds for nonlinear solvers during
 	// initialization, keyed by variable name. Values may be numeric literals
 	// or Expression graphs (serialized as interface{}).
-	Guesses map[string]interface{} `json:"guesses,omitempty"`
+	Guesses map[string]any `json:"guesses,omitempty"`
 	// SystemKind discriminates the MTK system type this model maps to.
 	// One of "ode" (default), "nonlinear", "sde", "pde".
 	SystemKind *string `json:"system_kind,omitempty"`
@@ -181,9 +181,9 @@ type Model struct {
 
 // Species represents a chemical species
 type Species struct {
-	Units       *string     `json:"units,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Description *string     `json:"description,omitempty"`
+	Units       *string `json:"units,omitempty"`
+	Default     any     `json:"default,omitempty"`
+	Description *string `json:"description,omitempty"`
 	// Constant marks reservoir species (held fixed, no ODE).
 	// Maps to Catalyst's isconstantspecies=true.
 	Constant *bool `json:"constant,omitempty"`
@@ -191,9 +191,9 @@ type Species struct {
 
 // Parameter represents a model parameter
 type Parameter struct {
-	Units       *string     `json:"units,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Description *string     `json:"description,omitempty"`
+	Units       *string `json:"units,omitempty"`
+	Default     any     `json:"default,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 // SubstrateProduct represents a substrate or product in a reaction.
@@ -219,14 +219,14 @@ type Reaction struct {
 
 // ReactionSystem represents a chemical reaction network
 type ReactionSystem struct {
-	Reference           *Reference             `json:"reference,omitempty"`
-	Species             map[string]Species     `json:"species"`
-	Parameters          map[string]Parameter   `json:"parameters"`
-	Reactions           []Reaction             `json:"reactions"`
-	ConstraintEquations []Equation             `json:"constraint_equations,omitempty"`
-	DiscreteEvents      []DiscreteEvent        `json:"discrete_events,omitempty"`
-	ContinuousEvents    []ContinuousEvent      `json:"continuous_events,omitempty"`
-	Subsystems          map[string]interface{} `json:"subsystems,omitempty"`
+	Reference           *Reference           `json:"reference,omitempty"`
+	Species             map[string]Species   `json:"species"`
+	Parameters          map[string]Parameter `json:"parameters"`
+	Reactions           []Reaction           `json:"reactions"`
+	ConstraintEquations []Equation           `json:"constraint_equations,omitempty"`
+	DiscreteEvents      []DiscreteEvent      `json:"discrete_events,omitempty"`
+	ContinuousEvents    []ContinuousEvent    `json:"continuous_events,omitempty"`
+	Subsystems          map[string]any       `json:"subsystems,omitempty"`
 	// Tolerance is the component-level default numerical tolerance for inline
 	// tests (esm-spec §6.6).
 	Tolerance *Tolerance `json:"tolerance,omitempty"`
@@ -271,7 +271,7 @@ type Assertion struct {
 	Reduce string `json:"reduce,omitempty"`
 	// Reference is the analytic/precomputed solution required by error-norm
 	// reductions: an inline Expression or a from_file shape (esm-spec §6.6.5).
-	Reference interface{} `json:"reference,omitempty"`
+	Reference any `json:"reference,omitempty"`
 }
 
 // Test is an inline validation test for a Model or ReactionSystem.
@@ -289,8 +289,8 @@ type Test struct {
 	// config (a peer of ParameterOverrides), so — unlike a component's own
 	// imports — this DOES survive parse → emit. Consumed only by an ephemeral
 	// per-run build, which this binding does not perform (no numeric solver).
-	ExpressionTemplateImports []interface{} `json:"expression_template_imports,omitempty"`
-	Assertions                []Assertion   `json:"assertions"`
+	ExpressionTemplateImports []any       `json:"expression_template_imports,omitempty"`
+	Assertions                []Assertion `json:"assertions"`
 }
 
 // PlotAxis is an axis specification for a plot.
@@ -360,7 +360,7 @@ type Example struct {
 	// §9.7.10 form C / §6.7). Authored per-run config (a peer of Parameters), so
 	// it DOES survive parse → emit; consumed only by an ephemeral per-run build,
 	// which this binding does not perform.
-	ExpressionTemplateImports []interface{} `json:"expression_template_imports,omitempty"`
+	ExpressionTemplateImports []any `json:"expression_template_imports,omitempty"`
 }
 
 // ========================================
@@ -370,11 +370,11 @@ type Example struct {
 // FunctionalAffect represents a registered functional affect handler for
 // discrete events that require complex behavior beyond symbolic expressions
 type FunctionalAffect struct {
-	HandlerID      string                 `json:"handler_id"`
-	ReadVars       []string               `json:"read_vars"`
-	ReadParams     []string               `json:"read_params"`
-	ModifiedParams []string               `json:"modified_params,omitempty"`
-	Config         map[string]interface{} `json:"config,omitempty"`
+	HandlerID      string         `json:"handler_id"`
+	ReadVars       []string       `json:"read_vars"`
+	ReadParams     []string       `json:"read_params"`
+	ModifiedParams []string       `json:"modified_params,omitempty"`
+	Config         map[string]any `json:"config,omitempty"`
 }
 
 // DiscreteEventTrigger represents different trigger types for discrete events
@@ -424,7 +424,7 @@ type DataLoader struct {
 	Determinism *DataLoaderDeterminism        `json:"determinism,omitempty"`
 	Variables   map[string]DataLoaderVariable `json:"variables"`
 	Reference   *Reference                    `json:"reference,omitempty"`
-	Metadata    map[string]interface{}        `json:"metadata,omitempty"`
+	Metadata    map[string]any                `json:"metadata,omitempty"`
 }
 
 // DataLoaderDeterminism is the reproducibility contract a loader advertises
@@ -446,22 +446,22 @@ type DataLoaderSource struct {
 // DataLoaderTemporal describes the temporal coverage and record layout.
 // RecordsPerFile may be an int or the string "auto"; represented as interface{}.
 type DataLoaderTemporal struct {
-	Start          *string     `json:"start,omitempty"`
-	End            *string     `json:"end,omitempty"`
-	FilePeriod     *string     `json:"file_period,omitempty"`
-	Frequency      *string     `json:"frequency,omitempty"`
-	RecordsPerFile interface{} `json:"records_per_file,omitempty"`
-	TimeVariable   *string     `json:"time_variable,omitempty"`
+	Start          *string `json:"start,omitempty"`
+	End            *string `json:"end,omitempty"`
+	FilePeriod     *string `json:"file_period,omitempty"`
+	Frequency      *string `json:"frequency,omitempty"`
+	RecordsPerFile any     `json:"records_per_file,omitempty"`
+	TimeVariable   *string `json:"time_variable,omitempty"`
 }
 
 // DataLoaderVariable describes one variable exposed by a data loader.
 // UnitConversion is either a number or an Expression AST node.
 type DataLoaderVariable struct {
-	FileVariable   string      `json:"file_variable"`
-	Units          string      `json:"units"`
-	UnitConversion interface{} `json:"unit_conversion,omitempty"`
-	Description    *string     `json:"description,omitempty"`
-	Reference      *Reference  `json:"reference,omitempty"`
+	FileVariable   string     `json:"file_variable"`
+	Units          string     `json:"units"`
+	UnitConversion any        `json:"unit_conversion,omitempty"`
+	Description    *string    `json:"description,omitempty"`
+	Reference      *Reference `json:"reference,omitempty"`
 }
 
 // The top-level `operators` and `registered_functions` blocks (and the `call`
@@ -481,11 +481,11 @@ type CouplingEntry interface {
 
 // OperatorComposeCoupling represents operator composition
 type OperatorComposeCoupling struct {
-	Type        string                 `json:"type"` // "operator_compose"
-	Systems     [2]string              `json:"systems"`
-	Translate   map[string]interface{} `json:"translate,omitempty"`
-	Lifting     *string                `json:"lifting,omitempty"`
-	Description *string                `json:"description,omitempty"`
+	Type        string         `json:"type"` // "operator_compose"
+	Systems     [2]string      `json:"systems"`
+	Translate   map[string]any `json:"translate,omitempty"`
+	Lifting     *string        `json:"lifting,omitempty"`
+	Description *string        `json:"description,omitempty"`
 }
 
 func (o OperatorComposeCoupling) GetType() string { return o.Type }
@@ -549,10 +549,10 @@ func (o OperatorApplyCoupling) GetType() string { return o.Type }
 
 // CallbackCoupling represents callback-based coupling
 type CallbackCoupling struct {
-	Type        string                 `json:"type"` // "callback"
-	CallbackID  string                 `json:"callback_id"`
-	Config      map[string]interface{} `json:"config,omitempty"`
-	Description *string                `json:"description,omitempty"`
+	Type        string         `json:"type"` // "callback"
+	CallbackID  string         `json:"callback_id"`
+	Config      map[string]any `json:"config,omitempty"`
+	Description *string        `json:"description,omitempty"`
 }
 
 func (c CallbackCoupling) GetType() string { return c.Type }
@@ -676,13 +676,13 @@ type Metadata struct {
 // The Go binding is schema-only: it stores and round-trips these declarations
 // but does not resolve `{from}` references or evaluate the sets.
 type IndexSet struct {
-	Kind    string        `json:"kind"`
-	Size    *int          `json:"size,omitempty"`
-	Members []interface{} `json:"members,omitempty"`
-	FromFAQ *string       `json:"from_faq,omitempty"`
-	Of      []string      `json:"of,omitempty"`
-	Offsets *string       `json:"offsets,omitempty"`
-	Values  *string       `json:"values,omitempty"`
+	Kind    string   `json:"kind"`
+	Size    *int     `json:"size,omitempty"`
+	Members []any    `json:"members,omitempty"`
+	FromFAQ *string  `json:"from_faq,omitempty"`
+	Of      []string `json:"of,omitempty"`
+	Offsets *string  `json:"offsets,omitempty"`
+	Values  *string  `json:"values,omitempty"`
 }
 
 // EsmFile represents the top-level ESM file structure
@@ -697,7 +697,7 @@ type EsmFile struct {
 	// a map from symbolic names (strings) to positive integers. Lowering
 	// (resolution to `const`-op integers) happens at load time.
 	Enums    map[string]map[string]int `json:"enums,omitempty"`
-	Coupling []interface{}             `json:"coupling,omitempty"` // Properly deserialized coupling entries
+	Coupling []any                     `json:"coupling,omitempty"` // Properly deserialized coupling entries
 	// CouplingRoles is present only in a coupling-library file (esm-spec §10.9):
 	// the map of formal component roles a role-scoped `coupling` array wires.
 	// Presence of this key is the sole positive identifier of the
@@ -742,7 +742,7 @@ type FunctionTable struct {
 	Interpolation *string             `json:"interpolation,omitempty"`
 	OutOfBounds   *string             `json:"out_of_bounds,omitempty"`
 	Outputs       []string            `json:"outputs,omitempty"`
-	Data          interface{}         `json:"data"`
+	Data          any                 `json:"data"`
 	Shape         []int               `json:"shape,omitempty"`
 	SchemaVersion *string             `json:"schema_version,omitempty"`
 }

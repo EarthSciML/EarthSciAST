@@ -53,14 +53,14 @@ type CouplingImportOptions struct {
 	// LoadRef resolves a `ref` string to a parsed coupling-library document
 	// (raw JSON view). Defaults to a filesystem reader. Tests may supply an
 	// in-memory resolver.
-	LoadRef func(ref, basePath string) (map[string]interface{}, error)
+	LoadRef func(ref, basePath string) (map[string]any, error)
 }
 
 // isCouplingLibraryDoc reports whether `raw` has the coupling-library-file FORM
 // (top-level `coupling_roles`, esm-spec §10.9). Presence of that key is the
 // sole positive identifier of the file kind; purity is checked separately at
 // the import edge.
-func isCouplingLibraryDoc(raw map[string]interface{}) bool {
+func isCouplingLibraryDoc(raw map[string]any) bool {
 	if raw == nil {
 		return false
 	}
@@ -103,19 +103,19 @@ func rewriteScopedRef(ref string, bind map[string]string) string {
 // tree. Numbers and other non-string/non-object leaves pass through unchanged;
 // `apply_expression_template` bindings VALUES are free-variable targets
 // (esm-spec §10.10.2) — Expressions in their own right.
-func rewriteExprRaw(expr interface{}, fn refFn) interface{} {
+func rewriteExprRaw(expr any, fn refFn) any {
 	switch e := expr.(type) {
 	case string:
 		return fn(e)
-	case map[string]interface{}:
-		if args, ok := e["args"].([]interface{}); ok {
+	case map[string]any:
+		if args, ok := e["args"].([]any); ok {
 			for i := range args {
 				args[i] = rewriteExprRaw(args[i], fn)
 			}
 			e["args"] = args
 		}
 		if op, _ := e["op"].(string); op == applyExpressionTemplateOp {
-			if b, ok := e["bindings"].(map[string]interface{}); ok {
+			if b, ok := e["bindings"].(map[string]any); ok {
 				for k := range b {
 					b[k] = rewriteExprRaw(b[k], fn)
 				}
@@ -128,8 +128,8 @@ func rewriteExprRaw(expr interface{}, fn refFn) interface{} {
 }
 
 // mapStringArrayRaw applies fn to every string element of a raw array in place.
-func mapStringArrayRaw(v interface{}, fn refFn) interface{} {
-	arr, ok := v.([]interface{})
+func mapStringArrayRaw(v any, fn refFn) any {
+	arr, ok := v.([]any)
 	if !ok {
 		return v
 	}
@@ -145,7 +145,7 @@ func mapStringArrayRaw(v interface{}, fn refFn) interface{} {
 // reference of a coupling edge and exprFn to every scoped reference inside its
 // Expression fields (esm-spec §10.10.2). Mutates `entry` in place (callers pass
 // a clone).
-func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
+func rewriteEntryInPlace(entry map[string]any, structFn, exprFn refFn) {
 	t, _ := entry["type"].(string)
 	switch t {
 	case "variable_map":
@@ -157,7 +157,7 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 		}
 		// A legacy string transform ("param_to_var", ...) is left alone; only an
 		// Expression (operator-node object) transform carries scoped references.
-		if tr, ok := entry["transform"].(map[string]interface{}); ok {
+		if tr, ok := entry["transform"].(map[string]any); ok {
 			entry["transform"] = rewriteExprRaw(tr, exprFn)
 		}
 
@@ -165,10 +165,10 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 		if sys, ok := entry["systems"]; ok {
 			entry["systems"] = mapStringArrayRaw(sys, structFn)
 		}
-		if conn, ok := entry["connector"].(map[string]interface{}); ok {
-			if eqs, ok := conn["equations"].([]interface{}); ok {
+		if conn, ok := entry["connector"].(map[string]any); ok {
+			if eqs, ok := conn["equations"].([]any); ok {
 				for _, e := range eqs {
-					eq, ok := e.(map[string]interface{})
+					eq, ok := e.(map[string]any)
 					if !ok {
 						continue
 					}
@@ -189,15 +189,15 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 		if sys, ok := entry["systems"]; ok {
 			entry["systems"] = mapStringArrayRaw(sys, structFn)
 		}
-		if tr, ok := entry["translate"].(map[string]interface{}); ok {
-			next := make(map[string]interface{}, len(tr))
+		if tr, ok := entry["translate"].(map[string]any); ok {
+			next := make(map[string]any, len(tr))
 			for k, v := range tr {
 				nk := structFn(k)
 				switch vv := v.(type) {
 				case string:
 					next[nk] = structFn(vv)
-				case map[string]interface{}:
-					m, _ := deepCopyJSON(vv).(map[string]interface{})
+				case map[string]any:
+					m, _ := deepCopyJSON(vv).(map[string]any)
 					if s, ok := m["var"].(string); ok {
 						m["var"] = structFn(s)
 					}
@@ -210,13 +210,13 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 		}
 
 	case "event":
-		if conds, ok := entry["conditions"].([]interface{}); ok {
+		if conds, ok := entry["conditions"].([]any); ok {
 			for i, c := range conds {
 				conds[i] = rewriteExprRaw(c, exprFn)
 			}
 		}
-		rewriteAffect := func(a interface{}) interface{} {
-			am, ok := a.(map[string]interface{})
+		rewriteAffect := func(a any) any {
+			am, ok := a.(map[string]any)
 			if !ok {
 				return a
 			}
@@ -228,24 +228,24 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 			}
 			return am
 		}
-		if aff, ok := entry["affects"].([]interface{}); ok {
+		if aff, ok := entry["affects"].([]any); ok {
 			for i := range aff {
 				aff[i] = rewriteAffect(aff[i])
 			}
 		}
-		if aff, ok := entry["affect_neg"].([]interface{}); ok {
+		if aff, ok := entry["affect_neg"].([]any); ok {
 			for i := range aff {
 				aff[i] = rewriteAffect(aff[i])
 			}
 		}
-		if trig, ok := entry["trigger"].(map[string]interface{}); ok {
+		if trig, ok := entry["trigger"].(map[string]any); ok {
 			if tt, _ := trig["type"].(string); tt == "condition" {
 				if ex, ok := trig["expression"]; ok && ex != nil {
 					trig["expression"] = rewriteExprRaw(ex, exprFn)
 				}
 			}
 		}
-		if fa, ok := entry["functional_affect"].(map[string]interface{}); ok {
+		if fa, ok := entry["functional_affect"].(map[string]any); ok {
 			for _, key := range []string{"read_vars", "read_params", "modified_params"} {
 				if lst, ok := fa[key]; ok {
 					fa[key] = mapStringArrayRaw(lst, structFn)
@@ -263,9 +263,9 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 // var lists) always name a role; Expression strings name a role only when they
 // are scoped references (contain a dot) — bare Expression operands like `"t"`
 // are incidental.
-func collectRoleSegments(edge map[string]interface{}) map[string]bool {
+func collectRoleSegments(edge map[string]any) map[string]bool {
 	seen := map[string]bool{}
-	clone, _ := deepCopyJSON(edge).(map[string]interface{})
+	clone, _ := deepCopyJSON(edge).(map[string]any)
 	structFn := func(ref string) string {
 		seen[headSegment(ref)] = true
 		return ref
@@ -284,7 +284,7 @@ func collectRoleSegments(edge map[string]interface{}) map[string]bool {
 // Ref loading (mirrors the §9.7 template resolver)
 // ---------------------------------------------------------------------------
 
-func defaultLoadCouplingRef(ref, basePath string) (map[string]interface{}, error) {
+func defaultLoadCouplingRef(ref, basePath string) (map[string]any, error) {
 	// loadRefBytes unifies the http(s)-vs-local branch (isRemoteRef + stat/read);
 	// a coupling library never has nested refs, so its base dir is discarded. The
 	// plain error is re-wrapped in this loader's own diagnostic code.
@@ -296,7 +296,7 @@ func defaultLoadCouplingRef(ref, basePath string) (map[string]interface{}, error
 	return parseCouplingRefView(ref, data)
 }
 
-func parseCouplingRefView(where string, data []byte) (map[string]interface{}, error) {
+func parseCouplingRefView(where string, data []byte) (map[string]any, error) {
 	view, err := decodeJSONView(data)
 	if err != nil {
 		return nil, newETErr("coupling_import_unresolved",
@@ -312,7 +312,7 @@ func parseCouplingRefView(where string, data []byte) (map[string]interface{}, er
 // expandCouplingImportEntry validates a resolved coupling-library document and
 // expands one `coupling_import` entry into its concrete edges, bound to `bind`.
 // Raises the esm-spec §10.11 diagnostics.
-func expandCouplingImportEntry(lib map[string]interface{}, ref string, bind map[string]string, file *EsmFile) ([]CouplingEntry, error) {
+func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]string, file *EsmFile) ([]CouplingEntry, error) {
 	if !isCouplingLibraryDoc(lib) {
 		return nil, newETErr("coupling_import_not_library",
 			fmt.Sprintf("coupling_import ref '%s' lacks top-level `coupling_roles` — not a coupling-library file (esm-spec §10.9)", ref))
@@ -326,13 +326,13 @@ func expandCouplingImportEntry(lib map[string]interface{}, ref string, bind map[
 		}
 	}
 
-	rolesMap, _ := lib["coupling_roles"].(map[string]interface{})
+	rolesMap, _ := lib["coupling_roles"].(map[string]any)
 	roleNames := sortedKeys(rolesMap)
 	if len(roleNames) == 0 {
 		return nil, newETErr("coupling_library_illegal_payload",
 			fmt.Sprintf("coupling-library '%s' declares no roles (esm-spec §10.9: `coupling_roles` is required, non-empty)", ref))
 	}
-	edges, _ := lib["coupling"].([]interface{})
+	edges, _ := lib["coupling"].([]any)
 	if len(edges) == 0 {
 		return nil, newETErr("coupling_library_illegal_payload",
 			fmt.Sprintf("coupling-library '%s' has an empty `coupling` array (esm-spec §10.9: required, non-empty)", ref))
@@ -346,7 +346,7 @@ func expandCouplingImportEntry(lib map[string]interface{}, ref string, bind map[
 	// Edge-type + role-scope checks over the declared roles.
 	usedRoles := map[string]bool{}
 	for _, e := range edges {
-		edge, ok := e.(map[string]interface{})
+		edge, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -402,11 +402,11 @@ func expandCouplingImportEntry(lib map[string]interface{}, ref string, bind map[
 	rw := func(r string) string { return rewriteScopedRef(r, bind) }
 	expanded := make([]CouplingEntry, 0, len(edges))
 	for _, e := range edges {
-		edge, ok := e.(map[string]interface{})
+		edge, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
-		clone, _ := deepCopyJSON(edge).(map[string]interface{})
+		clone, _ := deepCopyJSON(edge).(map[string]any)
 		rewriteEntryInPlace(clone, rw, rw)
 		ce, err := rawEdgeToCouplingEntry(clone)
 		if err != nil {
@@ -419,7 +419,7 @@ func expandCouplingImportEntry(lib map[string]interface{}, ref string, bind map[
 
 // rawEdgeToCouplingEntry re-materializes a rewritten raw edge map into a typed
 // CouplingEntry via the shared coupling-entry unmarshaler.
-func rawEdgeToCouplingEntry(edge map[string]interface{}) (CouplingEntry, error) {
+func rawEdgeToCouplingEntry(edge map[string]any) (CouplingEntry, error) {
 	data, err := json.Marshal(edge)
 	if err != nil {
 		return nil, newETErr("coupling_import_unresolved",
@@ -443,7 +443,7 @@ func resolvesToComponent(file *EsmFile, value string) bool {
 	segs := strings.Split(value, ".")
 	top := segs[0]
 
-	var subs map[string]interface{}
+	var subs map[string]any
 	found := false
 	if m, ok := file.Models[top]; ok {
 		found = true
@@ -466,11 +466,11 @@ func resolvesToComponent(file *EsmFile, value string) bool {
 		if !ok {
 			return false
 		}
-		nodeMap, ok := node.(map[string]interface{})
+		nodeMap, ok := node.(map[string]any)
 		if !ok {
 			return false
 		}
-		subs, _ = nodeMap["subsystems"].(map[string]interface{})
+		subs, _ = nodeMap["subsystems"].(map[string]any)
 	}
 	return true
 }
@@ -481,7 +481,7 @@ func resolvesToComponent(file *EsmFile, value string) bool {
 // has no `coupling` block. Non-import entries pass through untouched; a file
 // with no `coupling_import` entries needs no options and returns `file.Coupling`
 // verbatim.
-func expandCouplingImports(file *EsmFile, opts CouplingImportOptions) ([]interface{}, error) {
+func expandCouplingImports(file *EsmFile, opts CouplingImportOptions) ([]any, error) {
 	if file == nil {
 		return nil, nil
 	}
@@ -510,7 +510,7 @@ func expandCouplingImports(file *EsmFile, opts CouplingImportOptions) ([]interfa
 		basePath = "."
 	}
 
-	out := make([]interface{}, 0, len(coupling))
+	out := make([]any, 0, len(coupling))
 	for _, e := range coupling {
 		var imp CouplingImport
 		switch v := e.(type) {

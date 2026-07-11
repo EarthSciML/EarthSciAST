@@ -38,13 +38,13 @@ import (
 
 // metaExprIndexSize reads a folded interval `size` out of a raw resolved view
 // (the resolveTemplateMachinery output shape).
-func metaExprIndexSize(t *testing.T, view map[string]interface{}, name string) int64 {
+func metaExprIndexSize(t *testing.T, view map[string]any, name string) int64 {
 	t.Helper()
-	is, ok := view["index_sets"].(map[string]interface{})
+	is, ok := view["index_sets"].(map[string]any)
 	if !ok {
 		t.Fatalf("view has no index_sets")
 	}
-	decl, ok := is[name].(map[string]interface{})
+	decl, ok := is[name].(map[string]any)
 	if !ok {
 		t.Fatalf("index set %q missing from view", name)
 	}
@@ -87,7 +87,7 @@ func mountIndexSize(t *testing.T, f *EsmFile, name string) int {
 
 func TestMetaExpr_EvalFoldsProduct(t *testing.T) {
 	got, err := evalMetaExpr(
-		map[string]interface{}{"op": "*", "args": []interface{}{"NX", "NY"}},
+		map[string]any{"op": "*", "args": []any{"NX", "NY"}},
 		map[string]int64{"NX": 18, "NY": 20}, "t")
 	if err != nil {
 		t.Fatalf("evalMetaExpr: %v", err)
@@ -108,8 +108,8 @@ func TestMetaExpr_EvalNameAndLiteral(t *testing.T) {
 
 func TestMetaExpr_EvalNestedArithmetic(t *testing.T) {
 	// (NX + 2) * NY  with NX=4, NY=3  -> 18
-	expr := map[string]interface{}{"op": "*", "args": []interface{}{
-		map[string]interface{}{"op": "+", "args": []interface{}{"NX", 2}},
+	expr := map[string]any{"op": "*", "args": []any{
+		map[string]any{"op": "+", "args": []any{"NX", 2}},
 		"NY",
 	}}
 	got, err := evalMetaExpr(expr, map[string]int64{"NX": 4, "NY": 3}, "t")
@@ -122,7 +122,7 @@ func TestMetaExpr_EvalNestedArithmetic(t *testing.T) {
 }
 
 func TestMetaExpr_RequireReturnsUnfolded(t *testing.T) {
-	expr := map[string]interface{}{"op": "*", "args": []interface{}{"NX", "NY"}}
+	expr := map[string]any{"op": "*", "args": []any{"NX", "NY"}}
 	got, err := requireMetaExpr(expr, "t")
 	if err != nil {
 		t.Fatalf("requireMetaExpr: %v", err)
@@ -135,18 +135,18 @@ func TestMetaExpr_RequireReturnsUnfolded(t *testing.T) {
 func TestMetaExpr_HelperDiagnostics(t *testing.T) {
 	cases := []struct {
 		name string
-		expr interface{}
+		expr any
 		env  map[string]int64
 		code string
 	}{
 		// Bad op is caught structurally at the edge, even with a symbolic arg.
-		{"bad_op", map[string]interface{}{"op": "%", "args": []interface{}{"NX", 2}}, map[string]int64{}, "metaparameter_type_error"},
-		{"empty_args", map[string]interface{}{"op": "*", "args": []interface{}{}}, map[string]int64{}, "metaparameter_type_error"},
+		{"bad_op", map[string]any{"op": "%", "args": []any{"NX", 2}}, map[string]int64{}, "metaparameter_type_error"},
+		{"empty_args", map[string]any{"op": "*", "args": []any{}}, map[string]int64{}, "metaparameter_type_error"},
 		{"float_literal", 1.5, map[string]int64{}, "metaparameter_type_error"},
 		// Unknown free name is caught at fold time.
-		{"unknown_name", map[string]interface{}{"op": "*", "args": []interface{}{"NZ", "NY"}}, map[string]int64{"NX": 18, "NY": 20}, "template_import_unknown_name"},
+		{"unknown_name", map[string]any{"op": "*", "args": []any{"NZ", "NY"}}, map[string]int64{"NX": 18, "NY": 20}, "template_import_unknown_name"},
 		// Inexact division is rejected.
-		{"inexact_div", map[string]interface{}{"op": "/", "args": []interface{}{"NX", 7}}, map[string]int64{"NX": 18}, "metaparameter_type_error"},
+		{"inexact_div", map[string]any{"op": "/", "args": []any{"NX", 7}}, map[string]int64{"NX": 18}, "metaparameter_type_error"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

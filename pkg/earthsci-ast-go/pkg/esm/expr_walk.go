@@ -90,11 +90,11 @@ func mapExprChildren(node ExprNode, f func(Expression) (Expression, error)) (Exp
 	var err error
 
 	// mapSlice applies f to each element of a list-of-Expression field.
-	mapSlice := func(s []interface{}) ([]interface{}, error) {
+	mapSlice := func(s []any) ([]any, error) {
 		if s == nil {
 			return nil, nil
 		}
-		res := make([]interface{}, len(s))
+		res := make([]any, len(s))
 		for i, a := range s {
 			r, e := f(a)
 			if e != nil {
@@ -107,11 +107,11 @@ func mapExprChildren(node ExprNode, f func(Expression) (Expression, error)) (Exp
 
 	// mapStrIface applies f to each value of a map[string]interface{} field,
 	// preserving keys and iterating in sorted order for deterministic errors.
-	mapStrIface := func(m map[string]interface{}) (map[string]interface{}, error) {
+	mapStrIface := func(m map[string]any) (map[string]any, error) {
 		if m == nil {
 			return nil, nil
 		}
-		res := make(map[string]interface{}, len(m))
+		res := make(map[string]any, len(m))
 		for _, k := range sortedKeys(m) {
 			r, e := f(m[k])
 			if e != nil {
@@ -124,8 +124,8 @@ func mapExprChildren(node ExprNode, f func(Expression) (Expression, error)) (Exp
 
 	// --- scalar Expression fields (apply f when non-nil) ---
 	scalars := []struct {
-		src interface{}
-		dst *interface{}
+		src any
+		dst *any
 	}{
 		{node.Lower, &out.Lower},
 		{node.Upper, &out.Upper},
@@ -180,17 +180,17 @@ func mapExprChildren(node ExprNode, f func(Expression) (Expression, error)) (Exp
 
 	// --- Regions [][][]interface{}: walk each innermost bound leaf ---
 	if node.Regions != nil {
-		nr := make([][][]interface{}, len(node.Regions))
+		nr := make([][][]any, len(node.Regions))
 		for i, region := range node.Regions {
 			if region == nil {
 				continue
 			}
-			nreg := make([][]interface{}, len(region))
+			nreg := make([][]any, len(region))
 			for j, pair := range region {
 				if pair == nil {
 					continue
 				}
-				npair := make([]interface{}, len(pair))
+				npair := make([]any, len(pair))
 				for k, b := range pair {
 					var r Expression
 					if r, err = f(b); err != nil {

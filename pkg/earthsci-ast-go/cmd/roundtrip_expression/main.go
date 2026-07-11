@@ -33,14 +33,14 @@ func roundtripOne(path string) result {
 	// Use json.Unmarshal with interface{} to discover the shape, then
 	// re-cast operator nodes through esm.ExprNode to exercise the binding's
 	// typed path.
-	var rawAny interface{}
+	var rawAny any
 	if err := json.Unmarshal(raw, &rawAny); err != nil {
 		return result{OK: false, Error: fmt.Sprintf("decode error: %v", err)}
 	}
 
 	var expr esm.Expression
 	switch rawAny.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		var node esm.ExprNode
 		if err := json.Unmarshal(raw, &node); err != nil {
 			return result{OK: false, Error: fmt.Sprintf("node decode error: %v", err)}

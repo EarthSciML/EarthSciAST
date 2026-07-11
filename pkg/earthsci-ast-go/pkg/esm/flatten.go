@@ -41,7 +41,7 @@ type FlattenedSystem struct {
 	// per-state `default` the Julia/Rust/Python flatten paths carry.
 	InitialValues map[string]float64
 	Equations     []FlattenedEquation // all equations with namespaced vars
-	Events        []interface{}       // events with namespaced references
+	Events        []any               // events with namespaced references
 	Metadata      FlattenMetadata     // which systems were flattened
 }
 
@@ -486,7 +486,7 @@ func renderNamespacedNode(node ExprNode, resolve func(string) string, parens boo
 }
 
 // isAddSub returns true if expr is an addition or binary subtraction node.
-func isAddSub(expr interface{}) bool {
+func isAddSub(expr any) bool {
 	if n, ok := expr.(ExprNode); ok {
 		return n.Op == "+" || (n.Op == "-" && len(n.Args) == 2)
 	}
@@ -495,7 +495,7 @@ func isAddSub(expr interface{}) bool {
 
 // needsParens reports whether expr is an arithmetic node (+, -, *, /) that must
 // be parenthesized when it appears as a `/` denominator or a `^` base.
-func needsParens(expr interface{}) bool {
+func needsParens(expr any) bool {
 	if n, ok := expr.(ExprNode); ok {
 		return n.Op == "+" || n.Op == "-" || n.Op == "*" || n.Op == "/"
 	}
@@ -504,7 +504,7 @@ func needsParens(expr interface{}) bool {
 
 // isPowNode reports whether expr is an exponentiation node (^ / **). A pow base
 // must be parenthesized because rendered `^` is read left-to-right.
-func isPowNode(expr interface{}) bool {
+func isPowNode(expr any) bool {
 	if n, ok := expr.(ExprNode); ok {
 		return n.Op == "^" || n.Op == "**"
 	}
@@ -589,7 +589,7 @@ func namespaceExpressionTree(expr Expression, systemName string, varNames map[st
 	case float64, int:
 		return e
 	case ExprNode:
-		newArgs := make([]interface{}, len(e.Args))
+		newArgs := make([]any, len(e.Args))
 		for i, arg := range e.Args {
 			newArgs[i] = namespaceExpressionTree(arg, systemName, varNames)
 		}
@@ -616,7 +616,7 @@ func namespaceExpressionTree(expr Expression, systemName string, varNames map[st
 }
 
 // applyCouplingRule applies a single coupling entry to the flattened system.
-func applyCouplingRule(flat *FlattenedSystem, entry interface{}, allVarNames map[string]map[string]bool) error {
+func applyCouplingRule(flat *FlattenedSystem, entry any, allVarNames map[string]map[string]bool) error {
 	switch c := entry.(type) {
 	case OperatorComposeCoupling:
 		return applyOperatorCompose(flat, c)

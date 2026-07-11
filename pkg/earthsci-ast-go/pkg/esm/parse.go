@@ -94,7 +94,7 @@ func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
 	// schema error. Operates on a generic map view of the JSON (UseNumber to
 	// preserve int/float).
 	{
-		var preCheck map[string]interface{}
+		var preCheck map[string]any
 		predec := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
 		predec.UseNumber()
 		if err := predec.Decode(&preCheck); err == nil {
@@ -183,7 +183,7 @@ func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
 // normalizeJSONNumber converts a json.Number to int64 (no '.', no 'e'/'E') or
 // float64 per discretization RFC §5.4.6 round-trip parse rule. Values outside
 // int64 range fall back to float64.
-func normalizeJSONNumber(n json.Number) interface{} {
+func normalizeJSONNumber(n json.Number) any {
 	s := string(n)
 	if strings.ContainsAny(s, ".eE") {
 		f, err := n.Float64()
@@ -232,12 +232,12 @@ func normalizeExpression(expr Expression) Expression {
 			*e = nv
 		}
 		return e
-	case []interface{}:
+	case []any:
 		for i, a := range e {
 			e[i] = normalizeExpression(a)
 		}
 		return e
-	case map[string]interface{}:
+	case map[string]any:
 		for k, v := range e {
 			e[k] = normalizeExpression(v)
 		}
@@ -387,13 +387,13 @@ func rejectCallOps(file *EsmFile) error {
 		// Raw containers (e.g. a decoded Attrs/Bindings value) may still hold
 		// operator objects; descend deterministically.
 		switch v := expr.(type) {
-		case []interface{}:
+		case []any:
 			for _, a := range v {
 				if err := visit(a); err != nil {
 					return err
 				}
 			}
-		case map[string]interface{}:
+		case map[string]any:
 			for _, k := range sortedKeys(v) {
 				if err := visit(v[k]); err != nil {
 					return err

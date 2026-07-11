@@ -12,7 +12,7 @@ import (
 // that range) before running encoding/json. Without this pass Go emits
 // float64(1.0) as "1", which collides with int64(1) on the wire and
 // breaks the round-trip int/float node distinction.
-func marshalCanonical(v interface{}, indent bool) ([]byte, error) {
+func marshalCanonical(v any, indent bool) ([]byte, error) {
 	canonical, err := canonicalizeForJSON(v)
 	if err != nil {
 		return nil, err

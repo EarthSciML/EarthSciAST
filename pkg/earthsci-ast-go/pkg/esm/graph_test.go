@@ -23,7 +23,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "y",
 					},
 				},
@@ -49,7 +49,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 						},
 						Rate: ExprNode{
 							Op:   "*",
-							Args: []interface{}{"k", "A"},
+							Args: []any{"k", "A"},
 						},
 					},
 				},
@@ -66,7 +66,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 			},
 		},
-		Coupling: []interface{}{
+		Coupling: []any{
 			VariableMapCoupling{
 				Type:      "variable_map",
 				From:      "TestLoader.temp",
@@ -132,12 +132,12 @@ func TestExpressionGraphFromModel(t *testing.T) {
 		},
 		Equations: []Equation{
 			{
-				LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 				RHS: "y",
 			},
 			{
 				LHS: "z",
-				RHS: ExprNode{Op: "*", Args: []interface{}{2.0, "x"}},
+				RHS: ExprNode{Op: "*", Args: []any{2.0, "x"}},
 			},
 		},
 	}
@@ -181,12 +181,12 @@ func TestExpressionGraphEquationIndex(t *testing.T) {
 		},
 		Equations: []Equation{
 			{
-				LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 				RHS: "y",
 			},
 			{
 				LHS: "z",
-				RHS: ExprNode{Op: "*", Args: []interface{}{2.0, "x"}},
+				RHS: ExprNode{Op: "*", Args: []any{2.0, "x"}},
 			},
 		},
 	}
@@ -230,7 +230,7 @@ func TestExpressionGraphFromReactionSystem(t *testing.T) {
 				},
 				Rate: ExprNode{
 					Op:   "*",
-					Args: []interface{}{"k", "A"},
+					Args: []any{"k", "A"},
 				},
 			},
 		},
@@ -363,7 +363,7 @@ func TestExtractVariablesFromExpression(t *testing.T) {
 			name: "binary operation",
 			expr: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", "y"},
+				Args: []any{"x", "y"},
 			},
 			expected: []string{"x", "y"},
 		},
@@ -371,11 +371,11 @@ func TestExtractVariablesFromExpression(t *testing.T) {
 			name: "nested expression",
 			expr: ExprNode{
 				Op: "*",
-				Args: []interface{}{
+				Args: []any{
 					"k",
 					ExprNode{
 						Op:   "+",
-						Args: []interface{}{"x", 2.0},
+						Args: []any{"x", 2.0},
 					},
 				},
 			},
@@ -385,7 +385,7 @@ func TestExtractVariablesFromExpression(t *testing.T) {
 			name: "duplicate variables",
 			expr: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", "x"},
+				Args: []any{"x", "x"},
 			},
 			expected: []string{"x"},
 		},
@@ -431,7 +431,7 @@ func TestExtractVariableFromLHS(t *testing.T) {
 			name: "derivative",
 			lhs: ExprNode{
 				Op:   "D",
-				Args: []interface{}{"y"},
+				Args: []any{"y"},
 				Wrt:  stringPtr("t"),
 			},
 			expected: "y",
@@ -445,7 +445,7 @@ func TestExtractVariableFromLHS(t *testing.T) {
 			name: "other operator",
 			lhs: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", "y"},
+				Args: []any{"x", "y"},
 			},
 			expected: "",
 		},

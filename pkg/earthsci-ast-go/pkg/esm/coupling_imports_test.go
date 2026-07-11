@@ -26,7 +26,7 @@ const couplingLibJSON = `{
   ]
 }`
 
-func couplingLibView(t *testing.T, jsonStr string) map[string]interface{} {
+func couplingLibView(t *testing.T, jsonStr string) map[string]any {
 	t.Helper()
 	view, err := decodeJSONView([]byte(jsonStr))
 	if err != nil {
@@ -36,7 +36,7 @@ func couplingLibView(t *testing.T, jsonStr string) map[string]interface{} {
 }
 
 // An assembly mounting the two components the library wires.
-func couplingAssembly(coupling []interface{}) *EsmFile {
+func couplingAssembly(coupling []any) *EsmFile {
 	return &EsmFile{
 		Esm:      "0.8.0",
 		Metadata: Metadata{Name: "wildfire"},
@@ -64,7 +64,7 @@ func couplingImportEntry(bind map[string]string) CouplingImport {
 	return CouplingImport{Type: "coupling_import", Ref: "lib.esm", Bind: bind}
 }
 
-func expectVarMap(t *testing.T, e interface{}, from, to string) {
+func expectVarMap(t *testing.T, e any, from, to string) {
 	t.Helper()
 	vm, ok := e.(VariableMapCoupling)
 	if !ok {
@@ -95,7 +95,7 @@ func TestIsCouplingLibraryDoc(t *testing.T) {
 	if !isCouplingLibraryDoc(lib) {
 		t.Error("library with coupling_roles should be identified as a coupling-library doc")
 	}
-	if isCouplingLibraryDoc(map[string]interface{}{"esm": "0.8.0", "models": map[string]interface{}{}}) {
+	if isCouplingLibraryDoc(map[string]any{"esm": "0.8.0", "models": map[string]any{}}) {
 		t.Error("an assembly should not be a coupling-library doc")
 	}
 	if isCouplingLibraryDoc(nil) {
@@ -105,9 +105,9 @@ func TestIsCouplingLibraryDoc(t *testing.T) {
 
 func TestExpandCouplingImports_SubstitutesRoles(t *testing.T) {
 	lib := couplingLibView(t, couplingLibJSON)
-	loadRef := func(ref, basePath string) (map[string]interface{}, error) { return lib, nil }
+	loadRef := func(ref, basePath string) (map[string]any, error) { return lib, nil }
 
-	file := couplingAssembly([]interface{}{
+	file := couplingAssembly([]any{
 		couplingImportEntry(map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}),
 	})
 	expanded, err := expandCouplingImports(file, CouplingImportOptions{LoadRef: loadRef})
@@ -122,7 +122,7 @@ func TestExpandCouplingImports_SubstitutesRoles(t *testing.T) {
 }
 
 func TestExpandCouplingImports_NoImportsUntouched(t *testing.T) {
-	inline := []interface{}{
+	inline := []any{
 		VariableMapCoupling{Type: "variable_map", From: "FuelModelLookup.sigma", To: "RothermelFireSpread.sigma", Transform: "param_to_var"},
 	}
 	file := couplingAssembly(inline)
@@ -138,9 +138,9 @@ func TestExpandCouplingImports_NoImportsUntouched(t *testing.T) {
 
 func TestExpandCouplingImports_MultipleInstantiation(t *testing.T) {
 	lib := couplingLibView(t, couplingLibJSON)
-	loadRef := func(ref, basePath string) (map[string]interface{}, error) { return lib, nil }
+	loadRef := func(ref, basePath string) (map[string]any, error) { return lib, nil }
 
-	file := couplingAssembly([]interface{}{
+	file := couplingAssembly([]any{
 		couplingImportEntry(map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}),
 		couplingImportEntry(map[string]string{"Fuel": "RothermelFireSpread", "Spread": "FuelModelLookup"}),
 	})
@@ -156,10 +156,10 @@ func TestExpandCouplingImports_MultipleInstantiation(t *testing.T) {
 
 func TestFlattenEquivalence_ImportEqualsInline(t *testing.T) {
 	lib := couplingLibView(t, couplingLibJSON)
-	loadRef := func(ref, basePath string) (map[string]interface{}, error) { return lib, nil }
+	loadRef := func(ref, basePath string) (map[string]any, error) { return lib, nil }
 
 	imported, err := FlattenWithOptions(
-		couplingAssembly([]interface{}{
+		couplingAssembly([]any{
 			couplingImportEntry(map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}),
 		}),
 		CouplingImportOptions{LoadRef: loadRef},
@@ -167,7 +167,7 @@ func TestFlattenEquivalence_ImportEqualsInline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flatten import: %v", err)
 	}
-	inline, err := Flatten(couplingAssembly([]interface{}{
+	inline, err := Flatten(couplingAssembly([]any{
 		VariableMapCoupling{Type: "variable_map", From: "FuelModelLookup.sigma", To: "RothermelFireSpread.sigma", Transform: "param_to_var"},
 		VariableMapCoupling{Type: "variable_map", From: "FuelModelLookup.w_0", To: "RothermelFireSpread.w0", Transform: "param_to_var"},
 	}))
@@ -181,12 +181,12 @@ func TestFlattenEquivalence_ImportEqualsInline(t *testing.T) {
 
 func TestCouplingImportDiagnostics(t *testing.T) {
 	baseLib := couplingLibView(t, couplingLibJSON)
-	loadBase := func(ref, basePath string) (map[string]interface{}, error) { return baseLib, nil }
+	loadBase := func(ref, basePath string) (map[string]any, error) { return baseLib, nil }
 
 	tests := []struct {
 		name    string
 		bind    map[string]string
-		loadRef func(ref, basePath string) (map[string]interface{}, error)
+		loadRef func(ref, basePath string) (map[string]any, error)
 		want    string
 	}{
 		{
@@ -210,7 +210,7 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 		{
 			name: "not_library",
 			bind: map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"},
-			loadRef: func(ref, basePath string) (map[string]interface{}, error) {
+			loadRef: func(ref, basePath string) (map[string]any, error) {
 				return couplingLibView(t, `{"esm": "0.8.0", "metadata": {"name": "x"}, "models": {}}`), nil
 			},
 			want: "coupling_import_not_library",
@@ -218,9 +218,9 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 		{
 			name: "illegal_payload_declares_models",
 			bind: map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"},
-			loadRef: func(ref, basePath string) (map[string]interface{}, error) {
+			loadRef: func(ref, basePath string) (map[string]any, error) {
 				v := couplingLibView(t, couplingLibJSON)
-				v["models"] = map[string]interface{}{}
+				v["models"] = map[string]any{}
 				return v, nil
 			},
 			want: "coupling_library_illegal_payload",
@@ -228,10 +228,10 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 		{
 			name: "role_unused",
 			bind: map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread", "Extra": "FuelModelLookup"},
-			loadRef: func(ref, basePath string) (map[string]interface{}, error) {
+			loadRef: func(ref, basePath string) (map[string]any, error) {
 				v := couplingLibView(t, couplingLibJSON)
-				roles := v["coupling_roles"].(map[string]interface{})
-				roles["Extra"] = map[string]interface{}{}
+				roles := v["coupling_roles"].(map[string]any)
+				roles["Extra"] = map[string]any{}
 				return v, nil
 			},
 			want: "coupling_role_unused",
@@ -239,10 +239,10 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 		{
 			name: "edge_unknown_role",
 			bind: map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"},
-			loadRef: func(ref, basePath string) (map[string]interface{}, error) {
+			loadRef: func(ref, basePath string) (map[string]any, error) {
 				v := couplingLibView(t, couplingLibJSON)
-				v["coupling"] = []interface{}{
-					map[string]interface{}{"type": "variable_map", "from": "Ghost.sigma", "to": "Spread.sigma", "transform": "param_to_var"},
+				v["coupling"] = []any{
+					map[string]any{"type": "variable_map", "from": "Ghost.sigma", "to": "Spread.sigma", "transform": "param_to_var"},
 				}
 				return v, nil
 			},
@@ -251,10 +251,10 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 		{
 			name: "nested_import",
 			bind: map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"},
-			loadRef: func(ref, basePath string) (map[string]interface{}, error) {
+			loadRef: func(ref, basePath string) (map[string]any, error) {
 				v := couplingLibView(t, couplingLibJSON)
-				v["coupling"] = []interface{}{
-					map[string]interface{}{"type": "coupling_import", "ref": "other.esm", "bind": map[string]interface{}{}},
+				v["coupling"] = []any{
+					map[string]any{"type": "coupling_import", "ref": "other.esm", "bind": map[string]any{}},
 				}
 				return v, nil
 			},
@@ -263,7 +263,7 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 		{
 			name: "unresolved_loadref_error",
 			bind: map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"},
-			loadRef: func(ref, basePath string) (map[string]interface{}, error) {
+			loadRef: func(ref, basePath string) (map[string]any, error) {
 				return nil, fmt.Errorf("boom")
 			},
 			want: "coupling_import_unresolved",
@@ -272,7 +272,7 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			file := couplingAssembly([]interface{}{couplingImportEntry(tc.bind)})
+			file := couplingAssembly([]any{couplingImportEntry(tc.bind)})
 			_, err := expandCouplingImports(file, CouplingImportOptions{LoadRef: tc.loadRef})
 			if code := couplingErrCode(t, err); code != tc.want {
 				t.Errorf("code = %s; want %s", code, tc.want)
@@ -284,7 +284,7 @@ func TestCouplingImportDiagnostics(t *testing.T) {
 // Default filesystem loader: a missing ref surfaces as coupling_import_unresolved.
 func TestCouplingImport_DefaultLoaderMissingRef(t *testing.T) {
 	dir := t.TempDir()
-	file := couplingAssembly([]interface{}{
+	file := couplingAssembly([]any{
 		couplingImportEntry(map[string]string{"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}),
 	})
 	_, err := expandCouplingImports(file, CouplingImportOptions{BasePath: dir})
@@ -350,7 +350,7 @@ func TestSubsystemRef_IsCouplingLibrary(t *testing.T) {
 			"Outer": {
 				Variables:  map[string]ModelVariable{},
 				Equations:  []Equation{},
-				Subsystems: map[string]interface{}{"Inner": map[string]interface{}{"ref": "clib.esm"}},
+				Subsystems: map[string]any{"Inner": map[string]any{"ref": "clib.esm"}},
 			},
 		},
 	}

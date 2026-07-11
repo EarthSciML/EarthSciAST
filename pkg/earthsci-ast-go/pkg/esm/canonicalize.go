@@ -157,8 +157,8 @@ func canonMul(node ExprNode) (Expression, error) {
 
 // partitionIdentity splits args into (non-identity, hadIntIdentity, hadFloatIdentity)
 // where identityValue is 0 (for +) or 1 (for *).
-func partitionIdentity(args []interface{}, identityValue int64) (others []interface{}, hadInt, hadFloat bool) {
-	others = make([]interface{}, 0, len(args))
+func partitionIdentity(args []any, identityValue int64) (others []any, hadInt, hadFloat bool) {
+	others = make([]any, 0, len(args))
 	for _, a := range args {
 		switch v := a.(type) {
 		case int64:
@@ -177,7 +177,7 @@ func partitionIdentity(args []interface{}, identityValue int64) (others []interf
 	return others, hadInt, hadFloat
 }
 
-func allFloatLiterals(args []interface{}) bool {
+func allFloatLiterals(args []any) bool {
 	if len(args) == 0 {
 		return false
 	}
@@ -200,7 +200,7 @@ func canonSub(node ExprNode) (Expression, error) {
 		a, b := node.Args[0], node.Args[1]
 		// -(0, x) -> neg(x) (with type-preserving: -(0, x_literal) folds to negated literal)
 		if exprIsZeroAny(a) {
-			return canonNeg(ExprNode{Op: "neg", Args: []interface{}{b}})
+			return canonNeg(ExprNode{Op: "neg", Args: []any{b}})
 		}
 		// -(x, 0) -> x, type-preserving: if 0 is float and x is int literal, promote.
 		if exprIsZeroAny(b) {
@@ -259,12 +259,12 @@ func canonNeg(node ExprNode) (Expression, error) {
 			return v.Args[0], nil
 		}
 	}
-	return ExprNode{Op: "neg", Args: []interface{}{x}}, nil
+	return ExprNode{Op: "neg", Args: []any{x}}, nil
 }
 
 // flattenSameOp inlines nested same-op children.
-func flattenSameOp(args []interface{}, op string) []interface{} {
-	out := make([]interface{}, 0, len(args))
+func flattenSameOp(args []any, op string) []any {
+	out := make([]any, 0, len(args))
 	for _, a := range args {
 		switch v := a.(type) {
 		case ExprNode:
@@ -283,17 +283,17 @@ func flattenSameOp(args []interface{}, op string) []interface{} {
 	return out
 }
 
-func exprIsFloat(a interface{}) bool {
+func exprIsFloat(a any) bool {
 	_, ok := a.(float64)
 	return ok
 }
 
-func exprIsIntLiteral(a interface{}) bool {
+func exprIsIntLiteral(a any) bool {
 	_, ok := a.(int64)
 	return ok
 }
 
-func exprIsZeroAny(a interface{}) bool {
+func exprIsZeroAny(a any) bool {
 	switch v := a.(type) {
 	case int64:
 		return v == 0
@@ -303,17 +303,17 @@ func exprIsZeroAny(a interface{}) bool {
 	return false
 }
 
-func exprIsZeroInt(a interface{}) bool {
+func exprIsZeroInt(a any) bool {
 	v, ok := a.(int64)
 	return ok && v == 0
 }
 
-func exprIsZeroFloat(a interface{}) bool {
+func exprIsZeroFloat(a any) bool {
 	v, ok := a.(float64)
 	return ok && v == 0.0
 }
 
-func exprIsOneAny(a interface{}) bool {
+func exprIsOneAny(a any) bool {
 	switch v := a.(type) {
 	case int64:
 		return v == 1
@@ -323,7 +323,7 @@ func exprIsOneAny(a interface{}) bool {
 	return false
 }
 
-func exprIsOneFloat(a interface{}) bool {
+func exprIsOneFloat(a any) bool {
 	v, ok := a.(float64)
 	return ok && v == 1.0
 }
@@ -333,10 +333,10 @@ func exprIsOneFloat(a interface{}) bool {
 //  1. Numeric literals first, ascending value, int-before-float at equal magnitude.
 //  2. Bare strings lexicographically.
 //  3. Non-leaf nodes by canonical JSON byte compare.
-func sortArgs(args []interface{}) {
+func sortArgs(args []any) {
 	// Memoize the canonical JSON for non-leaf nodes to avoid quadratic serialization.
 	jsonCache := make(map[int]string)
-	getJSON := func(idx int, a interface{}) string {
+	getJSON := func(idx int, a any) string {
 		if s, ok := jsonCache[idx]; ok {
 			return s
 		}
@@ -353,14 +353,14 @@ func sortArgs(args []interface{}) {
 	sort.SliceStable(idx, func(i, j int) bool {
 		return argLess(args[idx[i]], args[idx[j]], idx[i], idx[j], getJSON)
 	})
-	sorted := make([]interface{}, n)
+	sorted := make([]any, n)
 	for i, k := range idx {
 		sorted[i] = args[k]
 	}
 	copy(args, sorted)
 }
 
-func argTier(a interface{}) int {
+func argTier(a any) int {
 	switch a.(type) {
 	case int64, float64:
 		return 0
@@ -372,7 +372,7 @@ func argTier(a interface{}) int {
 	return 3
 }
 
-func argLess(a, b interface{}, ia, ib int, getJSON func(int, interface{}) string) bool {
+func argLess(a, b any, ia, ib int, getJSON func(int, any) string) bool {
 	ta, tb := argTier(a), argTier(b)
 	if ta != tb {
 		return ta < tb
@@ -393,7 +393,7 @@ func argLess(a, b interface{}, ia, ib int, getJSON func(int, interface{}) string
 	return false
 }
 
-func numericKey(a interface{}) float64 {
+func numericKey(a any) float64 {
 	switch v := a.(type) {
 	case int64:
 		return float64(v)
@@ -422,7 +422,7 @@ func CanonicalJSON(expr Expression) ([]byte, error) {
 	return []byte(s), nil
 }
 
-func emitCanonicalJSON(a interface{}) (string, error) {
+func emitCanonicalJSON(a any) (string, error) {
 	switch v := a.(type) {
 	case int64:
 		return strconv.FormatInt(v, 10), nil
@@ -451,7 +451,7 @@ func emitCanonicalJSON(a interface{}) (string, error) {
 		return emitExprNodeJSON(v)
 	case *ExprNode:
 		return emitExprNodeJSON(*v)
-	case []interface{}:
+	case []any:
 		// Composite payloads (const/makearray arrays, nested value lists) recurse
 		// so nested floats keep their §5.4.6 trailing-.0 disambiguation instead of
 		// collapsing to bare integers via json.Marshal.
@@ -464,8 +464,8 @@ func emitCanonicalJSON(a interface{}) (string, error) {
 			parts[i] = s
 		}
 		return "[" + strings.Join(parts, ",") + "]", nil
-	case map[string]interface{}:
-		return emitCanonicalObject(sortedKeys(v), func(k string) interface{} { return v[k] })
+	case map[string]any:
+		return emitCanonicalObject(sortedKeys(v), func(k string) any { return v[k] })
 	case bool:
 		if v {
 			return "true", nil
@@ -487,7 +487,7 @@ func emitCanonicalJSON(a interface{}) (string, error) {
 // (callers pass sorted keys) and values rendered via emitCanonicalJSON so
 // nested floats stay canonical. Shared by the map arm of emitCanonicalJSON and
 // by every map-valued field of emitExprNodeJSON.
-func emitCanonicalObject(keys []string, get func(string) interface{}) (string, error) {
+func emitCanonicalObject(keys []string, get func(string) any) (string, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
 	for i, k := range keys {
@@ -524,7 +524,7 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 			appendRaw(key, string(b))
 		}
 	}
-	appendScalar := func(key string, v interface{}) error {
+	appendScalar := func(key string, v any) error {
 		if v == nil {
 			return nil
 		}
@@ -535,7 +535,7 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 		appendRaw(key, s)
 		return nil
 	}
-	appendSlice := func(key string, s []interface{}) error {
+	appendSlice := func(key string, s []any) error {
 		if len(s) == 0 {
 			return nil
 		}
@@ -550,11 +550,11 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 		appendRaw(key, "["+strings.Join(parts, ",")+"]")
 		return nil
 	}
-	appendStrMap := func(key string, m map[string]interface{}) error {
+	appendStrMap := func(key string, m map[string]any) error {
 		if len(m) == 0 {
 			return nil
 		}
-		s, err := emitCanonicalObject(sortedKeys(m), func(k string) interface{} { return m[k] })
+		s, err := emitCanonicalObject(sortedKeys(m), func(k string) any { return m[k] })
 		if err != nil {
 			return err
 		}
@@ -595,7 +595,7 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 	// scalar Expression slots.
 	for _, f := range []struct {
 		key string
-		v   interface{}
+		v   any
 	}{
 		{"lower", n.Lower}, {"upper", n.Upper}, {"value", n.Value},
 		{"output", n.Output}, {"axis", n.Axis}, {"expr", n.Expr},
@@ -609,7 +609,7 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 	// list-of-Expression slots.
 	for _, f := range []struct {
 		key string
-		v   []interface{}
+		v   []any
 	}{
 		{"values", n.Values}, {"shape", n.Shape}, {"perm", n.Perm},
 		{"output_idx", n.OutputIdx}, {"join", n.Join},
@@ -622,7 +622,7 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 	// map slots. TableAxes is map[string]Expression; emit via the shared object
 	// renderer keyed in sorted order.
 	if len(n.TableAxes) > 0 {
-		s, err := emitCanonicalObject(sortedKeys(n.TableAxes), func(k string) interface{} { return n.TableAxes[k] })
+		s, err := emitCanonicalObject(sortedKeys(n.TableAxes), func(k string) any { return n.TableAxes[k] })
 		if err != nil {
 			return "", err
 		}

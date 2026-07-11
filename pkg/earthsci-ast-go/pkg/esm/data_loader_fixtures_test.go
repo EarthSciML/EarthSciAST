@@ -110,12 +110,12 @@ func TestDataLoaderFixturesCoverage(t *testing.T) {
 // normalizeEsmJSON serializes an EsmFile and reparses it as interface{} so the
 // result can be compared with reflect.DeepEqual without being affected by Go
 // map ordering or float representation quirks.
-func normalizeEsmJSON(f *EsmFile) (interface{}, error) {
+func normalizeEsmJSON(f *EsmFile) (any, error) {
 	b, err := json.Marshal(f)
 	if err != nil {
 		return nil, err
 	}
-	var v interface{}
+	var v any
 	if err := json.Unmarshal(b, &v); err != nil {
 		return nil, err
 	}

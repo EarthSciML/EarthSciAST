@@ -26,13 +26,13 @@ const vmExprTransformEntry = `{
 // marshal → plain decode (numbers become float64) → marshal with Go's sorted
 // map keys. Both sides of a comparison go through the same normalization, so
 // json.Number / int64 / float64 encodings compare equal.
-func vmCanonJSON(t *testing.T, v interface{}) string {
+func vmCanonJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var plain interface{}
+	var plain any
 	if err := json.Unmarshal(b, &plain); err != nil {
 		t.Fatalf("re-decode: %v", err)
 	}
@@ -190,19 +190,19 @@ const couplingTransformFixture = `{
 
 const couplingTransformExpectedAST = `{"op": "+", "args": [{"op": "*", "args": [2.0, "Src.F"]}, "Sink.offset"]}`
 
-func vmCouplingTransformFromJSON(t *testing.T, jsonStr string) interface{} {
+func vmCouplingTransformFromJSON(t *testing.T, jsonStr string) any {
 	t.Helper()
-	var view map[string]interface{}
+	var view map[string]any
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
 	if err := dec.Decode(&view); err != nil {
 		t.Fatalf("decode expanded JSON: %v", err)
 	}
-	coupling, ok := view["coupling"].([]interface{})
+	coupling, ok := view["coupling"].([]any)
 	if !ok || len(coupling) == 0 {
 		t.Fatalf("expanded document lost the coupling array: %v", view["coupling"])
 	}
-	entry, ok := coupling[0].(map[string]interface{})
+	entry, ok := coupling[0].(map[string]any)
 	if !ok {
 		t.Fatalf("coupling[0] is not an object: %#v", coupling[0])
 	}
@@ -325,7 +325,7 @@ func TestLoadString_CouplingTransformExpansionEndToEnd(t *testing.T) {
 	}
 }
 
-func mustCanonicalRaw(t *testing.T, v interface{}) json.RawMessage {
+func mustCanonicalRaw(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := marshalCanonical(v, false)
 	if err != nil {
@@ -346,13 +346,13 @@ func TestFlatten_ExpressionTransformDoesNotError(t *testing.T) {
 				Equations: []Equation{},
 			},
 		},
-		Coupling: []interface{}{
+		Coupling: []any{
 			VariableMapCoupling{
 				Type: "variable_map",
 				From: "Src.F",
 				To:   "Sink.offset",
-				Transform: ExprNode{Op: "+", Args: []interface{}{
-					ExprNode{Op: "*", Args: []interface{}{2.0, "Src.F"}},
+				Transform: ExprNode{Op: "+", Args: []any{
+					ExprNode{Op: "*", Args: []any{2.0, "Src.F"}},
 					"Sink.offset",
 				}},
 			},

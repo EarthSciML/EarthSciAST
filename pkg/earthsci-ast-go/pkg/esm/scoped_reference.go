@@ -88,7 +88,7 @@ func resolveScopedInModel(path []string, model *Model) (string, bool) {
 // is stored in Model/ReactionSystem.Subsystems) into the typed component T
 // (Model or ReactionSystem) via a marshal→unmarshal round-trip. It reports false
 // if the value cannot be marshaled or decoded into T.
-func decodeSubsystemAs[T any](raw interface{}) (T, bool) {
+func decodeSubsystemAs[T any](raw any) (T, bool) {
 	var out T
 	data, err := json.Marshal(raw)
 	if err != nil {

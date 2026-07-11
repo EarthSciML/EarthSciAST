@@ -21,7 +21,7 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "ModelB.y", // Cross-model reference
 					},
 				},
@@ -30,15 +30,15 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 				Variables: map[string]ModelVariable{
 					"y": {Type: "parameter"},
 				},
-				Subsystems: map[string]interface{}{
-					"DeepNest": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"z": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"DeepNest": map[string]any{
+						"variables": map[string]any{
+							"z": map[string]any{"type": "state"},
 						},
-						"subsystems": map[string]interface{}{
-							"Level3": map[string]interface{}{
-								"variables": map[string]interface{}{
-									"w": map[string]interface{}{"type": "parameter"},
+						"subsystems": map[string]any{
+							"Level3": map[string]any{
+								"variables": map[string]any{
+									"w": map[string]any{"type": "parameter"},
 								},
 							},
 						},
@@ -151,10 +151,10 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: ExprNode{
 							Op:   "+",
-							Args: []interface{}{"ModelB.y", "ModelB.DeepNest.z"},
+							Args: []any{"ModelB.y", "ModelB.DeepNest.z"},
 						},
 					},
 				},
@@ -163,10 +163,10 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 				Variables: map[string]ModelVariable{
 					"y": {Type: "parameter"},
 				},
-				Subsystems: map[string]interface{}{
-					"DeepNest": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"z": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"DeepNest": map[string]any{
+						"variables": map[string]any{
+							"z": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -198,10 +198,10 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 				Variables: map[string]ModelVariable{
 					"x": {Type: "state"},
 				},
-				Subsystems: map[string]interface{}{
-					"SubA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"SubA": map[string]any{
+						"variables": map[string]any{
+							"temp": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -217,13 +217,13 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 	// Test expression with mixed scoped references
 	expr := ExprNode{
 		Op: "+",
-		Args: []interface{}{
+		Args: []any{
 			"x",         // Direct variable in current system
 			"SubA.temp", // Relative scoped reference
 			"ModelB.y",  // Absolute cross-model reference
 			ExprNode{
 				Op:   "*",
-				Args: []interface{}{"SubA.temp", float64(2.0)},
+				Args: []any{"SubA.temp", float64(2.0)},
 			},
 		},
 	}
@@ -271,7 +271,7 @@ func TestValidationErrorsForUnresolvedScopedReferences(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "NonExistent.Model.var", // Invalid scoped reference
 					},
 				},

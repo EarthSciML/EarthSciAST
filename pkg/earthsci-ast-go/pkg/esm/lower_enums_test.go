@@ -13,15 +13,15 @@ func TestLowerEnumsRecursesAllFields(t *testing.T) {
 		"Season": {"winter": 0, "summer": 2},
 	}
 	enumNode := func(sym string) ExprNode {
-		return ExprNode{Op: "enum", Args: []interface{}{"Season", sym}}
+		return ExprNode{Op: "enum", Args: []any{"Season", sym}}
 	}
 	node := ExprNode{
 		Op:    "aggregate",
-		Args:  []interface{}{enumNode("winter")},
+		Args:  []any{enumNode("winter")},
 		Expr:  enumNode("summer"),
 		Lower: enumNode("winter"),
 		Upper: enumNode("summer"),
-		Join:  []interface{}{enumNode("winter")},
+		Join:  []any{enumNode("winter")},
 	}
 
 	lowered, err := lowerExprEnums(node, enums)
@@ -33,7 +33,7 @@ func TestLowerEnumsRecursesAllFields(t *testing.T) {
 		t.Fatalf("expected ExprNode, got %T", lowered)
 	}
 
-	assertConst := func(where string, v interface{}, want int64) {
+	assertConst := func(where string, v any, want int64) {
 		t.Helper()
 		n, ok := v.(ExprNode)
 		if !ok {
@@ -60,8 +60,8 @@ func TestLowerEnumsUnknownSymbolInNestedField(t *testing.T) {
 	enums := map[string]map[string]int{"Season": {"winter": 0}}
 	node := ExprNode{
 		Op:    "aggregate",
-		Args:  []interface{}{"x"},
-		Lower: ExprNode{Op: "enum", Args: []interface{}{"Season", "autumn"}}, // not declared
+		Args:  []any{"x"},
+		Lower: ExprNode{Op: "enum", Args: []any{"Season", "autumn"}}, // not declared
 	}
 	_, err := lowerExprEnums(node, enums)
 	if err == nil {

@@ -819,7 +819,7 @@ func checkPhysicalConstantUnits(modelName string, model *Model, result *Structur
 			Path:    fmt.Sprintf("/models/%s/variables/%s", modelName, target),
 			Code:    ErrorUnitInconsistency,
 			Message: "Physical constant used with incorrect dimensional analysis",
-			Details: map[string]interface{}{
+			Details: map[string]any{
 				"constant_name":        vname,
 				"constant_description": constant.description,
 				"declared_units":       declared,
@@ -948,7 +948,7 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 			Path:    fmt.Sprintf("/models/%s/variables/%s", modelName, vname),
 			Code:    ErrorUnitInconsistency,
 			Message: "Unit conversion factor is incorrect for specified unit transformation",
-			Details: map[string]interface{}{
+			Details: map[string]any{
 				"variable":        vname,
 				"declared_units":  lhsUnits,
 				"source_units":    srcUnits,
@@ -1059,7 +1059,7 @@ func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string
 				Path:    rxPath,
 				Code:    ErrorUnitInconsistency,
 				Message: "Reaction rate expression has incompatible units for reaction stoichiometry",
-				Details: map[string]interface{}{
+				Details: map[string]any{
 					"reaction_id":         rx.ID,
 					"rate_units":          rateUnitsStr,
 					"expected_rate_units": formatExpectedRateUnits(firstSpUnits, totalOrder),

@@ -122,7 +122,7 @@ var datetimeFieldAccessors = map[string]func(time.Time) int{
 // responsible for that extraction.
 //
 // Returns *ClosedFunctionError on contract violations.
-func EvaluateClosedFunction(name string, args []interface{}) (interface{}, error) {
+func EvaluateClosedFunction(name string, args []any) (any, error) {
 	if !IsClosedFunction(name) {
 		return nil, newClosedFunctionError("unknown_closed_function",
 			fmt.Sprintf("`fn` name %q is not in the v0.3.0 closed function registry "+
@@ -233,7 +233,7 @@ func EvaluateClosedFunction(name string, args []interface{}) (interface{}, error
 
 // expectArity returns ClosedFunctionError(closed_function_arity) when the
 // argument count differs from `n`.
-func expectArity(name string, args []interface{}, n int) error {
+func expectArity(name string, args []any, n int) error {
 	if len(args) != n {
 		return newClosedFunctionError("closed_function_arity",
 			fmt.Sprintf("%s expects %d argument(s), got %d", name, n, len(args)))
@@ -257,7 +257,7 @@ func checkInt32(name string, v int64) (int32, error) {
 // (date, time-of-day) split; time.Unix already does this with the
 // proleptic-Gregorian calendar. Float fractional seconds are converted to
 // nanoseconds before construction.
-func toUnixDateTime(v interface{}) (time.Time, error) {
+func toUnixDateTime(v any) (time.Time, error) {
 	f, ok := toFloat64(v)
 	if !ok {
 		return time.Time{}, newClosedFunctionError("closed_function_arity",
@@ -357,13 +357,13 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 // were behaviorally identical (their explicit NaN-string branches were
 // unreachable once toFloat64 handles "NaN"); their doc claim of distinctness
 // was false.
-func toFloat64Array(name, role string, v interface{}) ([]float64, error) {
+func toFloat64Array(name, role string, v any) ([]float64, error) {
 	switch xs := v.(type) {
 	case []float64:
 		out := make([]float64, len(xs))
 		copy(out, xs)
 		return out, nil
-	case []interface{}:
+	case []any:
 		out := make([]float64, len(xs))
 		for i, e := range xs {
 			f, ok := toFloat64(e)
@@ -384,7 +384,7 @@ func toFloat64Array(name, role string, v interface{}) ([]float64, error) {
 // length is preserved; inner row lengths are checked against axis_y in
 // the validator. Ragged inner rows surface as `interp_axis_length_mismatch`
 // from the validator (per esm-spec §9.2 errors table), not here.
-func toInterpMatrix(name, role string, v interface{}) ([][]float64, error) {
+func toInterpMatrix(name, role string, v any) ([][]float64, error) {
 	switch outer := v.(type) {
 	case [][]float64:
 		out := make([][]float64, len(outer))
@@ -393,7 +393,7 @@ func toInterpMatrix(name, role string, v interface{}) ([][]float64, error) {
 			copy(out[i], row)
 		}
 		return out, nil
-	case []interface{}:
+	case []any:
 		out := make([][]float64, len(outer))
 		for i, row := range outer {
 			r, err := toFloat64Array(name, fmt.Sprintf("%s[%d]", role, i+1), row)

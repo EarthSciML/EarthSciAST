@@ -9,7 +9,7 @@ import (
 func TestToUnicodeBasic(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    interface{}
+		input    any
 		expected string
 	}{
 		{
@@ -61,7 +61,7 @@ func TestToUnicodeBasic(t *testing.T) {
 			name: "simple addition",
 			input: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 			expected: "a + b",
 		},
@@ -69,7 +69,7 @@ func TestToUnicodeBasic(t *testing.T) {
 			name: "multiplication",
 			input: ExprNode{
 				Op:   "*",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 			expected: "a·b",
 		},
@@ -77,7 +77,7 @@ func TestToUnicodeBasic(t *testing.T) {
 			name: "power of 2",
 			input: ExprNode{
 				Op:   "^",
-				Args: []interface{}{"x", 2},
+				Args: []any{"x", 2},
 			},
 			expected: "x²",
 		},
@@ -85,7 +85,7 @@ func TestToUnicodeBasic(t *testing.T) {
 			name: "derivative",
 			input: ExprNode{
 				Op:   "D",
-				Args: []interface{}{"O3"},
+				Args: []any{"O3"},
 				Wrt:  strPtr("t"),
 			},
 			expected: "∂O₃/∂t",
@@ -94,7 +94,7 @@ func TestToUnicodeBasic(t *testing.T) {
 			name: "gradient (generic fallback, dim not rendered)",
 			input: ExprNode{
 				Op:   "grad",
-				Args: []interface{}{"x"},
+				Args: []any{"x"},
 				Dim:  strPtr("y"),
 			},
 			expected: "grad(x)",
@@ -103,7 +103,7 @@ func TestToUnicodeBasic(t *testing.T) {
 			name: "unary minus",
 			input: ExprNode{
 				Op:   "-",
-				Args: []interface{}{"x"},
+				Args: []any{"x"},
 			},
 			expected: "−x",
 		},
@@ -111,7 +111,7 @@ func TestToUnicodeBasic(t *testing.T) {
 			name: "binary subtraction",
 			input: ExprNode{
 				Op:   "-",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 			expected: "a − b",
 		},
@@ -128,7 +128,7 @@ func TestToUnicodeBasic(t *testing.T) {
 func TestToLatexBasic(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    interface{}
+		input    any
 		expected string
 	}{
 		{
@@ -145,7 +145,7 @@ func TestToLatexBasic(t *testing.T) {
 			name: "simple addition",
 			input: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 			expected: "a + b",
 		},
@@ -153,7 +153,7 @@ func TestToLatexBasic(t *testing.T) {
 			name: "multiplication",
 			input: ExprNode{
 				Op:   "*",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 			expected: "a \\cdot b",
 		},
@@ -161,7 +161,7 @@ func TestToLatexBasic(t *testing.T) {
 			name: "division",
 			input: ExprNode{
 				Op:   "/",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 			expected: "\\frac{a}{b}",
 		},
@@ -169,7 +169,7 @@ func TestToLatexBasic(t *testing.T) {
 			name: "power",
 			input: ExprNode{
 				Op:   "^",
-				Args: []interface{}{"x", 2},
+				Args: []any{"x", 2},
 			},
 			expected: "x^{2}",
 		},
@@ -177,7 +177,7 @@ func TestToLatexBasic(t *testing.T) {
 			name: "derivative",
 			input: ExprNode{
 				Op:   "D",
-				Args: []interface{}{"O3"},
+				Args: []any{"O3"},
 				Wrt:  strPtr("t"),
 			},
 			expected: "\\frac{\\partial \\mathrm{O_{3}}}{\\partial t}",
@@ -186,7 +186,7 @@ func TestToLatexBasic(t *testing.T) {
 			name: "exponential simple",
 			input: ExprNode{
 				Op:   "exp",
-				Args: []interface{}{"x"},
+				Args: []any{"x"},
 			},
 			expected: "\\exp(x)",
 		},
@@ -194,10 +194,10 @@ func TestToLatexBasic(t *testing.T) {
 			name: "exponential complex",
 			input: ExprNode{
 				Op: "exp",
-				Args: []interface{}{
+				Args: []any{
 					ExprNode{
 						Op:   "/",
-						Args: []interface{}{-1370, "T"},
+						Args: []any{-1370, "T"},
 					},
 				},
 			},
@@ -207,7 +207,7 @@ func TestToLatexBasic(t *testing.T) {
 			name: "Pre function",
 			input: ExprNode{
 				Op:   "Pre",
-				Args: []interface{}{"x"},
+				Args: []any{"x"},
 			},
 			expected: "\\mathrm{Pre}(x)",
 		},
@@ -224,7 +224,7 @@ func TestToLatexBasic(t *testing.T) {
 func TestOperatorPrecedence(t *testing.T) {
 	tests := []struct {
 		name    string
-		input   interface{}
+		input   any
 		unicode string
 		latex   string
 	}{
@@ -232,8 +232,8 @@ func TestOperatorPrecedence(t *testing.T) {
 			name: "addition with multiplication (no parens needed)",
 			input: ExprNode{
 				Op: "+",
-				Args: []interface{}{
-					ExprNode{Op: "*", Args: []interface{}{"a", "b"}},
+				Args: []any{
+					ExprNode{Op: "*", Args: []any{"a", "b"}},
 					"c",
 				},
 			},
@@ -244,8 +244,8 @@ func TestOperatorPrecedence(t *testing.T) {
 			name: "multiplication with addition (parens needed)",
 			input: ExprNode{
 				Op: "*",
-				Args: []interface{}{
-					ExprNode{Op: "+", Args: []interface{}{"a", "b"}},
+				Args: []any{
+					ExprNode{Op: "+", Args: []any{"a", "b"}},
 					"c",
 				},
 			},
@@ -256,8 +256,8 @@ func TestOperatorPrecedence(t *testing.T) {
 			name: "exponentiation with addition (parens needed for base)",
 			input: ExprNode{
 				Op: "^",
-				Args: []interface{}{
-					ExprNode{Op: "+", Args: []interface{}{"x", "y"}},
+				Args: []any{
+					ExprNode{Op: "+", Args: []any{"x", "y"}},
 					2,
 				},
 			},
@@ -268,9 +268,9 @@ func TestOperatorPrecedence(t *testing.T) {
 			name: "complex expression",
 			input: ExprNode{
 				Op: "+",
-				Args: []interface{}{
-					ExprNode{Op: "^", Args: []interface{}{"x", 2}},
-					ExprNode{Op: "*", Args: []interface{}{2, "x"}},
+				Args: []any{
+					ExprNode{Op: "^", Args: []any{"x", 2}},
+					ExprNode{Op: "*", Args: []any{2, "x"}},
 				},
 			},
 			unicode: "x² + 2·x",
@@ -321,8 +321,8 @@ func TestFormatChemicalSpecies(t *testing.T) {
 func TestIfElse(t *testing.T) {
 	input := ExprNode{
 		Op: "ifelse",
-		Args: []interface{}{
-			ExprNode{Op: ">", Args: []interface{}{"x", 0}},
+		Args: []any{
+			ExprNode{Op: ">", Args: []any{"x", 0}},
 			"x",
 			0,
 		},
@@ -338,7 +338,7 @@ func TestIfElse(t *testing.T) {
 func TestComplexChemicalExpression(t *testing.T) {
 	input := ExprNode{
 		Op:   "*",
-		Args: []interface{}{1.8e-12, "O3", "NO", "M"},
+		Args: []any{1.8e-12, "O3", "NO", "M"},
 	}
 
 	unicode := ToUnicode(input)
@@ -381,14 +381,14 @@ func TestModelSummary(t *testing.T) {
 						},
 						Rate: ExprNode{
 							Op: "*",
-							Args: []interface{}{
+							Args: []any{
 								1.8e-12,
 								ExprNode{
 									Op: "exp",
-									Args: []interface{}{
+									Args: []any{
 										ExprNode{
 											Op:   "/",
-											Args: []interface{}{-1370, "T"},
+											Args: []any{-1370, "T"},
 										},
 									},
 								},
@@ -418,22 +418,22 @@ func TestModelSummary(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"_var"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"_var"}, Wrt: strPtr("t")},
 						RHS: ExprNode{
 							Op: "+",
-							Args: []interface{}{
+							Args: []any{
 								ExprNode{
 									Op: "*",
-									Args: []interface{}{
-										ExprNode{Op: "-", Args: []interface{}{"u_wind"}},
-										ExprNode{Op: "grad", Args: []interface{}{"_var"}, Dim: strPtr("x")},
+									Args: []any{
+										ExprNode{Op: "-", Args: []any{"u_wind"}},
+										ExprNode{Op: "grad", Args: []any{"_var"}, Dim: strPtr("x")},
 									},
 								},
 								ExprNode{
 									Op: "*",
-									Args: []interface{}{
-										ExprNode{Op: "-", Args: []interface{}{"v_wind"}},
-										ExprNode{Op: "grad", Args: []interface{}{"_var"}, Dim: strPtr("y")},
+									Args: []any{
+										ExprNode{Op: "-", Args: []any{"v_wind"}},
+										ExprNode{Op: "grad", Args: []any{"_var"}, Dim: strPtr("y")},
 									},
 								},
 							},
@@ -455,7 +455,7 @@ func TestModelSummary(t *testing.T) {
 				},
 			},
 		},
-		Coupling: []interface{}{
+		Coupling: []any{
 			OperatorComposeCoupling{
 				Type:    "operator_compose",
 				Systems: [2]string{"SimpleOzone", "Advection"},

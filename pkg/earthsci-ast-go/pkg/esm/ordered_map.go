@@ -8,18 +8,18 @@ import "sort"
 
 type orderedMap struct {
 	keys []string
-	m    map[string]interface{}
+	m    map[string]any
 }
 
 func newOrderedMap() *orderedMap {
-	return &orderedMap{m: map[string]interface{}{}}
+	return &orderedMap{m: map[string]any{}}
 }
 
 func (o *orderedMap) has(k string) bool { _, ok := o.m[k]; return ok }
 
-func (o *orderedMap) get(k string) interface{} { return o.m[k] }
+func (o *orderedMap) get(k string) any { return o.m[k] }
 
-func (o *orderedMap) set(k string, v interface{}) {
+func (o *orderedMap) set(k string, v any) {
 	if _, ok := o.m[k]; !ok {
 		o.keys = append(o.keys, k)
 	}
@@ -43,7 +43,7 @@ func (o *orderedMap) len() int { return len(o.m) }
 
 // orderedKeysOf returns m's keys, honouring `order` first and appending any
 // keys absent from `order` in sorted-name order.
-func orderedKeysOf(m map[string]interface{}, order []string) []string {
+func orderedKeysOf(m map[string]any, order []string) []string {
 	seen := make(map[string]bool, len(m))
 	keys := make([]string, 0, len(m))
 	for _, k := range order {

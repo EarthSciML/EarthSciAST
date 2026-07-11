@@ -89,8 +89,8 @@ func indexSetDeepEqual(a, b IndexSet) bool {
 // load-time error `subsystem_index_set_conflict` (§9.6.6) — the mounted-mesh
 // failure mode this makes loud. Mirrors the Julia reference
 // `_merge_subsystem_index_sets!`.
-func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]interface{}, ref string) error {
-	isetsRaw, ok := view["index_sets"].(map[string]interface{})
+func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, ref string) error {
+	isetsRaw, ok := view["index_sets"].(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -126,7 +126,7 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]inter
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -145,9 +145,9 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 		// as raw §9.7.2 entries and threaded into the referenced document's load,
 		// where the §9.6.3 fixpoint lowers its rewrite-targets before the mounted
 		// form is inlined (so the field does not survive parse → emit).
-		var injected []interface{}
-		if m, ok := value.(map[string]interface{}); ok {
-			if inj, ok := m["expression_template_imports"].([]interface{}); ok {
+		var injected []any
+		if m, ok := value.(map[string]any); ok {
+			if inj, ok := m["expression_template_imports"].([]any); ok {
 				injected = inj
 			}
 		}
@@ -248,16 +248,16 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 		// components, relative to its own directory; nested mounts merge their
 		// axes into the same importing-document registry (transitive, §4.7).
 		for _, kind := range templateComponentKinds {
-			comps, ok := view[kind].(map[string]interface{})
+			comps, ok := view[kind].(map[string]any)
 			if !ok {
 				continue
 			}
 			for _, compRaw := range comps {
-				compObj, ok := compRaw.(map[string]interface{})
+				compObj, ok := compRaw.(map[string]any)
 				if !ok {
 					continue
 				}
-				if subs, ok := compObj["subsystems"].(map[string]interface{}); ok {
+				if subs, ok := compObj["subsystems"].(map[string]any); ok {
 					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta); err != nil {
 						return fmt.Errorf("subsystem %q: resolving nested refs in %q: %w", key, refKey, err)
 					}
@@ -337,11 +337,11 @@ func fetchRemoteRef(url string) ([]byte, error) {
 // bindings, esm-spec §9.7.6 sites 4-5) and is the environment a nested §4.7
 // subsystem edge folds its own binding expressions against. Non-integer or
 // absent defaults are simply omitted (an open name is not in scope until bound).
-func metaEnvFromDecls(declsRaw interface{}, overlay map[string]int64) map[string]int64 {
+func metaEnvFromDecls(declsRaw any, overlay map[string]int64) map[string]int64 {
 	env := map[string]int64{}
-	if decls, ok := declsRaw.(map[string]interface{}); ok {
+	if decls, ok := declsRaw.(map[string]any); ok {
 		for name, dRaw := range decls {
-			decl, ok := dRaw.(map[string]interface{})
+			decl, ok := dRaw.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -363,8 +363,8 @@ func metaEnvFromDecls(declsRaw interface{}, overlay map[string]int64) map[string
 // extractRefWithBindings checks if a value is a reference object (a map with
 // a "ref" key) and returns the ref string plus its optional metaparameter
 // `bindings` object (esm-spec §9.7.6 binding site 3).
-func extractRefWithBindings(value interface{}) (string, map[string]interface{}, bool) {
-	m, ok := value.(map[string]interface{})
+func extractRefWithBindings(value any) (string, map[string]any, bool) {
+	m, ok := value.(map[string]any)
 	if !ok {
 		return "", nil, false
 	}
@@ -379,7 +379,7 @@ func extractRefWithBindings(value interface{}) (string, map[string]interface{}, 
 		return "", nil, false
 	}
 
-	bindings, _ := m["bindings"].(map[string]interface{})
+	bindings, _ := m["bindings"].(map[string]any)
 	return refStr, bindings, true
 }
 
@@ -388,10 +388,10 @@ func extractRefWithBindings(value interface{}) (string, map[string]interface{}, 
 // file contains exactly one such component it is returned as-is (a generic
 // map, preserving every Expression field verbatim). If there are multiple
 // systems or none, an error is returned.
-func extractSingleSystemRaw(view map[string]interface{}, path string) (interface{}, error) {
-	models, _ := view["models"].(map[string]interface{})
-	rss, _ := view["reaction_systems"].(map[string]interface{})
-	loaders, _ := view["data_loaders"].(map[string]interface{})
+func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
+	models, _ := view["models"].(map[string]any)
+	rss, _ := view["reaction_systems"].(map[string]any)
+	loaders, _ := view["data_loaders"].(map[string]any)
 	total := len(models) + len(rss) + len(loaders)
 
 	if total == 0 {

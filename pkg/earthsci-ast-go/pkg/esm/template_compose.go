@@ -14,13 +14,13 @@ import (
 // `apply_expression_template` node reachable in x into out. Used by
 // composeTemplateBodies to build the template-body reference graph (esm-spec
 // §9.7.3).
-func collectApplyNames(out *[]string, x interface{}) {
+func collectApplyNames(out *[]string, x any) {
 	switch v := x.(type) {
-	case []interface{}:
+	case []any:
 		for _, c := range v {
 			collectApplyNames(out, c)
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		if op, ok := v["op"].(string); ok && op == applyExpressionTemplateOp {
 			if nm, ok := v["name"].(string); ok {
 				*out = append(*out, nm)
@@ -37,10 +37,10 @@ func collectApplyNames(out *[]string, x interface{}) {
 // (esm-spec §9.7.3 registration-time body composition). Because referenced
 // bodies are inlined dependencies-first, one pass yields an apply-free subtree.
 // Returns a new tree; node is not mutated.
-func inlineApplies(node interface{}, templates map[string]interface{}, scope string) (interface{}, error) {
+func inlineApplies(node any, templates map[string]any, scope string) (any, error) {
 	switch v := node.(type) {
-	case []interface{}:
-		out := make([]interface{}, len(v))
+	case []any:
+		out := make([]any, len(v))
 		for i, c := range v {
 			nc, err := inlineApplies(c, templates, scope)
 			if err != nil {
@@ -49,8 +49,8 @@ func inlineApplies(node interface{}, templates map[string]interface{}, scope str
 			out[i] = nc
 		}
 		return out, nil
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(v))
+	case map[string]any:
+		out := make(map[string]any, len(v))
 		for k, c := range v {
 			nc, err := inlineApplies(c, templates, scope)
 			if err != nil {
@@ -79,7 +79,7 @@ func inlineApplies(node interface{}, templates map[string]interface{}, scope str
 // result. Afterwards every `body` is a closed Expression AST with zero
 // `apply_expression_template` nodes; runs BEFORE the §9.6.3 fixpoint ever
 // consults a `match` rule. Mutates the template declarations in place.
-func composeTemplateBodies(templates map[string]interface{}, scope string) error {
+func composeTemplateBodies(templates map[string]any, scope string) error {
 	if len(templates) == 0 {
 		return nil
 	}
@@ -87,7 +87,7 @@ func composeTemplateBodies(templates map[string]interface{}, scope string) error
 	anyRefs := false
 	for name, declRaw := range templates {
 		var names []string
-		if decl, ok := declRaw.(map[string]interface{}); ok {
+		if decl, ok := declRaw.(map[string]any); ok {
 			collectApplyNames(&names, decl["body"])
 		}
 		refs[name] = names
@@ -112,7 +112,7 @@ func composeTemplateBodies(templates map[string]interface{}, scope string) error
 				return newETErr("apply_expression_template_unknown_template",
 					fmt.Sprintf("%s.expression_templates.%s: body references undeclared template '%s' (esm-spec §9.7.3)", scope, name, r))
 			}
-			if tdecl, ok := tdeclRaw.(map[string]interface{}); ok {
+			if tdecl, ok := tdeclRaw.(map[string]any); ok {
 				if m, has := tdecl["match"]; has && m != nil {
 					return newETErr("apply_expression_template_unknown_template",
 						fmt.Sprintf("%s.expression_templates.%s: body references '%s', a `match` rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)", scope, name, r))
@@ -176,7 +176,7 @@ func composeTemplateBodies(templates map[string]interface{}, scope string) error
 		if len(refs[name]) == 0 {
 			continue
 		}
-		decl, ok := templates[name].(map[string]interface{})
+		decl, ok := templates[name].(map[string]any)
 		if !ok {
 			continue
 		}

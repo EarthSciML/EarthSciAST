@@ -29,7 +29,7 @@ func TestValidateValidModel(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -56,7 +56,7 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: "unknown_var", // This variable doesn't exist
 					},
 				},
@@ -86,7 +86,7 @@ func TestValidateObservedVariableWithoutExpression(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -182,22 +182,22 @@ func TestValidateComplexExpression(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: ExprNode{
 							Op: "*",
-							Args: []interface{}{
+							Args: []any{
 								"k",
-								ExprNode{Op: "+", Args: []interface{}{"x", "y"}},
+								ExprNode{Op: "+", Args: []any{"x", "y"}},
 							},
 						},
 					},
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"y"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")},
 						RHS: ExprNode{
 							Op: "*",
-							Args: []interface{}{
+							Args: []any{
 								"k",
-								ExprNode{Op: "-", Args: []interface{}{"x", "y"}},
+								ExprNode{Op: "-", Args: []any{"x", "y"}},
 							},
 						},
 					},
@@ -225,7 +225,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -233,7 +233,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 					{
 						Trigger: DiscreteEventTrigger{
 							Type:       "condition",
-							Expression: ExprNode{Op: ">", Args: []interface{}{"x", 10.0}},
+							Expression: ExprNode{Op: ">", Args: []any{"x", 10.0}},
 						},
 						Affects: []AffectEquation{
 							{
@@ -266,7 +266,7 @@ func TestValidateDataLoaders(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -304,7 +304,7 @@ func TestValidateDataLoaderMissingRequiredFields(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -348,7 +348,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -365,12 +365,12 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []interface{}{"k", "y"}},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{"k", "y"}},
 					},
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"y"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []interface{}{"k", "x"}},
+						LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{"k", "x"}},
 					},
 				},
 			},
@@ -385,7 +385,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -402,11 +402,11 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"k"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")},
 						RHS: float64(2.0),
 					},
 				},
@@ -422,7 +422,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"k"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -435,17 +435,17 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 			model: Model{
 				Variables: map[string]ModelVariable{
 					"x": {Type: "state"},
-					"y": {Type: "observed", Expression: ExprNode{Op: "*", Args: []interface{}{"x", 2.0}}},
+					"y": {Type: "observed", Expression: ExprNode{Op: "*", Args: []any{"x", 2.0}}},
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 					{
 						// This is not an ODE, it's an algebraic constraint
 						LHS: "y",
-						RHS: ExprNode{Op: "*", Args: []interface{}{"x", 2.0}},
+						RHS: ExprNode{Op: "*", Args: []any{"x", 2.0}},
 					},
 				},
 			},

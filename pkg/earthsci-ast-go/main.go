@@ -11,7 +11,7 @@ import (
 
 // fatalf writes a formatted message to stderr and exits with status 1. It is the
 // single error-exit path for the CLI (no timestamps, no stdout).
-func fatalf(format string, args ...interface{}) {
+func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
 }

@@ -143,7 +143,7 @@ func TestReactionRateUnitsMismatchFixtureRejected(t *testing.T) {
 	if found.Message != "Reaction rate expression has incompatible units for reaction stoichiometry" {
 		t.Errorf("unexpected message: %q", found.Message)
 	}
-	expectDetail := func(key string, want interface{}) {
+	expectDetail := func(key string, want any) {
 		t.Helper()
 		got, ok := found.Details[key]
 		if !ok {
@@ -200,7 +200,7 @@ func TestICInReactionSystemFixtureRejected(t *testing.T) {
 	if found.Path != "/reaction_systems/Chemistry/constraint_equations/0" {
 		t.Errorf("unexpected path: %q", found.Path)
 	}
-	expectDetail := func(key string, want interface{}) {
+	expectDetail := func(key string, want any) {
 		t.Helper()
 		got, ok := found.Details[key]
 		if !ok {
@@ -289,7 +289,7 @@ func TestConversionFactorErrorFixtureRejected(t *testing.T) {
 	if found.Message != "Unit conversion factor is incorrect for specified unit transformation" {
 		t.Errorf("unexpected message: %q", found.Message)
 	}
-	expectDetail := func(key string, want interface{}) {
+	expectDetail := func(key string, want any) {
 		t.Helper()
 		got, ok := found.Details[key]
 		if !ok {
@@ -343,7 +343,7 @@ func TestPhysicalConstantDimensionalErrorFixtureRejected(t *testing.T) {
 	if found.Path != "/models/ConstantUnitsModel/variables/gas_law_calculation" {
 		t.Errorf("unexpected path: %q", found.Path)
 	}
-	expectDetail := func(key string, want interface{}) {
+	expectDetail := func(key string, want any) {
 		t.Helper()
 		got, ok := found.Details[key]
 		if !ok {

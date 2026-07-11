@@ -51,12 +51,12 @@ func isValidDottedName(s string) bool {
 // the §9.7.7 target grammar (values are valid dotted identifiers; keys are
 // non-empty but never grammar-checked). A non-object raises
 // `template_import_rename_invalid`.
-func nameMap(raw interface{}, field, where string) (map[string]string, error) {
+func nameMap(raw any, field, where string) (map[string]string, error) {
 	out := map[string]string{}
 	if raw == nil {
 		return out, nil
 	}
-	obj, ok := raw.(map[string]interface{})
+	obj, ok := raw.(map[string]any)
 	if !ok {
 		return nil, newETErr("template_import_rename_invalid",
 			fmt.Sprintf("%s: `%s` must be an object mapping names to names (esm-spec §9.7.7)", where, field))
@@ -123,25 +123,25 @@ func isetRenamed(s string, isetmap map[string]string) string {
 // are mapped through `isetmap` (an unmapped name stays as spelled). Without this
 // the rule body/registry would use the renamed set while `where` still named the
 // original, and registration would fail with template_constraint_unknown_index_set.
-func renameWalk(x interface{}, varmap, isetmap, tplmap map[string]string) interface{} {
+func renameWalk(x any, varmap, isetmap, tplmap map[string]string) any {
 	switch v := x.(type) {
 	case string:
 		if n, ok := varmap[v]; ok {
 			return n
 		}
 		return v
-	case []interface{}:
-		out := make([]interface{}, len(v))
+	case []any:
+		out := make([]any, len(v))
 		for i, c := range v {
 			out[i] = renameWalk(c, varmap, isetmap, tplmap)
 		}
 		return out
-	case map[string]interface{}:
+	case map[string]any:
 		isApply := false
 		if op, ok := v["op"].(string); ok && op == applyExpressionTemplateOp {
 			isApply = true
 		}
-		out := make(map[string]interface{}, len(v))
+		out := make(map[string]any, len(v))
 		for k, val := range v {
 			if k == "from" {
 				if s, ok := val.(string); ok {
@@ -166,7 +166,7 @@ func renameWalk(x interface{}, varmap, isetmap, tplmap map[string]string) interf
 				}
 			}
 			if k == "where" {
-				if w, ok := val.(map[string]interface{}); ok {
+				if w, ok := val.(map[string]any); ok {
 					out[k] = renameWhere(w, isetmap)
 					continue
 				}
@@ -191,19 +191,19 @@ func renameWalk(x interface{}, varmap, isetmap, tplmap map[string]string) interf
 // are copied verbatim — rename never touches template-internal param names — and
 // each constraint's `shape` entries (index-set names) are mapped through
 // `isetmap`, with any unmapped name left as spelled (the body-reference rule).
-func renameWhere(whr map[string]interface{}, isetmap map[string]string) map[string]interface{} {
-	out := make(map[string]interface{}, len(whr))
+func renameWhere(whr map[string]any, isetmap map[string]string) map[string]any {
+	out := make(map[string]any, len(whr))
 	for p, cobj := range whr {
-		cmap, ok := cobj.(map[string]interface{})
+		cmap, ok := cobj.(map[string]any)
 		if !ok {
 			out[p] = deepCopyJSON(cobj)
 			continue
 		}
-		cout := make(map[string]interface{}, len(cmap))
+		cout := make(map[string]any, len(cmap))
 		for ck, cv := range cmap {
 			if ck == "shape" {
-				if arr, ok := cv.([]interface{}); ok {
-					shape := make([]interface{}, len(arr))
+				if arr, ok := cv.([]any); ok {
+					shape := make([]any, len(arr))
 					for i, e := range arr {
 						if s, ok := e.(string); ok {
 							shape[i] = isetRenamed(s, isetmap)
@@ -227,13 +227,13 @@ func renameWhere(whr map[string]interface{}, isetmap map[string]string) map[stri
 // `varmap` and `isetmap` inside its `body`/`match` (a param is the inner binder;
 // renaming must not capture it). `tplmap` is never shadowed — params do not bind
 // template names.
-func renameDecl(decl interface{}, varmap, isetmap, tplmap map[string]string) interface{} {
-	declObj, ok := decl.(map[string]interface{})
+func renameDecl(decl any, varmap, isetmap, tplmap map[string]string) any {
+	declObj, ok := decl.(map[string]any)
 	if !ok {
 		return renameWalk(decl, varmap, isetmap, tplmap)
 	}
 	v2, i2 := varmap, isetmap
-	if params, ok := declObj["params"].([]interface{}); ok && len(params) > 0 {
+	if params, ok := declObj["params"].([]any); ok && len(params) > 0 {
 		pset := map[string]struct{}{}
 		for _, p := range params {
 			if ps, ok := p.(string); ok {
@@ -278,22 +278,22 @@ func renameDecl(decl interface{}, varmap, isetmap, tplmap map[string]string) int
 // aggregate `output_idx` entries and `ranges` keys (at any nesting depth).
 // Rebinding one would desynchronize the ranges KEYS (object keys, unreachable by
 // value substitution) from their `expr` occurrences, so it is rejected outright.
-func collectBoundSyms(out map[string]struct{}, x interface{}) {
+func collectBoundSyms(out map[string]struct{}, x any) {
 	switch v := x.(type) {
-	case []interface{}:
+	case []any:
 		for _, c := range v {
 			collectBoundSyms(out, c)
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		if op, _ := v["op"].(string); op == "aggregate" {
-			if oi, ok := v["output_idx"].([]interface{}); ok {
+			if oi, ok := v["output_idx"].([]any); ok {
 				for _, e := range oi {
 					if es, ok := e.(string); ok {
 						out[es] = struct{}{}
 					}
 				}
 			}
-			if rg, ok := v["ranges"].(map[string]interface{}); ok {
+			if rg, ok := v["ranges"].(map[string]any); ok {
 				for k := range rg {
 					out[k] = struct{}{}
 				}
@@ -309,17 +309,17 @@ func collectBoundSyms(out map[string]struct{}, x interface{}) {
 // of a declaration (the positions `varmap` would rewrite), minus the
 // per-template `params` shadow set. Used for the rebind occurs-check and the
 // freshness (collision) guard.
-func collectRefNames(out map[string]struct{}, x interface{}, shadowed map[string]struct{}) {
+func collectRefNames(out map[string]struct{}, x any, shadowed map[string]struct{}) {
 	switch v := x.(type) {
 	case string:
 		if _, sh := shadowed[v]; !sh {
 			out[v] = struct{}{}
 		}
-	case []interface{}:
+	case []any:
 		for _, c := range v {
 			collectRefNames(out, c, shadowed)
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		for k, c := range v {
 			if k == "from" || k == "of" {
 				continue
@@ -346,7 +346,7 @@ func collectRefNames(out map[string]struct{}, x interface{}, shadowed map[string
 // `bindings` instantiation and `only` filtering, before the §9.7.4/§9.7.5 merge,
 // so dedup and conflict detection operate on post-rename names. Mutates scope in
 // place and returns it. Mirrors the Julia reference `_apply_edge_renames!`.
-func applyEdgeRenames(scope *templateScope, entry map[string]interface{}, origin, ref string) (*templateScope, error) {
+func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref string) (*templateScope, error) {
 	where := fmt.Sprintf("%s: import of '%s'", origin, ref)
 	rename, err := nameMap(entry["rename"], "rename", where)
 	if err != nil {
@@ -490,9 +490,9 @@ func applyEdgeRenames(scope *templateScope, entry map[string]interface{}, origin
 	newI := newOrderedMap()
 	for _, n := range scope.indexSets.keys {
 		nd := renameWalk(scope.indexSets.get(n), varmap, isetChanged, tplChanged)
-		if ndObj, ok := nd.(map[string]interface{}); ok {
-			if of, ok := ndObj["of"].([]interface{}); ok {
-				newOf := make([]interface{}, len(of))
+		if ndObj, ok := nd.(map[string]any); ok {
+			if of, ok := ndObj["of"].([]any); ok {
+				newOf := make([]any, len(of))
 				for i, e := range of {
 					if es, ok := e.(string); ok {
 						newOf[i] = isetRenamed(es, isetChanged)
@@ -530,8 +530,8 @@ func scopeNameInventory(scope *templateScope) (free, bound, paramsAll map[string
 		d := scope.templates.get(n)
 		collectBoundSyms(bound, d)
 		shadowed := map[string]struct{}{}
-		if declObj, ok := d.(map[string]interface{}); ok {
-			if params, ok := declObj["params"].([]interface{}); ok {
+		if declObj, ok := d.(map[string]any); ok {
+			if params, ok := declObj["params"].([]any); ok {
 				for _, p := range params {
 					if ps, ok := p.(string); ok {
 						shadowed[ps] = struct{}{}
@@ -545,7 +545,7 @@ func scopeNameInventory(scope *templateScope) (free, bound, paramsAll map[string
 		collectRefNames(free, d, shadowed)
 	}
 	for _, n := range scope.indexSets.keys {
-		if d, ok := scope.indexSets.get(n).(map[string]interface{}); ok {
+		if d, ok := scope.indexSets.get(n).(map[string]any); ok {
 			for _, f := range []string{"offsets", "values"} {
 				if s, ok := d[f].(string); ok {
 					free[s] = struct{}{}

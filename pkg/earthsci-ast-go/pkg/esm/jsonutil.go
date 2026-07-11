@@ -33,7 +33,7 @@ import "fmt"
 // `expression_templates` blocks (pre-substitution template bodies may legally
 // carry parameter names in scalar slots), use walkJSONTreeSkipping with a skip
 // set — the skip is a parameter, so the base form stays skip-free.
-func walkJSONTree(tree interface{}, path string, visit func(path string, obj map[string]interface{}) error) error {
+func walkJSONTree(tree any, path string, visit func(path string, obj map[string]any) error) error {
 	return walkJSONTreeSkipping(tree, path, nil, visit)
 }
 
@@ -44,9 +44,9 @@ func walkJSONTree(tree interface{}, path string, visit func(path string, obj map
 //
 // Pass e.g. map[string]struct{}{"expression_templates": {}} to reproduce the
 // validateGeometryManifolds / validateMakearrayRegions convention.
-func walkJSONTreeSkipping(tree interface{}, path string, skipKeys map[string]struct{}, visit func(path string, obj map[string]interface{}) error) error {
+func walkJSONTreeSkipping(tree any, path string, skipKeys map[string]struct{}, visit func(path string, obj map[string]any) error) error {
 	switch t := tree.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		if err := visit(path, t); err != nil {
 			return err
 		}
@@ -58,7 +58,7 @@ func walkJSONTreeSkipping(tree interface{}, path string, skipKeys map[string]str
 				return err
 			}
 		}
-	case []interface{}:
+	case []any:
 		for i, child := range t {
 			if err := walkJSONTreeSkipping(child, fmt.Sprintf("%s/%d", path, i), skipKeys, visit); err != nil {
 				return err

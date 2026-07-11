@@ -117,7 +117,7 @@ func TestFlatten_RecordsCouplingRules(t *testing.T) {
 				Equations: []Equation{},
 			},
 		},
-		Coupling: []interface{}{
+		Coupling: []any{
 			VariableMapCoupling{
 				Type:      "variable_map",
 				From:      "A.x",
@@ -165,13 +165,13 @@ func TestReplaceVarToken_RespectsTokenBoundaries(t *testing.T) {
 
 func TestNamespaceExpression_PowIsLeftAssociative(t *testing.T) {
 	// (a^b)^c must not render as a^b^c, which reparses as a^(b^c).
-	inner := ExprNode{Op: "^", Args: []interface{}{"a", "b"}}
-	node := ExprNode{Op: "^", Args: []interface{}{inner, "c"}}
+	inner := ExprNode{Op: "^", Args: []any{"a", "b"}}
+	node := ExprNode{Op: "^", Args: []any{inner, "c"}}
 	if got, want := namespaceExpression(node, "S", map[string]bool{}), "(a^b)^c"; got != want {
 		t.Errorf("namespaceExpression = %q; want %q", got, want)
 	}
 	// A pow exponent needs no parens: a^(b^c) renders as a^b^c.
-	node2 := ExprNode{Op: "^", Args: []interface{}{"a", ExprNode{Op: "^", Args: []interface{}{"b", "c"}}}}
+	node2 := ExprNode{Op: "^", Args: []any{"a", ExprNode{Op: "^", Args: []any{"b", "c"}}}}
 	if got, want := namespaceExpression(node2, "S", map[string]bool{}), "a^b^c"; got != want {
 		t.Errorf("namespaceExpression = %q; want %q", got, want)
 	}

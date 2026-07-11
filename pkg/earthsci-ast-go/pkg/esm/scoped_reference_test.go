@@ -15,16 +15,16 @@ func TestResolveScopedReference(t *testing.T) {
 					"x": {Type: "state"},
 					"y": {Type: "parameter"},
 				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp":     map[string]interface{}{"type": "state"},
-							"pressure": map[string]interface{}{"type": "parameter"},
+				Subsystems: map[string]any{
+					"SubsystemA": map[string]any{
+						"variables": map[string]any{
+							"temp":     map[string]any{"type": "state"},
+							"pressure": map[string]any{"type": "parameter"},
 						},
-						"subsystems": map[string]interface{}{
-							"NestedSub": map[string]interface{}{
-								"variables": map[string]interface{}{
-									"depth": map[string]interface{}{"type": "state"},
+						"subsystems": map[string]any{
+							"NestedSub": map[string]any{
+								"variables": map[string]any{
+									"depth": map[string]any{"type": "state"},
 								},
 							},
 						},
@@ -41,13 +41,13 @@ func TestResolveScopedReference(t *testing.T) {
 				Parameters: map[string]Parameter{
 					"rate_const": {},
 				},
-				Subsystems: map[string]interface{}{
-					"FastReactions": map[string]interface{}{
-						"species": map[string]interface{}{
-							"OH": map[string]interface{}{},
+				Subsystems: map[string]any{
+					"FastReactions": map[string]any{
+						"species": map[string]any{
+							"OH": map[string]any{},
 						},
-						"parameters": map[string]interface{}{
-							"k_fast": map[string]interface{}{},
+						"parameters": map[string]any{
+							"k_fast": map[string]any{},
 						},
 					},
 				},
@@ -146,14 +146,14 @@ func TestValidationWithScopedReferences(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "SubsystemA.temp", // Scoped reference
 					},
 				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"SubsystemA": map[string]any{
+						"variables": map[string]any{
+							"temp": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -181,10 +181,10 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 				Variables: map[string]ModelVariable{
 					"x": {Type: "state"},
 				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"SubsystemA": map[string]any{
+						"variables": map[string]any{
+							"temp": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -195,7 +195,7 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 	// Test expression with scoped reference
 	expr := ExprNode{
 		Op:   "+",
-		Args: []interface{}{"x", "SubsystemA.temp"},
+		Args: []any{"x", "SubsystemA.temp"},
 	}
 
 	// Bindings map

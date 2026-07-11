@@ -75,7 +75,7 @@ func TestEsmFileWithModel(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -141,7 +141,7 @@ func TestJSONSerialization(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -169,7 +169,7 @@ func TestUnmarshalExpression(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "number",
@@ -186,7 +186,7 @@ func TestUnmarshalExpression(t *testing.T) {
 			input: `{"op": "+", "args": ["a", "b"]}`,
 			expected: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 		},
 	}

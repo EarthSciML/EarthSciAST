@@ -129,7 +129,7 @@ func lowerReactionSystemEnums(rs *ReactionSystem, enums map[string]map[string]in
 // lowerCouplingEntryEnums lowers enum ops inside a coupling entry's connector
 // equations, returning the (possibly updated) entry. Only CouplingCouple
 // entries carry connector equations; any other entry is returned unchanged.
-func lowerCouplingEntryEnums(ce interface{}, enums map[string]map[string]int) (interface{}, error) {
+func lowerCouplingEntryEnums(ce any, enums map[string]map[string]int) (any, error) {
 	cc, ok := ce.(CouplingCouple)
 	if !ok {
 		return ce, nil
@@ -190,7 +190,7 @@ func lowerExprNodeEnums(node ExprNode, enums map[string]map[string]int) (Express
 			return nil, newLowerEnumsError("unknown_enum_symbol",
 				fmt.Sprintf("symbol %q is not declared under enum %q", symName, enumName))
 		}
-		return ExprNode{Op: OpConst, Args: []interface{}{}, Value: int64(v)}, nil
+		return ExprNode{Op: OpConst, Args: []any{}, Value: int64(v)}, nil
 	}
 	// Recurse — lower every child through the shared field-preserving walker.
 	// The old rebuild covered only Args + TableAxes, so an `enum` op nested in
@@ -205,7 +205,7 @@ func lowerExprNodeEnums(node ExprNode, enums map[string]map[string]int) (Express
 
 // stringFromArg accepts either a bare string (a `VarExpr`-equivalent in
 // Go's looser AST) or a `const`-op node carrying a string `Value`.
-func stringFromArg(a interface{}) (string, bool) {
+func stringFromArg(a any) (string, bool) {
 	switch v := a.(type) {
 	case string:
 		return v, true

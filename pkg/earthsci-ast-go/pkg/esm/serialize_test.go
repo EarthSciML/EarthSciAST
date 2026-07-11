@@ -28,7 +28,7 @@ func TestSave(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -41,7 +41,7 @@ func TestSave(t *testing.T) {
 	assert.NotEmpty(t, jsonStr)
 
 	// Verify it's valid JSON
-	var parsed interface{}
+	var parsed any
 	err = json.Unmarshal([]byte(jsonStr), &parsed)
 	assert.NoError(t, err)
 
@@ -64,7 +64,7 @@ func TestSaveCompact(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -80,7 +80,7 @@ func TestSaveCompact(t *testing.T) {
 	assert.NotContains(t, jsonStr, "\n  ")
 
 	// Verify it's valid JSON
-	var parsed interface{}
+	var parsed any
 	err = json.Unmarshal([]byte(jsonStr), &parsed)
 	assert.NoError(t, err)
 }
@@ -121,7 +121,7 @@ func TestSaveToFile(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -157,7 +157,7 @@ func TestSaveCompactToFile(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -182,7 +182,7 @@ func TestSaveCompactToFile(t *testing.T) {
 func TestSerializeExpression(t *testing.T) {
 	expr := ExprNode{
 		Op:   "+",
-		Args: []interface{}{"a", "b"},
+		Args: []any{"a", "b"},
 	}
 
 	jsonStr, err := SerializeExpression(expr)
@@ -199,7 +199,7 @@ func TestSerializeExpression(t *testing.T) {
 func TestSerializeExpressionCompact(t *testing.T) {
 	expr := ExprNode{
 		Op:   "*",
-		Args: []interface{}{"x", 2},
+		Args: []any{"x", 2},
 	}
 
 	jsonStr, err := SerializeExpressionCompact(expr)
@@ -227,7 +227,7 @@ func TestSerializeModel(t *testing.T) {
 		},
 		Equations: []Equation{
 			{
-				LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 				RHS: float64(1.0),
 			},
 		},
@@ -307,13 +307,13 @@ func TestRoundTripSerialization(t *testing.T) {
 					},
 					"y": {
 						Type:       "observed",
-						Expression: ExprNode{Op: "+", Args: []interface{}{"x", 2}},
+						Expression: ExprNode{Op: "+", Args: []any{"x", 2}},
 					},
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []interface{}{-0.1, "x"}},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{-0.1, "x"}},
 					},
 				},
 			},

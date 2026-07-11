@@ -18,23 +18,23 @@ type GraphEdge[N any, E any] struct {
 
 // ComponentNode represents a node in the component graph
 type ComponentNode struct {
-	ID            string                 `json:"id"`
-	Type          string                 `json:"type"` // "model", "reaction_system", "data_loader", "operator"
-	Name          string                 `json:"name"`
-	VariableCount *int                   `json:"variable_count,omitempty"`
-	EquationCount *int                   `json:"equation_count,omitempty"`
-	SpeciesCount  *int                   `json:"species_count,omitempty"`
-	ReactionCount *int                   `json:"reaction_count,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	ID            string         `json:"id"`
+	Type          string         `json:"type"` // "model", "reaction_system", "data_loader", "operator"
+	Name          string         `json:"name"`
+	VariableCount *int           `json:"variable_count,omitempty"`
+	EquationCount *int           `json:"equation_count,omitempty"`
+	SpeciesCount  *int           `json:"species_count,omitempty"`
+	ReactionCount *int           `json:"reaction_count,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 // CouplingEdge represents an edge in the component graph
 type CouplingEdge struct {
-	Type          string      `json:"type"` // coupling type
-	Label         *string     `json:"label,omitempty"`
-	Description   *string     `json:"description,omitempty"`
-	Bidirectional bool        `json:"bidirectional"`
-	CouplingEntry interface{} `json:"coupling_entry"`
+	Type          string  `json:"type"` // coupling type
+	Label         *string `json:"label,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	Bidirectional bool    `json:"bidirectional"`
+	CouplingEntry any     `json:"coupling_entry"`
 }
 
 // VariableNode represents a node in the expression graph
@@ -86,7 +86,7 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 			ID:       id,
 			Type:     "model",
 			Name:     id,
-			Metadata: make(map[string]interface{}),
+			Metadata: make(map[string]any),
 		}
 
 		// Count variables and equations
@@ -105,7 +105,7 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 			ID:       id,
 			Type:     "reaction_system",
 			Name:     id,
-			Metadata: make(map[string]interface{}),
+			Metadata: make(map[string]any),
 		}
 
 		// Count species and reactions
@@ -124,7 +124,7 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 			ID:   id,
 			Type: "data_loader",
 			Name: id,
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"kind":      loader.Kind,
 				"variables": len(loader.Variables),
 			},
@@ -146,7 +146,7 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 }
 
 // createCouplingEdges creates edges for a coupling entry
-func createCouplingEdges(coupling interface{}, nodeMap map[string]ComponentNode) []GraphEdge[ComponentNode, CouplingEdge] {
+func createCouplingEdges(coupling any, nodeMap map[string]ComponentNode) []GraphEdge[ComponentNode, CouplingEdge] {
 	var edges []GraphEdge[ComponentNode, CouplingEdge]
 
 	switch c := coupling.(type) {

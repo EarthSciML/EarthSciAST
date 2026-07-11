@@ -15,7 +15,7 @@ import (
 // declaring an earlier version that carry any of them are rejected with
 // `template_import_version_too_old` (esm-spec §9.6.5). Mirrors
 // RejectExpressionTemplatesPreV04 for the §9.7 constructs.
-func RejectTemplateImportsPreV08(view map[string]interface{}) error {
+func RejectTemplateImportsPreV08(view map[string]any) error {
 	if !esmVersionBelow(view, 0, 8) {
 		return nil
 	}
@@ -31,12 +31,12 @@ func RejectTemplateImportsPreV08(view map[string]interface{}) error {
 		offences = append(offences, "/expression_template_imports")
 	}
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, cname := range sortedKeys(comps) {
-			if compObj, ok := comps[cname].(map[string]interface{}); ok {
+			if compObj, ok := comps[cname].(map[string]any); ok {
 				if _, has := compObj["expression_template_imports"]; has {
 					offences = append(offences,
 						fmt.Sprintf("/%s/%s/expression_template_imports", kind, cname))
@@ -58,7 +58,7 @@ func RejectTemplateImportsPreV08(view map[string]interface{}) error {
 // FORM (top-level `expression_templates`, esm-spec §9.7.1). Purity (no models
 // / reaction systems / loaders / coupling / domain) is checked separately at
 // import edges.
-func isTemplateLibraryDoc(view map[string]interface{}) bool {
+func isTemplateLibraryDoc(view map[string]any) bool {
 	if view == nil {
 		return false
 	}

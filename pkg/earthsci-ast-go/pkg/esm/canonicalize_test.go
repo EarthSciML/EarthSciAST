@@ -71,7 +71,7 @@ func TestCanonicalOrdering(t *testing.T) {
 	// But integer 0 has float 1.0 present -> singleton rule must keep types.
 	expr := ExprNode{
 		Op: "+",
-		Args: []interface{}{
+		Args: []any{
 			"b", "a", 1.0, int64(0),
 		},
 	}
@@ -90,10 +90,10 @@ func TestWorkedExample(t *testing.T) {
 	// +(*(a, 0), b, +(a, 1))
 	expr := ExprNode{
 		Op: "+",
-		Args: []interface{}{
-			ExprNode{Op: "*", Args: []interface{}{"a", int64(0)}},
+		Args: []any{
+			ExprNode{Op: "*", Args: []any{"a", int64(0)}},
 			"b",
-			ExprNode{Op: "+", Args: []interface{}{"a", int64(1)}},
+			ExprNode{Op: "+", Args: []any{"a", int64(1)}},
 		},
 	}
 	got, err := CanonicalJSON(expr)
@@ -110,8 +110,8 @@ func TestFlatten(t *testing.T) {
 	// +(+(a,b), c) -> +(a,b,c)
 	expr := ExprNode{
 		Op: "+",
-		Args: []interface{}{
-			ExprNode{Op: "+", Args: []interface{}{"a", "b"}},
+		Args: []any{
+			ExprNode{Op: "+", Args: []any{"a", "b"}},
 			"c",
 		},
 	}
@@ -129,13 +129,13 @@ func TestFlatten(t *testing.T) {
 // a bare variable; dropping the 1.0 would erase float-promotion info.
 func TestTypePreservingIdentityElim(t *testing.T) {
 	// *(1, x) -> x (both int class / unknown class -> safe to drop).
-	expr1 := ExprNode{Op: "*", Args: []interface{}{int64(1), "x"}}
+	expr1 := ExprNode{Op: "*", Args: []any{int64(1), "x"}}
 	got1, _ := CanonicalJSON(expr1)
 	if string(got1) != `"x"` {
 		t.Errorf("*(1, x): got %s, want \"x\"", got1)
 	}
 	// *(1.0, x): must keep the 1.0 so evaluate still promotes to float.
-	expr2 := ExprNode{Op: "*", Args: []interface{}{1.0, "x"}}
+	expr2 := ExprNode{Op: "*", Args: []any{1.0, "x"}}
 	got2, _ := CanonicalJSON(expr2)
 	want := `{"args":[1.0,"x"],"op":"*"}`
 	if string(got2) != want {
@@ -146,19 +146,19 @@ func TestTypePreservingIdentityElim(t *testing.T) {
 // §5.4.4 zero-annihilation preserves numeric type.
 func TestZeroAnnihilationTypePreserve(t *testing.T) {
 	// *(0, x) -> 0 (integer)
-	e1 := ExprNode{Op: "*", Args: []interface{}{int64(0), "x"}}
+	e1 := ExprNode{Op: "*", Args: []any{int64(0), "x"}}
 	got1, _ := CanonicalJSON(e1)
 	if string(got1) != `0` {
 		t.Errorf("*(0,x): got %s", got1)
 	}
 	// *(0.0, x) -> 0.0 (float)
-	e2 := ExprNode{Op: "*", Args: []interface{}{0.0, "x"}}
+	e2 := ExprNode{Op: "*", Args: []any{0.0, "x"}}
 	got2, _ := CanonicalJSON(e2)
 	if string(got2) != `0.0` {
 		t.Errorf("*(0.0,x): got %s", got2)
 	}
 	// *(-0.0, x) -> -0.0 (signed-zero preserved)
-	e3 := ExprNode{Op: "*", Args: []interface{}{math.Copysign(0, -1), "x"}}
+	e3 := ExprNode{Op: "*", Args: []any{math.Copysign(0, -1), "x"}}
 	got3, _ := CanonicalJSON(e3)
 	if string(got3) != `-0.0` {
 		t.Errorf("*(-0.0,x): got %s", got3)
@@ -167,8 +167,8 @@ func TestZeroAnnihilationTypePreserve(t *testing.T) {
 
 // §5.4.6 disambiguation: float-1.0 and integer-1 produce distinct wire forms.
 func TestIntFloatDisambiguation(t *testing.T) {
-	a := ExprNode{Op: "+", Args: []interface{}{1.0, 2.5}}
-	b := ExprNode{Op: "+", Args: []interface{}{int64(1), 2.5}}
+	a := ExprNode{Op: "+", Args: []any{1.0, 2.5}}
+	b := ExprNode{Op: "+", Args: []any{int64(1), 2.5}}
 	gotA, _ := CanonicalJSON(a)
 	gotB, _ := CanonicalJSON(b)
 	if string(gotA) == string(gotB) {
@@ -182,20 +182,20 @@ func TestIntFloatDisambiguation(t *testing.T) {
 // §5.4.7 neg / unary minus canonical form.
 func TestNegCanonical(t *testing.T) {
 	// neg(neg(x)) -> x
-	inner := ExprNode{Op: "neg", Args: []interface{}{"x"}}
-	outer := ExprNode{Op: "neg", Args: []interface{}{inner}}
+	inner := ExprNode{Op: "neg", Args: []any{"x"}}
+	outer := ExprNode{Op: "neg", Args: []any{inner}}
 	got, _ := CanonicalJSON(outer)
 	if string(got) != `"x"` {
 		t.Errorf("neg(neg(x)): got %s", got)
 	}
 	// neg(5) -> -5 (literal)
-	e := ExprNode{Op: "neg", Args: []interface{}{int64(5)}}
+	e := ExprNode{Op: "neg", Args: []any{int64(5)}}
 	got, _ = CanonicalJSON(e)
 	if string(got) != `-5` {
 		t.Errorf("neg(5): got %s", got)
 	}
 	// -(0, x) -> neg(x)
-	s := ExprNode{Op: "-", Args: []interface{}{int64(0), "x"}}
+	s := ExprNode{Op: "-", Args: []any{int64(0), "x"}}
 	got, _ = CanonicalJSON(s)
 	want := `{"args":["x"],"op":"neg"}`
 	if string(got) != want {
@@ -205,7 +205,7 @@ func TestNegCanonical(t *testing.T) {
 
 // §5.4.7 division edge case: /(0, 0) errors.
 func TestDivZeroByZero(t *testing.T) {
-	e := ExprNode{Op: "/", Args: []interface{}{int64(0), int64(0)}}
+	e := ExprNode{Op: "/", Args: []any{int64(0), int64(0)}}
 	_, err := Canonicalize(e)
 	if !errors.Is(err, ErrCanonicalDivByZero) {
 		t.Errorf("0/0: err=%v want ErrCanonicalDivByZero", err)
@@ -220,7 +220,7 @@ func TestCanonicalizePreservesStructuralFields(t *testing.T) {
 	varName := "s"
 	node := ExprNode{
 		Op:    "integral",
-		Args:  []interface{}{"f"},
+		Args:  []any{"f"},
 		Var:   &varName,
 		Lower: int64(0),
 		Upper: 1.0,
@@ -259,8 +259,8 @@ func TestCanonicalizePreservesStructuralFields(t *testing.T) {
 // latent correctness hazard.
 func TestCanonicalDistinctTableLookups(t *testing.T) {
 	tA, tB := "tableA", "tableB"
-	nodeA := ExprNode{Op: "table_lookup", Args: []interface{}{}, Table: &tA}
-	nodeB := ExprNode{Op: "table_lookup", Args: []interface{}{}, Table: &tB}
+	nodeA := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tA}
+	nodeB := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tB}
 	ja, err := CanonicalJSON(nodeA)
 	if err != nil {
 		t.Fatal(err)

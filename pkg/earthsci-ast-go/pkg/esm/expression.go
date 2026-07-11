@@ -113,7 +113,7 @@ func simplifyAddition(node ExprNode) Expression {
 	}
 
 	// Filter out zeros and collect non-zero terms
-	nonZeroArgs := make([]interface{}, 0, len(node.Args))
+	nonZeroArgs := make([]any, 0, len(node.Args))
 	for _, arg := range node.Args {
 		if !isZero(arg) {
 			nonZeroArgs = append(nonZeroArgs, arg)
@@ -168,7 +168,7 @@ func simplifyMultiplication(node ExprNode) Expression {
 	}
 
 	// Filter out ones
-	nonOneArgs := make([]interface{}, 0, len(node.Args))
+	nonOneArgs := make([]any, 0, len(node.Args))
 	for _, arg := range node.Args {
 		if !isOne(arg) {
 			nonOneArgs = append(nonOneArgs, arg)
@@ -508,7 +508,7 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 // whether an expression is a numeric literal for Simplify/folding, because a
 // bare string there is a variable reference, not a number — use
 // toFloat64Strict instead.
-func toFloat64(value interface{}) (float64, bool) {
+func toFloat64(value any) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
 		return v, true
@@ -535,7 +535,7 @@ func toFloat64(value interface{}) (float64, bool) {
 // (isZero/isOne/isPositive) and constant folding use it so that a variable
 // literally named "0" or "1" is treated as a symbol, never as the number it
 // spells.
-func toFloat64Strict(value interface{}) (float64, bool) {
+func toFloat64Strict(value any) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
 		return v, true
@@ -553,7 +553,7 @@ func toFloat64Strict(value interface{}) (float64, bool) {
 }
 
 // isZero checks if an expression represents the number zero
-func isZero(expr interface{}) bool {
+func isZero(expr any) bool {
 	if num, ok := toFloat64Strict(expr); ok {
 		return num == 0.0
 	}
@@ -561,7 +561,7 @@ func isZero(expr interface{}) bool {
 }
 
 // isOne checks if an expression represents the number one
-func isOne(expr interface{}) bool {
+func isOne(expr any) bool {
 	if num, ok := toFloat64Strict(expr); ok {
 		return num == 1.0
 	}
@@ -569,7 +569,7 @@ func isOne(expr interface{}) bool {
 }
 
 // isPositive checks if an expression represents a positive number
-func isPositive(expr interface{}) bool {
+func isPositive(expr any) bool {
 	if num, ok := toFloat64Strict(expr); ok {
 		return num > 0.0
 	}
@@ -588,7 +588,7 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 	if node.Name == nil || *node.Name == "" {
 		return 0, fmt.Errorf("fn op missing required `name` field (esm-spec §4.4)")
 	}
-	args := make([]interface{}, len(node.Args))
+	args := make([]any, len(node.Args))
 	for i, raw := range node.Args {
 		v, err := evaluateFnArg(raw, bindings)
 		if err != nil {
@@ -616,7 +616,7 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 // reduced to scalar float64 via the standard evaluator. A `const`-op
 // child carrying an array Value is passed through as []interface{} so
 // that closed functions like `interp.searchsorted` receive the table.
-func evaluateFnArg(arg interface{}, bindings map[string]float64) (interface{}, error) {
+func evaluateFnArg(arg any, bindings map[string]float64) (any, error) {
 	switch a := arg.(type) {
 	case ExprNode:
 		if a.Op == "const" {
@@ -634,7 +634,7 @@ func evaluateFnArg(arg interface{}, bindings map[string]float64) (interface{}, e
 // constNodeValue returns the typed payload of a `const`-op node. Numeric
 // values come back as float64 / int64 (the parser's normalized literal
 // types); arrays come back as []interface{}.
-func constNodeValue(node ExprNode) (interface{}, error) {
+func constNodeValue(node ExprNode) (any, error) {
 	if node.Value == nil {
 		return nil, fmt.Errorf("const op missing required `value` field (esm-spec §4.2)")
 	}

@@ -34,7 +34,7 @@ func newTemplateScope() *templateScope {
 	}
 }
 
-func mergeNamed(dst *orderedMap, name string, decl interface{}, code, what, origin string) error {
+func mergeNamed(dst *orderedMap, name string, decl any, code, what, origin string) error {
 	if dst.has(name) {
 		// Deep-equal redeclaration (a diamond import) dedups at first
 		// occurrence; a non-equal collision is a conflict (§9.7.4/§9.7.5).
@@ -77,8 +77,8 @@ func mergeScope(dst, src *templateScope, origin string) error {
 // cycle stack is threaded by value. This is the shared "resolve imports →
 // mergeScope" head of processLibrary and the root/per-component branches of
 // resolveTemplateMachinery.
-func resolveImportsInto(scope *templateScope, imports interface{}, baseDir string, stack []string, origin string) error {
-	list, ok := imports.([]interface{})
+func resolveImportsInto(scope *templateScope, imports any, baseDir string, stack []string, origin string) error {
+	list, ok := imports.([]any)
 	if !ok {
 		return nil
 	}
@@ -98,7 +98,7 @@ func resolveImportsInto(scope *templateScope, imports interface{}, baseDir strin
 // entries — in declaration order, honouring `order` — into scope.templates
 // (esm-spec §9.7.4). A nil block is a no-op. Shared "validate + merge own
 // templates" step of processLibrary and resolveTemplateMachinery.
-func mergeOwnTemplates(scope *templateScope, tpl map[string]interface{}, order []string, origin string) error {
+func mergeOwnTemplates(scope *templateScope, tpl map[string]any, order []string, origin string) error {
 	if tpl == nil {
 		return nil
 	}
@@ -142,7 +142,7 @@ func mergeScopeExports(docIsets, docMeta *orderedMap, scope *templateScope, orig
 // possibly a symbolic `NX*NY` over the importer's still-open metaparameters);
 // foldStructuralSites / foldIndexSetSizes leave any site still carrying a free
 // name symbolic for the importer's own metaparameter close.
-func instantiateScope(scope *templateScope, values map[string]interface{}, ctx string) error {
+func instantiateScope(scope *templateScope, values map[string]any, ctx string) error {
 	newT := newOrderedMap()
 	for _, n := range scope.templates.keys {
 		nd := substituteMetaparamsDecl(scope.templates.get(n), values)
@@ -201,8 +201,8 @@ func loadImportBytes(ref, baseDir, origin string) ([]byte, string, error) {
 // numeric tokens as json.Number (via UseNumber) so the int/float wire
 // distinction the metaparameter arithmetic depends on survives (esm-spec
 // §5.4.1). Returns the decode error unwrapped; callers attach a diagnostic code.
-func decodeJSONView(data []byte) (map[string]interface{}, error) {
-	var view map[string]interface{}
+func decodeJSONView(data []byte) (map[string]any, error) {
+	var view map[string]any
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	if err := dec.Decode(&view); err != nil {
@@ -221,8 +221,8 @@ func decodeJSONView(data []byte) (map[string]interface{}, error) {
 // `stack` is the cycle-detection path of canonical refs, passed BY VALUE: the
 // recursive descent extends its own copy with append(stack, canonical), so the
 // caller's slice needs no pop and sibling edges cannot see each other's frame.
-func resolveImportEntry(entry interface{}, baseDir string, stack []string, origin string) (*templateScope, error) {
-	entryObj, ok := entry.(map[string]interface{})
+func resolveImportEntry(entry any, baseDir string, stack []string, origin string) (*templateScope, error) {
+	entryObj, ok := entry.(map[string]any)
 	if !ok {
 		return nil, newETErr(CodeTemplateImportUnresolved,
 			fmt.Sprintf("%s: expression_template_imports entries must be objects with a `ref` field", origin))
@@ -299,8 +299,8 @@ func resolveImportEntry(entry interface{}, baseDir string, stack []string, origi
 	// (e.g. `NX*NY`); at an import edge the importer's names are not yet closed
 	// (innermost-first), so the value is carried SYMBOLICALLY into the child and
 	// folds when the importing document closes (§9.7.6 binding value flow).
-	values := map[string]interface{}{}
-	if bindingsRaw, ok := entryObj["bindings"].(map[string]interface{}); ok {
+	values := map[string]any{}
+	if bindingsRaw, ok := entryObj["bindings"].(map[string]any); ok {
 		for _, name := range sortedKeys(bindingsRaw) {
 			if !scope.metaparams.has(name) {
 				return nil, newETErr(CodeTemplateImportUnknownName,
@@ -329,7 +329,7 @@ func resolveImportEntry(entry interface{}, baseDir string, stack []string, origi
 
 	// `only` visibility filtering (esm-spec §9.7.2) — after the target's own
 	// internal wiring resolved in its own scope.
-	if onlyRaw, ok := entryObj["only"].([]interface{}); ok {
+	if onlyRaw, ok := entryObj["only"].([]any); ok {
 		keep := map[string]bool{}
 		for _, nRaw := range onlyRaw {
 			n, ok := nRaw.(string)
@@ -363,19 +363,19 @@ func resolveImportEntry(entry interface{}, baseDir string, stack []string, origi
 // metaparameters appended in declaration order (esm-spec §9.7.4), then §9.7.3
 // body composition — so a BC-layer body reference to an imported interior
 // stencil closes here, before any `only` filtering by a downstream importer.
-func processLibrary(view map[string]interface{}, fileOrders map[string][]string,
+func processLibrary(view map[string]any, fileOrders map[string][]string,
 	dir string, stack []string, origin string) (*templateScope, error) {
 	scope := newTemplateScope()
 	if err := resolveImportsInto(scope, view["expression_template_imports"], dir, stack, origin); err != nil {
 		return nil, err
 	}
 
-	tpl, _ := view["expression_templates"].(map[string]interface{})
+	tpl, _ := view["expression_templates"].(map[string]any)
 	if err := mergeOwnTemplates(scope, tpl, fileOrders["/expression_templates"], origin); err != nil {
 		return nil, err
 	}
 
-	if isets, ok := view["index_sets"].(map[string]interface{}); ok {
+	if isets, ok := view["index_sets"].(map[string]any); ok {
 		for _, n := range orderedKeysOf(isets, fileOrders["/index_sets"]) {
 			if err := mergeNamed(scope.indexSets, n, isets[n],
 				"template_import_index_set_conflict", "index set", origin); err != nil {
@@ -411,7 +411,7 @@ func processLibrary(view map[string]interface{}, fileOrders map[string][]string,
 // that resolveTemplateMachinery must process: a top-level `expression_templates`
 // / `metaparameters` / `expression_template_imports` block, or a per-component
 // `expression_template_imports`. A document with none takes the legacy fast path.
-func hasImportMachinery(view map[string]interface{}) bool {
+func hasImportMachinery(view map[string]any) bool {
 	if view == nil {
 		return false
 	}
@@ -425,12 +425,12 @@ func hasImportMachinery(view map[string]interface{}) bool {
 		return true
 	}
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, compRaw := range comps {
-			if compObj, ok := compRaw.(map[string]interface{}); ok {
+			if compObj, ok := compRaw.(map[string]any); ok {
 				if _, has := compObj["expression_template_imports"]; has {
 					return true
 				}
@@ -456,7 +456,7 @@ func hasImportMachinery(view map[string]interface{}) bool {
 // no `expression_template_imports`, `metaparameters`, or top-level
 // `expression_templates` key remains (Option A round-trip). Returns false
 // when the document carries no §9.7 machinery (the legacy fast path).
-func resolveTemplateMachinery(view map[string]interface{}, orders map[string][]string,
+func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	baseDir string, metaparameters map[string]int64) (bool, error) {
 	if !hasImportMachinery(view) {
 		if len(metaparameters) > 0 {
@@ -480,7 +480,7 @@ func resolveTemplateMachinery(view map[string]interface{}, orders map[string][]s
 		return false, err
 	}
 	docIsets := newOrderedMap()
-	if isets, ok := view["index_sets"].(map[string]interface{}); ok {
+	if isets, ok := view["index_sets"].(map[string]any); ok {
 		for _, n := range orderedKeysOf(isets, orders["/index_sets"]) {
 			docIsets.set(n, isets[n])
 		}
@@ -542,13 +542,13 @@ func resolveTemplateMachinery(view map[string]interface{}, orders map[string][]s
 // a fresh scope; the scope's index sets and re-exported metaparameters flow into
 // the document registries docIsets / docMeta. Returns the effective top-level
 // template sequence.
-func resolveRootLibraryImports(view map[string]interface{}, orders map[string][]string,
+func resolveRootLibraryImports(view map[string]any, orders map[string][]string,
 	baseDir string, stack []string, docIsets, docMeta *orderedMap) (*orderedMap, error) {
 	topscope := newTemplateScope()
 	if err := resolveImportsInto(topscope, view["expression_template_imports"], baseDir, stack, "document"); err != nil {
 		return nil, err
 	}
-	tpl, _ := view["expression_templates"].(map[string]interface{})
+	tpl, _ := view["expression_templates"].(map[string]any)
 	if err := mergeOwnTemplates(topscope, tpl, orders["/expression_templates"], "document"); err != nil {
 		return nil, err
 	}
@@ -566,15 +566,15 @@ func resolveRootLibraryImports(view map[string]interface{}, orders map[string][]
 // declarations) becomes the component's `expression_templates` block — its
 // published key order IS the §9.6.3 declaration order, written back into
 // `orders` — and the consumed `expression_template_imports` key is stripped.
-func resolveComponentImports(view map[string]interface{}, orders map[string][]string,
+func resolveComponentImports(view map[string]any, orders map[string][]string,
 	baseDir string, stack []string, docIsets, docMeta *orderedMap) error {
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, cname := range orderedKeysOf(comps, orders["/"+kind]) {
-			comp, ok := comps[cname].(map[string]interface{})
+			comp, ok := comps[cname].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -588,7 +588,7 @@ func resolveComponentImports(view map[string]interface{}, orders map[string][]st
 				return err
 			}
 			tplPath := "/" + kind + "/" + cname + "/expression_templates"
-			tpl, _ := comp["expression_templates"].(map[string]interface{})
+			tpl, _ := comp["expression_templates"].(map[string]any)
 			if err := mergeOwnTemplates(cscope, tpl, orders[tplPath], corigin); err != nil {
 				return err
 			}
@@ -627,7 +627,7 @@ func closeDocumentMetaparams(docMeta *orderedMap, metaparameters map[string]int6
 			values[name] = v
 			continue
 		}
-		decl, _ := docMeta.get(name).(map[string]interface{})
+		decl, _ := docMeta.get(name).(map[string]any)
 		d, has := decl["default"]
 		if !has || d == nil {
 			openNames = append(openNames, name)
@@ -650,7 +650,7 @@ func closeDocumentMetaparams(docMeta *orderedMap, metaparameters map[string]int6
 // metaparameter name must not shadow any visible index-set / variable / species
 // / parameter name. A collision is `metaparameter_name_conflict`. No-op when the
 // document declares no metaparameters.
-func checkMetaparamNameCollisions(view map[string]interface{}, docMeta, docIsets *orderedMap) error {
+func checkMetaparamNameCollisions(view map[string]any, docMeta, docIsets *orderedMap) error {
 	if docMeta.len() == 0 {
 		return nil
 	}
@@ -659,17 +659,17 @@ func checkMetaparamNameCollisions(view map[string]interface{}, docMeta, docIsets
 		visible[n] = true
 	}
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, compRaw := range comps {
-			compObj, ok := compRaw.(map[string]interface{})
+			compObj, ok := compRaw.(map[string]any)
 			if !ok {
 				continue
 			}
 			for _, blk := range []string{"variables", "species", "parameters"} {
-				if b, ok := compObj[blk].(map[string]interface{}); ok {
+				if b, ok := compObj[blk].(map[string]any); ok {
 					for vn := range b {
 						visible[vn] = true
 					}
@@ -691,7 +691,7 @@ func checkMetaparamNameCollisions(view map[string]interface{}, docMeta, docIsets
 // via substituteMetaparamsDecl, everything else via substituteMetaparams), the
 // root library templates, and the document index sets (esm-spec §9.7.6). No-op
 // when there are no closed values.
-func substituteClosedMetaparams(view map[string]interface{}, topTemplates, docIsets *orderedMap, values map[string]int64) {
+func substituteClosedMetaparams(view map[string]any, topTemplates, docIsets *orderedMap, values map[string]int64) {
 	if len(values) == 0 {
 		return
 	}
@@ -699,23 +699,23 @@ func substituteClosedMetaparams(view map[string]interface{}, topTemplates, docIs
 	// substituteMetaparams takes a metaparameter-expression map (the same shape
 	// an import edge carries symbolically), so lift the int64 close environment
 	// into it.
-	substVals := make(map[string]interface{}, len(values))
+	substVals := make(map[string]any, len(values))
 	for k, v := range values {
 		substVals[k] = v
 	}
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, compRaw := range comps {
-			comp, ok := compRaw.(map[string]interface{})
+			comp, ok := compRaw.(map[string]any)
 			if !ok {
 				continue
 			}
 			for _, k := range sortedKeys(comp) {
 				if k == "expression_templates" {
-					if tpl, ok := comp[k].(map[string]interface{}); ok {
+					if tpl, ok := comp[k].(map[string]any); ok {
 						for tn, td := range tpl {
 							tpl[tn] = substituteMetaparamsDecl(td, substVals)
 						}
@@ -739,14 +739,14 @@ func substituteClosedMetaparams(view map[string]interface{}, topTemplates, docIs
 // sizes (esm-spec §9.7.6): components, then the root library templates, then the
 // document index sets with strict=true (any remaining open size is
 // `metaparameter_unbound`).
-func foldClosedDocument(view map[string]interface{}, topTemplates, docIsets *orderedMap) error {
+func foldClosedDocument(view map[string]any, topTemplates, docIsets *orderedMap) error {
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, cname := range sortedKeys(comps) {
-			if comp, ok := comps[cname].(map[string]interface{}); ok {
+			if comp, ok := comps[cname].(map[string]any); ok {
 				if err := foldStructuralSites(comp, kind+"."+cname); err != nil {
 					return err
 				}

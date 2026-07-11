@@ -17,7 +17,7 @@ import (
 // pass through; anything else (floats, bools, strings, objects) is
 // `metaparameter_type_error`. A float64 is accepted only when integral —
 // a plain-decoded (non-UseNumber) view cannot distinguish 4 from 4.0.
-func metaparamInt(v interface{}, ctx string) (int64, error) {
+func metaparamInt(v any, ctx string) (int64, error) {
 	switch n := v.(type) {
 	case json.Number:
 		if !strings.ContainsAny(string(n), ".eE") {
@@ -48,19 +48,19 @@ func metaparamInt(v interface{}, ctx string) (int64, error) {
 // kind) and, if present, an integer `default`; a violation raises
 // `metaparameter_type_error`. An absent/nil block yields an empty map. `order`
 // is the declaration order recovered from the raw JSON.
-func collectMetaparamDecls(raw map[string]interface{}, origin string, order []string) (*orderedMap, error) {
+func collectMetaparamDecls(raw map[string]any, origin string, order []string) (*orderedMap, error) {
 	out := newOrderedMap()
 	mpRaw, has := raw["metaparameters"]
 	if !has || mpRaw == nil {
 		return out, nil
 	}
-	mp, ok := mpRaw.(map[string]interface{})
+	mp, ok := mpRaw.(map[string]any)
 	if !ok {
 		return nil, newETErr(CodeMetaparamTypeError,
 			fmt.Sprintf("%s: `metaparameters` must be an object", origin))
 	}
 	for _, name := range orderedKeysOf(mp, order) {
-		decl, ok := mp[name].(map[string]interface{})
+		decl, ok := mp[name].(map[string]any)
 		if !ok {
 			return nil, newETErr(CodeMetaparamTypeError,
 				fmt.Sprintf("%s: metaparameters.%s must be an object with `type: \"integer\"`", origin, name))
@@ -101,21 +101,21 @@ var metaSubstSkipKeys = map[string]struct{}{
 // EXPRESSION (a `{op, args}` tree over the importer's still-open metaparameters,
 // e.g. `NX*NY`) at an import edge — carried symbolically until the importer
 // closes (esm-spec §9.7.6 binding value flow).
-func substituteMetaparams(x interface{}, values map[string]interface{}) interface{} {
+func substituteMetaparams(x any, values map[string]any) any {
 	switch v := x.(type) {
 	case string:
 		if i, ok := values[v]; ok {
 			return i
 		}
 		return v
-	case []interface{}:
-		out := make([]interface{}, len(v))
+	case []any:
+		out := make([]any, len(v))
 		for i, c := range v {
 			out[i] = substituteMetaparams(c, values)
 		}
 		return out
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(v))
+	case map[string]any:
+		out := make(map[string]any, len(v))
 		for k, c := range v {
 			if _, skip := metaSubstSkipKeys[k]; skip {
 				out[k] = deepCopyJSON(c)
@@ -132,13 +132,13 @@ func substituteMetaparams(x interface{}, values map[string]interface{}) interfac
 // `expression_templates` entry: the template's own `params` shadow like-named
 // metaparameters inside its `body` and `match` (a param is the inner binder;
 // substitution must not capture it).
-func substituteMetaparamsDecl(decl interface{}, values map[string]interface{}) interface{} {
-	declObj, ok := decl.(map[string]interface{})
+func substituteMetaparamsDecl(decl any, values map[string]any) any {
+	declObj, ok := decl.(map[string]any)
 	if !ok {
 		return substituteMetaparams(decl, values)
 	}
 	shadowed := values
-	if params, ok := declObj["params"].([]interface{}); ok {
+	if params, ok := declObj["params"].([]any); ok {
 		shadow := false
 		pset := map[string]struct{}{}
 		for _, p := range params {
@@ -150,7 +150,7 @@ func substituteMetaparamsDecl(decl interface{}, values map[string]interface{}) i
 			}
 		}
 		if shadow {
-			shadowed = make(map[string]interface{}, len(values))
+			shadowed = make(map[string]any, len(values))
 			for k, v := range values {
 				if _, isParam := pset[k]; !isParam {
 					shadowed[k] = v
@@ -211,7 +211,7 @@ func checkedNeg(a int64, ctx string) (int64, error) {
 // a later pass. Errors carry `metaparameter_type_error`: a non-integer
 // literal, an op outside + - * / over concrete args, inexact division, or
 // 64-bit overflow.
-func tryFold(x interface{}, ctx string) (val int64, folded bool, err error) {
+func tryFold(x any, ctx string) (val int64, folded bool, err error) {
 	switch v := x.(type) {
 	case string:
 		return 0, false, nil
@@ -235,10 +235,10 @@ func tryFold(x interface{}, ctx string) (val int64, folded bool, err error) {
 	case bool:
 		return 0, false, newETErr(CodeMetaparamTypeError,
 			fmt.Sprintf("%s: non-integer literal %v in a structural integer site (esm-spec §9.7.6)", ctx, v))
-	case map[string]interface{}:
+	case map[string]any:
 		opRaw, hasOp := v["op"]
 		argsRaw, hasArgs := v["args"]
-		args, argsOk := argsRaw.([]interface{})
+		args, argsOk := argsRaw.([]any)
 		if !hasOp || !hasArgs || !argsOk || len(args) == 0 {
 			return 0, false, newETErr(CodeMetaparamTypeError,
 				fmt.Sprintf("%s: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})", ctx))
@@ -297,15 +297,15 @@ func tryFold(x interface{}, ctx string) (val int64, folded bool, err error) {
 // expression into out (the `op` discriminator of a `{op, args}` node is
 // skipped). Used to report the free names of an expression that failed to fold
 // (evalMetaExpr / foldIndexSetSizes diagnostics).
-func collectMetaNames(out *[]string, x interface{}) {
+func collectMetaNames(out *[]string, x any) {
 	switch v := x.(type) {
 	case string:
 		*out = append(*out, v)
-	case []interface{}:
+	case []any:
 		for _, c := range v {
 			collectMetaNames(out, c)
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		for _, k := range sortedKeys(v) {
 			if k == "op" {
 				continue
@@ -318,7 +318,7 @@ func collectMetaNames(out *[]string, x interface{}) {
 // isIntToken reports whether v is an already-concrete integer literal — a
 // json.Number with integer grammar (no '.', 'e', 'E') or a native int type.
 // Used to skip structural sites that need no metaparameter folding.
-func isIntToken(v interface{}) bool {
+func isIntToken(v any) bool {
 	switch n := v.(type) {
 	case json.Number:
 		return !strings.ContainsAny(string(n), ".eE")
@@ -336,16 +336,16 @@ func isIntToken(v interface{}) bool {
 // missing/empty `args`, or a float literal at the binding EDGE even when an
 // arg is still a symbolic importer name. Mirrors the Python reference
 // `_validate_meta_expr`.
-func validateMetaExpr(x interface{}, ctx string) error {
+func validateMetaExpr(x any, ctx string) error {
 	switch v := x.(type) {
 	case string:
 		// A bare name (variable-reference surface syntax) — always structurally
 		// admissible; whether it is in scope is decided at fold time.
 		return nil
-	case map[string]interface{}:
+	case map[string]any:
 		op, _ := v["op"].(string)
 		argsRaw, hasArgs := v["args"]
-		args, argsOk := argsRaw.([]interface{})
+		args, argsOk := argsRaw.([]any)
 		if (op != "+" && op != "-" && op != "*" && op != "/") || !hasArgs || !argsOk || len(args) == 0 {
 			return newETErr(CodeMetaparamTypeError,
 				fmt.Sprintf("%s: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})", ctx))
@@ -380,7 +380,7 @@ func validateMetaExpr(x interface{}, ctx string) error {
 // arithmetic combination of the importer's metaparameters (e.g. `NTGT = NX*NY`),
 // which import renaming (name→name) could not express. Mirrors the Python
 // reference `require_meta_expr`.
-func requireMetaExpr(v interface{}, ctx string) (interface{}, error) {
+func requireMetaExpr(v any, ctx string) (any, error) {
 	if err := validateMetaExpr(v, ctx); err != nil {
 		return nil, err
 	}
@@ -394,7 +394,7 @@ func requireMetaExpr(v interface{}, ctx string) (interface{}, error) {
 // at every other metaparameter site. Non-integral / non-integer literals are
 // left untouched so tryFold raises the metaparameter_type_error. Strings
 // (names) and structure are preserved.
-func coerceMetaExprInts(x interface{}) interface{} {
+func coerceMetaExprInts(x any) any {
 	switch v := x.(type) {
 	case json.Number:
 		if !strings.ContainsAny(string(v), ".eE") {
@@ -408,14 +408,14 @@ func coerceMetaExprInts(x interface{}) interface{} {
 			return int64(v)
 		}
 		return v
-	case []interface{}:
-		out := make([]interface{}, len(v))
+	case []any:
+		out := make([]any, len(v))
 		for i, c := range v {
 			out[i] = coerceMetaExprInts(c)
 		}
 		return out
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(v))
+	case map[string]any:
+		out := make(map[string]any, len(v))
 		for k, c := range v {
 			out[k] = coerceMetaExprInts(c)
 		}
@@ -432,8 +432,8 @@ func coerceMetaExprInts(x interface{}) interface{} {
 // expression references a name absent from env — the mount-edge typo failure,
 // keeping error locality at the edge that authored the expression. Mirrors the
 // Python reference `eval_meta_expr`.
-func evalMetaExpr(expr interface{}, env map[string]int64, ctx string) (int64, error) {
-	envAny := make(map[string]interface{}, len(env))
+func evalMetaExpr(expr any, env map[string]int64, ctx string) (int64, error) {
+	envAny := make(map[string]any, len(env))
 	for k, v := range env {
 		envAny[k] = v
 	}
@@ -470,21 +470,21 @@ func evalMetaExpr(expr interface{}, env map[string]int64, ctx string) (int64, er
 // or an open metaparameter in a not-yet-fully-bound library) are left symbolic
 // for a later binding site. Index-set sizes are folded separately by
 // foldIndexSetSizes.
-func foldStructuralSites(x interface{}, ctx string) error {
+func foldStructuralSites(x any, ctx string) error {
 	switch v := x.(type) {
-	case []interface{}:
+	case []any:
 		for _, c := range v {
 			if err := foldStructuralSites(c, ctx); err != nil {
 				return err
 			}
 		}
 		return nil
-	case map[string]interface{}:
+	case map[string]any:
 		op, _ := v["op"].(string)
 		if op == "aggregate" {
-			if ranges, ok := v["ranges"].(map[string]interface{}); ok {
+			if ranges, ok := v["ranges"].(map[string]any); ok {
 				for _, k := range sortedKeys(ranges) {
-					rv, ok := ranges[k].([]interface{})
+					rv, ok := ranges[k].([]any)
 					if !ok {
 						continue // {from: ...} index-set refs untouched
 					}
@@ -503,14 +503,14 @@ func foldStructuralSites(x interface{}, ctx string) error {
 				}
 			}
 		} else if op == "makearray" {
-			if regions, ok := v["regions"].([]interface{}); ok {
+			if regions, ok := v["regions"].([]any); ok {
 				for _, regionRaw := range regions {
-					region, ok := regionRaw.([]interface{})
+					region, ok := regionRaw.([]any)
 					if !ok {
 						continue
 					}
 					for _, boundsRaw := range region {
-						bounds, ok := boundsRaw.([]interface{})
+						bounds, ok := boundsRaw.([]any)
 						if !ok {
 							continue
 						}
@@ -548,7 +548,7 @@ func foldStructuralSites(x interface{}, ctx string) error {
 // site.
 func foldIndexSetSizes(indexSets *orderedMap, ctx string, strict bool) error {
 	for _, name := range indexSets.keys {
-		decl, ok := indexSets.m[name].(map[string]interface{})
+		decl, ok := indexSets.m[name].(map[string]any)
 		if !ok {
 			continue
 		}

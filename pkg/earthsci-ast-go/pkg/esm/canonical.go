@@ -34,11 +34,11 @@ var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 // Types implementing json.Marshaler (e.g. json.Number, json.RawMessage)
 // are passed through untouched so that prior canonicalization inside
 // interface{} slots is preserved.
-func canonicalizeForJSON(v interface{}) (interface{}, error) {
+func canonicalizeForJSON(v any) (any, error) {
 	return canonicalizeValue(reflect.ValueOf(v))
 }
 
-func canonicalizeValue(rv reflect.Value) (interface{}, error) {
+func canonicalizeValue(rv reflect.Value) (any, error) {
 	if !rv.IsValid() {
 		return nil, nil
 	}
@@ -69,7 +69,7 @@ func canonicalizeValue(rv reflect.Value) (interface{}, error) {
 		if rv.IsNil() {
 			return nil, nil
 		}
-		result := make(map[string]interface{}, rv.Len())
+		result := make(map[string]any, rv.Len())
 		iter := rv.MapRange()
 		for iter.Next() {
 			key := iter.Key()
@@ -119,7 +119,7 @@ func canonicalizeValue(rv reflect.Value) (interface{}, error) {
 	return rv.Interface(), nil
 }
 
-func canonicalizeSequence(rv reflect.Value) (interface{}, error) {
+func canonicalizeSequence(rv reflect.Value) (any, error) {
 	// []byte is a special case: encoding/json emits it as a base64 string.
 	if rv.Type().Elem().Kind() == reflect.Uint8 {
 		if rv.Kind() == reflect.Slice {
@@ -132,7 +132,7 @@ func canonicalizeSequence(rv reflect.Value) (interface{}, error) {
 		}
 		return b, nil
 	}
-	result := make([]interface{}, rv.Len())
+	result := make([]any, rv.Len())
 	for i := 0; i < rv.Len(); i++ {
 		val, err := canonicalizeValue(rv.Index(i))
 		if err != nil {
@@ -143,9 +143,9 @@ func canonicalizeSequence(rv reflect.Value) (interface{}, error) {
 	return result, nil
 }
 
-func canonicalizeStruct(rv reflect.Value) (interface{}, error) {
+func canonicalizeStruct(rv reflect.Value) (any, error) {
 	t := rv.Type()
-	result := make(map[string]interface{}, t.NumField())
+	result := make(map[string]any, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if !field.IsExported() {

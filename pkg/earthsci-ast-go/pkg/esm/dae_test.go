@@ -6,7 +6,7 @@ import (
 )
 
 // opNode builds an operator ExprNode from an op name and args.
-func opNode(op string, args ...interface{}) ExprNode {
+func opNode(op string, args ...any) ExprNode {
 	return ExprNode{Op: op, Args: args}
 }
 
@@ -14,7 +14,7 @@ func opNode(op string, args ...interface{}) ExprNode {
 func dEq(name, indep string, rhs Expression) Equation {
 	w := indep
 	return Equation{
-		LHS: ExprNode{Op: "D", Args: []interface{}{name}, Wrt: &w},
+		LHS: ExprNode{Op: "D", Args: []any{name}, Wrt: &w},
 		RHS: rhs,
 	}
 }

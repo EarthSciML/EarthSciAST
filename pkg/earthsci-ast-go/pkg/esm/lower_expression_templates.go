@@ -77,10 +77,10 @@ var geometryManifoldValues = map[string]struct{}{
 // here is a real defect (e.g. a template invocation binding the manifold
 // parameter to a non-member literal). Returns an *ExpressionTemplateError with
 // code `geometry_manifold_invalid`.
-func validateGeometryManifolds(tree interface{}, path string) error {
+func validateGeometryManifolds(tree any, path string) error {
 	// Pre-substitution template trees may legally carry a param name in the
 	// manifold position (esm-spec §9.6.1), so `expression_templates` is skipped.
-	return walkJSONTreeSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]interface{}) error {
+	return walkJSONTreeSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
 		op, ok := t["op"].(string)
 		if !ok {
 			return nil
@@ -172,10 +172,10 @@ func newETErr(code, msg string) *ExpressionTemplateError {
 // assertNoNestedApply rejects `apply_expression_template` nodes inside a
 // `match` pattern (esm-spec §9.7.3: match patterns MUST NOT reference
 // templates).
-func assertNoNestedApply(body interface{}, templateName, path string) error {
+func assertNoNestedApply(body any, templateName, path string) error {
 	// walkJSONTree descends objects in sorted-key order, so the surfaced error
 	// is deterministic across runs (Go map iteration is randomized).
-	return walkJSONTree(body, path, func(p string, b map[string]interface{}) error {
+	return walkJSONTree(body, path, func(p string, b map[string]any) error {
 		if op, ok := b["op"].(string); ok && op == applyExpressionTemplateOp {
 			return newETErr(
 				"apply_expression_template_invalid_declaration",
@@ -186,10 +186,10 @@ func assertNoNestedApply(body interface{}, templateName, path string) error {
 	})
 }
 
-func validateTemplates(templates map[string]interface{}, scope string) error {
+func validateTemplates(templates map[string]any, scope string) error {
 	for _, name := range sortedKeys(templates) {
 		decl := templates[name]
-		declObj, ok := decl.(map[string]interface{})
+		declObj, ok := decl.(map[string]any)
 		if !ok {
 			return newETErr(
 				"apply_expression_template_invalid_declaration",
@@ -198,7 +198,7 @@ func validateTemplates(templates map[string]interface{}, scope string) error {
 		}
 		// `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
 		// template is a named constant fragment (common in library files).
-		paramsRaw, ok := declObj["params"].([]interface{})
+		paramsRaw, ok := declObj["params"].([]any)
 		if !ok {
 			return newETErr(
 				"apply_expression_template_invalid_declaration",
@@ -262,7 +262,7 @@ func validateTemplates(templates map[string]interface{}, scope string) error {
 // check runs later at rule REGISTRATION in the consuming component, where the
 // merged `index_sets` registry is in scope (see registeredWhere). A declaration
 // with no `where` block is a no-op.
-func validateWhereBlock(declObj map[string]interface{}, seen map[string]struct{}, hasMatch bool, matchRaw interface{}, scope, name string) error {
+func validateWhereBlock(declObj map[string]any, seen map[string]struct{}, hasMatch bool, matchRaw any, scope, name string) error {
 	whrRaw, hasWhere := declObj["where"]
 	if !hasWhere || whrRaw == nil {
 		return nil
@@ -271,7 +271,7 @@ func validateWhereBlock(declObj map[string]interface{}, seen map[string]struct{}
 		return newETErr("apply_expression_template_invalid_declaration",
 			fmt.Sprintf("%s.expression_templates.%s: 'where' is only admissible alongside 'match' — constraints scope an auto-applied rewrite rule, not a named fragment (esm-spec §9.6.1)", scope, name))
 	}
-	whr, ok := whrRaw.(map[string]interface{})
+	whr, ok := whrRaw.(map[string]any)
 	if !ok || len(whr) == 0 {
 		return newETErr("apply_expression_template_invalid_declaration",
 			fmt.Sprintf("%s.expression_templates.%s: 'where' must be a non-empty object mapping declared params to constraint objects", scope, name))
@@ -281,7 +281,7 @@ func validateWhereBlock(declObj map[string]interface{}, seen map[string]struct{}
 			return newETErr("apply_expression_template_invalid_declaration",
 				fmt.Sprintf("%s.expression_templates.%s: 'where' constrains '%s', which is not a declared param (esm-spec §9.6.1)", scope, name, p))
 		}
-		cobj, ok := whr[p].(map[string]interface{})
+		cobj, ok := whr[p].(map[string]any)
 		if !ok {
 			return newETErr("apply_expression_template_invalid_declaration",
 				fmt.Sprintf("%s.expression_templates.%s: where.%s must be a constraint object (v1 admits exactly the 'shape' kind)", scope, name, p))
@@ -291,7 +291,7 @@ func validateWhereBlock(declObj map[string]interface{}, seen map[string]struct{}
 			return newETErr("apply_expression_template_invalid_declaration",
 				fmt.Sprintf("%s.expression_templates.%s: where.%s carries constraint kind(s) %s; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)", scope, name, p, strings.Join(ckeys, ", ")))
 		}
-		shp, ok := cobj["shape"].([]interface{})
+		shp, ok := cobj["shape"].([]any)
 		if !ok || len(shp) == 0 {
 			return newETErr("apply_expression_template_invalid_declaration",
 				fmt.Sprintf("%s.expression_templates.%s: where.%s.shape must be a non-empty array of index-set names", scope, name, p))
@@ -306,16 +306,16 @@ func validateWhereBlock(declObj map[string]interface{}, seen map[string]struct{}
 	return nil
 }
 
-func deepCopyJSON(v interface{}) interface{} {
+func deepCopyJSON(v any) any {
 	switch x := v.(type) {
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(x))
+	case map[string]any:
+		out := make(map[string]any, len(x))
 		for k, val := range x {
 			out[k] = deepCopyJSON(val)
 		}
 		return out
-	case []interface{}:
-		out := make([]interface{}, len(x))
+	case []any:
+		out := make([]any, len(x))
 		for i, val := range x {
 			out[i] = deepCopyJSON(val)
 		}
@@ -325,21 +325,21 @@ func deepCopyJSON(v interface{}) interface{} {
 	}
 }
 
-func substituteParams(body interface{}, bindings map[string]interface{}) interface{} {
+func substituteParams(body any, bindings map[string]any) any {
 	switch b := body.(type) {
 	case string:
 		if v, ok := bindings[b]; ok {
 			return deepCopyJSON(v)
 		}
 		return body
-	case []interface{}:
-		out := make([]interface{}, len(b))
+	case []any:
+		out := make([]any, len(b))
 		for i, c := range b {
 			out[i] = substituteParams(c, bindings)
 		}
 		return out
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(b))
+	case map[string]any:
+		out := make(map[string]any, len(b))
 		for k, v := range b {
 			out[k] = substituteParams(v, bindings)
 		}
@@ -349,7 +349,7 @@ func substituteParams(body interface{}, bindings map[string]interface{}) interfa
 	}
 }
 
-func expandApply(node map[string]interface{}, templates map[string]interface{}, scope string) (interface{}, error) {
+func expandApply(node map[string]any, templates map[string]any, scope string) (any, error) {
 	nameRaw, ok := node["name"].(string)
 	if !ok || nameRaw == "" {
 		return nil, newETErr(
@@ -364,21 +364,21 @@ func expandApply(node map[string]interface{}, templates map[string]interface{}, 
 			fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, nameRaw),
 		)
 	}
-	decl, ok := declRaw.(map[string]interface{})
+	decl, ok := declRaw.(map[string]any)
 	if !ok {
 		return nil, newETErr(
 			"apply_expression_template_invalid_declaration",
 			fmt.Sprintf("%s: template '%s' declaration is not an object", scope, nameRaw),
 		)
 	}
-	bindingsRaw, ok := node["bindings"].(map[string]interface{})
+	bindingsRaw, ok := node["bindings"].(map[string]any)
 	if !ok {
 		return nil, newETErr(
 			"apply_expression_template_bindings_mismatch",
 			fmt.Sprintf("%s: apply_expression_template '%s' missing 'bindings' object", scope, nameRaw),
 		)
 	}
-	paramsArr, _ := decl["params"].([]interface{})
+	paramsArr, _ := decl["params"].([]any)
 	declared := make(map[string]struct{}, len(paramsArr))
 	params := make([]string, 0, len(paramsArr))
 	for _, p := range paramsArr {
@@ -407,7 +407,7 @@ func expandApply(node map[string]interface{}, templates map[string]interface{}, 
 	// NOT re-scanned here (esm-spec §9.6.3): the substituted body's sub-ASTs
 	// (from `bindings`) are spliced in intact and rewritten in SUBSEQUENT passes
 	// by the outermost-first fixpoint driver — never pre-rewritten in place.
-	resolved := make(map[string]interface{}, len(bindingsRaw))
+	resolved := make(map[string]any, len(bindingsRaw))
 	for k, v := range bindingsRaw {
 		resolved[k] = v
 	}
@@ -421,7 +421,7 @@ func expandApply(node map[string]interface{}, templates map[string]interface{}, 
 
 // asNumber reports whether v is a JSON number (json.Number or a native numeric
 // type) and returns its float64 value. A bool is NOT a number.
-func asNumber(v interface{}) (float64, bool) {
+func asNumber(v any) (float64, bool) {
 	switch n := v.(type) {
 	case json.Number:
 		f, err := n.Float64()
@@ -444,7 +444,7 @@ func asNumber(v interface{}) (float64, bool) {
 // scalar / string / number / bool). Numbers compare by value; bools compare only
 // to bools. Used to enforce that a metavariable bound twice in one pattern binds
 // to identical sub-trees.
-func jsonEqual(a, b interface{}) bool {
+func jsonEqual(a, b any) bool {
 	if ab, ok := a.(bool); ok {
 		bb, ok := b.(bool)
 		return ok && ab == bb
@@ -460,8 +460,8 @@ func jsonEqual(a, b interface{}) bool {
 		bs, ok := b.(string)
 		return ok && as == bs
 	}
-	if aa, ok := a.([]interface{}); ok {
-		ba, ok := b.([]interface{})
+	if aa, ok := a.([]any); ok {
+		ba, ok := b.([]any)
 		if !ok || len(aa) != len(ba) {
 			return false
 		}
@@ -472,8 +472,8 @@ func jsonEqual(a, b interface{}) bool {
 		}
 		return true
 	}
-	if am, ok := a.(map[string]interface{}); ok {
-		bm, ok := b.(map[string]interface{})
+	if am, ok := a.(map[string]any); ok {
+		bm, ok := b.(map[string]any)
 		if !ok || len(am) != len(bm) {
 			return false
 		}
@@ -495,7 +495,7 @@ func jsonEqual(a, b interface{}) bool {
 // Non-param strings, numbers, and booleans match literally; arrays match
 // elementwise (same length); objects match when every pattern key is present on
 // `node` and matches (extra `node` keys are allowed).
-func matchPattern(pattern, node interface{}, params map[string]struct{}, bindings map[string]interface{}) bool {
+func matchPattern(pattern, node any, params map[string]struct{}, bindings map[string]any) bool {
 	if pb, ok := pattern.(bool); ok {
 		nb, ok := node.(bool)
 		return ok && nb == pb
@@ -518,8 +518,8 @@ func matchPattern(pattern, node interface{}, params map[string]struct{}, binding
 		nf, ok := asNumber(node)
 		return ok && nf == pf
 	}
-	if pa, ok := pattern.([]interface{}); ok {
-		na, ok := node.([]interface{})
+	if pa, ok := pattern.([]any); ok {
+		na, ok := node.([]any)
 		if !ok || len(pa) != len(na) {
 			return false
 		}
@@ -530,8 +530,8 @@ func matchPattern(pattern, node interface{}, params map[string]struct{}, binding
 		}
 		return true
 	}
-	if pm, ok := pattern.(map[string]interface{}); ok {
-		nm, ok := node.(map[string]interface{})
+	if pm, ok := pattern.(map[string]any); ok {
+		nm, ok := node.(map[string]any)
 		if !ok {
 			return false
 		}
@@ -564,18 +564,18 @@ func matchPattern(pattern, node interface{}, params map[string]struct{}, binding
 // environment, as are species / parameters of reaction systems (no `shape`
 // field): a shape-constrained rule can only fire on a declared, shaped model
 // variable.
-func componentShapeEnv(comp map[string]interface{}) map[string][]string {
+func componentShapeEnv(comp map[string]any) map[string][]string {
 	env := map[string][]string{}
-	vars, ok := comp["variables"].(map[string]interface{})
+	vars, ok := comp["variables"].(map[string]any)
 	if !ok {
 		return env
 	}
 	for vn, vdRaw := range vars {
-		vd, ok := vdRaw.(map[string]interface{})
+		vd, ok := vdRaw.(map[string]any)
 		if !ok {
 			continue
 		}
-		shp, ok := vd["shape"].([]interface{})
+		shp, ok := vd["shape"].([]any)
 		if !ok {
 			continue
 		}
@@ -622,7 +622,7 @@ func strSliceEqual(a, b []string) bool {
 // syntactic and conservative: no shape inference over compound expressions, so
 // eligibility depends only on declarations and is byte-identical across
 // bindings.
-func whereSatisfied(whereC map[string][]string, bindings map[string]interface{}, shapeEnv map[string][]string) bool {
+func whereSatisfied(whereC map[string][]string, bindings map[string]any, shapeEnv map[string][]string) bool {
 	if whereC == nil {
 		return true
 	}
@@ -652,19 +652,19 @@ func whereSatisfied(whereC map[string][]string, bindings map[string]interface{},
 // index sets as spelled in the consuming document's registry (post-§9.7.5
 // merge, composing with import-edge index-set renaming). Structural validity of
 // the `where` block is already guaranteed by validateTemplates.
-func registeredWhere(decl map[string]interface{}, isetNames map[string]struct{}, scope, tname string) (map[string][]string, error) {
+func registeredWhere(decl map[string]any, isetNames map[string]struct{}, scope, tname string) (map[string][]string, error) {
 	whrRaw, has := decl["where"]
 	if !has || whrRaw == nil {
 		return nil, nil
 	}
-	whr, ok := whrRaw.(map[string]interface{})
+	whr, ok := whrRaw.(map[string]any)
 	if !ok {
 		return nil, nil
 	}
 	out := map[string][]string{}
 	for _, p := range sortedKeys(whr) {
-		cobj, _ := whr[p].(map[string]interface{})
-		shpRaw, _ := cobj["shape"].([]interface{})
+		cobj, _ := whr[p].(map[string]any)
+		shpRaw, _ := cobj["shape"].([]any)
 		req := make([]string, 0, len(shpRaw))
 		for _, s := range shpRaw {
 			ss, _ := s.(string)
@@ -685,7 +685,7 @@ func registeredWhere(decl map[string]interface{}, isetNames map[string]struct{},
 // grammar, or a native int type — a bool/float/string is not) and returns its
 // int64 value. Used by validateMakearrayRegions, which checks only concrete
 // integer bound pairs on the folded tree.
-func asInt64Strict(v interface{}) (int64, bool) {
+func asInt64Strict(v any) (int64, bool) {
 	switch n := v.(type) {
 	case json.Number:
 		if !strings.ContainsAny(string(n), ".eE") {
@@ -713,25 +713,25 @@ func asInt64Strict(v interface{}) (int64, bool) {
 // pre-substitution bounds may legally carry metaparameter names; only concrete
 // integer pairs are checked. Mirrors the Julia reference
 // `_validate_makearray_regions`.
-func validateMakearrayRegions(tree interface{}, path string) error {
+func validateMakearrayRegions(tree any, path string) error {
 	// Template bodies/matches are pre-substitution trees; bounds may legally
 	// carry metaparameter names or fold later (esm-spec §9.7.6), so
 	// `expression_templates` is skipped.
-	return walkJSONTreeSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]interface{}) error {
+	return walkJSONTreeSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
 		if op, _ := t["op"].(string); op != "makearray" {
 			return nil
 		}
-		regions, ok := t["regions"].([]interface{})
+		regions, ok := t["regions"].([]any)
 		if !ok {
 			return nil
 		}
 		for ri, regionRaw := range regions {
-			region, ok := regionRaw.([]interface{})
+			region, ok := regionRaw.([]any)
 			if !ok {
 				continue
 			}
 			for di, boundsRaw := range region {
-				bounds, ok := boundsRaw.([]interface{})
+				bounds, ok := boundsRaw.([]any)
 				if !ok || len(bounds) != 2 {
 					continue
 				}
@@ -753,7 +753,7 @@ func validateMakearrayRegions(tree interface{}, path string) error {
 // rulePriority returns the `priority` of a `match` rule (esm-spec §9.6.3): higher
 // fires first, ties break by declaration order. Absent ⇒ 0. Any numeric encoding
 // is coerced defensively.
-func rulePriority(decl map[string]interface{}) int {
+func rulePriority(decl map[string]any) int {
 	p, ok := decl["priority"]
 	if !ok || p == nil {
 		return 0
@@ -778,9 +778,9 @@ func rulePriority(decl map[string]interface{}) int {
 
 // matchRule is a pre-processed auto-applied (`match`) rewrite rule.
 type matchRule struct {
-	pattern  interface{}
+	pattern  any
 	params   map[string]struct{}
-	body     interface{}
+	body     any
 	priority int
 	declIdx  int
 	// whereC is the registered `where` shape-constraint map (param → required
@@ -797,11 +797,11 @@ type matchRule struct {
 // freshly-produced body during this pass. Otherwise it descends into children.
 // The returned bool is true iff any rewrite occurred; `last` records the op of
 // the most recent rewrite, for the non-convergence diagnostic.
-func rewritePass(node interface{}, named map[string]interface{}, rules []matchRule, scope string, last *string, shapeEnv map[string][]string) (interface{}, bool, error) {
+func rewritePass(node any, named map[string]any, rules []matchRule, scope string, last *string, shapeEnv map[string][]string) (any, bool, error) {
 	switch n := node.(type) {
-	case []interface{}:
+	case []any:
 		changed := false
-		out := make([]interface{}, len(n))
+		out := make([]any, len(n))
 		for i, c := range n {
 			nc, ch, err := rewritePass(c, named, rules, scope, last, shapeEnv)
 			if err != nil {
@@ -811,7 +811,7 @@ func rewritePass(node interface{}, named map[string]interface{}, rules []matchRu
 			changed = changed || ch
 		}
 		return out, changed, nil
-	case map[string]interface{}:
+	case map[string]any:
 		op, _ := n["op"].(string)
 		// (1) Outermost-first: fire a rule AT this node before descending.
 		if op == applyExpressionTemplateOp {
@@ -823,7 +823,7 @@ func rewritePass(node interface{}, named map[string]interface{}, rules []matchRu
 			return expanded, true, nil
 		}
 		for i := range rules {
-			bindings := map[string]interface{}{}
+			bindings := map[string]any{}
 			// Constraint filtering is part of match ELIGIBILITY (esm-spec
 			// §9.6.3 constraint 2): a `where`-excluded rule is treated exactly
 			// like a non-matching rule, so the scan proceeds to the next
@@ -836,7 +836,7 @@ func rewritePass(node interface{}, named map[string]interface{}, rules []matchRu
 		}
 		// (2) No rule fired here — descend into children.
 		changed := false
-		out := make(map[string]interface{}, len(n))
+		out := make(map[string]any, len(n))
 		for k, v := range n {
 			nv, ch, err := rewritePass(v, named, rules, scope, last, shapeEnv)
 			if err != nil {
@@ -856,7 +856,7 @@ func rewritePass(node interface{}, named map[string]interface{}, rules []matchRu
 // `rewrite_rule_nonterminating` once MaxRewritePasses productive passes have run
 // without converging. This bound — not a static check — is the authoritative
 // termination guard.
-func rewriteToFixpoint(node interface{}, named map[string]interface{}, rules []matchRule, scope string, shapeEnv map[string][]string) (interface{}, error) {
+func rewriteToFixpoint(node any, named map[string]any, rules []matchRule, scope string, shapeEnv map[string][]string) (any, error) {
 	last := ""
 	current := node
 	for pass := 0; pass < MaxRewritePasses; pass++ {
@@ -880,7 +880,7 @@ func rewriteToFixpoint(node interface{}, named map[string]interface{}, rules []m
 // not present in `order` (e.g. when only an unordered map is available) is
 // appended in sorted-name order, so the result is always deterministic. Mirrors
 // the Julia reference `_ordered_template_names`.
-func orderedTemplateNames(tpl map[string]interface{}, order []string) []string {
+func orderedTemplateNames(tpl map[string]any, order []string) []string {
 	seen := make(map[string]bool, len(tpl))
 	names := make([]string, 0, len(tpl))
 	for _, n := range order {
@@ -905,7 +905,7 @@ func orderedTemplateNames(tpl map[string]interface{}, order []string) []string {
 // `coupling[<idx>].transform` diagnostic scope.
 type couplingTransformSite struct {
 	idx   int
-	entry map[string]interface{}
+	entry map[string]any
 }
 
 // collectCouplingTransformSites assigns each top-level `coupling` entry with
@@ -916,21 +916,21 @@ type couplingTransformSite struct {
 // field of the component. Entries whose receiver is not declared are omitted
 // and stay unrewritten (a leftover apply_expression_template there is caught
 // by the final gate).
-func collectCouplingTransformSites(view map[string]interface{}) map[[2]string][]couplingTransformSite {
+func collectCouplingTransformSites(view map[string]any) map[[2]string][]couplingTransformSite {
 	sites := map[[2]string][]couplingTransformSite{}
-	coupling, ok := view["coupling"].([]interface{})
+	coupling, ok := view["coupling"].([]any)
 	if !ok {
 		return sites
 	}
 	for idx, entryRaw := range coupling {
-		entry, ok := entryRaw.(map[string]interface{})
+		entry, ok := entryRaw.(map[string]any)
 		if !ok {
 			continue
 		}
 		if t, _ := entry["type"].(string); t != "variable_map" {
 			continue
 		}
-		if _, isObj := entry["transform"].(map[string]interface{}); !isObj {
+		if _, isObj := entry["transform"].(map[string]any); !isObj {
 			continue
 		}
 		to, _ := entry["to"].(string)
@@ -942,7 +942,7 @@ func collectCouplingTransformSites(view map[string]interface{}) map[[2]string][]
 			continue
 		}
 		for _, kind := range templateComponentKinds {
-			comps, ok := view[kind].(map[string]interface{})
+			comps, ok := view[kind].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -959,21 +959,21 @@ func collectCouplingTransformSites(view map[string]interface{}) map[[2]string][]
 // hasTemplateMachinery reports whether `view` declares any non-empty
 // `expression_templates` block under models/reaction_systems, or contains any
 // `apply_expression_template` op anywhere. Files with neither need no rewriting.
-func hasTemplateMachinery(view map[string]interface{}) bool {
+func hasTemplateMachinery(view map[string]any) bool {
 	if view == nil {
 		return false
 	}
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, compRaw := range comps {
-			compObj, ok := compRaw.(map[string]interface{})
+			compObj, ok := compRaw.(map[string]any)
 			if !ok {
 				continue
 			}
-			if tpl, ok := compObj["expression_templates"].(map[string]interface{}); ok && len(tpl) > 0 {
+			if tpl, ok := compObj["expression_templates"].(map[string]any); ok && len(tpl) > 0 {
 				return true
 			}
 		}
@@ -987,8 +987,8 @@ var errStopWalk = errors.New("stop walk")
 
 // containsApplyOp reports whether tree contains any `apply_expression_template`
 // op, stopping at the first occurrence.
-func containsApplyOp(tree interface{}) bool {
-	err := walkJSONTree(tree, "", func(_ string, obj map[string]interface{}) error {
+func containsApplyOp(tree any) bool {
+	err := walkJSONTree(tree, "", func(_ string, obj map[string]any) error {
 		if op, ok := obj["op"].(string); ok && op == applyExpressionTemplateOp {
 			return errStopWalk
 		}
@@ -1000,8 +1000,8 @@ func containsApplyOp(tree interface{}) bool {
 // findApplyPaths appends the JSON-pointer path of every
 // `apply_expression_template` op in view to hits (used by the leftover gate and
 // the pre-v0.4 rejection, which report all offending paths).
-func findApplyPaths(view interface{}, path string, hits *[]string) {
-	_ = walkJSONTree(view, path, func(p string, v map[string]interface{}) error {
+func findApplyPaths(view any, path string, hits *[]string) {
+	_ = walkJSONTree(view, path, func(p string, v map[string]any) error {
 		if op, ok := v["op"].(string); ok && op == applyExpressionTemplateOp {
 			*hits = append(*hits, p)
 		}
@@ -1074,7 +1074,7 @@ var semverRe = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
 // unparseable version reports false — the construct-gate callers treat an
 // unknown version as "not below" and defer to schema validation. Shared by
 // RejectExpressionTemplatesPreV04 and RejectTemplateImportsPreV08.
-func esmVersionBelow(view map[string]interface{}, major, minor int) bool {
+func esmVersionBelow(view map[string]any, major, minor int) bool {
 	if view == nil {
 		return false
 	}
@@ -1097,19 +1097,19 @@ func esmVersionBelow(view map[string]interface{}, major, minor int) bool {
 // RejectExpressionTemplatesPreV04 rejects `expression_templates` blocks and
 // `apply_expression_template` ops in files declaring `esm` < 0.4.0. Mirrors
 // the equivalent TS / Python / Julia / Rust checks.
-func RejectExpressionTemplatesPreV04(view map[string]interface{}) error {
+func RejectExpressionTemplatesPreV04(view map[string]any) error {
 	if !esmVersionBelow(view, 0, 4) {
 		return nil
 	}
 	esmRaw, _ := view["esm"].(string)
 	offences := []string{}
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, cname := range sortedKeys(comps) {
-			compObj, ok := comps[cname].(map[string]interface{})
+			compObj, ok := comps[cname].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -1141,21 +1141,21 @@ func RejectExpressionTemplatesPreV04(view map[string]interface{}) error {
 // which each rule's `where` shape constraints are resolved at registration
 // (esm-spec §9.6.1; `template_constraint_unknown_index_set`). scope is the
 // diagnostic prefix (e.g. "models.M").
-func buildRewriteContext(tplMap map[string]interface{}, order []string, isetNames map[string]struct{}, scope string) (map[string]interface{}, []matchRule, error) {
-	named := map[string]interface{}{}
+func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[string]struct{}, scope string) (map[string]any, []matchRule, error) {
+	named := map[string]any{}
 	var rules []matchRule
 	if tplMap == nil {
 		return named, rules, nil
 	}
 	for idx, name := range orderedTemplateNames(tplMap, order) {
-		decl, _ := tplMap[name].(map[string]interface{})
+		decl, _ := tplMap[name].(map[string]any)
 		named[name] = decl
 		match, ok := decl["match"]
 		if !ok || match == nil {
 			continue
 		}
 		pset := map[string]struct{}{}
-		if pr, ok := decl["params"].([]interface{}); ok {
+		if pr, ok := decl["params"].([]any); ok {
 			for _, p := range pr {
 				if ps, ok := p.(string); ok {
 					pset[ps] = struct{}{}
@@ -1192,13 +1192,13 @@ func buildRewriteContext(tplMap map[string]interface{}, order []string, isetName
 // which recovers genuine declaration order.
 //
 // Pre-condition: the input has been schema-validated.
-func LowerExpressionTemplates(view map[string]interface{}) error {
+func LowerExpressionTemplates(view map[string]any) error {
 	return lowerExpressionTemplatesOrdered(view, nil)
 }
 
 // lowerExpressionTemplatesOrdered is LowerExpressionTemplates with an optional
 // `orders` map (path → template declaration order) recovered from the raw JSON.
-func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[string][]string) error {
+func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]string) error {
 	if err := RejectExpressionTemplatesPreV04(view); err != nil {
 		return err
 	}
@@ -1222,7 +1222,7 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 	// (esm-spec §9.6.1 — `template_constraint_unknown_index_set` for a name not
 	// declared here).
 	isetNames := map[string]struct{}{}
-	if isets, ok := view["index_sets"].(map[string]interface{}); ok {
+	if isets, ok := view["index_sets"].(map[string]any); ok {
 		for k := range isets {
 			isetNames[k] = struct{}{}
 		}
@@ -1233,12 +1233,12 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 	// inside the per-component loop below where that context is in scope.
 	couplingSites := collectCouplingTransformSites(view)
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for cname, compRaw := range comps {
-			compObj, ok := compRaw.(map[string]interface{})
+			compObj, ok := compRaw.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -1246,7 +1246,7 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 			// Static shape environment for `where` constraint evaluation
 			// (esm-spec §9.6.1): declared variable shapes only.
 			shapeEnv := componentShapeEnv(compObj)
-			tplMap, _ := compObj["expression_templates"].(map[string]interface{})
+			tplMap, _ := compObj["expression_templates"].(map[string]any)
 			if tplMap != nil {
 				if err := validateTemplates(tplMap, cscope); err != nil {
 					return err
@@ -1310,14 +1310,14 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 	return validateMakearrayRegions(view, "")
 }
 
-func stripExpressionTemplates(view map[string]interface{}) {
+func stripExpressionTemplates(view map[string]any) {
 	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]interface{})
+		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
 		for _, compRaw := range comps {
-			if compObj, ok := compRaw.(map[string]interface{}); ok {
+			if compObj, ok := compRaw.(map[string]any); ok {
 				delete(compObj, "expression_templates")
 			}
 		}
@@ -1333,7 +1333,7 @@ func stripExpressionTemplates(view map[string]interface{}) {
 // unmarshal into the typed struct. Template declaration order is recovered from
 // the raw JSON so `match`-rule tie-breaking is byte-identical to the reference.
 func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
-	var view map[string]interface{}
+	var view map[string]any
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
 	if err := dec.Decode(&view); err != nil {
@@ -1361,7 +1361,7 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 // tie-breaking honours imports-then-locals order. Returns the rewritten JSON;
 // the input is not modified.
 func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
-	var view map[string]interface{}
+	var view map[string]any
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
 	if err := dec.Decode(&view); err != nil {

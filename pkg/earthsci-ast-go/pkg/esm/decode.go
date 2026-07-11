@@ -51,7 +51,7 @@ func UnmarshalExpression(data []byte) (Expression, error) {
 			switch a := arg.(type) {
 			case json.Number:
 				node.Args[i] = normalizeJSONNumber(a)
-			case map[string]interface{}:
+			case map[string]any:
 				argBytes, err := json.Marshal(a)
 				if err != nil {
 					return nil, fmt.Errorf("failed to marshal arg for re-processing: %w", err)
@@ -285,7 +285,7 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if len(aux.Guesses) > 0 {
-		m.Guesses = make(map[string]interface{}, len(aux.Guesses))
+		m.Guesses = make(map[string]any, len(aux.Guesses))
 		for k, raw := range aux.Guesses {
 			g, err := unmarshalOptionalExpression(raw)
 			if err != nil {
@@ -476,14 +476,14 @@ func (esm *EsmFile) UnmarshalJSON(data []byte) error {
 }
 
 // UnmarshalCouplingArray handles the deserialization of the coupling array
-func UnmarshalCouplingArray(data []byte) ([]interface{}, error) {
+func UnmarshalCouplingArray(data []byte) ([]any, error) {
 	// First unmarshal as a slice of raw messages
 	var rawEntries []json.RawMessage
 	if err := json.Unmarshal(data, &rawEntries); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal coupling array: %w", err)
 	}
 
-	var result []interface{}
+	var result []any
 	for i, rawEntry := range rawEntries {
 		entry, err := UnmarshalCouplingEntry(rawEntry)
 		if err != nil {
@@ -498,7 +498,7 @@ func UnmarshalCouplingArray(data []byte) ([]interface{}, error) {
 // UnmarshalCouplingEntry handles the deserialization of a single coupling entry
 func UnmarshalCouplingEntry(data []byte) (CouplingEntry, error) {
 	// First, determine the type by unmarshaling into a map
-	var typeMap map[string]interface{}
+	var typeMap map[string]any
 	if err := json.Unmarshal(data, &typeMap); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal coupling entry as map: %w", err)
 	}

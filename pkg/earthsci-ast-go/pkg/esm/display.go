@@ -56,7 +56,7 @@ func ToAscii(target Expression) string {
 }
 
 // formatExpression is the internal function that handles different output formats
-func formatExpression(target interface{}, format string) string {
+func formatExpression(target any, format string) string {
 	switch expr := target.(type) {
 	case float64:
 		return formatNumber(expr, format)
@@ -82,18 +82,18 @@ func formatExpression(target interface{}, format string) string {
 		return formatExprNode(expr, format)
 	case *ExprNode:
 		return formatExprNode(*expr, format)
-	case map[string]interface{}:
+	case map[string]any:
 		// A raw op-node object (an un-normalized nested expression). Re-decode
 		// it into an ExprNode so all structural fields are populated, then render.
 		if b, err := json.Marshal(expr); err == nil {
 			if e, err := UnmarshalExpression(b); err == nil {
-				if _, isMap := e.(map[string]interface{}); !isMap {
+				if _, isMap := e.(map[string]any); !isMap {
 					return formatExpression(e, format)
 				}
 			}
 		}
 		return fmt.Sprintf("%v", target)
-	case []interface{}:
+	case []any:
 		// A bare array literal (e.g. a const array reaching the recursion).
 		parts := make([]string, len(expr))
 		for i, v := range expr {
@@ -482,7 +482,7 @@ func formatExprNode(node ExprNode, format string) string {
 	return op + "(" + inner + ")"
 }
 
-func formatMultiplication(args []interface{}, format string) string {
+func formatMultiplication(args []any, format string) string {
 	if len(args) < 2 {
 		return "*(...)"
 	}
@@ -509,7 +509,7 @@ func formatMultiplication(args []interface{}, format string) string {
 	}
 }
 
-func formatDivision(args []interface{}, format string) string {
+func formatDivision(args []any, format string) string {
 	if len(args) != 2 {
 		return "/(...)"
 	}
@@ -529,7 +529,7 @@ func formatDivision(args []interface{}, format string) string {
 	}
 }
 
-func formatExponentiation(args []interface{}, format string) string {
+func formatExponentiation(args []any, format string) string {
 	if len(args) != 2 {
 		return "^(...)"
 	}
@@ -730,7 +730,7 @@ func summarizeDomain(b *strings.Builder, esm *EsmFile) {
 	fmt.Fprintf(b, "  Domain: %s\n", strings.Join(parts, ", "))
 }
 
-func formatDerivative(args []interface{}, wrt *string, format string) string {
+func formatDerivative(args []any, wrt *string, format string) string {
 	if len(args) != 1 || wrt == nil {
 		return "D(...)"
 	}
@@ -764,11 +764,11 @@ func formatDerivative(args []interface{}, wrt *string, format string) string {
 
 // isOpNodeValue reports whether a value is an operator node (ExprNode or a raw
 // {"op": …} object) rather than a leaf.
-func isOpNodeValue(v interface{}) bool {
+func isOpNodeValue(v any) bool {
 	switch x := v.(type) {
 	case ExprNode, *ExprNode:
 		return true
-	case map[string]interface{}:
+	case map[string]any:
 		_, ok := x["op"]
 		return ok
 	}
@@ -777,7 +777,7 @@ func isOpNodeValue(v interface{}) bool {
 
 // wrapIfOpValue renders a sub-expression, parenthesizing it only when it is an
 // operator node (a leaf is never wrapped).
-func wrapIfOpValue(v interface{}, format string) string {
+func wrapIfOpValue(v any, format string) string {
 	s := formatExpression(v, format)
 	if isOpNodeValue(v) {
 		return "(" + s + ")"
@@ -788,7 +788,7 @@ func wrapIfOpValue(v interface{}, format string) string {
 // plainScalar returns the bare textual form of a raw scalar (index name, axis,
 // output selector, manifold, …) — mirrors JS String(): identifiers and enum
 // labels render verbatim, with no variable/greek formatting.
-func plainScalar(v interface{}) string {
+func plainScalar(v any) string {
 	switch x := v.(type) {
 	case nil:
 		return ""
@@ -811,9 +811,9 @@ func plainScalar(v interface{}) string {
 
 // formatConstValue renders a `const` node's literal payload: a scalar number or
 // a nested array, indistinguishable from a bare literal.
-func formatConstValue(v interface{}, format string) string {
+func formatConstValue(v any, format string) string {
 	switch x := v.(type) {
-	case []interface{}:
+	case []any:
 		parts := make([]string, len(x))
 		for i, e := range x {
 			parts[i] = formatConstValue(e, format)
@@ -842,7 +842,7 @@ func formatConstValue(v interface{}, format string) string {
 // formatStructBound renders a structural integer bound (region / shape / perm /
 // range entry): a plain integer or symbolic dimension, or a metaparameter
 // Expression node rendered recursively.
-func formatStructBound(v interface{}, format string) string {
+func formatStructBound(v any, format string) string {
 	if isOpNodeValue(v) {
 		return formatExpression(v, format)
 	}
@@ -850,7 +850,7 @@ func formatStructBound(v interface{}, format string) string {
 }
 
 // joinArgList renders each arg via the recursive formatter and joins with ", ".
-func joinArgList(args []interface{}, format string) string {
+func joinArgList(args []any, format string) string {
 	parts := make([]string, len(args))
 	for i, a := range args {
 		parts[i] = formatExpression(a, format)
@@ -908,18 +908,18 @@ func aggregateSymbol(semiring, reduce, format string) string {
 
 // formatRange renders a single range value: an array [a,b]→"a:b" / [a,s,b]→
 // "a:s:b", or an index-set reference { "from": F, "of": […] }.
-func formatRange(v interface{}, format string) string {
+func formatRange(v any, format string) string {
 	switch x := v.(type) {
-	case []interface{}:
+	case []any:
 		parts := make([]string, len(x))
 		for i, e := range x {
 			parts[i] = formatStructBound(e, format)
 		}
 		return strings.Join(parts, ":")
-	case map[string]interface{}:
+	case map[string]any:
 		if from, ok := x["from"]; ok {
 			fromStr := plainScalar(from)
-			if of, ok := x["of"].([]interface{}); ok && len(of) > 0 {
+			if of, ok := x["of"].([]any); ok && len(of) > 0 {
 				ofParts := make([]string, len(of))
 				for i, o := range of {
 					ofParts[i] = plainScalar(o)
@@ -936,7 +936,7 @@ func formatRange(v interface{}, format string) string {
 
 // formatRangesClause renders the ` where {…}` clause shared by aggregate and
 // argmin/argmax (keys sorted).
-func formatRangesClause(ranges map[string]interface{}, format string) string {
+func formatRangesClause(ranges map[string]any, format string) string {
 	inSym := "∈"
 	switch format {
 	case FmtLatex:
@@ -994,14 +994,14 @@ func formatAggregate(node ExprNode, format string) string {
 	if len(node.Join) > 0 {
 		clauses := make([]string, 0, len(node.Join))
 		for _, c := range node.Join {
-			cm, ok := c.(map[string]interface{})
+			cm, ok := c.(map[string]any)
 			if !ok {
 				continue
 			}
-			onRaw, _ := cm["on"].([]interface{})
+			onRaw, _ := cm["on"].([]any)
 			pairs := make([]string, 0, len(onRaw))
 			for _, p := range onRaw {
-				pp, ok := p.([]interface{})
+				pp, ok := p.([]any)
 				if !ok || len(pp) < 2 {
 					continue
 				}
@@ -1269,7 +1269,7 @@ func needsParenthesesForSubtraction(node ExprNode) bool {
 	return isAdditiveNode(node)
 }
 
-func shouldUseExpLeft(arg interface{}) bool {
+func shouldUseExpLeft(arg any) bool {
 	// Use \left( \right) for complex expressions in exp()
 	if node, ok := arg.(ExprNode); ok {
 		return node.Op == "/" || node.Op == "+" || node.Op == "-"

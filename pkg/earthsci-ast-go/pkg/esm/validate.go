@@ -20,10 +20,10 @@ type StructuralError struct {
 	// ("/reaction_systems/x/constraint_equations/0"), or a bare dotted form
 	// ("models.x.equations[0]"). Consumers must not assume a single format;
 	// unifying the dialects is deferred to preserve cross-language output.
-	Path    string                 `json:"path"`
-	Code    string                 `json:"code"`    // Machine-readable error code
-	Message string                 `json:"message"` // Human-readable description
-	Details map[string]interface{} `json:"details"` // Additional context
+	Path    string         `json:"path"`
+	Code    string         `json:"code"`    // Machine-readable error code
+	Message string         `json:"message"` // Human-readable description
+	Details map[string]any `json:"details"` // Additional context
 }
 
 // UnitWarning represents dimensional inconsistencies
@@ -183,7 +183,7 @@ func ValidateStructuralWithCodes(file *EsmFile) *StructuralValidationResult {
 			Path:    "$",
 			Code:    CodeValidationFailed,
 			Message: fmt.Sprintf("Basic validation failed: %v", err),
-			Details: map[string]interface{}{},
+			Details: map[string]any{},
 		})
 		result.Valid = false
 		return result
@@ -296,7 +296,7 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 				Path:    fmt.Sprintf("%s.variables.%s", basePath, varName),
 				Code:    ErrorMissingObservedExpr,
 				Message: "Observed variable must have an expression",
-				Details: map[string]interface{}{
+				Details: map[string]any{
 					"variable": varName,
 					"model":    modelName,
 				},
@@ -328,7 +328,7 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 					Path:    path,
 					Code:    ErrorUnresolvedScopedRef,
 					Message: fmt.Sprintf("Unresolved scoped reference '%s'", e),
-					Details: map[string]interface{}{
+					Details: map[string]any{
 						"variable":       e,
 						"current_system": currentSystem,
 					},
@@ -340,7 +340,7 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 			Path:    path,
 			Code:    ErrorUndefinedVariable,
 			Message: fmt.Sprintf("Undefined variable '%s'", e),
-			Details: map[string]interface{}{
+			Details: map[string]any{
 				"variable":       e,
 				"current_system": currentSystem,
 			},
@@ -359,7 +359,7 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 			Path:    path,
 			Code:    CodeUnknownExpressionType,
 			Message: fmt.Sprintf("Unknown expression type: %T", e),
-			Details: map[string]interface{}{"type": fmt.Sprintf("%T", e)},
+			Details: map[string]any{"type": fmt.Sprintf("%T", e)},
 		})
 	}
 }
@@ -382,7 +382,7 @@ func (s *structuralScan) validateAffectTarget(lhs string, allVars map[string]boo
 				Path:    lhsPath,
 				Code:    ErrorUnresolvedScopedRef,
 				Message: fmt.Sprintf("Unresolved scoped reference '%s' %s", lhs, suffix),
-				Details: map[string]interface{}{
+				Details: map[string]any{
 					"variable":       lhs,
 					"current_system": currentSystem,
 					"event_type":     eventType,
@@ -395,7 +395,7 @@ func (s *structuralScan) validateAffectTarget(lhs string, allVars map[string]boo
 		Path:    lhsPath,
 		Code:    ErrorEventVarUndeclared,
 		Message: fmt.Sprintf("Undefined variable '%s' %s", lhs, suffix),
-		Details: map[string]interface{}{
+		Details: map[string]any{
 			"variable":       lhs,
 			"current_system": currentSystem,
 			"event_type":     eventType,
@@ -444,7 +444,7 @@ func (s *structuralScan) validateEquationUnknownBalance(modelName string, model 
 		Path:    basePath,
 		Code:    ErrorEquationCountMismatch,
 		Message: message,
-		Details: map[string]interface{}{
+		Details: map[string]any{
 			"model":             modelName,
 			"state_count":       nStates,
 			"ode_count":         nOdes,
@@ -537,7 +537,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 				Path:    reactionPath,
 				Code:    ErrorNullReaction,
 				Message: "Reaction has no substrates and no products",
-				Details: map[string]interface{}{
+				Details: map[string]any{
 					"reaction_index": i,
 					"system":         systemName,
 				},
@@ -556,7 +556,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 					Path:    fmt.Sprintf("%s.substrates[%d].species", reactionPath, j),
 					Code:    ErrorUndefinedSpecies,
 					Message: fmt.Sprintf("Undefined species '%s' in reaction substrate", substrate.Species),
-					Details: map[string]interface{}{
+					Details: map[string]any{
 						"species":         substrate.Species,
 						"system":          systemName,
 						"reaction_index":  i,
@@ -571,7 +571,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 					Path:    fmt.Sprintf("%s.products[%d].species", reactionPath, j),
 					Code:    ErrorUndefinedSpecies,
 					Message: fmt.Sprintf("Undefined species '%s' in reaction product", product.Species),
-					Details: map[string]interface{}{
+					Details: map[string]any{
 						"species":        product.Species,
 						"system":         systemName,
 						"reaction_index": i,
@@ -607,7 +607,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 			Message: "ic equation not allowed in a reaction system; a reaction system has no equations " +
 				"field and hosts no ic equations (ICs are model-hosted: species.default, or a " +
 				"scoped-reference ic equation in a model, spec §11.4.1)",
-			Details: map[string]interface{}{
+			Details: map[string]any{
 				"system":                    systemName,
 				"species":                   species,
 				"constraint_equation_index": i,
@@ -658,7 +658,7 @@ func (s *structuralScan) validateCouplingReferences() {
 					Path:    fmt.Sprintf("%s.from", basePath),
 					Code:    ErrorUndefinedSystem,
 					Message: fmt.Sprintf("Undefined system '%s' in coupling (from '%s')", fromSystem, c.From),
-					Details: map[string]interface{}{
+					Details: map[string]any{
 						"system":         fromSystem,
 						"scoped_ref":     c.From,
 						"coupling_type":  "variable_map",
@@ -673,7 +673,7 @@ func (s *structuralScan) validateCouplingReferences() {
 					Path:    fmt.Sprintf("%s.to", basePath),
 					Code:    ErrorUndefinedSystem,
 					Message: fmt.Sprintf("Undefined system '%s' in coupling (to '%s')", toSystem, c.To),
-					Details: map[string]interface{}{
+					Details: map[string]any{
 						"system":         toSystem,
 						"scoped_ref":     c.To,
 						"coupling_type":  "variable_map",
@@ -690,7 +690,7 @@ func (s *structuralScan) validateCouplingReferences() {
 				Path:    fmt.Sprintf("%s.operator", basePath),
 				Code:    ErrorUndefinedOperator,
 				Message: fmt.Sprintf("'operator_apply' coupling has been removed (v0.3.0); referenced operator '%s'", c.Operator),
-				Details: map[string]interface{}{
+				Details: map[string]any{
 					"operator":       c.Operator,
 					"coupling_type":  "operator_apply",
 					"coupling_index": i,
@@ -715,7 +715,7 @@ func (s *structuralScan) validateCouplingSystems(systems []string, allSystems ma
 			Path:    fmt.Sprintf("%s.systems[%d]", basePath, j),
 			Code:    ErrorUndefinedSystem,
 			Message: fmt.Sprintf("Undefined system '%s' in coupling", sysName),
-			Details: map[string]interface{}{
+			Details: map[string]any{
 				"system":         sysName,
 				"coupling_type":  couplingType,
 				"coupling_index": couplingIndex,
@@ -735,7 +735,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 				Path:    fmt.Sprintf("%s.kind", basePath),
 				Code:    CodeMissingLoaderKind,
 				Message: "Data loader kind is required",
-				Details: map[string]interface{}{"loader": loaderName},
+				Details: map[string]any{"loader": loaderName},
 			})
 		}
 		if loader.Source.URLTemplate == "" {
@@ -743,7 +743,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 				Path:    fmt.Sprintf("%s.source.url_template", basePath),
 				Code:    CodeMissingLoaderSourceURLTemplate,
 				Message: "Data loader source.url_template is required",
-				Details: map[string]interface{}{"loader": loaderName},
+				Details: map[string]any{"loader": loaderName},
 			})
 		}
 		if len(loader.Variables) == 0 {
@@ -751,7 +751,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 				Path:    fmt.Sprintf("%s.variables", basePath),
 				Code:    CodeMissingLoaderVariables,
 				Message: "Data loader must expose at least one variable",
-				Details: map[string]interface{}{"loader": loaderName},
+				Details: map[string]any{"loader": loaderName},
 			})
 		}
 		for varName, dv := range loader.Variables {
@@ -760,7 +760,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 					Path:    fmt.Sprintf("%s.variables.%s.file_variable", basePath, varName),
 					Code:    CodeMissingLoaderVariableFileVariable,
 					Message: "Data loader variable missing file_variable",
-					Details: map[string]interface{}{"loader": loaderName, "variable": varName},
+					Details: map[string]any{"loader": loaderName, "variable": varName},
 				})
 			}
 			if dv.Units == "" {
@@ -768,7 +768,7 @@ func (s *structuralScan) validateDataLoaderReferences() {
 					Path:    fmt.Sprintf("%s.variables.%s.units", basePath, varName),
 					Code:    CodeMissingLoaderVariableUnits,
 					Message: "Data loader variable missing units",
-					Details: map[string]interface{}{"loader": loaderName, "variable": varName},
+					Details: map[string]any{"loader": loaderName, "variable": varName},
 				})
 			}
 		}

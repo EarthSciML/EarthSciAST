@@ -118,15 +118,15 @@ type closedFnTolerance struct {
 type closedFnScenario struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Inputs      []interface{}   `json:"inputs"`
+	Inputs      []any           `json:"inputs"`
 	Expected    json.RawMessage `json:"expected"`
 }
 
 type closedFnErrorScenario struct {
-	Name              string        `json:"name"`
-	Description       string        `json:"description"`
-	Inputs            []interface{} `json:"inputs"`
-	ExpectedErrorCode string        `json:"expected_error_code"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	Inputs            []any  `json:"inputs"`
+	ExpectedErrorCode string `json:"expected_error_code"`
 }
 
 type closedFnEntry struct {
@@ -179,23 +179,23 @@ func walkClosedFnDirs(root string) ([]closedFnEntry, error) {
 // types EvaluateClosedFunction expects: numbers stay as float64; nested
 // arrays stay as []interface{}; the literal string "NaN" is converted to
 // math.NaN(); other strings are forwarded for diagnostic purposes.
-func normalizeFixtureArgs(inputs []interface{}) ([]interface{}, error) {
-	out := make([]interface{}, len(inputs))
+func normalizeFixtureArgs(inputs []any) ([]any, error) {
+	out := make([]any, len(inputs))
 	for i, raw := range inputs {
 		out[i] = normalizeFixtureValue(raw)
 	}
 	return out, nil
 }
 
-func normalizeFixtureValue(v interface{}) interface{} {
+func normalizeFixtureValue(v any) any {
 	switch x := v.(type) {
 	case string:
 		if x == "NaN" || x == "nan" || x == "NAN" {
 			return math.NaN()
 		}
 		return x
-	case []interface{}:
-		out := make([]interface{}, len(x))
+	case []any:
+		out := make([]any, len(x))
 		for i, e := range x {
 			out[i] = normalizeFixtureValue(e)
 		}
@@ -209,7 +209,7 @@ func normalizeFixtureValue(v interface{}) interface{} {
 // reference within (abs OR rel) tolerance. Integer-typed outputs are
 // promoted to float64 for the comparison; the spec pins zero tolerance
 // for every entry except `datetime.julian_day` (≤ 1 ulp).
-func assertCloseEnough(got interface{}, expectedRaw json.RawMessage, tol closedFnTolerance) error {
+func assertCloseEnough(got any, expectedRaw json.RawMessage, tol closedFnTolerance) error {
 	want, err := decodeExpectedScalar(expectedRaw)
 	if err != nil {
 		return err
@@ -248,7 +248,7 @@ func decodeExpectedScalar(raw json.RawMessage) (float64, error) {
 }
 
 // errf is a tiny formatted-error helper used by the conformance harness.
-func errf(format string, args ...interface{}) error {
+func errf(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
 }
 
