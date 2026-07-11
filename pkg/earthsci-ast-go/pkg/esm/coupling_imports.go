@@ -19,15 +19,14 @@ package esm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"sort"
 	"strings"
 )
 
-// libraryForbiddenKeysCoupling are the payload keys a coupling-library file
+// couplingLibraryForbiddenKeys are the payload keys a coupling-library file
 // MUST NOT declare (esm-spec §10.9).
-var libraryForbiddenKeysCoupling = []string{
+var couplingLibraryForbiddenKeys = []string{
 	"models",
 	"reaction_systems",
 	"data_loaders",
@@ -115,7 +114,7 @@ func rewriteExprRaw(expr interface{}, fn refFn) interface{} {
 			}
 			e["args"] = args
 		}
-		if op, _ := e["op"].(string); op == "apply_expression_template" {
+		if op, _ := e["op"].(string); op == applyExpressionTemplateOp {
 			if b, ok := e["bindings"].(map[string]interface{}); ok {
 				for k := range b {
 					b[k] = rewriteExprRaw(b[k], fn)
@@ -198,7 +197,7 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 				case string:
 					next[nk] = structFn(vv)
 				case map[string]interface{}:
-					m := cloneRawMap(vv)
+					m, _ := deepCopyJSON(vv).(map[string]interface{})
 					if s, ok := m["var"].(string); ok {
 						m["var"] = structFn(s)
 					}
@@ -259,31 +258,6 @@ func rewriteEntryInPlace(entry map[string]interface{}, structFn, exprFn refFn) {
 	}
 }
 
-// cloneRaw deep-clones a raw JSON value (maps + slices copied; scalars shared).
-func cloneRaw(v interface{}) interface{} {
-	switch x := v.(type) {
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(x))
-		for k, val := range x {
-			out[k] = cloneRaw(val)
-		}
-		return out
-	case []interface{}:
-		out := make([]interface{}, len(x))
-		for i, val := range x {
-			out[i] = cloneRaw(val)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
-func cloneRawMap(v map[string]interface{}) map[string]interface{} {
-	c, _ := cloneRaw(v).(map[string]interface{})
-	return c
-}
-
 // collectRoleSegments collects the top-level role segments a library edge
 // references. Structural ref fields (systems[], from/to, translate keys, event
 // var lists) always name a role; Expression strings name a role only when they
@@ -291,7 +265,7 @@ func cloneRawMap(v map[string]interface{}) map[string]interface{} {
 // are incidental.
 func collectRoleSegments(edge map[string]interface{}) map[string]bool {
 	seen := map[string]bool{}
-	clone := cloneRawMap(edge)
+	clone, _ := deepCopyJSON(edge).(map[string]interface{})
 	structFn := func(ref string) string {
 		seen[headSegment(ref)] = true
 		return ref
@@ -311,26 +285,15 @@ func collectRoleSegments(edge map[string]interface{}) map[string]bool {
 // ---------------------------------------------------------------------------
 
 func defaultLoadCouplingRef(ref, basePath string) (map[string]interface{}, error) {
-	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-		data, err := fetchRemoteRef(ref)
-		if err != nil {
-			return nil, newETErr("coupling_import_unresolved",
-				fmt.Sprintf("coupling_import ref '%s' failed to download: %v", ref, err))
-		}
-		return parseCouplingRefView(ref, data)
-	}
-	path := canonicalImportRef(ref, basePath)
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return nil, newETErr("coupling_import_unresolved",
-			fmt.Sprintf("coupling-library file not found or unreadable: %s (from ref '%s')", path, ref))
-	}
-	data, err := os.ReadFile(path)
+	// loadRefBytes unifies the http(s)-vs-local branch (isRemoteRef + stat/read);
+	// a coupling library never has nested refs, so its base dir is discarded. The
+	// plain error is re-wrapped in this loader's own diagnostic code.
+	data, _, err := loadRefBytes(ref, basePath)
 	if err != nil {
 		return nil, newETErr("coupling_import_unresolved",
-			fmt.Sprintf("failed to read coupling-library ref '%s' (%s): %v", ref, path, err))
+			fmt.Sprintf("coupling_import ref '%s' failed to load: %v", ref, err))
 	}
-	return parseCouplingRefView(path, data)
+	return parseCouplingRefView(ref, data)
 }
 
 func parseCouplingRefView(where string, data []byte) (map[string]interface{}, error) {
@@ -346,17 +309,17 @@ func parseCouplingRefView(where string, data []byte) (map[string]interface{}, er
 // Library validation + expansion
 // ---------------------------------------------------------------------------
 
-// expandOne validates a resolved coupling-library document and expands one
-// `coupling_import` entry into its concrete edges, bound to `bind`. Raises the
-// esm-spec §10.11 diagnostics.
-func expandOne(lib map[string]interface{}, ref string, bind map[string]string, file *EsmFile) ([]CouplingEntry, error) {
+// expandCouplingImportEntry validates a resolved coupling-library document and
+// expands one `coupling_import` entry into its concrete edges, bound to `bind`.
+// Raises the esm-spec §10.11 diagnostics.
+func expandCouplingImportEntry(lib map[string]interface{}, ref string, bind map[string]string, file *EsmFile) ([]CouplingEntry, error) {
 	if !isCouplingLibraryDoc(lib) {
 		return nil, newETErr("coupling_import_not_library",
 			fmt.Sprintf("coupling_import ref '%s' lacks top-level `coupling_roles` — not a coupling-library file (esm-spec §10.9)", ref))
 	}
 
 	// Purity (esm-spec §10.9).
-	for _, k := range libraryForbiddenKeysCoupling {
+	for _, k := range couplingLibraryForbiddenKeys {
 		if _, has := lib[k]; has {
 			return nil, newETErr("coupling_library_illegal_payload",
 				fmt.Sprintf("coupling-library '%s' declares `%s` — a coupling library is nothing but roles + wiring (esm-spec §10.9)", ref, k))
@@ -364,11 +327,7 @@ func expandOne(lib map[string]interface{}, ref string, bind map[string]string, f
 	}
 
 	rolesMap, _ := lib["coupling_roles"].(map[string]interface{})
-	roleNames := make([]string, 0, len(rolesMap))
-	for k := range rolesMap {
-		roleNames = append(roleNames, k)
-	}
-	sort.Strings(roleNames)
+	roleNames := sortedKeys(rolesMap)
 	if len(roleNames) == 0 {
 		return nil, newETErr("coupling_library_illegal_payload",
 			fmt.Sprintf("coupling-library '%s' declares no roles (esm-spec §10.9: `coupling_roles` is required, non-empty)", ref))
@@ -405,12 +364,7 @@ func expandOne(lib map[string]interface{}, ref string, bind map[string]string, f
 				fmt.Sprintf("coupling-library '%s' contains an unsupported edge type '%s' (esm-spec §10.9)", ref, et))
 		}
 		segs := collectRoleSegments(edge)
-		segNames := make([]string, 0, len(segs))
-		for s := range segs {
-			segNames = append(segNames, s)
-		}
-		sort.Strings(segNames)
-		for _, seg := range segNames {
+		for _, seg := range sortedKeys(segs) {
 			if !roleSet[seg] {
 				return nil, newETErr("coupling_edge_unknown_role",
 					fmt.Sprintf("coupling-library '%s': edge references '%s', which is not a declared role (esm-spec §10.9)", ref, seg))
@@ -426,12 +380,7 @@ func expandOne(lib map[string]interface{}, ref string, bind map[string]string, f
 	}
 
 	// Binding — total and checked (esm-spec §10.10.1).
-	bindKeys := make([]string, 0, len(bind))
-	for k := range bind {
-		bindKeys = append(bindKeys, k)
-	}
-	sort.Strings(bindKeys)
-	for _, key := range bindKeys {
+	for _, key := range sortedKeys(bind) {
 		if !roleSet[key] {
 			return nil, newETErr("coupling_import_unknown_role",
 				fmt.Sprintf("coupling_import ref '%s': bind key '%s' is not a declared role (esm-spec §10.10.1)", ref, key))
@@ -457,7 +406,7 @@ func expandOne(lib map[string]interface{}, ref string, bind map[string]string, f
 		if !ok {
 			continue
 		}
-		clone := cloneRawMap(edge)
+		clone, _ := deepCopyJSON(edge).(map[string]interface{})
 		rewriteEntryInPlace(clone, rw, rw)
 		ce, err := rawEdgeToCouplingEntry(clone)
 		if err != nil {
@@ -580,19 +529,17 @@ func expandCouplingImports(file *EsmFile, opts CouplingImportOptions) ([]interfa
 
 		lib, err := loadRef(imp.Ref, basePath)
 		if err != nil {
-			if _, isET := err.(*ExpressionTemplateError); isET {
+			var etErr *ExpressionTemplateError
+			if errors.As(err, &etErr) {
 				return nil, err
 			}
 			return nil, newETErr("coupling_import_unresolved",
 				fmt.Sprintf("coupling_import ref '%s' failed to load: %v", imp.Ref, err))
 		}
 
-		bind := make(map[string]string, len(imp.Bind))
-		for k, v := range imp.Bind {
-			bind[k] = v
-		}
-
-		expanded, err := expandOne(lib, imp.Ref, bind, file)
+		// imp.Bind is only read downstream (validated + used as the rewrite
+		// table), so pass it directly instead of a defensive copy.
+		expanded, err := expandCouplingImportEntry(lib, imp.Ref, imp.Bind, file)
 		if err != nil {
 			return nil, err
 		}
