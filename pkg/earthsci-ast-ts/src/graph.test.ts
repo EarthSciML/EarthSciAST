@@ -203,6 +203,56 @@ describe('componentGraph function', () => {
     expect(coupleEdge?.data.label).toBe('couple')
   })
 
+  it('collapses operator_compose to a single systems[0] → systems[1] edge', () => {
+    // A >2-system compose chain records only the head-to-next link (one edge),
+    // matching the Rust/Go/Julia reference model.
+    const file: EsmFile = {
+      esm: '0.1.0',
+      metadata: { name: 'compose3' },
+      models: {
+        A: { variables: {}, equations: [] },
+        B: { variables: {}, equations: [] },
+        C: { variables: {}, equations: [] },
+      },
+      coupling: [{ type: 'operator_compose', systems: ['A', 'B', 'C'] }],
+    }
+    const graph = componentGraph(file)
+    const composeEdges = graph.edges.filter((e) => e.data.type === 'operator_compose')
+    expect(composeEdges).toHaveLength(1)
+    expect(composeEdges[0].source).toBe('A')
+    expect(composeEdges[0].target).toBe('B')
+  })
+
+  it('skips coupling edges whose endpoints are not declared nodes (no fabrication)', () => {
+    // Dangling references (a nonexistent component or a subsystem member that
+    // is not itself a node) never produce an edge or a phantom endpoint.
+    const file: EsmFile = {
+      esm: '0.1.0',
+      metadata: { name: 'dangling' },
+      models: {
+        A: { variables: {}, equations: [] },
+        B: { variables: {}, equations: [] },
+      },
+      coupling: [
+        // couple to a nonexistent node → skipped
+        { type: 'couple', systems: ['A', 'Ghost'] } as unknown as CouplingEntry,
+        // variable_map into a nonexistent component → skipped
+        { type: 'variable_map', from: 'A.u', to: 'Ghost.v', transform: 'identity' },
+        // operator_compose with a dangling second endpoint → skipped
+        { type: 'operator_compose', systems: ['A', 'Ghost'] },
+        // fully-resolved couple → kept
+        { type: 'couple', systems: ['A', 'B'] } as unknown as CouplingEntry,
+      ],
+    }
+    const graph = componentGraph(file)
+    expect(graph.edges).toHaveLength(1)
+    expect(graph.edges[0].source).toBe('A')
+    expect(graph.edges[0].target).toBe('B')
+    expect(graph.edges[0].data.type).toBe('couple')
+    // No phantom node was introduced for the dangling endpoint.
+    expect(graph.nodes.find((n) => n.id === 'Ghost')).toBeUndefined()
+  })
+
   it('should implement adjacency method correctly', () => {
     const graph = componentGraph(mockEsmFile)
 

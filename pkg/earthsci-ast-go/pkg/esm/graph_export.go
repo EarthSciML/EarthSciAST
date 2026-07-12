@@ -52,7 +52,7 @@ func (e *DOTExporter) ExportComponentGraph(graph *ComponentGraph) (string, error
 	// Export edges. A bidirectional coupling is a directed edge with
 	// dir=both — an undirected `--` edge is a syntax error inside a digraph.
 	for _, edge := range edges {
-		label := edge.Data.Type
+		label := string(edge.Data.Type)
 		if edge.Data.Label != nil {
 			label = fmt.Sprintf("%s [%s]", edge.Data.Type, *edge.Data.Label)
 		}
@@ -160,7 +160,7 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 			arrow = "---"
 		}
 
-		label := edge.Data.Type
+		label := string(edge.Data.Type)
 		if edge.Data.Label != nil {
 			label = *edge.Data.Label
 		}

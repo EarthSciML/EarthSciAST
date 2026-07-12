@@ -2088,7 +2088,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     earthsci_ast::graph::ComponentType::Model => "ellipse",
                                     earthsci_ast::graph::ComponentType::ReactionSystem => "box",
                                     earthsci_ast::graph::ComponentType::DataLoader => "diamond",
-                                    earthsci_ast::graph::ComponentType::Operator => "hexagon",
                                 };
                                 println!(
                                     "  \"{}\" [label=\"{}\", shape={}];",
@@ -2117,13 +2116,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     earthsci_ast::graph::ComponentType::Model => "(",
                                     earthsci_ast::graph::ComponentType::ReactionSystem => "[",
                                     earthsci_ast::graph::ComponentType::DataLoader => "{",
-                                    earthsci_ast::graph::ComponentType::Operator => "{{",
                                 };
                                 let shape_close = match node.component_type {
                                     earthsci_ast::graph::ComponentType::Model => ")",
                                     earthsci_ast::graph::ComponentType::ReactionSystem => "]",
                                     earthsci_ast::graph::ComponentType::DataLoader => "}",
-                                    earthsci_ast::graph::ComponentType::Operator => "}}",
                                 };
                                 println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
                             }
@@ -2140,7 +2137,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         earthsci_ast::graph::ComponentType::Model => "model",
                                         earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
                                         earthsci_ast::graph::ComponentType::DataLoader => "data_loader",
-                                        earthsci_ast::graph::ComponentType::Operator => "operator",
                                     },
                                     "name": n.name
                                 })).collect::<Vec<_>>(),

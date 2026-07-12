@@ -23,6 +23,7 @@ import {
   appendComponentImports,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
+  substituteMetaparams,
 } from './template-imports.js'
 import { errCode, errCodeAsync, fixturesDir, loadFixtureFile } from './test-helpers.js'
 
@@ -523,6 +524,26 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     }
     `) as any
     expect(f.models.M.variables.dlon.expression).toEqual({ op: '/', args: [360, 144] })
+  })
+
+  it('metaparameter substitution never rewrites a structural `dim` axis name', () => {
+    // `dim` carries a spatial axis NAME (esm-spec §4.2 / §9.7.7), not an
+    // expression position: even when a like-named metaparameter is bound to
+    // an integer it must survive substitution unchanged (Rust/Julia protect
+    // `dim` identically). Expression positions in the same node still fold.
+    // Tested at the substitution-unit level (mirrors the Python unit test) so
+    // the assertion is independent of whole-document schema validity.
+    const node = {
+      op: 'integral',
+      args: [{ op: '*', args: ['x', 'N'] }],
+      dim: 'N',
+    }
+    const out = substituteMetaparams(node, { N: 4 }) as any
+    // `dim` stays the axis name "N" — NOT substituted to the integer 4.
+    expect(out.dim).toBe('N')
+    // The expression-position "N" inside args IS substituted, proving the
+    // metaparameter is bound and active — the skip is scoped to `dim`.
+    expect(out.args[0]).toEqual({ op: '*', args: ['x', 4] })
   })
 
   const chainDoc = (n: number) => {

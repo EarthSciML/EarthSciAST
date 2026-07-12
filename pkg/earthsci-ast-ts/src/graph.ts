@@ -299,31 +299,48 @@ function extractComponentGraph(esmFile: EsmFile): ComponentGraph {
 
   // Extract edges from coupling entries
   if (esmFile.coupling) {
+    // The set of declared component node ids (models + reaction_systems +
+    // data_loaders). Coupling edges reference endpoints by id; any endpoint
+    // that is not a declared node (a dangling reference to a nonexistent
+    // component or a subsystem member) is skipped rather than fabricated,
+    // matching the Rust/Go/Julia reference model.
+    const nodeIds = new Set(nodes.map((n) => n.id))
+
     esmFile.coupling.forEach((coupling, index) => {
       const edgeId = `coupling-${index}`
 
       switch (coupling.type) {
         case 'operator_compose':
-          // operator_compose connects multiple systems
-          if (coupling.systems && coupling.systems.length >= 2) {
-            // Create edges between consecutive systems
-            for (let i = 0; i < coupling.systems.length - 1; i++) {
-              edges.push({
-                id: `${edgeId}-${i}`,
-                from: coupling.systems[i],
-                to: coupling.systems[i + 1],
-                type: 'operator_compose',
-                label: 'compose',
-                description: coupling.description,
-                coupling,
-              })
-            }
+          // operator_compose composes a chain of systems. The component graph
+          // records a single systems[0] → systems[1] edge (matching the
+          // Rust/Go/Julia reference model), emitted only if both endpoints are
+          // declared nodes.
+          if (
+            coupling.systems &&
+            coupling.systems.length >= 2 &&
+            nodeIds.has(coupling.systems[0]) &&
+            nodeIds.has(coupling.systems[1])
+          ) {
+            edges.push({
+              id: edgeId,
+              from: coupling.systems[0],
+              to: coupling.systems[1],
+              type: 'operator_compose',
+              label: 'compose',
+              description: coupling.description,
+              coupling,
+            })
           }
           break
 
         case 'couple':
-          // couple connects exactly two systems
-          if (coupling.systems && coupling.systems.length === 2) {
+          // couple connects exactly two systems; both must be declared nodes.
+          if (
+            coupling.systems &&
+            coupling.systems.length === 2 &&
+            nodeIds.has(coupling.systems[0]) &&
+            nodeIds.has(coupling.systems[1])
+          ) {
             edges.push({
               id: edgeId,
               from: coupling.systems[0],
@@ -347,15 +364,17 @@ function extractComponentGraph(esmFile: EsmFile): ComponentGraph {
               const toComponent = toParts[0]
               const variable = fromParts.slice(1).join('.')
 
-              edges.push({
-                id: edgeId,
-                from: fromComponent,
-                to: toComponent,
-                type: 'variable_map',
-                label: variable,
-                description: coupling.description || `${coupling.from} → ${coupling.to}`,
-                coupling,
-              })
+              if (nodeIds.has(fromComponent) && nodeIds.has(toComponent)) {
+                edges.push({
+                  id: edgeId,
+                  from: fromComponent,
+                  to: toComponent,
+                  type: 'variable_map',
+                  label: variable,
+                  description: coupling.description || `${coupling.from} → ${coupling.to}`,
+                  coupling,
+                })
+              }
             }
           }
           break
