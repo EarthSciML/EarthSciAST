@@ -6,67 +6,68 @@
  * or selects, and reports validation errors inline instead of via alert().
  */
 
-import { Component, For, Show, Switch, Match, createSignal } from 'solid-js';
-import './inline-form.css';
+import type { Component } from 'solid-js'
+import { For, Show, Switch, Match, createSignal } from 'solid-js'
+import './inline-form.css'
 
 export interface InlineFormField {
   /** Key of this field in the submitted values record */
-  name: string;
+  name: string
   /** Visible label */
-  label: string;
+  label: string
   /** Initial value */
-  initial?: string;
+  initial?: string
   /** Placeholder text */
-  placeholder?: string;
+  placeholder?: string
   /** Render a textarea instead of an input (for JSON/expressions) */
-  multiline?: boolean;
+  multiline?: boolean
   /** Render a select with these options instead of a free-text input */
-  options?: readonly string[];
+  options?: readonly string[]
 }
 
 export interface InlineFormProps {
   /** Optional form heading */
-  title?: string;
+  title?: string
   /** Field definitions */
-  fields: InlineFormField[];
+  fields: InlineFormField[]
   /** Label for the confirm button (default "Save") */
-  confirmLabel?: string;
+  confirmLabel?: string
   /** Extra CSS class */
-  class?: string;
+  class?: string
   /**
    * Called with the field values on confirm. Return an error message to
    * keep the form open and display the error inline; return nothing on
    * success (the caller is responsible for closing the form).
    */
-  onConfirm: (values: Record<string, string>) => string | null | undefined | void;
+  onConfirm: (values: Record<string, string>) => string | null | undefined | void
   /** Called when editing is cancelled */
-  onCancel: () => void;
+  onCancel: () => void
 }
 
 export const InlineForm: Component<InlineFormProps> = (props) => {
   // Initial field values are intentionally captured once per form instance
   const initialValues = Object.fromEntries(
-    props.fields.map(field => [field.name, field.initial ?? ''])
-  );
-  const [values, setValues] = createSignal<Record<string, string>>(initialValues);
-  const [error, setError] = createSignal<string | null>(null);
+    props.fields.map((field) => [field.name, field.initial ?? '']),
+  )
+  const [values, setValues] = createSignal<Record<string, string>>(initialValues)
+  const [error, setError] = createSignal<string | null>(null)
 
   const setValue = (name: string, value: string) => {
-    setValues(prev => ({ ...prev, [name]: value }));
-  };
+    setValues((prev) => ({ ...prev, [name]: value }))
+  }
 
   const handleSubmit = (e: Event) => {
-    e.preventDefault();
-    const result = props.onConfirm(values());
-    setError(typeof result === 'string' ? result : null);
-  };
+    e.preventDefault()
+    const result = props.onConfirm(values())
+    setError(typeof result === 'string' ? result : null)
+  }
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
-      e.preventDefault();
-      props.onCancel();
+      e.preventDefault()
+      props.onCancel()
     }
-  };
+  }
 
   return (
     <form
@@ -119,7 +120,9 @@ export const InlineForm: Component<InlineFormProps> = (props) => {
       </For>
 
       <Show when={error()}>
-        <div class="inline-form-error" role="alert">{error()}</div>
+        <div class="inline-form-error" role="alert">
+          {error()}
+        </div>
       </Show>
 
       <div class="inline-form-actions">
@@ -131,7 +134,7 @@ export const InlineForm: Component<InlineFormProps> = (props) => {
         </button>
       </div>
     </form>
-  );
-};
+  )
+}
 
-export default InlineForm;
+export default InlineForm

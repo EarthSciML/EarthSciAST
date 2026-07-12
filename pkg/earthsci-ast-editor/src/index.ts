@@ -6,16 +6,16 @@
  */
 
 // Core components
-export { ExpressionNode, type ExpressionNodeProps } from './components/ExpressionNode';
-export { ExpressionPalette, type ExpressionPaletteProps } from './components/ExpressionPalette';
+export { ExpressionNode, type ExpressionNodeProps } from './components/ExpressionNode'
+export { ExpressionPalette, type ExpressionPaletteProps } from './components/ExpressionPalette'
 
 // Editor components
-export { EquationEditor, type EquationEditorProps } from './components/EquationEditor';
-export { ModelEditor, type ModelEditorProps } from './components/ModelEditor';
-export { ReactionEditor, type ReactionEditorProps } from './components/ReactionEditor';
-export { CouplingGraph, type CouplingGraphProps } from './components/CouplingGraph';
-export { ValidationPanel, type ValidationPanelProps } from './components/ValidationPanel';
-export { FileSummary, type FileSummaryProps } from './components/FileSummary';
+export { EquationEditor, type EquationEditorProps } from './components/EquationEditor'
+export { ModelEditor, type ModelEditorProps } from './components/ModelEditor'
+export { ReactionEditor, type ReactionEditorProps } from './components/ReactionEditor'
+export { CouplingGraph, type CouplingGraphProps } from './components/CouplingGraph'
+export { ValidationPanel, type ValidationPanelProps } from './components/ValidationPanel'
+export { FileSummary, type FileSummaryProps } from './components/FileSummary'
 
 // Mathematical layout components (Section 5.2.3)
 export {
@@ -28,8 +28,8 @@ export {
   type SuperscriptProps,
   type SubscriptProps,
   type RadicalProps,
-  type DelimitersProps
-} from './layout';
+  type DelimitersProps,
+} from './layout'
 
 // Variable highlighting primitives
 export {
@@ -41,8 +41,8 @@ export {
   isHighlighted,
   type HighlightContextValue,
   type ScopingMode,
-  type HighlightProviderProps
-} from './primitives/highlighted-var';
+  type HighlightProviderProps,
+} from './primitives/highlighted-var'
 
 // Selection and inline editing primitives
 export {
@@ -53,8 +53,8 @@ export {
   getVariableSuggestions,
   type SelectionContextValue,
   type SelectionProviderProps,
-  type NodeDetails
-} from './primitives/selection';
+  type NodeDetails,
+} from './primitives/selection'
 
 // Shared path utilities (single implementation used by all primitives)
 export {
@@ -63,8 +63,8 @@ export {
   replaceExpressionAtPath,
   pathsEqual,
   pathToString,
-  stringToPath
-} from './primitives/path-utils';
+  stringToPath,
+} from './primitives/path-utils'
 
 // Structural editing primitives
 export {
@@ -79,8 +79,8 @@ export {
   type StructuralEditingProviderProps,
   type StructuralEditingMenuProps,
   type DraggableExpressionProps,
-  type DragState
-} from './primitives/structural-editing';
+  type DragState,
+} from './primitives/structural-editing'
 
 // Undo/redo history management
 export {
@@ -88,8 +88,8 @@ export {
   createUndoKeyboardHandler,
   type UndoHistory,
   type UndoHistoryConfig,
-  type HistoryEntry
-} from './primitives/history';
+  type HistoryEntry,
+} from './primitives/history'
 
 // AST store for centralized state management
 export {
@@ -99,8 +99,8 @@ export {
   type AstStore,
   type AstStoreConfig,
   type Path,
-  type PathSegment
-} from './primitives/ast-store';
+  type PathSegment,
+} from './primitives/ast-store'
 
 // Validation primitives for reactive validation signals
 export {
@@ -109,8 +109,8 @@ export {
   createDebouncedValidation,
   type ValidationSignals,
   type ValidationConfig,
-  type ValidationErrorWithMetadata
-} from './primitives/validation';
+  type ValidationErrorWithMetadata,
+} from './primitives/validation'
 
 // Web components for framework integration
 export {
@@ -119,8 +119,8 @@ export {
   type EsmModelEditorProps,
   type EsmFileEditorProps,
   type EsmReactionEditorProps,
-  type EsmCouplingGraphProps
-} from './web-components';
+  type EsmCouplingGraphProps,
+} from './web-components'
 
 // Re-export types from @earthsciml/ast for convenience
 export type {
@@ -131,5 +131,5 @@ export type {
   Graph,
   EsmFile,
   Model,
-  ReactionSystem
-} from '@earthsciml/ast';
+  ReactionSystem,
+} from '@earthsciml/ast'

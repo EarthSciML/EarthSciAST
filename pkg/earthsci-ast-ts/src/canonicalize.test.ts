@@ -71,4 +71,16 @@ describe('canonicalize per RFC §5.4 (TS best-effort)', () => {
       expect.objectContaining({ code: E_CANONICAL_DIVBY_ZERO }),
     )
   })
+
+  it('emits ALL defined node fields, not a hard-coded allowlist', () => {
+    // `reduce` was NOT in the former allowlist (op,args,wrt,dim,fn,name,value)
+    // and used to be silently dropped from the canonical form — which would
+    // collapse distinct aggregate nodes. It must now survive, sorted in.
+    const agg = { op: 'aggregate', args: ['x'], reduce: 'max' } as never
+    expect(canonicalJson(agg)).toBe('{"args":["x"],"op":"aggregate","reduce":"max"}')
+
+    // A previously-allowlisted field (`wrt`) keeps its byte-identical output.
+    const d = { op: 'D', args: ['x'], wrt: 't' } as never
+    expect(canonicalJson(d)).toBe('{"args":["x"],"op":"D","wrt":"t"}')
+  })
 })

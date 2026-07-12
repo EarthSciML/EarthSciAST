@@ -15,20 +15,8 @@
  * `function_tables` block independently of the parsed `table_lookup` node.
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { load } from './parse.js'
 import { dispatchClosedFunction } from './closed-functions.js'
-
-const FIXTURES_ROOT = resolve(
-  __dirname,
-  '..',
-  '..',
-  '..',
-  'tests',
-  'conformance',
-  'function_tables',
-)
+import { loadFixture as loadEsmFixture } from './test-helpers.js'
 
 function bitEq(a: number, b: number): boolean {
   const buf = new ArrayBuffer(16)
@@ -40,8 +28,7 @@ function bitEq(a: number, b: number): boolean {
 }
 
 function loadFixture(scenario: string): any {
-  const path = resolve(FIXTURES_ROOT, scenario, 'fixture.esm')
-  return load(readFileSync(path, 'utf-8'))
+  return loadEsmFixture('conformance', 'function_tables', scenario, 'fixture.esm')
 }
 
 interface Var {

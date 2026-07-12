@@ -25,8 +25,9 @@ import {
   interpLinear,
   interpBilinear,
 } from './closed-functions.js'
+import { fixturesDir } from './test-helpers.js'
 
-const fixturesRoot = join(__dirname, '../../../tests/closed_functions')
+const fixturesRoot = fixturesDir('closed_functions')
 
 interface Scenario {
   name: string

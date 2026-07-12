@@ -7,15 +7,12 @@
  * only present on the reservoir species.
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
-import { join } from 'path'
 import { load, save } from './index.js'
-
-const FIXTURE = join(__dirname, '../../../tests/valid/reservoir_species_constant.esm')
+import { readFixture } from './test-helpers.js'
 
 describe('reservoir species (Species.constant=true)', () => {
   it('round-trips the constant flag byte-identical and flags only reservoir species', () => {
-    const raw = readFileSync(FIXTURE, 'utf-8')
+    const raw = readFixture('valid', 'reservoir_species_constant.esm')
     const parsed = load(raw) as Record<string, unknown>
     const rs = (
       parsed.reaction_systems as Record<string, { species: Record<string, { constant?: boolean }> }>

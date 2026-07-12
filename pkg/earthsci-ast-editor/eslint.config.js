@@ -16,6 +16,11 @@ export default tseslint.config(
       // Pre-existing `any`s are surfaced as warnings to ratchet down over
       // time without blocking CI.
       '@typescript-eslint/no-explicit-any': 'warn',
+      // Enforce `import type { ... }` for type-only imports (own line).
+      '@typescript-eslint/consistent-type-imports': [
+        'error',
+        { prefer: 'type-imports', fixStyle: 'separate-type-imports' },
+      ],
     },
   },
 );

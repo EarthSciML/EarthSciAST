@@ -3,9 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { validate } from './validate.js'
+import { readFixture } from './test-helpers.js'
 
 describe('Structural validation', () => {
   it('should detect equation count mismatch', () => {
@@ -324,16 +323,7 @@ describe('Structural validation', () => {
   // at the usage site `gas_law_calculation` (mirrors Python's
   // parse._check_physical_constant_units, gt-3tgv).
   it('should reject units_dimensional_constant_error.esm with unit_inconsistency at usage site', () => {
-    const fixturePath = join(
-      __dirname,
-      '..',
-      '..',
-      '..',
-      'tests',
-      'invalid',
-      'units_dimensional_constant_error.esm',
-    )
-    const content = readFileSync(fixturePath, 'utf-8')
+    const content = readFixture('invalid', 'units_dimensional_constant_error.esm')
     const result = validate(content)
     expect(result.is_valid).toBe(false)
     const err = result.structural_errors.find(
@@ -404,5 +394,143 @@ describe('variable_map expression transforms (schema widening)', () => {
     expect(result.is_valid).toBe(false)
     expect(result.schema_errors.length).toBeGreaterThan(0)
     expect(result.schema_errors.some((e) => e.path.includes('/coupling/0'))).toBe(true)
+  })
+})
+
+describe('scoped-reference split keeps the full variable path (splitScopedRef)', () => {
+  // Regression for the split('.', 2) truncation bug: a 3-segment
+  // data-loader ref like "Weather.deep.path" must report the ENTIRE remainder
+  // ("deep.path") as the missing variable, not the truncated first segment
+  // ("deep"). Mirrors Go's strings.SplitN(from, ".", 2) remainder semantics.
+  it('reports the whole dotted remainder for a 3-segment data-loader from-ref', () => {
+    const data = {
+      esm: '0.8.0',
+      metadata: { name: 'split_scoped_ref' },
+      models: {
+        M: {
+          variables: { x: { type: 'state', default: 0.0 } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+      data_loaders: {
+        Weather: {
+          kind: 'grid',
+          source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
+          variables: {
+            T: { file_variable: 'T2', units: 'K', description: 'Temperature' },
+          },
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Weather.deep.path',
+          to: 'M.x',
+          transform: 'param_to_var',
+        },
+      ],
+    }
+
+    const result = validate(data)
+
+    expect(result.is_valid).toBe(false)
+    const err = result.structural_errors.find((e) => e.code === 'undefined_data_loader_variable')
+    expect(err).toBeDefined()
+    expect(err!.path).toBe('/coupling/0/from')
+    // The FIX: full remainder, not the truncated 'deep'.
+    expect(err!.details.variable).toBe('deep.path')
+    expect(err!.details.data_loader).toBe('Weather')
+  })
+
+  it('is unchanged for the common 2-segment data-loader from-ref', () => {
+    const data = {
+      esm: '0.8.0',
+      metadata: { name: 'split_scoped_ref_2seg' },
+      models: {
+        M: {
+          variables: { x: { type: 'state', default: 0.0 } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+      data_loaders: {
+        Weather: {
+          kind: 'grid',
+          source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
+          variables: {
+            T: { file_variable: 'T2', units: 'K', description: 'Temperature' },
+          },
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Weather.missing_var',
+          to: 'M.x',
+          transform: 'param_to_var',
+        },
+      ],
+    }
+
+    const result = validate(data)
+
+    expect(result.is_valid).toBe(false)
+    const err = result.structural_errors.find((e) => e.code === 'undefined_data_loader_variable')
+    expect(err).toBeDefined()
+    expect(err!.details.variable).toBe('missing_var')
+  })
+})
+
+describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => {
+  // validate() parses string input through the same `losslessJsonParse`
+  // machinery `load()` uses (tagged leaves stripped back to plain numbers),
+  // rather than a divergent bare `JSON.parse`. A malformed string is still
+  // reported in the historical `json_parse_error` envelope — same code, `$`
+  // path, `details.error` shape, and `Invalid JSON: ` message prefix.
+  it('reports malformed JSON in the json_parse_error envelope', () => {
+    const result = validate('{ "esm": "0.1.0", ')
+
+    expect(result.is_valid).toBe(false)
+    expect(result.structural_errors).toEqual([])
+    expect(result.unit_warnings).toEqual([])
+    expect(result.schema_errors).toHaveLength(1)
+    const err = result.schema_errors[0]
+    expect(err.code).toBe('json_parse_error')
+    expect(err.path).toBe('$')
+    expect(err.message.startsWith('Invalid JSON: ')).toBe(true)
+    expect(typeof err.details.error).toBe('string')
+    expect(err.message).toBe(`Invalid JSON: ${err.details.error}`)
+  })
+
+  it('rejects trailing content after the JSON document', () => {
+    const result = validate('{"esm":"0.1.0","metadata":{"name":"x"}} trailing')
+
+    expect(result.is_valid).toBe(false)
+    expect(result.schema_errors).toHaveLength(1)
+    expect(result.schema_errors[0].code).toBe('json_parse_error')
+  })
+
+  it('parses a valid string identically to the equivalent object', () => {
+    const obj = {
+      esm: '0.1.0',
+      metadata: { name: 'parse_parity' },
+      models: {
+        M: {
+          variables: {
+            x: { type: 'state', default: 1.0 },
+            k: { type: 'parameter', default: 2.0 },
+          },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'k' }],
+        },
+      },
+    }
+
+    const fromString = validate(JSON.stringify(obj))
+    const fromObject = validate(obj)
+
+    // Routing the string through the lossless parser (then stripping tagged
+    // leaves back to plain numbers) yields the same result as the object path.
+    expect(fromString).toEqual(fromObject)
+    expect(fromString.is_valid).toBe(true)
+    expect(fromString.structural_errors).toEqual([])
   })
 })

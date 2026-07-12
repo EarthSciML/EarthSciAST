@@ -5,75 +5,94 @@
  * within expressions or across multiple expressions in a model.
  */
 
-import type { Expr, Model, EsmFile } from '../types.js'
+import type { Expr, ExpressionNode, Model, EsmFile } from '../types.js'
 import type { CommonSubexpression, ExpressionLocation } from './types.js'
-import { analyzeComplexity } from './complexity.js'
-import { isExprNode } from '../expression.js'
-import { isNumericLiteral, isIntLit } from '../numeric-literal.js'
+import { collectSubtreeCosts } from './complexity.js'
+import { isExprNode, forEachChild } from '../expression.js'
+import { canonicalJson } from '../canonicalize.js'
 
 /**
- * Find common subexpressions in a single expression
- * @param expr Expression to analyze
- * @param minComplexity Minimum complexity threshold for considering subexpressions
- * @returns Array of common subexpressions found
+ * Default minimum {@link analyzeComplexity} cost a subexpression must reach to
+ * be considered for factoring. Shared by every entry point below.
  */
-export function findCommonSubexpressions(
-  expr: Expr,
-  minComplexity: number = 5,
+export const DEFAULT_MIN_COMPLEXITY = 5
+
+/**
+ * Canonical key used to group structurally-identical subexpressions. Keying on
+ * {@link canonicalJson} preserves every distinguishing field (`op`, `args`,
+ * `wrt`, `dim`, `value`, ...), so distinct nodes that merely share op/args are
+ * NOT collapsed. Falls back to a full structural stringification if a node
+ * cannot be canonicalized (e.g. a non-finite literal).
+ */
+function subexpressionKey(expr: ExpressionNode): string {
+  try {
+    return canonicalJson(expr)
+  } catch {
+    return JSON.stringify(expr)
+  }
+}
+
+/**
+ * Walk every named expression's tree, group structurally-identical
+ * subexpressions above the complexity threshold, and return those appearing
+ * more than once (highest estimated savings first). `makeLocation` renders each
+ * occurrence's {@link ExpressionLocation}, letting the single-expression and
+ * across-expression entry points share one collector while keeping their
+ * distinct location vocabularies.
+ */
+function collectCommonSubexpressions(
+  items: Array<{ expr: Expr; name: string }>,
+  minComplexity: number,
+  makeLocation: (name: string, path: string[], context?: Expr) => ExpressionLocation,
 ): CommonSubexpression[] {
   const subexpressionMap = new Map<
     string,
-    {
-      expression: Expr
-      locations: ExpressionLocation[]
-      count: number
-    }
+    { expression: Expr; locations: ExpressionLocation[]; count: number }
   >()
 
-  // Recursively extract subexpressions
-  function extractSubexpressions(currentExpr: Expr, path: string[], context?: Expr) {
-    if (isExprNode(currentExpr)) {
-      const complexity = analyzeComplexity(currentExpr).computationalCost
-
-      // Only consider subexpressions above the complexity threshold
-      if (complexity >= minComplexity) {
-        const key = serializeExpression(currentExpr)
-
-        if (!subexpressionMap.has(key)) {
-          subexpressionMap.set(key, {
-            expression: currentExpr,
-            locations: [],
-            count: 0,
-          })
-        }
-
-        const entry = subexpressionMap.get(key)!
-        entry.count++
-        entry.locations.push({
-          path: [...path],
-          description: `Path: ${path.join(' -> ')}`,
-          context,
-        })
-      }
-
-      // Recursively process arguments
-      currentExpr.args.forEach((arg, index) => {
-        extractSubexpressions(arg, [...path, `args[${index}]`], currentExpr)
-      })
-    }
+  // Memoize every op-node subtree's cost across ALL items in one bottom-up pass
+  // per item, so the walks below read costs in O(1) instead of re-running
+  // analyzeComplexity on every subtree (which made this O(n²)).
+  const costCache = new Map<ExpressionNode, number>()
+  for (const item of items) {
+    collectSubtreeCosts(item.expr, costCache)
   }
 
-  extractSubexpressions(expr, ['root'])
+  for (const item of items) {
+    const visit = (currentExpr: Expr, path: string[], context?: Expr): void => {
+      if (!isExprNode(currentExpr)) return
 
-  // Convert to CommonSubexpression format, filtering for actual duplicates
+      const complexity = costCache.get(currentExpr)!
+      if (complexity >= minComplexity) {
+        const key = subexpressionKey(currentExpr)
+
+        let entry = subexpressionMap.get(key)
+        if (!entry) {
+          entry = { expression: currentExpr, locations: [], count: 0 }
+          subexpressionMap.set(key, entry)
+        }
+        entry.count++
+        entry.locations.push(makeLocation(item.name, path, context))
+      }
+
+      // Recurse through every expression-bearing child (args, aggregate
+      // bodies, integral bounds, ...) via the shared walker.
+      forEachChild(currentExpr, (child, childKey, index) => {
+        const segment = index !== undefined ? `${childKey}[${index}]` : childKey
+        visit(child, [...path, segment], currentExpr)
+      })
+    }
+
+    visit(item.expr, ['root'])
+  }
+
   const results: CommonSubexpression[] = []
-
   for (const data of subexpressionMap.values()) {
     if (data.count > 1) {
-      // Only include actual duplicates
-      const complexity = analyzeComplexity(data.expression).computationalCost
-      const savings = complexity * (data.count - 1) // Cost saved by factoring out
-
+      // data.expression is always an op node (only isExprNode nodes are added),
+      // so its cost is in the cache from the pass above.
+      const complexity = costCache.get(data.expression as ExpressionNode)!
+      const savings = complexity * (data.count - 1) // Cost saved by factoring out.
       results.push({
         expression: data.expression,
         locations: data.locations,
@@ -83,8 +102,29 @@ export function findCommonSubexpressions(
     }
   }
 
-  // Sort by potential savings (highest first)
+  // Sort by potential savings (highest first).
   return results.sort((a, b) => b.savings - a.savings)
+}
+
+/**
+ * Find common subexpressions in a single expression
+ * @param expr Expression to analyze
+ * @param minComplexity Minimum complexity threshold for considering subexpressions
+ * @returns Array of common subexpressions found
+ */
+export function findCommonSubexpressions(
+  expr: Expr,
+  minComplexity: number = DEFAULT_MIN_COMPLEXITY,
+): CommonSubexpression[] {
+  return collectCommonSubexpressions(
+    [{ expr, name: 'root' }],
+    minComplexity,
+    (_name, path, context) => ({
+      path: [...path],
+      description: `Path: ${path.join(' -> ')}`,
+      context,
+    }),
+  )
 }
 
 /**
@@ -95,71 +135,13 @@ export function findCommonSubexpressions(
  */
 export function findCommonSubexpressionsAcrossExpressions(
   expressions: Array<{ expr: Expr; name: string }>,
-  minComplexity: number = 5,
+  minComplexity: number = DEFAULT_MIN_COMPLEXITY,
 ): CommonSubexpression[] {
-  const subexpressionMap = new Map<
-    string,
-    {
-      expression: Expr
-      locations: ExpressionLocation[]
-      count: number
-    }
-  >()
-
-  // Process each expression
-  expressions.forEach((item) => {
-    function extractSubexpressions(currentExpr: Expr, path: string[], context?: Expr) {
-      if (isExprNode(currentExpr)) {
-        const complexity = analyzeComplexity(currentExpr).computationalCost
-
-        if (complexity >= minComplexity) {
-          const key = serializeExpression(currentExpr)
-
-          if (!subexpressionMap.has(key)) {
-            subexpressionMap.set(key, {
-              expression: currentExpr,
-              locations: [],
-              count: 0,
-            })
-          }
-
-          const entry = subexpressionMap.get(key)!
-          entry.count++
-          entry.locations.push({
-            path: [item.name, ...path],
-            description: `Expression "${item.name}" at ${path.join(' -> ')}`,
-            context,
-          })
-        }
-
-        // Recursively process arguments
-        currentExpr.args.forEach((arg, index) => {
-          extractSubexpressions(arg, [...path, `args[${index}]`], currentExpr)
-        })
-      }
-    }
-
-    extractSubexpressions(item.expr, ['root'])
-  })
-
-  // Convert to CommonSubexpression format
-  const results: CommonSubexpression[] = []
-
-  for (const data of subexpressionMap.values()) {
-    if (data.count > 1) {
-      const complexity = analyzeComplexity(data.expression).computationalCost
-      const savings = complexity * (data.count - 1)
-
-      results.push({
-        expression: data.expression,
-        locations: data.locations,
-        count: data.count,
-        savings,
-      })
-    }
-  }
-
-  return results.sort((a, b) => b.savings - a.savings)
+  return collectCommonSubexpressions(expressions, minComplexity, (name, path, context) => ({
+    path: [name, ...path],
+    description: `Expression "${name}" at ${path.join(' -> ')}`,
+    context,
+  }))
 }
 
 /**
@@ -211,7 +193,7 @@ function collectModelExpressions(
  */
 export function findCommonSubexpressionsInModel(
   model: Model,
-  minComplexity: number = 5,
+  minComplexity: number = DEFAULT_MIN_COMPLEXITY,
 ): CommonSubexpression[] {
   const expressions: Array<{ expr: Expr; name: string }> = []
   collectModelExpressions(model, '', expressions)
@@ -229,7 +211,7 @@ export function findCommonSubexpressionsInModel(
  */
 export function findCommonSubexpressionsInEsmFile(
   esmFile: EsmFile,
-  minComplexity: number = 5,
+  minComplexity: number = DEFAULT_MIN_COMPLEXITY,
 ): CommonSubexpression[] {
   const expressions: Array<{ expr: Expr; name: string }> = []
 
@@ -259,47 +241,6 @@ export function findCommonSubexpressionsInEsmFile(
 }
 
 /**
- * Generate a canonical string representation of an expression for comparison
- * @param expr Expression to serialize
- * @returns Canonical string representation
- */
-function serializeExpression(expr: Expr): string {
-  if (typeof expr === 'number') {
-    return `n:${expr}`
-  } else if (isNumericLiteral(expr)) {
-    // Tagged canonical-mode literal: key by value, keeping the int/float
-    // distinction so int 2 and float 2.0 do not collapse.
-    return `${isIntLit(expr) ? 'i' : 'n'}:${expr.value}`
-  } else if (typeof expr === 'string') {
-    return `v:${expr}`
-  } else if (isExprNode(expr)) {
-    // Sort arguments for commutative operations to ensure canonical form
-    const commutativeOps = new Set(['+', '*', 'and', 'or', 'min', 'max'])
-
-    let args = expr.args
-    if (commutativeOps.has(expr.op)) {
-      // Sort arguments by their serialized form for commutative operations
-      args = [...expr.args].sort((a, b) =>
-        serializeExpression(a).localeCompare(serializeExpression(b)),
-      )
-    }
-
-    const serializedArgs = args.map((arg) => serializeExpression(arg)).join(',')
-
-    // Include additional properties if they exist
-    const extras = []
-    if ('dim' in expr && expr.dim) extras.push(`dim:${expr.dim}`)
-    if ('units' in expr && expr.units) extras.push(`units:${expr.units}`)
-
-    const extrasStr = extras.length > 0 ? `|${extras.join('|')}` : ''
-
-    return `op:${expr.op}(${serializedArgs})${extrasStr}`
-  }
-
-  return 'unknown'
-}
-
-/**
  * Estimate the cost savings from factoring out common subexpressions
  * @param commonSubexpressions Array of common subexpressions
  * @returns Total estimated cost savings
@@ -309,22 +250,25 @@ export function estimateSavings(commonSubexpressions: CommonSubexpression[]): nu
 }
 
 /**
- * Generate variable names for factored subexpressions
+ * Generate variable names for factored subexpressions.
+ *
+ * Keyed by the {@link CommonSubexpression} object itself so callers can look up
+ * a generated name directly from the array element (the previous private
+ * string key could not be reconstructed by callers).
  * @param commonSubexpressions Array of common subexpressions
  * @param prefix Prefix for generated variable names
- * @returns Map of expressions to generated variable names
+ * @returns Map from each common subexpression to its generated variable name
  */
 export function generateFactoredVariableNames(
   commonSubexpressions: CommonSubexpression[],
   prefix: string = 'temp_',
-): Map<string, string> {
-  const nameMap = new Map<string, string>()
+): Map<CommonSubexpression, string> {
+  const nameMap = new Map<CommonSubexpression, string>()
   let counter = 1
 
   for (const subexpr of commonSubexpressions) {
-    const key = serializeExpression(subexpr.expression)
-    if (!nameMap.has(key)) {
-      nameMap.set(key, `${prefix}${counter++}`)
+    if (!nameMap.has(subexpr)) {
+      nameMap.set(subexpr, `${prefix}${counter++}`)
     }
   }
 

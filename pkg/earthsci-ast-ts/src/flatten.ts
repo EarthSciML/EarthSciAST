@@ -16,6 +16,8 @@ import type {
 } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
+import { forEachComponent, forEachModelVariable } from './traverse.js'
+import { OPS } from './op-registry.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
 export type FlattenOptions = CouplingImportOptions
@@ -26,7 +28,16 @@ export type FlattenOptions = CouplingImportOptions
 export interface FlattenedEquation {
   /** Dot-namespaced LHS variable name (e.g., "Atmos.O3") */
   lhs: string
-  /** Expression string with namespaced references */
+  /**
+   * Expression string with namespaced references.
+   *
+   * For equations produced from a `couple` connector, the string uses a
+   * `transform(expr)` pseudo-function convention: the connector's `transform`
+   * (`"additive"` / `"multiplicative"` / `"replacement"`) is emitted as the
+   * function name wrapping the (already-scoped) connector expression — e.g.
+   * `additive(A.x)`. These are provenance/intent markers, not scalar operators
+   * in {@link OPS}; a downstream consumer interprets the wrapper.
+   */
   rhs: string
   /** Name of the source system this equation originated from */
   sourceSystem: string
@@ -61,6 +72,32 @@ export interface FlattenedSystem {
 }
 
 /**
+ * The single mutable accumulator threaded through the flatten helpers.
+ *
+ * It holds every growing output of a flatten run. Passing one object (instead
+ * of the historical four positional `string[]` params plus maps, which were
+ * transposition-prone and differed between {@link flattenModel} and
+ * {@link flattenReactionSystem}) means each helper touches exactly the fields
+ * it needs and the field↔argument mapping cannot silently drift.
+ */
+interface FlattenAccumulator {
+  /** All state variable names (dot-namespaced). */
+  stateVariables: string[]
+  /** All parameter names (dot-namespaced). */
+  parameters: string[]
+  /** All brownian (Wiener) noise variable names (dot-namespaced). */
+  brownianVariables: string[]
+  /** Observed/derived variables: namespaced name -> expression string. */
+  variables: Record<string, string>
+  /** All equations from all systems, with namespaced references. */
+  equations: FlattenedEquation[]
+  /** Names of the top-level source systems, in file order. */
+  sourceSystems: string[]
+  /** Human-readable descriptions of the coupling rules applied. */
+  couplingRules: string[]
+}
+
+/**
  * Flatten a multi-system ESM file into a single unified system.
  *
  * The algorithm:
@@ -73,40 +110,38 @@ export interface FlattenedSystem {
  * @returns A FlattenedSystem with all variables namespaced and equations unified
  */
 export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedSystem {
-  const stateVariables: string[] = []
-  const parameters: string[] = []
-  const brownianVariables: string[] = []
-  const variables: Record<string, string> = {}
-  const equations: FlattenedEquation[] = []
-  const sourceSystems: string[] = []
-  const couplingRules: string[] = []
-
-  // 1. Process all models (unresolved SubsystemRef entries carry no
-  // variables or equations — flattening them is a no-op, so skip them,
-  // but still record the system name)
-  if (file.models) {
-    for (const [systemName, model] of Object.entries(file.models)) {
-      sourceSystems.push(systemName)
-      if ('ref' in model) continue
-      flattenModel(
-        systemName,
-        model as Model,
-        stateVariables,
-        parameters,
-        brownianVariables,
-        variables,
-        equations,
-      )
-    }
+  const acc: FlattenAccumulator = {
+    stateVariables: [],
+    parameters: [],
+    brownianVariables: [],
+    variables: {},
+    equations: [],
+    sourceSystems: [],
+    couplingRules: [],
   }
 
-  // 2. Process all reaction systems
-  if (file.reaction_systems) {
-    for (const [systemName, rs] of Object.entries(file.reaction_systems)) {
-      sourceSystems.push(systemName)
-      flattenReactionSystem(systemName, rs, stateVariables, parameters, variables, equations)
-    }
-  }
+  // 1 & 2. Walk every model and reaction system (and, recursively, their inline
+  // subsystems) through the shared `traverse.js` policy, so subsystem descent
+  // and reference-stub skipping are defined in exactly ONE place (previously
+  // re-implemented divergently here, in graph.ts, and in units.ts). Reference
+  // stubs — `{ref}` includes and `{kind}` data loaders — are visited as leaves
+  // (`isReference`) and never descended into; they carry no variables or
+  // equations, so flattening them is a no-op. Top-level systems are still
+  // recorded in `sourceSystems`; a top-level entry is one whose composed
+  // `scopedName` equals its own `name` (subsystems gain a dotted prefix).
+  forEachComponent(
+    file,
+    (visit) => {
+      if (visit.scopedName === visit.name) acc.sourceSystems.push(visit.name)
+      if (visit.isReference) return
+      if (visit.kind === 'models') {
+        flattenModel(acc, visit.scopedName, visit.component as Model)
+      } else {
+        flattenReactionSystem(acc, visit.scopedName, visit.component as ReactionSystem)
+      }
+    },
+    { recurse: true },
+  )
 
   // 3. Expand coupling_import entries (esm-spec §10.10.3), then process the
   // resulting coupling sequence. A file with no coupling_import entries yields
@@ -114,98 +149,74 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   const coupling = expandCouplingImports(file, options)
   if (coupling) {
     for (const entry of coupling) {
-      processCouplingEntry(entry, equations, variables, couplingRules)
+      processCouplingEntry(acc, entry)
     }
   }
 
   return {
-    stateVariables,
-    parameters,
-    brownianVariables,
-    variables,
-    equations,
+    stateVariables: acc.stateVariables,
+    parameters: acc.parameters,
+    brownianVariables: acc.brownianVariables,
+    variables: acc.variables,
+    equations: acc.equations,
     metadata: {
-      sourceSystems,
-      couplingRules,
+      sourceSystems: acc.sourceSystems,
+      couplingRules: acc.couplingRules,
     },
   }
 }
 
 /**
- * Flatten a single Model and its subsystems into the accumulator arrays.
+ * Flatten a single Model into the accumulator. Subsystem descent is driven by
+ * {@link forEachComponent} in {@link flatten}, so this handles only THIS
+ * model's own variables and equations.
  */
-function flattenModel(
-  prefix: string,
-  model: Model,
-  stateVariables: string[],
-  parameters: string[],
-  brownianVariables: string[],
-  variables: Record<string, string>,
-  equations: FlattenedEquation[],
-): void {
+function flattenModel(acc: FlattenAccumulator, prefix: string, model: Model): void {
   // Collect the set of variable names in this model for namespacing expressions
   const localNames = new Set<string>(Object.keys(model.variables || {}))
 
   // Process variables
-  for (const [varName, variable] of Object.entries(model.variables || {})) {
+  forEachModelVariable(model, (variable, varName) => {
     const namespacedName = `${prefix}.${varName}`
 
     switch (variable.type) {
       case 'state':
-        stateVariables.push(namespacedName)
+        acc.stateVariables.push(namespacedName)
         break
       case 'parameter':
-        parameters.push(namespacedName)
+        acc.parameters.push(namespacedName)
         break
       case 'brownian':
-        brownianVariables.push(namespacedName)
+        acc.brownianVariables.push(namespacedName)
         break
       case 'observed':
         if (variable.expression !== undefined) {
-          variables[namespacedName] = namespaceExpression(variable.expression, prefix, localNames)
+          acc.variables[namespacedName] = namespaceExpression(
+            variable.expression,
+            prefix,
+            localNames,
+          )
         }
         break
     }
-  }
+  })
 
   // Process equations
   for (const eq of model.equations || []) {
-    equations.push({
+    acc.equations.push({
       lhs: namespaceExpression(eq.lhs, prefix, localNames),
       rhs: namespaceExpression(eq.rhs, prefix, localNames),
       sourceSystem: prefix,
     })
   }
-
-  // Recursively process inline-model subsystems (data loaders and
-  // unresolved refs carry no equations)
-  if (model.subsystems) {
-    for (const [subName, subModel] of Object.entries(model.subsystems)) {
-      if ('ref' in subModel || 'kind' in subModel) continue
-      flattenModel(
-        `${prefix}.${subName}`,
-        subModel as Model,
-        stateVariables,
-        parameters,
-        brownianVariables,
-        variables,
-        equations,
-      )
-    }
-  }
 }
 
 /**
- * Flatten a single ReactionSystem and its subsystems into the accumulator arrays.
+ * Flatten a single ReactionSystem into the accumulator. Subsystem descent is
+ * driven by {@link forEachComponent} in {@link flatten}, so this handles only
+ * THIS system's own species, parameters, reactions, and constraint equations.
  */
-function flattenReactionSystem(
-  prefix: string,
-  rs: ReactionSystem,
-  stateVariables: string[],
-  parameters: string[],
-  variables: Record<string, string>,
-  equations: FlattenedEquation[],
-): void {
+function flattenReactionSystem(acc: FlattenAccumulator, prefix: string, rs: ReactionSystem): void {
   // Collect local names for namespacing
   const localNames = new Set<string>([
     ...Object.keys(rs.species || {}),
@@ -214,12 +225,12 @@ function flattenReactionSystem(
 
   // Species are state variables
   for (const speciesName of Object.keys(rs.species || {})) {
-    stateVariables.push(`${prefix}.${speciesName}`)
+    acc.stateVariables.push(`${prefix}.${speciesName}`)
   }
 
   // Parameters
   for (const paramName of Object.keys(rs.parameters || {})) {
-    parameters.push(`${prefix}.${paramName}`)
+    acc.parameters.push(`${prefix}.${paramName}`)
   }
 
   // Convert reactions to equations
@@ -232,7 +243,7 @@ function flattenReactionSystem(
         const lhs = `${prefix}.${product.species}`
         const stoich = product.stoichiometry
         const rhsExpr = stoich === 1 ? rateStr : `${stoich} * ${rateStr}`
-        equations.push({
+        acc.equations.push({
           lhs,
           rhs: rhsExpr,
           sourceSystem: prefix,
@@ -246,7 +257,7 @@ function flattenReactionSystem(
         const lhs = `${prefix}.${substrate.species}`
         const stoich = substrate.stoichiometry
         const rhsExpr = stoich === 1 ? `-${rateStr}` : `-${stoich} * ${rateStr}`
-        equations.push({
+        acc.equations.push({
           lhs,
           rhs: rhsExpr,
           sourceSystem: prefix,
@@ -258,26 +269,11 @@ function flattenReactionSystem(
   // Process constraint equations if present
   if (rs.constraint_equations) {
     for (const eq of rs.constraint_equations) {
-      equations.push({
+      acc.equations.push({
         lhs: namespaceExpression(eq.lhs, prefix, localNames),
         rhs: namespaceExpression(eq.rhs, prefix, localNames),
         sourceSystem: prefix,
       })
-    }
-  }
-
-  // Recursively process inline subsystems (unresolved refs are skipped)
-  if (rs.subsystems) {
-    for (const [subName, subRs] of Object.entries(rs.subsystems)) {
-      if ('ref' in subRs) continue
-      flattenReactionSystem(
-        `${prefix}.${subName}`,
-        subRs as ReactionSystem,
-        stateVariables,
-        parameters,
-        variables,
-        equations,
-      )
     }
   }
 }
@@ -285,14 +281,15 @@ function flattenReactionSystem(
 /**
  * Process a single coupling entry and add resulting equations/mappings.
  */
-function processCouplingEntry(
-  entry: CouplingEntry,
-  equations: FlattenedEquation[],
-  variables: Record<string, string>,
-  couplingRules: string[],
-): void {
+function processCouplingEntry(acc: FlattenAccumulator, entry: CouplingEntry): void {
+  const { variables, equations, couplingRules } = acc
   switch (entry.type) {
     case 'operator_compose': {
+      // `operator_compose.systems` is schema-pinned to EXACTLY two entries
+      // (esm-schema `[string, string]`, minItems/maxItems 2), so destructuring
+      // the pair is complete — there is no chain to iterate. (graph.ts loops
+      // over consecutive pairs only as a defensive generalization for its
+      // structural edge view; a well-formed entry always yields one pair.)
       const [sys1, sys2] = entry.systems
       let ruleDesc = `operator_compose(${sys1}, ${sys2})`
 
@@ -318,6 +315,7 @@ function processCouplingEntry(
     }
 
     case 'couple': {
+      // `couple.systems` is likewise schema-pinned to exactly two entries.
       const [sys1, sys2] = entry.systems
       const ruleDesc = `couple(${sys1}, ${sys2})`
 
@@ -325,6 +323,9 @@ function processCouplingEntry(
         const exprStr =
           connEq.expression !== undefined ? expressionToString(connEq.expression) : connEq.from
 
+        // The connector's `transform` (additive/multiplicative/replacement) is
+        // emitted as a `transform(expr)` pseudo-function wrapper — see the
+        // FlattenedEquation.rhs doc for this convention.
         equations.push({
           lhs: connEq.to,
           rhs: `${connEq.transform}(${exprStr})`,
@@ -346,7 +347,16 @@ function processCouplingEntry(
         break
       }
       const ruleDesc = `variable_map(${entry.from} -> ${entry.to}, ${entry.transform})`
-      if (entry.transform === 'conversion_factor' && entry.factor !== undefined) {
+      // `factor` is a scaling coefficient the schema permits only on the scaling
+      // transforms (additive / multiplicative / conversion_factor), so apply it
+      // uniformly whenever present — the mapped value becomes `factor * from`.
+      // This mirrors Rust (`apply_variable_map`), Python (`_apply_variable_map`),
+      // and Go (`applyVariableMap`), which all scale by `factor` regardless of
+      // which scaling transform is named; TS previously honored only
+      // `conversion_factor`, silently dropping the factor for additive /
+      // multiplicative. A factor of 1 (or absent) is a no-op identity map, as
+      // are `param_to_var` / `identity` (which never carry a factor).
+      if (entry.factor !== undefined && entry.factor !== 1) {
         variables[entry.to] = `${entry.factor} * ${entry.from}`
       } else {
         variables[entry.to] = entry.from
@@ -397,6 +407,26 @@ function namespaceExpression(expr: Expression, prefix: string, localNames: Set<s
 }
 
 /**
+ * The infix operators this printer renders as `(a op b)`.
+ *
+ * op-registry.ts (`OPS[op].precedence`) is the single source of truth for
+ * which operators are infix: an op is infix iff it carries a `precedence`.
+ * This printer fully parenthesizes, so it needs the membership set but never
+ * the precedence VALUES. Two precedence-bearing ops are deliberately excluded
+ * because this printer renders them specially rather than infix: `not` (a
+ * unary op emitted as `not(x)` below) and `=` (emitted via the generic
+ * `fn(args...)` fallback). Excluding exactly those reproduces the historical
+ * set (`+ - * / ^ > < >= <= == != and or`), so emitted rhs strings are
+ * byte-identical — while new infix ops added to op-registry now flow through
+ * automatically.
+ */
+const INFIX_OPS: ReadonlySet<string> = new Set(
+  Object.entries(OPS)
+    .filter(([op, info]) => info.precedence !== undefined && op !== 'not' && op !== '=')
+    .map(([op]) => op),
+)
+
+/**
  * Convert an ExpressionNode to a string with namespaced variable references.
  */
 function expressionNodeToString(
@@ -406,10 +436,7 @@ function expressionNodeToString(
 ): string {
   const args = node.args.map((arg) => namespaceExpression(arg, prefix, localNames))
 
-  // Binary infix operators
-  const infixOps = new Set(['+', '-', '*', '/', '^', '>', '<', '>=', '<=', '==', '!=', 'and', 'or'])
-
-  if (infixOps.has(node.op)) {
+  if (INFIX_OPS.has(node.op)) {
     if (args.length === 1 && node.op === '-') {
       return `(-${args[0]})`
     }

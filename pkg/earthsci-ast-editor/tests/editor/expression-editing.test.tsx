@@ -1,18 +1,22 @@
 /**
- * Expression Editing E2E Tests
+ * Expression Editing Component Tests
  *
- * Browser automation tests for SolidJS earthsci-ast-editor expression editing capabilities.
- * Tests verify expression editing with live validation, structural editing operations,
- * and web component export compatibility.
+ * jsdom component tests (via @solidjs/testing-library) for the SolidJS
+ * earthsci-ast-editor expression editing web components. Despite the historical
+ * "E2E" label these carried, they run in the same jsdom environment as the unit
+ * tests -- not a real browser. They verify expression editing with live
+ * validation, structural editing operations, and web component export
+ * compatibility by exercising registered custom elements and their events.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@solidjs/testing-library';
 import '@testing-library/jest-dom';
 import { registerWebComponents } from '../../src/web-components.ts';
+import { installCustomElementsMock } from '../../src/test-setup.ts';
 import { createSignal } from 'solid-js';
 
-// Mock DOM environment setup for E2E simulation
+// jsdom environment setup shared with the unit tests
 let mockDocument;
 
 beforeEach(async () => {
@@ -22,21 +26,14 @@ beforeEach(async () => {
   // Clear any existing custom elements
   vi.clearAllMocks();
 
-  // Setup mock DOM environment
-  Object.defineProperty(global, 'customElements', {
-    value: {
-      define: vi.fn(),
-      get: vi.fn(),
-      whenDefined: vi.fn().mockResolvedValue(undefined),
-    },
-    writable: true,
-  });
+  // Install the shared customElements stub (define/get/whenDefined)
+  installCustomElementsMock();
 
   // Register web components
   registerWebComponents();
 });
 
-describe('Expression Editing E2E', () => {
+describe('Expression Editing', () => {
   const validExpression = {
     op: '+',
     args: [

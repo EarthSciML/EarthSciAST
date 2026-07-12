@@ -6,84 +6,70 @@
  * expressions that can be edited using the ExpressionNode component.
  */
 
-import { Component, createSignal, createMemo, Show } from 'solid-js';
-import type { Equation, Expression } from '@earthsciml/ast';
-import { ExpressionNode } from './ExpressionNode';
+import type { Component } from 'solid-js'
+import { createSignal, Show } from 'solid-js'
+import type { Equation, Expression } from '@earthsciml/ast'
+import { ExpressionNode } from './ExpressionNode'
+import { createMergedHighlight } from './merged-highlight'
+import { replaceAtDocumentPath } from './document-path'
 
 export interface EquationEditorProps {
   /** The equation to display and edit */
-  equation: Equation;
+  equation: Equation
 
   /** Callback when the equation is modified */
-  onEquationChange?: (newEquation: Equation) => void;
+  onEquationChange?: (newEquation: Equation) => void
 
   /** Currently highlighted variable equivalence class */
-  highlightedVars?: Set<string>;
+  highlightedVars?: Set<string>
 
   /** Whether the editor is in read-only mode */
-  readonly?: boolean;
+  readonly?: boolean
 
   /** CSS class for styling */
-  class?: string;
+  class?: string
 
   /** Unique identifier for this editor */
-  id?: string;
+  id?: string
 }
 
 /**
  * Main EquationEditor component
  */
 export const EquationEditor: Component<EquationEditorProps> = (props) => {
-  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
-  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
+  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null)
+  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null)
 
-  // Create reactive highlighted vars set that includes hovered variable
-  const highlightedVars = createMemo(() => {
-    const baseHighlighted = props.highlightedVars || new Set<string>();
-    const hovered = hoveredVar();
-
-    if (hovered && !baseHighlighted.has(hovered)) {
-      return new Set([...baseHighlighted, hovered]);
-    }
-    return baseHighlighted;
-  });
+  // Base highlight set merged with the locally hovered variable.
+  const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar)
 
   // Handle selection of expression nodes
   const handleSelect = (path: (string | number)[]) => {
-    setSelectedPath(path);
-  };
+    setSelectedPath(path)
+  }
 
   // Handle hovering over variables
   const handleHoverVar = (varName: string | null) => {
-    setHoveredVar(varName);
-  };
+    setHoveredVar(varName)
+  }
 
-  // Handle replacement of expression parts
+  // Handle replacement of expression parts. The paths handed up by
+  // ExpressionNode are rooted at the equation (`['lhs']`, `['rhs', 'args', 0]`,
+  // …), so this uses the document-dialect replace rather than the pure
+  // expression-path variant.
   const handleReplace = (path: (string | number)[], newExpr: Expression) => {
-    if (props.readonly || !props.onEquationChange) return;
+    if (props.readonly || !props.onEquationChange) return
 
-    // Clone the equation and update the specified path
-    const newEquation = structuredClone(props.equation);
-
-    // Navigate to the path and replace the expression
-    let current: any = newEquation;
-    for (let i = 0; i < path.length - 1; i++) {
-      current = current[path[i]];
-    }
-
-    if (path.length > 0) {
-      current[path[path.length - 1]] = newExpr;
-    }
-
-    props.onEquationChange(newEquation);
-  };
+    const newEquation = replaceAtDocumentPath(props.equation, path, newExpr)
+    props.onEquationChange(newEquation)
+  }
 
   const editorClasses = () => {
-    const classes = ['equation-editor'];
-    if (props.readonly) classes.push('readonly');
-    if (props.class) classes.push(props.class);
-    return classes.join(' ');
-  };
+    const classes = ['equation-editor']
+    if (props.readonly) classes.push('readonly')
+    if (props.class) classes.push(props.class)
+    return classes.join(' ')
+  }
 
   return (
     <div class={editorClasses()} id={props.id}>
@@ -93,7 +79,7 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
           <ExpressionNode
             expr={props.equation.lhs}
             path={['lhs']}
-            highlightedVars={() => highlightedVars()}
+            highlightedVars={highlightedVars()}
             onHoverVar={handleHoverVar}
             onSelect={handleSelect}
             onReplace={handleReplace}
@@ -111,7 +97,7 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
           <ExpressionNode
             expr={props.equation.rhs}
             path={['rhs']}
-            highlightedVars={() => highlightedVars()}
+            highlightedVars={highlightedVars()}
             onHoverVar={handleHoverVar}
             onSelect={handleSelect}
             onReplace={handleReplace}
@@ -127,7 +113,7 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
         </div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
-export default EquationEditor;
+export default EquationEditor

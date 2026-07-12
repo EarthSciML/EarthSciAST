@@ -16,8 +16,9 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { load, save } from './index.js'
+import { fixturesDir } from './test-helpers.js'
 
-const simulationDir = join(__dirname, '../../../tests/simulation')
+const simulationDir = fixturesDir('simulation')
 
 function findSimulationFixtures(): string[] {
   return readdirSync(simulationDir)

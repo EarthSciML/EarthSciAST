@@ -9,32 +9,37 @@
  * handler updates each frame, so the SVG animates as the layout settles.
  * Nodes are draggable via pointer move/up listeners, and the panels are
  * styled with plain CSS (coupling-graph.css) — no Tailwind dependency.
+ *
+ * Immutability: d3-force mutates x/y/vx/vy/fx/fy/index on the node objects it
+ * owns. We therefore hand it shallow copies of the caller's `ComponentNode`s
+ * (see `toSimulationNode`) so `props.graph.nodes` is never mutated in place.
  */
 
-import { Component, createSignal, createMemo, createEffect, on, onMount, onCleanup, Show, For } from 'solid-js';
-import type { ComponentNode, CouplingEdge, Graph } from '@earthsciml/ast';
-import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force';
-import type { Simulation, SimulationNodeDatum, SimulationLinkDatum } from 'd3-force';
-import './coupling-graph.css';
+import type { Component } from 'solid-js'
+import { createSignal, createMemo, createEffect, on, onMount, onCleanup, Show, For } from 'solid-js'
+import type { ComponentNode, CouplingEdge, Graph } from '@earthsciml/ast'
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force'
+import type { Simulation, SimulationNodeDatum, SimulationLinkDatum } from 'd3-force'
+import './coupling-graph.css'
 
 export interface CouplingGraphProps {
   /** The graph data to visualize */
-  graph: Graph<ComponentNode, CouplingEdge>;
+  graph: Graph<ComponentNode, CouplingEdge>
 
   /** Width of the graph container */
-  width?: number;
+  width?: number
 
   /** Height of the graph container */
-  height?: number;
+  height?: number
 
   /** Optional callback when a node is selected */
-  onNodeSelect?: (node: ComponentNode) => void;
+  onNodeSelect?: (node: ComponentNode) => void
 
   /** Optional callback when an edge is selected */
-  onEdgeSelect?: (edge: CouplingEdge) => void;
+  onEdgeSelect?: (edge: CouplingEdge) => void
 
   /** Whether to show the minimap */
-  showMinimap?: boolean;
+  showMinimap?: boolean
 }
 
 interface GraphNode extends ComponentNode, SimulationNodeDatum {
@@ -43,235 +48,257 @@ interface GraphNode extends ComponentNode, SimulationNodeDatum {
 }
 
 interface GraphEdge extends SimulationLinkDatum<GraphNode> {
-  data: CouplingEdge;
+  data: CouplingEdge
 }
 
 /** Node position snapshot published by the simulation tick handler */
-type PositionMap = Map<string, { x: number; y: number }>;
+type PositionMap = Map<string, { x: number; y: number }>
+
+/**
+ * Fill color per component type, kept in one map so the minimap and tests read
+ * from a single source instead of hex literals scattered through the render.
+ */
+export const NODE_FILL: Record<ComponentNode['type'] | 'default', string> = {
+  model: '#4CAF50',
+  data_loader: '#2196F3',
+  reaction_system: '#9C27B0',
+  default: '#607D8B',
+}
+
+/** Stroke dash pattern per coupling edge type. */
+export const EDGE_DASH: Record<string, string> = {
+  variable_map: 'none',
+  operator_compose: '5,5',
+  couple: '10,2',
+}
+
+const NODE_STROKE = '#333'
+const EDGE_STROKE = '#999'
+
+/** Shallow-copy a caller node into a simulation-owned object (see header). */
+const toSimulationNode = (node: ComponentNode): GraphNode => ({ ...node })
 
 export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   // Default dimensions
-  const width = () => props.width ?? 800;
-  const height = () => props.height ?? 600;
+  const width = () => props.width ?? 800
+  const height = () => props.height ?? 600
 
-  // Reactive graph data
-  const nodes = createMemo(() => [...props.graph.nodes] as GraphNode[]);
-  const edges = createMemo(() =>
-    props.graph.edges.map(edge => ({
+  // Reactive graph data. Nodes are copied so d3-force never mutates the
+  // caller-owned ComponentNode objects behind our backs.
+  const nodes = createMemo(() => props.graph.nodes.map(toSimulationNode))
+  const edges = createMemo<GraphEdge[]>(() =>
+    props.graph.edges.map((edge) => ({
       source: edge.source,
       target: edge.target,
-      data: edge.data
-    })) as GraphEdge[]
-  );
+      data: edge.data,
+    })),
+  )
 
   // Component state
-  const [selectedNode, setSelectedNode] = createSignal<ComponentNode | null>(null);
-  const [selectedEdge, setSelectedEdge] = createSignal<CouplingEdge | null>(null);
-  const [hoveredElement, setHoveredElement] = createSignal<string | null>(null);
-  const [transform, setTransform] = createSignal({ x: 0, y: 0, k: 1 });
+  const [selectedNode, setSelectedNode] = createSignal<ComponentNode | null>(null)
+  const [selectedEdge, setSelectedEdge] = createSignal<CouplingEdge | null>(null)
+  const [hoveredElement, setHoveredElement] = createSignal<string | null>(null)
+  // Only zoom (k) is interactive; there is no pan handler, so no x/y offset.
+  const [transform, setTransform] = createSignal({ k: 1 })
 
   // Node positions, written by the simulation tick handler and read by the
   // JSX below — this is what makes the force layout animate.
-  const [positions, setPositions] = createSignal<PositionMap>(new Map());
+  const [positions, setPositions] = createSignal<PositionMap>(new Map())
 
-  const pos = (id: string) => positions().get(id) ?? { x: 0, y: 0 };
+  const pos = (id: string) => positions().get(id) ?? { x: 0, y: 0 }
 
   // SVG refs
-  let svgRef: SVGSVGElement | undefined;
-  let simulation: Simulation<GraphNode, GraphEdge> | undefined;
+  let svgRef: SVGSVGElement | undefined
+  let simulation: Simulation<GraphNode, GraphEdge> | undefined
 
   /** Publish current simulation positions into the reactive signal */
   const publishPositions = () => {
-    if (!simulation) return;
-    const map: PositionMap = new Map();
+    if (!simulation) return
+    const map: PositionMap = new Map()
     for (const node of simulation.nodes()) {
-      map.set(node.id, { x: node.x ?? 0, y: node.y ?? 0 });
+      map.set(node.id, { x: node.x ?? 0, y: node.y ?? 0 })
     }
-    setPositions(map);
-  };
+    setPositions(map)
+  }
 
   // Initialize D3 force simulation
   const initializeSimulation = () => {
-    const nodeData = nodes();
-    const edgeData = edges();
+    const nodeData = nodes()
+    const edgeData = edges()
 
     // Initialize positions if not set
-    nodeData.forEach(node => {
-      if (node.x === undefined) node.x = width() / 2 + (Math.random() - 0.5) * 100;
-      if (node.y === undefined) node.y = height() / 2 + (Math.random() - 0.5) * 100;
-    });
+    nodeData.forEach((node) => {
+      if (node.x === undefined) node.x = width() / 2 + (Math.random() - 0.5) * 100
+      if (node.y === undefined) node.y = height() / 2 + (Math.random() - 0.5) * 100
+    })
 
     simulation = forceSimulation(nodeData)
-      .force('link', forceLink(edgeData)
-        .id(d => (d as GraphNode).id)
-        .distance(100)
-        .strength(0.1))
+      .force(
+        'link',
+        forceLink(edgeData)
+          .id((d) => (d as GraphNode).id)
+          .distance(100)
+          .strength(0.1),
+      )
       .force('charge', forceManyBody().strength(-300))
       .force('center', forceCenter(width() / 2, height() / 2))
       .force('collision', forceCollide().radius(30))
-      .on('tick', publishPositions);
+      .on('tick', publishPositions)
 
-    publishPositions();
-  };
+    publishPositions()
+  }
 
-  // Node styling based on type
+  // Node styling based on type (colors from the NODE_FILL map above)
   const getNodeStyle = (node: ComponentNode) => {
     const baseStyle = {
-      stroke: '#333',
+      stroke: NODE_STROKE,
       'stroke-width': selectedNode()?.id === node.id ? 3 : 1,
       cursor: 'pointer',
-      filter: hoveredElement() === node.id ? 'brightness(1.2)' : 'none'
-    };
-
-    switch (node.type) {
-      case 'model':
-        return { ...baseStyle, fill: '#4CAF50', rx: 5, ry: 5 }; // Green rectangle
-      case 'data_loader':
-        return { ...baseStyle, fill: '#2196F3' }; // Blue ellipse
-      case 'reaction_system':
-        return { ...baseStyle, fill: '#9C27B0' }; // Purple rectangle
-      default:
-        return { ...baseStyle, fill: '#607D8B' };
+      filter: hoveredElement() === node.id ? 'brightness(1.2)' : 'none',
     }
-  };
+    const fill = NODE_FILL[node.type] ?? NODE_FILL.default
+    // `model` renders as a rounded rectangle; the other shapes take no radius.
+    return node.type === 'model' ? { ...baseStyle, fill, rx: 5, ry: 5 } : { ...baseStyle, fill }
+  }
 
-  // Edge styling based on coupling type
+  // Edge styling based on coupling type (dash patterns from EDGE_DASH above)
   const getEdgeStyle = (edge: CouplingEdge) => {
     const baseStyle = {
-      stroke: '#999',
+      stroke: EDGE_STROKE,
       'stroke-width': selectedEdge()?.id === edge.id ? 3 : 1,
       cursor: 'pointer',
       'marker-end': 'url(#arrowhead)',
-      filter: hoveredElement() === edge.id ? 'brightness(1.5)' : 'none'
-    };
-
-    switch (edge.type) {
-      case 'variable_map':
-        return { ...baseStyle, 'stroke-dasharray': 'none' };
-      case 'operator_compose':
-        return { ...baseStyle, 'stroke-dasharray': '5,5' };
-      case 'couple':
-        return { ...baseStyle, 'stroke-dasharray': '10,2' };
-      default:
-        return baseStyle;
+      filter: hoveredElement() === edge.id ? 'brightness(1.5)' : 'none',
     }
-  };
+    return { ...baseStyle, 'stroke-dasharray': EDGE_DASH[edge.type] ?? 'none' }
+  }
+
+  /**
+   * The caller's original node for an id. Selection state and `onNodeSelect`
+   * hand back the props object, never the simulation's mutable copy, so the
+   * copy's transient x/y/vx/… fields don't leak to consumers.
+   */
+  const originalNode = (id: string): ComponentNode | undefined =>
+    props.graph.nodes.find((n) => n.id === id)
 
   // Event handlers
-  const handleNodeClick = (node: ComponentNode) => {
-    setSelectedNode(prev => prev?.id === node.id ? null : node);
-    setSelectedEdge(null);
-    props.onNodeSelect?.(node);
-  };
+  const handleNodeClick = (node: GraphNode) => {
+    const original = originalNode(node.id) ?? node
+    setSelectedNode((prev) => (prev?.id === original.id ? null : original))
+    setSelectedEdge(null)
+    props.onNodeSelect?.(original)
+  }
 
   const handleEdgeClick = (edge: CouplingEdge) => {
-    setSelectedEdge(prev => prev?.id === edge.id ? null : edge);
-    setSelectedNode(null);
-    props.onEdgeSelect?.(edge);
-  };
+    setSelectedEdge((prev) => (prev?.id === edge.id ? null : edge))
+    setSelectedNode(null)
+    props.onEdgeSelect?.(edge)
+  }
 
   // Teardown for an in-progress drag (also invoked if the component
   // unmounts mid-drag)
-  let endActiveDrag: (() => void) | null = null;
+  let endActiveDrag: (() => void) | null = null
 
   /**
    * Pointer-based node dragging: mousedown pins the node (fx/fy), document
    * mousemove follows the pointer, and mouseup releases the pin.
    */
   const handleNodeMouseDown = (node: GraphNode, event: MouseEvent) => {
-    event.preventDefault();
-    endActiveDrag?.();
+    event.preventDefault()
+    endActiveDrag?.()
 
-    node.fx = node.x;
-    node.fy = node.y;
-    simulation?.alphaTarget(0.3).restart();
+    node.fx = node.x
+    node.fy = node.y
+    simulation?.alphaTarget(0.3).restart()
 
     const toGraphCoords = (e: MouseEvent) => {
-      const rect = svgRef?.getBoundingClientRect();
-      const k = transform().k || 1;
-      if (!rect) return { x: e.offsetX, y: e.offsetY };
+      const rect = svgRef?.getBoundingClientRect()
+      const k = transform().k || 1
+      if (!rect) return { x: e.offsetX, y: e.offsetY }
       return {
         x: (e.clientX - rect.left) / k,
-        y: (e.clientY - rect.top) / k
-      };
-    };
+        y: (e.clientY - rect.top) / k,
+      }
+    }
 
     const handleMouseMove = (e: MouseEvent) => {
-      const point = toGraphCoords(e);
-      node.fx = point.x;
-      node.fy = point.y;
-      simulation?.alpha(Math.max(simulation.alpha(), 0.3)).restart();
-    };
+      const point = toGraphCoords(e)
+      node.fx = point.x
+      node.fy = point.y
+      simulation?.alpha(Math.max(simulation.alpha(), 0.3)).restart()
+    }
 
     const handleMouseUp = () => {
-      node.fx = null;
-      node.fy = null;
-      simulation?.alphaTarget(0);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      endActiveDrag = null;
-    };
+      node.fx = null
+      node.fy = null
+      simulation?.alphaTarget(0)
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      endActiveDrag = null
+    }
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    endActiveDrag = handleMouseUp;
-  };
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    endActiveDrag = handleMouseUp
+  }
 
-  // Zoom and pan functionality
+  // Zoom (wheel) — pan is not implemented, so only the scale factor changes.
   const handleWheel = (event: WheelEvent) => {
-    event.preventDefault();
-    const delta = event.deltaY > 0 ? 0.9 : 1.1;
-    const newTransform = transform();
-    setTransform({
-      ...newTransform,
-      k: Math.max(0.1, Math.min(3, newTransform.k * delta))
-    });
-  };
+    event.preventDefault()
+    const delta = event.deltaY > 0 ? 0.9 : 1.1
+    setTransform({ k: Math.max(0.1, Math.min(3, transform().k * delta)) })
+  }
 
   // Lifecycle management
   onMount(() => {
-    initializeSimulation();
+    initializeSimulation()
     if (svgRef) {
-      svgRef.addEventListener('wheel', handleWheel, { passive: false });
+      svgRef.addEventListener('wheel', handleWheel, { passive: false })
     }
-  });
+  })
 
   onCleanup(() => {
-    endActiveDrag?.();
-    simulation?.stop();
+    endActiveDrag?.()
+    simulation?.stop()
     if (svgRef) {
-      svgRef.removeEventListener('wheel', handleWheel);
+      svgRef.removeEventListener('wheel', handleWheel)
     }
-  });
+  })
 
   // Feed graph-data changes into the running simulation (side effect, so an
   // effect — not a memo). Deferred: onMount performs the initial setup.
-  createEffect(on([nodes, edges], ([nodeData, edgeData]) => {
-    if (!simulation) return;
+  createEffect(
+    on(
+      [nodes, edges],
+      ([nodeData, edgeData]) => {
+        if (!simulation) return
 
-    nodeData.forEach(node => {
-      if (node.x === undefined) node.x = width() / 2 + (Math.random() - 0.5) * 100;
-      if (node.y === undefined) node.y = height() / 2 + (Math.random() - 0.5) * 100;
-    });
+        nodeData.forEach((node) => {
+          if (node.x === undefined) node.x = width() / 2 + (Math.random() - 0.5) * 100
+          if (node.y === undefined) node.y = height() / 2 + (Math.random() - 0.5) * 100
+        })
 
-    simulation.nodes(nodeData);
-    const linkForce = simulation.force('link');
-    if (linkForce && 'links' in linkForce) {
-      (linkForce as { links: (edges: GraphEdge[]) => void }).links(edgeData);
-    }
-    simulation.alpha(0.3).restart();
-    publishPositions();
-  }, { defer: true }));
+        simulation.nodes(nodeData)
+        const linkForce = simulation.force('link')
+        if (linkForce && 'links' in linkForce) {
+          ;(linkForce as { links: (edges: GraphEdge[]) => void }).links(edgeData)
+        }
+        simulation.alpha(0.3).restart()
+        publishPositions()
+      },
+      { defer: true },
+    ),
+  )
 
   // Render node shapes based on type (positions read reactively)
   const renderNode = (node: GraphNode) => {
-    const style = () => getNodeStyle(node);
+    const style = () => getNodeStyle(node)
     const commonHandlers = {
       onClick: () => handleNodeClick(node),
       onMouseEnter: () => setHoveredElement(node.id),
       onMouseLeave: () => setHoveredElement(null),
-      onMouseDown: (e: MouseEvent) => handleNodeMouseDown(node, e)
-    };
+      onMouseDown: (e: MouseEvent) => handleNodeMouseDown(node, e),
+    }
 
     switch (node.type) {
       case 'model':
@@ -285,7 +312,7 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
             {...style()}
             {...commonHandlers}
           />
-        );
+        )
 
       case 'data_loader':
         return (
@@ -297,30 +324,24 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
             {...style()}
             {...commonHandlers}
           />
-        );
+        )
 
       default:
         return (
-          <circle
-            cx={pos(node.id).x}
-            cy={pos(node.id).y}
-            r="20"
-            {...style()}
-            {...commonHandlers}
-          />
-        );
+          <circle cx={pos(node.id).x} cy={pos(node.id).y} r="20" {...style()} {...commonHandlers} />
+        )
     }
-  };
+  }
 
   /** Resolve an edge endpoint to a node id */
   const endpointId = (endpoint: GraphEdge['source']): string =>
-    typeof endpoint === 'object' ? (endpoint as GraphNode).id : String(endpoint);
+    typeof endpoint === 'object' ? (endpoint as GraphNode).id : String(endpoint)
 
   // Render edge with arrowhead
   const renderEdge = (edge: GraphEdge) => {
-    const style = () => getEdgeStyle(edge.data);
-    const source = () => pos(endpointId(edge.source));
-    const target = () => pos(endpointId(edge.target));
+    const style = () => getEdgeStyle(edge.data)
+    const source = () => pos(endpointId(edge.source))
+    const target = () => pos(endpointId(edge.target))
 
     return (
       <line
@@ -333,13 +354,13 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
         onMouseEnter={() => setHoveredElement(edge.data.id)}
         onMouseLeave={() => setHoveredElement(null)}
       />
-    );
-  };
+    )
+  }
 
   // Minimap component
   const Minimap: Component = () => {
-    const minimapSize = 150;
-    const scale = () => Math.min(minimapSize / width(), minimapSize / height());
+    const minimapSize = 150
+    const scale = () => Math.min(minimapSize / width(), minimapSize / height())
 
     return (
       <div class="coupling-graph-minimap">
@@ -353,25 +374,25 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
                 cx={pos(node.id).x * scale()}
                 cy={pos(node.id).y * scale()}
                 r="2"
-                fill={getNodeStyle(node).fill as string}
+                fill={NODE_FILL[node.type] ?? NODE_FILL.default}
               />
             )}
           </For>
 
-          {/* Viewport indicator */}
+          {/* Viewport indicator (no panning, so the viewport is anchored at 0,0) */}
           <rect
-            x={-transform().x * scale()}
-            y={-transform().y * scale()}
-            width={width() * scale() / transform().k}
-            height={height() * scale() / transform().k}
+            x={0}
+            y={0}
+            width={(width() * scale()) / transform().k}
+            height={(height() * scale()) / transform().k}
             fill="none"
             stroke="red"
             stroke-width="1"
           />
         </svg>
       </div>
-    );
-  };
+    )
+  }
 
   return (
     <div class="coupling-graph-container">
@@ -379,7 +400,7 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
         ref={(el) => (svgRef = el)}
         width={width()}
         height={height()}
-        style={`transform: translate(${transform().x}px, ${transform().y}px) scale(${transform().k})`}
+        style={`transform: scale(${transform().k})`}
         class="coupling-graph-svg"
       >
         {/* Arrow marker definition */}
@@ -392,25 +413,18 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
             refY="3.5"
             orient="auto"
           >
-            <polygon
-              points="0 0, 10 3.5, 0 7"
-              fill="#999"
-            />
+            <polygon points="0 0, 10 3.5, 0 7" fill={EDGE_STROKE} />
           </marker>
         </defs>
 
         {/* Render edges */}
         <g class="edges">
-          <For each={edges()}>
-            {(edge) => renderEdge(edge)}
-          </For>
+          <For each={edges()}>{(edge) => renderEdge(edge)}</For>
         </g>
 
         {/* Render nodes */}
         <g class="nodes">
-          <For each={nodes()}>
-            {(node) => renderNode(node)}
-          </For>
+          <For each={nodes()}>{(node) => renderNode(node)}</For>
         </g>
 
         {/* Node labels */}
@@ -472,8 +486,8 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
 
           <button
             onClick={() => {
-              setSelectedNode(null);
-              setSelectedEdge(null);
+              setSelectedNode(null)
+              setSelectedEdge(null)
             }}
             class="coupling-graph-close-btn"
           >
@@ -482,7 +496,7 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
         </div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
-export default CouplingGraph;
+export default CouplingGraph

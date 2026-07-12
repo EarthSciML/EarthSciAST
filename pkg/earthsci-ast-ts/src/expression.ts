@@ -6,7 +6,7 @@
  */
 
 import type { Expression, ExpressionNode, Model } from './types.js'
-import { isNumericLiteral, type NumericLiteral } from './numeric-literal.js'
+import { isNumericLiteral, numericValue, type NumericLiteral } from './numeric-literal.js'
 import { evaluateExpression } from './codegen.js'
 
 /**
@@ -264,4 +264,249 @@ export function simplify(expr: Expr): Expr {
   }
 
   return expr
+}
+
+// ---------------------------------------------------------------------------
+// Shared expression-tree walker
+//
+// `mapChildren` / `forEachChild` are the ONE place that enumerates which
+// `ExpressionNode` fields carry child expressions. Every hand-rolled
+// traversal that recurses over an expression should go through these instead
+// of re-deriving the number/string/NumericLiteral/node leaf discrimination —
+// hand-rolled walkers historically each covered a different subset and
+// silently skipped children hidden in aggregate bodies (`expr`/`filter`/
+// `key`), integral bounds (`lower`/`upper`), `makearray` `values`,
+// `table_lookup` `axes`, and template `bindings`. Mirrors the Rust
+// `ExpressionNode::map_children` / `for_each_child` (types.rs) and the Python
+// `expr_walk` field set for cross-language parity.
+// ---------------------------------------------------------------------------
+
+/** `ExpressionNode` fields holding a positional array of child expressions. */
+const ARRAY_CHILD_KEYS = ['args', 'values'] as const
+
+/**
+ * `ExpressionNode` fields holding a string-keyed MAP of child expressions
+ * (`table_lookup.axes`, `apply_expression_template.bindings`).
+ */
+const MAP_CHILD_KEYS = ['axes', 'bindings'] as const
+
+/** `ExpressionNode` fields holding a single child expression. */
+const SCALAR_CHILD_KEYS = ['lower', 'upper', 'expr', 'filter', 'key'] as const
+
+/**
+ * The COMPLETE, canonical set of `ExpressionNode` fields that carry child
+ * expressions, in deterministic visit order (`args`, the integral/aggregate
+ * scalar slots, `values`, `axes`, `key`, `bindings`). This is the single
+ * source of truth every traversal in the package trusts.
+ *
+ * Any field NOT listed here is structural metadata preserved verbatim by
+ * `mapChildren`: `op`, `id`, `expect_cadence`, `wrt`, `dim`, `var`, `attrs`,
+ * `output_idx`, `reduce`, `semiring`, `ranges`, `join`, `distinct`, `arg`,
+ * `manifold`, `regions`, `shape`, `perm`, `axis`, `fn`, `name`, `value`,
+ * `table`, `output`, and any field added later. In particular the `const`
+ * node's `value` literal and `NumericLiteral` leaves are NOT expression
+ * children — the walker never descends into them.
+ *
+ * Mirrors the Rust `ExpressionNode::for_each_child` / `map_children` and the
+ * Python `expr_walk` field set.
+ */
+export const EXPRESSION_CHILD_KEYS = [
+  'args',
+  'lower',
+  'upper',
+  'expr',
+  'filter',
+  'values',
+  'axes',
+  'key',
+  'bindings',
+] as const
+
+const ARRAY_CHILD_KEY_SET: ReadonlySet<string> = new Set(ARRAY_CHILD_KEYS)
+const MAP_CHILD_KEY_SET: ReadonlySet<string> = new Set(MAP_CHILD_KEYS)
+const SCALAR_CHILD_KEY_SET: ReadonlySet<string> = new Set(SCALAR_CHILD_KEYS)
+
+/** Callback receiving each direct child, its slot key, and array/map index. */
+type ChildMapper = (child: Expr, key: string, index?: number) => Expr
+/** Read-only variant of {@link ChildMapper}. */
+type ChildVisitor = (child: Expr, key: string, index?: number) => void
+
+/**
+ * Rebuild `node`, replacing every expression-bearing child with
+ * `fn(child, key, index)` and PRESERVING every other field verbatim (`op`,
+ * `dim`, `wrt`, `reduce`, `join`, `ranges`, `regions`, and any scalar
+ * metadata). Field-preserving: any field not in {@link EXPRESSION_CHILD_KEYS}
+ * — including ones this walker does not know about — is copied through by the
+ * shallow spread.
+ *
+ * The traversal is ONE level deep: `fn` decides whether to recurse. Children
+ * are reported as follows:
+ *   - array fields (`args`, `values`): `fn(element, fieldName, arrayIndex)`;
+ *   - scalar fields (`lower`, `upper`, `expr`, `filter`, `key`):
+ *     `fn(child, fieldName)` with `index` omitted;
+ *   - map fields (`axes`, `bindings`): entries are visited in sorted-key
+ *     order as `fn(value, entryKey, enumerationIndex)` — `key` is the map's
+ *     own axis/param name.
+ *
+ * `NumericLiteral` leaves are passed to `fn` as ordinary children but are
+ * never destructured. Returns a NEW node; `node` is not mutated.
+ */
+export function mapChildren(node: ExpressionNode, fn: ChildMapper): ExpressionNode {
+  // Shallow copy carries every structural / metadata field through untouched;
+  // only the expression-bearing keys below are overwritten.
+  const out: Record<string, unknown> = { ...node }
+
+  out.args = node.args.map((child, i) => fn(child, 'args', i))
+
+  if (node.lower !== undefined) out.lower = fn(node.lower, 'lower')
+  if (node.upper !== undefined) out.upper = fn(node.upper, 'upper')
+  if (node.expr !== undefined) out.expr = fn(node.expr, 'expr')
+  if (node.filter !== undefined) out.filter = fn(node.filter, 'filter')
+
+  if (node.values !== undefined) {
+    out.values = node.values.map((child, i) => fn(child, 'values', i))
+  }
+
+  if (node.axes !== undefined) out.axes = mapRecordChildren(node.axes, fn)
+
+  if (node.key !== undefined) out.key = fn(node.key, 'key')
+
+  if (node.bindings !== undefined) out.bindings = mapRecordChildren(node.bindings, fn)
+
+  return out as unknown as ExpressionNode
+}
+
+/** Rebuild a string-keyed child map, visiting entries in sorted-key order. */
+function mapRecordChildren(
+  record: { [k: string]: Expression },
+  fn: ChildMapper,
+): { [k: string]: Expr } {
+  const out: { [k: string]: Expr } = {}
+  Object.keys(record)
+    .sort()
+    .forEach((k, i) => {
+      out[k] = fn(record[k], k, i)
+    })
+  return out
+}
+
+/**
+ * Read-only visitor over the same child set as {@link mapChildren}, in the
+ * same deterministic order. `fn` receives `(child, key, index?)` with the
+ * same key/index conventions documented on {@link mapChildren}.
+ */
+export function forEachChild(node: ExpressionNode, fn: ChildVisitor): void {
+  node.args.forEach((child, i) => fn(child, 'args', i))
+
+  if (node.lower !== undefined) fn(node.lower, 'lower')
+  if (node.upper !== undefined) fn(node.upper, 'upper')
+  if (node.expr !== undefined) fn(node.expr, 'expr')
+  if (node.filter !== undefined) fn(node.filter, 'filter')
+
+  if (node.values !== undefined) node.values.forEach((child, i) => fn(child, 'values', i))
+
+  if (node.axes !== undefined) forEachRecordChild(node.axes, fn)
+
+  if (node.key !== undefined) fn(node.key, 'key')
+
+  if (node.bindings !== undefined) forEachRecordChild(node.bindings, fn)
+}
+
+/** Visit a string-keyed child map's entries in sorted-key order. */
+function forEachRecordChild(record: { [k: string]: Expression }, fn: ChildVisitor): void {
+  Object.keys(record)
+    .sort()
+    .forEach((k, i) => fn(record[k], k, i))
+}
+
+/**
+ * Field-AWARE structural equality for expressions. Two values are equal iff:
+ *   - both are numeric leaves (plain `number` or tagged `NumericLiteral`)
+ *     with the same value under `Object.is` — the int/float kind tag is
+ *     ignored, so `1`, `intLit(1)` and `floatLit(1)` are all equal;
+ *   - both are the same variable-reference string;
+ *   - both are operator nodes with the same `op`, expression children
+ *     (`EXPRESSION_CHILD_KEYS`) equal via this function, AND every other own
+ *     field deep-equal structurally (so `{op:'const',value:1}` ≠
+ *     `{op:'const',value:2}`, and `D` with `wrt:'t'` ≠ `wrt:'s'`).
+ */
+export function deepEqualExpr(a: Expr, b: Expr): boolean {
+  // Numeric leaves: compare by value (Object.is ⇒ NaN===NaN, +0 !== -0),
+  // ignoring the int/float kind tag.
+  const na = numericValue(a)
+  const nb = numericValue(b)
+  if (na !== undefined || nb !== undefined) {
+    return na !== undefined && nb !== undefined && Object.is(na, nb)
+  }
+
+  // Variable-reference leaves compare by name.
+  if (typeof a === 'string' || typeof b === 'string') {
+    return a === b
+  }
+
+  // Operator nodes: same op, same children, same scalar metadata.
+  if (isExprNode(a) && isExprNode(b)) {
+    if (a.op !== b.op) return false
+    const keysA = ownDefinedKeys(a)
+    const keysB = ownDefinedKeys(b)
+    if (keysA.length !== keysB.length) return false
+    const recB = b as unknown as Record<string, unknown>
+    const recA = a as unknown as Record<string, unknown>
+    for (const k of keysA) {
+      if (!childOrScalarEqual(k, recA[k], recB[k])) return false
+    }
+    return true
+  }
+
+  return false
+}
+
+/** Own enumerable keys whose value is not `undefined` (⇒ treated as absent). */
+function ownDefinedKeys(o: object): string[] {
+  const rec = o as Record<string, unknown>
+  return Object.keys(rec).filter((k) => rec[k] !== undefined)
+}
+
+/**
+ * Compare one field of two nodes: expression-bearing fields recurse through
+ * {@link deepEqualExpr}; everything else uses plain structural equality.
+ */
+function childOrScalarEqual(key: string, av: unknown, bv: unknown): boolean {
+  if (ARRAY_CHILD_KEY_SET.has(key)) {
+    if (!Array.isArray(av) || !Array.isArray(bv) || av.length !== bv.length) return false
+    return av.every((x, i) => deepEqualExpr(x as Expr, bv[i] as Expr))
+  }
+  if (MAP_CHILD_KEY_SET.has(key)) {
+    if (typeof av !== 'object' || av === null || typeof bv !== 'object' || bv === null) return false
+    const am = av as Record<string, Expression>
+    const bm = bv as Record<string, Expression>
+    const km = Object.keys(am)
+    if (km.length !== Object.keys(bm).length) return false
+    return km.every(
+      (k) => Object.prototype.hasOwnProperty.call(bm, k) && deepEqualExpr(am[k], bm[k]),
+    )
+  }
+  if (SCALAR_CHILD_KEY_SET.has(key)) {
+    return deepEqualExpr(av as Expr, bv as Expr)
+  }
+  return scalarDeepEqual(av, bv)
+}
+
+/** Plain structural (JSON-shaped) deep equality for non-expression fields. */
+function scalarDeepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) {
+    return false
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((x, i) => scalarDeepEqual(x, b[i]))
+  }
+  const ao = a as Record<string, unknown>
+  const bo = b as Record<string, unknown>
+  const ka = Object.keys(ao)
+  if (ka.length !== Object.keys(bo).length) return false
+  return ka.every(
+    (k) => Object.prototype.hasOwnProperty.call(bo, k) && scalarDeepEqual(ao[k], bo[k]),
+  )
 }

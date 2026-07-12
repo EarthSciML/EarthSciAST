@@ -16,17 +16,19 @@ import { load, validateSchema } from './parse.js'
 import { save } from './serialize.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import {
-  ExpressionTemplateError,
   MAX_TEMPLATE_EXPANSION_DEPTH,
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
-import { rejectTemplateImportsPreV08, resolveTemplateMachinery } from './template-imports.js'
+import {
+  appendComponentImports,
+  rejectTemplateImportsPreV08,
+  resolveTemplateMachinery,
+} from './template-imports.js'
+import { errCode, errCodeAsync, fixturesDir, loadFixtureFile } from './test-helpers.js'
 
-const repoRoot = path.resolve(__dirname, '../../..')
-const conf = (...parts: string[]) =>
-  path.join(repoRoot, 'tests', 'conformance', 'expression_templates', ...parts)
-const invalidDir = path.join(repoRoot, 'tests', 'invalid', 'template_imports')
-const validDir = path.join(repoRoot, 'tests', 'valid')
+const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_templates', ...parts)
+const invalidDir = fixturesDir('invalid', 'template_imports')
+const validDir = fixturesDir('valid')
 
 /** Raw §9.7 pipeline (resolve → lower), mirroring the Julia golden generator. */
 function expandRaw(fixturePath: string): unknown {
@@ -37,29 +39,9 @@ function expandRaw(fixturePath: string): unknown {
 
 const golden = (goldenPath: string): unknown => JSON.parse(fs.readFileSync(goldenPath, 'utf8'))
 
-function errCode(f: () => unknown): string | null {
-  try {
-    f()
-    return null
-  } catch (e) {
-    if (e instanceof ExpressionTemplateError) return e.code
-    throw e
-  }
-}
-
-async function errCodeAsync(f: () => Promise<unknown>): Promise<string | null> {
-  try {
-    await f()
-    return null
-  } catch (e) {
-    if (e instanceof ExpressionTemplateError) return e.code
-    throw e
-  }
-}
-
 /** load() from a fixture path with the fixture's directory as basePath. */
 function loadPath(p: string, metaparameters?: Record<string, number>) {
-  return load(fs.readFileSync(p, 'utf8'), { basePath: path.dirname(p), metaparameters })
+  return loadFixtureFile(p, { metaparameters })
 }
 
 describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
@@ -257,7 +239,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
 
   it('invalid fixtures: every §9.7 diagnostic code, machine-checked', async () => {
     const expected = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, 'tests', 'invalid', 'expected_errors.json'), 'utf8'),
+      fs.readFileSync(fixturesDir('invalid', 'expected_errors.json'), 'utf8'),
     ) as Record<string, { resolver_only?: boolean; resolver_error_code?: string }>
     const fixtures = fs
       .readdirSync(invalidDir)
@@ -335,15 +317,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
   const loadStr = (text: string, metaparameters?: Record<string, number>) =>
     load(text, { basePath: tmpDir, metaparameters })
 
-  const errCode = (f: () => unknown): string | null => {
-    try {
-      f()
-      return null
-    } catch (e) {
-      if (e instanceof ExpressionTemplateError) return e.code
-      throw e
-    }
-  }
+  // `errCode` is shared from module scope (defined once, above).
 
   it('template_import_unresolved: missing / unparsable ref', () => {
     expect(
@@ -680,5 +654,33 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
      "metaparameters": {"N": {"type": "integer", "default": 1}},
      "expression_templates": {"t": {"params": [], "body": 1}}}`)
     expect(() => rejectTemplateImportsPreV08(ok)).not.toThrow()
+  })
+
+  // Regression: the §9.7.10 injected-imports append (shared by template-imports
+  // forms A/B and by ref-loading's ephemeralInjectedFile / subsystem-ref form A)
+  // must DEEP-CLONE each appended entry, never capture the caller's array by
+  // reference. ref-loading previously pushed by reference; both now route
+  // through the exported `appendComponentImports`.
+  it('appendComponentImports deep-clones injected entries and preserves merge order', () => {
+    const entry: Record<string, any> = { ref: './lib.esm', bindings: { N: 4 } }
+    const comp: Record<string, unknown> = {}
+    appendComponentImports(comp, [entry])
+
+    // Mutating the caller's source entry after the append must NOT leak into
+    // the component (a by-reference push would let it).
+    entry.bindings.N = 99
+    const appended = comp.expression_template_imports as any[]
+    expect(appended[0].bindings.N).toBe(4)
+
+    // Merge order (esm-spec §9.7.10): the component's own imports first, then
+    // the injected list appended after.
+    const comp2: Record<string, unknown> = {
+      expression_template_imports: [{ ref: './own.esm' }],
+    }
+    appendComponentImports(comp2, [{ ref: './inj.esm' }])
+    expect((comp2.expression_template_imports as any[]).map((e) => e.ref)).toEqual([
+      './own.esm',
+      './inj.esm',
+    ])
   })
 })

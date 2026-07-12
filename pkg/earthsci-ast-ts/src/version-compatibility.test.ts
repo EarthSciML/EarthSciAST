@@ -10,17 +10,12 @@ import {
   SCHEMA_VERSION,
   SchemaValidationError,
 } from './index.js'
-
-// Path to version compatibility test fixtures
-const fixturesPath = '../../../tests/version_compatibility'
+import { readFixture } from './test-helpers.js'
 
 describe('Version Compatibility', () => {
   // Helper function to load test fixture
-  const loadFixture = (filename: string) => {
-    const filePath = join(__dirname, fixturesPath, filename)
-    const content = readFileSync(filePath, 'utf-8')
-    return JSON.parse(content)
-  }
+  const loadFixture = (filename: string) =>
+    JSON.parse(readFixture('version_compatibility', filename))
 
   // Capture console.warn output around a callback
   const captureWarnings = <T>(fn: () => T): { result: T; warnings: string[] } => {

@@ -167,6 +167,43 @@ describe('edit', () => {
     it('should throw error when renaming non-existent variable', () => {
       expect(() => renameVariable(model, 'nonexistent', 'new_name')).toThrow(EntityNotFoundError)
     })
+
+    it('renames references inside event conditions and affect RHSs (unified sites)', () => {
+      const m: Model = {
+        variables: { x: { type: 'state' }, v: { type: 'state' } },
+        equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'v' }],
+        continuous_events: [
+          {
+            name: 'e',
+            conditions: [{ op: '>', args: ['x', 10] }],
+            affects: [{ lhs: 'v', rhs: { op: '-', args: ['x'] } }],
+          },
+        ],
+      }
+
+      const result = renameVariable(m, 'x', 'pos')
+
+      // removeVariable scans event sites, so renameVariable must rewrite them
+      // too — otherwise a rename leaves a reference removal would have flagged.
+      expect(result.continuous_events![0]!.conditions[0]).toEqual({ op: '>', args: ['pos', 10] })
+      expect(result.continuous_events![0]!.affects[0]!.rhs).toEqual({ op: '-', args: ['pos'] })
+    })
+
+    it('detects references inside event conditions (unified sites)', () => {
+      const m: Model = {
+        variables: { x: { type: 'state' }, v: { type: 'state' } },
+        equations: [{ lhs: { op: 'D', args: ['v'], wrt: 't' }, rhs: 0 }],
+        continuous_events: [
+          {
+            name: 'e',
+            conditions: [{ op: '>', args: ['x', 10] }],
+            affects: [{ lhs: 'v', rhs: 0 }],
+          },
+        ],
+      }
+
+      expect(() => removeVariable(m, 'x')).toThrow(VariableInUseError)
+    })
   })
 
   describe('Equation Operations', () => {
@@ -202,6 +239,30 @@ describe('edit', () => {
 
     it('should throw error when removing equation with invalid index', () => {
       expect(() => removeEquation(model, 10)).toThrow(EntityNotFoundError)
+    })
+
+    it('removeEquation by LHS distinguishes consts with different values (field-aware equality)', () => {
+      // `value` is object-typed on the schema node; these are deliberately
+      // hand-shaped `const` leaves that differ only in their numeric value.
+      const constNode = (v: number) =>
+        ({ op: 'const', value: v, args: [] }) as unknown as Equation['lhs']
+      const m: Model = {
+        variables: {},
+        equations: [
+          { lhs: constNode(1), rhs: 'a' },
+          { lhs: constNode(2), rhs: 'b' },
+        ],
+      }
+
+      // The old field-blind equality compared only op/args, so both consts
+      // looked equal and removeEquation deleted equation 0. deepEqualExpr
+      // distinguishes them, so the value:2 equation is the one removed.
+      const result = removeEquation(m, constNode(2))
+      expect(result.equations).toHaveLength(1)
+      expect(result.equations![0]!.rhs).toBe('a')
+
+      // A value that matches neither equation is genuinely not found.
+      expect(() => removeEquation(m, constNode(3))).toThrow(EntityNotFoundError)
     })
 
     it('should apply substitutions to equations', () => {
@@ -332,7 +393,10 @@ describe('edit', () => {
       const result = removeEvent(modelWithEvent, 'test_event')
 
       expect(result).not.toBe(modelWithEvent)
-      expect(result.continuous_events).toEqual([])
+      // Drop-when-empty convention: the last event removed drops the key, so the
+      // emptied container reads back as absent rather than as `[]`.
+      expect(result.continuous_events).toBeUndefined()
+      expect('continuous_events' in result).toBe(false)
     })
 
     it('should throw error when removing non-existent event', () => {
@@ -442,6 +506,96 @@ describe('edit', () => {
 
     it('should throw error when extracting non-existent component', () => {
       expect(() => extract(esmFile, 'NonExistent')).toThrow(EntityNotFoundError)
+    })
+  })
+
+  // Unified empty-collection convention across ALL editing ops: when a remove/
+  // merge op leaves a collection empty, its key is DROPPED (omitted) rather than
+  // left as `[]` / `{}`. Previously the ops disagreed (some kept `[]`, some
+  // collapsed to `undefined`, `merge` materialized empty `{}`/`[]`); these tests
+  // pin the single drop-when-empty convention.
+  describe('Empty-collection normalization (drop-when-empty)', () => {
+    const removedKeyIsAbsent = (obj: object, key: string) => {
+      expect((obj as Record<string, unknown>)[key]).toBeUndefined()
+      expect(key in obj).toBe(false)
+    }
+
+    it('removeVariable drops the variables key when the last variable is removed', () => {
+      const m: Model = { variables: { z: { type: 'parameter' } }, equations: [] }
+      const result = removeVariable(m, 'z')
+      removedKeyIsAbsent(result, 'variables')
+    })
+
+    it('removeEquation drops the equations key when the last equation is removed', () => {
+      const m: Model = { variables: {}, equations: [{ lhs: 'a', rhs: 1 }] }
+      const result = removeEquation(m, 0)
+      removedKeyIsAbsent(result, 'equations')
+    })
+
+    it('removeEquation keeps a non-empty equations array', () => {
+      const result = removeEquation(model, 0)
+      expect(result.equations).toHaveLength(1)
+      expect('equations' in result).toBe(true)
+    })
+
+    it('removeSpecies drops the species key when the last species is removed', () => {
+      const system: ReactionSystem = {
+        species: { Z: { units: 'mol/L' } },
+        parameters: { rate: { default: 0.1 } },
+        reactions: [{ id: 'r1', substrates: null, products: null, rate: 'rate' }],
+      }
+      const result = removeSpecies(system, 'Z')
+      removedKeyIsAbsent(result, 'species')
+    })
+
+    it('removeEvent drops the discrete_events key when the last discrete event is removed', () => {
+      const withEvent = addDiscreteEvent(model, {
+        name: 'reset',
+        condition: { op: '>', args: ['x', 5] },
+        affects: [{ lhs: 'x', rhs: 0 }],
+      } as unknown as DiscreteEvent)
+      const result = removeEvent(withEvent, 'reset')
+      removedKeyIsAbsent(result, 'discrete_events')
+    })
+
+    it('removeCoupling drops the coupling key when the last entry is removed', () => {
+      const withCoupling = addCoupling(esmFile, {
+        type: 'operator_compose',
+        systems: ['TestModel', 'TestSystem'],
+      } as unknown as CouplingEntry)
+      const result = removeCoupling(withCoupling, 0)
+      removedKeyIsAbsent(result, 'coupling')
+    })
+
+    it('merge omits collections that neither input contributes', () => {
+      // Deliberately schema-incomplete fixtures: only esm/metadata, no models,
+      // reaction_systems, data_loaders, or coupling.
+      const a = { esm: '0.8.0', metadata: { name: 'a' } } as unknown as EsmFile
+      const b = { esm: '0.8.0', metadata: { name: 'b' } } as unknown as EsmFile
+
+      const result = merge(a, b)
+
+      removedKeyIsAbsent(result, 'models')
+      removedKeyIsAbsent(result, 'reaction_systems')
+      removedKeyIsAbsent(result, 'data_loaders')
+      removedKeyIsAbsent(result, 'coupling')
+    })
+
+    it('merge keeps collections that an input does contribute', () => {
+      const b = {
+        metadata: { name: 'fileB', version: '0.1.0' },
+        models: { ModelB: { variables: {}, equations: [] } },
+      } as unknown as EsmFile
+
+      const result = merge(esmFile, b)
+
+      // esmFile contributes models + reaction_systems; both survive.
+      expect(result.models!.TestModel).toBeDefined()
+      expect(result.models!.ModelB).toBeDefined()
+      expect(result.reaction_systems!.TestSystem).toBeDefined()
+      // Neither input has data_loaders or coupling, so those stay omitted.
+      removedKeyIsAbsent(result, 'data_loaders')
+      removedKeyIsAbsent(result, 'coupling')
     })
   })
 })

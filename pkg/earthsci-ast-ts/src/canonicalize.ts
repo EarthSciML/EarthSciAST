@@ -10,9 +10,9 @@
  * See `docs/rfcs/discretization.md` §5.4.1–§5.4.7 for the normative rules.
  */
 
-import type { Expression } from './generated.js'
+import type { Expr } from './types.js'
 import {
-  type NumericLiteral,
+  CanonicalizeError,
   intLit,
   floatLit,
   isFloatLit,
@@ -21,22 +21,17 @@ import {
   formatIntToken,
 } from './numeric-literal.js'
 
-export class CanonicalizeError extends Error {
-  /** Stable RFC §5.4.6 / §5.4.7 error code. */
-  readonly code: string
-  constructor(code: string, message?: string) {
-    super(message ?? code)
-    this.code = code
-    this.name = 'CanonicalizeError'
-  }
-}
+// `CanonicalizeError` is DEFINED in numeric-literal.ts (the lowest module in
+// the canonical-form stack) so its nonfinite specialization
+// `CanonicalNonfiniteError` can extend it without an import cycle. Re-exported
+// here so existing consumers keep importing it from `./canonicalize.js`.
+export { CanonicalizeError }
 
 /** `E_CANONICAL_NONFINITE` — NaN or ±Inf (§5.4.6). */
 export const E_CANONICAL_NONFINITE = 'E_CANONICAL_NONFINITE'
 /** `E_CANONICAL_DIVBY_ZERO` — `/(0, 0)` (§5.4.7). */
 export const E_CANONICAL_DIVBY_ZERO = 'E_CANONICAL_DIVBY_ZERO'
 
-type Expr = Expression | NumericLiteral
 type Node = { op: string; args: Expr[] } & Record<string, unknown>
 
 function isNode(e: unknown): e is Node {
@@ -343,28 +338,25 @@ function emitJson(e: Expr | unknown): string {
 }
 
 function emitNodeJson(n: Node): string {
+  // Emit EVERY defined own key in sorted order rather than a hard-coded
+  // allowlist. A prior allowlist (`op,args,wrt,dim,fn,name,value`) silently
+  // DROPPED any other ExpressionNode field from the canonical form — the `fn`
+  // slot had to be retro-fitted after exactly that bug made `bc(u,dirichlet)`
+  // and `bc(u,neumann)` canonicalize identically. Emitting all keys means a
+  // newly-added field (`reduce`, `ranges`, `semiring`, `manifold`, …) is
+  // preserved automatically and can never again collapse two distinct nodes.
+  //
+  // Each value routes through `emitJson`, which yields byte-identical output to
+  // the old per-field emitters for the previously-listed fields: strings emit
+  // via `JSON.stringify`, `args`/`value` recurse through `emitJson`. Existing
+  // canonical fixtures carry only `op`/`args` nodes, so the sorted output is
+  // unchanged; the change only STOPS dropping less-common fields.
+  const rec = n as Record<string, unknown>
   const entries: Array<[string, string]> = []
-  entries.push(['op', JSON.stringify(n.op)])
-  entries.push(['args', `[${n.args.map(emitJson).join(',')}]`])
-  if ('wrt' in n && (n as Record<string, unknown>).wrt !== undefined) {
-    entries.push(['wrt', JSON.stringify((n as Record<string, unknown>).wrt)])
-  }
-  if ('dim' in n && (n as Record<string, unknown>).dim !== undefined) {
-    entries.push(['dim', JSON.stringify((n as Record<string, unknown>).dim)])
-  }
-  if ('fn' in n && (n as Record<string, unknown>).fn !== undefined) {
-    // `fn` carries the boundary-condition kind on synthetic `bc` nodes
-    // (esm-spec §9.2). Emit it symmetrically with `dim`/`wrt` so the kind is
-    // preserved in the canonical form — otherwise bc(u,dirichlet,xmin) and
-    // bc(u,neumann,xmin) collapse to the same canonical JSON, making the
-    // kind/side matcher's canonical equality kind-blind (ess-tox / G8).
-    entries.push(['fn', JSON.stringify((n as Record<string, unknown>).fn)])
-  }
-  if ('name' in n && (n as Record<string, unknown>).name !== undefined) {
-    entries.push(['name', JSON.stringify((n as Record<string, unknown>).name)])
-  }
-  if ('value' in n && (n as Record<string, unknown>).value !== undefined) {
-    entries.push(['value', emitJson((n as Record<string, unknown>).value)])
+  for (const key of Object.keys(rec)) {
+    const v = rec[key]
+    if (v === undefined) continue
+    entries.push([key, emitJson(v)])
   }
   entries.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0))
   const body = entries.map(([k, v]) => `${JSON.stringify(k)}:${v}`).join(',')
@@ -372,13 +364,16 @@ function emitNodeJson(n: Node): string {
 }
 
 /**
- * Format a finite `number` per RFC §5.4.6. Only handles float-typed
- * values: integer-typed `NumericLiteral` nodes are emitted as bare JSON
- * integers by {@link canonicalJson} directly.
+ * Format a finite `number` as a byte-CANONICAL float token per RFC §5.4.6.
+ * Only handles float-typed values: integer-typed `NumericLiteral` nodes are
+ * emitted as bare JSON integers by {@link canonicalJson} directly.
  *
- * Unlike the convenience helper re-exported from `./numeric-literal`, this
- * version strips the leading `+` on exponent notation (RFC §5.4.6:
- * "no leading + on the exponent") so `1e25` emits as `1e25`, not `1e+25`.
+ * NAMING: distinct from `formatFloatToken` in `./numeric-literal` (the
+ * document-serialization emitter used by `save()` / `losslessJsonStringify`).
+ * This canonical version additionally NORMALIZES exponent notation — it strips
+ * the leading `+` (RFC §5.4.6: "no leading + on the exponent") so `1e25` emits
+ * as `1e25`, not `1e+25`, and forces the §5.4.6 exponent thresholds. Use this
+ * one for canonical output, `formatFloatToken` for wire round-trip.
  */
 export function formatCanonicalFloat(f: number): string {
   if (!Number.isFinite(f)) {

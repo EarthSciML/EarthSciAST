@@ -8,136 +8,135 @@
  * - Inline editing for variables (double-click to autocomplete dropdown)
  * - onReplace callback integration for updating the store
  *
- * `createSelectionContext` is the single implementation; `SelectionProvider`
- * simply wraps it in a SolidJS context provider.
+ * Within this primitive, `createSelectionContext` is the single source of
+ * selection + inline-editing state; `SelectionProvider` simply wraps it in a
+ * SolidJS context provider. (It is NOT the only selection code in the editor —
+ * some components maintain their own selection state independently.)
  */
 
-import { createSignal, createMemo, Accessor, Setter, createContext, useContext } from 'solid-js';
-import type { Expression, ExpressionNode as ExprNode, EsmFile } from '@earthsciml/ast';
-import { getExpressionAtPath, replaceExpressionAtPath, pathsEqual } from './path-utils';
-
-export { pathsEqual, pathToString, stringToPath } from './path-utils';
+import type { Accessor, Setter, JSX } from 'solid-js'
+import { createSignal, createMemo, createContext, useContext } from 'solid-js'
+import type { Expression, ExpressionNode as ExprNode, EsmFile } from '@earthsciml/ast'
+import { getExpressionAtPath, replaceExpressionAtPath, pathsEqual, type Path } from './path-utils'
 
 // Types for selection context
 export interface SelectionContextValue {
   /** Currently selected AST path */
-  selectedPath: Accessor<(string | number)[] | null>;
+  selectedPath: Accessor<Path | null>
   /** Set the currently selected AST path */
-  setSelectedPath: Setter<(string | number)[] | null>;
+  setSelectedPath: Setter<Path | null>
   /** Check if a path is currently selected */
-  isSelected: (path: (string | number)[]) => boolean;
+  isSelected: (path: Path) => boolean
   /** Get detail panel data for the selected node */
-  selectedNodeDetails: Accessor<NodeDetails | null>;
+  selectedNodeDetails: Accessor<NodeDetails | null>
   /** Callback when replacing a node with new expression */
-  onReplace: (path: (string | number)[], newExpr: Expression) => void;
+  onReplace: (path: Path, newExpr: Expression) => void
   /** Start inline editing for the selected node */
-  startInlineEdit: () => void;
+  startInlineEdit: () => void
   /** Cancel inline editing */
-  cancelInlineEdit: () => void;
+  cancelInlineEdit: () => void
   /** Confirm inline editing with new value */
-  confirmInlineEdit: (newValue: string) => void;
+  confirmInlineEdit: (newValue: string) => void
   /** Check if inline editing is active */
-  isInlineEditing: Accessor<boolean>;
+  isInlineEditing: Accessor<boolean>
   /** Get inline edit value */
-  inlineEditValue: Accessor<string>;
+  inlineEditValue: Accessor<string>
   /** Set inline edit value */
-  setInlineEditValue: Setter<string>;
+  setInlineEditValue: Setter<string>
 }
 
 // Node detail information for the detail panel
 export interface NodeDetails {
   /** Type of the selected node */
-  type: 'number' | 'variable' | 'operator';
+  type: 'number' | 'variable' | 'operator'
   /** Current value/content */
-  value: string | number;
+  value: string | number
   /** Parent context information */
   parentContext?: {
     /** Parent node type */
-    type: 'operator' | 'root';
+    type: 'operator' | 'root'
     /** Parent operator name (if applicable) */
-    operator?: string;
+    operator?: string
     /** Position in parent's arguments */
-    argIndex?: number;
-  };
+    argIndex?: number
+  }
   /** Available actions for this node type */
-  availableActions: string[];
+  availableActions: string[]
   /** Path to this node in the AST */
-  path: (string | number)[];
+  path: Path
   /** Full expression being edited */
-  expression: Expression;
+  expression: Expression
 }
 
 // Selection context
-const SelectionContext = createContext<SelectionContextValue>();
+const SelectionContext = createContext<SelectionContextValue>()
 
 export interface SelectionProviderProps {
-  children: any;
+  children: JSX.Element
   /** Root expression being edited */
-  rootExpression: Accessor<Expression>;
+  rootExpression: Accessor<Expression>
   /** Callback when the root expression is replaced */
-  onRootReplace: (newExpr: Expression) => void;
-  /** ESM file for variable suggestions */
-  esmFile?: Accessor<EsmFile | null>;
+  onRootReplace: (newExpr: Expression) => void
 }
 
 /**
  * Get parent context information for a given path
  */
-function getParentContext(expr: Expression, path: (string | number)[]): NodeDetails['parentContext'] {
+function getParentContext(expr: Expression, path: Path): NodeDetails['parentContext'] {
   if (path.length === 0) {
-    return { type: 'root' };
+    return { type: 'root' }
   }
 
-  const parentPath = path.slice(0, -2); // Remove 'args' and index
-  const argIndex = path[path.length - 1];
+  const parentPath = path.slice(0, -2) // Remove 'args' and index
+  const argIndex = path[path.length - 1]
 
   if (typeof argIndex !== 'number') {
-    return { type: 'root' };
+    return { type: 'root' }
   }
 
-  const parent = getExpressionAtPath(expr, parentPath);
+  const parent = getExpressionAtPath(expr, parentPath)
   if (parent && typeof parent === 'object' && 'op' in parent) {
     return {
       type: 'operator',
       operator: (parent as ExprNode).op,
-      argIndex
-    };
+      argIndex,
+    }
   }
 
-  return { type: 'root' };
+  return { type: 'root' }
 }
 
 /**
  * Get available actions for a node based on its type
  */
 function getAvailableActions(expr: Expression): string[] {
-  const actions: string[] = [];
+  const actions: string[] = []
 
   if (typeof expr === 'number') {
-    actions.push('Edit Value', 'Convert to Variable', 'Wrap in Operator');
+    actions.push('Edit Value', 'Convert to Variable', 'Wrap in Operator')
   } else if (typeof expr === 'string') {
-    actions.push('Edit Variable', 'Convert to Number', 'Wrap in Operator');
+    actions.push('Edit Variable', 'Convert to Number', 'Wrap in Operator')
   } else if (typeof expr === 'object' && expr !== null && 'op' in expr) {
-    actions.push('Change Operator', 'Add Argument', 'Remove Argument', 'Unwrap');
+    actions.push('Change Operator', 'Add Argument', 'Remove Argument', 'Unwrap')
   }
 
-  return actions;
+  return actions
 }
 
 /**
  * Extract all variable names from an ESM file
  */
 function extractVariableNames(esmFile: EsmFile | null): string[] {
-  if (!esmFile) return [];
+  if (!esmFile) return []
 
-  const variables = new Set<string>();
+  const variables = new Set<string>()
 
   // Extract from models (variables — including parameters — are keyed by name)
   if (esmFile.models) {
     for (const model of Object.values(esmFile.models)) {
-      if ('ref' in model) continue; // Skip external subsystem references
+      if ('ref' in model) continue // Skip external subsystem references
       for (const name of Object.keys(model.variables || {})) {
-        variables.add(name);
+        variables.add(name)
       }
     }
   }
@@ -146,104 +145,110 @@ function extractVariableNames(esmFile: EsmFile | null): string[] {
   if (esmFile.reaction_systems) {
     for (const system of Object.values(esmFile.reaction_systems)) {
       for (const name of Object.keys(system.species || {})) {
-        variables.add(name);
+        variables.add(name)
       }
       for (const name of Object.keys(system.parameters || {})) {
-        variables.add(name);
+        variables.add(name)
       }
     }
   }
 
-  return Array.from(variables).sort();
+  return Array.from(variables).sort()
 }
 
 /**
  * Create selection context state and actions.
  *
- * This is the single implementation of selection + inline editing;
- * `SelectionProvider` delegates to it.
+ * This backs the selection primitive: `SelectionProvider` delegates to it, and
+ * it is the single source of state for consumers of this context. (Other
+ * editor components may still track selection independently of this context.)
  */
 export function createSelectionContext(
   rootExpression: Accessor<Expression>,
-  onRootReplace: (newExpr: Expression) => void
+  onRootReplace: (newExpr: Expression) => void,
 ): SelectionContextValue {
-  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
-  const [isInlineEditing, setIsInlineEditing] = createSignal(false);
-  const [inlineEditValue, setInlineEditValue] = createSignal('');
+  const [selectedPath, setSelectedPath] = createSignal<Path | null>(null)
+  const [isInlineEditing, setIsInlineEditing] = createSignal(false)
+  const [inlineEditValue, setInlineEditValue] = createSignal('')
 
-  const isSelected = (path: (string | number)[]) => {
-    const selected = selectedPath();
-    if (!selected) return false;
-    return pathsEqual(selected, path);
-  };
+  const isSelected = (path: Path) => {
+    const selected = selectedPath()
+    if (!selected) return false
+    return pathsEqual(selected, path)
+  }
 
   const selectedNodeDetails = createMemo((): NodeDetails | null => {
-    const path = selectedPath();
-    if (!path) return null;
+    const path = selectedPath()
+    if (!path) return null
 
-    const rootExpr = rootExpression();
-    const expression = getExpressionAtPath(rootExpr, path);
-    if (!expression) return null;
+    const rootExpr = rootExpression()
+    const expression = getExpressionAtPath(rootExpr, path)
+    if (!expression) return null
 
-    const type = typeof expression === 'number' ? 'number' :
-                 typeof expression === 'string' ? 'variable' : 'operator';
+    const type =
+      typeof expression === 'number'
+        ? 'number'
+        : typeof expression === 'string'
+          ? 'variable'
+          : 'operator'
 
-    const value = typeof expression === 'object' && 'op' in expression
-      ? (expression as ExprNode).op
-      : expression;
+    const value =
+      typeof expression === 'object' && 'op' in expression
+        ? (expression as ExprNode).op
+        : expression
 
     return {
       type,
-      value: (value as string | number),
+      value: value as string | number,
       parentContext: getParentContext(rootExpr, path),
       availableActions: getAvailableActions(expression),
       path: [...path],
-      expression
-    };
-  });
+      expression,
+    }
+  })
 
-  const onReplace = (path: (string | number)[], newExpr: Expression) => {
-    const rootExpr = rootExpression();
-    const newRoot = replaceExpressionAtPath(rootExpr, path, newExpr);
-    onRootReplace(newRoot);
-  };
+  const onReplace = (path: Path, newExpr: Expression) => {
+    const rootExpr = rootExpression()
+    const newRoot = replaceExpressionAtPath(rootExpr, path, newExpr)
+    onRootReplace(newRoot)
+  }
 
   const startInlineEdit = () => {
-    const details = selectedNodeDetails();
-    if (!details) return;
+    const details = selectedNodeDetails()
+    if (!details) return
 
     if (details.type === 'number' || details.type === 'variable') {
-      setInlineEditValue(String(details.value));
-      setIsInlineEditing(true);
+      setInlineEditValue(String(details.value))
+      setIsInlineEditing(true)
     }
-  };
+  }
 
   const cancelInlineEdit = () => {
-    setIsInlineEditing(false);
-    setInlineEditValue('');
-  };
+    setIsInlineEditing(false)
+    setInlineEditValue('')
+  }
 
   const confirmInlineEdit = (newValue: string) => {
-    const path = selectedPath();
-    const details = selectedNodeDetails();
-    if (!path || !details) return;
+    const path = selectedPath()
+    const details = selectedNodeDetails()
+    if (!path || !details) return
 
-    let newExpr: Expression;
+    let newExpr: Expression
 
     if (details.type === 'number') {
-      const numValue = parseFloat(newValue);
-      if (isNaN(numValue)) return; // Invalid number
-      newExpr = numValue;
+      const numValue = parseFloat(newValue)
+      if (isNaN(numValue)) return // Invalid number
+      newExpr = numValue
     } else if (details.type === 'variable') {
-      if (!newValue.trim()) return; // Empty variable name
-      newExpr = newValue.trim();
+      if (!newValue.trim()) return // Empty variable name
+      newExpr = newValue.trim()
     } else {
-      return; // Can't inline edit operators
+      return // Can't inline edit operators
     }
 
-    onReplace(path, newExpr);
-    cancelInlineEdit();
-  };
+    onReplace(path, newExpr)
+    cancelInlineEdit()
+  }
 
   return {
     selectedPath,
@@ -256,8 +261,8 @@ export function createSelectionContext(
     confirmInlineEdit,
     isInlineEditing,
     inlineEditValue,
-    setInlineEditValue
-  };
+    setInlineEditValue,
+  }
 }
 
 /**
@@ -267,25 +272,23 @@ export function createSelectionContext(
 export function SelectionProvider(props: SelectionProviderProps) {
   const contextValue = createSelectionContext(
     () => props.rootExpression(),
-    (newExpr) => props.onRootReplace(newExpr)
-  );
+    (newExpr) => props.onRootReplace(newExpr),
+  )
 
   return (
-    <SelectionContext.Provider value={contextValue}>
-      {props.children}
-    </SelectionContext.Provider>
-  );
+    <SelectionContext.Provider value={contextValue}>{props.children}</SelectionContext.Provider>
+  )
 }
 
 /**
  * Hook to access the selection context
  */
 export function useSelectionContext(): SelectionContextValue {
-  const context = useContext(SelectionContext);
+  const context = useContext(SelectionContext)
   if (!context) {
-    throw new Error('useSelectionContext must be used within a SelectionProvider');
+    throw new Error('useSelectionContext must be used within a SelectionProvider')
   }
-  return context;
+  return context
 }
 
 /**
@@ -293,22 +296,17 @@ export function useSelectionContext(): SelectionContextValue {
  * with or without a surrounding provider.
  */
 export function useMaybeSelectionContext(): SelectionContextValue | undefined {
-  return useContext(SelectionContext);
+  return useContext(SelectionContext)
 }
 
 /**
  * Get variable suggestions for autocomplete
  */
-export function getVariableSuggestions(
-  esmFile: EsmFile | null,
-  searchTerm: string = ''
-): string[] {
-  const allVars = extractVariableNames(esmFile);
+export function getVariableSuggestions(esmFile: EsmFile | null, searchTerm: string = ''): string[] {
+  const allVars = extractVariableNames(esmFile)
 
-  if (!searchTerm) return allVars;
+  if (!searchTerm) return allVars
 
-  const lowerTerm = searchTerm.toLowerCase();
-  return allVars.filter(variable =>
-    variable.toLowerCase().includes(lowerTerm)
-  );
+  const lowerTerm = searchTerm.toLowerCase()
+  return allVars.filter((variable) => variable.toLowerCase().includes(lowerTerm))
 }

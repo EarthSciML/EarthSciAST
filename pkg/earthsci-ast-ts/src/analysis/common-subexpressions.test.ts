@@ -365,6 +365,40 @@ describe('Common Subexpression Analysis', () => {
       expect(commonSubs).toHaveLength(0) // No repetition
     })
 
+    it('should NOT collapse subexpressions that differ only in a non-arg field', () => {
+      // `D(u) wrt x` and `D(u) wrt y` share op and args but are DISTINCT
+      // expressions. Keying on canonical JSON (which retains `wrt`) keeps them
+      // apart; the old op/args-only serializer wrongly merged them, reporting a
+      // bogus common subexpression.
+      const distinct: Expr = {
+        op: '+',
+        args: [
+          { op: 'D', args: ['u'], wrt: 'x' },
+          { op: 'D', args: ['u'], wrt: 'y' },
+        ],
+      }
+      const distinctSubs = findCommonSubexpressions(distinct, 5)
+      const mergedD = distinctSubs.find(
+        (sub) => isExprNode(sub.expression) && sub.expression.op === 'D',
+      )
+      expect(mergedD).toBeUndefined()
+
+      // Two genuinely identical D nodes ARE a common subexpression.
+      const same: Expr = {
+        op: '+',
+        args: [
+          { op: 'D', args: ['u'], wrt: 'x' },
+          { op: 'D', args: ['u'], wrt: 'x' },
+        ],
+      }
+      const sameSubs = findCommonSubexpressions(same, 5)
+      const commonD = sameSubs.find(
+        (sub) => isExprNode(sub.expression) && sub.expression.op === 'D',
+      )
+      expect(commonD).toBeDefined()
+      expect(commonD?.count).toBe(2)
+    })
+
     it('should handle deeply nested identical subexpressions', () => {
       const deepExpr: Expr = {
         op: 'exp',

@@ -19,37 +19,28 @@ import { flatten } from './flatten.js'
 import { expandCouplingImports } from './coupling-imports.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import { validate } from './validate.js'
+import {
+  errCode as errCodeShared,
+  errCodeAsync as errCodeAsyncShared,
+  fixturesDir,
+  loadFixtureFile,
+} from './test-helpers.js'
 import type { CouplingEntry, EsmFile } from './types.js'
 
-const repoRoot = path.resolve(__dirname, '../../..')
-const dir = path.join(repoRoot, 'tests', 'coupling_libraries')
+const dir = fixturesDir('coupling_libraries')
 const cl = (...parts: string[]): string => path.join(dir, ...parts)
 
 const readText = (p: string): string => fs.readFileSync(p, 'utf8')
 const readJson = (p: string): Record<string, unknown> => JSON.parse(readText(p))
 
 /** load() a fixture with the fixtures directory as basePath. */
-function loadPath(p: string): EsmFile {
-  return load(readText(p), { basePath: path.dirname(p) })
-}
+const loadPath = (p: string): EsmFile => loadFixtureFile(p)
 
-/** Run `fn`; return the thrown error's `.code`, or a sentinel. */
-function errCode(fn: () => unknown): string {
-  try {
-    fn()
-    return 'NO_ERROR'
-  } catch (e) {
-    return (e as { code?: string }).code ?? 'NON_CODE_ERROR'
-  }
-}
-async function errCodeAsync(fn: () => Promise<unknown>): Promise<string> {
-  try {
-    await fn()
-    return 'NO_ERROR'
-  } catch (e) {
-    return (e as { code?: string }).code ?? 'NON_CODE_ERROR'
-  }
-}
+// This file-corpus suite uses the legacy sentinel contract: 'NO_ERROR' on
+// success and `err.code ?? 'NON_CODE_ERROR'` for any throw (never rethrows).
+const errCode = (fn: () => unknown): string | null => errCodeShared(fn, { sentinel: true })
+const errCodeAsync = (fn: () => Promise<unknown>): Promise<string | null> =>
+  errCodeAsyncShared(fn, { sentinel: true })
 
 /** Expand a fixture's coupling_import edges (typed convenience). */
 function expandFixture(p: string): CouplingEntry[] {
@@ -93,10 +84,16 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     expect(expanded).toHaveLength(10)
     const first = expanded.slice(0, 5) as any[]
     const second = expanded.slice(5) as any[]
-    expect(first.every((e) => e.from.startsWith('FuelModelLookup.') && e.to.startsWith('RothermelFireSpread.'))).toBe(
-      true,
-    )
-    expect(second.every((e) => e.from.startsWith('LandfireFuel.') && e.to.startsWith('RothermelStatic.'))).toBe(true)
+    expect(
+      first.every(
+        (e) => e.from.startsWith('FuelModelLookup.') && e.to.startsWith('RothermelFireSpread.'),
+      ),
+    ).toBe(true)
+    expect(
+      second.every(
+        (e) => e.from.startsWith('LandfireFuel.') && e.to.startsWith('RothermelStatic.'),
+      ),
+    ).toBe(true)
   })
 
   // --- Full surface: every §10.10.2 occurrence site is rewritten ----------
@@ -206,12 +203,16 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
   it('subsystem ref targeting a coupling library -> subsystem_ref_is_coupling_library', async () => {
     const p = cl('subsystem_ref_to_library.esm')
     const f = loadPath(p)
-    expect(await errCodeAsync(() => resolveSubsystemRefs(f, path.dirname(p)))).toBe('subsystem_ref_is_coupling_library')
+    expect(await errCodeAsync(() => resolveSubsystemRefs(f, path.dirname(p)))).toBe(
+      'subsystem_ref_is_coupling_library',
+    )
   })
 
   it('template import targeting a coupling library -> template_import_is_coupling_library', () => {
     const p = cl('template_import_to_library.esm')
-    expect(errCode(() => load(readText(p), { basePath: path.dirname(p) }))).toBe('template_import_is_coupling_library')
+    expect(errCode(() => load(readText(p), { basePath: path.dirname(p) }))).toBe(
+      'template_import_is_coupling_library',
+    )
   })
 
   // --- coupletype removal (schema failure) --------------------------------

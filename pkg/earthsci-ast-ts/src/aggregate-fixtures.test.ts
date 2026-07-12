@@ -12,8 +12,9 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
 import { load, save, validate, validateSchema } from './index.js'
+import { fixturesDir } from './test-helpers.js'
 
-const testsDir = join(__dirname, '../../../tests')
+const testsDir = fixturesDir()
 
 function esmFilesIn(dir: string): string[] {
   return readdirSync(dir)

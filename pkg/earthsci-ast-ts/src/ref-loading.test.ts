@@ -5,6 +5,26 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+/**
+ * Build an `EsmFile` fixture from a top-level component map, replacing the
+ * repeated `{ esm, metadata, models/reaction_systems } as unknown as EsmFile`
+ * literals. The single `as unknown as EsmFile` cast lives here so intentionally
+ * partial test shapes don't scatter double-casts through every test.
+ */
+function esmFile(parts: {
+  name?: string
+  models?: Record<string, unknown>
+  reaction_systems?: Record<string, unknown>
+}): EsmFile {
+  const file: Record<string, unknown> = {
+    esm: '0.1.0',
+    metadata: { name: parts.name ?? 'test' },
+  }
+  if (parts.models) file.models = parts.models
+  if (parts.reaction_systems) file.reaction_systems = parts.reaction_systems
+  return file as unknown as EsmFile
+}
+
 describe('resolveSubsystemRefs', () => {
   let tmpDir: string
 
@@ -17,13 +37,11 @@ describe('resolveSubsystemRefs', () => {
   })
 
   it('does nothing for files with no refs', async () => {
-    const file = {
-      esm: '0.1.0',
-      metadata: { name: 'test' },
+    const file = esmFile({
       models: {
         Atm: { variables: {}, equations: [] },
       },
-    } as unknown as EsmFile
+    })
 
     await resolveSubsystemRefs(file, tmpDir)
     expect(file.models!.Atm).toBeDefined()
@@ -42,9 +60,8 @@ describe('resolveSubsystemRefs', () => {
     })
     await fs.writeFile(path.join(tmpDir, 'inner.esm.json'), refContent)
 
-    const file = {
-      esm: '0.1.0',
-      metadata: { name: 'main' },
+    const file = esmFile({
+      name: 'main',
       models: {
         Outer: {
           variables: {},
@@ -54,7 +71,7 @@ describe('resolveSubsystemRefs', () => {
           },
         },
       },
-    } as unknown as EsmFile
+    })
 
     await resolveSubsystemRefs(file, tmpDir)
     const inner = (file.models!.Outer as Model).subsystems!.Inner as any
@@ -81,9 +98,8 @@ describe('resolveSubsystemRefs', () => {
     })
     await fs.writeFile(path.join(tmpDir, 'weather.esm.json'), refContent)
 
-    const file = {
-      esm: '0.1.0',
-      metadata: { name: 'main' },
+    const file = esmFile({
+      name: 'main',
       models: {
         Outer: {
           variables: {},
@@ -93,7 +109,7 @@ describe('resolveSubsystemRefs', () => {
           },
         },
       },
-    } as unknown as EsmFile
+    })
 
     await resolveSubsystemRefs(file, tmpDir)
     const met = (file.models!.Outer as Model).subsystems!.Met as any
@@ -104,9 +120,8 @@ describe('resolveSubsystemRefs', () => {
   })
 
   it('throws RefLoadError when local file is missing', async () => {
-    const file = {
-      esm: '0.1.0',
-      metadata: { name: 'main' },
+    const file = esmFile({
+      name: 'main',
       models: {
         Outer: {
           variables: {},
@@ -116,7 +131,7 @@ describe('resolveSubsystemRefs', () => {
           },
         },
       },
-    } as unknown as EsmFile
+    })
 
     await expect(resolveSubsystemRefs(file, tmpDir)).rejects.toBeInstanceOf(RefLoadError)
   })
@@ -147,9 +162,8 @@ describe('resolveSubsystemRefs', () => {
     await fs.writeFile(path.join(tmpDir, 'a.esm.json'), aContent)
     await fs.writeFile(path.join(tmpDir, 'b.esm.json'), bContent)
 
-    const file = {
-      esm: '0.1.0',
-      metadata: { name: 'main' },
+    const file = esmFile({
+      name: 'main',
       models: {
         Root: {
           variables: {},
@@ -157,7 +171,7 @@ describe('resolveSubsystemRefs', () => {
           subsystems: { Start: { ref: './a.esm.json' } },
         },
       },
-    } as unknown as EsmFile
+    })
 
     await expect(resolveSubsystemRefs(file, tmpDir)).rejects.toBeInstanceOf(CircularReferenceError)
   })
@@ -176,9 +190,8 @@ describe('resolveSubsystemRefs', () => {
     })
     await fs.writeFile(path.join(tmpDir, 'subchem.esm.json'), refContent)
 
-    const file = {
-      esm: '0.1.0',
-      metadata: { name: 'main' },
+    const file = esmFile({
+      name: 'main',
       reaction_systems: {
         Chem: {
           species: {},
@@ -189,7 +202,7 @@ describe('resolveSubsystemRefs', () => {
           },
         },
       },
-    } as unknown as EsmFile
+    })
 
     await resolveSubsystemRefs(file, tmpDir)
     const sub = file.reaction_systems!.Chem!.subsystems!.Sub as any

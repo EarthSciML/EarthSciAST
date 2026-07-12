@@ -12,20 +12,20 @@
  * a file change and the debounced validation completing.
  */
 
-import { createMemo, createSignal, createEffect, on, onCleanup, untrack } from 'solid-js';
-import { validate, type ValidationError, type ValidationResult } from '@earthsciml/ast';
-import type { EsmFile } from '@earthsciml/ast';
+import { createMemo, createSignal, createEffect, on, onCleanup, untrack } from 'solid-js'
+import { validate, type ValidationError, type ValidationResult } from '@earthsciml/ast'
+import type { EsmFile } from '@earthsciml/ast'
 
 /**
  * Configuration for validation behavior
  */
 export interface ValidationConfig {
   /** Whether to enable automatic validation on file changes */
-  enabled?: boolean;
+  enabled?: boolean
   /** Debounce delay in milliseconds to avoid excessive validation calls */
-  debounceMs?: number;
+  debounceMs?: number
   /** Whether to validate on initialization */
-  validateOnInit?: boolean;
+  validateOnInit?: boolean
 }
 
 /**
@@ -33,11 +33,11 @@ export interface ValidationConfig {
  */
 export interface ValidationErrorWithMetadata extends ValidationError {
   /** Error severity level */
-  severity: 'error' | 'warning';
+  severity: 'error' | 'warning'
   /** Error category */
-  type: 'schema' | 'structural' | 'unit';
+  type: 'schema' | 'structural' | 'unit'
   /** Whether this error is highlighted in the UI */
-  highlighted?: boolean;
+  highlighted?: boolean
 }
 
 /**
@@ -45,48 +45,44 @@ export interface ValidationErrorWithMetadata extends ValidationError {
  */
 export interface ValidationSignals {
   /** Reactive validation result */
-  validationResult: () => ValidationResult;
+  validationResult: () => ValidationResult
   /** All validation errors with metadata */
-  allErrors: () => ValidationErrorWithMetadata[];
+  allErrors: () => ValidationErrorWithMetadata[]
   /** Only schema errors */
-  schemaErrors: () => ValidationErrorWithMetadata[];
+  schemaErrors: () => ValidationErrorWithMetadata[]
   /** Only structural errors */
-  structuralErrors: () => ValidationErrorWithMetadata[];
+  structuralErrors: () => ValidationErrorWithMetadata[]
   /** Unit warnings */
-  unitWarnings: () => ValidationErrorWithMetadata[];
+  unitWarnings: () => ValidationErrorWithMetadata[]
   /** Total error count */
-  errorCount: () => number;
+  errorCount: () => number
   /** Total warning count */
-  warningCount: () => number;
+  warningCount: () => number
   /** Whether the file is valid */
-  isValid: () => boolean;
+  isValid: () => boolean
   /** Whether a debounced validation is pending */
-  isValidating: () => boolean;
+  isValidating: () => boolean
   /** Force immediate re-validation */
-  revalidate: () => void;
+  revalidate: () => void
   /** Highlight a specific error by path */
-  highlightError: (path: string) => void;
+  highlightError: (path: string) => void
   /** Clear error highlighting */
-  clearHighlight: () => void;
+  clearHighlight: () => void
 }
 
 /**
- * Get severity level for a validation error
+ * Severity by error category: schema and structural errors are hard errors;
+ * unit checks surface as warnings.
  */
-function getErrorSeverity(_error: ValidationError, type: 'schema' | 'structural' | 'unit'): 'error' | 'warning' {
-  // Unit errors are typically warnings
-  if (type === 'unit') {
-    return 'warning';
-  }
+const SEVERITY_BY_TYPE: Record<'schema' | 'structural' | 'unit', 'error' | 'warning'> = {
+  schema: 'error',
+  structural: 'error',
+  unit: 'warning',
+}
 
-  // Schema errors are always errors
-  if (type === 'schema') {
-    return 'error';
-  }
-
-  // Structural errors could be warnings in some cases
-  // For now, treating all as errors, but could be enhanced based on error code
-  return 'error';
+/** Get severity level for a validation error category. */
+function getErrorSeverity(type: 'schema' | 'structural' | 'unit'): 'error' | 'warning' {
+  return SEVERITY_BY_TYPE[type]
 }
 
 /** Empty (valid) validation result */
@@ -95,8 +91,8 @@ function emptyResult(): ValidationResult {
     is_valid: true,
     schema_errors: [],
     structural_errors: [],
-    unit_warnings: []
-  };
+    unit_warnings: [],
+  }
 }
 
 /** Run validation on a file, converting exceptions into result errors */
@@ -104,35 +100,39 @@ function runValidation(currentFile: EsmFile | null | undefined): ValidationResul
   if (!currentFile) {
     return {
       is_valid: false,
-      schema_errors: [{
-        path: '$',
-        message: 'No ESM file provided',
-        code: 'missing_file',
-        details: {}
-      }],
+      schema_errors: [
+        {
+          path: '$',
+          message: 'No ESM file provided',
+          code: 'missing_file',
+          details: {},
+        },
+      ],
       structural_errors: [],
-      unit_warnings: []
-    };
+      unit_warnings: [],
+    }
   }
 
   try {
-    return validate(currentFile);
+    return validate(currentFile)
   } catch (error: unknown) {
-    const err = error as Error;
+    const err = error as Error
     return {
       is_valid: false,
-      schema_errors: [{
-        path: '$',
-        message: `Validation error: ${err.message || String(error)}`,
-        code: 'validation_exception',
-        details: {
-          exception_type: err.constructor.name,
-          error: err.message || String(error)
-        }
-      }],
+      schema_errors: [
+        {
+          path: '$',
+          message: `Validation error: ${err.message || String(error)}`,
+          code: 'validation_exception',
+          details: {
+            exception_type: err.constructor.name,
+            error: err.message || String(error),
+          },
+        },
+      ],
       structural_errors: [],
-      unit_warnings: []
-    };
+      unit_warnings: [],
+    }
   }
 }
 
@@ -145,153 +145,141 @@ function runValidation(currentFile: EsmFile | null | undefined): ValidationResul
  */
 export function createValidationSignals(
   file: () => EsmFile,
-  config: ValidationConfig = {}
+  config: ValidationConfig = {},
 ): ValidationSignals {
-  const {
-    enabled = true,
-    debounceMs = 300,
-    validateOnInit = true
-  } = config;
+  const { enabled = true, debounceMs = 300, validateOnInit = true } = config
 
   // Internal state
-  const [isValidating, setIsValidating] = createSignal(false);
-  const [highlightedPath, setHighlightedPath] = createSignal<string | null>(null);
+  const [isValidating, setIsValidating] = createSignal(false)
+  const [highlightedPath, setHighlightedPath] = createSignal<string | null>(null)
   const [validationResult, setValidationResult] = createSignal<ValidationResult>(
     // Validate the initial file synchronously when requested; otherwise start
     // from an empty (valid) result until the first file change or revalidate()
-    enabled && validateOnInit ? runValidation(untrack(file)) : emptyResult()
-  );
+    enabled && validateOnInit ? runValidation(untrack(file)) : emptyResult(),
+  )
 
-  let validationTimeout: ReturnType<typeof setTimeout> | undefined;
+  let validationTimeout: ReturnType<typeof setTimeout> | undefined
 
   /** Immediately validate the current file and publish the result */
   const doValidate = () => {
-    if (!enabled) return;
-    setValidationResult(runValidation(untrack(file)));
-    setIsValidating(false);
-  };
+    if (!enabled) return
+    setValidationResult(runValidation(untrack(file)))
+    setIsValidating(false)
+  }
 
   // Debounced validation on file changes. Deferred so creation does not
   // schedule a redundant run on top of the synchronous initial validation.
   if (enabled) {
-    createEffect(on(
-      () => file(),
-      () => {
-        setIsValidating(true);
-        if (validationTimeout) {
-          clearTimeout(validationTimeout);
-        }
-        validationTimeout = setTimeout(() => {
-          validationTimeout = undefined;
-          doValidate();
-        }, debounceMs);
-      },
-      { defer: true }
-    ));
+    createEffect(
+      on(
+        () => file(),
+        () => {
+          setIsValidating(true)
+          if (validationTimeout) {
+            clearTimeout(validationTimeout)
+          }
+          validationTimeout = setTimeout(() => {
+            validationTimeout = undefined
+            doValidate()
+          }, debounceMs)
+        },
+        { defer: true },
+      ),
+    )
 
     onCleanup(() => {
       if (validationTimeout) {
-        clearTimeout(validationTimeout);
+        clearTimeout(validationTimeout)
       }
-    });
+    })
   }
 
   // All errors with metadata and highlighting
   const allErrors = createMemo((): ValidationErrorWithMetadata[] => {
-    const result = validationResult();
-    const highlighted = highlightedPath();
-    const errors: ValidationErrorWithMetadata[] = [];
+    const result = validationResult()
+    const highlighted = highlightedPath()
+    const errors: ValidationErrorWithMetadata[] = []
 
     // Safety check - ensure result exists and has expected properties
     if (!result) {
-      return errors;
+      return errors
     }
 
     // Add schema errors
-    (result.schema_errors || []).forEach(error => {
+    ;(result.schema_errors || []).forEach((error) => {
       errors.push({
         ...error,
-        severity: getErrorSeverity(error, 'schema'),
+        severity: getErrorSeverity('schema'),
         type: 'schema',
-        highlighted: highlighted === error.path
-      });
-    });
+        highlighted: highlighted === error.path,
+      })
+    })
 
     // Add structural errors
-    (result.structural_errors || []).forEach(error => {
+    ;(result.structural_errors || []).forEach((error) => {
       errors.push({
         ...error,
-        severity: getErrorSeverity(error, 'structural'),
+        severity: getErrorSeverity('structural'),
         type: 'structural',
-        highlighted: highlighted === error.path
-      });
-    });
+        highlighted: highlighted === error.path,
+      })
+    })
 
     // Add unit warnings (UnitWarning carries message/location/equation, not path/details)
-    (result.unit_warnings || []).forEach(warning => {
-      const path = warning.location || '$';
-      const details: Record<string, unknown> = {};
-      if (warning.equation !== undefined) details.equation = warning.equation;
+    ;(result.unit_warnings || []).forEach((warning) => {
+      const path = warning.location || '$'
+      const details: Record<string, unknown> = {}
+      if (warning.equation !== undefined) details.equation = warning.equation
       const asError: ValidationError = {
         path,
         message: warning.message,
         code: 'unit_warning',
-        details
-      };
+        details,
+      }
       errors.push({
         ...asError,
-        severity: getErrorSeverity(asError, 'unit'),
+        severity: getErrorSeverity('unit'),
         type: 'unit',
-        highlighted: highlighted === path
-      });
-    });
+        highlighted: highlighted === path,
+      })
+    })
 
-    return errors;
-  });
+    return errors
+  })
 
   // Filtered error lists
-  const schemaErrors = createMemo(() =>
-    allErrors().filter(e => e.type === 'schema')
-  );
+  const schemaErrors = createMemo(() => allErrors().filter((e) => e.type === 'schema'))
 
-  const structuralErrors = createMemo(() =>
-    allErrors().filter(e => e.type === 'structural')
-  );
+  const structuralErrors = createMemo(() => allErrors().filter((e) => e.type === 'structural'))
 
-  const unitWarnings = createMemo(() =>
-    allErrors().filter(e => e.type === 'unit')
-  );
+  const unitWarnings = createMemo(() => allErrors().filter((e) => e.type === 'unit'))
 
   // Summary metrics
-  const errorCount = createMemo(() =>
-    allErrors().filter(e => e.severity === 'error').length
-  );
+  const errorCount = createMemo(() => allErrors().filter((e) => e.severity === 'error').length)
 
-  const warningCount = createMemo(() =>
-    allErrors().filter(e => e.severity === 'warning').length
-  );
+  const warningCount = createMemo(() => allErrors().filter((e) => e.severity === 'warning').length)
 
   const isValid = createMemo(() => {
-    const result = validationResult();
-    return result ? result.is_valid : false;
-  });
+    const result = validationResult()
+    return result ? result.is_valid : false
+  })
 
   // Actions
   const revalidate = () => {
     if (validationTimeout) {
-      clearTimeout(validationTimeout);
-      validationTimeout = undefined;
+      clearTimeout(validationTimeout)
+      validationTimeout = undefined
     }
-    doValidate();
-  };
+    doValidate()
+  }
 
   const highlightError = (path: string) => {
-    setHighlightedPath(path);
-  };
+    setHighlightedPath(path)
+  }
 
   const clearHighlight = () => {
-    setHighlightedPath(null);
-  };
+    setHighlightedPath(null)
+  }
 
   return {
     validationResult,
@@ -305,8 +293,8 @@ export function createValidationSignals(
     isValidating,
     revalidate,
     highlightError,
-    clearHighlight
-  };
+    clearHighlight,
+  }
 }
 
 /**
@@ -316,18 +304,15 @@ export function createValidationSignals(
  * @param config - Optional configuration
  * @returns Simplified validation interface
  */
-export function createValidationContext(
-  file: () => EsmFile,
-  config: ValidationConfig = {}
-) {
-  const signals = createValidationSignals(file, config);
+export function createValidationContext(file: () => EsmFile, config: ValidationConfig = {}) {
+  const signals = createValidationSignals(file, config)
 
   return {
     isValid: signals.isValid,
     errorCount: signals.errorCount,
     warningCount: signals.warningCount,
-    revalidate: signals.revalidate
-  };
+    revalidate: signals.revalidate,
+  }
 }
 
 /**
@@ -337,24 +322,21 @@ export function createValidationContext(
  * @param debounceMs - Debounce delay in milliseconds
  * @returns Debounced validation function
  */
-export function createDebouncedValidation(
-  validationFn: () => void,
-  debounceMs: number = 300
-) {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+export function createDebouncedValidation(validationFn: () => void, debounceMs: number = 300) {
+  let timeout: ReturnType<typeof setTimeout> | undefined
 
   const debouncedFn = () => {
     if (timeout) {
-      clearTimeout(timeout);
+      clearTimeout(timeout)
     }
-    timeout = setTimeout(validationFn, debounceMs);
-  };
+    timeout = setTimeout(validationFn, debounceMs)
+  }
 
   onCleanup(() => {
     if (timeout) {
-      clearTimeout(timeout);
+      clearTimeout(timeout)
     }
-  });
+  })
 
-  return debouncedFn;
+  return debouncedFn
 }

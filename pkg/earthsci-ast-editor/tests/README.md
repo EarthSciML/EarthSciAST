@@ -1,10 +1,13 @@
-# ESM Editor E2E Tests
+# ESM Editor Component Integration Tests
 
-This directory contains comprehensive End-to-End (E2E) tests for the SolidJS ESM Editor web components.
+This directory contains component integration tests for the SolidJS ESM Editor web
+components. They run under Vitest with jsdom (via `@solidjs/testing-library`) — they
+exercise the web components and cross-component workflows in a simulated DOM, not a real
+browser.
 
 ## Test Files
 
-### 1. `expression_editing_e2e.test.js`
+### 1. `expression-editing.test.tsx`
 
 Tests for interactive expression editing capabilities:
 
@@ -23,7 +26,7 @@ Tests for interactive expression editing capabilities:
 - Undo/redo state management
 - Custom element attribute reactivity
 
-### 2. `coupling_graph_interaction.test.js`
+### 2. `coupling-graph-interaction.test.tsx`
 
 Tests for interactive coupling graph visualization:
 
@@ -45,7 +48,7 @@ Tests for interactive coupling graph visualization:
 - Zoom and pan controls
 - Performance optimization for large graphs
 
-### 3. `validation_panel_live_updates.test.js`
+### 3. `validation-panel-live-updates.test.tsx`
 
 Tests for real-time validation feedback:
 
@@ -67,7 +70,7 @@ Tests for real-time validation feedback:
 
 ### Testing Approach
 
-These E2E tests use Vitest with jsdom to simulate browser environment interactions. The tests focus on:
+These integration tests use Vitest with jsdom to simulate DOM interactions. The tests focus on:
 
 1. **Web Component Integration**: Testing custom elements as they would be used in real applications
 2. **Event-Driven Architecture**: Verifying custom event dispatching and handling
@@ -124,9 +127,10 @@ The E2E tests cover the following requirements from the task specification:
 
 ✅ **Validation panel live updates**: Real-time validation feedback with error navigation
 
-## Browser Automation Simulation
+## jsdom vs. real-browser automation
 
-While these tests use jsdom instead of a full browser automation framework like Playwright or Cypress, they provide comprehensive coverage of:
+These tests use jsdom rather than a full browser-automation framework (Playwright,
+Cypress). They are not E2E/browser-automation tests, but they still cover:
 
 - Web component lifecycle and event handling
 - DOM manipulation and custom event dispatching

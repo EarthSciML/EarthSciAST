@@ -6,8 +6,15 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { load } from './parse.js'
-import { lowerExpressionTemplates, ExpressionTemplateError } from './lower-expression-templates.js'
+import {
+  lowerExpressionTemplates,
+  EsmMachineryError,
+  // Deprecated same-class alias — imported to assert backward compatibility below.
+  ExpressionTemplateError,
+} from './lower-expression-templates.js'
+import { EsmDiagnosticError } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
+import { fixturesDir } from './test-helpers.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
 // `arrhenius` template and one inline rate, plus an arithmetic check.
@@ -174,14 +181,9 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   })
 
   it('conformance fixture matches the canonical expanded form (cross-binding pin)', () => {
-    const root = path.resolve(__dirname, '../../..')
-    const fixturePath = path.join(
-      root,
-      'tests/conformance/expression_templates/arrhenius_smoke/fixture.esm',
-    )
-    const expandedPath = path.join(
-      root,
-      'tests/conformance/expression_templates/arrhenius_smoke/expanded.esm',
+    const fixturePath = fixturesDir('conformance/expression_templates/arrhenius_smoke/fixture.esm')
+    const expandedPath = fixturesDir(
+      'conformance/expression_templates/arrhenius_smoke/expanded.esm',
     )
     const file = load(fs.readFileSync(fixturePath, 'utf8'))
     const expanded = JSON.parse(fs.readFileSync(expandedPath, 'utf8'))
@@ -192,11 +194,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     // The v0.8.0 variable_map expression-transform widening: a coupling
     // `transform` invoking a template declared by the RECEIVING component
     // expands at load against that component's registry (§9.6.4).
-    const root = path.resolve(__dirname, '../../..')
-    const casedir = path.join(
-      root,
-      'tests/conformance/expression_templates/coupling_transform_expression',
-    )
+    const casedir = fixturesDir('conformance/expression_templates/coupling_transform_expression')
     const file = load(
       fs.readFileSync(path.join(casedir, 'fixture.esm'), 'utf8'),
     ) as unknown as Record<string, unknown>
@@ -205,15 +203,15 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     expect(file.models).toEqual(expanded.models)
   })
 
-  it('ExpressionTemplateError is thrown with stable diagnostic codes', () => {
+  it('EsmMachineryError is thrown with stable diagnostic codes', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     fixture.reaction_systems.chem.reactions[0].rate.name = 'missing'
     try {
       load(fixture)
       throw new Error('expected error')
     } catch (e) {
-      expect(e).toBeInstanceOf(ExpressionTemplateError)
-      expect((e as ExpressionTemplateError).code).toBe('apply_expression_template_unknown_template')
+      expect(e).toBeInstanceOf(EsmMachineryError)
+      expect((e as EsmMachineryError).code).toBe('apply_expression_template_unknown_template')
     }
   })
 })
@@ -379,7 +377,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       lowerExpressionTemplates(file)
       throw new Error('expected error')
     } catch (e) {
-      expect((e as ExpressionTemplateError).code).toBe('rewrite_rule_nonterminating')
+      expect((e as EsmMachineryError).code).toBe('rewrite_rule_nonterminating')
     }
   })
 
@@ -457,7 +455,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
 // ---------------------------------------------------------------------------
 
 describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)', () => {
-  const confDir = path.resolve(__dirname, '../../..', 'tests/conformance/expression_templates')
+  const confDir = fixturesDir('conformance/expression_templates')
   const fixtureText = (name: string) =>
     fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8')
   // Mirror the Julia driver `_lower_conf`: parse the fixture and run the
@@ -510,11 +508,11 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(ExpressionTemplateError)
-    expect((err as ExpressionTemplateError).code).toBe('rewrite_rule_nonterminating')
+    expect(err).toBeInstanceOf(EsmMachineryError)
+    expect((err as EsmMachineryError).code).toBe('rewrite_rule_nonterminating')
     // Also fires through the full load() pipeline (stage: "load").
     expect(() => load(fixtureText('nonterminating_rewrite'))).toThrow(/rewrite_rule_nonterminating/)
-    expect((err as ExpressionTemplateError).code).toBe(goldenError('nonterminating_rewrite').code)
+    expect((err as EsmMachineryError).code).toBe(goldenError('nonterminating_rewrite').code)
   })
 
   it('unlowered spatial D loads clean, then errors `unlowered_operator` at evaluation', () => {
@@ -716,7 +714,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
     // the apply op survives lowering and trips the leftover gate.
     src.models.Src.expression_templates = src.models.Sink.expression_templates
     delete src.models.Sink.expression_templates
-    expect(() => lowerExpressionTemplates(src)).toThrow(ExpressionTemplateError)
+    expect(() => lowerExpressionTemplates(src)).toThrow(EsmMachineryError)
     expect(() => lowerExpressionTemplates(src)).toThrow(
       /remain after expansion at: \/coupling\/0\/transform/,
     )
@@ -725,7 +723,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
   it('reports the coupling[<idx>].transform scope for an unknown template name', () => {
     const src = couplingFixture() as any
     src.coupling[0].transform.name = 'nope'
-    expect(() => lowerExpressionTemplates(src)).toThrow(ExpressionTemplateError)
+    expect(() => lowerExpressionTemplates(src)).toThrow(EsmMachineryError)
     expect(() => lowerExpressionTemplates(src)).toThrow(/coupling\[0\]\.transform/)
   })
 
@@ -856,7 +854,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
       },
       { K_manifold: 'bogus', a: 'pa', b: 'pb' },
     )
-    expect(() => lowerExpressionTemplates(src)).toThrow(ExpressionTemplateError)
+    expect(() => lowerExpressionTemplates(src)).toThrow(EsmMachineryError)
     expect(() => lowerExpressionTemplates(src)).toThrow(/geometry_manifold_invalid/)
   })
 
@@ -887,11 +885,7 @@ describe('scalar_field_param conformance fixture', () => {
   // Drives tests/conformance/expression_templates/scalar_field_param — the
   // scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
   // (planar / spherical) — against its pinned Julia-generated expanded.esm.
-  const caseDir = path.resolve(
-    __dirname,
-    '../../..',
-    'tests/conformance/expression_templates/scalar_field_param',
-  )
+  const caseDir = fixturesDir('conformance/expression_templates/scalar_field_param')
 
   it('matches the canonical expanded form', () => {
     const fixture = JSON.parse(fs.readFileSync(path.join(caseDir, 'fixture.esm'), 'utf8'))
@@ -911,7 +905,7 @@ describe('scalar_field_param conformance fixture', () => {
 // ---------------------------------------------------------------------------
 
 describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
-  const confDir = path.resolve(__dirname, '../../..', 'tests/conformance/expression_templates')
+  const confDir = fixturesDir('conformance/expression_templates')
   const fixture = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8'))
   const golden = (name: string) =>
@@ -966,9 +960,9 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     } catch (e) {
       caught = e
     }
-    expect(caught).toBeInstanceOf(ExpressionTemplateError)
-    expect((caught as ExpressionTemplateError).code).toBe(err.code)
-    expect((caught as ExpressionTemplateError).code).toBe('template_constraint_unknown_index_set')
+    expect(caught).toBeInstanceOf(EsmMachineryError)
+    expect((caught as EsmMachineryError).code).toBe(err.code)
+    expect((caught as EsmMachineryError).code).toBe('template_constraint_unknown_index_set')
   })
 
   // --- non-fixture unit pins (match-pattern-scoping-constraints RFC §10.6) ---
@@ -1075,9 +1069,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     } catch (e) {
       caught = e
     }
-    expect((caught as ExpressionTemplateError).code).toBe(
-      'apply_expression_template_invalid_declaration',
-    )
+    expect((caught as EsmMachineryError).code).toBe('apply_expression_template_invalid_declaration')
   })
 })
 
@@ -1087,7 +1079,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
 // ---------------------------------------------------------------------------
 
 describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
-  const validDir = path.resolve(__dirname, '../../..', 'tests/valid')
+  const validDir = fixturesDir('valid')
 
   it('empty bound [start, start-1] loads clean at the minimum extent', () => {
     // tests/valid/makearray_empty_region_min_extent.esm folds the interior
@@ -1115,7 +1107,68 @@ describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
     } catch (e) {
       caught = e
     }
-    expect(caught).toBeInstanceOf(ExpressionTemplateError)
-    expect((caught as ExpressionTemplateError).code).toBe('makearray_region_inverted')
+    expect(caught).toBeInstanceOf(EsmMachineryError)
+    expect((caught as EsmMachineryError).code).toBe('makearray_region_inverted')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Regression guards for the Wave-2β clarity/consistency fixes.
+// ---------------------------------------------------------------------------
+
+describe('rulePriority — non-finite priority does not poison rule selection', () => {
+  it('a NaN-priority rule sorts as priority 0, so a real higher-priority rule still wins', () => {
+    // Two `match` rules fire on the same `foo` node. `ruleNaN` is declared
+    // FIRST (declIndex 0) with a non-finite priority; `rule5` is declared
+    // second with priority 5. Before the guard fix, `NaN` made the sort
+    // comparator fall back to declaration order, so `ruleNaN` (declIndex 0)
+    // shadowed `rule5`. With the fix (`NaN` -> 0) the priority-5 rule wins.
+    const file = {
+      esm: '0.8.0',
+      metadata: { name: 'nan_priority' },
+      models: {
+        m: {
+          variables: { x: { type: 'variable', units: '1' } },
+          expression_templates: {
+            ruleNaN: {
+              params: ['a'],
+              match: { op: 'foo', args: ['a'] },
+              body: { op: 'from_nan', args: ['a'] },
+              priority: Number.NaN,
+            },
+            rule5: {
+              params: ['a'],
+              match: { op: 'foo', args: ['a'] },
+              body: { op: 'from_five', args: ['a'] },
+              priority: 5,
+            },
+          },
+          equations: [{ lhs: 'x', rhs: { op: 'foo', args: ['z'] } }],
+        },
+      },
+    }
+    const out = lowerExpressionTemplates(file) as any
+    expect(out.models.m.equations[0].rhs).toEqual({ op: 'from_five', args: ['z'] })
+  })
+})
+
+describe('EsmMachineryError — extends EsmDiagnosticError, byte-compatible', () => {
+  it('keeps its name, code, and [code] message while gaining the EsmDiagnosticError base', () => {
+    const err = new EsmMachineryError('some_code', 'boom')
+    expect(err).toBeInstanceOf(EsmMachineryError)
+    expect(err).toBeInstanceOf(EsmDiagnosticError)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.name).toBe('EsmMachineryError')
+    expect(err.code).toBe('some_code')
+    expect(err.message).toBe('[some_code] boom')
+  })
+
+  it('exposes the deprecated ExpressionTemplateError alias as the SAME class', () => {
+    // Backward compatibility: the alias is the same class object, so instanceof
+    // classifies identically in either direction for external consumers.
+    expect(ExpressionTemplateError).toBe(EsmMachineryError)
+    const err = new EsmMachineryError('some_code', 'boom')
+    expect(err).toBeInstanceOf(ExpressionTemplateError)
+    expect(new ExpressionTemplateError('c', 'm')).toBeInstanceOf(EsmMachineryError)
   })
 })

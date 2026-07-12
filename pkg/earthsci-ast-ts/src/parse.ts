@@ -5,11 +5,12 @@
  * Separates concerns: JSON parsing → schema validation → type coercion.
  */
 
-import Ajv, { ErrorObject, ValidateFunction } from 'ajv'
+import type { ErrorObject, ValidateFunction } from 'ajv'
+import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
-import type { EsmFile, Expression } from './types.js'
+import type { EsmFile } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
-import { isNumericLiteral, losslessJsonParse } from './numeric-literal.js'
+import { losslessJsonParse, stripNumericLiterals } from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
 import {
   lowerExpressionTemplates,
@@ -21,6 +22,16 @@ import {
   resolveTemplateMachinery,
 } from './template-imports.js'
 import { schema } from './embedded-schema.js'
+
+/**
+ * The single root-path token used when a validation diagnostic has no more
+ * specific location. `'$'` is chosen (over a bare `'/'`) so every root-level
+ * `path` this library emits — structural errors/warnings and catch-paths in
+ * validate.ts as well as this module's schema-error root fallback — is uniform,
+ * matching the Python and Go bindings. Exported so validate.ts consumes the
+ * same constant (validate imports parse, so there is no import cycle).
+ */
+export const ROOT_PATH = '$'
 
 /**
  * Schema validation error with JSON Pointer path
@@ -101,21 +112,19 @@ try {
  * Validate data against the ESM schema
  */
 export function validateSchema(data: unknown): SchemaError[] {
-  // Reject unsupported major versions before AJV validation.
-  if (typeof data === 'object' && data !== null) {
-    const esm = (data as Record<string, unknown>).esm
-    if (typeof esm === 'string') {
-      const v = parseSemanticVersion(esm)
-      if (v !== null && v.major !== CURRENT_VERSION.major) {
-        return [
-          {
-            path: '/esm',
-            message: `Unsupported major version ${v.major}; this validator supports major version ${CURRENT_VERSION.major}`,
-            keyword: 'major_version_mismatch',
-          },
-        ]
-      }
-    }
+  // Reject unsupported major versions before AJV validation. Shares the
+  // major-version predicate with `checkVersionCompatibility` (the throw
+  // surface); this surface keeps its own separately-pinned schema-error
+  // wording/keyword.
+  const version = parseFileVersion(data)
+  if (version !== null && isUnsupportedMajor(version)) {
+    return [
+      {
+        path: '/esm',
+        message: `Unsupported major version ${version.major}; this validator supports major version ${CURRENT_VERSION.major}`,
+        keyword: 'major_version_mismatch',
+      },
+    ]
   }
 
   const isValid = validator(data)
@@ -124,7 +133,7 @@ export function validateSchema(data: unknown): SchemaError[] {
   }
 
   return validator.errors.map((error: ErrorObject): SchemaError => ({
-    path: error.instancePath || '/',
+    path: error.instancePath || ROOT_PATH,
     message: error.message || 'Unknown validation error',
     keyword: error.keyword,
   }))
@@ -161,108 +170,6 @@ function parseJsonLossless(input: string): unknown {
 }
 
 /**
- * Recursively replace `NumericLiteral` leaves with their plain-number
- * value. Used to produce a plain view of a lossless-parsed document
- * for Ajv schema validation (the schema declares `type: number`, which
- * does not match tagged objects).
- *
- * Returns a new tree; input is not mutated. Non-literal objects and
- * arrays are shallow-copied only when a descendant is rewritten.
- */
-function stripNumericLiterals(value: unknown): unknown {
-  if (isNumericLiteral(value)) return value.value
-  if (Array.isArray(value)) {
-    let changed = false
-    const out: unknown[] = new Array(value.length)
-    for (let i = 0; i < value.length; i++) {
-      const v = stripNumericLiterals(value[i])
-      if (v !== value[i]) changed = true
-      out[i] = v
-    }
-    return changed ? out : value
-  }
-  if (value && typeof value === 'object') {
-    const src = value as Record<string, unknown>
-    let changed = false
-    const out: Record<string, unknown> = {}
-    for (const key of Object.keys(src)) {
-      const v = stripNumericLiterals(src[key])
-      if (v !== src[key]) changed = true
-      out[key] = v
-    }
-    return changed ? out : value
-  }
-  return value
-}
-
-/**
- * Coerce types for better TypeScript compatibility
- * Handles Expression union types and discriminated unions
- */
-function coerceTypes(data: any): any {
-  if (data === null || data === undefined) {
-    return data
-  }
-
-  // Canonical-mode tagged leaves are opaque — never descend into them.
-  if (isNumericLiteral(data)) {
-    return data
-  }
-
-  if (Array.isArray(data)) {
-    return data.map(coerceTypes)
-  }
-
-  if (typeof data === 'object') {
-    const result: any = {}
-
-    for (const [key, value] of Object.entries(data)) {
-      // Expression-bearing fields per the schema: a variable's defining
-      // `expression`, an ExpressionNode's `args` list, and an aggregate
-      // node's contracted body `expr`. Everything else is walked
-      // generically.
-      if (EXPRESSION_KEYS.has(key)) {
-        result[key] = coerceExpression(value)
-      } else {
-        result[key] = coerceTypes(value)
-      }
-    }
-
-    return result
-  }
-
-  return data
-}
-
-const EXPRESSION_KEYS = new Set(['expression', 'expr', 'args'])
-
-/**
- * Coerce Expression union type (number | string | ExpressionNode).
- * `NumericLiteral` tagged leaves (canonical-mode only) pass through
- * unchanged.
- */
-function coerceExpression(value: any): Expression {
-  if (typeof value === 'number' || typeof value === 'string') {
-    return value
-  }
-
-  // NumericLiteral — canonical-mode tagged leaf; pass through.
-  if (isNumericLiteral(value)) {
-    return value as unknown as Expression
-  }
-
-  // If it's an object with 'op' and 'args', treat as ExpressionNode
-  if (value && typeof value === 'object' && 'op' in value && 'args' in value) {
-    return {
-      ...value,
-      args: Array.isArray(value.args) ? value.args.map(coerceExpression) : value.args,
-    }
-  }
-
-  return value
-}
-
-/**
  * Parse a semantic version string and return its components
  */
 function parseSemanticVersion(
@@ -283,13 +190,44 @@ function parseSemanticVersion(
 const CURRENT_VERSION = parseSemanticVersion(SCHEMA_VERSION)!
 
 /**
+ * The `esm` version declared by `data`, parsed into components, or `null` when
+ * `data` is not an object, carries no string `esm`, or the string is not a
+ * well-formed semantic version (those cases are deliberately left to schema
+ * validation). Shared by both version-check surfaces below.
+ */
+function parseFileVersion(data: unknown): { major: number; minor: number; patch: number } | null {
+  if (typeof data !== 'object' || data === null) return null
+  const esm = (data as Record<string, unknown>).esm
+  if (typeof esm !== 'string') return null
+  return parseSemanticVersion(esm)
+}
+
+/**
+ * The single definition of "this file's major version is incompatible with the
+ * schema this build implements". Consulted by BOTH the `validateSchema`
+ * schema-error surface and the `checkVersionCompatibility` throw surface so the
+ * rejection rule lives in exactly one place (the two surfaces keep their own,
+ * separately-pinned diagnostic wording).
+ */
+function isUnsupportedMajor(v: { major: number }): boolean {
+  return v.major !== CURRENT_VERSION.major
+}
+
+/**
  * Check version compatibility for an ESM file. Mirrors the Python binding's
  * `_check_version_compatibility`: a different major version is rejected; a
  * newer minor version warns but loads (the schema's `additionalProperties:
  * false` still applies — forward compatibility is warn-only, never weakened
  * validation).
+ *
+ * The minor-version warning is routed through `onVersionWarning` when supplied,
+ * falling back to `console.warn` otherwise (the default that
+ * `version-compatibility.test.ts` observes).
  */
-function checkVersionCompatibility(data: unknown): void {
+function checkVersionCompatibility(
+  data: unknown,
+  onVersionWarning?: (message: string) => void,
+): void {
   if (typeof data !== 'object' || data === null) {
     return // Let schema validation handle this
   }
@@ -304,21 +242,23 @@ function checkVersionCompatibility(data: unknown): void {
     return // Let schema validation handle invalid version format
   }
 
-  const { major, minor } = versionComponents
-
   // Reject unsupported major versions
-  if (major !== CURRENT_VERSION.major) {
+  if (isUnsupportedMajor(versionComponents)) {
     throw new ParseError(
-      `Unsupported major version ${major}. This parser supports major version ${CURRENT_VERSION.major}.`,
+      `Unsupported major version ${versionComponents.major}. This parser supports major version ${CURRENT_VERSION.major}.`,
     )
   }
 
   // Warn about newer minor versions
-  if (minor > CURRENT_VERSION.minor) {
-    console.warn(
+  if (versionComponents.minor > CURRENT_VERSION.minor) {
+    const message =
       `${version} is newer than the current library version ${SCHEMA_VERSION}. ` +
-        `Some features may not be supported.`,
-    )
+      `Some features may not be supported.`
+    if (onVersionWarning) {
+      onVersionWarning(message)
+    } else {
+      console.warn(message)
+    }
   }
 }
 
@@ -387,6 +327,14 @@ export interface LoadOptions {
    * structured result.
    */
   onUnitWarning?: ((warning: UnitWarning) => void) | undefined
+
+  /**
+   * Receives the forward-compatibility warning emitted when the file's minor
+   * version is newer than the schema this build implements, instead of the
+   * default `console.warn`. Parallels {@link onUnitWarning} so hosts can route
+   * both load-time warnings into a structured channel.
+   */
+  onVersionWarning?: ((message: string) => void) | undefined
 }
 
 /**
@@ -421,7 +369,7 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
   }
 
   // Step 2: Version compatibility check (before schema validation)
-  checkVersionCompatibility(validationView)
+  checkVersionCompatibility(validationView, options?.onVersionWarning)
 
   // Step 2a: v0.3.0 file-boundary rejection of removed v0.2.x extension
   // points (esm-spec §9 / closed function registry RFC). Mirrors the
@@ -475,12 +423,14 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
     validateSchema,
   })
   data = resolved ?? machineryInput
-  data = lowerExpressionTemplates(data as object)
+  // `lowerExpressionTemplates` returns a fresh tree (it deep-clones), so `data`
+  // is already independent of the caller's input here; no separate defensive
+  // copy is needed. (The former `coerceTypes` pass was a second, no-op identity
+  // deep-copy that transformed nothing — it is removed and the value cast
+  // directly.)
+  const typedData = lowerExpressionTemplates(data as object) as EsmFile
 
-  // Step 4: Type coercion
-  const typedData = coerceTypes(data) as EsmFile
-
-  // Step 4b: Lower `enum` ops to `const` integer nodes against the
+  // Step 4: Lower `enum` ops to `const` integer nodes against the
   // file-local `enums` block (esm-spec §9.3). After this pass, the
   // codegen runner sees only `const` — `evaluateExpression()` rejects
   // any leftover `enum` op as an unlowered file.

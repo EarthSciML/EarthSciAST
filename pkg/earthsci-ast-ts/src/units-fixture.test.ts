@@ -16,12 +16,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { evaluateExpression } from './codegen.js'
+import { readFixture } from './test-helpers.js'
 import type { EsmFile, Expr, Model, ModelVariable, Test, Assertion } from './types.js'
 
-const FIXTURES_DIR = join(__dirname, '..', '..', '..', 'tests', 'valid')
 const FIXTURES = [
   'units_conversions.esm',
   'units_dimensional_analysis.esm',
@@ -115,7 +113,7 @@ function buildBindings(model: Model, t: Test): Map<string, number> {
 describe('Units fixtures inline tests execution (gt-dt0o)', () => {
   for (const fname of FIXTURES) {
     describe(fname, () => {
-      const raw = readFileSync(join(FIXTURES_DIR, fname), 'utf8')
+      const raw = readFixture('valid', fname)
       const file = JSON.parse(raw) as EsmFile
       const models = file.models ?? {}
       const modelEntries = Object.entries(models)

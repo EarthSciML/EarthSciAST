@@ -1,14 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { load, save } from './index.js'
+import { loadFixture as loadEsmFixture } from './test-helpers.js'
 import type { EsmFile, Model, ModelVariable } from './types.js'
 
-const FIXTURE_DIR = resolve(__dirname, '..', '..', '..', 'tests', 'fixtures', 'arrayed_vars')
-
 function loadFixture(name: string): EsmFile {
-  const raw = readFileSync(resolve(FIXTURE_DIR, name), 'utf8')
-  return load(raw)
+  return loadEsmFixture('fixtures', 'arrayed_vars', name)
 }
 
 function roundtrip(name: string): { first: EsmFile; second: EsmFile } {

@@ -10,6 +10,7 @@ import {
   higherOrderDerivative,
   isDifferentiable,
   findCriticalPoints,
+  NonDifferentiableExpressionError,
 } from './differentiation.js'
 import type { Expr } from '../types.js'
 
@@ -334,10 +335,10 @@ describe('Symbolic Differentiation', () => {
       const result = higherOrderDerivative(expr, 'x', 2)
 
       expect(result.variable).toBe('x')
-      expect(result.chainComponents).toHaveLength(2)
+      expect(result.derivativeSteps).toHaveLength(2)
 
       // First derivative: 4x³
-      expect(result.chainComponents![0].derivative).toEqual({
+      expect(result.derivativeSteps![0].derivative).toEqual({
         op: '*',
         args: [4, { op: '^', args: ['x', 3] }, 1],
       })
@@ -371,6 +372,25 @@ describe('Symbolic Differentiation', () => {
         ],
       }
       expect(isDifferentiable(expr, 'x')).toBe(true)
+    })
+
+    it('should report a known op applied with the wrong arity as non-differentiable', () => {
+      // sin takes exactly one argument; two args has no derivative rule and
+      // must NOT be silently fabricated as 0.
+      const badSin: Expr = { op: 'sin', args: ['x', 'y'] }
+      expect(isDifferentiable(badSin, 'x')).toBe(false)
+      expect(() => differentiate(badSin, 'x')).toThrow(NonDifferentiableExpressionError)
+
+      // Same for a structural op with an unsupported arity (division needs 2).
+      const badDiv: Expr = { op: '/', args: ['x'] }
+      expect(isDifferentiable(badDiv, 'x')).toBe(false)
+      expect(() => differentiate(badDiv, 'x')).toThrow(NonDifferentiableExpressionError)
+    })
+
+    it('should report unknown operators as non-differentiable', () => {
+      const unknown: Expr = { op: 'mystery_op', args: ['x'] }
+      expect(isDifferentiable(unknown, 'x')).toBe(false)
+      expect(() => differentiate(unknown, 'x')).toThrow(NonDifferentiableExpressionError)
     })
   })
 

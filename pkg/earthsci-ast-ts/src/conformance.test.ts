@@ -26,6 +26,7 @@ import {
   contains,
 } from './index.js'
 import * as toolkit from './index.js'
+import { fixturesDir } from './test-helpers.js'
 import type { Expr, Expression } from './types.js'
 
 // The toolkit has never exported a bare `evaluate` helper (evaluation is
@@ -37,7 +38,7 @@ const { evaluate } = toolkit as {
   evaluate?: (expr: Expr, bindings: Record<string, number | undefined>) => unknown
 }
 
-const testsDir = join(__dirname, '../../../tests')
+const testsDir = fixturesDir()
 
 /**
  * Helper to recursively find all .esm files in a directory
