@@ -30,9 +30,10 @@ _twb_floor(x) = Dict{String,Any}("op"=>"floor", "args"=>[x])
 _twb_div(a, b) = Dict{String,Any}("op"=>"/", "args"=>[a, b])
 _twb_eq(a, b) = Dict{String,Any}("op"=>"==", "args"=>[a, b])
 _twb_mul(a...) = Dict{String,Any}("op"=>"*", "args"=>collect(Any, a))
-# skolem("bin", floor(lon[sym]/bin_dx), floor(lat[sym]/bin_dy))
-_twb_binkey(lon, lat, sym) = Dict{String,Any}("op"=>"skolem", "args"=>[
-    "bin",
+# skolem[bin](floor(lon[sym]/bin_dx), floor(lat[sym]/bin_dy))
+# The "bin" relation tag lives in the dedicated `label` field (esm-spec skolem
+# key shape); `args` are the pure key components.
+_twb_binkey(lon, lat, sym) = Dict{String,Any}("op"=>"skolem", "label"=>"bin", "args"=>[
     _twb_floor(_twb_div(_twb_ix(lon, sym), "bin_dx")),
     _twb_floor(_twb_div(_twb_ix(lat, sym), "bin_dy"))])
 

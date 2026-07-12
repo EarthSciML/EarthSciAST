@@ -476,6 +476,15 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
+    /// Documentary relation tag for a `skolem` node (e.g. `"edge"`, `"bin"`,
+    /// `"pair"`). Purely a human-readable annotation of which relation the
+    /// invented key belongs to — it is NOT a key component and is ignored by
+    /// value invention. Kept out of `args` so a mistyped key component can never
+    /// masquerade as a tag (and vice versa). A scalar, so it is deliberately not
+    /// traversed by `for_each_child`/`map_children`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+
     /// For the `const` op: inline literal value (any JSON number, integer,
     /// or nested array thereof). `args` MUST be empty when this is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]

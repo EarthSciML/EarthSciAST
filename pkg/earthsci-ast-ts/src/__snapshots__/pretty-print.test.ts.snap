@@ -4347,18 +4347,18 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "godunov_hamiltonian(u, v)",
   },
   {
-    "ascii": "skolem(edge, u, v)",
+    "ascii": "skolem(u, v)",
     "input": {
       "args": [
-        "edge",
         "u",
         "v",
       ],
+      "label": "edge",
       "op": "skolem",
     },
-    "latex": "\\mathrm{skolem}(\\mathrm{edge}, u, v)",
-    "mathml": "<mrow><mi>skolem</mi><mo>(</mo><mi>edge</mi><mo>,</mo><mi>u</mi><mo>,</mo><mi>v</mi><mo>)</mo></mrow>",
-    "unicode": "skolem(edge, u, v)",
+    "latex": "\\mathrm{skolem}(u, v)",
+    "mathml": "<mrow><mi>skolem</mi><mo>(</mo><mi>u</mi><mo>,</mo><mi>v</mi><mo>)</mo></mrow>",
+    "unicode": "skolem(u, v)",
   },
   {
     "ascii": "rank(S)",

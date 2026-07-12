@@ -53,6 +53,13 @@ class ExprNode:
     distinct: bool | None = None
     # Skolem-term expression for an index-set-producing aggregate (RFC §5.5).
     key: Expr | None = None
+    # Documentary relation tag for a `skolem` node (e.g. "edge"/"bin"/"pair").
+    # Purely descriptive: it names the relation the emitted key belongs to and is
+    # NEVER part of the key itself. ``args`` are PURE key components (exact integer
+    # IDs, §5.5.1 rule 4) — a leading string in ``args`` is no longer overloaded as
+    # the tag (which silently masked a real component on a typo). JSON wire key
+    # "label". Mirrors the Julia reference `label` field.
+    label: str | None = None
     # makearray:
     regions: list[list[list[int]]] | None = None
     values: list[Expr] | None = None

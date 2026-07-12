@@ -94,6 +94,11 @@ type ExprNode struct {
 	Distinct *bool `json:"distinct,omitempty"`
 	// Key is the optional grouping key of an `aggregate` op.
 	Key any `json:"key,omitempty"`
+	// Label is the optional documentary relation tag of a `skolem` op
+	// (esm-spec §4.2; e.g. "edge", "bin", "pair"). Purely documentary — it does
+	// NOT affect the emitted key; the key components are the node's Args. Modeled
+	// so a label-bearing skolem node round-trips.
+	Label *string `json:"label,omitempty"`
 	// Arg is the witness index name of an `argmin` / `argmax` op.
 	Arg *string `json:"arg,omitempty"`
 }

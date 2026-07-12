@@ -137,6 +137,8 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
             result["handler_id"] = expr.handler_id
         if expr.name is not None:
             result["name"] = expr.name
+        if getattr(expr, "label", None) is not None:
+            result["label"] = expr.label
         if expr.value is not None:
             result["value"] = expr.value
         # table_lookup (esm-spec §9.5, v0.4.0). Stored under JSON key "axes"

@@ -135,6 +135,10 @@ Operator expression node containing:
 - `value`: for the `const` op, the inline literal value carried by this node.
   Any JSON value (number, integer, or nested array thereof); `args` MUST be
   empty for a const node.
+- `label`: optional documentary relation tag for a `skolem` node (e.g. "edge",
+  "bin", "pair") — the human-facing name of the relation the emitted key belongs
+  to. Purely documentary: it is NOT part of the emitted key and is NOT rendered;
+  `args` are the pure key components.
 """
 # `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
 # licence to mutate: the build path treats `OpExpr` as an immutable value and only
@@ -248,6 +252,17 @@ mutable struct OpExpr <: ASTExpr
     arg::Union{String,Nothing}
     bindings::Union{Dict{String,ASTExpr},Nothing}
 
+    # ── Skolem documentary relation tag ──
+    # `label` — an OPTIONAL documentary relation tag on a `skolem` node (e.g.
+    #           "edge"/"bin"/"pair"): the human-facing name of the relation the
+    #           emitted key belongs to. Formerly this tag was overloaded onto the
+    #           FIRST `args` position, where a typo silently masqueraded as a real
+    #           key component; it now lives in its own field so `args` are PURE key
+    #           components. Purely documentary — NOT part of the emitted key
+    #           (`_vi_skolem` reads it for provenance only) and NOT rendered by the
+    #           pretty-printer (a skolem renders as `skolem(<args>)`).
+    label::Union{String,Nothing}
+
     OpExpr(op::String, args::Vector{ASTExpr};
            wrt=nothing, dim=nothing,
            int_var=nothing, lower=nothing, upper=nothing,
@@ -260,7 +275,7 @@ mutable struct OpExpr <: ASTExpr
            join=nothing, filter=nothing, join_gates=nothing,
            id=nothing, manifold=nothing,
            distinct=nothing, key=nothing,
-           arg=nothing, bindings=nothing,
+           arg=nothing, bindings=nothing, label=nothing,
            # `handler_id` was the v0.2.x field for the now-removed `call`
            # op (esm-spec §9.2 closure). Accept and ignore on construction
            # so internal helpers that still pass it through don't break
@@ -270,25 +285,25 @@ mutable struct OpExpr <: ASTExpr
             semiring, ranges,
             regions, values, shape, perm, axis, fn, name, value,
             table, table_axes, output, join, filter, join_gates,
-            id, manifold, distinct, key, arg, bindings)
+            id, manifold, distinct, key, arg, bindings, label)
 
     # Fully-positional inner constructor — the ALLOCATION-FREE reconstruction
     # path. The keyword constructor above builds a ~30-entry `NamedTuple` for its
     # kwargs on every call, and `reconstruct` (the one canonical copy-with-changes
     # site, invoked once per rewritten node in `_sub_preserving`/`_resolve_*`)
     # would pay that on every substitution. Routing `reconstruct` through this
-    # positional form drops the per-node NamedTuple allocation entirely. The 32
-    # arguments MUST stay in exact struct-field order; there is no other 32-arg
+    # positional form drops the per-node NamedTuple allocation entirely. The 33
+    # arguments MUST stay in exact struct-field order; there is no other 33-arg
     # `OpExpr` method, so the positional call is unambiguous.
     global _reconstruct_opexpr(op::String, args::Vector{ASTExpr}, wrt, dim, int_var,
             lower, upper, output_idx, expr_body, reduce, semiring, ranges, regions,
             values, shape, perm, axis, fn, name, value, table, table_axes, output,
-            join, filter, join_gates, id, manifold, distinct, key, arg, bindings) =
+            join, filter, join_gates, id, manifold, distinct, key, arg, bindings, label) =
         new(op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
             semiring, ranges,
             regions, values, shape, perm, axis, fn, name, value,
             table, table_axes, output, join, filter, join_gates,
-            id, manifold, distinct, key, arg, bindings)
+            id, manifold, distinct, key, arg, bindings, label)
 end
 
 # Accept any AbstractVector of ASTExpr-subtypes (e.g. Vector{VarExpr},
@@ -338,7 +353,7 @@ function reconstruct(e::OpExpr;
         join = e.join, filter = e.filter, join_gates = e.join_gates,
         id = e.id, manifold = e.manifold,
         distinct = e.distinct, key = e.key,
-        arg = e.arg, bindings = e.bindings)
+        arg = e.arg, bindings = e.bindings, label = e.label)
     # Positional (NamedTuple-free) construction on the hot path. `args` defaults to
     # the `Vector{ASTExpr}` field and callers overwrite it with `Vector{ASTExpr}`s, so the
     # `isa` fast path is the norm; the widening branch preserves the historical
@@ -348,7 +363,7 @@ function reconstruct(e::OpExpr;
     return _reconstruct_opexpr(op, argv, wrt, dim, int_var, lower, upper,
         output_idx, expr_body, reduce, semiring, ranges, regions, values, shape,
         perm, axis, fn, name, value, table, table_axes, output, join, filter,
-        join_gates, id, manifold, distinct, key, arg, bindings)
+        join_gates, id, manifold, distinct, key, arg, bindings, label)
 end
 
 # ========================================

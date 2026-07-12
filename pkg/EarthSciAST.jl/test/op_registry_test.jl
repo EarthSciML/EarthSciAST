@@ -148,7 +148,7 @@ end
         :ranges, :regions, :values, :shape, :perm, :axis,
         :table, :table_axes, :output,
         :join, :filter, :join_gates,
-        :id, :manifold, :distinct, :key,
+        :id, :manifold, :distinct, :key, :label,
     )
     @test ESM._EMISSIBLE_FIELDS == (:op, :args, :wrt, :dim, :fn, :name, :value)
     # `arg`/`bindings` were historically tolerated-and-ignored (absent from the

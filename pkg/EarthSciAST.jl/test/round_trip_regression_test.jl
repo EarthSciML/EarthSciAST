@@ -157,6 +157,10 @@ const ESM = EarthSciAST
          expected = Dict{String,ESM.ASTExpr}("f" => VarExpr("u")),
          cop = "aggregate", cargs = E(),
          kw = (bindings = Dict{String,ESM.ASTExpr}("f" => VarExpr("u")),)),
+        (field = :label,
+         json = """{"op":"skolem","args":["a","b"],"label":"edge"}""",
+         expected = "edge",
+         cop = "skolem", cargs = E(VarExpr("a"), VarExpr("b")), kw = (label = "edge",)),
     ]
 
     # The spec list must cover every field except op/args (structural) and

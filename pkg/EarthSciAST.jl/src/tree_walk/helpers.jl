@@ -485,6 +485,19 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
     elseif op == "mod"
         length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "mod in index needs 2 args"))
         return mod(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
+    elseif op == "max"
+        # `max`/`min` in an index position are integer index-CLAMP ops (e.g. a
+        # boundary-clamped subscript `max(1, i-1)` / `min(N, i+1)`, or a clamp
+        # nested in a flattened linear index). Their operands are the same
+        # const-foldable integer index arithmetic as the `+`/`-`/`*` cases, so
+        # fold them the same way. (The `*`/`+` reductions above can descend into a
+        # `max`/`min` sub-expression of a computed index; without these branches
+        # that descent hit the catch-all throw below.)
+        isempty(c) && throw(TreeWalkError("E_TREEWALK_ARITY", "max in index needs >=1 arg"))
+        return maximum(_eval_const_int(a, idx_env, const_arrays) for a in c)
+    elseif op == "min"
+        isempty(c) && throw(TreeWalkError("E_TREEWALK_ARITY", "min in index needs >=1 arg"))
+        return minimum(_eval_const_int(a, idx_env, const_arrays) for a in c)
     elseif op == "ifelse"
         length(c) == 3 || throw(TreeWalkError("E_TREEWALK_ARITY", "ifelse in index needs 3 args"))
         cond = _eval_const_int(c[1], idx_env, const_arrays)

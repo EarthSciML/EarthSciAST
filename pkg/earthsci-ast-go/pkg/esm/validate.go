@@ -508,8 +508,11 @@ func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[str
 //   - Var           — the integral integration variable
 //   - Arg           — the argmin / argmax witness index
 //   - Args[1:]      — `index(array, i, j, …)` element positions (bare names)
-//   - Args[0]       — `skolem(name, …)` invented-key name
 //   - Bindings keys — apply_expression_template formal parameter names
+//
+// A `skolem` node binds nothing: its `args` are pure key components (references
+// to symbols bound by the enclosing aggregate), and its documentary relation
+// tag lives in the dedicated `label` field, so its args are checked normally.
 func boundIndexSymbols(node ExprNode) []string {
 	var syms []string
 	for _, idx := range node.OutputIdx {
@@ -532,13 +535,6 @@ func boundIndexSymbols(node ExprNode) []string {
 		// are bare names are bound index symbols.
 		for i := 1; i < len(node.Args); i++ {
 			if name, ok := node.Args[i].(string); ok {
-				syms = append(syms, name)
-			}
-		}
-	case "skolem":
-		// skolem(name, …): the first positional arg is the invented-key binder.
-		if len(node.Args) > 0 {
-			if name, ok := node.Args[0].(string); ok {
 				syms = append(syms, name)
 			}
 		}
