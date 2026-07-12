@@ -25,6 +25,7 @@ from earthsci_ast.parse import SchemaValidationError, load
 from earthsci_ast.serialize import _serialize_esm_file, save
 from earthsci_ast.template_imports import (
     MAX_TEMPLATE_EXPANSION_DEPTH,
+    _substitute_metaparams,
     reject_template_imports_pre_v08,
     resolve_template_machinery,
 )
@@ -829,3 +830,16 @@ def test_subsystem_index_set_merge_brings_axes_into_registry():
     f = load(os.path.join(VALID_DIR, "subsystem_index_set_merge.esm"))
     assert f.index_sets["cells"]["size"] == 5
     assert f.index_sets["vertices"]["size"] == 4
+
+
+def test_dim_axis_name_survives_metaparameter_substitution():
+    """§9.7.6: a `dim` field names an AXIS / index set (a structural namespace),
+    never an expression position. Even when a metaparameter `N` is bound to an
+    integer, a body node's `"dim":"N"` must be preserved verbatim — NOT folded
+    to the integer value — because `dim` is in `_META_SUBST_SKIP_KEYS`."""
+    body = {"op": "sum", "dim": "N", "of": ["x"]}
+    out = _substitute_metaparams(body, {"N": 7})
+    assert out["dim"] == "N"
+    # sanity: the substitution machinery IS active for genuine expression
+    # positions (bare variable-reference strings), so this is a real skip.
+    assert _substitute_metaparams("N", {"N": 7}) == 7

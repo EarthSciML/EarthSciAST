@@ -287,11 +287,12 @@ function _vi_param(ctx::_ViCtx, name::AbstractString)
 end
 
 # Evaluate a value-invention node that MUST reduce to a build-time number.
-# `_vi_eval` arm 4 returns an unresolved bare string verbatim (a relation tag),
-# which is only meaningful in `skolem`'s leading position — never in an
-# arithmetic / index context. Guard those contexts so a typo'd range symbol,
-# const-array factor, or scalar-parameter name fails closed with a structured
-# code instead of an opaque `Float64("…")` / `Int("…")` ArgumentError.
+# `_vi_eval` arm 4 returns an unresolved bare string verbatim; it has NO
+# legitimate value context (the former `skolem` relation tag now lives in the
+# node's `label` field, not in `args`). Guard arithmetic / index contexts so a
+# typo'd range symbol, const-array factor, or scalar-parameter name fails closed
+# with a structured code instead of an opaque `Float64("…")` / `Int("…")`
+# ArgumentError.
 function _vi_num(node, ctx::_ViCtx, bindings::AbstractDict)
     v = _vi_eval(node, ctx, bindings)
     isa(v, Real) && return v
@@ -316,18 +317,19 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
         #   2. a const-array factor name — returned AS the name; only `index`
         #      consumes it, gathering from `ctx.const_arrays`;
         #   3. a scalar `parameter` variable — its override-or-default value;
-        #   4. FALLTHROUGH: anything else is returned verbatim and treated as a
-        #      relation tag ("edge"/"bin"/"pair", stripped by `_vi_skolem`).
-        # Arm 4 stays lenient because a leading tag string is a valid `skolem`
-        # component. Any string that instead reaches an arithmetic / index /
-        # key context fails closed there: `_vi_num` guards the arithmetic and
-        # index arms and `_vi_key_int` guards key components, each raising a
-        # structured E_TREEWALK_VI_* code rather than an opaque cast error.
+        #   4. FALLTHROUGH: an unresolved name, returned verbatim. It has NO
+        #      legitimate value context — the former `skolem` relation tag now
+        #      lives in the node's `label` field, not in `args`.
+        # Every downstream context fails closed on such a string: `_vi_num` guards
+        # the arithmetic and index arms and `_vi_key_int` guards key components
+        # (including EVERY `skolem` arg, now that `args` are pure key components),
+        # each raising a structured E_TREEWALK_VI_* code rather than an opaque
+        # cast error.
         haskey(bindings, node) && return bindings[node]   # bound range symbol
         haskey(ctx.const_arrays, node) && return node     # bare factor name (used by index)
         haskey(ctx.variables, node) && _vi_get(ctx.variables[node], "type") == "parameter" &&
             return _vi_param(ctx, node)                    # scalar parameter
-        return node                                        # relation tag ("edge"/"bin"/"pair")
+        return node                                        # unresolved name (fails closed downstream)
     elseif isa(node, AbstractDict)
         op = _vi_get(node, "op")
         args = _vi_get(node, "args", Any[])
@@ -405,17 +407,18 @@ function _vi_index(node, ctx::_ViCtx, bindings::AbstractDict)
     return arr[idxs...]
 end
 
-# skolem(tag?, c1, c2, …) → the canonical key tuple. A leading STRING literal is
-# the relation tag (the "sort"/relation name) and is NOT part of the emitted key
-# — this is what makes the materialised set byte-identical to the M3 determinism
-# golden (edges `[[1,2],…]`, candidate pairs `(i,j)`), which carry no tag (the
-# `Relational.skolem_edge` / projected-pair form). The remaining components are
-# exact integer IDs (§5.5.1 rule 4). A single component degrades to a scalar key.
+# skolem(c1, c2, …) → the canonical key tuple. The documentary relation tag (the
+# "sort"/relation name) lives in the node's optional `label` field, read here for
+# provenance ONLY and NEVER part of the emitted key. Every `args` entry is a PURE
+# key component, coerced to an exact integer ID via `_vi_key_int` — a non-key
+# value (e.g. a mis-placed tag string) fails closed rather than being silently
+# stripped (§5.5.1 rule 4). This keeps the materialised set byte-identical to the
+# M3 determinism golden (edges `[[1,2],…]`, candidate pairs `(i,j)`), which carry
+# no tag (the `Relational.skolem_edge` / projected-pair form). A single component
+# degrades to a scalar key.
 function _vi_skolem(node, ctx::_ViCtx, bindings::AbstractDict)
+    _vi_get(node, "label")   # documentary relation tag; deliberately unused in the key
     comps = Any[_vi_eval(a, ctx, bindings) for a in _vi_get(node, "args", Any[])]
-    if !isempty(comps) && isa(comps[1], AbstractString)
-        comps = comps[2:end]   # strip the relation tag
-    end
     key = Tuple(_vi_key_int(c) for c in comps)
     length(key) == 1 && return key[1]
     return key

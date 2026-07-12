@@ -1,0 +1,14 @@
+{
+  "id": "integral_bounds_unsupported",
+  "description": "Fail-closed: a node carrying integral bounds lower/upper. Neither is in the canonical emissible set {op,args,wrt,dim,fn,name,value}. canonical_json must raise E_CANONICAL_UNSUPPORTED_FIELD.",
+  "input": {
+    "op": "integral",
+    "args": ["f"],
+    "var": "x",
+    "dim": "x",
+    "lower": 0,
+    "upper": 1
+  },
+  "expect_error": "E_CANONICAL_UNSUPPORTED_FIELD",
+  "tags": ["fail_closed", "integral", "lower", "upper"]
+}

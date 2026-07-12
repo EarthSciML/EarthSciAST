@@ -244,6 +244,10 @@ def _bare_string_leaves(expr) -> set[str]:
         if isinstance(axes, dict):
             for child in axes.values():
                 out |= _bare_string_leaves(child)
+        bindings = expr.get("bindings")
+        if isinstance(bindings, dict):
+            for child in bindings.values():
+                out |= _bare_string_leaves(child)
     return out
 
 
@@ -287,6 +291,13 @@ def _expression_bound_symbols(expr) -> set[str]:
     if isinstance(axes, dict):
         for child in axes.values():
             bound |= _expression_bound_symbols(child)
+    # `apply_expression_template` bindings values are free-variable TARGETS
+    # (esm-spec §10.10.2): bound symbols hidden in a binding value must stay
+    # visible so the reference walker below can filter them consistently.
+    bindings = expr.get("bindings")
+    if isinstance(bindings, dict):
+        for child in bindings.values():
+            bound |= _expression_bound_symbols(child)
     return bound
 
 
@@ -324,6 +335,13 @@ def _walk_expression_strings(expr) -> list[str]:
     axes = expr.get("axes")
     if isinstance(axes, dict):
         for child in axes.values():
+            descend(child)
+    # `apply_expression_template` bindings values are free-variable targets
+    # (esm-spec §10.10.2); an undefined variable hidden in a binding value
+    # would otherwise escape the undefined-reference check.
+    bindings = expr.get("bindings")
+    if isinstance(bindings, dict):
+        for child in bindings.values():
             descend(child)
     return result
 

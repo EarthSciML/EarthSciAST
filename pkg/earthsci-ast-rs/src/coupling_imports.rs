@@ -127,11 +127,11 @@ fn rewrite_expr(expr: &mut Value, f: &dyn Fn(&str) -> String) {
             }
             // `apply_expression_template` bindings VALUES are free-variable
             // targets (esm-spec §10.10.2) — Expressions in their own right.
-            if node.get("op").and_then(|o| o.as_str()) == Some("apply_expression_template") {
-                if let Some(Value::Object(b)) = node.get_mut("bindings") {
-                    for (_, bv) in b.iter_mut() {
-                        rewrite_expr(bv, f);
-                    }
+            if node.get("op").and_then(|o| o.as_str()) == Some("apply_expression_template")
+                && let Some(Value::Object(b)) = node.get_mut("bindings")
+            {
+                for (_, bv) in b.iter_mut() {
+                    rewrite_expr(bv, f);
                 }
             }
         }
@@ -155,25 +155,25 @@ fn rewrite_entry_in_place(
         Some("variable_map") => {
             rewrite_string_field(entry, "from", struct_fn);
             rewrite_string_field(entry, "to", struct_fn);
-            if let Some(t) = entry.get_mut("transform") {
-                if t.is_object() {
-                    rewrite_expr(t, expr_fn);
-                }
+            if let Some(t) = entry.get_mut("transform")
+                && t.is_object()
+            {
+                rewrite_expr(t, expr_fn);
             }
         }
         Some("couple") => {
             rewrite_string_array(entry, "systems", struct_fn);
-            if let Some(conn) = entry.get_mut("connector") {
-                if let Some(Value::Array(eqs)) = conn.get_mut("equations") {
-                    for eq in eqs.iter_mut() {
-                        if !eq.is_object() {
-                            continue;
-                        }
-                        rewrite_string_field(eq, "from", struct_fn);
-                        rewrite_string_field(eq, "to", struct_fn);
-                        if let Some(e) = eq.get_mut("expression") {
-                            rewrite_expr(e, expr_fn);
-                        }
+            if let Some(conn) = entry.get_mut("connector")
+                && let Some(Value::Array(eqs)) = conn.get_mut("equations")
+            {
+                for eq in eqs.iter_mut() {
+                    if !eq.is_object() {
+                        continue;
+                    }
+                    rewrite_string_field(eq, "from", struct_fn);
+                    rewrite_string_field(eq, "to", struct_fn);
+                    if let Some(e) = eq.get_mut("expression") {
+                        rewrite_expr(e, expr_fn);
                     }
                 }
             }
@@ -221,18 +221,17 @@ fn rewrite_entry_in_place(
                     }
                 }
             }
-            if let Some(trigger) = entry.get_mut("trigger") {
-                if trigger.get("type").and_then(|t| t.as_str()) == Some("condition") {
-                    if let Some(e) = trigger.get_mut("expression") {
-                        rewrite_expr(e, expr_fn);
-                    }
-                }
+            if let Some(trigger) = entry.get_mut("trigger")
+                && trigger.get("type").and_then(|t| t.as_str()) == Some("condition")
+                && let Some(e) = trigger.get_mut("expression")
+            {
+                rewrite_expr(e, expr_fn);
             }
-            if let Some(fa) = entry.get_mut("functional_affect") {
-                if fa.is_object() {
-                    for key in ["read_vars", "read_params", "modified_params"] {
-                        rewrite_string_array(fa, key, struct_fn);
-                    }
+            if let Some(fa) = entry.get_mut("functional_affect")
+                && fa.is_object()
+            {
+                for key in ["read_vars", "read_params", "modified_params"] {
+                    rewrite_string_array(fa, key, struct_fn);
                 }
             }
             rewrite_string_array(entry, "discrete_parameters", struct_fn);

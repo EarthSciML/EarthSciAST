@@ -31,6 +31,43 @@ export { CanonicalizeError }
 export const E_CANONICAL_NONFINITE = 'E_CANONICAL_NONFINITE'
 /** `E_CANONICAL_DIVBY_ZERO` — `/(0, 0)` (§5.4.7). */
 export const E_CANONICAL_DIVBY_ZERO = 'E_CANONICAL_DIVBY_ZERO'
+/**
+ * `E_CANONICAL_UNSUPPORTED_FIELD` — a node carries an expression field outside
+ * the RFC-pinned emissible set (`op`/`args`/`wrt`/`dim`/`fn`/`name`/`value`), so
+ * no faithful canonical JSON exists (emitting only the pinned fields would make
+ * structurally-different aggregates byte-identical — the defect class behind the
+ * `fn` bc-node bug). Fail-closed, matching the Julia reference `canonical_json`.
+ */
+export const E_CANONICAL_UNSUPPORTED_FIELD = 'E_CANONICAL_UNSUPPORTED_FIELD'
+
+/**
+ * Fields WITH a pinned slot in the cross-binding canonical JSON node encoding:
+ * exactly the set every binding (TS/Python/Rust/Julia) serializes and the
+ * cross-language canonical fixtures pin. CLOSED — extending it is a cross-binding
+ * format change, never a TS-local edit.
+ */
+const EMISSIBLE_FIELDS = ['op', 'args', 'wrt', 'dim', 'fn', 'name', 'value'] as const
+
+/**
+ * Fields TOLERATED-AND-IGNORED by the canonical emitter: a node carrying them
+ * still canonicalizes, emitting the pinned fields only (matches Julia's
+ * `_CANONICAL_IGNORED_FIELDS`). Both are display/rendering conveniences with no
+ * wire slot of their own (`arg` — the argmin/argmax witness index for the
+ * pretty-printer; `bindings` — the apply_expression_template parameter map).
+ */
+const CANONICAL_IGNORED_FIELDS = ['arg', 'bindings'] as const
+
+/**
+ * Own keys allowed on a node without failing canonical emission: emissible ∪
+ * tolerated. Any OTHER own key with a defined value is NON-EMISSIBLE and makes
+ * {@link canonicalJson} throw `E_CANONICAL_UNSUPPORTED_FIELD` (fail-closed:
+ * a future field cannot be silently dropped — it must be added to one of the two
+ * closed tuples above deliberately).
+ */
+const CANONICAL_ALLOWED_KEYS: ReadonlySet<string> = new Set<string>([
+  ...EMISSIBLE_FIELDS,
+  ...CANONICAL_IGNORED_FIELDS,
+])
 
 type Node = { op: string; args: Expr[] } & Record<string, unknown>
 
@@ -99,9 +136,45 @@ export function canonicalize(expr: Expr): Expr {
   throw new TypeError(`unknown expression type: ${typeof expr}`)
 }
 
-/** Emit canonical on-wire JSON per §5.4.6 (sorted keys, no whitespace). */
+/**
+ * Emit canonical on-wire JSON per §5.4.6 (sorted keys, no whitespace).
+ *
+ * FAIL-CLOSED (matching the Julia reference): `canonicalize` PRESERVES every
+ * node field, then this validates the canonicalized tree and throws
+ * `E_CANONICAL_UNSUPPORTED_FIELD` if any node carries an own key (with a defined
+ * value) outside the emissible ∪ tolerated set. A node carrying a non-emissible
+ * aggregate/geometry field has NO faithful canonical JSON — emitting only the
+ * pinned fields would collapse structurally-different nodes to identical bytes.
+ */
 export function canonicalJson(expr: Expr): string {
-  return emitJson(canonicalize(expr))
+  const canon = canonicalize(expr)
+  assertEmissible(canon)
+  return emitJson(canon)
+}
+
+/**
+ * Fail-closed field validation. Walks the canonicalized tree (recursing into
+ * `args`, the only field emission recurses into — matching Julia's
+ * `_emit_node_json`) and throws `E_CANONICAL_UNSUPPORTED_FIELD` at the first
+ * node carrying a non-emissible own field.
+ */
+function assertEmissible(e: Expr | unknown): void {
+  if (!isNode(e)) return
+  const rec = e as Record<string, unknown>
+  const offending: string[] = []
+  for (const key of Object.keys(rec)) {
+    if (rec[key] === undefined) continue
+    if (!CANONICAL_ALLOWED_KEYS.has(key)) offending.push(key)
+  }
+  if (offending.length > 0) {
+    throw new CanonicalizeError(
+      E_CANONICAL_UNSUPPORTED_FIELD,
+      `op '${e.op}' carries field(s) [${offending.join(', ')}] outside the canonical ` +
+        `JSON node encoding (op/args/wrt/dim/fn/name/value); emitting them would be ` +
+        `lossy and non-portable (RFC §5.4.6)`,
+    )
+  }
+  for (const a of e.args) assertEmissible(a)
 }
 
 function canonOp(node: Node): Expr {
@@ -338,22 +411,20 @@ function emitJson(e: Expr | unknown): string {
 }
 
 function emitNodeJson(n: Node): string {
-  // Emit EVERY defined own key in sorted order rather than a hard-coded
-  // allowlist. A prior allowlist (`op,args,wrt,dim,fn,name,value`) silently
-  // DROPPED any other ExpressionNode field from the canonical form — the `fn`
-  // slot had to be retro-fitted after exactly that bug made `bc(u,dirichlet)`
-  // and `bc(u,neumann)` canonicalize identically. Emitting all keys means a
-  // newly-added field (`reduce`, `ranges`, `semiring`, `manifold`, …) is
-  // preserved automatically and can never again collapse two distinct nodes.
+  // FIXED emitter: only the pinned emissible fields (op,args,wrt,dim,fn,name,
+  // value) reach the wire, sorted. Non-emissible fields are NOT dropped
+  // silently here — `canonicalJson` validates the canonicalized tree first and
+  // throws `E_CANONICAL_UNSUPPORTED_FIELD` for any node carrying one, matching
+  // the Julia reference `_emit_node_json`. (This emitter also runs during
+  // intermediate arg sorting, where a node may still carry a non-emissible
+  // field; emitting the pinned subset gives a stable sort key, and the
+  // fail-closed check in `canonicalJson` refuses to return the ambiguous bytes.)
   //
-  // Each value routes through `emitJson`, which yields byte-identical output to
-  // the old per-field emitters for the previously-listed fields: strings emit
-  // via `JSON.stringify`, `args`/`value` recurse through `emitJson`. Existing
-  // canonical fixtures carry only `op`/`args` nodes, so the sorted output is
-  // unchanged; the change only STOPS dropping less-common fields.
+  // Each value routes through `emitJson`: strings emit via `JSON.stringify`,
+  // `args`/`value` recurse through `emitJson`.
   const rec = n as Record<string, unknown>
   const entries: Array<[string, string]> = []
-  for (const key of Object.keys(rec)) {
+  for (const key of EMISSIBLE_FIELDS) {
     const v = rec[key]
     if (v === undefined) continue
     entries.push([key, emitJson(v)])

@@ -109,7 +109,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 	}
 
 	// Check edge types
-	edgeTypes := make(map[string]int)
+	edgeTypes := make(map[CouplingKind]int)
 	for _, edge := range graph.Edges {
 		edgeTypes[edge.Data.Type]++
 	}

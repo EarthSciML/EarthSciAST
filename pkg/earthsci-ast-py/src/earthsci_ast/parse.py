@@ -219,6 +219,9 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
         filter_expr = _parse_expression(expr_data["filter"]) if "filter" in expr_data else None
         distinct = expr_data.get("distinct")
         key_expr = _parse_expression(expr_data["key"]) if "key" in expr_data else None
+        # Documentary relation tag on a `skolem` node (§5.5). Purely descriptive —
+        # NEVER part of the emitted key; `args` are pure key components.
+        label = expr_data.get("label")
         regions = expr_data.get("regions")
         values = None
         if "values" in expr_data:
@@ -287,6 +290,7 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
             filter=filter_expr,
             distinct=distinct,
             key=key_expr,
+            label=label,
             regions=regions,
             values=values,
             shape=shape,

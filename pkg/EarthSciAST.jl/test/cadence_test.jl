@@ -128,8 +128,8 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         rhs = Dict{String,Any}(
             "op" => "aggregate", "distinct" => true, "semiring" => "bool_and_or",
             "output_idx" => Any["e"], "ranges" => Dict{String,Any}("f" => Dict{String,Any}("from" => "faces")),
-            "key" => Dict{String,Any}("op" => "skolem",
-                "args" => Any["edge", Dict{String,Any}("op" => "index", "args" => Any["u", "f"])]),
+            "key" => Dict{String,Any}("op" => "skolem", "label" => "edge",
+                "args" => Any[Dict{String,Any}("op" => "index", "args" => Any["u", "f"])]),
             "expr" => Dict{String,Any}("op" => "true", "args" => Any[]))
         @test _Cadence.classify(rhs, model) == "continuous"
         @test_throws _Cadence.CadenceError _Cadence.assert_no_continuous_relational(rhs, model)

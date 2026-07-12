@@ -142,7 +142,12 @@ class UnitValidator:
                     result.unit_registry[var_name] = var_info.units
                     self.known_units[var_name] = unit
                 except pint.PintError as e:
-                    result.errors.append(
+                    # Per esm-libraries-spec §3.3.3/§3.4 and the Julia
+                    # reference, an unparseable unit is a WARNING, not a hard
+                    # error: the variable is omitted from known_units below
+                    # (treated as unknown), so equations referencing it are
+                    # skipped rather than reported as dimensional mismatches.
+                    result.warnings.append(
                         f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}"
                     )
 
@@ -187,7 +192,10 @@ class UnitValidator:
                         result.unit_registry[species.name] = species.units
                         self.known_units[species.name] = unit
                     except pint.PintError as e:
-                        result.errors.append(
+                        # Unparseable unit is a WARNING, not a hard error (see
+                        # validate_model): the species is omitted from
+                        # known_units, so it is treated as unknown.
+                        result.warnings.append(
                             f"Invalid unit '{species.units}' for species '{species.name}': {e}"
                         )
 
@@ -200,7 +208,10 @@ class UnitValidator:
                         result.unit_registry[param.name] = param.units
                         self.known_units[param.name] = unit
                     except pint.PintError as e:
-                        result.errors.append(
+                        # Unparseable unit is a WARNING, not a hard error (see
+                        # validate_model): the parameter is omitted from
+                        # known_units, so it is treated as unknown.
+                        result.warnings.append(
                             f"Invalid unit '{param.units}' for parameter '{param.name}': {e}"
                         )
 

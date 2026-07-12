@@ -42,7 +42,10 @@ emitted in **sorted key order** for determinism.
 Numbers, variable strings, `+ - * / ^`, comparisons, `and/or/not`, `ifelse`,
 all elementary/trig/hyperbolic functions, `D` (uses `wrt`), `Pre`, `ic`,
 `min/max`, `skolem`, `rank`. `skolem`/`rank`/`ic` use the generic fallback
-(args-only ⇒ already non-lossy).
+(args-only ⇒ already non-lossy). `skolem` additionally carries a documentary
+`label` field (the relation-kind tag, e.g. `"edge"`/`"bin"`/`"pair"`) that
+lives outside `args` and is **not rendered** — only its component `args` are
+shown, e.g. `skolem(u, v)`.
 
 ### const  `{op:"const", value:V, args:[]}`
 Render the literal value `V` itself — indistinguishable from a bare literal.

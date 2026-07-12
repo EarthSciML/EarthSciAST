@@ -963,20 +963,21 @@ def _eval_skolem(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
 
     A skolem term is a deterministic identity for its argument tuple; it is only
     ever COMPARED (the broad-phase equi-join, RFC §5.3), so any injective
-    encoding of the tuple suffices. String args (the tag, e.g. ``"bin"``) are
-    literal; numeric args are evaluated and canonicalised (integers kept exact).
+    encoding of the tuple suffices. EVERY ``args`` entry is a PURE key component:
+    it is evaluated and canonicalised (integers kept exact). The relation tag
+    lives in the dedicated ``label`` field — it is DOCUMENTARY (both sides of a
+    join carry the same label, so it does no disambiguation work) and is NOT
+    hashed into the code, which therefore encodes only the pure ``args``.
 
     Array-aware: when the vectorized map path binds an index symbol to a whole
     range (so a subscript evaluates to an ndarray), the codes are computed
     ELEMENT-WISE and returned as an ndarray — otherwise the per-cell bins would
     collapse to a single code. Scalar args yield a single float code.
     """
+    _label = expr.label  # documentary relation tag; NOT encoded into the join code
     evaled: list[tuple[str, Any]] = []
     n: int | None = None
     for a in expr.args:
-        if isinstance(a, str):
-            evaled.append(("s", a))
-            continue
         arr = np.asarray(eval_expr(a, ctx), dtype=float)
         if arr.ndim == 0:
             evaled.append(("scalar", float(arr)))
@@ -990,15 +991,13 @@ def _eval_skolem(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
                 )
             evaled.append(("array", flat))
     if n is None:
-        parts = [(k, v) if k == "s" else _skolem_atom(v) for k, v in evaled]
+        parts = [_skolem_atom(v) for _, v in evaled]
         return _skolem_code(parts)
     codes = np.empty(n, dtype=float)
     for i in range(n):
         parts = []
         for kind, val in evaled:
-            if kind == "s":
-                parts.append(("s", val))
-            elif kind == "scalar":
+            if kind == "scalar":
                 parts.append(_skolem_atom(val))
             else:
                 parts.append(_skolem_atom(val[i]))

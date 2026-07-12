@@ -88,19 +88,23 @@ function dimensionless(): ParsedUnit {
 }
 
 /**
- * Parse a unit string into canonical SI dimensions plus scale factor.
+ * Parse a unit string into canonical SI dimensions plus scale factor, or return
+ * `null` when the string cannot be parsed.
  *
- * Delegates to `parseUnitForConversion` but swallows parse errors and returns
- * a dimensionless fallback, matching the lenient semantics of the earlier
- * unit validator (which silently ignored unknown tokens). This keeps the
- * `validateUnits` pipeline warning-driven rather than exception-driven.
+ * This is the fallible companion to {@link parseUnit}: instead of swallowing a
+ * parse failure into a dimensionless fallback, it surfaces the failure as
+ * `null`. Callers can then leave the variable's dimension UNKNOWN (unbound) and
+ * emit a warning, rather than silently manufacturing a dimensionless binding
+ * that HIDES real dimensional mismatches — or MANUFACTURES false ones
+ * (esm-libraries-spec §3.3.3/§3.4, matching the Julia reference). A
+ * `UnitConversionError` (unknown unit name, malformed token, misused offset
+ * unit) maps to `null`; any other error is rethrown.
  *
- * The string `"degrees"` is accepted as dimensionless because ESM treats
- * angle labels as informational; the canonical unit table does not register
- * it to avoid committing to a radian conversion factor that ESM does not
- * promise.
+ * The string `"degrees"` is still accepted as dimensionless because ESM treats
+ * angle labels as informational; the canonical unit table does not register it
+ * to avoid committing to a radian conversion factor that ESM does not promise.
  */
-export function parseUnit(unitStr: string): ParsedUnit {
+export function tryParseUnit(unitStr: string): ParsedUnit | null {
   const normalized = (unitStr ?? '').trim().toLowerCase()
   if (normalized === 'degrees') {
     return dimensionless()
@@ -109,10 +113,25 @@ export function parseUnit(unitStr: string): ParsedUnit {
     return parseUnitForConversion(unitStr)
   } catch (err) {
     if (err instanceof UnitConversionError) {
-      return dimensionless()
+      return null
     }
     throw err
   }
+}
+
+/**
+ * Parse a unit string into canonical SI dimensions plus scale factor.
+ *
+ * Lenient wrapper around {@link tryParseUnit}: an unparseable string collapses
+ * to a dimensionless fallback, matching the lenient semantics of the earlier
+ * unit validator (which silently ignored unknown tokens). Retained for callers
+ * (reaction/model checks and the exported public API) that want that legacy
+ * behaviour. `validateUnits` itself now uses `tryParseUnit` directly so it can
+ * warn on and skip unparseable declarations instead of manufacturing
+ * dimensionless bindings.
+ */
+export function parseUnit(unitStr: string): ParsedUnit {
+  return tryParseUnit(unitStr) ?? dimensionless()
 }
 
 /**
@@ -383,15 +402,31 @@ export function checkDimensions(
  * key is FIRST-WINS — an earlier component's short name is never overwritten by
  * a later collision, matching the legacy resolution order where the
  * first-declared short name shadows later ones. No-op when `units` is absent.
+ *
+ * When `units` is present but UNPARSEABLE, the variable is deliberately left
+ * UNBOUND (its dimension is UNKNOWN, not dimensionless) and an `analysis`
+ * `unit_warning` is recorded on `warnings`. `checkDimensions` then treats the
+ * name as an "Unknown variable", which `checkAndReport` uses to suppress
+ * equation mismatches — so an unparseable unit surfaces as a warning without
+ * hiding or manufacturing a dimensional mismatch.
  */
 function addBinding(
   bindings: Map<string, ParsedUnit>,
   scope: string,
   name: string,
   units: string | undefined,
+  warnings: UnitWarning[],
 ): void {
   if (!units) return
-  const parsed = parseUnit(units)
+  const parsed = tryParseUnit(units)
+  if (parsed === null) {
+    warnings.push({
+      message: `Unable to parse units '${units}' for ${scope}.${name}; dimension left unknown`,
+      code: 'analysis',
+      location: `${scope}.${name}`,
+    })
+    return
+  }
   bindings.set(`${scope}.${name}`, parsed)
   if (!bindings.has(name)) bindings.set(name, parsed)
 }
@@ -441,10 +476,32 @@ function checkAndReport(
  * metre denominator. Parameters live in `variables` (type `parameter`) so they
  * are covered by the same loop, matching Julia's `model.variables`.
  */
-function buildCoordinateBindings(model: Model): Map<string, ParsedUnit> {
+function buildCoordinateBindings(
+  model: Model,
+  warnings: UnitWarning[],
+  location: string,
+): Map<string, ParsedUnit> {
   const coords = new Map<string, ParsedUnit>()
   for (const [name, variable] of Object.entries(model.variables ?? {})) {
-    coords.set(name, variable.units ? parseUnit(variable.units) : dimensionless())
+    if (!variable.units) {
+      coords.set(name, dimensionless())
+      continue
+    }
+    const parsed = tryParseUnit(variable.units)
+    if (parsed === null) {
+      // Unparseable coordinate unit: leave it OUT of the table so its
+      // dimension stays UNKNOWN. A grad/div/laplacian naming it then falls
+      // back to the metre denominator (the not-a-declared-coordinate path)
+      // instead of the dimensionless entry that would raise a false
+      // unit_inconsistency. Record it as an `analysis` warning.
+      warnings.push({
+        message: `Unable to parse units '${variable.units}' for coordinate '${name}'; dimension left unknown`,
+        code: 'analysis',
+        location,
+      })
+      continue
+    }
+    coords.set(name, parsed)
   }
   return coords
 }
@@ -493,7 +550,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     for (const [modelName, model] of Object.entries(file.models)) {
       if ('variables' in model && model.variables) {
         for (const [varName, variable] of Object.entries(model.variables)) {
-          addBinding(unitBindings, modelName, varName, variable.units)
+          addBinding(unitBindings, modelName, varName, variable.units, warnings)
         }
       }
     }
@@ -502,12 +559,12 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     for (const [systemName, system] of Object.entries(file.reaction_systems)) {
       if ('species' in system && system.species) {
         for (const [speciesName, species] of Object.entries(system.species)) {
-          addBinding(unitBindings, systemName, speciesName, species.units)
+          addBinding(unitBindings, systemName, speciesName, species.units, warnings)
         }
       }
       if ('parameters' in system && system.parameters) {
         for (const [paramName, param] of Object.entries(system.parameters)) {
-          addBinding(unitBindings, systemName, paramName, param.units)
+          addBinding(unitBindings, systemName, paramName, param.units, warnings)
         }
       }
     }
@@ -532,7 +589,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       // system has no `variables`, so `undefined` here keeps the metre fallback
       // for any grad in a constraint equation).
       const coordinateBindings =
-        'variables' in component ? buildCoordinateBindings(component) : undefined
+        'variables' in component ? buildCoordinateBindings(component, warnings, location) : undefined
 
       forEachEquation(component, (equation) => {
         checkAndReport(warnings, location, 'Error checking equation dimensions', () => {
@@ -565,20 +622,32 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               'Error checking observed variable dimensions',
               () => {
                 const exprResult = checkDimensions(expression, unitBindings, coordinateBindings)
-                const varDims: ParsedUnit = variable.units
-                  ? parseUnit(variable.units)
-                  : dimensionless()
-                const mismatch: UnitWarning | null = dimsEqual(
-                  exprResult.dimensions.dims,
-                  varDims.dims,
-                )
-                  ? null
-                  : {
-                      message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
-                      code: 'dimensional_mismatch',
-                      location: varLocation,
-                    }
-                return { diagnostics: exprResult.diagnostics, mismatch }
+                const diagnostics = [...exprResult.diagnostics]
+                // Declared units are parsed leniently-but-fallibly. An
+                // unparseable declaration leaves the target dimension UNKNOWN,
+                // so we record an `analysis` warning and skip the mismatch
+                // comparison instead of forcing the declared side to
+                // dimensionless (which would manufacture a false mismatch
+                // against the expression).
+                let varDims: ParsedUnit | null = dimensionless()
+                if (variable.units) {
+                  varDims = tryParseUnit(variable.units)
+                  if (varDims === null) {
+                    diagnostics.push({
+                      message: `Unable to parse declared units '${variable.units}' for observed variable ${varName}; dimension left unknown`,
+                      code: 'analysis',
+                    })
+                  }
+                }
+                const mismatch: UnitWarning | null =
+                  varDims !== null && !dimsEqual(exprResult.dimensions.dims, varDims.dims)
+                    ? {
+                        message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
+                        code: 'dimensional_mismatch',
+                        location: varLocation,
+                      }
+                    : null
+                return { diagnostics, mismatch }
               },
             )
           }

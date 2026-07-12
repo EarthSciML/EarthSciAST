@@ -10,6 +10,7 @@ See ``docs/rfcs/discretization.md`` §5.4.1–§5.4.7 for the normative rules.
 from __future__ import annotations
 
 import math
+from dataclasses import fields as dataclass_fields
 from dataclasses import replace
 from typing import Any
 
@@ -41,6 +42,35 @@ class DivByZeroError(CanonicalizeError):
         super().__init__(message)
 
 
+class UnsupportedFieldError(CanonicalizeError):
+    """``E_CANONICAL_UNSUPPORTED_FIELD`` — a node carries an expression field
+    outside the RFC-pinned emissible set (``op``/``args``/``wrt``/``dim``/``fn``/
+    ``name``/``value``), so no faithful canonical JSON exists.
+
+    Emitting only the pinned fields would make structurally-different nodes
+    (aggregates, table lookups, geometry leaves, …) byte-identical — the defect
+    class behind the ``fn`` bc-node bug — and emitting more fields would diverge
+    unilaterally from the other bindings. Every binding (Julia is reference)
+    fail-closes here instead. See :func:`canonical_json`.
+    """
+
+    code = "E_CANONICAL_UNSUPPORTED_FIELD"
+
+    def __init__(self, field: str | None = None, message: str | None = None):
+        self.field = field
+        if message is None:
+            message = (
+                "E_CANONICAL_UNSUPPORTED_FIELD"
+                if field is None
+                else (
+                    f"node carries field '{field}' outside the canonical JSON node "
+                    "encoding (op/args/wrt/dim/fn/name/value); emitting it would be "
+                    "lossy and non-portable (RFC §5.4.6)"
+                )
+            )
+        super().__init__(message)
+
+
 def canonicalize(expr: Expr) -> Expr:
     """Canonicalize an expression tree per RFC §5.4. Input is not mutated."""
     if isinstance(expr, bool):
@@ -61,8 +91,19 @@ def canonicalize(expr: Expr) -> Expr:
 
 
 def canonical_json(expr: Expr) -> str:
-    """Emit canonical on-wire JSON (sorted keys, no whitespace, §5.4.6 numbers)."""
+    """Emit canonical on-wire JSON (sorted keys, no whitespace, §5.4.6 numbers).
+
+    Two-step contract (identical across bindings; Julia is reference): first
+    :func:`canonicalize` (still field-preserving), then a fail-closed check that
+    no node carries a non-emissible field. Emissible fields are exactly
+    ``op``/``args``/``wrt``/``dim``/``fn``/``name``/``value`` — the set the
+    cross-language canonical fixtures pin. A node carrying any OTHER set field
+    (aggregate ``expr``/``ranges``/``semiring``, ``table``/``table_axes``,
+    geometry ``id``/``manifold``, …) has NO faithful canonical JSON here, so it
+    raises :class:`UnsupportedFieldError` rather than emit ambiguous bytes.
+    """
     c = canonicalize(expr)
+    _assert_emissible(c)
     return _emit_json(c)
 
 
@@ -269,74 +310,76 @@ def _emit_json(e: Expr) -> str:
     raise TypeError(f"cannot canonicalize value of type {type(e).__name__}")
 
 
+# ExprNode fields WITH a pinned slot in the cross-binding canonical JSON node
+# encoding: exactly the set every binding serializes and the cross-language
+# canonical fixtures pin (see `canonical_json`). CLOSED — extending it is a
+# cross-binding format change, never a Python-local edit.
+_EMISSIBLE_FIELDS: tuple[str, ...] = ("op", "args", "wrt", "dim", "fn", "name", "value")
+
+# ExprNode fields TOLERATED-AND-IGNORED by the canonical emitter: a node
+# carrying them still canonicalizes, emitting the pinned fields only. Kept for
+# parity with the Julia reference's ``_CANONICAL_IGNORED_FIELDS`` (`arg` — an
+# argmin/argmax pretty-printer witness; `bindings` — a template parameter map).
+# Python's ``ExprNode`` declares neither today, so this is a documentation /
+# forward-compat placeholder; listing them here keeps the derived non-emissible
+# set below matching Julia's contract exactly.
+_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("arg", "bindings")
+
+# ExprNode fields WITHOUT a pinned slot in the cross-binding canonical JSON node
+# encoding. If any is set, the node cannot be emitted faithfully and
+# ``canonical_json`` raises ``E_CANONICAL_UNSUPPORTED_FIELD``. Derived,
+# FAIL-CLOSED: every dataclass field that is neither emissible nor explicitly
+# ignored is non-emissible, so a future field cannot be silently dropped from
+# canonical JSON by forgetting to list it — it must be added to one of the two
+# closed tuples above deliberately. Preserves declaration order (mirrors
+# Julia's ``setdiff(fieldnames(OpExpr), …)``).
+_NON_EMISSIBLE_FIELDS: tuple[str, ...] = tuple(
+    f.name
+    for f in dataclass_fields(ExprNode)
+    if f.name not in _EMISSIBLE_FIELDS and f.name not in _CANONICAL_IGNORED_FIELDS
+)
+
+
+def _assert_emissible(e: Expr) -> None:
+    """Fail-closed check (RFC §5.4.6): raise ``UnsupportedFieldError`` if any
+    ``ExprNode`` in the tree carries a set field outside the emissible encoding.
+
+    Recurses through ``args`` only — the only place sub-expressions live in an
+    emissible node (``value`` carries inline literal data, not AST; the other
+    emissible fields are strings). A node carrying a non-emissible field raises
+    immediately, so its nested-expression fields are never reached.
+    """
+    if not isinstance(e, ExprNode):
+        return
+    for name in _NON_EMISSIBLE_FIELDS:
+        if getattr(e, name) is not None:
+            raise UnsupportedFieldError(name)
+    for a in e.args:
+        _assert_emissible(a)
+
+
 def _emit_node_json(n: ExprNode) -> str:
-    # Emit EVERY present, non-None distinguishing field of the node — mirroring
-    # the field set the parser/serializer round-trip — so nodes differing only
-    # in an integral bound, a table selector, a semiring, a range spec, etc. do
-    # NOT collapse to identical canonical JSON. Keys are sorted at the end, so
-    # append order does not affect determinism.
+    # Emit ONLY the closed emissible field set (op/args/wrt/dim/fn/name/value) —
+    # the set every binding serializes and the cross-language canonical fixtures
+    # pin. Nodes carrying any other set field have already been rejected by
+    # `_assert_emissible` (via `canonical_json`); `fn` also carries the
+    # boundary-condition kind on synthetic `bc` nodes (esm-spec §9.2), so
+    # emitting it keeps bc(u,dirichlet,xmin) distinct from bc(u,neumann,xmin).
+    # Keys are sorted at the end, so append order does not affect determinism.
     entries: list[tuple[str, str]] = []
     entries.append(("op", _json_string(n.op)))
     args_str = "[" + ",".join(_emit_json(a) for a in n.args) + "]"
     entries.append(("args", args_str))
-
-    # String / scalar discriminating fields. ``fn`` also carries the
-    # boundary-condition kind on synthetic `bc` nodes (esm-spec §9.2), which is
-    # why emitting it keeps bc(u,dirichlet,xmin) distinct from bc(u,neumann,xmin).
-    for key, val in (
-        ("wrt", n.wrt),
-        ("dim", n.dim),
-        ("var", n.var),
-        ("reduce", n.reduce),
-        ("semiring", n.semiring),
-        ("distinct", n.distinct),
-        ("axis", n.axis),
-        ("fn", n.fn),
-        ("id", n.id),
-        ("manifold", n.manifold),
-        ("handler_id", n.handler_id),
-        ("name", n.name),
-        ("table", n.table),
-        ("output", n.output),
-    ):
-        if val is not None:
-            entries.append((key, _emit_data_json(val)))
-
-    # Nested-expression fields (integral bounds; aggregate body / filter
-    # predicate / skolem key). Emitted through the expression emitter so a
-    # difference in any nested subtree distinguishes the node deterministically.
-    for key, sub in (
-        ("lower", n.lower),
-        ("upper", n.upper),
-        ("expr", n.expr),
-        ("filter", n.filter),
-        ("key", n.key),
-    ):
-        if sub is not None:
-            entries.append((key, _emit_json(sub)))
-
-    if n.values is not None:
-        entries.append(("values", "[" + ",".join(_emit_json(v) for v in n.values) + "]"))
-    if n.table_axes is not None:
-        axis_items = sorted(n.table_axes.items(), key=lambda kv: kv[0])
-        axes_body = ",".join(f"{_json_string(str(k))}:{_emit_json(v)}" for k, v in axis_items)
-        entries.append(("axes", "{" + axes_body + "}"))
-
-    # Plain structured-data fields (index signatures, range specs, joins, ...).
-    for key, val in (
-        ("output_idx", n.output_idx),
-        ("ranges", n.ranges),
-        ("join", n.join),
-        ("regions", n.regions),
-        ("shape", n.shape),
-        ("perm", n.perm),
-    ):
-        if val is not None:
-            entries.append((key, _emit_data_json(val)))
-
+    if n.wrt is not None:
+        entries.append(("wrt", _json_string(n.wrt)))
+    if n.dim is not None:
+        entries.append(("dim", _json_string(n.dim)))
+    if n.fn is not None:
+        entries.append(("fn", _json_string(n.fn)))
+    if n.name is not None:
+        entries.append(("name", _json_string(n.name)))
     if n.value is not None:
         entries.append(("value", _emit_value_json(n.value)))
-
     entries.sort(key=lambda kv: kv[0])
     body = ",".join(f"{_json_string(k)}:{v}" for k, v in entries)
     return "{" + body + "}"
@@ -373,23 +416,6 @@ def _emit_value_json(v: Any) -> str:
     if v is None:
         return "null"
     raise TypeError(f"cannot canonicalize const value of type {type(v).__name__}")
-
-
-def _emit_data_json(v: Any) -> str:
-    """Emit an arbitrary JSON-compatible plain-data payload deterministically.
-
-    Used by :func:`_emit_node_json` for the non-AST structured fields
-    (``output_idx`` / ``ranges`` / ``join`` / ``shape`` / ...): object keys are
-    sorted and floats go through the canonical formatter (via
-    :func:`_emit_value_json`) so the same data serializes byte-identically.
-    """
-    if isinstance(v, dict):
-        items = sorted(v.items(), key=lambda kv: str(kv[0]))
-        body = ",".join(f"{_json_string(str(k))}:{_emit_data_json(val)}" for k, val in items)
-        return "{" + body + "}"
-    if isinstance(v, (list, tuple)):
-        return "[" + ",".join(_emit_data_json(x) for x in v) + "]"
-    return _emit_value_json(v)
 
 
 def format_canonical_float(f: float) -> str:

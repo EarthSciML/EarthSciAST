@@ -431,7 +431,11 @@
         },
         "key": {
           "$ref": "#/$defs/Expression",
-          "description": "For aggregate: optional Skolem term — a deterministic, content-addressed key naming each member an index-set-producing (`distinct`) node emits (RFC semiring-faq-unified-ir §5.5). Typically a `{ \"op\": \"skolem\", \"args\": [<label>, <component>…] }` node; the components are canonicalized (a symmetric relation sorts its components, e.g. an undirected edge (min(u,v), max(u,v)); a directed one preserves order) so the same member is named identically across bindings (§5.7). Dense integer ids for the array backend then come from a `{ \"op\": \"rank\" }` over the resulting set. Floats are forbidden in keys (§5.7 / §A.5) — keys are integer or categorical ids."
+          "description": "For aggregate: optional Skolem term — a deterministic, content-addressed key naming each member an index-set-producing (`distinct`) node emits (RFC semiring-faq-unified-ir §5.5). Typically a `{ \"op\": \"skolem\", \"label\": <tag>, \"args\": [<component>…] }` node; the components are canonicalized (a symmetric relation sorts its components, e.g. an undirected edge (min(u,v), max(u,v)); a directed one preserves order) so the same member is named identically across bindings (§5.7). Dense integer ids for the array backend then come from a `{ \"op\": \"rank\" }` over the resulting set. Floats are forbidden in keys (§5.7 / §A.5) — keys are integer or categorical ids."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional documentary relation tag for a skolem node (e.g. \"edge\", \"bin\", \"pair\"). Does NOT affect the emitted key; the key components are the node's args."
         },
         "arg": {
           "type": "string",

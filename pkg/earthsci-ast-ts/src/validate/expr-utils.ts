@@ -39,16 +39,17 @@ export function isInlineModel(v: Model | DataLoader | SubsystemRef): v is Model 
 // collector (collectIndexSymbols) now models EVERY binder those bodies can
 // introduce — not just aggregate `output_idx`/`ranges` and `index` element
 // positions, but also the `argmin`/`argmax` `arg` witness and its own `ranges`,
-// the `skolem` invented-key name (the first positional arg, e.g. the
-// `skolem('edge', …)` term in tests/valid/aggregate/skolem_distinct_rank.esm or
-// the `skolem('bin', …)` term in nearest_generator_argmin.esm), and
-// `apply_expression_template` `bindings` parameter names. Every such name is a
-// scoped iteration/invention symbol, NOT a declared variable, so
+// and `apply_expression_template` `bindings` parameter names. Every such name is
+// a scoped iteration/invention symbol, NOT a declared variable, so
 // validateReferenceIntegrity treats it as bound and does not flag it — keeping
 // emitted diagnostics byte-identical to the old `args`-only walkers on valid
-// fixtures while gaining the deeper descent. (`join` is deliberately NOT an
-// expression-child field, so `forEachChild` never descends into it and its
-// `on` operands are never surfaced as references.)
+// fixtures while gaining the deeper descent. A `skolem` node's `args` are NOT
+// binders: they are PURE key components — ordinary references that
+// validateReferenceIntegrity checks like any other. Its optional documentary
+// relation tag lives in the dedicated `label` field, not in `args`, so a typo in
+// a component can no longer silently masquerade as a tag. (`join` is deliberately
+// NOT an expression-child field, so `forEachChild` never descends into it and
+// its `on` operands are never surfaced as references.)
 // ---------------------------------------------------------------------------
 
 /**
@@ -87,9 +88,12 @@ export function extractVariableReferences(expr: Expression): string[] {
  * Binders modelled:
  *   - `aggregate` `output_idx` entries and `ranges` keys (loop variables);
  *   - `argmin` / `argmax` `arg` witness and their own `ranges` keys;
- *   - `skolem` invented-key name (the first positional `args` entry);
  *   - `index(array, i, j, …)` element positions after the array head;
  *   - `apply_expression_template` `bindings` parameter names.
+ *
+ * A `skolem` node's `args` are deliberately NOT collected here: they are pure key
+ * components — ordinary references validated normally. Its documentary relation
+ * tag lives in the `label` field, so no `args` entry is ever treated as a binder.
  */
 export function collectIndexSymbols(expr: Expression): Set<string> {
   const symbols = new Set<string>()
@@ -113,12 +117,6 @@ export function collectIndexSymbols(expr: Expression): Set<string> {
     // argmin/argmax bind an arg-witness symbol naming the winning index.
     if ((node.op === 'argmin' || node.op === 'argmax') && typeof node.arg === 'string') {
       symbols.add(node.arg)
-    }
-
-    // skolem(name, ...): the first positional arg is the invented-key binder,
-    // not a declared variable reference.
-    if (node.op === 'skolem' && node.args.length > 0 && typeof node.args[0] === 'string') {
-      symbols.add(node.args[0])
     }
 
     if (node.op === 'index') {

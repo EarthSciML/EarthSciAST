@@ -97,8 +97,8 @@
             "key": {
               "op": "skolem",
               "expect_cadence": "const",
+              "label": "edge",
               "args": [
-                "edge",
                 {
                   "op": "index",
                   "args": [

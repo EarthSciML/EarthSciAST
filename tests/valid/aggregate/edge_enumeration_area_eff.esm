@@ -167,8 +167,8 @@
             },
             "key": {
               "op": "skolem",
+              "label": "edge",
               "args": [
-                "edge",
                 "a",
                 "b"
               ]

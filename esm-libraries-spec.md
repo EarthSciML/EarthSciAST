@@ -604,33 +604,47 @@ Equations:
 
 #### 4.7.6 Dimension Promotion for Hybrid Flattening
 
-A single `.esm` file may combine systems living on different spatial dimensions: a 0D box-model reaction system, a 1D vertical-diffusion PDE, a 2D horizontal transport PDE, a 3D atmospheric tracer PDE. Flattening a hybrid file requires a well-defined rule for how state variables, reactions, and equations from lower-dimensional systems are **promoted** onto higher-dimensional domains so that coupling operators can combine their RHS terms pointwise.
+> **Status (v0.8.0).** The **Interface** construct — its `dimension_mapping` and
+> `regridding` fields and the file-level `interfaces` section — was **removed** in
+> v0.8.0 (see `esm-schema.json`: "Removed … all regridding configuration
+> (`Model.regrid`, `RegridSpec`, `Interface.regridding`)"). Cross-grid and
+> cross-dimensional coupling is no longer a separate interface/geometry construct:
+> it is expressed as an ordinary **regridding expression** carried in the coupling
+> entry's `transform` — an `aggregate` (Functional Aggregate Query) over index
+> sets, the same algebra as discretization and reductions. See esm-spec.md §8.6
+> (regridding as a coupling expression), §10.5 (coupling across grids and
+> dimensionality), and §12 (the retired Interfaces section). No binding performs
+> `dimension_mapping` validation, because no such field exists; the error types
+> this subsection once tied to Interface validation are correspondingly
+> reserved/parity-only or repurposed (see §4.7.6.10).
+
+A single `.esm` file may still combine systems living on different spatial dimensions: a 0D box-model reaction system, a 1D vertical-diffusion PDE, a 2D horizontal transport PDE, a 3D atmospheric tracer PDE. Flattening a hybrid file requires a well-defined rule for how state variables, reactions, and equations from lower-dimensional systems are **promoted** onto higher-dimensional domains so that coupling operators can combine their RHS terms pointwise. In v0.8.0 that promotion is realized by the regridding expression on the coupling `transform` and by the pointwise spatial lift (esm-spec.md §10.5), not by an Interface record.
 
 **Terminology.**
 - A **domain** is a spatial/temporal specification (see `Domain` in Section 2.2). A system's domain is either `null` (0D — box model) or a reference to a `domains` entry that declares one or more spatial axes (e.g. `{x, y}` or `{x, y, z}`).
 - **Promotion** is the act of rewriting a variable or equation so it lives on a higher-dimensional target domain while preserving its mathematical meaning.
-- An **Interface** (Section 2.2) specifies how variables cross between two domains of different dimensionality. Its `dimension_mapping` field names the kind of promotion to use, and its `regridding` field selects the numerical strategy when source and target live on different grids of the same dimensionality.
+- A **regridding expression** — the `aggregate`/FAQ on a coupling entry's `transform` (esm-spec.md §8.6, §10.5) — is how promotion is realized numerically. It replaces the removed `Interface.dimension_mapping` / `Interface.regridding` pair: there is no separate interface record and no `dimension_mapping` enum.
 
-**Canonical dimension mapping types.**
+**Kinds of promotion (each now spelled as a regridding expression).** The rows below name *what* a promotion does; in v0.8.0 each is written as an `aggregate` expression on the coupling `transform`, not as an `Interface.dimension_mapping` value:
 
-| Type | Source → Target | Meaning |
+| Kind | Source → Target | Meaning |
 |---|---|---|
 | `broadcast` | 0D → N-D | The source value is spatially uniform on the target domain. A 0D variable `v` becomes a field `v(x, y, …)` whose value is identical at every target grid point. |
 | `identity` | N-D → N-D (same grid) | Source and target share axes and grid; no interpolation is needed. |
 | `slice` | N-D → (N-k)-D | Evaluate the source at fixed coordinate values along `k` of its axes (e.g. project a 3D field onto its surface `z=0`). |
-| `project` | N-D → M-D, M<N | Integrate or average out `N-M` axes. Requires metadata declaring the reduction (`"integrate"` vs `"average"`) and the axes to reduce. |
-| `regrid` | N-D → N-D (different grid) | Same axes but different discretization; requires a `regridding` strategy (`nearest`, `linear`, `bilinear`, `trilinear`, `conservative`). |
+| `project` | N-D → M-D, M<N | Integrate or average out `N-M` axes (an `aggregate` reduction declaring `"integrate"` vs `"average"` and the axes to reduce). |
+| `regrid` | N-D → N-D (different grid) | Same axes but different discretization; an `aggregate` regridding expression (nearest, linear/bilinear/trilinear, or conservative overlap-area weighting — esm-spec.md §8.6). |
 
-**Tier requirements.** Core-tier libraries MUST support `broadcast` and `identity` — they are the minimum needed for any hybrid ODE/PDE flatten. `slice`, `project`, and `regrid` are Analysis-tier or Advanced-tier; a library that receives an Interface specifying a mapping it does not support — `slice`, `project`, `regrid`, or a spatial operator — MUST raise `UnsupportedMappingError`.
+**Tier expectations.** `broadcast` and `identity` are trivial and available everywhere. `slice`, `project`, and `regrid` are Analysis-/Advanced-tier and, being ordinary `aggregate` expressions, are handled by the same evaluator as any other FAQ; there is no Interface tier-gate. A library that cannot evaluate a requested regridding kernel surfaces the reserved `UnsupportedMappingError` (see §4.7.6.10) rather than an Interface-mapping error.
 
-**Implicit broadcast.** When a 0D system is coupled to an N-D system without an explicit Interface, libraries MUST apply `broadcast` promotion implicitly — this is the only unambiguous default. Any other hybrid coupling (N-D ↔ M-D with `N ≠ M`, or different grids of the same dimensionality) requires an explicit `Interface` in the file's `interfaces` section; its absence raises `UnmappedDomainError`.
+**Implicit broadcast.** When a 0D system is coupled to an N-D system, libraries apply `broadcast` promotion implicitly — a 0D value is spatially uniform, the only unambiguous default — so the common 0D↔N-D case needs no explicit transform. (The removed `UnmappedDomainError` path, which formerly fired when no `Interface` covered a cross-domain coupling, is reserved/never-raised; see §4.7.6.10.)
 
 **Reaction systems on PDE domains.** When a `ReactionSystem` lives on a PDE domain (its `domain` field references a domain with spatial axes), `lower_reactions_to_equations` still emits `D(species, t) = Σ stoich·rate` equations. The rate expressions are evaluated pointwise on the target domain: each grid point sees the local species concentrations and the local values of any parameters. Spatial derivatives (advection, diffusion) are added in a later pass by `operator_compose` — the reaction lowering itself is dimension-agnostic.
 
 **Hybrid operator semantics.** Section 4.7.5 step 3 describes how `operator_compose`, `couple`, and `variable_map` combine equations. For hybrid flattening:
 
 1. **`operator_compose`:** Before summing matched equations, apply dimension promotion so that both RHS terms live on the target (highest-dimensional) domain. The resulting equation uses the target domain's independent variables. Example: composing a 0D chemistry RHS with a 2D advection RHS produces a 2D reaction-advection equation whose chemistry term is implicitly broadcast onto the 2D grid.
-2. **`couple`:** The connector equations' `from` and `to` references are resolved after promotion; a connector equation that ties a 0D source value to a PDE field produces a boundary-condition-like term at the point(s) specified by the Interface.
+2. **`couple`:** The connector equations' `from` and `to` references are resolved after promotion; a connector equation that ties a 0D source value to a PDE field produces a boundary-condition-like term at the point(s) selected by the coupling entry's regridding expression (e.g. a `slice` aggregate).
 3. **`variable_map`:** The source variable is promoted to the target domain before substitution, so `param_to_var` on a 0D parameter with a PDE-domain replacement produces a field that varies across the target grid.
 
 **Independent-variable computation.** After coupling, libraries compute the flattened system's `independent_variables` by:
@@ -642,24 +656,24 @@ The result is `[:t]` for purely 0D systems and `[:t, :x, :y, …]` for PDE syste
 
 ##### 4.7.6.6 Slice ODE-to-PDE Coupling Interpretation
 
-When a `slice` mapping bridges a 0D source ODE (e.g. a surface deposition velocity) to an N-D diffusive PDE on the same axis, Core-/Analysis-tier implementations MAY interpret the source equation as either a pointwise volumetric source at the slice coordinate OR a flux boundary condition on the diffusive variable at that coordinate. The choice is an implementation detail that MUST be documented by each library.
+When a `slice` regridding expression bridges a 0D source ODE (e.g. a surface deposition velocity) to an N-D diffusive PDE on the same axis, Core-/Analysis-tier implementations MAY interpret the source equation as either a pointwise volumetric source at the slice coordinate OR a flux boundary condition on the diffusive variable at that coordinate. The choice is an implementation detail that MUST be documented by each library.
 
 ##### 4.7.6.10 Error Taxonomy
 
-The hybrid flattening path defines eight named errors that every implementation MUST expose for cross-language error-name parity:
+The hybrid flattening path defines eight named errors that every implementation MUST expose as named exception classes for cross-language error-name parity. Because the **Interface**/`dimension_mapping` construct was removed in v0.8.0, most are now **reserved/parity-only** — defined and catchable by name, but never raised, since no dimension-mapping validation exists. Three are genuinely raised, but by mechanisms unrelated to the removed Interface machinery, as noted below.
 
-| Error | Raised when |
-|---|---|
-| `ConflictingDerivativeError` | Two systems define non-additive equations for the same dependent variable (also raised by §4.7.5 flatten). |
-| `DimensionPromotionError` | A variable or equation cannot be promoted given the available `Interface`s. |
-| `UnmappedDomainError` | A coupling references a variable whose domain has no mapping rule. |
-| `UnsupportedMappingError` | A `dimension_mapping` type that the library does not implement (`slice`, `project`, `regrid`, or a spatial operator) is encountered. |
-| `DomainUnitMismatchError` | A coupling across an `Interface` requires an undeclared unit conversion. |
-| `DomainExtentMismatchError` | An `identity` mapping is asked to bridge domains with incompatible extents. |
-| `SliceOutOfDomainError` | A `slice` mapping reaches outside the source variable's domain. |
-| `CyclicPromotionError` | Promotion rules form a cycle. |
+| Error | Status | Trigger |
+|---|---|---|
+| `ConflictingDerivativeError` | **raised** | Two systems define non-additive equations for the same dependent variable — the same §4.7.5 flatten check (a species is both an explicit `D(X,t)` LHS and a reaction reactant/product). Not a dimension-mapping error. |
+| `DimensionPromotionError` | **raised (repurposed)** | Not by Interface validation (which no longer exists), but by the §10.5 pointwise spatial lift / array shape-promotion: a species' operator makearrays yield no full-rank interior-stencil gather, or elementwise array-observed operands resolve to conflicting grid shapes. |
+| `DomainUnitMismatchError` | **raised (optional parity)** | An OPTIONAL preflight over `variable_map` couplings whose `transform == "identity"`, when the source and target variables carry non-empty, declared-**different** units. A units check on an identity `variable_map`, not tied to any Interface; `conversion_factor` and `param_to_var` transforms are exempt. Implemented in the Julia binding. |
+| `UnmappedDomainError` | *reserved / never raised* | Formerly: a cross-domain coupling with no `Interface` mapping rule. With Interfaces removed and 0D↔N-D handled by implicit broadcast, nothing raises it. |
+| `UnsupportedMappingError` | *reserved / never raised* | Formerly: an `Interface` requested an unsupported `dimension_mapping`/regridding kind. Reserved for a library that cannot evaluate a requested regridding kernel. |
+| `DomainExtentMismatchError` | *reserved / never raised* | Would fire if an `identity` bridge joined domains with incompatible extents; no binding performs this check. |
+| `SliceOutOfDomainError` | *reserved / never raised* | Would fire if a `slice` reached outside the source domain; only relevant to a higher-tier `slice` implementation. |
+| `CyclicPromotionError` | *reserved / never raised* | Would fire if promotion rules formed a cycle; no promotion graph is built. |
 
-All 8 types MUST be defined as named exception classes in every implementation for cross-language error-name parity. Core-tier libraries MAY leave variants that cover Analysis/Advanced-tier failure modes (`DomainExtentMismatchError`, `SliceOutOfDomainError`, `CyclicPromotionError`, and the slice/project/regrid sub-cases of `UnsupportedMappingError`) as reserved types they never raise.
+All 8 types MUST remain defined as named exception classes in every implementation for cross-language error-name parity, whether or not a given binding ever raises them.
 
 **Worked example: 0D chemistry + 2D transport.** A file containing `Chem` (a `ReactionSystem` on the 2D grid `grid2d = {x, y}`) and no explicit `Advection` model, coupled only by the presence of a shared domain, flattens to:
 
@@ -675,7 +689,7 @@ Independent variables: [:t, :x, :y]
 
 Adding an explicit `Advection` model on the same grid with `_var` placeholder equations and coupling them via `operator_compose` sums an advection term onto each of the three equations — the placeholder expansion rule from §4.7.1 is unchanged for hybrid cases.
 
-**Follow-up work.** The full set of hybrid tests — 1D vertical diffusion + 0D surface deposition, 3D PDE + 2D reaction subsystem via `slice` — and the `project`/`regrid` mapping implementations are Analysis-tier and Advanced-tier follow-up work, tracked in successor beads.
+**Follow-up work.** The full set of hybrid tests — 1D vertical diffusion + 0D surface deposition, 3D PDE + 2D reaction subsystem via a `slice` regridding expression — and the `project`/`regrid` regridding-expression implementations are Analysis-tier and Advanced-tier follow-up work, tracked in successor beads.
 
 ### 4.8 Graph Representations
 

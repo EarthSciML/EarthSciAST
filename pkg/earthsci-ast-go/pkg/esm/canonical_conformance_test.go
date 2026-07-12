@@ -40,9 +40,10 @@ func TestCanonicalConformanceFixtures(t *testing.T) {
 				t.Fatalf("read fixture: %v", err)
 			}
 			var fixture struct {
-				ID       string          `json:"id"`
-				Input    json.RawMessage `json:"input"`
-				Expected string          `json:"expected"`
+				ID          string          `json:"id"`
+				Input       json.RawMessage `json:"input"`
+				Expected    string          `json:"expected"`
+				ExpectError string          `json:"expect_error"`
 			}
 			if err := json.Unmarshal(raw, &fixture); err != nil {
 				t.Fatalf("parse fixture: %v", err)
@@ -52,6 +53,17 @@ func TestCanonicalConformanceFixtures(t *testing.T) {
 				t.Fatalf("unmarshal input: %v", err)
 			}
 			got, err := CanonicalJSON(expr)
+			// Fail-closed fixtures pin an error CODE instead of expected bytes:
+			// assert CanonicalJSON returns an error whose message is that code.
+			if fixture.ExpectError != "" {
+				if err == nil {
+					t.Fatalf("id %s: expected error %q, got output %s", f.ID, fixture.ExpectError, got)
+				}
+				if err.Error() != fixture.ExpectError {
+					t.Errorf("id %s: error %q; want %q", f.ID, err.Error(), fixture.ExpectError)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("CanonicalJSON: %v", err)
 			}

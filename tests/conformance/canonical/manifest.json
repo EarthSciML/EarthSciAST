@@ -7,6 +7,12 @@
     {"id": "float_subnormal",   "path": "float_subnormal.json",   "tags": ["float", "subnormal", "signed_zero", "ordering"]},
     {"id": "n_ary_flatten",     "path": "n_ary_flatten.json",     "tags": ["flatten", "ordering", "nonleaf"]},
     {"id": "zero_elim",         "path": "zero_elim.json",         "tags": ["zero_elim", "integer", "ordering", "nonleaf"]},
-    {"id": "nonleaf_ordering",  "path": "nonleaf_ordering.json",  "tags": ["ordering", "nonleaf"]}
+    {"id": "nonleaf_ordering",  "path": "nonleaf_ordering.json",  "tags": ["ordering", "nonleaf"]},
+    {"id": "aggregate_unsupported",       "path": "aggregate_unsupported.json",       "tags": ["fail_closed", "aggregate", "reduce", "semiring"]},
+    {"id": "table_lookup_unsupported",    "path": "table_lookup_unsupported.json",    "tags": ["fail_closed", "table_lookup", "table", "axes"]},
+    {"id": "filter_unsupported",          "path": "filter_unsupported.json",          "tags": ["fail_closed", "filter"]},
+    {"id": "integral_bounds_unsupported", "path": "integral_bounds_unsupported.json", "tags": ["fail_closed", "integral", "lower", "upper"]},
+    {"id": "geometry_unsupported",        "path": "geometry_unsupported.json",        "tags": ["fail_closed", "geometry", "manifold", "distinct"]},
+    {"id": "bc_fn_supported",             "path": "bc_fn_supported.json",             "tags": ["supported", "bc", "fn", "dim"]}
   ]
 }

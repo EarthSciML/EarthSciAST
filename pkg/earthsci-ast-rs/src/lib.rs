@@ -36,6 +36,9 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+// Conformance-harness argument parsing; callable by the conformance binaries but
+// hidden from the published rustdoc API surface.
+#[doc(hidden)]
 pub mod adapter_support;
 pub mod aggregate;
 pub mod cadence;

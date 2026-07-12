@@ -21,6 +21,7 @@
 //! JSON layer means refs are inlined into the parsed value, and the typed
 //! model only ever sees fully resolved input.
 
+use crate::diagnostic::{DiagnosticError, err};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -69,7 +70,7 @@ fn root_metaparameter_env(value: &Value, api_meta: &BTreeMap<String, i64>) -> BT
 ///
 /// * `value` - the parsed ESM JSON to resolve (modified in place)
 /// * `base_path` - directory to resolve relative file paths against
-pub fn resolve_subsystem_refs(value: &mut Value, base_path: &Path) -> Result<(), String> {
+pub fn resolve_subsystem_refs(value: &mut Value, base_path: &Path) -> Result<(), DiagnosticError> {
     resolve_subsystem_refs_with_metaparameters(value, base_path, &BTreeMap::new())
 }
 
@@ -83,7 +84,7 @@ pub fn resolve_subsystem_refs_with_metaparameters(
     value: &mut Value,
     base_path: &Path,
     api_meta: &BTreeMap<String, i64>,
-) -> Result<(), String> {
+) -> Result<(), DiagnosticError> {
     let root_meta = root_metaparameter_env(value, api_meta);
     let mut visited = HashSet::new();
     walk_top_level(value, base_path, &mut visited, &root_meta)
@@ -98,16 +99,19 @@ fn merge_subsystem_index_sets(
     registry: &mut Map<String, Value>,
     loaded: &Map<String, Value>,
     ref_str: &str,
-) -> Result<(), String> {
+) -> Result<(), DiagnosticError> {
     for (n, decl) in loaded {
         if let Some(existing) = registry.get(n) {
             if existing != decl {
-                return Err(format!(
-                    "[subsystem_index_set_conflict] index set '{n}' from subsystem ref \
-                     '{ref_str}' collides with a non-deep-equal declaration in the importing \
-                     document. A referenced subsystem file's top-level index_sets merge into the \
-                     importing document's registry; deep-equal redeclaration is idempotent, a \
-                     size/kind disagreement is a load-time error (esm-spec §4.7)."
+                return Err(err(
+                    "subsystem_index_set_conflict",
+                    format!(
+                        "index set '{n}' from subsystem ref \
+                         '{ref_str}' collides with a non-deep-equal declaration in the importing \
+                         document. A referenced subsystem file's top-level index_sets merge into \
+                         the importing document's registry; deep-equal redeclaration is \
+                         idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)."
+                    ),
                 ));
             }
         } else {
@@ -126,6 +130,8 @@ struct RefNoun {
     cycle_singular: &'static str,
     /// Item noun for the resolve / read / parse messages (e.g. `"ref"`).
     item: &'static str,
+    /// Stable diagnostic code for this ref-kind's load/shape failures.
+    code: &'static str,
 }
 
 /// A subsystem `{ "ref": ... }` edge (used by [`resolve_value`]).
@@ -133,6 +139,7 @@ const SUBSYSTEM_REF: RefNoun = RefNoun {
     remote_plural: "subsystem refs",
     cycle_singular: "subsystem reference",
     item: "ref",
+    code: "subsystem_ref_unresolved",
 };
 
 /// A top-level `models.<k>` mount edge (used by [`inline_toplevel_model_refs`]).
@@ -140,6 +147,7 @@ const TOPLEVEL_MODEL_REF: RefNoun = RefNoun {
     remote_plural: "top-level model refs",
     cycle_singular: "top-level model reference",
     item: "top-level model ref",
+    code: "toplevel_model_ref_unresolved",
 };
 
 /// The shared "load a referenced .esm document" sequence both ref-resolvers run:
@@ -158,34 +166,48 @@ fn load_ref_document(
     base: &Path,
     visited: &mut HashSet<PathBuf>,
     noun: &RefNoun,
-) -> Result<(PathBuf, Value), String> {
+) -> Result<(PathBuf, Value), DiagnosticError> {
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-        return Err(format!(
-            "Remote {} are not supported in the Rust loader; \
-             download {ref_str:?} to a local file first",
-            noun.remote_plural
+        return Err(err(
+            noun.code,
+            format!(
+                "Remote {} are not supported in the Rust loader; \
+                 download {ref_str:?} to a local file first",
+                noun.remote_plural
+            ),
         ));
     }
 
     let canonical = base
         .join(ref_str)
         .canonicalize()
-        .map_err(|e| format!("failed to resolve {} {ref_str:?}: {e}", noun.item))?;
+        .map_err(|e| err(noun.code, format!("failed to resolve {} {ref_str:?}: {e}", noun.item)))?;
 
     if visited.contains(&canonical) {
-        return Err(format!(
-            "circular {} detected: {}",
-            noun.cycle_singular,
-            canonical.display()
+        return Err(err(
+            noun.code,
+            format!(
+                "circular {} detected: {}",
+                noun.cycle_singular,
+                canonical.display()
+            ),
         ));
     }
     visited.insert(canonical.clone());
 
-    let loaded = (|| -> Result<Value, String> {
-        let content = std::fs::read_to_string(&canonical)
-            .map_err(|e| format!("failed to read {} {}: {}", noun.item, canonical.display(), e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("failed to parse {} {}: {}", noun.item, canonical.display(), e))
+    let loaded = (|| -> Result<Value, DiagnosticError> {
+        let content = std::fs::read_to_string(&canonical).map_err(|e| {
+            err(
+                noun.code,
+                format!("failed to read {} {}: {}", noun.item, canonical.display(), e),
+            )
+        })?;
+        serde_json::from_str(&content).map_err(|e| {
+            err(
+                noun.code,
+                format!("failed to parse {} {}: {}", noun.item, canonical.display(), e),
+            )
+        })
     })();
 
     match loaded {
@@ -204,7 +226,7 @@ fn walk_top_level(
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     parent_meta: &BTreeMap<String, i64>,
-) -> Result<(), String> {
+) -> Result<(), DiagnosticError> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
         None => return Ok(()),
@@ -277,7 +299,7 @@ fn inline_toplevel_model_refs(
     obj: &mut Map<String, Value>,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), DiagnosticError> {
     let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
         Some(models) => models
             .iter()
@@ -299,10 +321,9 @@ fn inline_toplevel_model_refs(
             .and_then(|m| m.remove(&name))
             .expect("edge entry present");
         let entry_obj = entry.as_object().expect("edge entry is an object");
-        let ref_str = entry_obj
-            .get("ref")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "top-level model ref must be a string".to_string())?;
+        let ref_str = entry_obj.get("ref").and_then(|v| v.as_str()).ok_or_else(|| {
+            err(TOPLEVEL_MODEL_REF.code, "top-level model ref must be a string")
+        })?;
         let (canonical, mut comp) =
             load_ref_document(ref_str, base_path, visited, &TOPLEVEL_MODEL_REF)?;
         let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
@@ -310,7 +331,7 @@ fn inline_toplevel_model_refs(
         // `comp` stays owned here; the closure only borrows it (so the visited
         // mark can be removed and `comp`'s by-name blocks merged below on every
         // exit path), and yields the spliced model.
-        let build: Result<Value, String> = (|| {
+        let build: Result<Value, DiagnosticError> = (|| {
             // Component-of-component: inline the leaf's own top-level model-refs.
             if let Some(comp_obj) = comp.as_object_mut() {
                 inline_toplevel_model_refs(comp_obj, &leaf_dir, visited)?;
@@ -331,7 +352,10 @@ fn inline_toplevel_model_refs(
                 }
                 append_component_imports(
                     model.as_object_mut().ok_or_else(|| {
-                        format!("top-level model ref {ref_str:?} is not an object")
+                        err(
+                            TOPLEVEL_MODEL_REF.code,
+                            format!("top-level model ref {ref_str:?} is not an object"),
+                        )
                     })?,
                     injected,
                 );
@@ -375,28 +399,34 @@ fn extract_toplevel_model(
     sel: Option<&str>,
     ref_str: &str,
     source: &Path,
-) -> Result<Value, String> {
+) -> Result<Value, DiagnosticError> {
     let models = comp
         .as_object()
         .and_then(|o| o.get("models"))
         .and_then(|v| v.as_object())
         .ok_or_else(|| {
-            format!(
-                "top-level model ref '{ref_str}' resolves to a file with no models block ({})",
-                source.display()
+            err(
+                TOPLEVEL_MODEL_REF.code,
+                format!(
+                    "top-level model ref '{ref_str}' resolves to a file with no models block ({})",
+                    source.display()
+                ),
             )
         })?;
     match sel {
         Some(name) => models.get(name).cloned().ok_or_else(|| {
             let mut avail: Vec<&String> = models.keys().collect();
             avail.sort();
-            format!(
-                "top-level model ref '{ref_str}' has no model '{name}' (available: {})",
-                avail
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+            err(
+                TOPLEVEL_MODEL_REF.code,
+                format!(
+                    "top-level model ref '{ref_str}' has no model '{name}' (available: {})",
+                    avail
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             )
         }),
         None => {
@@ -405,15 +435,18 @@ fn extract_toplevel_model(
             } else {
                 let mut avail: Vec<&String> = models.keys().collect();
                 avail.sort();
-                Err(format!(
-                    "top-level model ref '{ref_str}' resolves to {} models; add a \"model\" \
-                     selector to choose one (available: {})",
-                    models.len(),
-                    avail
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                Err(err(
+                    TOPLEVEL_MODEL_REF.code,
+                    format!(
+                        "top-level model ref '{ref_str}' resolves to {} models; add a \"model\" \
+                         selector to choose one (available: {})",
+                        models.len(),
+                        avail
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                 ))
             }
         }
@@ -473,7 +506,7 @@ fn walk_subsystems(
     visited: &mut HashSet<PathBuf>,
     mut registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
-) -> Result<(), String> {
+) -> Result<(), DiagnosticError> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
         None => return Ok(()),
@@ -514,25 +547,24 @@ fn walk_subsystems(
 fn read_edge_bindings(
     obj: &serde_json::Map<String, Value>,
     parent_meta: &std::collections::BTreeMap<String, i64>,
-) -> Result<std::collections::BTreeMap<String, i64>, String> {
+) -> Result<std::collections::BTreeMap<String, i64>, DiagnosticError> {
     let mut out = std::collections::BTreeMap::new();
     let Some(bindings) = obj.get("bindings") else {
         return Ok(out);
     };
     let Some(bindings_obj) = bindings.as_object() else {
-        return Err(
-            "[metaparameter_type_error] subsystem ref `bindings` must be an object of \
-             metaparameter expressions (esm-spec 9.7.6)"
-                .to_string(),
-        );
+        return Err(err(
+            "metaparameter_type_error",
+            "subsystem ref `bindings` must be an object of \
+             metaparameter expressions (esm-spec 9.7.6)",
+        ));
     };
     for (k, v) in bindings_obj {
         let ctx = format!("subsystem ref, binding '{k}'");
         // Structural grammar check at the edge (bad op / empty args / float —
         // even with a symbolic arg), then fold against the mounting scope.
-        crate::template_imports::require_meta_expr(v, &ctx).map_err(|e| e.to_string())?;
-        let folded = crate::template_imports::eval_meta_expr(v, parent_meta, &ctx)
-            .map_err(|e| e.to_string())?;
+        crate::template_imports::require_meta_expr(v, &ctx)?;
+        let folded = crate::template_imports::eval_meta_expr(v, parent_meta, &ctx)?;
         out.insert(k.clone(), folded);
     }
     Ok(out)
@@ -548,22 +580,23 @@ fn read_edge_bindings(
 /// (template imports + metaparameters) is resolved in the referenced file's
 /// directory, closed with this edge's `bindings` (§9.7.6 binding site 3) and
 /// lowered to the §9.6.3 fixpoint, before the single component is extracted.
-/// Template-import diagnostics are embedded in the error string as
-/// `[<stable code>] ...`, matching how `load()` surfaces
-/// [`crate::lower_expression_templates::ExpressionTemplateError`].
+/// Template-import diagnostics propagate as
+/// [`crate::lower_expression_templates::ExpressionTemplateError`] (a
+/// [`DiagnosticError`]), carrying their stable `code`, matching how `load()`
+/// surfaces them.
 fn resolve_value(
     value: Value,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
-) -> Result<Value, String> {
+) -> Result<Value, DiagnosticError> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
     {
         let ref_str = ref_val
             .as_str()
-            .ok_or_else(|| "subsystem ref must be a string".to_string())?;
+            .ok_or_else(|| err(SUBSYSTEM_REF.code, "subsystem ref must be a string"))?;
 
         let (canonical, mut parsed) =
             load_ref_document(ref_str, base_path, visited, &SUBSYSTEM_REF)?;
@@ -572,11 +605,14 @@ fn resolve_value(
         // two reference mechanisms are disjoint (esm-spec §9.7.1).
         if crate::template_imports::is_template_library_doc(&parsed) {
             visited.remove(&canonical);
-            return Err(format!(
-                "[subsystem_ref_is_template_library] Subsystem ref '{ref_str}' targets a \
-                 template-library file ({}); libraries are imported via \
-                 expression_template_imports (esm-spec 9.7.1)",
-                canonical.display()
+            return Err(err(
+                "subsystem_ref_is_template_library",
+                format!(
+                    "Subsystem ref '{ref_str}' targets a \
+                     template-library file ({}); libraries are imported via \
+                     expression_template_imports (esm-spec 9.7.1)",
+                    canonical.display()
+                ),
             ));
         }
 
@@ -585,11 +621,14 @@ fn resolve_value(
         // mounted as a subsystem (esm-spec §10.9).
         if crate::coupling_imports::is_coupling_library_doc(&parsed) {
             visited.remove(&canonical);
-            return Err(format!(
-                "[subsystem_ref_is_coupling_library] Subsystem ref '{ref_str}' targets a \
-                 coupling-library file ({}); libraries are imported via a coupling_import \
-                 coupling entry (esm-spec 10.9)",
-                canonical.display()
+            return Err(err(
+                "subsystem_ref_is_coupling_library",
+                format!(
+                    "Subsystem ref '{ref_str}' targets a \
+                     coupling-library file ({}); libraries are imported via a coupling_import \
+                     coupling entry (esm-spec 10.9)",
+                    canonical.display()
+                ),
             ));
         }
 
@@ -598,11 +637,9 @@ fn resolve_value(
         // (esm-spec §9.7.6 binding site 3), then run the §9.6.3 fixpoint so
         // the inlined component carries only concrete Expression ASTs.
         let parent_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
-        let edge_result: Result<(), String> = (|| {
-            crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)
-                .map_err(|e| e.to_string())?;
-            crate::template_imports::reject_template_imports_pre_v08(&parsed)
-                .map_err(|e| e.to_string())?;
+        let edge_result: Result<(), DiagnosticError> = (|| {
+            crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)?;
+            crate::template_imports::reject_template_imports_pre_v08(&parsed)?;
             let bindings = read_edge_bindings(obj, parent_meta)?;
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
@@ -615,14 +652,13 @@ fn resolve_value(
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            crate::template_imports::apply_scope_injections(&mut parsed, &injected)
-                .map_err(|e| e.to_string())?;
-            if let Some(mut resolved) =
-                crate::template_imports::resolve_template_machinery(&parsed, &parent_dir, &bindings)
-                    .map_err(|e| e.to_string())?
-            {
-                crate::lower_expression_templates::lower_expression_templates(&mut resolved)
-                    .map_err(|e| e.to_string())?;
+            crate::template_imports::apply_scope_injections(&mut parsed, &injected)?;
+            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
+                &parsed,
+                &parent_dir,
+                &bindings,
+            )? {
+                crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
                 parsed = resolved;
             }
             Ok(())
@@ -639,7 +675,7 @@ fn resolve_value(
         // on the error paths too — a load error aborts the whole resolution
         // today, but a path left marked visited would silently skip the file
         // if resolution ever becomes partially recoverable.
-        let nested_result = (|| -> Result<(), String> {
+        let nested_result = (|| -> Result<(), DiagnosticError> {
             // The referenced document's own metaparameters were just closed and
             // folded by `resolve_template_machinery` above, so any binding on
             // its OWN nested subsystem refs arrives with metaparameter names
@@ -669,10 +705,13 @@ fn resolve_value(
 /// system, or data loader. Extract that single entry as a JSON value to inline
 /// into the caller's subsystem slot. Precedence is models -> reaction_systems
 /// -> data_loaders.
-fn extract_single_system(value: Value, source: &Path) -> Result<Value, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| format!("ref {} did not parse to a JSON object", source.display()))?;
+fn extract_single_system(value: Value, source: &Path) -> Result<Value, DiagnosticError> {
+    let obj = value.as_object().ok_or_else(|| {
+        err(
+            SUBSYSTEM_REF.code,
+            format!("ref {} did not parse to a JSON object", source.display()),
+        )
+    })?;
 
     let pick_single = |key: &str| -> Option<Value> {
         obj.get(key).and_then(|v| v.as_object()).and_then(|m| {
@@ -688,9 +727,13 @@ fn extract_single_system(value: Value, source: &Path) -> Result<Value, String> {
         .or_else(|| pick_single("reaction_systems"))
         .or_else(|| pick_single("data_loaders"))
         .ok_or_else(|| {
-            format!(
-                "ref {} must contain exactly one top-level model, reaction system, or data loader",
-                source.display()
+            err(
+                SUBSYSTEM_REF.code,
+                format!(
+                    "ref {} must contain exactly one top-level model, reaction system, or data \
+                     loader",
+                    source.display()
+                ),
             )
         })
 }
@@ -844,7 +887,7 @@ mod tests {
 
         let result = resolve_subsystem_refs(&mut value, Path::new("/tmp"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Remote subsystem refs"));
+        assert!(result.unwrap_err().to_string().contains("Remote subsystem refs"));
     }
 
     #[test]
@@ -897,7 +940,7 @@ mod tests {
 
         let result = resolve_subsystem_refs(&mut value, dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("circular"));
+        assert!(result.unwrap_err().to_string().contains("circular"));
     }
 
     #[test]
@@ -919,7 +962,7 @@ mod tests {
 
         let result = resolve_subsystem_refs(&mut value, dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("failed to resolve ref"));
+        assert!(result.unwrap_err().to_string().contains("failed to resolve ref"));
     }
 
     #[test]

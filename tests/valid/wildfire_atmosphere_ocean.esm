@@ -879,8 +879,8 @@
             "args": [],
             "expr": {
               "op": "skolem",
+              "label": "bin",
               "args": [
-                "bin",
                 {
                   "op": "floor",
                   "args": [
@@ -944,8 +944,8 @@
             "args": [],
             "expr": {
               "op": "skolem",
+              "label": "bin",
               "args": [
-                "bin",
                 {
                   "op": "floor",
                   "args": [
@@ -1023,8 +1023,8 @@
             ],
             "key": {
               "op": "skolem",
+              "label": "pair",
               "args": [
-                "pair",
                 "a",
                 "o"
               ]

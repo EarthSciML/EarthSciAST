@@ -1,0 +1,31 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "TestModel",
+    "description": "Undefined variable hidden in an aggregate `key` (Skolem-term) child field. The reference check must descend into `key`, not only `args`, to catch it. `g` is bound via `ranges`; `rate` is declared; only `undefined_xyz` is undefined. The key here is an `index` expression (rather than a full `skolem` node) so that the single undefined reference is isolated — a skolem's bare-string label argument would otherwise register as a second undefined reference."
+  },
+  "index_sets": {
+    "grp": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": { "type": "state" },
+        "rate": { "type": "parameter" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [],
+            "args": ["rate"],
+            "ranges": { "g": { "from": "grp" } },
+            "key": { "op": "index", "args": ["undefined_xyz", "g"] },
+            "expr": { "op": "index", "args": ["rate", "g"] }
+          }
+        }
+      ]
+    }
+  }
+}

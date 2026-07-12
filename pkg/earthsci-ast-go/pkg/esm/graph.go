@@ -28,13 +28,22 @@ type ComponentNode struct {
 	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
+// CouplingKind identifies the kind of coupling a component-graph edge represents.
+type CouplingKind string
+
+const (
+	CouplingKindOperatorCompose CouplingKind = "operator_compose"
+	CouplingKindCouple          CouplingKind = "couple"
+	CouplingKindVariableMap     CouplingKind = "variable_map"
+)
+
 // CouplingEdge represents an edge in the component graph
 type CouplingEdge struct {
-	Type          string  `json:"type"` // coupling type
-	Label         *string `json:"label,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	Bidirectional bool    `json:"bidirectional"`
-	CouplingEntry any     `json:"coupling_entry"`
+	Type          CouplingKind `json:"type"` // coupling type
+	Label         *string      `json:"label,omitempty"`
+	Description   *string      `json:"description,omitempty"`
+	Bidirectional bool         `json:"bidirectional"`
+	CouplingEntry any          `json:"coupling_entry"`
 }
 
 // VariableNode represents a node in the expression graph
@@ -160,7 +169,7 @@ func createCouplingEdges(coupling any, nodeMap map[string]ComponentNode) []Graph
 					Source: source,
 					Target: target,
 					Data: CouplingEdge{
-						Type:          "operator_compose",
+						Type:          CouplingKindOperatorCompose,
 						Description:   c.Description,
 						Bidirectional: true,
 						CouplingEntry: c,
@@ -181,7 +190,7 @@ func createCouplingEdges(coupling any, nodeMap map[string]ComponentNode) []Graph
 					Source: source,
 					Target: target,
 					Data: CouplingEdge{
-						Type:          "couple",
+						Type:          CouplingKindCouple,
 						Label:         &label,
 						Description:   c.Description,
 						Bidirectional: true,
@@ -207,27 +216,8 @@ func createCouplingEdges(coupling any, nodeMap map[string]ComponentNode) []Graph
 				Source: source,
 				Target: target,
 				Data: CouplingEdge{
-					Type:          "variable_map",
+					Type:          CouplingKindVariableMap,
 					Label:         &varName,
-					Description:   c.Description,
-					Bidirectional: false,
-					CouplingEntry: c,
-				},
-			}
-			edges = append(edges, edge)
-		}
-
-	case OperatorApplyCoupling:
-		source, sourceExists := nodeMap[c.Operator]
-		if sourceExists {
-			// Create edges to all systems this operator affects
-			// Since we don't have explicit target info, we'd need to infer from context
-			// For now, create a self-loop to indicate operator application
-			edge := GraphEdge[ComponentNode, CouplingEdge]{
-				Source: source,
-				Target: source,
-				Data: CouplingEdge{
-					Type:          "operator_apply",
 					Description:   c.Description,
 					Bidirectional: false,
 					CouplingEntry: c,

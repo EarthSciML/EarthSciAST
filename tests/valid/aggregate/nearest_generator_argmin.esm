@@ -291,8 +291,8 @@
             ],
             "expr": {
               "op": "skolem",
+              "label": "bin",
               "args": [
-                "bin",
                 {
                   "op": "floor",
                   "args": [
@@ -359,8 +359,8 @@
             ],
             "expr": {
               "op": "skolem",
+              "label": "bin",
               "args": [
-                "bin",
                 {
                   "op": "floor",
                   "args": [

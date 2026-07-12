@@ -55,7 +55,10 @@ describe('mapChildren — field preservation', () => {
       args: ['A'],
       expr: { op: '*', args: ['A', 'w'] },
       filter: { op: '>', args: ['A', 0] },
-      key: { op: 'skolem', args: ['i', 'j'] },
+      // `skolem` args are PURE key components — here the bound range symbols
+      // `i`, `j` declared in `ranges`, ordinary references the walker never
+      // treats as binders. The documentary relation tag lives in `label`.
+      key: { op: 'skolem', label: 'edge', args: ['i', 'j'] },
       reduce: '+',
       semiring: 'sum_product',
       ranges: { i: [1, 10], j: { from: 'edges' } },
@@ -72,6 +75,9 @@ describe('mapChildren — field preservation', () => {
     expect(rec.ranges).toEqual({ i: [1, 10], j: { from: 'edges' } })
     expect(rec.join).toEqual([{ on: [['i', 'j']] }])
     expect(rec.output_idx).toEqual(['i'])
+    // The skolem key round-trips whole: its `label` documentary tag is a sidecar
+    // field preserved verbatim, and its `args` (pure components) are unchanged.
+    expect(rec.key).toEqual({ op: 'skolem', label: 'edge', args: ['i', 'j'] })
   })
 
   it('visits integral bounds (lower/upper) and preserves var', () => {

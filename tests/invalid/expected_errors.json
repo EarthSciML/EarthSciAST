@@ -249,6 +249,132 @@
     "is_valid": false
   },
 
+  "undefined_variable_in_aggregate_expr.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Undefined variable hidden in the aggregate `expr` body — a non-`args` expression child field. Exercises that the undefined-reference check descends every expression child field, not just `args` (loop index `g` is bound via `ranges`, `rate` is declared, so only `undefined_xyz` is undefined)."
+  },
+
+  "undefined_variable_in_filter.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Undefined variable hidden in the aggregate `filter` predicate — a non-`args` expression child field."
+  },
+
+  "undefined_variable_in_aggregate_key.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Undefined variable hidden in the aggregate `key` (Skolem-term) child field — a non-`args` expression child field. The key holds an `index` expression rather than a full `skolem` node so the single undefined reference is isolated (a skolem bare-string label would register as a second undefined reference)."
+  },
+
+  "undefined_variable_in_integral_bound.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Undefined variable hidden in the integral `lower` bound — a non-`args` expression child field (the `upper` bound is the symmetric case; integration variable `s` is bound via `var`, `k` is declared)."
+  },
+
+  "undefined_variable_in_makearray_values.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Undefined variable hidden in a makearray `values` entry — a non-`args` expression child field (makearray carries an empty `args`)."
+  },
+
+  "undefined_variable_in_table_lookup_axes.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Undefined variable hidden in a table_lookup `axes` map value — a non-`args` expression child field (table_lookup carries an empty `args`; the table `tbl` and axis name `a` are declared)."
+  },
+
+  "undefined_variable_in_template_bindings.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Undefined variable hidden in an apply_expression_template `bindings` value — a non-`args` expression child field (the node carries an empty `args`; the template `negate` and its parameter `A_pre` are declared)."
+  },
+
   "undefined_species_in_substrates.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1740,6 +1866,15 @@
       }
     ],
     "is_valid": false
+  },
+
+  "domain_unit_mismatch_identity.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "domain_unit_mismatch",
+    "notes": "Flatten-level invalid (esm-spec §4.7.6). The document is SCHEMA-VALID (a variable_map identity coupling with declared units is legal schema) and validate()-clean — no binding's validate() checks cross-binding coupling units — so schema-only bindings (TypeScript, Go) accept it (is_valid: true) and their invalid-fixture loops read `resolver_only` and assert schema acceptance. Lives under tests/invalid/coupling/. A variable_map coupling entry with transform=='identity' between two variables whose DECLARED units are both present, non-empty, and DIFFERENT (SystemA.temperature='K' vs SystemB.temperature='degC') MUST be rejected at flatten() with the DomainUnitMismatch flatten error (Julia: DomainUnitMismatchError, raised by _check_variable_map_units in coupling_apply.jl; Rust: FlattenError::DomainUnitMismatch; Python: DomainUnitMismatchError). Matching or absent units are legal (see the positive control tests/valid/coupling_variable_map_identity_units_match.esm). `param_to_var` and `conversion_factor` transforms are exempt."
   },
 
   "units_incompatible_assignment.esm": {

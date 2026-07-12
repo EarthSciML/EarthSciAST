@@ -80,6 +80,14 @@ fn units_fixtures_dimensional_propagation() {
     // validation completes, so the shared fixture stays as is and this test
     // pins the detection instead.
     let expected_warning_counts = [
+        // These counts are DIMENSIONAL-analysis warnings only. Many of these
+        // fixtures declare real scientific units (Hz, T, C, BTU, kWh, degC, bar,
+        // …) that this crate's minimal unit parser does not recognize (pint /
+        // Unitful in the Python / Julia bindings do). Since the unparseable-unit
+        // leniency fix, each such unit is surfaced as an "unparseable unit;
+        // treated as unknown" warning instead of being silently coerced to
+        // dimensionless — a pre-existing Rust parser-coverage gap, orthogonal to
+        // dimensional propagation, so the assertion below filters those out.
         ("units_conversions.esm", 0usize),
         ("units_dimensional_analysis.esm", 1),
         ("units_propagation.esm", 0),
@@ -96,10 +104,14 @@ fn units_fixtures_dimensional_propagation() {
             .find(|(n, _)| n == name)
             .map(|(_, c)| *c)
             .unwrap_or(0);
+        let dimensional_warnings = result
+            .unit_warnings
+            .iter()
+            .filter(|w| !w.contains("unparseable unit"))
+            .count();
         assert_eq!(
-            result.unit_warnings.len(),
-            expected,
-            "{name}: expected {expected} unit warning(s), got {:?}",
+            dimensional_warnings, expected,
+            "{name}: expected {expected} dimensional warning(s), got {:?}",
             result.unit_warnings
         );
     }

@@ -42,8 +42,28 @@ pub enum ComponentType {
     ReactionSystem,
     /// Data loader
     DataLoader,
-    /// Operator
-    Operator,
+}
+
+/// Kind of coupling relationship represented by an edge
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CouplingEdgeKind {
+    /// Operator composition of two named systems
+    OperatorCompose,
+    /// Direct coupling of two named systems
+    Couple,
+    /// Variable mapping between two systems
+    VariableMap,
+}
+
+impl std::fmt::Display for CouplingEdgeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            CouplingEdgeKind::OperatorCompose => "operator_compose",
+            CouplingEdgeKind::Couple => "couple",
+            CouplingEdgeKind::VariableMap => "variable_map",
+        })
+    }
 }
 
 /// Edge in the component graph
@@ -54,7 +74,7 @@ pub struct CouplingEdge {
     /// Target component ID
     pub to: String,
     /// Type of coupling
-    pub coupling_type: String,
+    pub coupling_type: CouplingEdgeKind,
     /// Additional coupling data
     pub data: serde_json::Value,
 }
@@ -105,39 +125,31 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
         }
     }
 
-    // Add operator nodes
-    if let Some(ref operators) = esm_file.operators {
-        for id in sorted_keys(operators) {
-            nodes.push(ComponentNode {
-                id: id.clone(),
-                component_type: ComponentType::Operator,
-                name: None, // Operators typically don't have human names
-            });
-        }
-    }
-
     // Add coupling edges.
     //
-    // NOTE (known limitation, intentionally deferred): some coupling kinds do
-    // not name two concrete components, so this synthesizes placeholder
-    // endpoints that are NOT present in `nodes` — `OperatorApply`/`Callback`
-    // point at `"unknown_target"`, and `Event` may point at `"unknown"` or the
-    // event's own name. `to_dot`/`to_mermaid` therefore render edges to
-    // nonexistent nodes, and `coupling_type` is a stringly-typed magic value.
-    // Modeling these explicitly (skipping the edge or materializing the missing
-    // node) would change the edge count/structure that the CLI (`esm graph`
-    // reports `edges.len()`) and cross-language conformance observe, so it is
-    // left as-is pending a coordinated multi-language change.
+    // Coupling edges only connect endpoints that are real component nodes
+    // (models, reaction systems, data loaders). Coupling kinds that do not name
+    // two concrete components (operator_apply, callback, event, coupling_import)
+    // contribute no edge to the source-level component graph.
+    let node_ids: std::collections::HashSet<&str> =
+        nodes.iter().map(|n| n.id.as_str()).collect();
+
     if let Some(ref coupling_entries) = esm_file.coupling {
         for entry in coupling_entries {
-            // Extract coupling relationships based on the coupling type
-            let (from, to, coupling_type_str) = match entry {
+            // Resolve each coupling entry to a (from, to, kind) triple.
+            //
+            // `operator_compose`/`couple` name two concrete systems (arity-2);
+            // `variable_map` resolves each endpoint to its owning system via the
+            // scope prefix. Kinds that do not name two concrete components
+            // (operator_apply, callback, event, coupling_import) contribute no
+            // edge to the source-level component graph.
+            let (from, to, kind) = match entry {
                 CouplingEntry::OperatorCompose { systems, .. } => {
                     if systems.len() >= 2 {
                         (
                             systems[0].clone(),
                             systems[1].clone(),
-                            "operator_compose".to_string(),
+                            CouplingEdgeKind::OperatorCompose,
                         )
                     } else {
                         continue; // Skip invalid coupling
@@ -145,7 +157,11 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
                 }
                 CouplingEntry::Couple { systems, .. } => {
                     if systems.len() >= 2 {
-                        (systems[0].clone(), systems[1].clone(), "couple".to_string())
+                        (
+                            systems[0].clone(),
+                            systems[1].clone(),
+                            CouplingEdgeKind::Couple,
+                        )
                     } else {
                         continue; // Skip invalid coupling
                     }
@@ -154,66 +170,25 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
                     // Parse scoped references to extract system names
                     let from_system = from.split('.').next().unwrap_or(from).to_string();
                     let to_system = to.split('.').next().unwrap_or(to).to_string();
-                    (from_system, to_system, "variable_map".to_string())
+                    (from_system, to_system, CouplingEdgeKind::VariableMap)
                 }
-                CouplingEntry::OperatorApply { operator, .. } => (
-                    operator.clone(),
-                    "unknown_target".to_string(),
-                    "operator_apply".to_string(),
-                ),
-                CouplingEntry::Callback { callback_id, .. } => (
-                    callback_id.clone(),
-                    "unknown_target".to_string(),
-                    "callback".to_string(),
-                ),
-                CouplingEntry::Event { name, affects, .. } => {
-                    // Extract system names from affect variable references (e.g., "System1.var")
-                    let systems: Vec<String> = affects
-                        .as_ref()
-                        .map(|affects| {
-                            affects
-                                .iter()
-                                .filter_map(|affect| {
-                                    if affect.lhs.contains('.') {
-                                        Some(affect.lhs.split('.').next().unwrap_or("").to_string())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    if systems.len() >= 2 {
-                        (systems[0].clone(), systems[1].clone(), "event".to_string())
-                    } else if systems.len() == 1 {
-                        let event_name = name.as_deref().unwrap_or("unknown_event");
-                        (
-                            event_name.to_string(),
-                            systems[0].clone(),
-                            "event".to_string(),
-                        )
-                    } else {
-                        let event_name = name.as_deref().unwrap_or("unknown_event");
-                        (
-                            event_name.to_string(),
-                            "unknown".to_string(),
-                            "event".to_string(),
-                        )
-                    }
-                }
-                // A `coupling_import` is an indirection to a coupling-library
-                // file; its concrete edges are materialized only at flatten, so
-                // the source-level component graph carries no edge for it.
-                CouplingEntry::CouplingImport { .. } => continue,
+                // These coupling kinds do not name two concrete component nodes,
+                // so they contribute no edge to the component graph.
+                CouplingEntry::OperatorApply { .. }
+                | CouplingEntry::Callback { .. }
+                | CouplingEntry::Event { .. }
+                | CouplingEntry::CouplingImport { .. } => continue,
             };
 
-            edges.push(CouplingEdge {
-                from,
-                to,
-                coupling_type: coupling_type_str,
-                data: serde_json::Value::Null, // Simplified for now
-            });
+            // Only emit an edge when both endpoints are real graph nodes.
+            if node_ids.contains(from.as_str()) && node_ids.contains(to.as_str()) {
+                edges.push(CouplingEdge {
+                    from,
+                    to,
+                    coupling_type: kind,
+                    data: serde_json::Value::Null,
+                });
+            }
         }
     }
 
@@ -256,8 +231,6 @@ pub fn get_component_type(esm_file: &EsmFile, component_id: &str) -> Option<Comp
         Some(ComponentType::ReactionSystem)
     } else if contains(&esm_file.data_loaders, component_id) {
         Some(ComponentType::DataLoader)
-    } else if contains(&esm_file.operators, component_id) {
-        Some(ComponentType::Operator)
     } else {
         None
     }
@@ -717,7 +690,6 @@ impl ComponentGraph {
                 ComponentType::Model => "ellipse",
                 ComponentType::ReactionSystem => "box",
                 ComponentType::DataLoader => "diamond",
-                ComponentType::Operator => "hexagon",
             };
 
             let label = node.name.as_ref().unwrap_or(&node.id);
@@ -737,7 +709,7 @@ impl ComponentGraph {
                 "  \"{}\" -> \"{}\" [label=\"{}\"];\n",
                 escape_dot(&edge.from),
                 escape_dot(&edge.to),
-                escape_dot(&edge.coupling_type)
+                escape_dot(&edge.coupling_type.to_string())
             ));
         }
 
@@ -759,7 +731,6 @@ impl ComponentGraph {
                 ComponentType::Model => ("(", ")"),
                 ComponentType::ReactionSystem => ("[", "]"),
                 ComponentType::DataLoader => ("{", "}"),
-                ComponentType::Operator => ("((", "))"),
             };
 
             let label = node.name.as_ref().unwrap_or(&node.id);
@@ -777,7 +748,7 @@ impl ComponentGraph {
             mermaid.push_str(&format!(
                 "  {} -->|{}| {}\n",
                 edge.from,
-                mermaid_label(&edge.coupling_type),
+                mermaid_label(&edge.coupling_type.to_string()),
                 edge.to
             ));
         }
@@ -1307,6 +1278,6 @@ mod tests {
         // Edge should connect system names, not full scoped references
         assert_eq!(edge.from, "source"); // Not "source.var"
         assert_eq!(edge.to, "target"); // Not "target.param"
-        assert_eq!(edge.coupling_type, "variable_map");
+        assert_eq!(edge.coupling_type, CouplingEdgeKind::VariableMap);
     }
 }

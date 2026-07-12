@@ -1,0 +1,31 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "TestModel",
+    "description": "Undefined variable hidden in an apply_expression_template `bindings` value (a non-args child field; the node carries an empty `args`). The reference check must descend into `bindings` values, not only `args`, to catch it. The template `negate` and its parameter `A_pre` are declared; only `undefined_xyz` (the expression bound to `A_pre`) is undefined."
+  },
+  "models": {
+    "TestModel": {
+      "expression_templates": {
+        "negate": {
+          "params": ["A_pre"],
+          "body": { "op": "-", "args": ["A_pre"] }
+        }
+      },
+      "variables": {
+        "y": { "type": "state" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": {
+            "op": "apply_expression_template",
+            "name": "negate",
+            "bindings": { "A_pre": "undefined_xyz" },
+            "args": []
+          }
+        }
+      ]
+    }
+  }
+}

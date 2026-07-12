@@ -946,7 +946,7 @@ mod tests {
                 "rhs": {
                     "op": "aggregate", "distinct": true, "semiring": "bool_and_or",
                     "output_idx": ["e"], "ranges": {"f": {"from": "faces"}},
-                    "key": {"op": "skolem", "args": ["edge", {"op": "index", "args": ["u", "f"]}]},
+                    "key": {"op": "skolem", "label": "edge", "args": [{"op": "index", "args": ["u", "f"]}]},
                     "expr": {"op": "true", "args": []}
                 }
             }]

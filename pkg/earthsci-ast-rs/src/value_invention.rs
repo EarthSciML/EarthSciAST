@@ -709,26 +709,23 @@ fn resolve_const_index(
     ))
 }
 
-/// `skolem(tag?, c1, c2, …)` → the canonical key tuple. A leading STRING literal
-/// is the relation tag (the relation name) and is NOT part of the emitted key —
-/// this is what makes the materialised set byte-identical to the M3 determinism
-/// golden (edges `[[1,2],…]`, candidate pairs `(i,j)`), which carry no tag. The
-/// remaining components are exact integer IDs (§5.5.1 rule 4). A single component
-/// degrades to a scalar key.
+/// `skolem(c1, c2, …)` → the canonical key tuple. EVERY arg is a pure key
+/// component: an exact integer ID (§5.5.1 rule 4). The relation tag (the
+/// "sort"/relation name, e.g. `"edge"`/`"bin"`/`"pair"`) lives in the node's
+/// dedicated `label` field — documentary only, never part of the emitted key —
+/// which keeps the materialised set byte-identical to the M3 determinism golden
+/// (edges `[[1,2],…]`, candidate pairs `(i,j)`, which carry no tag) while
+/// ensuring a mistyped key component can no longer silently masquerade as a tag
+/// (it now fails closed via `key_int`). A single component degrades to a scalar
+/// key.
 fn vi_skolem(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Key, ValueInventionError> {
     let args = node_args(node);
-    let mut comps: Vec<Val> = Vec::with_capacity(args.len());
+    let mut key_comps: Vec<Key> = Vec::with_capacity(args.len());
     for a in args {
-        comps.push(vi_eval(a, ctx, bindings)?);
-    }
-    let start = if matches!(comps.first(), Some(Val::Str(_))) {
-        1
-    } else {
-        0
-    };
-    let mut key_comps: Vec<Key> = Vec::with_capacity(comps.len() - start);
-    for c in &comps[start..] {
-        key_comps.push(Key::Int(c.key_int()?));
+        // Every arg is a key component; a non-key value fails closed via `key_int`
+        // (as it already did for non-leading positions). The `label` field, if
+        // present, is a documentary relation tag and is intentionally ignored.
+        key_comps.push(Key::Int(vi_eval(a, ctx, bindings)?.key_int()?));
     }
     if key_comps.len() == 1 {
         Ok(key_comps.into_iter().next().unwrap())
@@ -1756,6 +1753,56 @@ mod tests {
 
     fn k(i: i64, j: i64) -> Key {
         Key::Tuple(vec![Key::Int(i), Key::Int(j)])
+    }
+
+    /// A `skolem` node's leading arg used to be overloaded: a leading STRING was
+    /// stripped as a relation tag, so a mistyped key component could silently
+    /// vanish. The tag now lives in the dedicated `label` field (documentary
+    /// only), and EVERY arg is a pure key component — a non-integer arg fails
+    /// closed instead of masquerading as a tag.
+    #[test]
+    fn skolem_label_is_documentary_and_typo_fails_closed() {
+        let const_arrays: HashMap<String, ArrayD<f64>> = HashMap::new();
+        let params: HashMap<String, f64> = HashMap::new();
+        let empty = Map::new();
+        let no_bnds = no_bounds();
+        let ctx = ViCtx {
+            const_arrays: &const_arrays,
+            params: &params,
+            index_sets: &empty,
+            variables: &empty,
+            const_array_boundaries: &no_bnds,
+            maps: HashMap::new(),
+        };
+        // `a`, `b` are bound range symbols (integer IDs).
+        let bindings: Bindings = [("a".to_string(), 1), ("b".to_string(), 2)]
+            .into_iter()
+            .collect();
+
+        // A documentary `label:"edge"` is ignored for key construction: the key
+        // is exactly the `(a, b)` tuple — byte-identical to the pre-`label`
+        // behaviour where the tag was a stripped leading string arg.
+        let tagged = serde_json::json!({
+            "op": "skolem",
+            "label": "edge",
+            "args": ["a", "b"],
+        });
+        assert_eq!(vi_skolem(&tagged, &ctx, &bindings).unwrap(), k(1, 2));
+
+        // A `skolem` with no label produces the same key from the same args.
+        let untagged = serde_json::json!({"op": "skolem", "args": ["a", "b"]});
+        assert_eq!(vi_skolem(&untagged, &ctx, &bindings).unwrap(), k(1, 2));
+
+        // A mistyped leading arg (`"aa"` instead of the bound `"a"`) is NOT a
+        // valid key component. It once masqueraded as a stripped tag; now it
+        // fails closed via `key_int`.
+        let typo = serde_json::json!({"op": "skolem", "args": ["aa", "b"]});
+        let e = vi_skolem(&typo, &ctx, &bindings).unwrap_err();
+        assert!(
+            e.0.contains("non-numeric key component"),
+            "unexpected error message: {}",
+            e.0
+        );
     }
 
     #[test]

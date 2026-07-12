@@ -222,7 +222,7 @@ def test_guard_continuous_relational_rejected():
                     "output_idx": ["e"],
                     "ranges": {"f": {"from": "faces"}},
                     # the key reads state u → the distinct node classifies CONTINUOUS
-                    "key": {"op": "skolem", "args": ["edge", {"op": "index", "args": ["u", "f"]}]},
+                    "key": {"op": "skolem", "label": "edge", "args": [{"op": "index", "args": ["u", "f"]}]},
                     "expr": {"op": "true", "args": []},
                 },
             }

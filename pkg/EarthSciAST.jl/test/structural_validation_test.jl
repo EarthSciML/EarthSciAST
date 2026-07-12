@@ -519,4 +519,75 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
+    @testset "Undefined bare variables in equations (undefined_variable)" begin
+        # Invalid fixture: an undefined variable hidden in an aggregate `expr`
+        # body (a non-`args` child) must be rejected. Mirrors Rust/Go/TS/Python.
+        @testset "Invalid fixture undefined_variable_in_aggregate_expr.esm is rejected" begin
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                    "undefined_variable_in_aggregate_expr.esm")
+            if _require_fixture(fixture_path)
+                esm_data = EarthSciAST.load(fixture_path)
+                result = EarthSciAST.validate(esm_data)
+                @test !result.is_valid
+                undefs = filter(e -> e.error_type == "undefined_variable", result.structural_errors)
+                @test !isempty(undefs)
+                @test any(e -> occursin("undefined_xyz", e.message), undefs)
+            end
+        end
+
+        # No false positive: an aggregate whose body references a bound loop
+        # index (`i`, introduced by `ranges`) and a declared variable must NOT
+        # flag the bound index. Built via the typed API so it is schema-free.
+        @testset "Bound loop index in an aggregate is not flagged" begin
+            variables = Dict{String,EarthSciAST.ModelVariable}(
+                "q" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable),
+            )
+            agg = EarthSciAST.OpExpr("aggregate",
+                EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];
+                output_idx=Any["i"],
+                ranges=Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")),
+                expr_body=EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
+                    EarthSciAST.NumExpr(-0.25),
+                    EarthSciAST.OpExpr("index", EarthSciAST.ASTExpr[
+                        EarthSciAST.VarExpr("q"), EarthSciAST.VarExpr("i")]),
+                ]))
+            eq = EarthSciAST.Equation(
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")]; wrt="t"),
+                agg)
+            model = EarthSciAST.Model(variables, EarthSciAST.Equation[eq])
+            file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("AggBoundIdx"),
+                                       models=Dict("M" => model))
+            errors = EarthSciAST.validate_model_references(file, model, "/models/M")
+            @test !any(e -> e.error_type == "undefined_variable", errors)
+        end
+
+        # Negative control on the same shape: swap the reduced array for an
+        # undeclared name and confirm it IS flagged (so the check above is not
+        # vacuous — the bound index `i` is still excused).
+        @testset "Undeclared name inside an aggregate body is flagged" begin
+            variables = Dict{String,EarthSciAST.ModelVariable}(
+                "q" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable),
+            )
+            agg = EarthSciAST.OpExpr("aggregate",
+                EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];
+                output_idx=Any["i"],
+                ranges=Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")),
+                expr_body=EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
+                    EarthSciAST.NumExpr(-0.25),
+                    EarthSciAST.OpExpr("index", EarthSciAST.ASTExpr[
+                        EarthSciAST.VarExpr("undefined_zzz"), EarthSciAST.VarExpr("i")]),
+                ]))
+            eq = EarthSciAST.Equation(
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")]; wrt="t"),
+                agg)
+            model = EarthSciAST.Model(variables, EarthSciAST.Equation[eq])
+            file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("AggBoundIdxBad"),
+                                       models=Dict("M" => model))
+            errors = EarthSciAST.validate_model_references(file, model, "/models/M")
+            undefs = filter(e -> e.error_type == "undefined_variable", errors)
+            @test !isempty(undefs)
+            @test any(e -> occursin("undefined_zzz", e.message), undefs)
+        end
+    end
+
 end

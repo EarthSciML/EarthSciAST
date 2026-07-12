@@ -216,6 +216,7 @@ _META_SUBST_SKIP_KEYS = frozenset(
         "description",
         "name",
         "wrt",
+        "dim",
         "expression_template_imports",
         "metaparameters",
         "only",

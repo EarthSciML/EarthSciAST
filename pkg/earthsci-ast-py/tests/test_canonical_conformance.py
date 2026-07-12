@@ -14,16 +14,24 @@ import json
 import pytest
 from conftest import CONFORMANCE_DIR
 
-from earthsci_ast.canonicalize import canonical_json
+from earthsci_ast.canonicalize import CanonicalizeError, canonical_json
 from earthsci_ast.esm_types import ExprNode
 
 FIXTURES_DIR = CONFORMANCE_DIR / "canonical"
 
 
+# Wire JSON keys that differ from the ``ExprNode`` field name (see esm_types.py).
+_WIRE_FIELD_RENAMES = {"axes": "table_axes"}
+
+
 def _wire_to_expr(node):
     """Convert a JSON-deserialized fixture into an ESM expression tree."""
     if isinstance(node, dict) and "op" in node and "args" in node:
-        kwargs = {k: v for k, v in node.items() if k not in ("op", "args")}
+        kwargs = {
+            _WIRE_FIELD_RENAMES.get(k, k): v
+            for k, v in node.items()
+            if k not in ("op", "args")
+        }
         return ExprNode(
             op=node["op"],
             args=[_wire_to_expr(a) for a in node["args"]],
@@ -52,6 +60,21 @@ def test_canonical_conformance(fixture_id):
     with fixture_path.open() as fh:
         fixture = json.load(fh)
     expr = _wire_to_expr(fixture["input"])
+
+    # Fail-closed fixtures: a node carrying a non-emissible field has no faithful
+    # canonical JSON, so `canonical_json` must raise the pinned coded error
+    # rather than emit bytes (matches the Julia reference / cross-binding
+    # contract). Other bindings consume the same `expect_error` fixtures.
+    expected_error = fixture.get("expect_error")
+    if expected_error is not None:
+        with pytest.raises(CanonicalizeError) as excinfo:
+            canonical_json(expr)
+        assert excinfo.value.code == expected_error, (
+            f"\n  id: {fixture_id}\n  got code:  {excinfo.value.code}"
+            f"\n  want code: {expected_error}"
+        )
+        return
+
     got = canonical_json(expr)
     assert got == fixture["expected"], (
         f"\n  id: {fixture_id}\n  got:  {got}\n  want: {fixture['expected']}"

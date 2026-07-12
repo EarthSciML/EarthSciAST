@@ -531,15 +531,15 @@
         "name": "skolem (generic, args-only)",
         "input": {
           "op": "skolem",
+          "label": "edge",
           "args": [
-            "edge",
             "u",
             "v"
           ]
         },
-        "unicode": "skolem(edge, u, v)",
-        "latex": "\\mathrm{skolem}(\\mathrm{edge}, u, v)",
-        "ascii": "skolem(edge, u, v)"
+        "unicode": "skolem(u, v)",
+        "latex": "\\mathrm{skolem}(u, v)",
+        "ascii": "skolem(u, v)"
       },
       {
         "name": "rank (generic, args-only)",

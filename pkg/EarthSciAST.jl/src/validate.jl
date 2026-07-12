@@ -307,6 +307,23 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
     return errors
 end
 
+# The solved-for name an equation defines: a bare `VarExpr` LHS (`x = …`) or the
+# first argument of an operator LHS (`D(x, t) = …`, `ic(x) = …`). These are the
+# model's unknowns and are in scope for its equations even when not separately
+# listed under `variables` (an ODE state may appear only as `D(u)`). Dotted
+# cross-system targets are left to the qualified-reference resolver. Returns
+# `nothing` when no bare local name can be extracted.
+function _equation_lhs_target(eq::Equation)::Union{String,Nothing}
+    lhs = eq.lhs
+    if isa(lhs, VarExpr)
+        return occursin('.', lhs.name) ? nothing : lhs.name
+    elseif isa(lhs, OpExpr) && !isempty(lhs.args) && isa(lhs.args[1], VarExpr)
+        name = lhs.args[1].name
+        return occursin('.', name) ? nothing : name
+    end
+    return nothing
+end
+
 """
     validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
 
@@ -315,10 +332,25 @@ Validate variable references within a model.
 function validate_model_references(file::EsmFile, model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
+    # Names in scope for this model's equations: its declared variables (state,
+    # parameter, observed), the document-scoped `index_sets` registry (a
+    # legitimate non-variable identifier namespace an aggregate may name — RFC
+    # semiring-faq-unified-ir §5.2), and each equation's LHS target (a
+    # solved-for unknown, e.g. an ODE state referenced as `D(u)` that is not
+    # separately listed under `variables`). Bound loop indices and the time
+    # variable are added per-node during the descent (see
+    # `validate_expression_references`).
+    scope = Set{String}(keys(model.variables))
+    union!(scope, keys(file.index_sets))
+    for eq in model.equations
+        target = _equation_lhs_target(eq)
+        target === nothing || push!(scope, target)
+    end
+
     # Validate equation references
     for (i, eq) in enumerate(model.equations)
-        append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i-1)/lhs"))
-        append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i-1)/rhs"))
+        append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i-1)/lhs"; scope=scope))
+        append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i-1)/rhs"; scope=scope))
     end
 
     # Validate discrete event references
@@ -340,44 +372,179 @@ function validate_model_references(file::EsmFile, model::Model, path::String)::V
 end
 
 """
-    validate_expression_references(file::EsmFile, expr::ASTExpr, path::String) -> Vector{StructuralError}
-
-Validate that operator references in an expression can be resolved.
-
-Limitation: bare `VarExpr` references are accepted unconditionally — full
-scoped variable resolution (deciding whether a name is a local variable, a
-subsystem-qualified reference, or undefined in context) is out of scope for
-this validator today. Only `operator_apply` operator names are checked.
+Bare names that are always in scope inside an expression even when they are not
+declared model variables: the elementary math functions and reductions the AST
+spells as operator (`OpExpr`) names. They normally appear as `OpExpr.op`, not as
+`VarExpr` leaves, but a bare occurrence (e.g. a partially-applied builtin) must
+not be mis-reported as an undefined variable. Mirrors Rust
+`is_builtin_function` (structural.rs) so the same names are excused across
+bindings.
 """
-function validate_expression_references(file::EsmFile, expr::ASTExpr, path::String)::Vector{StructuralError}
-    errors = StructuralError[]
+const _BUILTIN_FUNCTION_NAMES = Set{String}([
+    "exp", "log", "log10", "sqrt", "abs", "sign",
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+    "min", "max", "floor", "ceil", "ifelse", "Pre",
+])
 
+"""
+    _bound_index_symbols(op::OpExpr) -> Vector{String}
+
+The index / iteration symbols an operator node BINDS for its own child
+expressions — loop positions and invented keys, NOT declared variables. They
+are in scope for the node's descended children (an aggregate body, a filter
+predicate, a grouping key, integral bounds) so a bound loop index such as the
+`i` in `index(u, i)` is not mis-reported as undefined.
+
+Mirrors Rust `bound_index_symbols` (structural.rs) and Go `boundIndexSymbols`
+(validate.go). Binder sources: `output_idx` (aggregate surviving indices),
+`ranges` keys (contraction loop variables), `int_var` (integral integration
+variable, wire `var`), `arg` (argmin/argmax witness), the positional element
+indices of an `index(array, i, j, …)` node, the invented-key name of a
+`skolem(name, …)` node, and `bindings` keys (`apply_expression_template`
+formal parameters).
+"""
+function _bound_index_symbols(op::OpExpr)::Vector{String}
+    syms = String[]
+    if op.output_idx !== nothing
+        for x in op.output_idx
+            x isa AbstractString && push!(syms, String(x))
+        end
+    end
+    if op.ranges !== nothing
+        for k in keys(op.ranges)
+            push!(syms, String(k))
+        end
+    end
+    op.int_var !== nothing && push!(syms, op.int_var)
+    op.arg !== nothing && push!(syms, op.arg)
+    if op.op == "index"
+        # index(array, pos…): the positional element indices after the array
+        # head that are bare names are bound index symbols.
+        for i in 2:length(op.args)
+            op.args[i] isa VarExpr && push!(syms, op.args[i].name)
+        end
+    elseif op.op == "skolem"
+        # skolem(name, …): the first positional arg is the invented-key binder.
+        if !isempty(op.args) && op.args[1] isa VarExpr
+            push!(syms, op.args[1].name)
+        end
+    end
+    if op.bindings !== nothing
+        for k in keys(op.bindings)
+            push!(syms, String(k))
+        end
+    end
+    return syms
+end
+
+"""
+    validate_expression_references(file::EsmFile, expr::ASTExpr, path::String;
+                                   scope::Union{Set{String},Nothing}=nothing) -> Vector{StructuralError}
+
+Validate references in an expression tree.
+
+Two independent checks run over the FULL expression child set — `args` plus the
+sidecar fields (integral `lower`/`upper` bounds, an aggregate/arrayop body
+`expr`, a `filter` predicate, `makearray` `values`, `table_lookup` `axes`, an
+aggregate grouping `key`, and `apply_expression_template` `bindings` values),
+matching Rust `for_each_child` / Go `validateExprNodeChildren`:
+
+1. `operator_apply` operator names are always flagged (the top-level
+   `operators` block was removed in esm-spec v0.3.0 §9, so they never resolve).
+
+2. When `scope` is supplied, each bare (non-dotted) `VarExpr` that is not in
+   scope is reported as `undefined_variable`. In scope = a name in `scope`
+   (the enclosing model/system's declared variables/parameters, its equation
+   LHS targets, and the document `index_sets` names), the time variable `t`, a
+   derivative form (`d(…)`), a builtin function name, or an index symbol BOUND
+   by an enclosing node (see [`_bound_index_symbols`]). Dotted `A.b` references
+   are left to the qualified-reference resolver and never flagged here. When
+   `scope === nothing` (event / coupling call sites) the bare-variable check is
+   skipped, but the full child set is still descended so an `operator_apply`
+   hidden outside `args` is not missed.
+"""
+function validate_expression_references(file::EsmFile, expr::ASTExpr, path::String;
+                                        scope::Union{Set{String},Nothing}=nothing)::Vector{StructuralError}
+    errors = StructuralError[]
+    _check_expression_references!(errors, file, expr, path, scope)
+    return errors
+end
+
+function _check_expression_references!(errors::Vector{StructuralError}, file::EsmFile,
+                                       expr::ASTExpr, path::String,
+                                       scope::Union{Set{String},Nothing})
     if isa(expr, VarExpr)
-        # Simple variable reference — accepted as-is; see the docstring's
-        # limitation note on scoped resolution.
+        _check_bare_variable!(errors, expr.name, path, scope)
     elseif isa(expr, OpExpr)
-        # Recursively check arguments
-        for (i, arg) in enumerate(expr.args)
-            append!(errors, validate_expression_references(file, arg, "$path/args/$(i-1)"))
+        # Extend the in-scope set with any index symbols this node binds, so a
+        # bound loop index in a descended child is not flagged as undefined.
+        child_scope = scope
+        if scope !== nothing
+            bound = _bound_index_symbols(expr)
+            isempty(bound) || (child_scope = union(scope, bound))
         end
 
-        # Check operator_apply references. The top-level `operators` block was
-        # removed in esm-spec v0.3.0 (§9 closure), so an operator reference can
-        # never resolve — flag it undefined.
-        if expr.op == "operator_apply"
-            # First argument should be an operator reference
-            if !isempty(expr.args) && isa(expr.args[1], VarExpr)
-                op_name = expr.args[1].name
-                push!(errors, StructuralError(
-                    path,
-                    "Operator '$op_name' referenced but not defined",
-                    "undefined_operator"
-                ))
+        # `operator_apply`: the referenced operator can never resolve (v0.3.0
+        # §9 closure). Flag it, and don't also treat the operator-name arg as a
+        # bare undefined variable.
+        skip_operator_arg = false
+        if expr.op == "operator_apply" && !isempty(expr.args) && isa(expr.args[1], VarExpr)
+            push!(errors, StructuralError(
+                path,
+                "Operator '$(expr.args[1].name)' referenced but not defined",
+                "undefined_operator"
+            ))
+            skip_operator_arg = true
+        end
+
+        # Descend the full expression-bearing child set (mirrors Rust
+        # `for_each_child`). `args` first, then the sidecar fields.
+        for (i, arg) in enumerate(expr.args)
+            (skip_operator_arg && i == 1) && continue
+            _check_expression_references!(errors, file, arg, "$path/args/$(i-1)", child_scope)
+        end
+        expr.lower !== nothing && _check_expression_references!(errors, file, expr.lower, "$path/lower", child_scope)
+        expr.upper !== nothing && _check_expression_references!(errors, file, expr.upper, "$path/upper", child_scope)
+        expr.expr_body !== nothing && _check_expression_references!(errors, file, expr.expr_body, "$path/expr", child_scope)
+        expr.filter !== nothing && _check_expression_references!(errors, file, expr.filter, "$path/filter", child_scope)
+        if expr.values !== nothing
+            for (i, v) in enumerate(expr.values)
+                _check_expression_references!(errors, file, v, "$path/values/$(i-1)", child_scope)
+            end
+        end
+        if expr.table_axes !== nothing
+            for (k, v) in expr.table_axes
+                _check_expression_references!(errors, file, v, "$path/axes/$k", child_scope)
+            end
+        end
+        expr.key !== nothing && _check_expression_references!(errors, file, expr.key, "$path/key", child_scope)
+        if expr.bindings !== nothing
+            for (k, v) in expr.bindings
+                _check_expression_references!(errors, file, v, "$path/bindings/$k", child_scope)
             end
         end
     end
-    # NumExpr has no references to validate
+    # NumExpr / IntExpr are literals — no references to validate.
+    return errors
+end
 
+# Flag a bare `VarExpr` name that is not in scope as `undefined_variable`.
+# No-op when `scope === nothing` (scoped resolution not requested), for a dotted
+# (qualified) reference (handled by the qualified-reference resolver), for the
+# time variable, for a derivative form, or for a builtin function name.
+function _check_bare_variable!(errors::Vector{StructuralError}, name::String,
+                               path::String, scope::Union{Set{String},Nothing})
+    scope === nothing && return errors
+    occursin('.', name) && return errors
+    (name == "t" || startswith(name, "d(") || name in _BUILTIN_FUNCTION_NAMES) && return errors
+    if !(name in scope)
+        push!(errors, StructuralError(
+            path,
+            "Variable '$name' referenced in equation is not declared",
+            "undefined_variable"
+        ))
+    end
     return errors
 end
 

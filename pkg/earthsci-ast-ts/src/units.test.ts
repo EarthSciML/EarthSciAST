@@ -321,6 +321,87 @@ describe('Unit parsing and dimensional analysis', () => {
       const warnings = validateUnits(esmFile)
       expect(warnings).toEqual([])
     })
+
+    it('surfaces an unparseable unit as a warning, not a dimensional mismatch', () => {
+      // `x` carries an unparseable unit ('notaunit'). The pre-fix behaviour
+      // bound it as DIMENSIONLESS, so `D(x, t)` (= 1/s) vs `v` (= m/s) looked
+      // like a dimensional mismatch — a FALSE positive. Per esm-libraries-spec
+      // §3.3.3/§3.4 (and the Julia reference) the unparseable unit must instead
+      // surface as a WARNING with the variable's dimension left UNKNOWN
+      // (unbound), which suppresses the mismatch and keeps validation valid.
+      const esmFile: EsmFile = {
+        esm: '0.1.0',
+        metadata: {
+          name: 'test',
+          description: 'unparseable unit',
+          authors: ['test'],
+        },
+        models: {
+          TestModel: {
+            variables: {
+              x: { type: 'state', units: 'notaunit', description: 'Unparseable unit' },
+              v: { type: 'state', units: 'm/s', description: 'Velocity' },
+              t: { type: 'parameter', units: 's', description: 'Time' },
+            },
+            equations: [
+              {
+                lhs: { op: 'D', args: ['x'], wrt: 't' },
+                rhs: 'v',
+              },
+            ],
+          },
+        },
+      }
+
+      const warnings = validateUnits(esmFile)
+
+      // A warning is surfaced for the unparseable unit...
+      expect(warnings.length).toBeGreaterThan(0)
+      // ...it is an `analysis` warning referencing the offending unit, NOT a
+      // promoted error (do not match the exact prose, just the unit token).
+      expect(
+        warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit')),
+      ).toBe(true)
+      // ...and NONE is a dimensional mismatch, so `validate()` keeps it valid.
+      expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
+    })
+
+    it('surfaces an unparseable observed-variable declared unit as a warning, not a mismatch', () => {
+      // `rate` declares an unparseable unit ('notaunit') while its expression
+      // (k*x) evaluates to m/s. Forcing the declared side to dimensionless
+      // would manufacture a false mismatch; instead the declaration is left
+      // UNKNOWN and only a warning is emitted.
+      const esmFile: EsmFile = {
+        esm: '0.1.0',
+        metadata: {
+          name: 'test',
+          description: 'unparseable observed unit',
+          authors: ['test'],
+        },
+        models: {
+          TestModel: {
+            variables: {
+              k: { type: 'parameter', units: '1/s', description: 'Rate constant' },
+              x: { type: 'state', units: 'm', description: 'Position' },
+              rate: {
+                type: 'observed',
+                units: 'notaunit',
+                expression: { op: '*', args: ['k', 'x'] },
+                description: 'Rate of change',
+              },
+            },
+            equations: [],
+          },
+        },
+      }
+
+      const warnings = validateUnits(esmFile)
+
+      expect(warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit'))).toBe(
+        true,
+      )
+      expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
+    })
   })
 
   describe('Edge cases and error handling', () => {

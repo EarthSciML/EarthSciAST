@@ -3,6 +3,7 @@ import {
   CanonicalizeError,
   E_CANONICAL_DIVBY_ZERO,
   E_CANONICAL_NONFINITE,
+  E_CANONICAL_UNSUPPORTED_FIELD,
   canonicalJson,
   canonicalize,
   formatCanonicalFloat,
@@ -72,15 +73,40 @@ describe('canonicalize per RFC §5.4 (TS best-effort)', () => {
     )
   })
 
-  it('emits ALL defined node fields, not a hard-coded allowlist', () => {
-    // `reduce` was NOT in the former allowlist (op,args,wrt,dim,fn,name,value)
-    // and used to be silently dropped from the canonical form — which would
-    // collapse distinct aggregate nodes. It must now survive, sorted in.
+  it('fails closed on non-emissible node fields', () => {
+    // `reduce` is NOT in the emissible set (op,args,wrt,dim,fn,name,value); a
+    // node carrying it has no faithful canonical JSON, so — matching the Julia
+    // reference — `canonicalJson` THROWS `E_CANONICAL_UNSUPPORTED_FIELD` rather
+    // than silently dropping the field or emitting an ambiguous sidecar.
     const agg = { op: 'aggregate', args: ['x'], reduce: 'max' } as never
-    expect(canonicalJson(agg)).toBe('{"args":["x"],"op":"aggregate","reduce":"max"}')
+    expect(() => canonicalJson(agg)).toThrow(
+      expect.objectContaining({ code: E_CANONICAL_UNSUPPORTED_FIELD }),
+    )
+    expect(() => canonicalJson(agg)).toThrow(CanonicalizeError)
 
-    // A previously-allowlisted field (`wrt`) keeps its byte-identical output.
-    const d = { op: 'D', args: ['x'], wrt: 't' } as never
-    expect(canonicalJson(d)).toBe('{"args":["x"],"op":"D","wrt":"t"}')
+    // A non-emissible field on a nested arg node is caught too (tree walk).
+    const nested = { op: '+', args: [{ op: 'aggregate', args: ['x'], semiring: 'tropical' }, 'y'] }
+    expect(() => canonicalJson(nested as never)).toThrow(
+      expect.objectContaining({ code: E_CANONICAL_UNSUPPORTED_FIELD }),
+    )
+
+    // `undefined` non-emissible fields are treated as absent — no throw.
+    const undef = { op: 'D', args: ['x'], wrt: 't', reduce: undefined } as never
+    expect(canonicalJson(undef)).toBe('{"args":["x"],"op":"D","wrt":"t"}')
+  })
+
+  it('emits the 7 emissible fields (sorted), tolerating arg / bindings', () => {
+    // Each pinned field keeps its byte-identical output.
+    expect(canonicalJson({ op: 'D', args: ['x'], wrt: 't' } as never)).toBe(
+      '{"args":["x"],"op":"D","wrt":"t"}',
+    )
+    const bc = { op: 'bc', args: ['u'], fn: 'dirichlet', dim: 'x', name: 'foo' } as never
+    expect(canonicalJson(bc)).toBe('{"args":["u"],"dim":"x","fn":"dirichlet","name":"foo","op":"bc"}')
+    const c = { op: 'const', args: [], value: 2.5 } as never
+    expect(canonicalJson(c)).toBe('{"args":[],"op":"const","value":2.5}')
+
+    // `arg` / `bindings` are TOLERATED: present, ignored, not emitted, no error.
+    const tol = { op: '+', args: ['a', 'b'], arg: 0, bindings: { p: 1 } } as never
+    expect(canonicalJson(tol)).toBe('{"args":["a","b"],"op":"+"}')
   })
 })

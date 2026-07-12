@@ -7,8 +7,7 @@
       "metadata": {
         "species_count": 3,
         "parameter_count": 3,
-        "reaction_count": 2,
-        "coupletype": "SimpleOzoneCoupler"
+        "reaction_count": 2
       }
     },
     {

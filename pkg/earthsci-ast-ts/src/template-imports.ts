@@ -222,6 +222,10 @@ const META_SUBST_SKIP_KEYS = new Set<string>([
   'description',
   'name',
   'wrt',
+  // Axis-name positions (esm-spec §9.7.7): a `dim` value is a structural axis
+  // NAME, never an expression, so a bound metaparameter of the same name must
+  // not rewrite it into an integer. (The §9.7.7 rename walk handles renaming.)
+  'dim',
   'expression_template_imports',
   'metaparameters',
   'only',
@@ -236,7 +240,7 @@ const META_SUBST_SKIP_KEYS = new Set<string>([
  * except the `META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
  * expression-position substitution; no folding here).
  */
-function substituteMetaparams(x: Json, values: Record<string, Json>): Json {
+export function substituteMetaparams(x: Json, values: Record<string, Json>): Json {
   if (typeof x === 'string') {
     return Object.prototype.hasOwnProperty.call(values, x) ? values[x] : x
   }

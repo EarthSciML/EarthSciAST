@@ -178,6 +178,10 @@ export type ExpressionNode = ExpressionNode1 & {
    */
   key?: number | string | ExpressionNode1;
   /**
+   * Optional documentary relation tag for a skolem node (e.g. "edge", "bin", "pair"). Does NOT affect the emitted key; the key components are the node's args.
+   */
+  label?: string;
+  /**
    * For the arg-witness reducers `argmin` / `argmax` (RFC semiring-faq-unified-ir §5.7 rule 6): names the contracted `ranges` index symbol whose value (a 1-based generator id) is RETURNED at the optimum. The op reduces its `expr` body (a declarative scalar FAQ, e.g. a squared-distance metric) over the inner `ranges` candidate domain — optionally pruned by a bin-Skolem `join` / `filter` — and emits the witnessing INDEX rather than the reduced value: `assign[i] = argmin_g dist(point_i, gen_g)`, the nearest-generator assignment. NET-NEW because the closed semiring registry (§5.1) returns values and the value-invention primitives distinct/skolem/rank (§5.5) return sets — neither returns the arg. Materialized at build time as an integer per-element buffer (CONST/DISCRETE cadence, like the §A.8 bin-Skolem `:map` buffers; a CONTINUOUS arg-witness is rejected by §5.7 guard 2). The NORMATIVE tie-break is the SMALLEST arg (smallest generator id): equal `expr` values resolve to the lower index, making the buffer byte-identical across bindings (§5.7). REQUIRED on `argmin` / `argmax`; ignored on any other op. An empty candidate set is an error (no index witnesses the optimum).
    */
   arg?: string;

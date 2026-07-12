@@ -113,6 +113,7 @@ const OPEXPR_WIRE_KEYS = (
     id = :id, manifold = :manifold,
     distinct = :distinct, key = :key,
     arg = :arg, bindings = :bindings,
+    label = :label,
 )
 
 # Shared implementation for every dict-like carrier (native Dict, JSON3.Object,
@@ -219,6 +220,11 @@ function _parse_op_dict(data)
         end
     end
 
+    # `skolem` documentary relation tag (esm-spec value-invention §5.5): a plain
+    # optional string, parsed exactly like `fn`/`name`. It is NOT part of the
+    # emitted key — `args` are the pure key components (see `_vi_skolem`).
+    label_str = _opt_string(data, :label)
+
     return OpExpr(op, args;
         wrt=wrt,
         dim=dim,
@@ -232,7 +238,7 @@ function _parse_op_dict(data)
         join=join_clauses, filter=filter_expr,
         id=id_str, manifold=manifold_str,
         distinct=distinct_val, key=key_expr,
-        arg=arg_str, bindings=bindings_dict)
+        arg=arg_str, bindings=bindings_dict, label=label_str)
 end
 
 # ── Per-op validators for `_parse_op_dict` ──────────────────────────────────

@@ -447,15 +447,21 @@ def _vi_index(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) ->
 
 
 def _vi_skolem(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) -> Any:
-    """``skolem(tag?, c1, c2, …)`` → the canonical key tuple. A leading STRING
-    literal is the relation tag (the relation name) and is NOT part of the
-    emitted key — this is what makes the materialised set byte-identical to the
-    M3 determinism golden (edges ``[[1,2],…]``, candidate pairs ``(i,j)``), which
-    carry no tag. The remaining components are exact integer IDs (§5.5.1 rule 4).
-    A single component degrades to a scalar key."""
+    """``skolem(c1, c2, …)`` → the canonical key tuple. EVERY ``args`` entry is a
+    PURE key component — an exact integer ID (§5.5.1 rule 4); a non-key component
+    (an unresolved / typo'd name, or a non-integral value) fails closed in
+    :func:`_vi_key_int`. The optional ``label`` field is a DOCUMENTARY relation
+    tag ("edge"/"bin"/"pair") that names the relation the key belongs to but is
+    NEVER part of the emitted key — this keeps the materialised set byte-identical
+    to the M3 determinism golden (edges ``[[1,2],…]``, candidate pairs ``(i,j)``),
+    which carry no tag. A single component degrades to a scalar key. Mirrors the
+    Julia reference ``_vi_skolem``.
+
+    Note there is deliberately NO leading-string strip: the tag now lives in the
+    dedicated ``label`` field, so a leading string in ``args`` is a real key
+    component (e.g. a bound range symbol) — never silently discarded as a tag."""
+    _label = node.get("label")  # documentary relation tag; NOT part of the key
     comps = [_vi_eval(a, ctx, bindings) for a in (node.get("args") or [])]
-    if comps and isinstance(comps[0], str):
-        comps = comps[1:]  # strip the relation tag
     key = tuple(_vi_key_int(c) for c in comps)
     if len(key) == 1:
         return key[0]
