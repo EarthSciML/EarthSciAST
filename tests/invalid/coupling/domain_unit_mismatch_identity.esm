@@ -1,0 +1,31 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "DomainUnitMismatchIdentity",
+    "description": "Resolver-level invalid (esm-spec §4.7.6): a variable_map coupling with transform=='identity' between two variables whose DECLARED units are both present, non-empty, and DIFFERENT (K vs degC). Schema-valid and validate()-clean; rejected only at flatten with DomainUnitMismatch.",
+    "authors": ["Chris Tessum with Claude"],
+    "created": "2026-07-12T00:00:00Z"
+  },
+
+  "models": {
+    "SystemA": {
+      "variables": {
+        "temperature": { "type": "state", "units": "K", "default": 298.15, "description": "Source temperature (kelvin)" },
+        "source": { "type": "parameter", "units": "K/s", "default": 0.0, "description": "Heating rate (dimensionally consistent RHS)" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["temperature"], "wrt": "t" }, "rhs": "source" }
+      ]
+    },
+    "SystemB": {
+      "variables": {
+        "temperature": { "type": "parameter", "units": "degC", "default": 25.0, "description": "Target temperature (celsius)" }
+      },
+      "equations": []
+    }
+  },
+
+  "coupling": [
+    { "type": "variable_map", "from": "SystemA.temperature", "to": "SystemB.temperature", "transform": "identity" }
+  ]
+}

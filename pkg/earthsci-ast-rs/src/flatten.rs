@@ -6,13 +6,20 @@
 //!
 //! The Rust implementation targets the **Core tier** only. It does NOT inspect
 //! `dimension_mapping` declarations at all: there is no `slice` / `project` /
-//! `regrid` handling, and no dimension-promotion graph is built. The
-//! dimension-mapping error variants ([`FlattenError::UnsupportedMapping`],
-//! [`FlattenError::DimensionPromotion`], [`FlattenError::UnmappedDomain`],
-//! [`FlattenError::DomainUnitMismatch`], [`FlattenError::DomainExtentMismatch`])
-//! and [`DimensionPromotionRecord`] are reserved for cross-language parity —
+//! `regrid` handling, and no dimension-promotion graph is built. The removed
+//! Interface construct (v0.8.0) means dimension-mapping validation via an
+//! Interface does not exist, so [`FlattenError::UnsupportedMapping`],
+//! [`FlattenError::UnmappedDomain`], [`FlattenError::DomainExtentMismatch`], and
+//! [`DimensionPromotionRecord`] stay reserved for cross-language parity —
 //! defined so a sibling binding (or a future Rust tier) can raise / populate
 //! them under the same names, but never currently constructed by this crate.
+//! Two of the former "reserved" variants ARE now raised for cross-binding
+//! parity, independent of the removed Interface machinery:
+//! [`FlattenError::DomainUnitMismatch`] is the `variable_map` `identity`-transform
+//! unit check (mirrors Julia's `_check_variable_map_units`), and
+//! [`FlattenError::DimensionPromotion`] is raised by the pointwise spatial lift
+//! (esm-spec §10.5) when the grid loop variables cannot be determined (mirrors
+//! Julia / Python `DimensionPromotionError`).
 //! Unlowered rewrite-target operators (the sugar ops
 //! `grad` / `div` / `laplacian` / `curl` / `∇`, or a spatial `D` with
 //! `wrt != "t"`) raise [`FlattenError::UnloweredOperator`] with the uniform
@@ -54,12 +61,16 @@ pub enum FlattenError {
     )]
     ConflictingDerivative { species: Vec<String> },
 
-    /// Dimension promotion could not be completed given the available
-    /// interface rules (Core tier).
+    /// Dimension promotion failed.
     ///
-    /// **Reserved / parity-only — never currently raised.** This crate builds
-    /// no dimension-promotion graph, so it never constructs this variant; it is
-    /// defined for cross-language parity with the sibling bindings.
+    /// Raised by the pointwise spatial lift (esm-spec §10.5) when a lifted
+    /// species' operator `makearray` carries no full-rank interior-stencil
+    /// `index(...)` gather, so the grid loop variables cannot be determined and
+    /// the merged reaction/operator ODE cannot be array-ified onto the operator
+    /// grid. Mirrors the Julia / Python `DimensionPromotionError` raised for the
+    /// same case (pointwise_lift.jl / shape_promotion.jl, flatten.py). The
+    /// removed Interface / `dimension_mapping` promotion graph (v0.8.0) never
+    /// raised it; this crate still builds no such graph.
     #[error("Dimension promotion failed: {message}")]
     DimensionPromotion { message: String },
 
@@ -108,12 +119,17 @@ pub enum FlattenError {
     )]
     UnloweredOperator { op: String },
 
-    /// Incompatible units across a shared independent variable.
+    /// A `variable_map` `identity` transform bridges two variables that carry
+    /// declared, non-empty, and DIFFERING unit strings (esm-spec §10.4).
     ///
-    /// **Reserved / parity-only — never currently raised.** This crate performs
-    /// no domain unit checking; defined for cross-language parity.
+    /// Raised by the identity-transform unit check (mirrors Julia's
+    /// `_check_variable_map_units`, coupling_apply.jl): an `identity` map asserts
+    /// the `from` and `to` variables are the same quantity, so incompatible
+    /// declared units are a modeling error. `param_to_var` / `conversion_factor`
+    /// / expression transforms are exempt, and a missing or empty unit on either
+    /// side is the valid (unchecked) case. `variable` names the entry's `from`.
     #[error(
-        "Domain unit mismatch on independent variable '{variable}': source units '{source_units}' vs target units '{target_units}'"
+        "Domain unit mismatch on variable '{variable}': source units '{source_units}' vs target units '{target_units}'"
     )]
     DomainUnitMismatch {
         variable: String,
@@ -180,15 +196,6 @@ pub enum FlattenError {
         "Malformed connector equation in couple({systems}): '{side}' is absent or did not deserialize as an expression"
     )]
     MalformedConnectorEquation { systems: String, side: String },
-
-    /// The pointwise spatial lift (esm-spec §10.5) could not determine the grid
-    /// loop variables for a lifted species from its operator `makearray`
-    /// interior stencil, so the merged reaction/operator ODE could not be
-    /// array-ified onto the operator grid.
-    #[error(
-        "Pointwise lift failed for species '{species}': could not determine the spatial loop variables from its operator makearray"
-    )]
-    PointwiseLiftFailed { species: String },
 
     /// A model subsystem that structurally declares itself a [`DataLoader`] —
     /// it carries the discriminating `kind` / `source` keys — failed to
@@ -375,6 +382,12 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     if !has_models && !has_rs {
         return Err(FlattenError::Empty);
     }
+
+    // Preflight (esm-spec §10.4): a `variable_map` `identity` transform must not
+    // bridge two variables carrying declared, non-empty, and differing units.
+    // Mirrors Julia's `_check_variable_map_units` (coupling_apply.jl), run before
+    // collection so an incoherent identity map fails fast.
+    check_variable_map_units(file)?;
 
     // Phase 1: collect per-system lowered equations and namespaced variables.
     let (source_systems, mut per_system) = collect_component_systems(file)?;
@@ -1557,6 +1570,107 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
     }
 }
 
+/// Preflight (esm-spec §10.4): walk every `variable_map` coupling entry whose
+/// transform is the named `identity` and raise [`FlattenError::DomainUnitMismatch`]
+/// when the `from` and `to` variables both carry DECLARED, non-empty, and
+/// DIFFERING unit strings. Mirrors Julia's `_check_variable_map_units`
+/// (coupling_apply.jl): an `identity` map asserts the two ends are the same
+/// quantity, so incompatible declared units are a modeling error.
+/// `param_to_var` / `conversion_factor` / expression transforms are exempt (the
+/// conversion is declared, or the mapping does not imply unit equivalence at the
+/// site), and a missing or empty unit on either side is the valid (unchecked)
+/// case.
+fn check_variable_map_units(file: &EsmFile) -> Result<(), FlattenError> {
+    let Some(entries) = &file.coupling else {
+        return Ok(());
+    };
+    for entry in entries {
+        let CouplingEntry::VariableMap {
+            from, to, transform, ..
+        } = entry
+        else {
+            continue;
+        };
+        if transform.as_named() != Some("identity") {
+            continue;
+        }
+        let (Some(source_units), Some(target_units)) = (
+            lookup_variable_units(file, from),
+            lookup_variable_units(file, to),
+        ) else {
+            continue;
+        };
+        if source_units.is_empty() || target_units.is_empty() {
+            continue;
+        }
+        if source_units != target_units {
+            return Err(FlattenError::DomainUnitMismatch {
+                variable: from.clone(),
+                source_units,
+                target_units,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Look up a dot-qualified variable's declared units across models, subsystems,
+/// and reaction systems (species + parameters). Returns `None` when the
+/// variable is missing or carries no declared units. Mirrors Julia's
+/// `_lookup_variable_units` (coupling_apply.jl).
+fn lookup_variable_units(file: &EsmFile, qualified: &str) -> Option<String> {
+    let (root, tail) = qualified.split_once('.')?;
+    if let Some(models) = &file.models
+        && let Some(model) = models.get(root)
+    {
+        return lookup_model_units(model, tail);
+    }
+    if let Some(rsystems) = &file.reaction_systems
+        && let Some(rsys) = rsystems.get(root)
+    {
+        return lookup_rsys_units(rsys, tail);
+    }
+    None
+}
+
+/// Resolve a variable's declared units within a [`Model`], recursing into
+/// Model subsystems for nested names like `"Inner.T"`. A present variable's
+/// units are returned as-is (possibly `None`); the subsystem recursion is only
+/// tried when the variable is absent from this model's own `variables`.
+fn lookup_model_units(model: &Model, name: &str) -> Option<String> {
+    if let Some(var) = model.variables.get(name) {
+        return var.units.clone();
+    }
+    if let Some((head, rest)) = name.split_once('.')
+        && let Some(subs) = &model.subsystems
+        && let Some(sub_val) = subs.get(head)
+        && let Ok(sub_model) = serde_json::from_value::<Model>(sub_val.clone())
+    {
+        return lookup_model_units(&sub_model, rest);
+    }
+    None
+}
+
+/// Resolve a variable's declared units within a [`ReactionSystem`] — species
+/// first, then parameters, then nested subsystems — mirroring Julia's
+/// `_lookup_rsys_units`.
+fn lookup_rsys_units(rsys: &ReactionSystem, name: &str) -> Option<String> {
+    if let Some(sp) = rsys.species.get(name) {
+        return sp.units.clone();
+    }
+    if let Some(p) = rsys.parameters.get(name) {
+        return p.units.clone();
+    }
+    if let Some((head, rest)) = name.split_once('.')
+        && let Some(subs) = &rsys.subsystems
+        && let Some(sub_val) = subs.get(head)
+        && let Ok(sub_rsys) = serde_json::from_value::<ReactionSystem>(sub_val.clone())
+    {
+        return lookup_rsys_units(&sub_rsys, rest);
+    }
+    None
+}
+
 // ============================================================================
 // Scoped-reference `ic` classification (esm-spec §11.4.1)
 // ============================================================================
@@ -1825,8 +1939,16 @@ fn apply_pointwise_lift(
                 break;
             }
         }
-        let loops = loops.ok_or_else(|| FlattenError::PointwiseLiftFailed {
-            species: species.clone(),
+        // No full-rank interior-stencil gather in any operator makearray → the
+        // grid loop variables are unknown, so the merged reaction/operator ODE
+        // cannot be array-ified onto the operator grid. Mirrors the Julia /
+        // Python `DimensionPromotionError` message for this same case
+        // (pointwise_lift.jl `_pointwise_lift_loops`, flatten.py).
+        let loops = loops.ok_or_else(|| FlattenError::DimensionPromotion {
+            message: format!(
+                "pointwise lift: could not determine the spatial loop variables \
+                 for species '{species}' from its operator makearray"
+            ),
         })?;
 
         let extents = makearray_extents(first_ma);
@@ -2031,6 +2153,153 @@ mod tests {
                 assert_eq!(node.args[1], Expr::Variable("t".to_string()));
             }
             _ => panic!("expected operator node"),
+        }
+    }
+
+    // ---- Test helpers for the variable_map unit check + pointwise lift ----
+
+    fn var(vt: VariableType, units: Option<&str>) -> ModelVariable {
+        ModelVariable {
+            var_type: vt,
+            units: units.map(|u| u.to_string()),
+            default: None,
+            description: None,
+            expression: None,
+            shape: None,
+            location: None,
+            noise_kind: None,
+            correlation_group: None,
+        }
+    }
+
+    fn ddt(target: &str, rhs: Expr) -> Equation {
+        Equation {
+            lhs: Expr::Operator(ExpressionNode {
+                op: "D".to_string(),
+                args: vec![Expr::Variable(target.to_string())],
+                wrt: Some("t".to_string()),
+                ..Default::default()
+            }),
+            rhs,
+        }
+    }
+
+    fn make_model(vars: Vec<(&str, ModelVariable)>, equations: Vec<Equation>) -> Model {
+        let mut variables = HashMap::new();
+        for (name, v) in vars {
+            variables.insert(name.to_string(), v);
+        }
+        Model {
+            name: None,
+            subsystems: None,
+            reference: None,
+            variables,
+            equations,
+            discrete_events: None,
+            continuous_events: None,
+            description: None,
+            tolerance: None,
+            tests: None,
+            initialization_equations: None,
+            guesses: None,
+            system_kind: None,
+        }
+    }
+
+    /// Two models coupled by an `identity` variable_map from `src.T` (units
+    /// `from_units`) onto the parameter `dst.temp` (units `to_units`).
+    fn identity_map_file(from_units: Option<&str>, to_units: Option<&str>) -> EsmFile {
+        let src = make_model(
+            vec![("T", var(VariableType::State, from_units))],
+            vec![ddt("T", Expr::Number(0.0))],
+        );
+        let dst = make_model(
+            vec![
+                ("temp", var(VariableType::Parameter, to_units)),
+                ("y", var(VariableType::State, Some("K"))),
+            ],
+            vec![ddt("y", Expr::Variable("temp".to_string()))],
+        );
+        let mut models = HashMap::new();
+        models.insert("src".to_string(), src);
+        models.insert("dst".to_string(), dst);
+
+        EsmFile {
+            models: Some(models),
+            coupling: Some(vec![CouplingEntry::VariableMap {
+                from: "src.T".to_string(),
+                to: "dst.temp".to_string(),
+                transform: VariableMapTransform::Named("identity".to_string()),
+                factor: None,
+                description: None,
+            }]),
+            ..empty_file()
+        }
+    }
+
+    // C1: an `identity` variable_map bridging a K-unit source and a degC-unit
+    // target (both declared, non-empty, differing) raises DomainUnitMismatch —
+    // mirrors Julia's `_check_variable_map_units`.
+    #[test]
+    fn test_variable_map_identity_unit_mismatch_errors() {
+        let file = identity_map_file(Some("K"), Some("degC"));
+        match flatten(&file).unwrap_err() {
+            FlattenError::DomainUnitMismatch {
+                variable,
+                source_units,
+                target_units,
+            } => {
+                assert_eq!(variable, "src.T");
+                assert_eq!(source_units, "K");
+                assert_eq!(target_units, "degC");
+            }
+            other => panic!("expected DomainUnitMismatch, got {other:?}"),
+        }
+    }
+
+    // C1: matching declared units under `identity` is the valid case — no error.
+    #[test]
+    fn test_variable_map_identity_matching_units_ok() {
+        let file = identity_map_file(Some("K"), Some("K"));
+        assert!(flatten(&file).is_ok());
+    }
+
+    // C1: an absent unit on either side is exempt (the unchecked valid case),
+    // even when the other side declares one.
+    #[test]
+    fn test_variable_map_identity_missing_unit_ok() {
+        assert!(flatten(&identity_map_file(None, Some("degC"))).is_ok());
+        assert!(flatten(&identity_map_file(Some("K"), None)).is_ok());
+    }
+
+    // C2: a pointwise-lift merged ODE whose operator makearray carries no
+    // full-rank interior-stencil `index(...)` gather cannot resolve its grid
+    // loop variables, and now surfaces DimensionPromotion (the reserved variant,
+    // reused here for cross-binding parity) rather than the removed
+    // PointwiseLiftFailed.
+    #[test]
+    fn test_pointwise_lift_failure_yields_dimension_promotion() {
+        let makearray = Expr::Operator(ExpressionNode {
+            op: "makearray".to_string(),
+            regions: Some(vec![vec![[1, 3]]]),
+            // Constant body — no `index(C, i)` interior stencil to read loops from.
+            args: vec![Expr::Number(0.0)],
+            ..Default::default()
+        });
+        let mut equations = vec![ddt("C", makearray)];
+        let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
+        state_variables.insert("C".to_string(), var(VariableType::State, None));
+        let loaded_producers: HashMap<String, usize> = HashMap::new();
+
+        let err =
+            apply_pointwise_lift(&mut equations, &mut state_variables, &loaded_producers)
+                .unwrap_err();
+        match err {
+            FlattenError::DimensionPromotion { message } => {
+                assert!(message.contains("pointwise lift"), "message: {message}");
+                assert!(message.contains("'C'"), "message: {message}");
+            }
+            other => panic!("expected DimensionPromotion, got {other:?}"),
         }
     }
 }

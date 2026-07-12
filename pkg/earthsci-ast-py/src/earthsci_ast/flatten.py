@@ -68,10 +68,11 @@ class DimensionPromotionError(FlattenError):
     """
 
 
-# The following six errors are declared for cross-binding parity; they are not
+# The following five errors are declared for cross-binding parity; they are not
 # raised by the Python Core tier (§4.7.6 dimension-promotion is not implemented
 # in this tier). They exist so callers catching them by name behave uniformly
-# across language bindings.
+# across language bindings. (DomainUnitMismatchError, below, IS raised — by the
+# identity-transform variable_map unit check, mirroring Julia.)
 class UnmappedDomainError(FlattenError):
     """A coupling references a variable whose domain has no mapping rule."""
 
@@ -87,7 +88,12 @@ class UnsupportedMappingError(FlattenError):
 
 
 class DomainUnitMismatchError(FlattenError):
-    """An Interface coupling requires a unit conversion that was not declared."""
+    """An Interface coupling requires a unit conversion that was not declared.
+
+    Raised by the flatten preflight when a ``variable_map`` coupling with an
+    ``identity`` transform binds two variables whose declared, non-empty units
+    differ (§4.7.6). Mirrors Julia's ``DomainUnitMismatchError``.
+    """
 
 
 class DomainExtentMismatchError(FlattenError):
@@ -512,6 +518,99 @@ def _describe_coupling(entry: CouplingEntry) -> str:
     if isinstance(entry, CallbackCoupling):
         return f"callback({entry.callback_id})"
     return f"unknown({type(entry).__name__})"
+
+
+# ============================================================================
+# Coupling preflight checks (spec §4.7.6)
+# ============================================================================
+#
+# Port of EarthSciAST.jl/src/coupling_apply.jl ``_check_variable_map_units`` +
+# ``_lookup_variable_units`` (called from flatten.jl Step 0b). The check is the
+# only §4.7.6 preflight the Core tier implements.
+
+
+def _lookup_model_units(model: Model, name: str) -> str | None:
+    """Resolve a (possibly dotted, subsystem-nested) variable's declared units
+    within ``model``. Returns None when the variable is missing or carries no
+    declared units. Only Model subsystems are recursed into (mirrors Julia's
+    Model-only method dispatch)."""
+    var = model.variables.get(name)
+    if var is not None:
+        return var.units
+    # Recurse into subsystems for nested names like "Inner.T".
+    dot = name.find(".")
+    if dot != -1:
+        head, rest = name[:dot], name[dot + 1 :]
+        sub = model.subsystems.get(head)
+        if isinstance(sub, Model):
+            return _lookup_model_units(sub, rest)
+    return None
+
+
+def _lookup_rsys_units(rs: ReactionSystem, name: str) -> str | None:
+    """Resolve a species' or parameter's declared units within ``rs`` (recursing
+    into subsystems for dotted names). Returns None when missing / unit-less."""
+    for sp in rs.species:
+        if sp.name == name:
+            return sp.units
+    for p in rs.parameters:
+        if p.name == name:
+            return p.units
+    dot = name.find(".")
+    if dot != -1:
+        head, rest = name[:dot], name[dot + 1 :]
+        sub = rs.subsystems.get(head)
+        if sub is not None:
+            return _lookup_rsys_units(sub, rest)
+    return None
+
+
+def _lookup_variable_units(esm_file: EsmFile, qualified: str) -> str | None:
+    """Look up a dot-qualified variable's declared units across models,
+    subsystems, and reaction systems (species + parameters). Returns None when
+    the variable is missing or carries no declared units."""
+    parts = qualified.split(".")
+    if len(parts) < 2:
+        return None
+    root = parts[0]
+    tail = ".".join(parts[1:])
+    model = esm_file.models.get(root)
+    if model is not None:
+        return _lookup_model_units(model, tail)
+    rs = esm_file.reaction_systems.get(root)
+    if rs is not None:
+        return _lookup_rsys_units(rs, tail)
+    return None
+
+
+def _check_variable_map_units(
+    esm_file: EsmFile, coupling_entries: list[CouplingEntry]
+) -> None:
+    """Raise :class:`DomainUnitMismatchError` for any ``identity``-transform
+    ``variable_map`` whose ``from``/``to`` variables carry declared, non-empty,
+    and DIFFERENT units (spec §4.7.6).
+
+    Port of EarthSciAST.jl's ``_check_variable_map_units``. ``param_to_var`` and
+    ``conversion_factor`` transforms are exempt: ``conversion_factor`` declares
+    the conversion explicitly; ``param_to_var`` does not imply unit equivalence
+    at the mapping site. An expression transform (ExprNode) is likewise not
+    ``"identity"`` and is skipped. No error is raised when either unit is
+    absent/empty or when the two units match.
+    """
+    for entry in coupling_entries:
+        if not isinstance(entry, VariableMapCoupling):
+            continue
+        if entry.transform != "identity":
+            continue
+        src_units = _lookup_variable_units(esm_file, entry.from_var or "")
+        tgt_units = _lookup_variable_units(esm_file, entry.to_var or "")
+        if not src_units or not tgt_units:
+            continue
+        if src_units != tgt_units:
+            raise DomainUnitMismatchError(
+                f"variable {entry.from_var!r} has units {src_units!r} on source "
+                f"and {tgt_units!r} on target"
+            )
 
 
 # ============================================================================
@@ -1281,6 +1380,9 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     ConflictingDerivativeError
         If two source systems define non-additive equations for the same
         dependent variable.
+    DomainUnitMismatchError
+        If an ``identity``-transform ``variable_map`` bridges two variables whose
+        declared, non-empty units differ (spec §4.7.6).
     ExpressionTemplateError
         For any esm-spec §10.11 coupling-import / coupling-library diagnostic.
     """
@@ -1293,6 +1395,11 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     from .coupling_imports import expand_coupling_imports
 
     coupling_entries = expand_coupling_imports(esm_file, base_path=base_path, load_ref=load_ref)
+
+    # Step 0b: coupling preflight — reject an `identity` variable_map that bridges
+    # two variables with declared, non-empty, different units (spec §4.7.6). Runs
+    # over the expanded coupling list so imported edges are checked too.
+    _check_variable_map_units(esm_file, coupling_entries)
 
     # Step 1: collect every component system into a per-system bag of variables.
     components, source_systems = _collect_components(esm_file)

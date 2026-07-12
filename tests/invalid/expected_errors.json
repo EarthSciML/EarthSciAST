@@ -1868,6 +1868,15 @@
     "is_valid": false
   },
 
+  "domain_unit_mismatch_identity.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "domain_unit_mismatch",
+    "notes": "Flatten-level invalid (esm-spec §4.7.6). The document is SCHEMA-VALID (a variable_map identity coupling with declared units is legal schema) and validate()-clean — no binding's validate() checks cross-binding coupling units — so schema-only bindings (TypeScript, Go) accept it (is_valid: true) and their invalid-fixture loops read `resolver_only` and assert schema acceptance. Lives under tests/invalid/coupling/. A variable_map coupling entry with transform=='identity' between two variables whose DECLARED units are both present, non-empty, and DIFFERENT (SystemA.temperature='K' vs SystemB.temperature='degC') MUST be rejected at flatten() with the DomainUnitMismatch flatten error (Julia: DomainUnitMismatchError, raised by _check_variable_map_units in coupling_apply.jl; Rust: FlattenError::DomainUnitMismatch; Python: DomainUnitMismatchError). Matching or absent units are legal (see the positive control tests/valid/coupling_variable_map_identity_units_match.esm). `param_to_var` and `conversion_factor` transforms are exempt."
+  },
+
   "units_incompatible_assignment.esm": {
     "schema_errors": [],
     "structural_errors": [
