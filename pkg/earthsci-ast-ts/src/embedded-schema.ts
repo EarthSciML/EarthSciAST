@@ -78,9 +78,16 @@ export const schema: AnySchemaObject = {
     },
     "reaction_systems": {
       "type": "object",
-      "description": "Reaction network components, keyed by unique identifier.",
+      "description": "Reaction network components, keyed by unique identifier. Each component may be defined inline or included by reference to an external ESM file containing exactly one top-level reaction system (esm-spec.md §4.7).",
       "additionalProperties": {
-        "$ref": "#/$defs/ReactionSystem"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/ReactionSystem"
+          },
+          {
+            "$ref": "#/$defs/SubsystemRef"
+          }
+        ]
       }
     },
     "data_loaders": {
@@ -1442,11 +1449,15 @@ export const schema: AnySchemaObject = {
       "properties": {
         "ref": {
           "type": "string",
-          "description": "Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model, reaction system, or data loader (unless `model` selects one of several), which is used as the subsystem definition (esm-spec.md §4.7). A single top-level data loader is named by the parent's subsystem key; no fragment selector is needed because the file is single-component."
+          "description": "Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model, reaction system, or data loader (unless `model` / `reaction_system` selects one of several), which is used as the subsystem definition (esm-spec.md §4.7). A single top-level data loader is named by the parent's subsystem key; no fragment selector is needed because the file is single-component."
         },
         "model": {
           "type": "string",
           "description": "Optional model selector. When the referenced file defines more than one top-level model, names which one to splice in. Omit for single-model files. Lets a multi-model component library (e.g. an ESD regridder file holding several kernels) be referenced by one of its models."
+        },
+        "reaction_system": {
+          "type": "string",
+          "description": "Optional reaction-system selector. When the referenced file defines more than one top-level reaction system, names which one to splice in. Omit for single-reaction-system files. The reaction-system analogue of `model`, used when a top-level `reaction_systems` entry is a `{ref}` stub (esm-spec.md §4.7)."
         },
         "bindings": {
           "type": "object",

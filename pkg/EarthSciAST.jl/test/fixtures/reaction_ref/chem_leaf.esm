@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "chem_leaf",
+    "authors": ["Test"],
+    "description": "Tiny single-reaction leaf: A -> B at mass-action rate k*A. Used to exercise mounting an external reaction_systems file by reference (esm-spec §4.7)."
+  },
+  "reaction_systems": {
+    "Chem": {
+      "species": {
+        "A": { "units": "mol/m^3", "default": 1.0 },
+        "B": { "units": "mol/m^3", "default": 0.0 }
+      },
+      "parameters": {
+        "k": { "units": "1/s", "default": 0.3 }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [{ "stoichiometry": 1, "species": "A" }],
+          "products": [{ "stoichiometry": 1, "species": "B" }],
+          "rate": "k"
+        }
+      ]
+    }
+  }
+}

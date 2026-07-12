@@ -48,6 +48,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("mock_systems_test.jl")
     include("shape_promotion_test.jl")
     include("subsystem_ref_test.jl")
+    include("reaction_system_ref_test.jl")
     include("editing_test.jl")
     include("data_loader_fixtures_test.jl")
     include("arrayed_vars_test.jl")

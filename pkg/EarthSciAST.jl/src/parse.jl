@@ -1651,8 +1651,16 @@ function load(path::String;
     # the file has no such stubs (the common case), in which case the
     # already-parsed document is reused as-is; only the stub path pays a
     # JSON re-serialize (the inliner rewrites the document structurally).
-    inlined = _inline_toplevel_model_refs(raw_data, base_path)
-    doc = inlined === nothing ? raw_data : JSON3.read(JSON3.write(inlined))
+    # Two composable passes: top-level model `{ref}` stubs, then top-level
+    # reaction_system `{ref}` stubs (schema §4.7: each block's entry is
+    # oneOf [component, {ref}]). The reaction-system pass runs on the model
+    # pass's native output when it produced one, so an assembly may mount a
+    # model AND a reaction system by reference on the same document.
+    inlined_m = _inline_toplevel_model_refs(raw_data, base_path)
+    rs_src = inlined_m === nothing ? raw_data : inlined_m
+    inlined_r = _inline_toplevel_reaction_system_refs(rs_src, base_path)
+    native = inlined_r !== nothing ? inlined_r : inlined_m
+    doc = native === nothing ? raw_data : JSON3.read(JSON3.write(native))
     file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters)
     # Resolve nested subsystem references relative to the file's directory.
     resolve_subsystem_refs!(file, base_path)
@@ -1940,6 +1948,117 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
             end
             # Merge the by-name blocks the model's AST references; the parent wins
             # on a key clash (its own definitions take precedence).
+            for blk in ("function_tables", "data_loaders", "enums")
+                src = get(comp, blk, nothing)
+                (src isa AbstractDict && !isempty(src)) || continue
+                dst = get!(() -> Dict{String,Any}(), native, blk)
+                dst isa AbstractDict || continue
+                for (k, v) in src
+                    haskey(dst, k) || (dst[k] = v)
+                end
+            end
+        finally
+            delete!(visited, refpath)
+        end
+    end
+    return
+end
+
+"""
+    _inline_toplevel_reaction_system_refs(raw_data, base_path) -> Union{Nothing,Dict{String,Any}}
+
+Return a native ESM dict with every top-level reaction_system `{ref}` stub
+replaced by the referenced component's reaction system (and its
+`function_tables` / `enums` / `data_loaders` merged in), or `nothing` when
+`raw_data` has no such stub. The reaction-system analogue of
+[`_inline_toplevel_model_refs`](@ref) (schema §4.7: a `reaction_systems` entry is
+`oneOf [ReactionSystem, {ref}]`), so an assembly may mount an external
+reaction-system file — e.g. `superfast.esm` — by reference instead of inlining
+its whole `reaction_systems` block. Accepts either the raw JSON3 document or an
+already-native dict (the model-ref inliner's output), so the two top-level
+inliners compose on one document.
+"""
+function _inline_toplevel_reaction_system_refs(raw_data, base_path::String)
+    rsystems = _get_field(raw_data, :reaction_systems, nothing)
+    rsystems === nothing && return nothing
+    has_stub = any(values(rsystems)) do r
+        _is_json_object(r) && _has_field(r, :ref) && !_has_field(r, :species)
+    end
+    has_stub || return nothing
+    native = _to_native_json(raw_data)
+    _inline_toplevel_reaction_system_refs!(native, base_path, Set{String}())
+    return native
+end
+
+"""
+    _inline_toplevel_reaction_system_refs!(native, base_path, visited)
+
+In-place native-dict worker for [`_inline_toplevel_reaction_system_refs`](@ref).
+Mirrors [`_inline_toplevel_model_refs!`](@ref): loads each stub's referenced file,
+splices in its single top-level reaction system (or the one named by a
+`"reaction_system"` selector), and merges the `function_tables` / `data_loaders`
+/ `enums` blocks the reaction system's AST references (parent wins on a clash).
+Cycle detection is PATH-scoped, so the same single-reaction-system file may be
+mounted under several assembly keys.
+"""
+function _inline_toplevel_reaction_system_refs!(native::Dict{String,Any}, base_path::String,
+                                                visited::Set{String})
+    rsystems = get(native, "reaction_systems", nothing)
+    rsystems isa AbstractDict || return
+    for (name, entry) in collect(rsystems)
+        (entry isa AbstractDict && haskey(entry, "ref") &&
+            !haskey(entry, "species")) || continue
+        ref = _expand_ref_env(String(entry["ref"]))  # esm-spec §4.7 ${VAR} expansion
+        # Optional reaction-system selector: when the referenced file holds
+        # several reaction systems, `reaction_system` names which one to splice.
+        sel = haskey(entry, "reaction_system") && entry["reaction_system"] !== nothing ?
+              String(entry["reaction_system"]) : nothing
+        refpath = abspath(joinpath(base_path, ref))
+        if refpath in visited
+            throw(SubsystemRefError("Circular top-level reaction system reference detected: $(refpath)"))
+        end
+        push!(visited, refpath)
+        try
+            isfile(refpath) || throw(SubsystemRefError(
+                "Referenced reaction system file not found: $(refpath) (from ref '$(ref)')"))
+            comp = _to_native_json(JSON3.read(read(refpath, String)))
+            comp isa Dict{String,Any} || throw(SubsystemRefError(
+                "Referenced reaction system file '$(ref)' did not parse as a JSON object"))
+            # A §4.7 subsystem ref MUST NOT target a template/coupling library.
+            _reject_library_ref(comp, ref, refpath)
+            compdir = dirname(refpath)
+            # component-of-component: the referenced file may itself mount refs.
+            _inline_toplevel_model_refs!(comp, compdir, visited)
+            _inline_toplevel_reaction_system_refs!(comp, compdir, visited)
+            crsystems = get(comp, "reaction_systems", nothing)
+            crsystems isa AbstractDict || throw(SubsystemRefError(
+                "Top-level reaction system ref '$(ref)' resolves to a file with no reaction_systems block"))
+            crsys = if sel !== nothing
+                haskey(crsystems, sel) || throw(SubsystemRefError(
+                    "Top-level reaction system ref '$(ref)' has no reaction system '$(sel)' " *
+                    "(available: $(join(sort(collect(keys(crsystems))), ", ")))"))
+                crsystems[sel]
+            else
+                length(crsystems) == 1 || throw(SubsystemRefError(
+                    "Top-level reaction system ref '$(ref)' resolves to $(length(crsystems)) reaction systems; " *
+                    "add a \"reaction_system\" selector to choose one " *
+                    "(available: $(join(sort(collect(keys(crsystems))), ", ")))"))
+                first(values(crsystems))
+            end
+            _absolutize_nested_refs!(crsys, compdir)
+            rsystems[name] = crsys
+            # esm-spec §9.7.10 form A at a TOP-LEVEL reaction-system-ref edge:
+            # the edge's `expression_template_imports` inject into the referenced
+            # component's own scope, appended AFTER its own imports (§9.7.10 merge
+            # order), with refs anchored at THIS document's directory.
+            edge_imports = get(entry, "expression_template_imports", nothing)
+            if edge_imports isa AbstractVector && !isempty(edge_imports)
+                imports_native = _to_native_json(edge_imports)
+                _absolutize_nested_refs!(imports_native, base_path)
+                _append_component_imports!(crsys, imports_native)
+            end
+            # Merge the by-name blocks the reaction system's AST references; the
+            # parent wins on a key clash (its own definitions take precedence).
             for blk in ("function_tables", "data_loaders", "enums")
                 src = get(comp, blk, nothing)
                 (src isa AbstractDict && !isempty(src)) || continue
