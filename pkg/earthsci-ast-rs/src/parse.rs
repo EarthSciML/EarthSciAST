@@ -118,7 +118,7 @@ pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFil
         &base,
         &options.metaparameters,
     )
-    .map_err(EsmError::SchemaValidation)?;
+    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // v0.4.0 expression_templates / apply_expression_template are rejected
     // when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
