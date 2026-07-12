@@ -368,15 +368,20 @@ end
 
 """
 Apply a `CouplingCouple` entry: attach the connector equations to the
-flattened equation list. The connector.equations field may contain full
-equation structures; we accept both raw Equation objects and dict-shaped
-connector entries whose `lhs`/`rhs` are already-parsed `ASTExpr`s.
+flattened equation list. Connector equations come in two shapes:
 
-A dict-shaped connector equation that cannot be coerced (no parsed `ASTExpr`
-lhs/rhs) is NOT silently degraded into a bogus placeholder equation; it is
-recorded in `opaque_refs` (the `metadata.opaque_coupling_refs` channel used
-for the other couplings the flattener cannot lower) so callers can see the
-entry was skipped. The spec taxonomy (§4.7.6, 8 error types for
+  * a plain `{lhs, rhs}` equation (a raw `Equation`, or a dict whose `lhs`/`rhs`
+    are already-parsed `ASTExpr`s) — appended verbatim; and
+
+  * a `{from, to, transform, expression}` connector-transform equation
+    (esm-spec §10.3), where `transform` selects how `expression` modifies the
+    `to` variable's flattened ODE — see [`_apply_connector_transform!`](@ref).
+
+A dict-shaped connector equation that is neither (no `transform`, and no parsed
+`ASTExpr` `lhs`/`rhs`) is NOT silently degraded into a bogus placeholder
+equation; it is recorded in `opaque_refs` (the `metadata.opaque_coupling_refs`
+channel used for the other couplings the flattener cannot lower) so callers can
+see the entry was skipped. The spec taxonomy (§4.7.6, 8 error types for
 cross-language parity) has no matching typed error, and adding a ninth is
 forbidden — the opaque-refs channel is the designated fallback.
 """
@@ -391,6 +396,13 @@ function _apply_couple!(equations::Vector{Equation},
             continue
         end
         item isa AbstractDict || continue
+        # A `{from, to, transform, expression}` connector-transform equation
+        # (esm-spec §10.3) is discriminated by its `transform` key, which the
+        # plain `{lhs, rhs}` form never carries.
+        if _has_field(item, :transform)
+            _apply_connector_transform!(equations, item, entry, opaque_refs)
+            continue
+        end
         lhs = get(item, "lhs", nothing)
         rhs = get(item, "rhs", nothing)
         if lhs isa ASTExpr && rhs isa ASTExpr
@@ -401,6 +413,95 @@ function _apply_couple!(equations::Vector{Equation},
                 join(entry.systems, "<->")))
         end
     end
+    return
+end
+
+"""
+    _apply_connector_transform!(equations, item, entry, opaque_refs)
+
+Apply one `{from, to, transform, expression}` connector-transform equation
+(esm-spec §10.3). The `transform` string selects how `expression` (parsed to an
+`ASTExpr`) modifies the `to` variable's flattened ODE:
+
+  * `additive`       — add `expression` as a source/sink term to `to`'s
+                       tendency: `D(to) ~ <existing rhs> + expression`. The term
+                       is folded onto the existing `D(to)` equation exactly as
+                       [`_apply_operator_compose!`](@ref) sums equations that
+                       share a dependent variable. If `to` has no tendency yet,
+                       `expression` becomes it.
+  * `multiplicative` — multiply `to`'s existing tendency by `expression`:
+                       `D(to) ~ (<existing rhs>) * expression`.
+  * `replacement`    — NOT IMPLEMENTED. "Replace the variable value entirely"
+                       (§10.3) is ambiguous between replacing the tendency and
+                       turning `to` into an algebraic variable; rather than
+                       guess, this raises a clear error.
+
+`expression` may already be an `ASTExpr` (in-memory construction) or raw JSON
+(the usual load path), in which case it is parsed. A malformed item (missing
+`to`/`expression`, or a non-string `transform`) is recorded on `opaque_refs`
+rather than misapplied — the same fallback the plain-equation arm uses.
+"""
+function _apply_connector_transform!(equations::Vector{Equation},
+                                     item::AbstractDict,
+                                     entry::CouplingCouple,
+                                     opaque_refs::Vector{String})
+    transform_raw = _get_field(item, :transform, nothing)
+    to_raw = _get_field(item, :to, nothing)
+    expr_raw = _get_field(item, :expression, nothing)
+
+    if !(transform_raw isa AbstractString) || to_raw === nothing || expr_raw === nothing
+        push!(opaque_refs, string(
+            "couple:unparsed_connector_equation:",
+            join(entry.systems, "<->")))
+        return
+    end
+    transform = String(transform_raw)
+    to = String(to_raw)
+    expression = expr_raw isa ASTExpr ? expr_raw : parse_expression(expr_raw)
+
+    if transform == "additive"
+        _combine_tendency_term!(equations, to, expression, "+")
+    elseif transform == "multiplicative"
+        _combine_tendency_term!(equations, to, expression, "*")
+    elseif transform == "replacement"
+        throw(ArgumentError(
+            "couple connector transform 'replacement' (esm-spec §10.3) is not " *
+            "implemented: its \"replace the variable value entirely\" semantics is " *
+            "ambiguous between replacing '$(to)'s tendency and making it algebraic. " *
+            "Use 'additive'/'multiplicative', or an explicit {lhs, rhs} connector " *
+            "equation."))
+    else
+        throw(ArgumentError(
+            "invalid couple connector transform '$(transform)': must be one of " *
+            "additive, multiplicative, replacement (esm-spec §10.3)."))
+    end
+    return
+end
+
+# Fold `expression` into the `to` state's tendency in place: rewrite the RHS of
+# the existing `D(to) ~ …` equation to `combine(<existing rhs>, expression)`
+# (`combine == "+"` for additive, `"*"` for multiplicative). This mirrors the
+# shared-dependent-variable RHS merge in `_apply_operator_compose!`. When no
+# `D(to)` equation exists yet:
+#   * additive       — `expression` becomes the whole tendency (`D(to) ~ expression`);
+#   * multiplicative — there is no existing tendency to scale, which is an error.
+function _combine_tendency_term!(equations::Vector{Equation},
+                                 to::String, expression::ASTExpr, combine::String)
+    idx = findfirst(eq -> differential_lhs_variable(eq.lhs) == to, equations)
+    if idx === nothing
+        if combine == "*"
+            throw(ArgumentError(
+                "couple connector 'multiplicative' transform targets '$(to)', which " *
+                "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."))
+        end
+        push!(equations, Equation(
+            OpExpr("D", ASTExpr[VarExpr(to)], wrt="t"), expression;
+            _comment="couple:additive"))
+        return
+    end
+    existing = equations[idx]
+    new_rhs = OpExpr(combine, ASTExpr[existing.rhs, expression])
+    equations[idx] = Equation(existing.lhs, new_rhs; _comment=existing._comment)
     return
 end
 

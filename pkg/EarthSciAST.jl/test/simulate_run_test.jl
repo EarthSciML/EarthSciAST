@@ -71,4 +71,36 @@ const ESM_S = EarthSciAST
     @testset "missing alg → clear error" begin
         @test_throws ESM_S.SimulateError ESM_S.simulate(scalar_esm(1.0), (0.0, 1.0))
     end
+
+    @testset "additive couple connector adds -k*A to a species ODE (esm-spec §10.3)" begin
+        # A single reaction-system species A (no reactions → D(Chem.A)=0 alone),
+        # plus a `Sink` model exposing parameter k. An additive `couple` edge
+        # Sink.k → Chem.A adds (-Sink.k)*Chem.A to A's tendency, so
+        # D(Chem.A) ~ -k*A and A(t) = A0*exp(-k*t). Before the fix the edge was
+        # dropped to opaque refs, leaving D(Chem.A)=0 and A constant.
+        neg_k = Dict{String,Any}("op" => "-", "args" => Any["Sink.k"])
+        esm = Dict{String,Any}(
+            "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "AdditiveCouple"),
+            "reaction_systems" => Dict{String,Any}("Chem" => Dict{String,Any}(
+                "species" => Dict{String,Any}("A" =>
+                    Dict{String,Any}("default" => 2.0, "units" => "mol/mol")),
+                "reactions" => Any[])),
+            "models" => Dict{String,Any}("Sink" => Dict{String,Any}(
+                "variables" => Dict{String,Any}("k" =>
+                    Dict{String,Any}("type" => "parameter", "default" => 0.1)),
+                "equations" => Any[])),
+            "coupling" => Any[Dict{String,Any}(
+                "type" => "couple", "systems" => Any["Chem", "Sink"],
+                "connector" => Dict{String,Any}("equations" => Any[Dict{String,Any}(
+                    "from" => "Sink.k", "to" => "Chem.A", "transform" => "additive",
+                    "expression" => Dict{String,Any}("op" => "*",
+                        "args" => Any[neg_k, "Chem.A"]))]))])
+
+        r = ESM_S.simulate(esm, (0.0, 1.0); alg = Tsit5())
+        @test r isa SimulationResult && r.success
+        A0 = 2.0; k = 0.1
+        @test isapprox(r["Chem.A"][end], A0 * exp(-k * 1.0); rtol = 1e-4)
+        # A strictly decayed (before the fix it would stay at A0).
+        @test r["Chem.A"][end] < A0 - 1e-3
+    end
 end

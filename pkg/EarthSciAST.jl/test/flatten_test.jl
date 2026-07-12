@@ -389,6 +389,126 @@ end
         @test found_connector
     end
 
+    @testset "8a. couple additive connector transform (esm-spec §10.3)" begin
+        # Chem: one species A (no reactions) → D(Chem.A) ~ 0.
+        # Sink: a parameter k. An additive couple edge Sink.k → Chem.A adds
+        # (-Sink.k)*Chem.A to A's tendency, so D(Chem.A) ~ 0 + (-k*A) = -k*A.
+        rsys = EarthSciAST.ReactionSystem(
+            [EarthSciAST.Species("A", default=2.0)], EarthSciAST.Reaction[])
+        sink = Model(
+            Dict{String, ModelVariable}("k" => ModelVariable(ParameterVariable, default=0.1)),
+            Equation[])
+        # `expression` supplied as an already-parsed ASTExpr: (-Sink.k) * Chem.A.
+        expr = _op("*", _op("-", _V("Sink.k")), _V("Chem.A"))
+        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
+            "from" => "Sink.k", "to" => "Chem.A",
+            "transform" => "additive", "expression" => expr)])
+        coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
+        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8a"),
+            models=Dict("Sink" => sink),
+            reaction_systems=Dict("Chem" => rsys),
+            coupling=coupling)
+        flat = flatten(file)
+
+        # The edge is APPLIED, not dropped onto the opaque-coupling channel.
+        @test isempty(flat.metadata.opaque_coupling_refs)
+        eq_A = _find_eq(flat, "Chem.A")
+        @test eq_A !== nothing
+        # The additive term was summed onto A's tendency: -k*A is present.
+        @test _has_op(eq_A.rhs, "+")          # 0 + <term>
+        @test _has_op(eq_A.rhs, "-")          # negation of Sink.k
+        @test _uses_var(eq_A.rhs, "Sink.k")
+        @test _uses_var(eq_A.rhs, "Chem.A")
+        # Exactly one D(Chem.A) equation (no over-determining duplicate).
+        @test count(eq -> EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.A",
+                    flat.equations) == 1
+    end
+
+    @testset "8b. additive connector: raw-JSON expression is parsed" begin
+        # Same edge, but `expression` arrives as raw JSON (the load path) rather
+        # than a pre-parsed ASTExpr — exercises the parse_expression branch.
+        rsys = EarthSciAST.ReactionSystem(
+            [EarthSciAST.Species("A", default=1.0)], EarthSciAST.Reaction[])
+        sink = Model(
+            Dict{String, ModelVariable}("k" => ModelVariable(ParameterVariable, default=0.3)),
+            Equation[])
+        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
+            "from" => "Sink.k", "to" => "Chem.A", "transform" => "additive",
+            "expression" => Dict{String, Any}("op" => "*", "args" => Any[
+                Dict{String, Any}("op" => "-", "args" => Any["Sink.k"]),
+                "Chem.A"]))])
+        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8b2"),
+            models=Dict("Sink" => sink),
+            reaction_systems=Dict("Chem" => rsys),
+            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+        flat = flatten(file)
+        @test isempty(flat.metadata.opaque_coupling_refs)
+        eq_A = _find_eq(flat, "Chem.A")
+        @test eq_A !== nothing && _uses_var(eq_A.rhs, "Sink.k") &&
+              _uses_var(eq_A.rhs, "Chem.A")
+    end
+
+    @testset "8c. multiplicative connector scales the tendency" begin
+        # Chem: A --k--> (decay), giving D(Chem.A) ~ -k*A. A multiplicative
+        # edge multiplies that tendency by Sink.s.
+        species = [EarthSciAST.Species("A", default=1.0)]
+        params = [EarthSciAST.Parameter("k", 0.1)]
+        rate = _op("*", _V("k"), _V("A"))
+        rxns = [EarthSciAST.Reaction("r1",
+            [EarthSciAST.StoichiometryEntry("A", 1)],
+            EarthSciAST.StoichiometryEntry[], rate)]
+        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters=params)
+        sink = Model(
+            Dict{String, ModelVariable}("s" => ModelVariable(ParameterVariable, default=2.0)),
+            Equation[])
+        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
+            "from" => "Sink.s", "to" => "Chem.A",
+            "transform" => "multiplicative", "expression" => _V("Sink.s"))])
+        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8c"),
+            models=Dict("Sink" => sink),
+            reaction_systems=Dict("Chem" => rsys),
+            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+        flat = flatten(file)
+        @test isempty(flat.metadata.opaque_coupling_refs)
+        eq_A = _find_eq(flat, "Chem.A")
+        @test eq_A !== nothing
+        # Top-level RHS is now a product that folds in Sink.s.
+        @test eq_A.rhs isa EarthSciAST.OpExpr && eq_A.rhs.op == "*"
+        @test _uses_var(eq_A.rhs, "Sink.s") && _uses_var(eq_A.rhs, "Chem.A")
+    end
+
+    @testset "8d. replacement connector raises a clear error" begin
+        rsys = EarthSciAST.ReactionSystem(
+            [EarthSciAST.Species("A", default=1.0)], EarthSciAST.Reaction[])
+        sink = Model(
+            Dict{String, ModelVariable}("v" => ModelVariable(ParameterVariable, default=1.0)),
+            Equation[])
+        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
+            "from" => "Sink.v", "to" => "Chem.A",
+            "transform" => "replacement", "expression" => _V("Sink.v"))])
+        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8d"),
+            models=Dict("Sink" => sink),
+            reaction_systems=Dict("Chem" => rsys),
+            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+        @test_throws ArgumentError flatten(file)
+    end
+
+    @testset "8e. unknown connector transform raises a clear error" begin
+        rsys = EarthSciAST.ReactionSystem(
+            [EarthSciAST.Species("A", default=1.0)], EarthSciAST.Reaction[])
+        sink = Model(
+            Dict{String, ModelVariable}("v" => ModelVariable(ParameterVariable, default=1.0)),
+            Equation[])
+        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
+            "from" => "Sink.v", "to" => "Chem.A",
+            "transform" => "bogus_transform", "expression" => _V("Sink.v"))])
+        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8e"),
+            models=Dict("Sink" => sink),
+            reaction_systems=Dict("Chem" => rsys),
+            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+        @test_throws ArgumentError flatten(file)
+    end
+
     @testset "9. Nested subsystems produce full dot paths" begin
         inner_v = Dict{String, ModelVariable}("v" => ModelVariable(StateVariable))
         inner = Model(inner_v, Equation[])
