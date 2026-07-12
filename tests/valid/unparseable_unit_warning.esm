@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnparseableUnitWarning",
+    "description": "A variable declared with an unparseable unit string ('not_a_unit') must be handled as a WARNING with an unknown dimension (is_valid stays true) — never a silent coercion to dimensionless nor a hard structural error. The decay equation D(c)/dt = -k*c is dimensionally self-consistent under the unknown dimension of c (both sides reduce to [c]/time), so no dimensional-mismatch error is produced. This file MUST validate as is_valid == true across every binding; a unit warning is acceptable but is not pinned."
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "c": { "type": "state", "units": "not_a_unit", "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": {
+            "op": "*",
+            "args": [
+              { "op": "-", "args": ["k"] },
+              "c"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

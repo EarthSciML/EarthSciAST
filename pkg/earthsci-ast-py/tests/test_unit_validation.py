@@ -21,6 +21,7 @@ from earthsci_ast.esm_types import (
     Model,
     ReactionSystem,
     Reaction,
+    Equation,
 )
 from earthsci_ast.units import UnitValidator, UnitValidationResult
 
@@ -603,3 +604,52 @@ class TestEsmSpecificUnitsStandard:
         b = self.ureg.Quantity(1.0, "molecule / cm**3")
         assert a.dimensionality == b.dimensionality
         assert a.to(b.units).magnitude == pytest.approx(1.0)
+
+
+class TestUnparseableUnitLeniency:
+    """An unparseable unit is a WARNING, not a hard error.
+
+    Per esm-libraries-spec §3.3.3/§3.4 and the Julia reference, a unit string
+    that pint cannot parse must not fail validation: the variable is simply
+    omitted from the known-units registry (treated as unknown), so equations
+    referencing it are skipped rather than flagged as dimensional mismatches.
+    """
+
+    def test_variable_unparseable_unit_warns_and_stays_valid(self):
+        model = Model(name="LenientUnits")
+        # A syntactically valid identifier that pint does not know how to
+        # parse (UndefinedUnitError, a PintError subclass).
+        model.variables["bad"] = ModelVariable(
+            type="state", units="not_a_real_unit_zzz"
+        )
+        model.variables["good"] = ModelVariable(type="state", units="kelvin")
+
+        validator = UnitValidator()
+        result = validator.validate_model(model)
+
+        # Unparseable unit => a warning, never an error.
+        assert result.is_valid is True
+        assert result.errors == []
+        assert any("Invalid unit" in w and "bad" in w for w in result.warnings)
+
+        # The bad variable is omitted from the known-units registry, so it is
+        # treated as unknown rather than assigned a bogus dimension.
+        assert "bad" not in result.unit_registry
+        assert "good" in result.unit_registry
+
+    def test_no_false_dimensional_mismatch_from_unparseable_unit(self):
+        model = Model(name="LenientUnitsEq")
+        model.variables["bad"] = ModelVariable(
+            type="state", units="not_a_real_unit_zzz"
+        )
+        model.variables["good"] = ModelVariable(type="observed", units="kelvin")
+        # good = bad : `bad` resolves to an unknown dimension (omitted from
+        # known_units), so no dimensional-mismatch error may be produced.
+        model.equations.append(Equation(lhs="good", rhs="bad"))
+
+        validator = UnitValidator()
+        result = validator.validate_model(model)
+
+        assert result.is_valid is True
+        assert result.errors == []
+        assert not any("mismatch" in w.lower() for w in result.warnings)

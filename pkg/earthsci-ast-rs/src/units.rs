@@ -641,28 +641,49 @@ fn coord_denominator(
     coord.power(power)
 }
 
-/// Build a `HashMap<String, Unit>` environment from model variable metadata.
+/// Build a `HashMap<String, Unit>` environment from model variable metadata,
+/// together with a list of warnings for any variables whose declared unit
+/// string could not be parsed.
 ///
-/// Variables without declared units are treated as dimensionless. Unparseable
-/// unit strings are *also* coerced to dimensionless — a lenient fallback that
-/// matches the TypeScript binding's `parseUnit` (which swallows parse errors
-/// and returns a dimensionless unit). Be aware this suppresses
-/// [`UnitError::DimensionMismatch`] detection for the affected variable, since
-/// a dimensionless unit is compatible with nothing but other dimensionless
-/// units. The Julia (`@warn`) and Python (error) bindings instead surface the
-/// failure, but doing so here would require this function to return a `Result`
-/// or a warning list, changing its caller in `structural.rs`; the lenient
-/// behavior is therefore retained.
-pub fn build_unit_env(variables: &HashMap<String, crate::ModelVariable>) -> HashMap<String, Unit> {
+/// Variables without declared units are treated as dimensionless. A variable
+/// whose declared unit string is *unparseable* is OMITTED from the returned
+/// environment — its dimension is left UNKNOWN, so [`Unit::propagate`] yields
+/// [`UnitError::UnknownUnit`] for any equation referencing it and that equation
+/// is skipped for dimensional checking (surfaced by the caller as a
+/// non-blocking warning). It is deliberately NOT coerced to dimensionless:
+/// doing so would both hide genuine [`UnitError::DimensionMismatch`] errors
+/// (when the variable is used consistently) and manufacture false ones (when
+/// the real unit was, e.g., `m`). This mirrors the Julia (`@warn`) reference
+/// behavior and esm-libraries-spec §3.3.3/§3.4. The returned warnings must not
+/// affect validity — callers report them as non-blocking warnings only.
+pub fn build_unit_env(
+    variables: &HashMap<String, crate::ModelVariable>,
+) -> (HashMap<String, Unit>, Vec<String>) {
     let mut env = HashMap::new();
+    let mut warnings = Vec::new();
     for (name, var) in variables {
-        let unit = match &var.units {
-            Some(s) => parse_unit(s).unwrap_or_else(|_| Unit::dimensionless()),
-            None => Unit::dimensionless(),
-        };
-        env.insert(name.clone(), unit);
+        match &var.units {
+            Some(s) => match parse_unit(s) {
+                Ok(unit) => {
+                    env.insert(name.clone(), unit);
+                }
+                Err(_) => {
+                    // Unparseable unit: omit the variable so its dimension is
+                    // unknown (rather than silently coerced to dimensionless)
+                    // and surface a warning.
+                    warnings.push(format!(
+                        "Variable \"{name}\" has an unparseable unit \"{s}\"; \
+                         treating its dimension as unknown (equations \
+                         referencing it are skipped for dimensional checking)"
+                    ));
+                }
+            },
+            None => {
+                env.insert(name.clone(), Unit::dimensionless());
+            }
+        }
     }
-    env
+    (env, warnings)
 }
 
 /// Validate that an equation's LHS and RHS have matching dimensions.
@@ -1366,5 +1387,56 @@ mod tests {
             rhs: Expr::Variable("h".into()),
         };
         assert!(validate_equation_dimensions(&eq, &env).is_err());
+    }
+
+    /// Build a bare state [`crate::ModelVariable`] carrying only a declared
+    /// unit string (all other metadata omitted).
+    fn state_var_with_units(units: Option<&str>) -> crate::ModelVariable {
+        crate::ModelVariable {
+            var_type: crate::VariableType::State,
+            units: units.map(str::to_string),
+            default: None,
+            description: None,
+            expression: None,
+            shape: None,
+            location: None,
+            noise_kind: None,
+            correlation_group: None,
+        }
+    }
+
+    #[test]
+    fn build_unit_env_unparseable_unit_is_unknown_not_dimensionless() {
+        let mut variables = HashMap::new();
+        // `x` has an unparseable unit; `y` has a real unit of metres.
+        variables.insert("x".to_string(), state_var_with_units(Some("not_a_unit")));
+        variables.insert("y".to_string(), state_var_with_units(Some("m")));
+
+        let (env, warnings) = build_unit_env(&variables);
+
+        // The unparseable variable is OMITTED (unknown), NOT coerced to a
+        // dimensionless unit; the parseable one is present.
+        assert!(!env.contains_key("x"), "unparseable unit must not be in env");
+        assert!(env.contains_key("y"));
+
+        // A warning is surfaced for the unparseable unit (behavior, not text).
+        assert!(
+            warnings.iter().any(|w| w.contains("x")),
+            "expected a warning mentioning the offending variable, got {warnings:?}"
+        );
+
+        // An equation `y = x` referencing the unknown-unit variable propagates
+        // to UnknownUnit — a non-blocking, skip-for-dim-checking outcome — NOT
+        // a false DimensionMismatch (which a dimensionless coercion of `x`
+        // against `y`'s metres would have produced).
+        let eq = Equation {
+            lhs: Expr::Variable("y".into()),
+            rhs: Expr::Variable("x".into()),
+        };
+        let result = validate_equation_dimensions(&eq, &env);
+        assert!(
+            matches!(result, Err(UnitError::UnknownUnit(_))),
+            "expected UnknownUnit (skipped), not a false mismatch, got {result:?}"
+        );
     }
 }

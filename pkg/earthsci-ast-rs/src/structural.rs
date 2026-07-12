@@ -77,8 +77,13 @@ pub(crate) fn validate_model(
     }
 
     // Build a unit environment once per model — expression-level
-    // dimensional propagation walks the Expr AST using this map.
-    let unit_env = build_unit_env(&model.variables);
+    // dimensional propagation walks the Expr AST using this map. A variable
+    // whose declared unit is unparseable is omitted from the env (its dimension
+    // is unknown) and surfaced as a non-blocking warning, rather than being
+    // coerced to dimensionless; equations referencing it then propagate to
+    // `UnitError::UnknownUnit`, which the loop below records as a warning too.
+    let (unit_env, unit_warnings) = build_unit_env(&model.variables);
+    warnings.extend(unit_warnings);
 
     // Build the coordinate-units map for the model's referenced domain, if
     // any. Used by `grad`/`div`/`laplacian` propagation to divide by the

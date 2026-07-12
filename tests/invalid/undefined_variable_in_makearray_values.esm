@@ -1,0 +1,33 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "TestModel",
+    "description": "Undefined variable hidden in a makearray `values` entry (a non-args child field; makearray carries no natural `args`). The reference check must descend into `values`, not only `args`, to catch it. `rate` is declared; only `undefined_xyz` is undefined."
+  },
+  "index_sets": {
+    "lon": { "kind": "interval", "size": 3 }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": { "type": "state", "shape": ["lon"] },
+        "rate": { "type": "parameter" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [[1, 3]]
+            ],
+            "values": [
+              { "op": "*", "args": ["rate", "undefined_xyz"] }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

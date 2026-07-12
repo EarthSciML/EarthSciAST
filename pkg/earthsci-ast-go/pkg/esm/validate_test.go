@@ -658,3 +658,143 @@ func TestValidateFileValidModel(t *testing.T) {
 	assert.Empty(t, result.StructuralErrors)
 	assert.True(t, result.IsValid)
 }
+
+// TestUndefinedVariableInAggregateBodyFlagged pins that a reference-checking walk
+// descends the non-`args` child fields of an operator node. An undefined variable
+// hidden in an `aggregate` `expr` body (a field the historical args-only walker
+// never visited, so the document was silently accepted) is now reported as an
+// ErrorUndefinedVariable at the aggregate's `/expr` sub-path.
+func TestUndefinedVariableInAggregateBodyFlagged(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "0.8.0",
+		Metadata: Metadata{Name: "AggBody", Authors: []string{"Test Author"}},
+		IndexSets: map[string]IndexSet{
+			"cells": {Kind: "interval"},
+		},
+		Models: map[string]Model{
+			"AggBody": {
+				Variables: map[string]ModelVariable{
+					"total": {Type: "state"},
+				},
+				Equations: []Equation{
+					{
+						LHS: ExprNode{Op: "D", Args: []any{"total"}, Wrt: strPtr("t")},
+						// aggregate contracts over loop index `i` (bound via
+						// ranges) but its body references an undeclared variable.
+						RHS: ExprNode{
+							Op:        "aggregate",
+							Args:      []any{},
+							OutputIdx: []any{},
+							Ranges:    map[string]any{"i": map[string]any{"from": "cells"}},
+							Expr:      "undefined_var",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := ValidateStructuralWithCodes(esmFile)
+
+	var found *StructuralError
+	for i := range result.StructuralErrors {
+		if result.StructuralErrors[i].Code == ErrorUndefinedVariable {
+			found = &result.StructuralErrors[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "undefined variable in aggregate expr body must be flagged; got %+v", result.StructuralErrors)
+	assert.Equal(t, "undefined_var", found.Details["variable"])
+	assert.Truef(t, strings.HasSuffix(found.Path, "/rhs/expr"), "path %q should point at the aggregate body", found.Path)
+	assert.False(t, result.Valid)
+}
+
+// TestBoundLoopIndexInAggregateNotFlagged pins that a name introduced ONLY as a
+// bound loop index — the `i` an aggregate contracts over and then uses via
+// `index(u, i)` in its body — is treated as in-scope for the full-child descent
+// and is NOT mis-reported as an undefined variable. Without bound-symbol
+// filtering the deeper descent would false-flag `i`.
+func TestBoundLoopIndexInAggregateNotFlagged(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "0.8.0",
+		Metadata: Metadata{Name: "AggIdx", Authors: []string{"Test Author"}},
+		IndexSets: map[string]IndexSet{
+			"cells": {Kind: "interval"},
+		},
+		Models: map[string]Model{
+			"AggIdx": {
+				Variables: map[string]ModelVariable{
+					"total": {Type: "state"},
+					"u":     {Type: "parameter"},
+				},
+				Equations: []Equation{
+					{
+						LHS: ExprNode{Op: "D", Args: []any{"total"}, Wrt: strPtr("t")},
+						RHS: ExprNode{
+							Op:        "aggregate",
+							Args:      []any{},
+							OutputIdx: []any{},
+							Ranges:    map[string]any{"i": map[string]any{"from": "cells"}},
+							// body references the array `u` at bound index `i`.
+							Expr: ExprNode{Op: "index", Args: []any{"u", "i"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := ValidateStructuralWithCodes(esmFile)
+	for _, se := range result.StructuralErrors {
+		assert.NotEqualf(t, ErrorUndefinedVariable, se.Code,
+			"bound loop index / declared array must not be flagged: %+v", se)
+	}
+	assert.True(t, result.Valid, "valid aggregate should pass: %+v", result.StructuralErrors)
+}
+
+// TestUnparseableUnitYieldsWarningNotError pins the spec §3.3.3/§3.4 leniency:
+// a variable whose declared unit string does not parse is treated as UNKNOWN
+// (omitted from the unit env) and surfaced as a non-blocking UnitWarning, NOT
+// coerced to dimensionless. Coercing to dimensionless would manufacture a false
+// mismatch here — `D(x) = x` with a dimensionless `x` is `1/s` vs `1` — so the
+// absence of any dimension-mismatch warning confirms the unknown treatment.
+func TestUnparseableUnitYieldsWarningNotError(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "0.1.0",
+		Metadata: Metadata{Name: "BadUnit", Authors: []string{"Test Author"}},
+		Models: map[string]Model{
+			"BadUnit": {
+				Variables: map[string]ModelVariable{
+					"x": {Type: "state", Units: strPtr("notaunit")},
+				},
+				Equations: []Equation{
+					{
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+						RHS: "x",
+					},
+				},
+			},
+		},
+	}
+
+	result := ValidateStructuralWithCodes(esmFile)
+
+	// A parse warning is recorded ...
+	var sawParseWarning, sawMismatch bool
+	for _, w := range result.UnitWarnings {
+		if strings.Contains(w.Message, "could not parse unit") {
+			sawParseWarning = true
+		}
+		if strings.Contains(w.Message, "does not match") {
+			sawMismatch = true
+		}
+	}
+	assert.True(t, sawParseWarning, "unparseable unit must surface a warning: %+v", result.UnitWarnings)
+	// ... and the variable is treated as UNKNOWN, so no false mismatch is manufactured ...
+	assert.False(t, sawMismatch, "unknown-unit variable must not manufacture a dimension mismatch: %+v", result.UnitWarnings)
+	// ... and it is NOT a hard error.
+	for _, se := range result.StructuralErrors {
+		assert.NotEqualf(t, ErrorUnitInconsistency, se.Code, "unparseable unit must not be a hard error: %+v", se)
+	}
+	assert.True(t, result.Valid)
+}

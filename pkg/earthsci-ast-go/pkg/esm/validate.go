@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -311,6 +312,13 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	for varName := range model.Variables {
 		allVars[varName] = true
 	}
+	// The document-scoped `index_sets` registry is a legitimate non-variable
+	// identifier namespace (RFC semiring-faq-unified-ir §5.2): an `aggregate`
+	// may name an index set as a positional operand (value-invention form
+	// `aggregate(args:["faces"], …)`) or reduce over it (`rank(edges)`). Credit
+	// those names so the full-child descent below does not mis-flag them as
+	// undefined, mirroring TS `validateReferenceIntegrity`'s `declaredIndexSets`.
+	s.creditIndexSetNames(allVars)
 
 	for i, eq := range model.Equations {
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
@@ -378,14 +386,32 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 			},
 		})
 	case ExprNode:
-		for i, arg := range e.Args {
-			s.validateExpressionVariables(arg, allVars, fmt.Sprintf("%s/args/%d", path, i), currentSystem)
+		s.validateExprNodeChildren(e, allVars, path, currentSystem)
+	case *ExprNode:
+		if e != nil {
+			s.validateExprNodeChildren(*e, allVars, path, currentSystem)
 		}
-	case float64, float32, int, int32, int64:
-		// Numeric literals are always valid. This mirrors the numeric types the
-		// JSON unmarshaler emits (integers lower to int64) and the set the unit
-		// propagator recognizes, so an integer literal is not misreported as an
-		// unknown expression type.
+	case map[string]any:
+		// A raw (un-normalized) operator node reached through a non-`args`
+		// sidecar child (expr/filter/key/lower/upper/values/axes/bindings):
+		// UnmarshalExpression normalizes only `args`, so those fields keep their
+		// decoded-JSON shape and an operator node inside them arrives as a map.
+		// Normalize it and descend; a non-operator object carries no references.
+		if node, ok := rawExprNode(e); ok {
+			s.validateExprNodeChildren(node, allVars, path, currentSystem)
+		}
+	case []any:
+		// A raw nested array reached through a sidecar child; check each element.
+		for i, el := range e {
+			s.validateExpressionVariables(el, allVars, fmt.Sprintf("%s/%d", path, i), currentSystem)
+		}
+	case float64, float32, int, int32, int64, json.Number:
+		// Numeric literals are always valid. float64/int64 are the shapes the
+		// JSON unmarshaler emits for normalized `args`; json.Number appears in
+		// raw sidecar children, which retain their decoded-JSON shape.
+	case bool, nil:
+		// Boolean / null literal leaves, reachable only through raw sidecar
+		// children (e.g. a filter-predicate literal) — never a reference.
 	default:
 		s.addErr(StructuralError{
 			Path:    path,
@@ -394,6 +420,158 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 			Details: map[string]any{"type": fmt.Sprintf("%T", e)},
 		})
 	}
+}
+
+// creditIndexSetNames marks every document-scoped `index_sets` registry name as
+// in-scope in allVars. Index-set names are a legitimate non-variable identifier
+// namespace an `aggregate` may reference (RFC semiring-faq-unified-ir §5.2); the
+// full-child descent in validateExprNodeChildren would otherwise flag them as
+// undefined. No-op when no file/registry is attached.
+func (s *structuralScan) creditIndexSetNames(allVars map[string]bool) {
+	if s.file == nil {
+		return
+	}
+	for name := range s.file.IndexSets {
+		allVars[name] = true
+	}
+}
+
+// validateExprNodeChildren descends every canonical child-Expression field of an
+// operator node — args, lower, upper, expr, filter, values, axes, key, bindings,
+// in that order — mirroring Rust `ExpressionNode::for_each_child` (src/types.rs)
+// and TS `forEachChild` (expression.ts). Descending only `args` (the historical
+// behaviour) silently accepted an undefined variable hidden in an aggregate body
+// (`expr`), an aggregate `filter`/`key`, integral `lower`/`upper` bounds, a
+// `makearray` `values` list, `table_lookup` `axes`, or an
+// `apply_expression_template` `bindings` map. Index symbols the node BINDS (see
+// boundIndexSymbols) are added to the in-scope set for the descent so a bound
+// loop index is not mis-reported as undefined.
+//
+// Non-child structural slots — `ranges`/`output_idx`/`arg`/`var` (binder
+// sources, credited via boundIndexSymbols instead), `join`, `regions`, `attrs`,
+// `output` — are intentionally NOT descended, matching for_each_child; join `on`
+// operands in particular bind their own symbols and must not surface as
+// references.
+func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[string]bool, path, currentSystem string) {
+	scope := allVars
+	if bound := boundIndexSymbols(node); len(bound) > 0 {
+		scope = make(map[string]bool, len(allVars)+len(bound))
+		for k, v := range allVars {
+			scope[k] = v
+		}
+		for _, sym := range bound {
+			scope[sym] = true
+		}
+	}
+
+	for i, arg := range node.Args {
+		s.validateExpressionVariables(arg, scope, fmt.Sprintf("%s/args/%d", path, i), currentSystem)
+	}
+	if node.Lower != nil {
+		s.validateExpressionVariables(node.Lower, scope, path+"/lower", currentSystem)
+	}
+	if node.Upper != nil {
+		s.validateExpressionVariables(node.Upper, scope, path+"/upper", currentSystem)
+	}
+	if node.Expr != nil {
+		s.validateExpressionVariables(node.Expr, scope, path+"/expr", currentSystem)
+	}
+	if node.Filter != nil {
+		s.validateExpressionVariables(node.Filter, scope, path+"/filter", currentSystem)
+	}
+	for i, v := range node.Values {
+		s.validateExpressionVariables(v, scope, fmt.Sprintf("%s/values/%d", path, i), currentSystem)
+	}
+	for _, k := range sortedKeys(node.TableAxes) {
+		s.validateExpressionVariables(node.TableAxes[k], scope, fmt.Sprintf("%s/axes/%s", path, k), currentSystem)
+	}
+	if node.Key != nil {
+		s.validateExpressionVariables(node.Key, scope, path+"/key", currentSystem)
+	}
+	for _, k := range sortedKeys(node.Bindings) {
+		s.validateExpressionVariables(node.Bindings[k], scope, fmt.Sprintf("%s/bindings/%s", path, k), currentSystem)
+	}
+}
+
+// boundIndexSymbols returns the index / iteration symbols an operator node BINDS
+// for its own child expressions — names that are loop positions or invented keys
+// rather than declared variables. validateExprNodeChildren adds them to the
+// in-scope set for the descent so a bound loop index (the `i` in `index(u, i)`,
+// the `e` an aggregate contracts over, an integral's integration variable) is
+// not mis-reported as an undefined variable.
+//
+// Mirrors Rust `bound_index_symbols` (src/structural.rs) and TS
+// `collectIndexSymbols` (validate/expr-utils.ts). Binder sources:
+//
+//   - OutputIdx     — aggregate surviving (free) index names
+//   - Ranges keys   — aggregate / argmin / argmax contraction loop variables
+//   - Var           — the integral integration variable
+//   - Arg           — the argmin / argmax witness index
+//   - Args[1:]      — `index(array, i, j, …)` element positions (bare names)
+//   - Args[0]       — `skolem(name, …)` invented-key name
+//   - Bindings keys — apply_expression_template formal parameter names
+func boundIndexSymbols(node ExprNode) []string {
+	var syms []string
+	for _, idx := range node.OutputIdx {
+		if name, ok := idx.(string); ok {
+			syms = append(syms, name)
+		}
+	}
+	for k := range node.Ranges {
+		syms = append(syms, k)
+	}
+	if node.Var != nil {
+		syms = append(syms, *node.Var)
+	}
+	if node.Arg != nil {
+		syms = append(syms, *node.Arg)
+	}
+	switch node.Op {
+	case "index":
+		// index(array, pos1, pos2, …): the positions after the array head that
+		// are bare names are bound index symbols.
+		for i := 1; i < len(node.Args); i++ {
+			if name, ok := node.Args[i].(string); ok {
+				syms = append(syms, name)
+			}
+		}
+	case "skolem":
+		// skolem(name, …): the first positional arg is the invented-key binder.
+		if len(node.Args) > 0 {
+			if name, ok := node.Args[0].(string); ok {
+				syms = append(syms, name)
+			}
+		}
+	}
+	for k := range node.Bindings {
+		syms = append(syms, k)
+	}
+	return syms
+}
+
+// rawExprNode normalizes a raw decoded-JSON object (map[string]any) that
+// represents an operator node into an ExprNode. Sidecar child fields
+// (expr/filter/key/lower/upper/values/axes/bindings) are NOT normalized by
+// UnmarshalExpression — only `args` is — so an operator node nested inside one
+// of them is reached as a decoded map rather than an ExprNode. Routing it back
+// through UnmarshalExpression (the same re-marshal path decode.go uses for
+// nested args) yields an ExprNode whose own `args` are normalized; its sidecar
+// children remain raw and are re-normalized on further descent. Returns
+// (ExprNode{}, false) for a map that is not an operator node (no "op") or that
+// fails to normalize.
+func rawExprNode(m map[string]any) (ExprNode, bool) {
+	if _, hasOp := m["op"]; !hasOp {
+		return ExprNode{}, false
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ExprNode{}, false
+	}
+	expr, err := UnmarshalExpression(b)
+	if err != nil {
+		return ExprNode{}, false
+	}
+	return asExprNode(expr)
 }
 
 // validateAffectTarget checks that an event affect's LHS target variable is
@@ -550,7 +728,8 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	for speciesName := range system.Species {
 		allSpecies[speciesName] = true
 	}
-	// Combined names available to rate expressions (species + parameters).
+	// Combined names available to rate expressions (species + parameters, plus
+	// the document-scoped `index_sets` names — see validateModel).
 	allVars := make(map[string]bool)
 	for name := range system.Species {
 		allVars[name] = true
@@ -558,6 +737,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	for name := range system.Parameters {
 		allVars[name] = true
 	}
+	s.creditIndexSetNames(allVars)
 
 	for i, reaction := range system.Reactions {
 		reactionPath := fmt.Sprintf("%s/reactions/%d", basePath, i)

@@ -1,0 +1,34 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "TestModel",
+    "description": "Undefined variable hidden in an aggregate `filter` predicate (a non-args child field). The reference check must descend into `filter`, not only `args`, to catch it. `g` is bound via `ranges`; `rate` is declared; only `undefined_xyz` is undefined."
+  },
+  "index_sets": {
+    "grp": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": { "type": "state" },
+        "rate": { "type": "parameter" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [],
+            "args": ["rate"],
+            "ranges": { "g": { "from": "grp" } },
+            "filter": {
+              "op": ">",
+              "args": ["undefined_xyz", 0]
+            },
+            "expr": { "op": "index", "args": ["rate", "g"] }
+          }
+        }
+      ]
+    }
+  }
+}
