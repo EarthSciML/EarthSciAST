@@ -852,25 +852,62 @@ function _seed_arrayop_init_u0!(u0::Vector{Float64}, init_equations,
     return nothing
 end
 
-# ---- Stage: discrete-cadence materialization split (the middle cadence phase) ----
-# From the set of INLINE-candidate array observeds (the geometry live-field taint
-# `geom_inline_vars` ∪ the promoted-arrayop `array_inline_vars`), pick the
-# DISCRETE-cadence ones. A field is discrete-cadence iff BOTH:
-#   • it is PARAM-TAINTED — its defining expression (transitively, through the
-#     equation defs) reads a live `param_arrays` forcing buffer. A field over only
-#     const/parameter data is CONST-cadence, not discrete: it must stay on its
-#     existing inline/const path (making it a per-refresh cache would be wrong and
-#     changes the byte-exact inline numerics). This is also what keeps the cut
-#     disjoint from the setup/const-obs vars — a param-tainted var is never a
-#     build-once setup const, so its arrayop def always survives to the extraction.
-#   • it is STATE-FREE — it does NOT (transitively) read a continuous `state`
-#     variable or the independent variable `t`; the rest of the taint cone (anything
-#     reaching a state) is genuinely continuous and stays inlined.
-# Such a field changes only at the refresh cadence, so it is materialized once per
-# refresh into a cache buffer instead of inlined into the hot RHS.
+# True if `e` contains a gather `index(arr, sub…)` whose SUBSCRIPT references a scalar
+# parameter — the signature of a nearest-neighbour COORDINATE regrid
+# (`index(F_fuel, floor((tgt_lat[j] − src_y0)/src_dy)…)`, whose subscript reads the
+# grid-geometry parameters src_y0/src_dy). The integer const-index folder cannot
+# evaluate such a subscript, so it marks the const-tier materialization seed. An affine
+# subscript (loop vars + const-array gathers, e.g. a conservative regrid's `W[i,j]` or
+# a reshape `(gy−1)·NX+gx`) references no scalar parameter and is NOT flagged.
+function _has_param_indexed_gather(e::ASTExpr, scalar_params::Set{String})
+    e isa OpExpr || return false
+    if e.op == "index" && length(e.args) >= 2
+        for k in 2:length(e.args)
+            any(r -> r in scalar_params, _referenced_var_names(e.args[k])) && return true
+        end
+    end
+    for a in e.args
+        _has_param_indexed_gather(a, scalar_params) && return true
+    end
+    e.expr_body !== nothing && _has_param_indexed_gather(e.expr_body, scalar_params) && return true
+    if e.values !== nothing
+        for v in e.values
+            _has_param_indexed_gather(v, scalar_params) && return true
+        end
+    end
+    return false
+end
+
+# ---- Stage: cadence materialization split (the discrete + const cuts) ----
+# From the INLINE-candidate array observeds (`geom_inline_vars` ∪ `array_inline_vars`)
+# pull out two classes that must NOT be inlined into the state RHS. A field is
+# PARAM-TAINTED iff its def transitively reads a live `param_arrays` buffer;
+# STATE-REACHING iff it transitively reads a continuous `state` or `t`.
+#
+#   • DISCRETE (param-tainted, NOT state-reaching): a per-bracket conservative regrid —
+#     materialized ONCE PER REFRESH into a cache buffer (the pre-existing middle phase).
+#   • CONST (const-cadence, NOT state-reaching): a NEAREST-NEIGHBOUR COORDINATE regrid
+#     (`index(F_fuel, floor((tgt_lat[j] − src_y0)/src_dy)…)`) whose gather SUBSCRIPT is
+#     a coordinate/parameter FLOAT the integer const-index folder cannot evaluate. It
+#     (and its const dependency chain) materializes BUILD-ONCE into a const array
+#     through the setup-time evaluator (see the call site); its readers then fold over
+#     that const array per cell. The seed is precise — a def that gathers with a
+#     subscript referencing a SCALAR PARAMETER — so a conservative Era5/elevation regrid
+#     (affine src gather) and an ordinary contraction (`Σ_i W[i,j]·x`) are NOT flagged.
+#
+# Everything else (a param-tainted AND state/`t`-reaching field — the time-interpolated
+# ERA5 met blend + the Rothermel/EMC/wind physics over it) STAYS inlined: after the
+# discrete cut its body is an AFFINE blend of the discrete caches
+# (`(1−w_time)·index(t_xy0,x,y) + w_time·index(t_xy1,x,y)`) the symbolic-stencil folder
+# handles. `array_inline_candidates` is the const-tier pool (the geometry live-field
+# set is param-tainted by construction, never const). A model with no coordinate regrid
+# gets an empty const set (byte-identical). Returns `(discrete_vars, const_vars)`.
 function _discrete_materialize_split(equations::Vector{Equation},
-                                     inline_candidates, state_var_names, param_names)
-    (isempty(inline_candidates) || isempty(param_names)) && return Set{String}()
+                                     inline_candidates, array_inline_candidates,
+                                     state_var_names, param_names, scalar_param_names)
+    empty = Set{String}()
+    isempty(inline_candidates) && isempty(array_inline_candidates) &&
+        return (empty, copy(empty))
     defs = Dict{String,ASTExpr}()
     for eq in equations
         eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
@@ -891,13 +928,32 @@ function _discrete_materialize_split(equations::Vector{Equation},
         reached
     end
     # PARAM-TAINTED: transitively reads a live forcing buffer name.
-    param_tainted = _closure(Set{String}(param_names))
+    param_tainted = isempty(param_names) ? Set{String}() : _closure(Set{String}(param_names))
     # STATE-REACHING: transitively reads a continuous state (seeded with the states
     # themselves so a direct reader is caught) or `t`.
     state_seed = Set{String}(state_var_names); push!(state_seed, "t")
     state_reaching = _closure(state_seed)
-    return Set{String}(n for n in inline_candidates
-                       if (n in param_tainted) && !(n in state_reaching))
+    discrete = Set{String}(n for n in inline_candidates
+                           if (n in param_tainted) && !(n in state_reaching))
+    # CONST tier — coordinate-regrid SEED (a parameter-indexed gather), then close over
+    # its const-cadence array dependencies so `_materialize_geometry_setup` can resolve
+    # each body against the already-materialized upstream. Restricted to const-cadence
+    # producers (neither param-tainted nor state/`t`-reaching).
+    is_const(n) = !(n in param_tainted) && !(n in state_reaching)
+    const_vars = Set{String}(n for n in array_inline_candidates
+        if is_const(n) && haskey(defs, n) &&
+           _has_param_indexed_gather(defs[n], scalar_param_names))
+    changed = true
+    while changed
+        changed = false
+        for n in collect(const_vars)
+            for r in _referenced_var_names(defs[n])
+                (r in array_inline_candidates) && !(r in const_vars) && is_const(r) || continue
+                push!(const_vars, r); changed = true
+            end
+        end
+    end
+    return (discrete, const_vars)
 end
 
 # Dependency order over the discrete-materialize vars (a cache that gathers another
@@ -1039,22 +1095,47 @@ function _build_lower_and_classify(model::Model;
     array_inline_vars = _collect_array_inline_vars(model, equations,
         geo.setup_vars, geo.ring_vars, geom_inline_vars)
 
-    # ---- Discrete-cadence materialization split (the middle cadence phase) ----
-    # OPT-IN (gated on the `materialize_out` sink): pull the STATE-FREE live-field
-    # array observeds out of the inline sets — they change only at the refresh
-    # cadence and are materialized once per refresh into cache buffers (phase 4),
-    # rather than recomputed on every continuous step. Without the sink
-    # `discrete_vars` is empty and the inline sets are untouched (byte-identical
-    # to the pre-cut build).
+    # ---- Cadence materialization split (discrete + const cuts) ----
+    # OPT-IN (gated on the `materialize_out` sink): pull two classes of array observed
+    # out of the inline sets so they are NOT inlined into the state RHS.
+    #   • DISCRETE (param-tainted, state-free): the per-bracket conservative regrids,
+    #     materialized once per refresh into cache buffers gathered via `pgather`
+    #     (phase 4). This is the pre-existing middle cadence phase.
+    #   • CONST (const-cadence, state-free): the nearest-neighbour coordinate fuel
+    #     regrid (+ its const dependencies) — folded into `geom_setup_vars` so it
+    #     materializes BUILD-ONCE through `_materialize_geometry_setup` (the float +
+    #     parameter aware setup evaluator that resolves the coordinate gather), is
+    #     registered as a const array, and its equation dropped. Its downstream table
+    #     lookups stay inlined and fold over that const array per cell.
+    # The param-tainted state/`t`-reaching fields (the time-interp ERA5 met blend + the
+    # physics over it) stay inlined: after the discrete cut they reduce to affine blends
+    # of the discrete caches that the symbolic-stencil folder handles. Without the sink
+    # both sets are empty and the inline sets are untouched (byte-identical pre-cut).
     discrete_vars = Set{String}()
     if materialize_out !== nothing
         pre_state = Set{String}(n for (n, v) in model.variables
                                 if v.type == StateVariable && !(n in vi_vars))
-        discrete_vars = _discrete_materialize_split(equations,
-            union(geom_inline_vars, array_inline_vars), pre_state,
-            Set{String}(String(k) for k in keys(param_arrays)))
+        scalar_params = Set{String}(n for (n, v) in model.variables
+            if v.type == ParameterVariable && !_is_array_shape(v.shape))
+        discrete_vars, const_mat_vars = _discrete_materialize_split(
+            equations, union(geom_inline_vars, array_inline_vars),
+            copy(array_inline_vars), pre_state,
+            Set{String}(String(k) for k in keys(param_arrays)), scalar_params)
         setdiff!(geom_inline_vars, discrete_vars)
         setdiff!(array_inline_vars, discrete_vars)
+        setdiff!(array_inline_vars, const_mat_vars)
+        # Route the const cut into the setup-geometry machinery: it flows through
+        # `_materialize_geometry_setup` (float + parameter aware — resolves the
+        # coordinate gather), registers as const arrays, and its equations drop.
+        # Merge its defs into `geo.defs` so `_geom_setup_order` resolves them even
+        # for a model with no polygon geometry (where `geo.defs` is otherwise empty).
+        if !isempty(const_mat_vars)
+            for eq in equations
+                (eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in const_mat_vars) &&
+                    (geo.defs[(eq.lhs::VarExpr).name] = eq.rhs)
+            end
+            union!(geo.setup_vars, const_mat_vars)
+        end
     end
 
     # ---- polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----

@@ -485,6 +485,17 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
     elseif op == "mod"
         length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "mod in index needs 2 args"))
         return mod(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
+    elseif op == "max"
+        # `max`/`min` in an index position are integer index-CLAMP ops: a loader
+        # reindex clamps a computed cell subscript into the source-grid bounds
+        # (`max(1, min(NSRC, floor((c-1)/GX)+1))`). Every operand is an already-
+        # integer subexpression, so the clamp folds to a concrete Int on the LIVE
+        # gather / per-cell materialize path exactly as it does at build-once setup.
+        isempty(c) && throw(TreeWalkError("E_TREEWALK_ARITY", "max in index needs ≥1 arg"))
+        return maximum(_eval_const_int(a, idx_env, const_arrays) for a in c)
+    elseif op == "min"
+        isempty(c) && throw(TreeWalkError("E_TREEWALK_ARITY", "min in index needs ≥1 arg"))
+        return minimum(_eval_const_int(a, idx_env, const_arrays) for a in c)
     elseif op == "ifelse"
         length(c) == 3 || throw(TreeWalkError("E_TREEWALK_ARITY", "ifelse in index needs 3 args"))
         cond = _eval_const_int(c[1], idx_env, const_arrays)
