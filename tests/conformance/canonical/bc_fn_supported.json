@@ -1,0 +1,7 @@
+{
+  "id": "bc_fn_supported",
+  "description": "Positive control for the fail-closed rule: a boundary-condition node whose only fields (op/args/fn/dim) are all in the canonical emissible set {op,args,wrt,dim,fn,name,value}. It must round-trip through canonical_json with keys emitted in sorted order, not raise.",
+  "input": {"op": "bc", "args": ["u"], "fn": "dirichlet", "dim": "x"},
+  "expected": "{\"args\":[\"u\"],\"dim\":\"x\",\"fn\":\"dirichlet\",\"op\":\"bc\"}",
+  "tags": ["supported", "bc", "fn", "dim"]
+}

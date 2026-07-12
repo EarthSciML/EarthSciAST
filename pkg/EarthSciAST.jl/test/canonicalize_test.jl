@@ -197,7 +197,18 @@ const ESM_Expr = EarthSciAST.ASTExpr
             if node isa AbstractDict || (node isa JSON3.Object)
                 if haskey(node, :op) && haskey(node, :args)
                     args = ESM_Expr[wire_to_expr(a) for a in node[:args]]
-                    return OpExpr(String(node[:op]), args)
+                    ex = OpExpr(String(node[:op]), args)
+                    # Carry the emissible scalar sidecar fields (wrt/dim/fn/
+                    # name/value) so a positive fixture exercising an emissible
+                    # sidecar (e.g. `bc` with fn/dim) round-trips. Non-emissible
+                    # fields stay absent here; fail-closed fixtures use the
+                    # parse_expression path above instead.
+                    haskey(node, :wrt) && (ex.wrt = String(node[:wrt]))
+                    haskey(node, :dim) && (ex.dim = String(node[:dim]))
+                    haskey(node, :fn) && (ex.fn = String(node[:fn]))
+                    haskey(node, :name) && (ex.name = String(node[:name]))
+                    haskey(node, :value) && (ex.value = node[:value])
+                    return ex
                 end
             end
             if node isa Integer
@@ -214,10 +225,33 @@ const ESM_Expr = EarthSciAST.ASTExpr
             id = String(f[:id])
             path = joinpath(dir, String(f[:path]))
             fixture = JSON3.read(read(path, String))
-            expr = wire_to_expr(fixture[:input])
-            got = canonical_json(expr)
-            want = String(fixture[:expected])
-            @test got == want
+            if haskey(fixture, :expect_error)
+                # Fail-closed fixture: the input carries a NON-emissible field
+                # (aggregate `expr`/`ranges`/`semiring`, `table`/`axes`,
+                # `filter`/`join`, geometry `id`/`manifold`, …) that has no
+                # faithful slot in the canonical JSON node encoding, so
+                # `canonical_json` must throw the pinned coded error rather than
+                # emit ambiguous bytes. Build the node via the authoritative
+                # wire→typed parser (`parse_expression`), which populates those
+                # non-op/args fields — the byte-fixture helper `wire_to_expr`
+                # intentionally keeps only `op`/`args`, so it could not
+                # reproduce the offending field.
+                want_code = String(fixture[:expect_error])
+                expr = parse_expression(fixture[:input])
+                err = try
+                    canonical_json(expr)
+                    nothing
+                catch e
+                    e
+                end
+                @test err isa CanonicalizeError
+                @test err isa CanonicalizeError && err.code == want_code
+            else
+                expr = wire_to_expr(fixture[:input])
+                got = canonical_json(expr)
+                want = String(fixture[:expected])
+                @test got == want
+            end
         end
     end
 end

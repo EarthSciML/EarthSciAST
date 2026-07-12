@@ -212,10 +212,12 @@ func TestDivZeroByZero(t *testing.T) {
 	}
 }
 
-// Canonicalize must PRESERVE structural fields on non-arithmetic op nodes
-// (the confirmed integral bug: canonOp used to rebuild from an
-// Op/Args/Wrt/Dim/Fn/Name/Value subset, dropping Var/Lower/Upper/…), and
-// emitExprNodeJSON must EMIT them.
+// Canonicalize stays FIELD-PRESERVING on non-arithmetic op nodes (the copy
+// rides every field through mapExprChildren), but CanonicalJSON is FAIL-CLOSED:
+// a node carrying a non-emissible field (var/lower/upper/…) has no faithful
+// canonical JSON in the pinned 7-field encoding, so CanonicalJSON returns
+// E_CANONICAL_UNSUPPORTED_FIELD — matching the Julia reference's
+// _emit_node_json.
 func TestCanonicalizePreservesStructuralFields(t *testing.T) {
 	varName := "s"
 	node := ExprNode{
@@ -233,6 +235,7 @@ func TestCanonicalizePreservesStructuralFields(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ExprNode, got %T", c)
 	}
+	// Canonicalize must NOT drop the sidecar fields.
 	if out.Var == nil || *out.Var != "s" {
 		t.Errorf("Var dropped by Canonicalize: %v", out.Var)
 	}
@@ -243,37 +246,87 @@ func TestCanonicalizePreservesStructuralFields(t *testing.T) {
 		t.Errorf("Upper not preserved: %v (%T)", out.Upper, out.Upper)
 	}
 
+	// Emission is fail-closed: the node carries non-emissible fields.
+	if _, err := CanonicalJSON(node); !errors.Is(err, ErrCanonicalUnsupportedField) {
+		t.Errorf("CanonicalJSON(non-emissible node): err=%v; want ErrCanonicalUnsupportedField", err)
+	}
+}
+
+// A node carrying a non-emissible field (table_lookup's `table`) has no
+// faithful canonical JSON in the pinned 7-field encoding, so CanonicalJSON is
+// FAIL-CLOSED and returns E_CANONICAL_UNSUPPORTED_FIELD (matching Julia) rather
+// than emitting lossy bytes.
+func TestCanonicalTableLookupUnsupported(t *testing.T) {
+	tA := "tableA"
+	node := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tA}
+	if _, err := CanonicalJSON(node); !errors.Is(err, ErrCanonicalUnsupportedField) {
+		t.Errorf("CanonicalJSON(table_lookup): err=%v; want ErrCanonicalUnsupportedField", err)
+	}
+}
+
+// A non-emissible field set on a CHILD node (nested in `args`) is also rejected:
+// the emissibility gate recurses through args, matching the Julia emitter.
+func TestCanonicalUnsupportedFieldNestedInArgs(t *testing.T) {
+	tA := "tbl"
+	child := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tA}
+	node := ExprNode{Op: "+", Args: []any{"x", child}}
+	if _, err := CanonicalJSON(node); !errors.Is(err, ErrCanonicalUnsupportedField) {
+		t.Errorf("CanonicalJSON(nested non-emissible): err=%v; want ErrCanonicalUnsupportedField", err)
+	}
+}
+
+// The emissible field set {op,args,wrt,dim,fn,name,value} still emits: a node
+// using only these fields has faithful, sorted-key canonical JSON.
+func TestCanonicalEmissibleFields(t *testing.T) {
+	wrt, dim, fn, name := "x", "y", "dirichlet", "datetime.julian_day"
+	node := ExprNode{
+		Op:   "bc",
+		Args: []any{"u"},
+		Wrt:  &wrt,
+		Dim:  &dim,
+		Fn:   &fn,
+		Name: &name,
+	}
 	got, err := CanonicalJSON(node)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"args":["f"],"lower":0,"op":"integral","upper":1.0,"var":"s"}`
+	want := `{"args":["u"],"dim":"y","fn":"dirichlet","name":"datetime.julian_day","op":"bc","wrt":"x"}`
 	if string(got) != want {
-		t.Errorf("canonical JSON:\n got %s\nwant %s", got, want)
+		t.Errorf("emissible fields:\n got %s\nwant %s", got, want)
 	}
 }
 
-// Distinct expressions that differ only in a previously-dropped field
-// (table_lookup's `table`) must now produce distinct canonical JSON — the
-// canonical bytes are also the sortArgs sort key, so collapsing them was a
-// latent correctness hazard.
-func TestCanonicalDistinctTableLookups(t *testing.T) {
-	tA, tB := "tableA", "tableB"
-	nodeA := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tA}
-	nodeB := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tB}
-	ja, err := CanonicalJSON(nodeA)
+// `value` (the const-op payload) is emissible and emits via the canonical
+// value encoder.
+func TestCanonicalConstValueEmissible(t *testing.T) {
+	node := ExprNode{Op: "const", Args: []any{}, Value: 2.5}
+	got, err := CanonicalJSON(node)
 	if err != nil {
 		t.Fatal(err)
 	}
-	jb, err := CanonicalJSON(nodeB)
+	want := `{"args":[],"op":"const","value":2.5}`
+	if string(got) != want {
+		t.Errorf("const value:\n got %s\nwant %s", got, want)
+	}
+}
+
+// `arg` and `bindings` are TOLERATED: present, ignored, never emitted, and NOT
+// an error — matching the Julia _CANONICAL_IGNORED_FIELDS tolerance.
+func TestCanonicalToleratedFields(t *testing.T) {
+	argName := "i"
+	node := ExprNode{
+		Op:       "argmin",
+		Args:     []any{"cost"},
+		Arg:      &argName,
+		Bindings: map[string]any{"p": 1.0},
+	}
+	got, err := CanonicalJSON(node)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("tolerated fields must not error: %v", err)
 	}
-	if string(ja) == string(jb) {
-		t.Fatalf("distinct table_lookup nodes collapsed to same canonical JSON: %s", ja)
-	}
-	want := `{"args":[],"op":"table_lookup","table":"tableA"}`
-	if string(ja) != want {
-		t.Errorf("got %s, want %s", ja, want)
+	want := `{"args":["cost"],"op":"argmin"}`
+	if string(got) != want {
+		t.Errorf("tolerated fields:\n got %s\nwant %s", got, want)
 	}
 }

@@ -15,13 +15,26 @@ pub enum CanonicalizeError {
     NonFinite,
     /// `E_CANONICAL_DIVBY_ZERO` — `/(0, 0)` encountered (§5.4.7).
     DivByZero,
+    /// `E_CANONICAL_UNSUPPORTED_FIELD` — an operator node reached during
+    /// emission carries a field with no slot in the closed canonical JSON node
+    /// encoding (`op`/`args`/`wrt`/`dim`/`fn`/`name`/`value`), so no faithful
+    /// canonical JSON exists for it (see [`canonical_json`]). The `String`
+    /// names the first offending field. Fail-closed to match Julia's
+    /// `_emit_node_json` guard (`_NON_EMISSIBLE_FIELDS`) and the TS/Python
+    /// siblings, rather than silently dropping the field and emitting ambiguous
+    /// bytes.
+    UnsupportedField(String),
 }
 
 impl std::fmt::Display for CanonicalizeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Render the stable cross-language error CODE only (the `String` payload
+        // of `UnsupportedField` is diagnostic and lives in the `Debug`/variant,
+        // matching how `NonFinite`/`DivByZero` render just their codes).
         match self {
             CanonicalizeError::NonFinite => write!(f, "E_CANONICAL_NONFINITE"),
             CanonicalizeError::DivByZero => write!(f, "E_CANONICAL_DIVBY_ZERO"),
+            CanonicalizeError::UnsupportedField(_) => write!(f, "E_CANONICAL_UNSUPPORTED_FIELD"),
         }
     }
 }
@@ -49,7 +62,118 @@ pub fn canonicalize(expr: &Expr) -> Result<Expr, CanonicalizeError> {
 /// whitespace, and the strict number formatting of §5.4.6.
 pub fn canonical_json(expr: &Expr) -> Result<String, CanonicalizeError> {
     let c = canonicalize(expr)?;
+    // `canonicalize` PRESERVES every field on pass-through (non-arithmetic)
+    // nodes, so the returned tree may still carry a field with no slot in the
+    // closed canonical JSON node encoding. Emitting only the emissible fields
+    // would make structurally-different nodes byte-identical (the defect class
+    // behind the `fn` bc-node bug). Fail closed instead, matching Julia's
+    // `_emit_node_json` guard — see `validate_emissible`.
+    validate_emissible(&c)?;
     Ok(emit_canonical_json(&c))
+}
+
+/// Reject any operator node reached through the `args` spine (the same nodes
+/// `emit_node_json` recurses into) that carries a NON-EMISSIBLE field, per the
+/// cross-binding canonical contract. Returns the code
+/// `E_CANONICAL_UNSUPPORTED_FIELD` naming the first offending field.
+///
+/// This mirrors Julia's `_emit_node_json`, which checks each node's
+/// `_NON_EMISSIBLE_FIELDS` before emitting and recurses only into `args`. A
+/// non-emissible field carried by a node buried ONLY in a sidecar sub-tree
+/// (`filter`/`expr`/…) is never emitted, hence never validated — exactly as in
+/// Julia, since that node whose sidecar holds it is itself flagged first.
+fn validate_emissible(e: &Expr) -> Result<(), CanonicalizeError> {
+    if let Expr::Operator(n) = e {
+        if let Some(field) = first_non_emissible_field(n) {
+            return Err(CanonicalizeError::UnsupportedField(field.into()));
+        }
+        for a in &n.args {
+            validate_emissible(a)?;
+        }
+    }
+    Ok(())
+}
+
+/// The first set field of `n` that has NO slot in the canonical JSON node
+/// encoding, or `None` if the node is fully emissible.
+///
+/// EMISSIBLE (have a wire slot): `op`, `args`, `wrt`, `dim`, `fn`
+/// (`broadcast_fn`), `name`, `value`. TOLERATED-AND-IGNORED (may be present, no
+/// wire slot, NOT an error — matching Julia's `_CANONICAL_IGNORED_FIELDS`):
+/// `arg`, `bindings`. Every OTHER `ExpressionNode` field is NON-EMISSIBLE and
+/// listed below; a field newly added to `ExpressionNode` therefore fails closed
+/// (until deliberately classified) rather than being silently dropped. Kept in
+/// lockstep with Julia's `_NON_EMISSIBLE_FIELDS`.
+fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
+    // JSON wire name reported where it differs from the Rust field name
+    // (`int_var` serializes as `var`).
+    if n.int_var.is_some() {
+        return Some("var");
+    }
+    if n.lower.is_some() {
+        return Some("lower");
+    }
+    if n.upper.is_some() {
+        return Some("upper");
+    }
+    if n.expr.is_some() {
+        return Some("expr");
+    }
+    if n.output_idx.is_some() {
+        return Some("output_idx");
+    }
+    if n.ranges.is_some() {
+        return Some("ranges");
+    }
+    if n.reduce.is_some() {
+        return Some("reduce");
+    }
+    if n.semiring.is_some() {
+        return Some("semiring");
+    }
+    if n.join.is_some() {
+        return Some("join");
+    }
+    if n.filter.is_some() {
+        return Some("filter");
+    }
+    if n.regions.is_some() {
+        return Some("regions");
+    }
+    if n.values.is_some() {
+        return Some("values");
+    }
+    if n.shape.is_some() {
+        return Some("shape");
+    }
+    if n.perm.is_some() {
+        return Some("perm");
+    }
+    if n.axis.is_some() {
+        return Some("axis");
+    }
+    if n.table.is_some() {
+        return Some("table");
+    }
+    if n.axes.is_some() {
+        return Some("axes");
+    }
+    if n.output.is_some() {
+        return Some("output");
+    }
+    if n.id.is_some() {
+        return Some("id");
+    }
+    if n.manifold.is_some() {
+        return Some("manifold");
+    }
+    if n.distinct.is_some() {
+        return Some("distinct");
+    }
+    if n.key.is_some() {
+        return Some("key");
+    }
+    None
 }
 
 fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
@@ -66,9 +190,11 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     // Sidecar fields are NOT part of the emitted canonical JSON (see
     // `emit_node_json`, which emits only op/args/wrt/dim/fn/name/value — the
     // closed cross-binding field set the TS/Python/Julia siblings pin), so
-    // normalizing the sidecar sub-trees here never changes `canonical_json`
-    // bytes; it only strengthens the finiteness guard and normalizes the
-    // returned tree. See the module-level note on the field-coverage gap.
+    // normalizing the sidecar sub-trees here only strengthens the finiteness
+    // guard and normalizes the returned tree. A node that still carries a
+    // non-emissible sidecar field after canonicalization makes `canonical_json`
+    // fail closed with `E_CANONICAL_UNSUPPORTED_FIELD` (see `validate_emissible`)
+    // rather than emitting ambiguous bytes.
     let mut err: Option<CanonicalizeError> = None;
     work.for_each_child_mut(&mut |child| {
         if err.is_some() {
@@ -360,7 +486,9 @@ fn emit_canonical_json(e: &Expr) -> String {
     }
 }
 
-// Emit the canonical JSON object for an operator node.
+// Emit the canonical JSON object for an operator node. Infallible internal sort
+// key: `canonical_json` runs `validate_emissible` BEFORE any emission, so every
+// node reaching here is already known to be fully emissible.
 //
 // Emissible field set (CLOSED, cross-binding-pinned): exactly
 // `op`/`args`/`wrt`/`dim`/`fn`/`name`/`value`. This is the identical set the
@@ -371,17 +499,12 @@ fn emit_canonical_json(e: &Expr) -> String {
 // extra field here would make this binding's `canonical_json` bytes diverge from
 // the siblings and break the byte contract.
 //
-// DEFERRED field-coverage gap (do NOT "fix" unilaterally here): a node's other
-// set fields — aggregate `expr`/`ranges`/`output_idx`/`reduce`/`semiring`/
-// `join`/`filter`, `makearray` `regions`/`values`, `table`/`axes`/`output`,
-// `reshape`/`transpose`/`concat` shape/perm/axis, geometry `id`/`manifold`,
-// `key`/`distinct`/`bindings`, … — have NO slot here, so two nodes differing
-// ONLY in those fields currently produce byte-identical canonical JSON. Python
-// and TS share this exact gap; Julia instead FAILS CLOSED, throwing
-// `E_CANONICAL_UNSUPPORTED_FIELD` when a non-emissible field is set rather than
-// emitting ambiguous bytes. Closing the gap portably requires agreeing an
-// emission encoding (or the fail-closed guard) across all four bindings plus new
-// conformance fixtures — tracked as a cross-binding item, not landed here.
+// The former field-coverage gap (a node's other set fields — `expr`/`ranges`/
+// `reduce`/`semiring`/`join`/`filter`, `regions`/`values`, `table`/`axes`/
+// `output`, `shape`/`perm`/`axis`, `id`/`manifold`, `key`/`distinct`, … — had
+// no slot here, so two nodes differing ONLY in those fields produced identical
+// canonical JSON) is now CLOSED by failing closed: `validate_emissible` rejects
+// any such node with `E_CANONICAL_UNSUPPORTED_FIELD`, matching Julia.
 fn emit_node_json(n: &ExpressionNode) -> String {
     let mut entries: Vec<(String, String)> = Vec::new();
     entries.push(("op".into(), json_string(&n.op)));
@@ -644,6 +767,145 @@ mod tests {
         assert_eq!(canonicalize(&e).unwrap_err(), CanonicalizeError::DivByZero);
     }
 
+    /// A node carrying any NON-EMISSIBLE field fails closed with the pinned
+    /// cross-language code `E_CANONICAL_UNSUPPORTED_FIELD`, matching Julia's
+    /// `_emit_node_json` guard. Covers a single-child sidecar (`filter`,
+    /// `expr`), a scalar sidecar (`table`), and a bare-string sidecar (`id`).
+    #[test]
+    fn non_emissible_field_fails_closed() {
+        // filter (Option<Box<Expr>>).
+        let filtered = Expr::Operator(ExpressionNode {
+            op: "aggregate".into(),
+            args: vec![Expr::Variable("x".into())],
+            filter: Some(Box::new(Expr::Variable("p".into()))),
+            ..ExpressionNode::default()
+        });
+        // expr (Option<Box<Expr>>).
+        let bodied = Expr::Operator(ExpressionNode {
+            op: "arrayop".into(),
+            args: vec![Expr::Variable("A".into())],
+            expr: Some(Box::new(Expr::Variable("A".into()))),
+            ..ExpressionNode::default()
+        });
+        // table (Option<String>).
+        let tabled = Expr::Operator(ExpressionNode {
+            op: "table_lookup".into(),
+            args: vec![],
+            table: Some("t".into()),
+            ..ExpressionNode::default()
+        });
+        // id (Option<String>).
+        let ided = Expr::Operator(ExpressionNode {
+            op: "intersect_polygon".into(),
+            args: vec![Expr::Variable("poly".into())],
+            id: Some("g0".into()),
+            ..ExpressionNode::default()
+        });
+        for e in [&filtered, &bodied, &tabled, &ided] {
+            let err = canonical_json(e).unwrap_err();
+            assert!(
+                matches!(err, CanonicalizeError::UnsupportedField(_)),
+                "expected UnsupportedField, got {err:?}"
+            );
+            assert_eq!(err.to_string(), "E_CANONICAL_UNSUPPORTED_FIELD");
+        }
+    }
+
+    /// A non-emissible field on a node reached through the `args` spine (not
+    /// just the root) is also caught — matching Julia's recursion into `args`.
+    #[test]
+    fn non_emissible_field_in_args_fails_closed() {
+        let e = op(
+            "+",
+            vec![
+                Expr::Variable("x".into()),
+                Expr::Operator(ExpressionNode {
+                    op: "table_lookup".into(),
+                    args: vec![],
+                    table: Some("t".into()),
+                    ..ExpressionNode::default()
+                }),
+            ],
+        );
+        assert_eq!(
+            canonical_json(&e).unwrap_err().to_string(),
+            "E_CANONICAL_UNSUPPORTED_FIELD"
+        );
+    }
+
+    /// The EMISSIBLE `fn`/`name` fields still round-trip (they have a wire
+    /// slot), and the TOLERATED-AND-IGNORED `arg`/`bindings` fields are NOT an
+    /// error — they canonicalize, emitting the pinned fields only. Matches
+    /// Julia's `_EMISSIBLE_FIELDS` / `_CANONICAL_IGNORED_FIELDS`.
+    #[test]
+    fn emissible_and_tolerated_fields_round_trip() {
+        // `fn` (broadcast_fn) is emissible → emitted.
+        let bc = Expr::Operator(ExpressionNode {
+            op: "broadcast".into(),
+            args: vec![Expr::Variable("u".into())],
+            broadcast_fn: Some("sin".into()),
+            ..ExpressionNode::default()
+        });
+        let got = canonical_json(&bc).unwrap();
+        assert!(got.contains(r#""fn":"sin""#), "fn not emitted: {got}");
+
+        // `name` is emissible → emitted.
+        let named = Expr::Operator(ExpressionNode {
+            op: "fn".into(),
+            args: vec![Expr::Variable("x".into())],
+            name: Some("m.f".into()),
+            ..ExpressionNode::default()
+        });
+        assert!(
+            canonical_json(&named).unwrap().contains(r#""name":"m.f""#),
+            "name not emitted"
+        );
+
+        // `arg` and `bindings` are tolerated-and-ignored → no error, not emitted.
+        let mut bindings = std::collections::HashMap::new();
+        bindings.insert("t".to_string(), Expr::Variable("z".into()));
+        let tolerated = Expr::Operator(ExpressionNode {
+            op: "argmax".into(),
+            args: vec![Expr::Variable("x".into())],
+            arg: Some("i".into()),
+            bindings: Some(bindings),
+            ..ExpressionNode::default()
+        });
+        let got = canonical_json(&tolerated).expect("tolerated fields must not error");
+        assert!(!got.contains("\"arg\""), "arg leaked into emission: {got}");
+        assert!(
+            !got.contains("bindings"),
+            "bindings leaked into emission: {got}"
+        );
+    }
+
+    /// `canonicalize` alone STILL preserves every field on pass-through nodes
+    /// (only `canonical_json` fails closed). The fail-close lives in
+    /// `validate_emissible`, not in the tree rewrite.
+    #[test]
+    fn canonicalize_alone_preserves_fields() {
+        let e = Expr::Operator(ExpressionNode {
+            op: "table_lookup".into(),
+            args: vec![],
+            table: Some("mytable".into()),
+            output: Some(serde_json::json!(0)),
+            ..ExpressionNode::default()
+        });
+        let c = canonicalize(&e).expect("canonicalize must not fail-close");
+        match c {
+            Expr::Operator(n) => {
+                assert_eq!(n.table.as_deref(), Some("mytable"));
+                assert_eq!(n.output, Some(serde_json::json!(0)));
+            }
+            other => panic!("expected preserved operator, got {other:?}"),
+        }
+        // But emission fails closed.
+        assert_eq!(
+            canonical_json(&e).unwrap_err().to_string(),
+            "E_CANONICAL_UNSUPPORTED_FIELD"
+        );
+    }
+
     /// Conformance fixture consumer — the same fixture set is run by every
     /// binding's tests; passing here means this binding produces canonical
     /// output that matches the cross-binding contract.
@@ -674,9 +936,21 @@ mod tests {
             let fixture: serde_json::Value = serde_json::from_slice(&raw).expect("parse fixture");
             let input_json = fixture["input"].clone();
             let expr: Expr = serde_json::from_value(input_json).expect("decode input as Expr");
-            let got = canonical_json(&expr).expect("canonicalize");
-            let want = fixture["expected"].as_str().unwrap();
-            assert_eq!(got, want, "fixture {id}: got {got}, want {want}");
+            if let Some(code) = fixture.get("expect_error").and_then(|v| v.as_str()) {
+                // Fail-closed fixture: `canonical_json` must return the pinned
+                // stable error code (e.g. `E_CANONICAL_UNSUPPORTED_FIELD`).
+                let err = canonical_json(&expr)
+                    .expect_err(&format!("fixture {id}: expected error {code}, got Ok"));
+                assert_eq!(
+                    err.to_string(),
+                    code,
+                    "fixture {id}: error code mismatch (got {err}, want {code})"
+                );
+            } else {
+                let got = canonical_json(&expr).expect("canonicalize");
+                let want = fixture["expected"].as_str().unwrap();
+                assert_eq!(got, want, "fixture {id}: got {got}, want {want}");
+            }
         }
     }
 }

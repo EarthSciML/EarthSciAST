@@ -1,0 +1,11 @@
+{
+  "id": "filter_unsupported",
+  "description": "Fail-closed: a node carrying a filter predicate. 'filter' is not in the canonical emissible set {op,args,wrt,dim,fn,name,value}. canonical_json must raise E_CANONICAL_UNSUPPORTED_FIELD.",
+  "input": {
+    "op": "aggregate",
+    "args": ["x"],
+    "filter": {"op": ">", "args": ["x", 0]}
+  },
+  "expect_error": "E_CANONICAL_UNSUPPORTED_FIELD",
+  "tags": ["fail_closed", "filter"]
+}

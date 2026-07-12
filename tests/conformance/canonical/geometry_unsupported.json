@@ -1,0 +1,13 @@
+{
+  "id": "geometry_unsupported",
+  "description": "Fail-closed: a geometry node carrying id/manifold/distinct, none of which is in the canonical emissible set {op,args,wrt,dim,fn,name,value}. canonical_json must raise E_CANONICAL_UNSUPPORTED_FIELD.",
+  "input": {
+    "op": "geometry",
+    "args": [],
+    "id": "mesh0",
+    "manifold": "sphere",
+    "distinct": true
+  },
+  "expect_error": "E_CANONICAL_UNSUPPORTED_FIELD",
+  "tags": ["fail_closed", "geometry", "manifold", "distinct"]
+}

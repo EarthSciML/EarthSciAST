@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalJson } from './canonicalize.js'
+import { CanonicalizeError, canonicalJson } from './canonicalize.js'
 import { losslessJsonParse } from './numeric-literal.js'
 import { readFixture } from './test-helpers.js'
 
@@ -25,10 +25,20 @@ describe('canonical-form cross-binding conformance', () => {
     // `floatLit` leaves. Preserves the RFC §5.4.1 distinction that the
     // binding's canonical form depends on.
     const raw = losslessJsonParse(canon(entry.path)) as Record<string, unknown>
-    const expected = raw.expected as string
+    const expected = raw.expected as string | undefined
+    const expectError = raw.expect_error as string | undefined
     const input = raw.input
     const test = entry.ts_skip ? it.skip : it
     test(`${entry.id}${entry.ts_skip ? ' (TS skip: ' + entry.ts_skip + ')' : ''}`, () => {
+      // Fail-closed fixtures pin an error code rather than expected bytes:
+      // `canonicalJson(input)` must throw a CanonicalizeError with that code.
+      if (expectError !== undefined) {
+        expect(() => canonicalJson(input as never)).toThrow(
+          expect.objectContaining({ code: expectError }),
+        )
+        expect(() => canonicalJson(input as never)).toThrow(CanonicalizeError)
+        return
+      }
       const got = canonicalJson(input as never)
       expect(got).toBe(expected)
     })

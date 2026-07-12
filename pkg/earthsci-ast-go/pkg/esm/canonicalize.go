@@ -15,6 +15,12 @@ import (
 var (
 	ErrCanonicalNonFinite = errors.New("E_CANONICAL_NONFINITE")
 	ErrCanonicalDivByZero = errors.New("E_CANONICAL_DIVBY_ZERO")
+	// ErrCanonicalUnsupportedField is returned by CanonicalJSON when a node
+	// carries a set field outside the closed emissible set
+	// {op,args,wrt,dim,fn,name,value} (arg/bindings tolerated) — the node has
+	// no faithful canonical JSON in the pinned encoding. Matches the Julia
+	// reference's E_CANONICAL_UNSUPPORTED_FIELD (see canonicalize.jl).
+	ErrCanonicalUnsupportedField = errors.New("E_CANONICAL_UNSUPPORTED_FIELD")
 )
 
 // Canonicalize applies RFC §5.4 canonical form to an expression tree.
@@ -415,11 +421,77 @@ func CanonicalJSON(expr Expression) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Fail-closed emissibility gate (twin of Julia's _emit_node_json check).
+	// Canonicalize is field-preserving, so a node may still carry a field with
+	// no slot in the pinned 7-field canonical encoding; such a node has no
+	// faithful canonical JSON and is rejected here rather than emitted lossily.
+	if err := validateEmissibleFields(c); err != nil {
+		return nil, err
+	}
 	s, err := emitCanonicalJSON(c)
 	if err != nil {
 		return nil, err
 	}
 	return []byte(s), nil
+}
+
+// validateEmissibleFields walks a canonicalized tree and returns
+// ErrCanonicalUnsupportedField if any ExprNode carries a SET field outside the
+// closed emissible set {op, args, wrt, dim, fn, name, value}. `arg` and
+// `bindings` are TOLERATED (present, ignored, never emitted), matching the
+// Julia reference (canonicalize.jl _CANONICAL_IGNORED_FIELDS). Recurses through
+// `args` only — the sole emissible slot that can carry child ExprNodes — exactly
+// as the Julia emitter recurses, so every node the emitter would visit is
+// screened.
+func validateEmissibleFields(a any) error {
+	var n ExprNode
+	switch v := a.(type) {
+	case ExprNode:
+		n = v
+	case *ExprNode:
+		n = *v
+	default:
+		return nil
+	}
+	if exprNodeHasNonEmissibleField(n) {
+		return ErrCanonicalUnsupportedField
+	}
+	for _, child := range n.Args {
+		if err := validateEmissibleFields(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// exprNodeHasNonEmissibleField reports whether n carries any SET field outside
+// the emissible set {op, args, wrt, dim, fn, name, value} and the tolerated set
+// {arg, bindings}. FAIL-CLOSED: every OTHER ExprNode field (types.go) is listed
+// here explicitly, so a newly-added struct field is non-emissible until it is
+// deliberately reclassified. Mirrors the Julia _NON_EMISSIBLE_FIELDS tuple.
+func exprNodeHasNonEmissibleField(n ExprNode) bool {
+	return n.Var != nil ||
+		n.Lower != nil ||
+		n.Upper != nil ||
+		n.Table != nil ||
+		len(n.TableAxes) > 0 ||
+		n.Output != nil ||
+		len(n.Attrs) > 0 ||
+		len(n.Regions) > 0 ||
+		len(n.Values) > 0 ||
+		len(n.Shape) > 0 ||
+		len(n.Perm) > 0 ||
+		n.Axis != nil ||
+		n.Manifold != nil ||
+		len(n.OutputIdx) > 0 ||
+		n.Expr != nil ||
+		n.Reduce != nil ||
+		n.Semiring != nil ||
+		len(n.Ranges) > 0 ||
+		len(n.Join) > 0 ||
+		n.Filter != nil ||
+		n.Distinct != nil ||
+		n.Key != nil
 }
 
 func emitCanonicalJSON(a any) (string, error) {
@@ -507,59 +579,25 @@ func emitCanonicalObject(keys []string, get func(string) any) (string, error) {
 	return buf.String(), nil
 }
 
-// emitExprNodeJSON renders an ExprNode's canonical JSON object. It emits EVERY
-// set field (driven from the same field set mapExprChildren walks, plus the
-// non-expression structural slots) rather than a hand-maintained subset — the
-// old emitter dropped table/axes/output/lower/upper/… and so collapsed distinct
-// expressions to equal canonical JSON (which is also the sortArgs sort key).
-// `op` and `args` are always present (args as `[]` when empty); every other
-// field follows its struct-tag omitempty (nil pointer / empty slice / empty map
-// omitted). Keys are emitted in sorted byte order to match json.Marshal.
+// emitExprNodeJSON renders an ExprNode's canonical JSON object, emitting ONLY
+// the CLOSED emissible field set the cross-binding canonical encoding pins:
+// op, args, wrt, dim, fn, name, value (RFC §5.4.6). `op` and `args` are always
+// present (`args` as `[]` when empty); wrt/dim/fn/name emit when their *string
+// is non-nil; value emits when non-nil. Keys are emitted in sorted byte order
+// to match json.Marshal.
+//
+// Extending this set is a cross-binding format change, never a Go-local edit.
+// A node carrying any NON-emissible set field never reaches here: CanonicalJSON
+// screens it up front (validateEmissibleFields → ErrCanonicalUnsupportedField),
+// matching the Julia reference's fail-closed _emit_node_json.
 func emitExprNodeJSON(n ExprNode) (string, error) {
-	kv := make([][2]string, 0, 8)
+	kv := make([][2]string, 0, 7)
 	appendRaw := func(key, val string) { kv = append(kv, [2]string{key, val}) }
 	appendStr := func(key string, p *string) {
 		if p != nil {
 			b, _ := json.Marshal(*p)
 			appendRaw(key, string(b))
 		}
-	}
-	appendScalar := func(key string, v any) error {
-		if v == nil {
-			return nil
-		}
-		s, err := emitCanonicalJSON(v)
-		if err != nil {
-			return err
-		}
-		appendRaw(key, s)
-		return nil
-	}
-	appendSlice := func(key string, s []any) error {
-		if len(s) == 0 {
-			return nil
-		}
-		parts := make([]string, len(s))
-		for i, e := range s {
-			js, err := emitCanonicalJSON(e)
-			if err != nil {
-				return err
-			}
-			parts[i] = js
-		}
-		appendRaw(key, "["+strings.Join(parts, ",")+"]")
-		return nil
-	}
-	appendStrMap := func(key string, m map[string]any) error {
-		if len(m) == 0 {
-			return nil
-		}
-		s, err := emitCanonicalObject(sortedKeys(m), func(k string) any { return m[k] })
-		if err != nil {
-			return err
-		}
-		appendRaw(key, s)
-		return nil
 	}
 
 	// op (always) and args (always, `[]` when empty).
@@ -578,94 +616,21 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 	}
 	appendRaw("args", "["+strings.Join(argParts, ",")+"]")
 
-	// *string slots. `fn` carries the bc kind on synthetic `bc` nodes (§9.2);
-	// emitting it symmetrically keeps bc(u,dirichlet,…) and bc(u,neumann,…)
-	// distinct in the canonical form (ess-tox/G8).
+	// *string emissible slots. `fn` carries the bc kind on synthetic `bc`
+	// nodes (§9.2); emitting it symmetrically keeps bc(u,dirichlet,…) and
+	// bc(u,neumann,…) distinct in the canonical form (ess-tox/G8).
 	appendStr("wrt", n.Wrt)
 	appendStr("dim", n.Dim)
 	appendStr("fn", n.Fn)
-	appendStr("var", n.Var)
 	appendStr("name", n.Name)
-	appendStr("table", n.Table)
-	appendStr("manifold", n.Manifold)
-	appendStr("reduce", n.Reduce)
-	appendStr("semiring", n.Semiring)
-	appendStr("arg", n.Arg)
 
-	// scalar Expression slots.
-	for _, f := range []struct {
-		key string
-		v   any
-	}{
-		{"lower", n.Lower}, {"upper", n.Upper}, {"value", n.Value},
-		{"output", n.Output}, {"axis", n.Axis}, {"expr", n.Expr},
-		{"filter", n.Filter}, {"key", n.Key},
-	} {
-		if err := appendScalar(f.key, f.v); err != nil {
-			return "", err
-		}
-	}
-
-	// list-of-Expression slots.
-	for _, f := range []struct {
-		key string
-		v   []any
-	}{
-		{"values", n.Values}, {"shape", n.Shape}, {"perm", n.Perm},
-		{"output_idx", n.OutputIdx}, {"join", n.Join},
-	} {
-		if err := appendSlice(f.key, f.v); err != nil {
-			return "", err
-		}
-	}
-
-	// map slots. TableAxes is map[string]Expression; emit via the shared object
-	// renderer keyed in sorted order.
-	if len(n.TableAxes) > 0 {
-		s, err := emitCanonicalObject(sortedKeys(n.TableAxes), func(k string) any { return n.TableAxes[k] })
+	// value: the `const`-op literal payload (§4.2 / §9.3).
+	if n.Value != nil {
+		s, err := emitCanonicalJSON(n.Value)
 		if err != nil {
 			return "", err
 		}
-		appendRaw("axes", s)
-	}
-	if err := appendStrMap("attrs", n.Attrs); err != nil {
-		return "", err
-	}
-	if err := appendStrMap("bindings", n.Bindings); err != nil {
-		return "", err
-	}
-	if err := appendStrMap("ranges", n.Ranges); err != nil {
-		return "", err
-	}
-
-	// Regions [][][]interface{} (makearray hyper-rectangular index regions).
-	if len(n.Regions) > 0 {
-		regs := make([]string, len(n.Regions))
-		for i, region := range n.Regions {
-			pairs := make([]string, len(region))
-			for j, pair := range region {
-				elems := make([]string, len(pair))
-				for k, b := range pair {
-					s, e := emitCanonicalJSON(b)
-					if e != nil {
-						return "", e
-					}
-					elems[k] = s
-				}
-				pairs[j] = "[" + strings.Join(elems, ",") + "]"
-			}
-			regs[i] = "[" + strings.Join(pairs, ",") + "]"
-		}
-		appendRaw("regions", "["+strings.Join(regs, ",")+"]")
-	}
-
-	// Distinct *bool (aggregate reduces over distinct values).
-	if n.Distinct != nil {
-		if *n.Distinct {
-			appendRaw("distinct", "true")
-		} else {
-			appendRaw("distinct", "false")
-		}
+		appendRaw("value", s)
 	}
 
 	sort.Slice(kv, func(i, j int) bool { return kv[i][0] < kv[j][0] })

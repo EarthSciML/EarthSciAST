@@ -1,0 +1,14 @@
+{
+  "id": "aggregate_unsupported",
+  "description": "Fail-closed: an aggregate node carries the discretization-only fields reduce/semiring/expr/ranges, none of which is in the canonical emissible set {op,args,wrt,dim,fn,name,value}. canonical_json must raise E_CANONICAL_UNSUPPORTED_FIELD rather than silently dropping them.",
+  "input": {
+    "op": "aggregate",
+    "args": ["x"],
+    "reduce": "sum",
+    "semiring": "sum_product",
+    "expr": {"op": "*", "args": ["A", "F"]},
+    "ranges": {"i": [0, 3]}
+  },
+  "expect_error": "E_CANONICAL_UNSUPPORTED_FIELD",
+  "tags": ["fail_closed", "aggregate", "reduce", "semiring"]
+}
