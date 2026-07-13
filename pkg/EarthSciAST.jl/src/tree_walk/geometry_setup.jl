@@ -986,31 +986,33 @@ end
 # observeds that depend on them WITHOUT touching a state variable. Single direct
 # clips (in `geom_ring_vars`) keep the existing 2-D ring path. Returns the set and
 # the name → RHS map.
-# Every VarExpr name appearing anywhere in `expr` (args / arrayop-aggregate body /
-# bounds / makearray values). Unlike `free_variables`, this does NOT treat an
-# arrayop/aggregate as binding its references away — we need the array vars an
-# expression READS (intersected with declared variable names by the caller, which
-# drops bound loop indices). Used for the setup-geometry dependency closure.
-# INTENTIONAL field subset (behavior-pinned — do NOT widen to `child_exprs`
-# coverage without a spec decision): walks args / expr_body / lower / upper /
-# values, NOT filter / key / table_axes / ranges bounds. A variable read only
-# inside e.g. a filter predicate is therefore invisible to the setup-dependency
-# closure, the live-taint pass, and `_resolve_observed`'s inlining trigger —
-# flagged for Wave 3.
+# Every VarExpr name appearing anywhere in `expr` — the NON-BINDING twin of
+# `free_variables`: it enumerates children through the ONE shared
+# `child_exprs`/`foreach_subexpr` traversal (so it sees EVERY expression-bearing
+# `OpExpr` field: args, aggregate/arrayop `expr_body`, integral `lower`/`upper`,
+# makearray `values`, aggregate `filter` predicates, value-invention `key`s,
+# table-lookup `table_axes`, and expression-valued dense `ranges` bounds), plus
+# the `wrt` differentiation target, exactly as `free_variables` does. Unlike
+# `free_variables` it does NOT subtract an arrayop/aggregate's bound loop
+# symbols — we need the vars an expression READS, and every caller intersects
+# the result with declared variable names (which drops the bound indices).
+#
+# Do NOT re-hand-roll the field list here. This walker feeds the setup-geometry
+# dependency closure, the live-taint pass, `_resolve_observed`'s inlining
+# trigger AND the cadence materialization split (`_discrete_materialize_split`),
+# where a MISSED reference is a silent wrong answer: a def whose only state read
+# sits in an aggregate `filter` used to classify as state-free and get frozen
+# into a discrete-cadence cache at `u = 0` (ess-5d1). Routing through
+# `child_exprs` is what keeps this walker from drifting out of sync with the
+# rest of the IR again; `_build_discrete_materializer!` additionally CHECKS the
+# result on the compiled fill nodes, so a future divergence fails loudly.
 function _referenced_var_names(expr, acc::Set{String}=Set{String}())
-    if expr isa VarExpr
-        push!(acc, expr.name)
-    elseif expr isa OpExpr
-        for a in expr.args
-            _referenced_var_names(a, acc)
-        end
-        expr.expr_body !== nothing && _referenced_var_names(expr.expr_body, acc)
-        expr.lower !== nothing && _referenced_var_names(expr.lower, acc)
-        expr.upper !== nothing && _referenced_var_names(expr.upper, acc)
-        if expr.values !== nothing
-            for v in expr.values
-                _referenced_var_names(v, acc)
-            end
+    expr isa ASTExpr || return acc
+    foreach_subexpr(expr) do e
+        if e isa VarExpr
+            push!(acc, e.name)
+        elseif e isa OpExpr && e.wrt !== nothing
+            push!(acc, e.wrt::String)
         end
     end
     return acc
