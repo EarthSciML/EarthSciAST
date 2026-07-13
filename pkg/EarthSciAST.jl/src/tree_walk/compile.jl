@@ -400,12 +400,62 @@ end
 # into `cache` (slot order); every occurrence then reads `cache[slot]` via
 # `_NK_CACHED`. A subexpression occurring K times is thus evaluated once.
 #
-# BIT-EXACTNESS: a cached subexpression's definition is compiled from its
-# original (first-seen) operand order — identical to what `_compile` emits
-# inline today — so each occurrence reads back the exact bytes it would have
-# computed. With no common subexpressions the prelude is empty and `_compile_cse`
-# produces the identical `_Node` tree `_compile` would, so f! is unchanged for
-# models with nothing to share.
+# IDENTITY IS CANONICAL, NOT STRUCTURAL — and that is a decision, not an accident.
+# `canonical_json` CANONICALIZES before it emits (canonicalize.jl): n-ary `+`/`*`
+# are flattened and their arguments sorted. Three consequences, stated exactly:
+#
+#   (a) CSE keys on CANONICAL identity. Two subexpressions share a slot iff their
+#       canonical forms are equal — the same identity all five bindings already
+#       agree on, which is what makes keying on it conformance-safe.
+#   (b) Reassociation-equivalent expressions therefore SHARE A SLOT. `(a+b)+c` and
+#       `a+(b+c)` have one key, `{"args":["a","b","c"],"op":"+"}`, hence one slot.
+#   (c) The FIRST-SEEN operand order is what every occurrence reads back. The slot's
+#       def is compiled from the first occurrence encountered (`_cse_rebuild`), so
+#       the other occurrences get that association order, not their own.
+#
+# The consequence is worth naming, because it is surprising: since float `+`/`*` are
+# not associative, an equation's numeric output is NOT a function of that equation
+# alone — adding a canonically-equal expression elsewhere in the model can shift it.
+# The difference is bounded by float reassociation of a CANONICALLY EQUAL expression
+# (normally sub-ulp; catastrophic cancellation can amplify it), and the format
+# already reassociates freely as a matter of course: `discretize` canonicalizes each
+# per-cell RHS before it is ever compiled, so canonical form *is* this format's
+# notion of expression identity and a conforming reader may associate `+(a,b,c)`
+# however it likes. Keying CSE structurally instead would restore per-equation
+# locality, but it would lose commutative sharing (which tree_walk_cse_test.jl pins)
+# and would itself change the numbers of models that work today. So: the key stays
+# canonical, and this property is PINNED by a test rather than left latent.
+#
+# What IS bit-exact: a model with nothing to share gets an empty prelude, and
+# `_compile_cse` then produces the identical `_Node` tree `_compile` would — so f!
+# is unchanged, instruction for instruction, for models with no common subexpression.
+#
+# GUARDS — the prelude is UNCONDITIONAL, the walker is LAZY. `_make_rhs` fills every
+# slot at the top of every call, before any equation runs, while `_eval_node_op` is
+# lazy for `ifelse` (only the taken branch is walked) and short-circuits `and`/`or`.
+# Hoisting a subexpression that occurs ONLY under a guard would therefore evaluate it
+# when no guard fires — turning `ifelse(a >= 0, sqrt(a), 0)` at `a = -1` into a
+# `DomainError`, and making whether a guard protects its operand depend on how many
+# times that operand happens to appear in the model. So a key is hoisted iff
+#
+#     total_occurrences >= 2   AND   unconditional_occurrences >= 1
+#
+# (see `_cse_count!`). If a key has an unconditional occurrence the original walk
+# evaluates it anyway at that occurrence, so evaluating it once in the prelude is
+# exactly as safe — no new throw, no new NaN — and the GUARDED occurrences of that
+# same key may then freely read the cache (`_compile_cse` needs no guard logic: slot
+# membership already implies an unconditional occurrence). A key occurring only under
+# guards is left inline, where its guard still protects it. Note this is deliberately
+# not "refuse to recurse into guarded arms", which would lose legitimate sharing
+# within an arm and between an arm and an unconditional occurrence.
+#
+# Guard laziness holds only on the two SCALAR walkers (`_eval_node`, `_oop_eval`).
+# The vectorized `_eval_vec` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
+# broadcasts over lanes, and per-lane laziness would need masked evaluation — so a
+# guarded-domain expression inside an `arrayop` is NOT protected by its guard, with
+# or without CSE. That is a known, deliberate divergence between the scalar and
+# array paths (see the `ifelse` arm of `_eval_vec` in vectorize.jl), and it is why
+# the guard rule above lives in the scalar CSE pass only.
 #
 # SCOPE — why CSE lives on the scalar tree-walk path, not the vectorized
 # (ess-dhq) arrayop path. After ess-dhq, redundancy is removed at three layers:
@@ -473,14 +523,36 @@ function _cse_key(e::ASTExpr)
     end
 end
 
-# Count pass: tally canonical_json occurrences of every hoistable subexpression
-# across all RHS trees. A key seen >= 2 times is worth hoisting.
-function _cse_count!(e::ASTExpr, counts::Dict{String,Int})
+# Is argument `i` of `op` evaluated CONDITIONALLY — i.e. only when a sibling
+# argument takes a particular value? Exactly the three lazy/short-circuiting arms of
+# `_eval_node_op`: `ifelse` walks only the taken branch (args 2 and 3), and `and` /
+# `or` stop at the first decisive argument (args 2..n). Arg 1 of all three is always
+# evaluated. Every other op evaluates all of its arguments, always.
+#
+# This is the ONE place the guard structure is declared; `_cse_count!` propagates the
+# flag to all descendants, so a node inside a guarded arm is guarded however deep.
+@inline _cse_arg_conditional(op::String, i::Int) =
+    (op == "ifelse" && i >= 2) || ((op == "and" || op == "or") && i >= 2)
+
+# Count pass: tally `canonical_json` occurrences of every hoistable subexpression
+# across all RHS trees, splitting each key's tally into (TOTAL, UNCONDITIONAL).
+#
+# `conditional` is true iff `e` sits under a guard — under a lazy `ifelse` branch or
+# a short-circuited `and`/`or` argument, at any depth. Two counts, not one, because
+# the hoist rule needs both (see the GUARDS note above): >= 2 total occurrences makes
+# a key worth hoisting, and >= 1 unconditional occurrence makes hoisting it SAFE —
+# the original walk evaluates it at that occurrence regardless, so the prelude's
+# unconditional evaluation introduces no throw or NaN the walk did not already have.
+function _cse_count!(e::ASTExpr, counts::Dict{String,Tuple{Int,Int}},
+                     conditional::Bool=false)
     (e isa OpExpr && _cse_hoistable(e)) || return
     k = _cse_key(e)
-    k === nothing || (counts[k] = get(counts, k, 0) + 1)
-    for a in e.args
-        _cse_count!(a, counts)
+    if k !== nothing
+        total, uncond = get(counts, k, (0, 0))
+        counts[k] = (total + 1, uncond + (conditional ? 0 : 1))
+    end
+    for (i, a) in enumerate(e.args)
+        _cse_count!(a, counts, conditional || _cse_arg_conditional(e.op, i))
     end
     return
 end
@@ -619,16 +691,19 @@ end
 # (criterion #2: distinct evaluations == distinct canonical subexpressions).
 function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
                              var_map, param_syms, reg_funcs)
-    counts = Dict{String,Int}()
+    counts = Dict{String,Tuple{Int,Int}}()
     for (_, e) in entries
         _cse_count!(e, counts)
     end
     cached = Set{String}()
     n_occ = 0
-    for (k, c) in counts
-        if c >= 2
+    for (k, (total, uncond)) in counts
+        # Hoist iff it is WORTH it (>= 2 occurrences) and SAFE (>= 1 of them
+        # unconditional — the prelude then evaluates nothing the walk would not).
+        # A key occurring only under guards stays inline, behind its guard.
+        if total >= 2 && uncond >= 1
             push!(cached, k)
-            n_occ += c
+            n_occ += total   # every occurrence of a cached key becomes a cache read
         end
     end
     cache = _CSECache()

@@ -357,7 +357,32 @@ function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
     if n.op === :^ || n.op === :pow
         return _oop_pow(n.op, n.children, u, p, t, cache)
     end
+    # A GUARD MUST GUARD. `ifelse`/`and`/`or` are lazy on the in-place scalar walker
+    # (`_eval_node_op`), and this emitter promises a Float64 `:oop` run is bit-
+    # identical to `:inplace` — but the generic path below fills EVERY child into `c`
+    # before dispatching to `_oop_op`, which would make them eager here and throw
+    # `DomainError` on `ifelse(a >= 0, sqrt(a), 0)` at `a = -1`, a model `f!` runs
+    # fine. So they short-circuit here, ahead of the child loop, exactly the way `fn`
+    # and `^` already return early. (`_oop_op` keeps its folded arms: it is SHARED
+    # with `_oop_eval_vec`'s `_VK_OP` arm, where evaluation is over lanes and eager
+    # by construction — the same scalar/array divergence `_eval_vec` has.)
     ch = n.children
+    if n.op === :ifelse
+        _expect_arity_n(n.op, ch, 3)
+        return _oop_eval(ch[1], u, p, t, cache) != 0 ?
+               _oop_eval(ch[2], u, p, t, cache) :
+               _oop_eval(ch[3], u, p, t, cache)
+    elseif n.op === :and
+        @inbounds for i in eachindex(ch)
+            _oop_eval(ch[i], u, p, t, cache) == 0 && return zero(T)
+        end
+        return one(T)
+    elseif n.op === :or
+        @inbounds for i in eachindex(ch)
+            _oop_eval(ch[i], u, p, t, cache) != 0 && return one(T)
+        end
+        return zero(T)
+    end
     c = Vector{T}(undef, length(ch))
     @inbounds for i in eachindex(ch)
         c[i] = _oop_eval(ch[i], u, p, t, cache)
