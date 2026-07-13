@@ -219,7 +219,15 @@ const _OP_TABLE = _OpSpec[
     _op("false"; arity=0:0, category=:constant, geo=true),
 
     # ── Closed functions & the retired v0.2.x closure marker (esm-spec §9.2) ──
-    _op("fn";   category=:function, cse=true, known=true),
+    #    `fn` is NOT `cse_opaque`: a closed-function call is a pure, deterministic
+    #    scalar function of its scalar args (the `interp.*` / `datetime.*` registry
+    #    is closed), so both the call and the subexpressions beneath it are sound
+    #    CSE hoist candidates. Flagging it opaque made every closed-function call a
+    #    sharing BARRIER, so an observed chain reaching a costly subtree through an
+    #    `interp.*` lookup (FastJX actinic-flux bands over `Solar.cos_zenith`) was
+    #    re-walked once per occurrence — see `_CSE_OPAQUE_OPS` (tree_walk/compile.jl).
+    #    `call` stays opaque: it was removed in v0.3.0 and always throws at compile.
+    _op("fn";   category=:function, known=true),
     _op("call"; category=:function, cse=true, known=true),
 
     # ── Const data / enum markers ──

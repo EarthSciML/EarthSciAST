@@ -32,12 +32,18 @@ const ESM = EarthSciAST
     end
 
     @testset "_CSE_OPAQUE_OPS membership (pre-registry literal)" begin
+        # `fn` was dropped from this set (ess-obs): a closed-function call is a
+        # pure scalar function of its scalar args, so CSE may hoist it AND share
+        # subexpressions beneath it. Keeping it opaque made every `interp.*` /
+        # `datetime.*` call a sharing barrier, which is what let an inlined
+        # observed chain under an `interp.*` lookup be re-walked per occurrence.
         @test ESM._CSE_OPAQUE_OPS == Set{String}([
-            "fn", "const", "enum", "call", "D", "ic", "grad", "div", "laplacian",
+            "const", "enum", "call", "D", "ic", "grad", "div", "laplacian",
             "arrayop", "aggregate", "makearray", "broadcast", "reshape",
             "transpose", "concat", "index",
         ])
         @test ESM._CSE_OPAQUE_OPS isa Set{String}
+        @test !("fn" in ESM._CSE_OPAQUE_OPS)
     end
 
     @testset "_STENCIL_ELEMENTWISE_OPS membership (pre-registry literal)" begin

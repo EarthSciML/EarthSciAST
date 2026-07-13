@@ -213,51 +213,64 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo
     m[expr] = r
     return r
 end
+
+# Lower one `fn` (closed-function) OpExpr to its `_NK_OP` node (esm-spec §9.2 /
+# esm-tzp). The function name is captured in the node's `payload` slot as a tuple
+# of (name::String, spec_or_nothing). For the `interp.*` functions the const-array
+# args are pre-extracted per `_FN_CONST_ARG_SPECS` AND validated + coerced into a
+# typed `_Interp*Spec` here at build time, so the runtime hot path neither walks
+# the AST nor re-validates the axis. All-scalar closed functions (`datetime.*`)
+# store `nothing` and keep the boxed `evaluate_closed_function` path.
+#
+# `compile_child` lowers ONE scalar argument expression to a `_Node`. It is a
+# parameter — not a hardcoded `_compile` call — so the CSE pass can reuse this
+# exact lowering while compiling the scalar args through `_compile_cse` (ess-r7h
+# follow-up, ess-obs): a closed function is a pure, deterministic node, so both
+# the `fn` node itself and every scalar subexpression BELOW it are legitimate CSE
+# hoist candidates. Routing both callers through one function is what keeps the
+# const-arg protocol (`_FN_CONST_ARG_SPECS`) single-sourced — a CSE-local copy of
+# this branch could drift from the eval arm's payload contract.
+function _compile_fn_node(expr::OpExpr, compile_child)
+    fname = expr.name
+    fname === nothing &&
+        throw(TreeWalkError("E_TREEWALK_FN_MISSING_NAME", expr.op))
+    if !(fname in _CLOSED_FUNCTION_NAMES)
+        throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION", fname))
+    end
+    cspec = _fn_const_arg_spec(fname)
+    if cspec === nothing
+        children = _Node[compile_child(a) for a in expr.args]
+        # Datetime.* etc.: `(fname, nothing)`; the eval arm's concrete-tuple
+        # split takes the boxed `evaluate_closed_function` fallback.
+        payload = (fname, nothing)
+    else
+        length(expr.args) == cspec.arity ||
+            throw(TreeWalkError("E_TREEWALK_FN_ARITY",
+                "$(fname) expects $(cspec.arity) args, got $(length(expr.args))"))
+        # Validate + extract every const position first (matching the
+        # pre-table ladders, which never compiled a scalar arg before a
+        # failed const check), then compile the scalar args — in spec
+        # order — as the node's children. The const arrays are validated +
+        # coerced into a typed spec ONCE here (fail-fast on a bad axis). The
+        # payload is the CONCRETE `Tuple{String,_Interp*Spec}`; the eval arm
+        # `isa`-matches that concrete tuple type so the spec is read without
+        # a per-call re-box (a `Tuple{String,Any}` read would box the inline
+        # immutable struct every call).
+        const_args = Any[_const_array_arg(expr.args[pos], cspec.const_errs[k])
+                         for (k, pos) in enumerate(cspec.const_positions)]
+        children = _Node[compile_child(expr.args[pos])
+                         for pos in 1:cspec.arity if !(pos in cspec.const_positions)]
+        payload = (fname, _build_interp_spec(fname, const_args))
+    end
+    return _mknode(kind=_NK_OP, op=:fn, children=children, payload=payload)
+end
+
 function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
     payload = nothing
     if op_sym === :fn
-        # Closed function registry (esm-spec §9.2 / esm-tzp). The function
-        # name is captured in the node's `payload` slot as a tuple of
-        # (name::String, spec_or_nothing). For the `interp.*` functions the
-        # const-array args are pre-extracted per `_FN_CONST_ARG_SPECS` AND
-        # validated + coerced into a typed `_Interp*Spec` here at build time, so
-        # the runtime hot path neither walks the AST nor re-validates the axis.
-        # All-scalar closed functions (`datetime.*`) store `nothing` and keep
-        # the boxed `evaluate_closed_function` path.
-        fname = expr.name
-        fname === nothing &&
-            throw(TreeWalkError("E_TREEWALK_FN_MISSING_NAME", expr.op))
-        if !(fname in _CLOSED_FUNCTION_NAMES)
-            throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION", fname))
-        end
-        cspec = _fn_const_arg_spec(fname)
-        if cspec === nothing
-            children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
-                             for a in expr.args]
-            # Datetime.* etc.: `(fname, nothing)`; the eval arm's concrete-tuple
-            # split takes the boxed `evaluate_closed_function` fallback.
-            payload = (fname, nothing)
-        else
-            length(expr.args) == cspec.arity ||
-                throw(TreeWalkError("E_TREEWALK_FN_ARITY",
-                    "$(fname) expects $(cspec.arity) args, got $(length(expr.args))"))
-            # Validate + extract every const position first (matching the
-            # pre-table ladders, which never compiled a scalar arg before a
-            # failed const check), then compile the scalar args — in spec
-            # order — as the node's children. The const arrays are validated +
-            # coerced into a typed spec ONCE here (fail-fast on a bad axis). The
-            # payload is the CONCRETE `Tuple{String,_Interp*Spec}`; the eval arm
-            # `isa`-matches that concrete tuple type so the spec is read without
-            # a per-call re-box (a `Tuple{String,Any}` read would box the inline
-            # immutable struct every call).
-            const_args = Any[_const_array_arg(expr.args[pos], cspec.const_errs[k])
-                             for (k, pos) in enumerate(cspec.const_positions)]
-            children = _Node[_compile(expr.args[pos], var_map, param_syms, reg_funcs, memo)
-                             for pos in 1:cspec.arity if !(pos in cspec.const_positions)]
-            payload = (fname, _build_interp_spec(fname, const_args))
-        end
-        return _mknode(kind=_NK_OP, op=op_sym, children=children, payload=payload)
+        return _compile_fn_node(expr,
+            a -> _compile(a, var_map, param_syms, reg_funcs, memo))
     end
 
     children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
@@ -418,12 +431,25 @@ end
 # future case — keyed structurally on the post-merge `_VecNode` rather than on
 # `canonical_json`, with a per-call vector cache — and is tracked as a follow-up.
 
-# Ops `_compile` handles specially (closed functions, array/aggregate producers,
-# unresolved/illegal-in-RHS markers). CSE never hoists a node rooted at one of
-# these and never rewrites their operands — such subtrees delegate to plain
-# `_compile`. Everything else is the scalar arithmetic / comparison /
-# transcendental family that `_compile` lowers to a plain `_NK_OP`, which is
-# exactly what `_compile_cse` reconstructs, so hoisting those is sound.
+# Ops CSE must not look at: array/aggregate producers, const/enum data carriers,
+# and the unresolved/illegal-in-RHS markers. CSE never hoists a node rooted at
+# one of these and never rewrites their operands — such subtrees delegate to
+# plain `_compile`. Everything else is a pure, deterministic scalar node whose
+# value depends only on `(u, p, t)`, so naming it once and reading the name back
+# is value-preserving.
+#
+# `fn` (the closed-function call) is deliberately NOT opaque (ess-obs). It IS
+# handled specially by `_compile` — const-array args, a typed payload — but it is
+# nonetheless a pure scalar function of its scalar args, and the `interp.*` /
+# `datetime.*` registry (esm-spec §9.2) is closed and deterministic. Treating it
+# as opaque made every closed-function call a CSE BARRIER: `_cse_count!` stopped
+# at the `fn` node, so neither the call nor anything beneath it could be shared.
+# That is exactly the shape of an inlined observed chain that reaches a
+# time/solar-geometry subtree through an `interp.*` table lookup — e.g. FastJX's
+# 18 actinic-flux bands `F_i = interp.linear(table_i, axis, cos_sza)`, each
+# carrying a full copy of the inlined `Solar.cos_zenith` subtree, summed by ~14
+# photolysis rates: ~250 re-walks of the same solar chain per RHS call. Hoisting
+# through `fn` collapses all of them to one evaluation (see `_cse_rebuild`).
 # Membership is declared per-op in src/op_registry.jl (flag `:cse_opaque`)
 # and pinned by op_registry_test.jl.
 const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
@@ -470,6 +496,23 @@ mutable struct _CSEContext
     cache::Vector{Float64}
 end
 
+# Rebuild the `_Node` that plain `_compile` would emit for a hoistable `expr`,
+# but with each operand lowered through `_compile_cse` so a shared operand
+# becomes a `_NK_CACHED` ref. The `fn` arm delegates to `_compile_fn_node` — the
+# SAME lowering `_compile_op` uses — so the closed-function payload contract
+# (const-arg extraction, typed `_Interp*Spec`, spec-order scalar children) is
+# single-sourced; only the scalar children route through CSE. Every other
+# hoistable op is a plain `_NK_OP` whose operands are all scalar.
+function _cse_rebuild(expr::OpExpr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
+    if expr.op == "fn"
+        return _compile_fn_node(expr,
+            a -> _compile_cse(a, var_map, param_syms, reg_funcs, ctx))
+    end
+    children = _Node[_compile_cse(a, var_map, param_syms, reg_funcs, ctx)
+                     for a in expr.args]
+    return _mknode(kind=_NK_OP, op=Symbol(expr.op), children=children)
+end
+
 # Compile `expr` to a `_Node`, hoisting any subexpression whose canonical key is
 # in `ctx.cached` into the prelude and replacing it with a `_NK_CACHED` ref.
 # Falls back to plain `_compile` for leaves and opaque ops, so the result is
@@ -485,19 +528,15 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
         # First occurrence: compile children first (assigning them lower slots,
         # keeping `defs` topologically ordered), reserve this slot, register the
         # def, and return a ref. Every later occurrence hits the `s != 0` path.
-        children = _Node[_compile_cse(a, var_map, param_syms, reg_funcs, ctx)
-                         for a in expr.args]
-        defnode = _mknode(kind=_NK_OP, op=Symbol(expr.op), children=children)
+        defnode = _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
         s = length(ctx.defs) + 1
         ctx.slot[key] = s
         push!(ctx.defs, defnode)
         return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
     end
-    # Not cached: reconstruct the same `_NK_OP` node `_compile` would, but with
+    # Not cached: reconstruct the same `_Node` `_compile` would, but with
     # hoisted children.
-    children = _Node[_compile_cse(a, var_map, param_syms, reg_funcs, ctx)
-                     for a in expr.args]
-    return _mknode(kind=_NK_OP, op=Symbol(expr.op), children=children)
+    return _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
 end
 
 # Compile a batch of scalar `(state_index, resolved_rhs_expr)` entries with

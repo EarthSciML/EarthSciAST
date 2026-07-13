@@ -198,6 +198,57 @@ end
     end
 
     # ========================================================
+    # Observed-into-observed chains resolve to a fixed point in dependency
+    # (topological) order, and a CYCLE is a clean build error — never an
+    # infinite substitution loop or a silently-truncated body. `_resolve_observed`
+    # caps the fixed-point iteration at the longest possible acyclic chain, so
+    # exceeding it can only mean a cycle.
+    # ========================================================
+    @testset "Observed dependency chains and cycle detection" begin
+        # Acyclic chain c → b → a: `_resolve_observed` must fully collapse it,
+        # regardless of the order the equations are declared in (the Dict/loop
+        # order is not the dependency order).
+        vars = Dict{String,ModelVariable}(
+            "x" => ModelVariable(StateVariable; default=1.0),
+            "k" => ModelVariable(ParameterVariable; default=2.0),
+            "a" => ModelVariable(ObservedVariable),
+            "b" => ModelVariable(ObservedVariable),
+            "c" => ModelVariable(ObservedVariable),
+        )
+        # c = b + 1; b = a * a; a = k;  D(x) = c * x  →  (2*2 + 1) * 1 = 5
+        eqs = [
+            ESM.Equation(_v("c"), _op("+", _v("b"), _n(1.0))),
+            ESM.Equation(_v("b"), _op("*", _v("a"), _v("a"))),
+            ESM.Equation(_v("a"), _v("k")),
+            ESM.Equation(_D("x"), _op("*", _v("c"), _v("x"))),
+        ]
+        f!, u0, p, _tspan, var_map = build_evaluator(ESM.Model(vars, eqs))
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        @test du[var_map["x"]] === (2.0 * 2.0 + 1.0) * 1.0
+
+        # Cyclic: a = b + 1; b = a + 1. Must throw, not hang.
+        cyc_vars = Dict{String,ModelVariable}(
+            "x" => ModelVariable(StateVariable; default=1.0),
+            "a" => ModelVariable(ObservedVariable),
+            "b" => ModelVariable(ObservedVariable),
+        )
+        cyc_eqs = [
+            ESM.Equation(_v("a"), _op("+", _v("b"), _n(1.0))),
+            ESM.Equation(_v("b"), _op("+", _v("a"), _n(1.0))),
+            ESM.Equation(_D("x"), _v("a")),
+        ]
+        err = try
+            build_evaluator(ESM.Model(cyc_vars, cyc_eqs))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ESM.TreeWalkError
+        @test err.code == "E_TREEWALK_OBSERVED_CYCLE"
+    end
+
+    # ========================================================
     # Full solve: exponential decay
     # ========================================================
     @testset "Exponential decay solve" begin
