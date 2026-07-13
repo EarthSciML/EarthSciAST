@@ -80,34 +80,42 @@ You can filter operations by package type:
 
 ## Package Configuration
 
-The `workspace.json` file defines all packages in the workspace:
+The `workspace.json` file defines all packages in the workspace. It records where
+each package lives and how it is published; per-package versions are not
+duplicated here, they live in each package's own manifest (`Project.toml`,
+`package.json`, `pyproject.toml`, `Cargo.toml`).
 
 ```json
 {
   "name": "EarthSciAST",
-  "version": "0.1.0",
   "workspaces": {
     "packages": ["pkg/*"]
   },
   "dependencies": {
-    "esm-format-js": {
+    "earthsci-ast-jl": {
+      "path": "./pkg/EarthSciAST.jl",
+      "type": "julia",
+      "julia_name": "EarthSciAST",
+      "registry": "General"
+    },
+    "earthsci-ast-ts": {
       "path": "./pkg/earthsci-ast-ts",
-      "version": "0.1.0",
-      "type": "typescript"
+      "type": "typescript",
+      "npm_name": "@earthsciml/ast",
+      "registry": "https://registry.npmjs.org"
     },
     "earthsci-ast-py": {
       "path": "./pkg/earthsci-ast-py",
-      "version": "0.1.0",
-      "type": "python"
-    },
-    "esm-format-jl": {
-      "path": "./pkg/EarthSciAST.jl",
-      "version": "0.1.0",
-      "type": "julia"
+      "type": "python",
+      "pypi_name": "earthsci-ast",
+      "registry": "https://pypi.org"
     }
   }
 }
 ```
+
+`workspace.json` is edited by hand. CI must not write it: a workflow that
+commits it back to `main` will conflict with every developer push.
 
 ## TypeScript Package Manager
 

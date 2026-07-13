@@ -70,14 +70,38 @@ const DEFAULT_SIM_RELTOL = 1e-4
 const DEFAULT_SIM_ABSTOL = 1e-6
 
 # --------------------------------------------------------------------------- #
-# Input coercion: path | EsmFile | FlattenedSystem | native Dict → a runnable
-# ESM document for build_evaluator. A FlattenedSystem is lowered to a native
-# ESM Dict; a native Dict (e.g. a regridder-merged level-set) passes through.
+# Input coercion: path | native Dict | EsmFile | FlattenedSystem → a runnable
+# ESM document for build_evaluator.
+#
+# EVERY carrier of an AUTHORED document (a path, or the same document as a
+# Dict) is parsed and FLATTENED; only a `FlattenedSystem` — the type that says
+# "already flattened" — skips the flattener, and it is lowered to the native
+# single-model run document `build_evaluator` actually consumes.
+#
+# A Dict must NOT be handed to `build_evaluator` directly. `build_evaluator`
+# runs ONE model (`_select_model`) and never reads `reaction_systems` or
+# `coupling` — those are lowered/applied BY `flatten`. So passing an authored
+# Dict through silently ran a single model with the reaction network and every
+# coupling edge dropped, reporting `success = true` on a system the caller
+# never wrote (an authored `{reaction_systems, models: {Sink}}` document ran as
+# the bare `Sink`, with an empty state vector). Routing it through `load`
+# instead gives a Dict the schema validation, version gates and `{ref}`
+# resolution a path input has always had — the last of these mattering because
+# `flatten` SKIPS an unresolved `SubsystemRef` (`_collect_model!`), so merely
+# coercing would swap one silent drop for another.
+#
+# Consequence: state names from a Dict are now the flattener's namespaced names
+# (`"M.y"`, not `"y"`) — i.e. exactly what the identical document in a file has
+# always produced. `base_path = pwd()` anchors its relative refs, a file input
+# anchoring them at its own directory.
 # --------------------------------------------------------------------------- #
 function _prepare_run_doc(input)
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
         input = load(input)
+    end
+    if input isa AbstractDict
+        input = load(input; base_path=pwd())
     end
     if input isa EsmFile
         input = flatten(input)
@@ -95,9 +119,6 @@ function _prepare_run_doc(input)
         # run is byte-identical.
         input = promote_downstream_shapes(algebraic_states_to_observeds(input))
         return flattened_to_esm(input)
-    end
-    if input isa AbstractDict
-        return input
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
                         "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"))
@@ -193,8 +214,15 @@ Run an ESM model end to end: coerce `input` to a runnable document, build the
 tree-walk evaluator, seed initial conditions, wire any discrete-cadence data
 providers, and integrate over `tspan = (t0, t1)`.
 
-`input` may be a path to an `.esm` file, a loaded [`EsmFile`](@ref), a
-[`FlattenedSystem`](@ref), or a native ESM `Dict`.
+`input` may be a path to an `.esm` file, a native ESM `Dict` (the same document
+held in memory), a loaded [`EsmFile`](@ref), or a [`FlattenedSystem`](@ref).
+
+The first three are AUTHORED documents and are flattened before they run, so
+`simulate(doc)` and `simulate(path_to_that_doc)` produce the same system —
+including the flattener's namespaced state names (`"Chem.A"`, not `"A"`), which
+is what `parameters`, `initial_conditions` and `result["…"]` are keyed by. Only
+a `FlattenedSystem` skips the flattener, that being the type whose whole meaning
+is "already flattened".
 
 Keyword arguments
 * `alg` — the ODE algorithm, e.g. `Tsit5()`. REQUIRED (the solve runs in the
