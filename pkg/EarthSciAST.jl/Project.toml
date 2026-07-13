@@ -20,6 +20,7 @@ EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
+Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 
@@ -29,6 +30,7 @@ EarthSciASTDataRefreshExt = ["DiffEqCallbacks", "SciMLBase"]
 EarthSciASTEarthSciIOExt = "EarthSciIO"
 EarthSciASTGeometryOpsExt = ["GeometryOps", "GeoInterface"]
 EarthSciASTMTKExt = ["DomainSets", "ModelingToolkit", "Symbolics"]
+EarthSciASTReactantExt = "Reactant"
 EarthSciASTSimulateExt = "SciMLBase"
 
 [compat]
@@ -46,6 +48,7 @@ OrderedCollections = "1, 2"
 OrdinaryDiffEqNonlinearSolve = "1"
 OrdinaryDiffEqRosenbrock = "1"
 OrdinaryDiffEqTsit5 = "1"
+Reactant = "0.2"
 SciMLBase = "2"
 Symbolics = "7"
 Tullio = "0.3.9"

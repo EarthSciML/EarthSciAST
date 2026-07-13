@@ -112,6 +112,48 @@
 # own, and an equivalent detector was equally worthless there. Same answer, both worlds.)
 @inline _oop_gather(u, slots::Vector{Int}) = @inbounds u[slots]
 
+# ---- Output-container seams (GPU / Reactant) --------------------------------
+#
+# The three places the RHS BUILDS its output, named for the same reason
+# `_oop_read_state` is: a backend must be able to replace them without forking the
+# walker. Under Julia they are exactly what they read as, and at Float64 they emit
+# the same stores in the same order the inline code did, so nothing changes.
+#
+# Under tracing they cannot stay inline. `_oop_value_type` resolves to the backend's
+# traced SCALAR type (`TracedRNumber{Float64}` for Reactant), and `similar(u, that, n)`
+# builds a HOST `Vector{TracedRNumber}` — a Julia array holding traced scalars, which
+# is not a traced array and so is not something the trace can return. The output
+# container has to come from the backend, not from `T`; hence `_oop_du_zeros` takes
+# `u` (whose container type the backend owns) as well as `T`.
+#
+# And every write RETURNS `du` rather than only mutating it. That costs nothing here
+# — the default methods return the same object they were handed — but it is what lets
+# a backend implement the writes FUNCTIONALLY on an immutable traced value, which is
+# the only form available to it.
+@inline _oop_du_zeros(u, ::Type{T}, n::Int) where {T} = fill!(similar(u, T, n), zero(T))
+
+@inline _oop_store(du, i::Int, v) = (@inbounds du[i] = v; du)
+
+# One kernel's whole result lands through ONE call, not one call per cell. Splitting
+# it per cell would be the natural-looking thing and is exactly wrong for a tracing
+# backend: it turns a single scatter into `length(out)` separate scatter ops, i.e. an
+# XLA program whose SIZE grows with the grid — the one property the compiled IR is
+# built to avoid. `res` is a scalar when the kernel's whole template hoisted to
+# lane-invariant (a single-cell boundary group, say); that branch is the caller's
+# `else` arm from before, kept here so the seam owns the entire scatter.
+@inline function _oop_scatter(du, out::Vector{Int}, res)
+    if res isa AbstractArray
+        @inbounds for m in eachindex(out)
+            du[out[m]] = res[m]
+        end
+    else
+        @inbounds for m in eachindex(out)
+            du[out[m]] = res
+        end
+    end
+    return du
+end
+
 # ---- The shared op ladder ---------------------------------------------------
 #
 # The mechanical unary arms (`sin` … `ceil`), GENERATED from the op-registry table
@@ -481,8 +523,10 @@ end
 # kernels) so the two emitters cannot diverge in evaluation ORDER, only in storage.
 # States with no `D(...)` equation keep `du = 0`, as under `f!`.
 #
-# `du` is built with `similar(u, T, n_states)` rather than `zeros(T, n_states)` so it
-# inherits `u`'s container — the seam a GPU array needs.
+# Every touch of the output goes through the `_oop_du_zeros` / `_oop_store` /
+# `_oop_scatter` seams above, and the closure REBINDS `du` from each — so a backend
+# whose output is immutable (a traced value) is expressible here without a second
+# closure. At Float64 the seams are the inline code they replaced.
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        vec_kernels::AbstractVector{_VecKernel},
@@ -495,25 +539,14 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
             cache[s] = _oop_eval(cse_prelude[s], u, p, t, cache)
         end
 
-        du = fill!(similar(u, T, n_states), zero(T))
+        du = _oop_du_zeros(u, T, n_states)
         @inbounds for k in eachindex(rhs_list)
             slot, node = rhs_list[k]
-            du[slot] = _oop_eval(node, u, p, t, cache)
+            du = _oop_store(du, slot, _oop_eval(node, u, p, t, cache))
         end
         for vk in vec_kernels
             res = _oop_eval_vec(vk.template, u, p, t, cache)
-            out = vk.out_slots
-            if res isa AbstractArray
-                @inbounds for m in eachindex(out)
-                    du[out[m]] = res[m]
-                end
-            else
-                # A degenerate kernel whose whole template is lane-invariant (a
-                # single-cell boundary group, say) evaluates to one scalar.
-                @inbounds for m in eachindex(out)
-                    du[out[m]] = res
-                end
-            end
+            du = _oop_scatter(du, vk.out_slots, res)
         end
         return du
     end
