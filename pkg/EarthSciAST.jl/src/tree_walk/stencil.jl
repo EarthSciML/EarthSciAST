@@ -491,6 +491,11 @@ function _lower_template(n::_Node, recipes::Vector{_LaneRecipe},
         if n.op === :fn
             return _merge_fn_node(n.payload, ch, len, length(ch))
         end
+        # Lane-invariant subtree → one scalar eval per RHS call instead of one per lane
+        # (vectorize.jl). Built from the LOWERED children, never from this template node,
+        # whose LITERAL/STATE leaves are recipe placeholders rather than lane values.
+        hoisted = _maybe_hoist_invariant(n.op, n.payload, ch, len)
+        hoisted === nothing || return hoisted
         return _mkvnode(kind=_VK_OP, op=n.op, payload=n.payload, children=ch,
                         buf=Vector{Float64}(undef, len))
     end

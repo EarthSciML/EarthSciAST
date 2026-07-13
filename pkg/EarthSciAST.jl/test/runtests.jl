@@ -67,6 +67,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_test.jl")
     include("tree_walk_arrayop_test.jl")
     include("tree_walk_vectorized_test.jl")
+    include("tree_walk_invariant_hoist_test.jl")
     include("tree_walk_allocation_test.jl")
     include("tree_walk_param_gather_test.jl")
     include("data_refresh_test.jl")

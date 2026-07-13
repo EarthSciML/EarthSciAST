@@ -80,6 +80,34 @@ const _VK_OP       = UInt8(7)   # elementwise broadcast of op over child vectors
 const _VK_REDUCE   = UInt8(8)   # contraction: axis fold over children (semiring)
 const _VK_FN       = UInt8(9)   # closed-function map (interp.* = whole-array)
 const _VK_PGATHER  = UInt8(10)  # forcing[slots] — gather over a captured live p-buffer (ess-14f.3)
+const _VK_INVARIANT = UInt8(11) # LANE-INVARIANT subtree: `payload` is the representative
+                                # scalar `_Node`, evaluated ONCE per RHS call and broadcast.
+
+# ---- Lane-invariant hoisting -------------------------------------------------
+# A subtree with no free cell index — `exp(-Ea/T)` written inside an `arrayop`,
+# `interp.linear(table, t)`, any pure parameter/time/scalar-state algebra — has
+# the SAME value in every lane. Evaluated as an ordinary `_VK_OP` it is recomputed
+# per lane AND every interior node materialises a full-length constant buffer.
+# `_merge_nodes` instead collapses the whole subtree to one `_VK_INVARIANT` node:
+# one scalar `_eval_node` call per RHS, one `fill!`, and every interior buffer in
+# it disappears.
+#
+# Which vec kinds are lane-invariant: a LITERAL that merged equal across cells, a
+# STATE whose slot merged equal (a 0-D state read inside an arrayop), a PARAM, TIME,
+# and a subtree already hoisted to INVARIANT. Deliberately NOT invariant: CONSTVEC
+# and GATHER/PGATHER (per-cell by construction), and REDUCE/FN (left alone — a
+# contraction's per-cell child count is not pinned by the structural signature, and
+# an unhoisted `fn` keeps its existing const-fold/typed-spec lowering).
+#
+# The hoist is safe precisely BECAUSE the check is on the merged children: `_VK_LITERAL`
+# only exists when every cell's literal was equal (an unequal one becomes CONSTVEC) and
+# `_VK_STATE` only when every cell's slot was equal (else GATHER). So all-invariant
+# children ⇒ every cell's subtree is value-identical ⇒ `nodes[1]` is a faithful
+# representative, and the scalar `_eval_node` that built the vec arm in the first place
+# is its exact oracle. Bottom-up construction makes the hoist MAXIMAL for free: an
+# invariant child becomes INVARIANT, its parent then sees an all-invariant child list
+# and absorbs it, so only the outermost invariant node survives.
+# (`_vk_lane_invariant` is defined just below `struct _VecNode`, which it annotates.)
 
 # Each node owns a preallocated `buf` (length = the kernel's lane count) into
 # which `_eval_vec` writes its lane values IN PLACE at runtime, then returns it.
@@ -125,6 +153,49 @@ struct _VecNode
     buf::Vector{Float64}
     fnargs::Vector{Any}
     cvbufs::Vector{Vector{Float64}}
+end
+
+# Lane-invariant test for a LOWERED child (see the `_VK_INVARIANT` commentary above).
+@inline _vk_lane_invariant(n::_VecNode) =
+    n.kind === _VK_LITERAL || n.kind === _VK_STATE || n.kind === _VK_PARAM ||
+    n.kind === _VK_TIME    || n.kind === _VK_INVARIANT
+
+# Rebuild the scalar `_Node` for an already-LOWERED lane-invariant `_VecNode` subtree.
+#
+# It reads the values off the LOWERED node, never off the source `_Node`. That is the
+# whole point: both vec builders can rewrite a leaf's value on the way down — the
+# symbolic-stencil builder (`stencil.jl`'s `_lower_template`) resolves LITERAL/STATE
+# leaves through per-lane RECIPES, so the source template's `literal`/`idx` fields are
+# placeholders, not lane values. Reconstructing from the lowered node is correct for
+# both builders; reconstructing from the source node would silently read a placeholder.
+#
+# Total over exactly the kinds `_vk_lane_invariant` admits, minus `fn` (a lowered
+# `_VK_FN` carries a typed `_Interp*Spec`, not the scalar `(fname, const_args)`
+# payload, so it is not reconstructible here — `fn` subtrees are simply not hoisted).
+function _vk_to_scalar(n::_VecNode)::_Node
+    k = n.kind
+    k === _VK_LITERAL   && return _mknode(kind=_NK_LITERAL, literal=n.literal)
+    k === _VK_STATE     && return _mknode(kind=_NK_STATE, idx=n.idx)
+    k === _VK_PARAM     && return _mknode(kind=_NK_PARAM, sym=n.sym)
+    k === _VK_TIME      && return _mknode(kind=_NK_TIME)
+    k === _VK_INVARIANT && return n.payload::_Node
+    k === _VK_OP        && return _mknode(kind=_NK_OP, op=n.op, payload=n.payload,
+                                          children=_Node[_vk_to_scalar(c) for c in n.children])
+    throw(TreeWalkError("E_TREEWALK_INTERNAL",
+        "lane-invariant hoist: unexpected vec kind $(k)"))
+end
+
+# Shared by BOTH vec builders (`_merge_nodes` and stencil.jl's `_lower_template`):
+# if every lowered child of this op is lane-invariant, collapse the whole subtree to a
+# single `_VK_INVARIANT` node. Returns `nothing` when it does not apply, so each caller
+# falls through to its normal `_VK_OP`. `fn` ops are excluded (see `_vk_to_scalar`);
+# a childless op is degenerate and left alone.
+function _maybe_hoist_invariant(op::Symbol, payload, ch::Vector{_VecNode}, len::Int)
+    (op === :fn || isempty(ch)) && return nothing
+    all(_vk_lane_invariant, ch) || return nothing
+    scalar = _mknode(kind=_NK_OP, op=op, payload=payload,
+                     children=_Node[_vk_to_scalar(c) for c in ch])
+    return _mkvnode(kind=_VK_INVARIANT, payload=scalar, buf=Vector{Float64}(undef, len))
 end
 
 const _VK_NO_VALS   = Float64[]
@@ -265,6 +336,9 @@ function _merge_nodes(nodes::Vector{_Node}, len::Int)::_VecNode
         if n1.op === :fn
             return _merge_fn_node(n1.payload, ch, len, m)
         end
+        # Lane-invariant subtree → one scalar eval per RHS call instead of one per lane.
+        hoisted = _maybe_hoist_invariant(n1.op, n1.payload, ch, len)
+        hoisted === nothing || return hoisted
         return _mkvnode(kind=_VK_OP, op=n1.op, payload=n1.payload, children=ch,
                         buf=Vector{Float64}(undef, len))
     end
@@ -393,6 +467,11 @@ function _eval_vec(n::_VecNode, u, p, t)::Vector{Float64}
         b = n.buf; fill!(b, getfield(p, n.sym)); return b
     elseif k === _VK_TIME
         b = n.buf; fill!(b, t); return b
+    elseif k === _VK_INVARIANT
+        # The subtree has no free cell index, so ONE scalar evaluation covers every
+        # lane. `_eval_node` is the same scalar walker the vec arms mirror, so this is
+        # bit-identical to broadcasting the subtree per lane — see `_vk_lane_invariant`.
+        b = n.buf; fill!(b, _eval_node(n.payload::_Node, u, p, t)); return b
     elseif k === _VK_REDUCE
         return _eval_vec_reduce(n, u, p, t)
     elseif k === _VK_FN
