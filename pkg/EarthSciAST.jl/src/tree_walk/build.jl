@@ -1911,15 +1911,19 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
 * `registered_functions::Dict{String,<:Function}` — handlers for
   `call` ops, keyed by `handler_id`.
 * `form::Symbol` — which RHS to emit (`:inplace`, the default, or `:oop`).
-  `:inplace` gives the zero-allocation Float64 `f!(du, u, p, t)` above —
-  the form to SOLVE with. `:oop` gives an out-of-place `f(u, p, t) → du`
-  that is generic in its value type, so ForwardDiff (over the state or
-  over the parameters) and Enzyme can differentiate it — the form to
-  DIFFERENTIATE. Both are emitted from the same compiled IR in the same
-  evaluation order, so a Float64 `:oop` call is bit-identical to `f!`; it
-  trades the preallocated buffers (and hence the allocation-free property)
-  for that genericity. SciML dispatches `ODEProblem` on RHS arity, so
-  either drops into `ODEProblem(f, u0, tspan, p)` unchanged.
+  `:inplace` gives the `f!(du, u, p, t)` above: zero-allocation at Float64
+  AND eltype-generic, so it both solves and differentiates (ForwardDiff
+  over the state or over the parameters; a stiff solve gets an exact AD
+  Jacobian for free). It is the right answer for almost everything.
+  `:oop` gives an out-of-place `f(u, p, t) → du`. Reach for it only to
+  TRACE — it is what XLA/Reactant and device backends can consume, because
+  it captures no host scratch buffers and contains no per-lane scalar
+  loops. It is not faster and not more differentiable than `f!`; it
+  allocates one temporary per AST node. Both come from the same compiled
+  IR in the same evaluation order, so a Float64 `:oop` call is
+  bit-identical to `f!` — which is why the in-place tests use it as their
+  oracle. SciML dispatches `ODEProblem` on RHS arity, so either drops into
+  `ODEProblem(f, u0, tspan, p)` unchanged.
 """
 function build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)

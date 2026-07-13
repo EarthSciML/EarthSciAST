@@ -10,30 +10,47 @@
 # 4d. Out-of-place RHS: `f(u, p, t) -> du`
 # ============================================================
 #
-# WHY A SECOND EMITTER (and not a replacement).
-# ---------------------------------------------
-# `_make_rhs`'s `f!` is the production Float64 path: type-stable, zero-alloc, one
-# preallocated `Float64` buffer per `_VecNode` (`n.buf`). Those buffers are what
-# make it fast AND what make it Float64-only — a `Vector{Float64}` cannot hold a
-# `ForwardDiff.Dual`, so `f!` cannot be differentiated. Widening the buffers to a
-# type parameter would mean allocating them per call, i.e. giving up exactly the
-# property they exist for.
+# WHY A SECOND EMITTER — and what it is NOT for.
+# ----------------------------------------------
+# It is NOT the AD path. `f!` (vectorize.jl) is eltype-generic in its own right: it
+# is zero-alloc AND bit-identical at Float64, and it differentiates under ForwardDiff
+# over the state or the parameters. Differentiate with `f!`. Solve with `f!`. If you
+# are reaching for this file to get a derivative on the CPU, you are in the wrong file.
 #
-# So the two forms are siblings, not competitors, and they share the compiled IR:
-#   * `f!(du, u, p, t)` — zero-alloc, Float64. The default; use it to SOLVE.
-#   * `f(u, p, t) -> du` — allocating, eltype-generic. Use it to DIFFERENTIATE.
+# THIS EMITTER EXISTS TO BE TRACED — by XLA/Reactant today (ext/EarthSciASTReactantExt.jl),
+# by any device backend tomorrow. What makes it traceable is not the out-of-place
+# SIGNATURE, which is incidental, but two properties `f!` cannot have without ceasing
+# to be `f!`:
 #
-# `build_evaluator(model; form = :oop)` returns the latter in the `f!` slot of the
-# usual `(f, u0, p, tspan, var_map)` tuple; SciML dispatches `ODEProblem` on RHS
+#   1. NO CAPTURED HOST BUFFERS. `f!` writes into a preallocated `Vector{Float64}` per
+#      `_VecNode` (`n.buf`), created at build time. A traced value cannot be written
+#      into concrete host memory. Nor does `f!`'s eltype-generic alt-buffer rescue it:
+#      under tracing the value type is `TracedRNumber{Float64}`, so the lazy buffer
+#      would be a HOST `Vector{TracedRNumber}` — a Julia array of traced scalars, which
+#      is not a traced array. (And XLA assigns its own buffers anyway, so ours would be
+#      redundant even if they worked.)
+#   2. NO PER-LANE SCALAR LOOPS. `f!` still walks lanes one at a time in several arms —
+#      the gather (`b[j] = u[s[j]]`), the pgather, the `du` scatter, the interp kernels.
+#      XLA REJECTS scalar indexing of a traced array outright. Every one of those is a
+#      whole-array op here (`u[slots]`, `du[out] = res`). That de-scalarization is the
+#      real content of this file.
+#
+# Fix both in `f!` and you would have rewritten this walker. They converge; that is why
+# there are two, and why neither subsumes the other.
+#
+# Its second, quieter job: it is an INDEPENDENT implementation of the same IR, so it is
+# the oracle the in-place tests use to prove `f!` still computes the same Float64 answers
+# (tree_walk_iip_generic_test.jl). Two emitters that must agree bit-for-bit keep each
+# other honest.
+#
+# `build_evaluator(model; form = :oop)` returns `f(u, p, t) -> du` in the `f!` slot of
+# the usual `(f, u0, p, tspan, var_map)` tuple; SciML dispatches `ODEProblem` on RHS
 # arity, so it drops straight in.
 #
-# WHAT GENERICITY BUYS (the point of the exercise): ForwardDiff over the state
-# (Jacobians for stiff/implicit solvers), ForwardDiff over the parameters
-# (sensitivities), and Enzyme reverse mode all work on `f`. The value type is
-# derived from `u`, `p` AND `t` together — see `_oop_value_type` — which is what
-# makes parameter differentiation work: there `u` stays `Float64` while the
-# parameter values go `Dual`, so an output buffer sized from `eltype(u)` alone
-# would throw on the first store.
+# The value type is derived from `u`, `p` AND `t` together — see `_oop_value_type` —
+# never from `eltype(u)` alone, which would throw `Float64(::Dual)` the moment anyone
+# differentiated with respect to a PARAMETER (there `u` stays `Float64` and only the
+# parameter values go `Dual`).
 #
 # ENZYME NEEDS ONE FLAG, and it is worth knowing why before trying to remove it:
 #
@@ -42,11 +59,12 @@
 # Reverse mode then produces gradients matching ForwardDiff to ~1e-16. Without it,
 # Enzyme's type analysis rejects the RHS — not because of anything this file does,
 # but because the walk LOADS FIELDS FROM `_VecNode`, and that struct is heterogeneous
-# by design: one `payload::Any` slot serving ten node kinds, plus `fnargs::Vector{Any}`
-# for the boxed closed-function path. Enzyme cannot type-analyze loads out of such an
-# object and bails on the whole method — including, note, loads of the CONCRETE fields
-# (`vals`, `slots`), so simply routing around the `Any` payload does NOT help. I tried
-# that; it does not work. Nothing short of a payload-free IR will.
+# by design: one `payload::Any` slot serving ten node kinds, `fnargs::Vector{Any}` for
+# the boxed closed-function path, and `altbuf::RefValue{Any}` for `f!`'s lazy per-eltype
+# scratch. Enzyme cannot type-analyze loads out of such an object and bails on the whole
+# method — including, note, loads of the CONCRETE fields (`vals`, `slots`), so simply
+# routing around the `Any` payload does NOT help. I tried that; it does not work. Nothing
+# short of a payload-free IR will.
 #
 # Which is the real fix, and it is a separate piece of work: lower the compiled IR ONCE
 # at build time into a concretely-typed tree with no `Any` anywhere. That same lowering
@@ -69,9 +87,9 @@
 # for. (An affine-slice fast path for the gathers was tried and measured worthless, so
 # it is not here.)
 #
-# Which is exactly why both emitters exist. Integrate with `f!`; differentiate with `f`.
-# Under AD the comparison is anyway academic: `Dual` arithmetic dominates, and a chunked
-# ForwardDiff Jacobian pays the primal cost once per chunk, not once per column.
+# So do NOT reach for this form to go faster, and do not reach for it to differentiate
+# on the CPU either — `f!` does both better. Reach for it when the target is a tracer or
+# a device, where the buffers this form lacks are exactly the thing standing in the way.
 
 # ---- Value type -------------------------------------------------------------
 #
@@ -111,6 +129,48 @@
 # not by the gather's addressing mode. (XLA canonicalizes such gathers to slices on its
 # own, and an equivalent detector was equally worthless there. Same answer, both worlds.)
 @inline _oop_gather(u, slots::Vector{Int}) = @inbounds u[slots]
+
+# ---- Output-container seams (GPU / Reactant) --------------------------------
+#
+# The three places the RHS BUILDS its output, named for the same reason
+# `_oop_read_state` is: a backend must be able to replace them without forking the
+# walker. Under Julia they are exactly what they read as, and at Float64 they emit
+# the same stores in the same order the inline code did, so nothing changes.
+#
+# Under tracing they cannot stay inline. `_oop_value_type` resolves to the backend's
+# traced SCALAR type (`TracedRNumber{Float64}` for Reactant), and `similar(u, that, n)`
+# builds a HOST `Vector{TracedRNumber}` — a Julia array holding traced scalars, which
+# is not a traced array and so is not something the trace can return. The output
+# container has to come from the backend, not from `T`; hence `_oop_du_zeros` takes
+# `u` (whose container type the backend owns) as well as `T`.
+#
+# And every write RETURNS `du` rather than only mutating it. That costs nothing here
+# — the default methods return the same object they were handed — but it is what lets
+# a backend implement the writes FUNCTIONALLY on an immutable traced value, which is
+# the only form available to it.
+@inline _oop_du_zeros(u, ::Type{T}, n::Int) where {T} = fill!(similar(u, T, n), zero(T))
+
+@inline _oop_store(du, i::Int, v) = (@inbounds du[i] = v; du)
+
+# One kernel's whole result lands through ONE call, not one call per cell. Splitting
+# it per cell would be the natural-looking thing and is exactly wrong for a tracing
+# backend: it turns a single scatter into `length(out)` separate scatter ops, i.e. an
+# XLA program whose SIZE grows with the grid — the one property the compiled IR is
+# built to avoid. `res` is a scalar when the kernel's whole template hoisted to
+# lane-invariant (a single-cell boundary group, say); that branch is the caller's
+# `else` arm from before, kept here so the seam owns the entire scatter.
+@inline function _oop_scatter(du, out::Vector{Int}, res)
+    if res isa AbstractArray
+        @inbounds for m in eachindex(out)
+            du[out[m]] = res[m]
+        end
+    else
+        @inbounds for m in eachindex(out)
+            du[out[m]] = res
+        end
+    end
+    return du
+end
 
 # ---- The shared op ladder ---------------------------------------------------
 #
@@ -481,8 +541,10 @@ end
 # kernels) so the two emitters cannot diverge in evaluation ORDER, only in storage.
 # States with no `D(...)` equation keep `du = 0`, as under `f!`.
 #
-# `du` is built with `similar(u, T, n_states)` rather than `zeros(T, n_states)` so it
-# inherits `u`'s container — the seam a GPU array needs.
+# Every touch of the output goes through the `_oop_du_zeros` / `_oop_store` /
+# `_oop_scatter` seams above, and the closure REBINDS `du` from each — so a backend
+# whose output is immutable (a traced value) is expressible here without a second
+# closure. At Float64 the seams are the inline code they replaced.
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        vec_kernels::AbstractVector{_VecKernel},
@@ -495,25 +557,14 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
             cache[s] = _oop_eval(cse_prelude[s], u, p, t, cache)
         end
 
-        du = fill!(similar(u, T, n_states), zero(T))
+        du = _oop_du_zeros(u, T, n_states)
         @inbounds for k in eachindex(rhs_list)
             slot, node = rhs_list[k]
-            du[slot] = _oop_eval(node, u, p, t, cache)
+            du = _oop_store(du, slot, _oop_eval(node, u, p, t, cache))
         end
         for vk in vec_kernels
             res = _oop_eval_vec(vk.template, u, p, t, cache)
-            out = vk.out_slots
-            if res isa AbstractArray
-                @inbounds for m in eachindex(out)
-                    du[out[m]] = res[m]
-                end
-            else
-                # A degenerate kernel whose whole template is lane-invariant (a
-                # single-cell boundary group, say) evaluates to one scalar.
-                @inbounds for m in eachindex(out)
-                    du[out[m]] = res
-                end
-            end
+            du = _oop_scatter(du, vk.out_slots, res)
         end
         return du
     end

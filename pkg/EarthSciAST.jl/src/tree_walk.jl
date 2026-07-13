@@ -16,11 +16,15 @@
 # `var_map` is the state-name → index lookup so callers can probe the
 # solution at specific variables.
 #
-# `build_evaluator(model; form = :oop)` returns an OUT-OF-PLACE `f(u, p, t) → du`
-# in the same slot: allocating, but generic in the value type, so ForwardDiff and
-# Enzyme can differentiate it (tree_walk/oop.jl). SciML dispatches `ODEProblem` on
-# RHS arity, so it drops in unchanged. The default `:inplace` form stays the
-# zero-alloc Float64 path to SOLVE with.
+# The default `f!` both SOLVES and DIFFERENTIATES: it is zero-alloc at Float64 and
+# eltype-generic, so ForwardDiff runs through it over the state or the parameters
+# (a stiff solve gets an exact AD Jacobian for free).
+#
+# `build_evaluator(model; form = :oop)` returns an OUT-OF-PLACE `f(u, p, t) → du` in
+# the same slot (tree_walk/oop.jl). It is NOT a faster or more differentiable `f!` —
+# it is the one that can be TRACED: it captures no host buffers and contains no
+# per-lane scalar loops, the two things XLA/Reactant and device backends cannot
+# accept. Reach for it for tracing, not for derivatives.
 #
 # Dict and EsmFile convenience entry points select a model by name (or
 # the single model, if the file carries only one).
