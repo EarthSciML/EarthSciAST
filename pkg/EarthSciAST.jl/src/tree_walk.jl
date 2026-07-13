@@ -45,9 +45,13 @@
 #                           _build_evaluator_impl, build_evaluator entry
 #                           points, evaluate_expr
 #   compile.jl         §3-4 _Node IR compilation, CSE (ess-r7h), the compiled
-#                           scalar walker (zero-alloc hot path)
+#                           scalar walker (zero-alloc hot path), the RHS value
+#                           type (_rhs_value_type) both walkers compute in
 #   vectorize.jl       §4b  vectorized array kernels (ess-dhq): merge +
-#                           in-place runtime eval + _make_rhs (zero-alloc)
+#                           in-place runtime eval + _make_rhs — zero-alloc at
+#                           Float64, and eltype-generic (ForwardDiff over the
+#                           state OR the parameters) via the per-node lazy
+#                           alt-buffer (_vbuf)
 #   oop.jl             §4d  out-of-place emitter over the SAME IR: eltype-generic
 #                           f(u,p,t) → du, the AD / device path (`form = :oop`)
 #   stencil.jl         §4c  symbolic stencil compiler (ess-perf)

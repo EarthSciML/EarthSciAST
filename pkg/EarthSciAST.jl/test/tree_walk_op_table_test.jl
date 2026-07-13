@@ -79,7 +79,7 @@ function _ot_vector_supported(op::String)
     node = _ot_node(op)
     merged = ESM._merge_nodes(ESM._Node[node, node], 2)
     try
-        v = ESM._eval_vec(merged, Float64[], NamedTuple(), 0.0)
+        v = ESM._eval_vec(merged, Float64[], NamedTuple(), 0.0, Float64)
         return v isa Vector{Float64}
     catch err
         if err isa ESM.TreeWalkError
@@ -131,7 +131,7 @@ end
             node = _ot_node(op)
             sval = ESM._eval_node(node, Float64[], NamedTuple(), 0.0)
             vval = ESM._eval_vec(ESM._merge_nodes(ESM._Node[node, node], 2),
-                                 Float64[], NamedTuple(), 0.0)
+                                 Float64[], NamedTuple(), 0.0, Float64)
             @test length(vval) == 2
             @test vval[1] === sval && vval[2] === sval
         end

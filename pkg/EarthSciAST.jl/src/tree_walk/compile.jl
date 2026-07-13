@@ -54,8 +54,8 @@ const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: paylo
 #   * `_NK_PARAM_GATHER` — the aliased flat `Vector{Float64}` of a live
 #     forcing buffer (`_PGatherArray.flat`, ess-14f.3); `idx` holds the
 #     pre-linearized column-major offset.
-#   * `_NK_CACHED` — the shared CSE scratch `Vector{Float64}` (ess-r7h);
-#     `idx` holds the value-number slot.
+#   * `_NK_CACHED` — the shared CSE scratch (`_CSECache`, ess-r7h); `idx` holds
+#     the value-number slot.
 #   * every other kind — `nothing`.
 struct _Node
     kind::UInt8
@@ -459,6 +459,79 @@ function _cse_count!(e::ASTExpr, counts::Dict{String,Int})
     return
 end
 
+# The CSE prelude's per-call scratch, captured on every `_NK_CACHED` node at
+# build time and refilled at the top of each `f!` call. TWO buffers, because the
+# RHS has two value types (see `_rhs_value_type`):
+#
+#   * `f64`  — the production `Float64` slots. Sized once at build; `f!` writes it
+#              and `_NK_CACHED` reads it, exactly as before this struct existed.
+#   * `alt`  — the buffer for whatever NON-`Float64` value type last called `f!`
+#              (a `Vector{Dual}` under ForwardDiff). `nothing` until the first such
+#              call, so a model that is only ever integrated pays ZERO extra memory
+#              and takes ZERO extra branches: `_cse_buf`/`_cse_read` dispatch on
+#              `Type{Float64}` and compile to a bare field load.
+#
+# Kept as ONE cache object per evaluator (not per Dual type) because ForwardDiff
+# uses a single `Dual{Tag,V,N}` for the whole Jacobian: the buffer is allocated on
+# the first Dual call and reused by every later one. Alternating between two
+# distinct Dual types would re-allocate `alt` each call — correct, just not free —
+# which is the same non-reentrancy bargain the `_VecNode` buffers already make.
+mutable struct _CSECache
+    f64::Vector{Float64}
+    alt::Any
+end
+_CSECache() = _CSECache(Float64[], nothing)
+
+# Fetch the prelude scratch for value type `T`. `T` is a compile-time constant at
+# every call site (it is derived from the argument TYPES — see `_rhs_value_type`),
+# so exactly one of these two methods is compiled into any given `f!`
+# specialization, and the `Float64` one is a field load.
+@inline _cse_buf(c::_CSECache, ::Type{Float64}) = c.f64
+@inline function _cse_buf(c::_CSECache, ::Type{T}) where {T}
+    b = c.alt
+    b isa Vector{T} && return b
+    nb = Vector{T}(undef, length(c.f64))
+    c.alt = nb
+    return nb
+end
+
+# Read slot `i`. The `::Vector{T}` assert is what keeps the read monomorphic out
+# of the `Any` field; `f!` calls `_cse_buf` before the prelude runs, so `alt` is
+# always a live `Vector{T}` by the time an `_NK_CACHED` node is evaluated.
+@inline _cse_read(c::_CSECache, i::Int, ::Type{Float64}) = @inbounds c.f64[i]
+@inline _cse_read(c::_CSECache, i::Int, ::Type{T}) where {T} =
+    @inbounds (c.alt::Vector{T})[i]
+
+# ---- The RHS value type -----------------------------------------------------
+#
+# The type the RHS computes in, fixed by the three runtime inputs: the state, the
+# parameter VALUES, and time. Literals, const arrays and captured forcing buffers
+# are `Float64` DATA — never differentiated — so they promote INTO this type rather
+# than constraining it (and, for `^`, deliberately do not: see `_eval_node_op`).
+#
+# Deriving `T` from all three (not just `eltype(u)`) is load-bearing. Under
+# ForwardDiff-over-PARAMETERS `u` is a plain `Vector{Float64}` and only the `p`
+# values are `Dual`; a scratch buffer sized from `eltype(u)` alone would compile
+# fine and then throw `Float64(::Dual)` on the first store.
+#
+# Every argument's TYPE determines the answer, so inference constant-folds this to
+# a `Type{…}` at each `f!` specialization — which is what makes `_cse_buf`/`_vbuf`
+# static dispatches and keeps the Float64 path byte-for-byte what it was.
+#
+# (oop.jl carries an identical `_oop_value_type`. The two emitters must agree on
+# the value type; dedupe when they are next touched together.)
+@inline _promote_val_types(::Tuple{}) = Bool   # identity for `promote_type`
+@inline _promote_val_types(x::Tuple) =
+    promote_type(typeof(x[1]), _promote_val_types(Base.tail(x)))
+
+@inline _rhs_value_type(u, p::NamedTuple, t) =
+    promote_type(eltype(u), _promote_val_types(values(p)), typeof(t))
+
+# A parameter-free model carries SciMLBase's `nothing` sentinel instead of an empty
+# NamedTuple (see `_build_state_layout`); with no parameters there is nothing for it
+# to contribute to the value type.
+@inline _rhs_value_type(u, ::Nothing, t) = promote_type(eltype(u), typeof(t))
+
 # Mutable CSE compile context: the set of cached keys, the slot assigned to each
 # (assigned lazily, in topological order, at first compile), the prelude
 # definitions (`defs[s]` computes `cache[s]`), and the shared scratch the
@@ -467,7 +540,7 @@ mutable struct _CSEContext
     cached::Set{String}
     slot::Dict{String,Int}
     defs::Vector{_Node}
-    cache::Vector{Float64}
+    cache::_CSECache
 end
 
 # Compile `expr` to a `_Node`, hoisting any subexpression whose canonical key is
@@ -519,7 +592,7 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
             n_occ += c
         end
     end
-    cache = Float64[]
+    cache = _CSECache()
     ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache)
     rhs_list = Tuple{Int,_Node}[]
     for (idx, e) in entries
@@ -527,7 +600,8 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
     end
     # Size the scratch to the number of slots. `cache` is the SAME object the
     # `_NK_CACHED` nodes captured, so this in-place resize is visible to them.
-    resize!(cache, length(ctx.defs))
+    # (`alt` is sized from `f64` on first use, i.e. after this.)
+    resize!(cache.f64, length(ctx.defs))
     diag = (; n_slots = length(ctx.defs), n_occurrences = n_occ)
     return rhs_list, ctx.defs, cache, diag
 end
@@ -536,7 +610,24 @@ end
 # 4. Compiled walker
 # ============================================================
 
-@inline function _eval_node(n::_Node, u, p, t)
+# The value type `T` is threaded through the whole walk (rather than re-derived at
+# each node) so that every `Type{T}`-dispatched scratch lookup — `_cse_read` here,
+# `_vbuf` on the vectorized side — is resolved statically.
+#
+# NOTHING in this walker CONVERTS to `T`. A leaf returns whatever it natively holds
+# and Julia's promotion does the rest: a `Float64` literal beside a `Dual` state
+# promotes at the operator, which is both correct (a constant's derivative is zero)
+# and, for `^`, ESSENTIAL — see the note on the `^` arm in `_eval_node_op`. So under
+# AD the return type is the small union `Union{Float64,T}`, which Julia union-splits;
+# at `T === Float64` it collapses to `Float64` and this is the pre-existing walker,
+# instruction for instruction.
+#
+# The 4-arg form is the build-time / test entry point (constant folding, initial
+# conditions, loop bounds): it derives `T` from the arguments, which are `Float64`
+# there, so it lands on the same specialization.
+@inline _eval_node(n::_Node, u, p, t) = _eval_node(n, u, p, t, _rhs_value_type(u, p, t))
+
+@inline function _eval_node(n::_Node, u, p, t, ::Type{T}) where {T}
     k = n.kind
     if k === _NK_LITERAL
         return n.literal
@@ -558,13 +649,14 @@ end
         # Common-subexpression reference (ess-r7h). The value was computed once
         # into the per-call scratch cache by the CSE prelude (see `_make_rhs`);
         # every occurrence reads it here instead of re-walking the subtree. The
-        # cache vector is captured in `payload` at build time, so this needs no
-        # extra eval argument and the recursive `_eval_node` family is unchanged.
-        @inbounds return (n.payload::Vector{Float64})[n.idx]
+        # `_CSECache` is captured in `payload` at build time; `T` selects which of
+        # its two buffers holds this call's values (Float64 slots vs. the Dual
+        # buffer ForwardDiff drove `f!` with).
+        return _cse_read(n.payload::_CSECache, n.idx, T)
     elseif k === _NK_CONTRACTION
-        return _eval_contraction(n, u, p, t)
+        return _eval_contraction(n, u, p, t, T)
     else
-        return _eval_node_op(n, u, p, t)
+        return _eval_node_op(n, u, p, t, T)
     end
 end
 
@@ -580,60 +672,60 @@ end
 # the four arms structurally identical is what makes the RHS `f!` non-allocating
 # (ess-9cc). This node is only built with ≥1 child (the empty case folds to a
 # literal upstream).
-function _eval_contraction(n::_Node, u, p, t)
+function _eval_contraction(n::_Node, u, p, t, ::Type{T}) where {T}
     op = n.op
     children = n.children
     if op === :+
         s = n.literal  # 0̄ = 0.0 for sum_product
         @inbounds for k in eachindex(children)
-            s += _eval_node(children[k], u, p, t)
+            s += _eval_node(children[k], u, p, t, T)
         end
         return s
     elseif op === :*
         s = n.literal  # 1̄ for the ×-reduce
         @inbounds for k in eachindex(children)
-            s *= _eval_node(children[k], u, p, t)
+            s *= _eval_node(children[k], u, p, t, T)
         end
         return s
     elseif op === :max
         s = n.literal  # -∞
         @inbounds for k in eachindex(children)
-            s = max(s, _eval_node(children[k], u, p, t))
+            s = max(s, _eval_node(children[k], u, p, t, T))
         end
         return s
     else  # :min
         s = n.literal  # +∞
         @inbounds for k in eachindex(children)
-            s = min(s, _eval_node(children[k], u, p, t))
+            s = min(s, _eval_node(children[k], u, p, t, T))
         end
         return s
     end
 end
 
-function _eval_node_op(n::_Node, u, p, t)
+function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
     op = n.op
     c = n.children
 
     # Arithmetic — the hot paths.
     if op === :+
-        length(c) == 1 && return _eval_node(c[1], u, p, t)
-        acc = _eval_node(c[1], u, p, t)
+        length(c) == 1 && return _eval_node(c[1], u, p, t, T)
+        acc = _eval_node(c[1], u, p, t, T)
         @inbounds for i in 2:length(c)
-            acc += _eval_node(c[i], u, p, t)
+            acc += _eval_node(c[i], u, p, t, T)
         end
         return acc
     elseif op === :*
-        length(c) == 1 && return _eval_node(c[1], u, p, t)
-        acc = _eval_node(c[1], u, p, t)
+        length(c) == 1 && return _eval_node(c[1], u, p, t, T)
+        acc = _eval_node(c[1], u, p, t, T)
         @inbounds for i in 2:length(c)
-            acc *= _eval_node(c[i], u, p, t)
+            acc *= _eval_node(c[i], u, p, t, T)
         end
         return acc
     elseif op === :-
         if length(c) == 1
-            return -_eval_node(c[1], u, p, t)
+            return -_eval_node(c[1], u, p, t, T)
         elseif length(c) == 2
-            return _eval_node(c[1], u, p, t) - _eval_node(c[2], u, p, t)
+            return _eval_node(c[1], u, p, t, T) - _eval_node(c[2], u, p, t, T)
         end
         throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
     elseif op === :neg
@@ -641,96 +733,108 @@ function _eval_node_op(n::_Node, u, p, t)
         # `-x` to `neg(x)`, so any AST that has been through `discretize`
         # may carry `neg` ops where the source had `-x`.
         _expect_arity_n(op, c, 1)
-        return -_eval_node(c[1], u, p, t)
+        return -_eval_node(c[1], u, p, t, T)
     elseif op === :/
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) / _eval_node(c[2], u, p, t)
+        return _eval_node(c[1], u, p, t, T) / _eval_node(c[2], u, p, t, T)
     elseif op === :^ || op === :pow
+        # A LITERAL EXPONENT MUST STAY A `Float64`, and this arm is why the walker
+        # never converts its leaves into `T`. `^` is the one op whose derivative
+        # w.r.t. an OPERAND needs a function with a smaller domain than the op
+        # itself: ∂(x^y)/∂y = x^y·log(x). Hand ForwardDiff a `Dual` exponent and it
+        # takes that branch even when the exponent's partials are all zero, so
+        # `c^2` at any NEGATIVE c evaluates log(c) and silently poisons the gradient
+        # with NaN while the primal value still looks perfect. Because
+        # `_NK_LITERAL` returns its raw `Float64`, this compiles to `Dual^Float64`
+        # — the power rule, defined on the whole domain `^` is. (The vectorized twin
+        # gets the same protection from `_VK_LITERAL`/`_VK_CONSTVEC` staying
+        # `Vector{Float64}`; see `_eval_vec`.) An exponent that genuinely depends on
+        # a differentiated variable still lands on `Dual^Dual`, which is correct.
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) ^ _eval_node(c[2], u, p, t)
+        return _eval_node(c[1], u, p, t, T) ^ _eval_node(c[2], u, p, t, T)
 
     # Comparisons → 1.0/0.0 (match `evaluate` semantics)
     elseif op === :<
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) <  _eval_node(c[2], u, p, t) ? 1.0 : 0.0
+        return _eval_node(c[1], u, p, t, T) <  _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
     elseif op === Symbol("<=")
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) <= _eval_node(c[2], u, p, t) ? 1.0 : 0.0
+        return _eval_node(c[1], u, p, t, T) <= _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
     elseif op === :>
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) >  _eval_node(c[2], u, p, t) ? 1.0 : 0.0
+        return _eval_node(c[1], u, p, t, T) >  _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
     elseif op === Symbol(">=")
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) >= _eval_node(c[2], u, p, t) ? 1.0 : 0.0
+        return _eval_node(c[1], u, p, t, T) >= _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
     elseif op === Symbol("==")
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) == _eval_node(c[2], u, p, t) ? 1.0 : 0.0
+        return _eval_node(c[1], u, p, t, T) == _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
     elseif op === Symbol("!=")
         _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t) != _eval_node(c[2], u, p, t) ? 1.0 : 0.0
+        return _eval_node(c[1], u, p, t, T) != _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
 
     # Logical
     elseif op === :and
         for child in c
-            _eval_node(child, u, p, t) == 0 && return 0.0
+            _eval_node(child, u, p, t, T) == 0 && return 0.0
         end
         return 1.0
     elseif op === :or
         for child in c
-            _eval_node(child, u, p, t) != 0 && return 1.0
+            _eval_node(child, u, p, t, T) != 0 && return 1.0
         end
         return 0.0
     elseif op === :not
         _expect_arity_n(op, c, 1)
-        return _eval_node(c[1], u, p, t) == 0 ? 1.0 : 0.0
+        return _eval_node(c[1], u, p, t, T) == 0 ? 1.0 : 0.0
 
     elseif op === :ifelse
         _expect_arity_n(op, c, 3)
-        return _eval_node(c[1], u, p, t) != 0 ?
-               _eval_node(c[2], u, p, t) :
-               _eval_node(c[3], u, p, t)
+        return _eval_node(c[1], u, p, t, T) != 0 ?
+               _eval_node(c[2], u, p, t, T) :
+               _eval_node(c[3], u, p, t, T)
 
     # Elementary functions
-    elseif op === :sin;   _expect_arity_n(op, c, 1); return sin(_eval_node(c[1], u, p, t))
-    elseif op === :cos;   _expect_arity_n(op, c, 1); return cos(_eval_node(c[1], u, p, t))
-    elseif op === :tan;   _expect_arity_n(op, c, 1); return tan(_eval_node(c[1], u, p, t))
-    elseif op === :asin;  _expect_arity_n(op, c, 1); return asin(_eval_node(c[1], u, p, t))
-    elseif op === :acos;  _expect_arity_n(op, c, 1); return acos(_eval_node(c[1], u, p, t))
+    elseif op === :sin;   _expect_arity_n(op, c, 1); return sin(_eval_node(c[1], u, p, t, T))
+    elseif op === :cos;   _expect_arity_n(op, c, 1); return cos(_eval_node(c[1], u, p, t, T))
+    elseif op === :tan;   _expect_arity_n(op, c, 1); return tan(_eval_node(c[1], u, p, t, T))
+    elseif op === :asin;  _expect_arity_n(op, c, 1); return asin(_eval_node(c[1], u, p, t, T))
+    elseif op === :acos;  _expect_arity_n(op, c, 1); return acos(_eval_node(c[1], u, p, t, T))
     elseif op === :atan
         if length(c) == 1
-            return atan(_eval_node(c[1], u, p, t))
+            return atan(_eval_node(c[1], u, p, t, T))
         elseif length(c) == 2
-            return atan(_eval_node(c[1], u, p, t), _eval_node(c[2], u, p, t))
+            return atan(_eval_node(c[1], u, p, t, T), _eval_node(c[2], u, p, t, T))
         end
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
     elseif op === :atan2
         _expect_arity_n(op, c, 2)
-        return atan(_eval_node(c[1], u, p, t), _eval_node(c[2], u, p, t))
-    elseif op === :sinh;  _expect_arity_n(op, c, 1); return sinh(_eval_node(c[1], u, p, t))
-    elseif op === :cosh;  _expect_arity_n(op, c, 1); return cosh(_eval_node(c[1], u, p, t))
-    elseif op === :tanh;  _expect_arity_n(op, c, 1); return tanh(_eval_node(c[1], u, p, t))
-    elseif op === :asinh; _expect_arity_n(op, c, 1); return asinh(_eval_node(c[1], u, p, t))
-    elseif op === :acosh; _expect_arity_n(op, c, 1); return acosh(_eval_node(c[1], u, p, t))
-    elseif op === :atanh; _expect_arity_n(op, c, 1); return atanh(_eval_node(c[1], u, p, t))
-    elseif op === :exp;   _expect_arity_n(op, c, 1); return exp(_eval_node(c[1], u, p, t))
-    elseif op === :log;   _expect_arity_n(op, c, 1); return log(_eval_node(c[1], u, p, t))
-    elseif op === :log10; _expect_arity_n(op, c, 1); return log10(_eval_node(c[1], u, p, t))
-    elseif op === :sqrt;  _expect_arity_n(op, c, 1); return sqrt(_eval_node(c[1], u, p, t))
-    elseif op === :abs;   _expect_arity_n(op, c, 1); return abs(_eval_node(c[1], u, p, t))
-    elseif op === :sign;  _expect_arity_n(op, c, 1); return sign(_eval_node(c[1], u, p, t))
-    elseif op === :floor; _expect_arity_n(op, c, 1); return floor(_eval_node(c[1], u, p, t))
-    elseif op === :ceil;  _expect_arity_n(op, c, 1); return ceil(_eval_node(c[1], u, p, t))
+        return atan(_eval_node(c[1], u, p, t, T), _eval_node(c[2], u, p, t, T))
+    elseif op === :sinh;  _expect_arity_n(op, c, 1); return sinh(_eval_node(c[1], u, p, t, T))
+    elseif op === :cosh;  _expect_arity_n(op, c, 1); return cosh(_eval_node(c[1], u, p, t, T))
+    elseif op === :tanh;  _expect_arity_n(op, c, 1); return tanh(_eval_node(c[1], u, p, t, T))
+    elseif op === :asinh; _expect_arity_n(op, c, 1); return asinh(_eval_node(c[1], u, p, t, T))
+    elseif op === :acosh; _expect_arity_n(op, c, 1); return acosh(_eval_node(c[1], u, p, t, T))
+    elseif op === :atanh; _expect_arity_n(op, c, 1); return atanh(_eval_node(c[1], u, p, t, T))
+    elseif op === :exp;   _expect_arity_n(op, c, 1); return exp(_eval_node(c[1], u, p, t, T))
+    elseif op === :log;   _expect_arity_n(op, c, 1); return log(_eval_node(c[1], u, p, t, T))
+    elseif op === :log10; _expect_arity_n(op, c, 1); return log10(_eval_node(c[1], u, p, t, T))
+    elseif op === :sqrt;  _expect_arity_n(op, c, 1); return sqrt(_eval_node(c[1], u, p, t, T))
+    elseif op === :abs;   _expect_arity_n(op, c, 1); return abs(_eval_node(c[1], u, p, t, T))
+    elseif op === :sign;  _expect_arity_n(op, c, 1); return sign(_eval_node(c[1], u, p, t, T))
+    elseif op === :floor; _expect_arity_n(op, c, 1); return floor(_eval_node(c[1], u, p, t, T))
+    elseif op === :ceil;  _expect_arity_n(op, c, 1); return ceil(_eval_node(c[1], u, p, t, T))
     elseif op === :min
         # n-ary min (esm-spec §4.2 — arity ≥ 2)
         length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
-        acc = _eval_node(c[1], u, p, t)
-        @inbounds for i in 2:length(c); acc = min(acc, _eval_node(c[i], u, p, t)); end
+        acc = _eval_node(c[1], u, p, t, T)
+        @inbounds for i in 2:length(c); acc = min(acc, _eval_node(c[i], u, p, t, T)); end
         return acc
     elseif op === :max
         # n-ary max (esm-spec §4.2 — arity ≥ 2)
         length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "max needs ≥2 args"))
-        acc = _eval_node(c[1], u, p, t)
-        @inbounds for i in 2:length(c); acc = max(acc, _eval_node(c[i], u, p, t)); end
+        acc = _eval_node(c[1], u, p, t, T)
+        @inbounds for i in 2:length(c); acc = max(acc, _eval_node(c[i], u, p, t, T)); end
         return acc
 
     elseif op === :pi || op === :π
@@ -740,7 +844,7 @@ function _eval_node_op(n::_Node, u, p, t)
 
     elseif op === :Pre
         _expect_arity_n(op, c, 1)
-        return _eval_node(c[1], u, p, t)
+        return _eval_node(c[1], u, p, t, T)
 
     elseif op === :fn
         # `n.payload` is `(fname::String, spec_or_nothing)`. For `interp.*` the
@@ -759,23 +863,23 @@ function _eval_node_op(n::_Node, u, p, t)
         pl = n.payload
         if pl isa Tuple{String,_InterpLinearSpec}
             spec = pl[2]
-            x = _eval_node(c[1], u, p, t)
+            x = _eval_node(c[1], u, p, t, T)
             return _interp_linear_core(spec.table, spec.axis, x)
         elseif pl isa Tuple{String,_InterpBilinearSpec}
             spec = pl[2]
-            x = _eval_node(c[1], u, p, t)
-            y = _eval_node(c[2], u, p, t)
+            x = _eval_node(c[1], u, p, t, T)
+            y = _eval_node(c[2], u, p, t, T)
             return _interp_bilinear_core(spec.table, spec.axis_x, spec.axis_y, x, y)
         elseif pl isa Tuple{String,_InterpSearchsortedSpec}
             spec = pl[2]
-            x = _eval_node(c[1], u, p, t)
+            x = _eval_node(c[1], u, p, t, T)
             return Float64(_interp_searchsorted_core("interp.searchsorted", x, spec.xs))
         elseif pl isa Tuple{String,Nothing}
             # All-scalar closed functions (e.g. `datetime.*`): boxed path. The
             # children are the full spec-order arg list; a cold case off the
             # numeric RHS hot path, so the residual `Vector{Any}` is tolerated.
             fname = pl[1]
-            args_evaluated = Any[_eval_node(ci, u, p, t) for ci in c]
+            args_evaluated = Any[_eval_node(ci, u, p, t, T) for ci in c]
             return Float64(evaluate_closed_function(fname, args_evaluated))
         end
         # Unreachable if `_compile_op` and this arm agree (via

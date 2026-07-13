@@ -150,7 +150,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
                                       for _ in 1:wrong],
                 buf=Vector{Float64}(undef, 1))
             err = try
-                ESM._eval_vec_op(bad, Float64[], NamedTuple(), 0.0)
+                ESM._eval_vec_op(bad, Float64[], NamedTuple(), 0.0, Float64)
                 nothing
             catch e
                 e

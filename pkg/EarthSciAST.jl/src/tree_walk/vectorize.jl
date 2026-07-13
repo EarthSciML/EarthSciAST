@@ -122,6 +122,33 @@ const _VK_INVARIANT = UInt8(11) # LANE-INVARIANT subtree: `payload` is the repre
 # (ess-wrh), leaving `fnargs`/`cvbufs` as shared empty sentinels; every non-`fn`
 # node shares those sentinels too.
 #
+# `altbuf` IS WHAT MAKES `f!` DIFFERENTIABLE, and it is the whole trick of this
+# file's AD story, so it is worth being precise about. A `Vector{Float64}` cannot
+# hold a `ForwardDiff.Dual`, so `buf` alone pins the evaluator to `Float64` — and
+# widening `buf` to a type parameter would mean allocating it per call, i.e. giving
+# up the exact property it exists for. Instead each node carries a SECOND,
+# LAZILY-CREATED buffer for whatever non-`Float64` value type last drove `f!`
+# (`_vbuf`). Consequences, all of them deliberate:
+#   * The `Float64` path is untouched: `_vbuf(n, Float64)` IS `n.buf`, a field load
+#     the compiler resolves statically (`T` is a compile-time constant — see
+#     `_rhs_value_type`). Same buffers, same broadcasts, same zero allocations,
+#     same bits.
+#   * A model that is only ever INTEGRATED never allocates the Dual buffers at all.
+#     This is why the node holds its own lazy slot rather than a
+#     `PreallocationTools.DiffCache`, which eagerly reserves
+#     `length × (chunk+1)` `Float64`s per node at BUILD time — a large memory tax
+#     on the production path for an AD feature it does not use, and it re-allocates
+#     inside the RHS whenever ForwardDiff's real chunk exceeds the guess.
+#   * `Ref{Any}` + an `isa` narrowing (not a `Dict{DataType,…}`): ForwardDiff drives
+#     a whole Jacobian with ONE `Dual{Tag,V,N}`, so a one-slot cache hits every call
+#     after the first. Alternating two distinct Dual types would re-allocate each
+#     call — correct, just not free.
+#   * `_VK_LITERAL`, `_VK_CONSTVEC` and `_VK_PGATHER` deliberately keep NO alt
+#     buffer: their lanes are DATA (literals, const arrays, live forcing) whose
+#     derivative is genuinely zero, so they stay `Vector{Float64}` and promote at
+#     the operator. For `^` that is not merely an optimization but a correctness
+#     requirement — see the `:^` arm of `_eval_vec_op`.
+#
 # Because the buffers are mutable shared state, an evaluator is NON-REENTRANT: a
 # given `f!` must not run concurrently for one problem (the ODE integrator calls
 # the RHS sequentially, so this holds). Concurrent/ensemble use needs one
@@ -151,9 +178,37 @@ struct _VecNode
     slots::Vector{Int}
     children::Vector{_VecNode}
     buf::Vector{Float64}
+    altbuf::Base.RefValue{Any}   # lazily-created `Vector{T}`, T ≠ Float64 (see above)
     fnargs::Vector{Any}
-    cvbufs::Vector{Vector{Float64}}
+    # Child result buffers for the boxed `fn` path. `Any` rather than
+    # `Vector{Float64}` because a child evaluates to `Vector{Float64}` (a data
+    # node) or `Vector{T}` (everything else) depending on the value type. The
+    # extra dynamic index this costs is free in context: that path already boxes
+    # a scalar per lane into `fnargs` to call `evaluate_closed_function`, so it
+    # was never allocation-free to begin with (`interp.*`, which IS on the hot
+    # path, is lowered to a typed spec and never reaches it).
+    cvbufs::Vector{Any}
 end
+
+# The node's scratch for value type `T`. `T` is a compile-time constant at every
+# call site, so ONE of these two methods is compiled into any given `f!`
+# specialization — the `Float64` one to a bare field load.
+@inline _vbuf(n::_VecNode, ::Type{Float64}) = n.buf
+@inline function _vbuf(n::_VecNode, ::Type{T}) where {T}
+    b = n.altbuf[]
+    b isa Vector{T} && return b
+    nb = Vector{T}(undef, length(n.buf))
+    n.altbuf[] = nb
+    return nb
+end
+
+# What one `_eval_vec` node yields: a `Vector{T}` for a computed node, or a
+# `Vector{Float64}` for a DATA node (`_VK_LITERAL` / `_VK_CONSTVEC` /
+# `_VK_PGATHER`, whose lanes are never differentiated). At `T === Float64` the two
+# collapse into a single concrete type and this alias IS `Vector{Float64}` — the
+# vectorized walker is then exactly the pre-AD one. Under AD it is a two-member
+# union that Julia union-splits at each broadcast.
+const _VecVal{T} = Union{Vector{Float64},Vector{T}}
 
 # Lane-invariant test for a LOWERED child (see the `_VK_INVARIANT` commentary above).
 @inline _vk_lane_invariant(n::_VecNode) =
@@ -202,17 +257,20 @@ const _VK_NO_VALS   = Float64[]
 const _VK_NO_SLOTS  = Int[]
 const _VK_NO_BUF    = Float64[]
 const _VK_NO_FNARGS = Any[]
-const _VK_NO_CVBUFS = Vector{Float64}[]
+const _VK_NO_CVBUFS = Any[]
 
+# `altbuf` is the one field that must NOT be shared — each node needs its own
+# empty slot — so it is constructed fresh per call rather than defaulted to a
+# module-level sentinel like the others.
 function _mkvnode(; kind::UInt8, op::Symbol=Symbol(""), literal::Float64=0.0,
                   idx::Int=0, sym::Symbol=Symbol(""), payload=nothing,
                   vals::Vector{Float64}=_VK_NO_VALS, slots::Vector{Int}=_VK_NO_SLOTS,
                   children::Vector{_VecNode}=_VecNode[],
                   buf::Vector{Float64}=_VK_NO_BUF,
                   fnargs::Vector{Any}=_VK_NO_FNARGS,
-                  cvbufs::Vector{Vector{Float64}}=_VK_NO_CVBUFS)
+                  cvbufs::Vector{Any}=_VK_NO_CVBUFS)
     return _VecNode(kind, op, literal, idx, sym, payload, vals, slots, children,
-                    buf, fnargs, cvbufs)
+                    buf, Base.RefValue{Any}(nothing), fnargs, cvbufs)
 end
 
 # One vectorized array equation (or one structural sub-group of it): write the
@@ -368,7 +426,7 @@ function _merge_fn_node(payload, ch::Vector{_VecNode}, len::Int, m::Int)::_VecNo
     return _mkvnode(kind=_VK_FN, op=:fn, payload=payload, children=ch,
                     buf=Vector{Float64}(undef, len),
                     fnargs=_make_fnargs(m),
-                    cvbufs=Vector{Vector{Float64}}(undef, m))
+                    cvbufs=Vector{Any}(undef, m))
 end
 
 # (ess-wrh §4) On-knot / constant-query lowering. When EVERY query child of an
@@ -432,19 +490,25 @@ end
 
 # ---- Vectorized evaluation (runtime) — fully in place (ess-9cc) ----
 #
-# `_eval_vec` writes the node's lane values into its preallocated `n.buf` and
-# RETURNS that buffer (CONSTVEC returns its stored `n.vals`; pure pass-through
-# arms return a child's buffer directly). No node ever mutates a child's buffer:
-# the template is a pure tree, so every node's `buf` is disjoint from all of its
-# descendants', which lets a parent hold several child buffers at once and
-# combine them in place. The whole array-kernel evaluation therefore allocates
-# nothing — the only Float64 arrays are the build-time `buf`s in the closure.
-function _eval_vec(n::_VecNode, u, p, t)::Vector{Float64}
+# `_eval_vec` writes the node's lane values into its preallocated buffer for the
+# value type `T` (`_vbuf`, which IS `n.buf` at `T === Float64`) and RETURNS that
+# buffer. No node ever mutates a child's buffer: the template is a pure tree, so
+# every node's buffer is disjoint from all of its descendants', which lets a parent
+# hold several child buffers at once and combine them in place. The whole
+# array-kernel evaluation therefore allocates nothing — the only arrays are the
+# build-time buffers in the closure (plus, under AD, their one-time Dual twins).
+#
+# The three DATA kinds return `Vector{Float64}` at every `T`: CONSTVEC its stored
+# `n.vals`, LITERAL and PGATHER their `n.buf`. Their lanes are constants and live
+# forcing data, whose derivative is genuinely zero, so they promote at the operator
+# instead of being widened — cheaper, and (for `^`) the difference between a
+# correct gradient and a silent NaN.
+function _eval_vec(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     k = n.kind
     if k === _VK_CONSTVEC
         return n.vals
     elseif k === _VK_GATHER
-        b = n.buf; s = n.slots
+        b = _vbuf(n, T); s = n.slots
         @inbounds for j in eachindex(s)
             b[j] = u[s[j]]
         end
@@ -462,22 +526,22 @@ function _eval_vec(n::_VecNode, u, p, t)::Vector{Float64}
     elseif k === _VK_LITERAL
         b = n.buf; fill!(b, n.literal); return b
     elseif k === _VK_STATE
-        b = n.buf; fill!(b, @inbounds(u[n.idx])); return b
+        b = _vbuf(n, T); fill!(b, @inbounds(u[n.idx])); return b
     elseif k === _VK_PARAM
-        b = n.buf; fill!(b, getfield(p, n.sym)); return b
+        b = _vbuf(n, T); fill!(b, getfield(p, n.sym)); return b
     elseif k === _VK_TIME
-        b = n.buf; fill!(b, t); return b
+        b = _vbuf(n, T); fill!(b, t); return b
     elseif k === _VK_INVARIANT
         # The subtree has no free cell index, so ONE scalar evaluation covers every
         # lane. `_eval_node` is the same scalar walker the vec arms mirror, so this is
         # bit-identical to broadcasting the subtree per lane — see `_vk_lane_invariant`.
-        b = n.buf; fill!(b, _eval_node(n.payload::_Node, u, p, t)); return b
+        b = _vbuf(n, T); fill!(b, _eval_node(n.payload::_Node, u, p, t, T)); return b
     elseif k === _VK_REDUCE
-        return _eval_vec_reduce(n, u, p, t)
+        return _eval_vec_reduce(n, u, p, t, T)
     elseif k === _VK_FN
-        return _eval_vec_fn(n, u, p, t)
+        return _eval_vec_fn(n, u, p, t, T)
     else
-        return _eval_vec_op(n, u, p, t)
+        return _eval_vec_op(n, u, p, t, T)
     end
 end
 
@@ -485,29 +549,29 @@ end
 # the scalar `_eval_contraction`, seeded in place from the 0̄ identity on the
 # node. Writes into `n.buf`; each child buffer is consumed before the next child
 # is evaluated, so no child result needs to outlive its use.
-function _eval_vec_reduce(n::_VecNode, u, p, t)::Vector{Float64}
+function _eval_vec_reduce(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     op = n.op
     c = n.children
-    b = n.buf
+    b = _vbuf(n, T)
     fill!(b, n.literal)
     if op === :+
         @inbounds for k in 1:length(c)
-            ck = _eval_vec(c[k], u, p, t)
+            ck = _eval_vec(c[k], u, p, t, T)
             @. b += ck
         end
     elseif op === :*
         @inbounds for k in 1:length(c)
-            ck = _eval_vec(c[k], u, p, t)
+            ck = _eval_vec(c[k], u, p, t, T)
             @. b *= ck
         end
     elseif op === :max
         @inbounds for k in 1:length(c)
-            ck = _eval_vec(c[k], u, p, t)
+            ck = _eval_vec(c[k], u, p, t, T)
             @. b = max(b, ck)
         end
     else  # :min
         @inbounds for k in 1:length(c)
-            ck = _eval_vec(c[k], u, p, t)
+            ck = _eval_vec(c[k], u, p, t, T)
             @. b = min(b, ck)
         end
     end
@@ -525,16 +589,16 @@ end
 # path — a cold case off the PDE array RHS. The `isa` ladder is a manual union
 # split: each branch narrows `n.payload::Any` to a concrete type, so the kernels
 # it calls are type-stable (no dispatch box).
-function _eval_vec_fn(n::_VecNode, u, p, t)::Vector{Float64}
+function _eval_vec_fn(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     h = n.payload
     if h isa _InterpLinearSpec
-        return _eval_vec_interp_linear(h, n, u, p, t)
+        return _eval_vec_interp_linear(h, n, u, p, t, T)
     elseif h isa _InterpBilinearSpec
-        return _eval_vec_interp_bilinear(h, n, u, p, t)
+        return _eval_vec_interp_bilinear(h, n, u, p, t, T)
     elseif h isa _InterpSearchsortedSpec
-        return _eval_vec_interp_searchsorted(h, n, u, p, t)
+        return _eval_vec_interp_searchsorted(h, n, u, p, t, T)
     else
-        return _eval_vec_fn_boxed(n, u, p, t)
+        return _eval_vec_fn_boxed(n, u, p, t, T)
     end
 end
 
@@ -551,9 +615,10 @@ end
 # re-validation, and the boxed `AbstractVector` dispatch — are eliminated here
 # regardless of locate strategy: the query is a typed `Float64`, the table/axis
 # are validated once at build time, and the call is statically dispatched.
-function _eval_vec_interp_linear(h::_InterpLinearSpec, n::_VecNode, u, p, t)::Vector{Float64}
-    b = n.buf
-    xq = _eval_vec(n.children[1], u, p, t)   # query lane vector (disjoint from b)
+function _eval_vec_interp_linear(h::_InterpLinearSpec, n::_VecNode, u, p, t,
+                                 ::Type{T})::_VecVal{T} where {T}
+    b = _vbuf(n, T)
+    xq = _eval_vec(n.children[1], u, p, t, T)   # query lane vector (disjoint from b)
     table = h.table; axis = h.axis
     @inbounds for lane in eachindex(b)
         b[lane] = _interp_linear_core(table, axis, xq[lane])
@@ -561,9 +626,10 @@ function _eval_vec_interp_linear(h::_InterpLinearSpec, n::_VecNode, u, p, t)::Ve
     return b
 end
 
-function _eval_vec_interp_searchsorted(h::_InterpSearchsortedSpec, n::_VecNode, u, p, t)::Vector{Float64}
-    b = n.buf
-    xq = _eval_vec(n.children[1], u, p, t)
+function _eval_vec_interp_searchsorted(h::_InterpSearchsortedSpec, n::_VecNode, u, p, t,
+                                       ::Type{T})::_VecVal{T} where {T}
+    b = _vbuf(n, T)
+    xq = _eval_vec(n.children[1], u, p, t, T)
     xs = h.xs
     @inbounds for lane in eachindex(b)
         b[lane] = Float64(_interp_searchsorted_core("interp.searchsorted", xq[lane], xs))
@@ -571,10 +637,11 @@ function _eval_vec_interp_searchsorted(h::_InterpSearchsortedSpec, n::_VecNode, 
     return b
 end
 
-function _eval_vec_interp_bilinear(h::_InterpBilinearSpec, n::_VecNode, u, p, t)::Vector{Float64}
-    b = n.buf
-    xq = _eval_vec(n.children[1], u, p, t)
-    yq = _eval_vec(n.children[2], u, p, t)   # sibling buffer, disjoint from xq and b
+function _eval_vec_interp_bilinear(h::_InterpBilinearSpec, n::_VecNode, u, p, t,
+                                   ::Type{T})::_VecVal{T} where {T}
+    b = _vbuf(n, T)
+    xq = _eval_vec(n.children[1], u, p, t, T)
+    yq = _eval_vec(n.children[2], u, p, t, T)   # sibling buffer, disjoint from xq and b
     table = h.table; axis_x = h.axis_x; axis_y = h.axis_y
     @inbounds for lane in eachindex(b)
         b[lane] = _interp_bilinear_core(table, axis_x, axis_y, xq[lane], yq[lane])
@@ -587,25 +654,25 @@ end
 # passed to `evaluate_closed_function`. Off the PDE RHS hot loop, so the residual
 # per-lane `Float64`→`Any` box is tolerated. `interp.*` never reaches here — those
 # are lowered to typed specs at build time.
-function _eval_vec_fn_boxed(n::_VecNode, u, p, t)::Vector{Float64}
+function _eval_vec_fn_boxed(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     fname, spec = n.payload::Tuple{String,Any}
     # Only the all-scalar `datetime.*` path (payload second slot `nothing`)
     # reaches here; `interp.*` specs are handled by `_eval_vec_fn` above.
     spec === nothing ||
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_VEC_OP", string("fn:", fname)))
     c = n.children
-    b = n.buf
+    b = _vbuf(n, T)
     args = n.fnargs
     cv = n.cvbufs
     len = length(b)
     @inbounds for a in eachindex(c)
-        cv[a] = _eval_vec(c[a], u, p, t)
+        cv[a] = _eval_vec(c[a], u, p, t, T)
     end
     @inbounds for lane in 1:len
         for a in 1:length(cv)
-            args[a] = cv[a][lane]
+            args[a] = (cv[a]::AbstractVector)[lane]
         end
-        b[lane] = Float64(evaluate_closed_function(fname, args))
+        b[lane] = evaluate_closed_function(fname, args)
     end
     return b
 end
@@ -616,7 +683,7 @@ end
 # automatically. The generated body is one `op === :name` compare chain in
 # table (= original hand-ladder arm) order, each arm equivalent to the
 # hand-written original:
-#     _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t)
+#     _expect_arity_n(op, c, 1); c1 = _eval_vec(c[1], u, p, t, T)
 #     @. b = fn(c1); return b
 # — same arity guard, same fused broadcast, same buffer discipline (write the
 # caller's `b`, return `b`). Returns `nothing` when `op` is not a mechanical
@@ -637,14 +704,15 @@ let arms = :(return nothing)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
                          quote
                              _expect_arity_n(op, c, 1)
-                             c1 = _eval_vec(c[1], u, p, t)
+                             c1 = _eval_vec(c[1], u, p, t, T)
                              @. b = $(row.sym)(c1)
                              return b
                          end,
                          arms)
     end
     @eval @inline function _eval_vec_unary_elementwise(op::Symbol, c::Vector{_VecNode},
-                                                       b::Vector{Float64}, u, p, t)
+                                                       b::AbstractVector, u, p, t,
+                                                       ::Type{T}) where {T}
         $arms
     end
 end
@@ -667,83 +735,94 @@ end
 # disjoint from every child buffer, so writing it is always safe. Pure
 # pass-through arms (1-ary `+`/`*`/`min`/`max`, `Pre`) return the child buffer
 # directly — the parent only reads it.
-function _eval_vec_op(n::_VecNode, u, p, t)::Vector{Float64}
+function _eval_vec_op(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     op = n.op
     c = n.children
-    b = n.buf
+    b = _vbuf(n, T)
 
     if op === :+
-        c1 = _eval_vec(c[1], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
         length(c) == 1 && return c1
-        c2 = _eval_vec(c[2], u, p, t)
+        c2 = _eval_vec(c[2], u, p, t, T)
         @. b = c1 + c2
         @inbounds for i in 3:length(c)
-            ci = _eval_vec(c[i], u, p, t)
+            ci = _eval_vec(c[i], u, p, t, T)
             @. b += ci
         end
         return b
     elseif op === :*
-        c1 = _eval_vec(c[1], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
         length(c) == 1 && return c1
-        c2 = _eval_vec(c[2], u, p, t)
+        c2 = _eval_vec(c[2], u, p, t, T)
         @. b = c1 * c2
         @inbounds for i in 3:length(c)
-            ci = _eval_vec(c[i], u, p, t)
+            ci = _eval_vec(c[i], u, p, t, T)
             @. b *= ci
         end
         return b
     elseif op === :-
-        c1 = _eval_vec(c[1], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
         if length(c) == 1
             @. b = -c1
             return b
         elseif length(c) == 2
-            c2 = _eval_vec(c[2], u, p, t)
+            c2 = _eval_vec(c[2], u, p, t, T)
             @. b = c1 - c2
             return b
         end
         throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
     elseif op === :neg
         _expect_arity_n(op, c, 1)
-        c1 = _eval_vec(c[1], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
         @. b = -c1
         return b
     elseif op === :/
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t)
-        c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
+        c2 = _eval_vec(c[2], u, p, t, T)
         @. b = c1 / c2
         return b
     elseif op === :^ || op === :pow
+        # THE ONE ARM THAT DEPENDS ON DATA NODES STAYING `Float64`. `^` is the only
+        # op whose derivative w.r.t. an OPERAND needs a function with a smaller
+        # domain than the op itself: ∂(x^y)/∂y = x^y·log(x). If a literal exponent
+        # were lifted into the differentiable type, ForwardDiff would evaluate that
+        # branch despite the exponent's partials all being zero — so `c[i]^2` over a
+        # lane vector holding any NEGATIVE cell would produce log(negative) = NaN and
+        # silently poison the gradient while the primal values still looked perfect.
+        # `_VK_LITERAL` and `_VK_CONSTVEC` yield `Vector{Float64}` at every value
+        # type, so a literal / const-array exponent lowers to `Dual^Float64` — the
+        # power rule. A state- or parameter-dependent exponent lowers to `Dual^Dual`,
+        # which is what it should be.
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t)
-        c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
+        c2 = _eval_vec(c[2], u, p, t, T)
         @. b = c1 ^ c2
         return b
 
     elseif op === :<
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
         @. b = ifelse(c1 <  c2, 1.0, 0.0); return b
     elseif op === Symbol("<=")
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
         @. b = ifelse(c1 <= c2, 1.0, 0.0); return b
     elseif op === :>
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
         @. b = ifelse(c1 >  c2, 1.0, 0.0); return b
     elseif op === Symbol(">=")
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
         @. b = ifelse(c1 >= c2, 1.0, 0.0); return b
     elseif op === Symbol("==")
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
         @. b = ifelse(c1 == c2, 1.0, 0.0); return b
     elseif op === Symbol("!=")
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
         @. b = ifelse(c1 != c2, 1.0, 0.0); return b
 
     elseif op === :and
@@ -751,26 +830,26 @@ function _eval_vec_op(n::_VecNode, u, p, t)::Vector{Float64}
         # arm; all children are evaluated — no short-circuit, matching prior code).
         fill!(b, 1.0)
         @inbounds for a in eachindex(c)
-            ca = _eval_vec(c[a], u, p, t)
+            ca = _eval_vec(c[a], u, p, t, T)
             @. b = ifelse((b != 0) & (ca != 0), 1.0, 0.0)
         end
         return b
     elseif op === :or
         fill!(b, 0.0)
         @inbounds for a in eachindex(c)
-            ca = _eval_vec(c[a], u, p, t)
+            ca = _eval_vec(c[a], u, p, t, T)
             @. b = ifelse((b != 0) | (ca != 0), 1.0, 0.0)
         end
         return b
     elseif op === :not
         _expect_arity_n(op, c, 1)
-        c1 = _eval_vec(c[1], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
         @. b = ifelse(c1 == 0, 1.0, 0.0); return b
     elseif op === :ifelse
         _expect_arity_n(op, c, 3)
-        c1 = _eval_vec(c[1], u, p, t)
-        c2 = _eval_vec(c[2], u, p, t)
-        c3 = _eval_vec(c[3], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
+        c2 = _eval_vec(c[2], u, p, t, T)
+        c3 = _eval_vec(c[3], u, p, t, T)
         @. b = ifelse(c1 != 0, c2, c3); return b
 
     # The 19 mechanical unary arms (`sin` … `ceil`) are GENERATED from the
@@ -779,41 +858,41 @@ function _eval_vec_op(n::_VecNode, u, p, t)::Vector{Float64}
     # probe sits where the first mechanical arm (`sin`) sat; every arm tests
     # `op === <disjoint symbol>`, so probing the second historical run
     # (`sinh` … `ceil`) before `atan`/`atan2` cannot change which arm fires.
-    elseif (unary = _eval_vec_unary_elementwise(op, c, b, u, p, t)) !== nothing
+    elseif (unary = _eval_vec_unary_elementwise(op, c, b, u, p, t, T)) !== nothing
         return unary
     elseif op === :atan
         if length(c) == 1
-            c1 = _eval_vec(c[1], u, p, t)
+            c1 = _eval_vec(c[1], u, p, t, T)
             @. b = atan(c1); return b
         elseif length(c) == 2
-            c1 = _eval_vec(c[1], u, p, t)
-            c2 = _eval_vec(c[2], u, p, t)
+            c1 = _eval_vec(c[1], u, p, t, T)
+            c2 = _eval_vec(c[2], u, p, t, T)
             @. b = atan(c1, c2); return b
         end
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
     elseif op === :atan2
         _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t); c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
         @. b = atan(c1, c2); return b
     elseif op === :min
         # n-ary min (esm-spec §4.2 — arity ≥ 2), matching the scalar arm's guard.
         length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
-        c1 = _eval_vec(c[1], u, p, t)
-        c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
+        c2 = _eval_vec(c[2], u, p, t, T)
         @. b = min(c1, c2)
         @inbounds for i in 3:length(c)
-            ci = _eval_vec(c[i], u, p, t)
+            ci = _eval_vec(c[i], u, p, t, T)
             @. b = min(b, ci)
         end
         return b
     elseif op === :max
         # n-ary max (esm-spec §4.2 — arity ≥ 2), matching the scalar arm's guard.
         length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "max needs ≥2 args"))
-        c1 = _eval_vec(c[1], u, p, t)
-        c2 = _eval_vec(c[2], u, p, t)
+        c1 = _eval_vec(c[1], u, p, t, T)
+        c2 = _eval_vec(c[2], u, p, t, T)
         @. b = max(c1, c2)
         @inbounds for i in 3:length(c)
-            ci = _eval_vec(c[i], u, p, t)
+            ci = _eval_vec(c[i], u, p, t, T)
             @. b = max(b, ci)
         end
         return b
@@ -824,7 +903,7 @@ function _eval_vec_op(n::_VecNode, u, p, t)::Vector{Float64}
         fill!(b, Float64(ℯ)); return b
     elseif op === :Pre
         _expect_arity_n(op, c, 1)
-        return _eval_vec(c[1], u, p, t)
+        return _eval_vec(c[1], u, p, t, T)
     else
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_VEC_OP", String(op)))
     end
@@ -843,11 +922,24 @@ end
 # combined with the in-place `_eval_vec`, the whole RHS is allocation-free in
 # steady state (ess-9cc), so it can be reused across every RK stage without GC
 # pressure. Property pinned by the `@allocated f!(du,u,p,t) == 0` test.
+#
+# ELTYPE-GENERIC, STILL ZERO-ALLOC. `f!` computes in `T = _rhs_value_type(u, p, t)`,
+# which is a compile-time constant per specialization — so at `T === Float64` the
+# two scratch lookups below (`_cse_buf`, and `_vbuf` inside `_eval_vec`) are field
+# loads and this is exactly the Float64 RHS it always was. Hand it `Dual` state
+# (a ForwardDiff Jacobian for a stiff solver) or a `Dual`-valued parameter
+# NamedTuple (a sensitivity) and the SAME closure evaluates in `Dual`, reusing the
+# per-node Dual buffers created on the first such call. `t` is folded into the value
+# type alongside `u` and `p` precisely so the parameter axis works: there `u` stays
+# `Vector{Float64}` and only the parameter VALUES are `Dual`, so a scratch sized
+# from `eltype(u)` alone would compile and then throw `Float64(::Dual)` on its first
+# store.
 function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    cse_prelude::AbstractVector{_Node},
-                   cse_cache::Vector{Float64},
+                   cse_cache::_CSECache,
                    vec_kernels::AbstractVector{_VecKernel})
     function f!(du, u, p, t)
+        T = _rhs_value_type(u, p, t)
         # CSE prelude (ess-r7h): evaluate each distinct shared subexpression
         # exactly once per call into the scratch cache, in slot order. `defs[s]`
         # references only slots < s (topological), so each read is already
@@ -855,16 +947,17 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # the cache makes `f!` non-reentrant (one instance per integrator, which
         # is how ODE RHS closures are used). Empty prelude ⇒ this loop is a no-op
         # and f! is identical to the pre-CSE evaluator.
+        cache = _cse_buf(cse_cache, T)
         @inbounds for s in 1:length(cse_prelude)
-            cse_cache[s] = _eval_node(cse_prelude[s], u, p, t)
+            cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
         end
         @inbounds for k in 1:length(rhs_list)
             idx_and_node = rhs_list[k]
-            du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t)
+            du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
         end
         @inbounds for j in 1:length(vec_kernels)
             vk = vec_kernels[j]
-            res = _eval_vec(vk.template, u, p, t)
+            res = _eval_vec(vk.template, u, p, t, T)
             out = vk.out_slots
             for m in 1:length(out)
                 du[out[m]] = res[m]
