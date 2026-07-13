@@ -1644,6 +1644,43 @@ function load(path::String;
               metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     base_path = dirname(abspath(path))
     raw_data = _read_json_document(read(path, String))
+    return _load_document(raw_data, base_path; metaparameters=metaparameters)
+end
+
+"""
+    load(doc::AbstractDict; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+
+Load and parse an ESM document held in memory as a native Julia dict — the same
+document a `.esm` file holds, just already parsed. Runs the identical pipeline
+`load(::String)` runs (top-level `{ref}` inlining, schema validation,
+expression-template lowering, coercion, subsystem-ref resolution); `base_path`
+anchors the relative refs a file input anchors at its own directory.
+
+Distinct from [`coerce_esm_file`](@ref), which only coerces: it does not
+validate, and it leaves a `{ref}` subsystem as an unresolved `SubsystemRef`
+that [`flatten`](@ref) then SKIPS — so a dict must come through here, not
+through `coerce_esm_file`, before it is flattened and run.
+"""
+function load(doc::AbstractDict;
+              base_path::AbstractString=pwd(),
+              metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+    return _load_document(doc, String(base_path); metaparameters=metaparameters)
+end
+
+"""
+    _load_document(raw_data, base_path; metaparameters) -> EsmFile
+
+The document pipeline shared by every `load` method: top-level `{ref}` inlining
+→ `_load_parsed` (version gates, schema validation, template lowering,
+coercion) → nested subsystem-ref resolution. `raw_data` may be the raw JSON3
+document (the file path) or an already-native dict (the in-memory path); both
+inliners accept either.
+
+Factored out so a file and the identical document held as a dict cannot drift
+apart — the only difference between them is which `base_path` anchors the refs.
+"""
+function _load_document(raw_data, base_path::String;
+                        metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     # Inline any top-level model `{ref}` stubs (schema §4.7: `models.*` is
     # oneOf [Model, {ref}]) before the typed pipeline, so a simulation file that
     # references its components by `{"ref": "..."}` — as the Python runner's
@@ -1662,7 +1699,7 @@ function load(path::String;
     native = inlined_r !== nothing ? inlined_r : inlined_m
     doc = native === nothing ? raw_data : JSON3.read(JSON3.write(native))
     file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters)
-    # Resolve nested subsystem references relative to the file's directory.
+    # Resolve nested subsystem references relative to the document's directory.
     resolve_subsystem_refs!(file, base_path)
     return file
 end
@@ -1861,13 +1898,18 @@ end
 Return a native ESM dict with every top-level model `{ref}` stub replaced by the
 referenced component's model (and its `function_tables` / `enums` /
 `data_loaders` merged in), or `nothing` when `raw_data` has no such stub.
+
+Reads the document through `_get_field` / `_has_field`, so it accepts the raw
+JSON3 document (symbol-keyed) as well as an already-native string-keyed dict —
+the same carriers [`_inline_toplevel_reaction_system_refs`](@ref) accepts, so
+the two top-level inliners compose on one document and `load(::AbstractDict)`
+resolves stubs exactly as `load(::String)` does.
 """
 function _inline_toplevel_model_refs(raw_data, base_path::String)
-    models = get(raw_data, :models, nothing)
+    models = _get_field(raw_data, :models, nothing)
     models === nothing && return nothing
     has_stub = any(values(models)) do m
-        (m isa JSON3.Object || m isa AbstractDict) &&
-            haskey(m, :ref) && !haskey(m, :variables)
+        _is_json_object(m) && _has_field(m, :ref) && !_has_field(m, :variables)
     end
     has_stub || return nothing
     native = _to_native_json(raw_data)
@@ -2110,10 +2152,13 @@ form is `models.<M>.boundary_conditions` (RFC §9). A follow-up bead will
 turn the warning into a schema-level hard error.
 """
 function _warn_deprecated_domain_bc(raw_data)
-    domains = get(raw_data, :domains, nothing)
+    # Through `_get_field` / `_has_field`, not a symbol-keyed `get`: the document
+    # also arrives here as a string-keyed native dict (`load(::AbstractDict)`),
+    # for which a symbol lookup silently finds nothing and skips the check.
+    domains = _get_field(raw_data, :domains, nothing)
     domains === nothing && return
     for (domain_name, domain) in domains
-        if haskey(domain, :boundary_conditions)
+        if _has_field(domain, :boundary_conditions)
             @warn string(
                 "[E_DEPRECATED_DOMAIN_BC] domains.", domain_name,
                 ".boundary_conditions is deprecated in ESM v0.2.0; migrate ",

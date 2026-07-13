@@ -347,6 +347,55 @@ using JSON3
             Dict{String,Any}("esm" => "0.8.0"))
     end
 
+    # `load(::AbstractDict)` — a document held in memory is the SAME document a
+    # `.esm` file holds, so it runs the identical pipeline (`_load_document`):
+    # schema validation and `{ref}` resolution, neither of which `coerce_esm_file`
+    # does. That distinction is load-bearing: `flatten` SILENTLY SKIPS an
+    # unresolved `SubsystemRef` (`_collect_model!`), so a merely-coerced document
+    # with a `{ref}` would flatten to a system missing that whole subsystem.
+    @testset "load(::AbstractDict) matches load(::String) on the same document" begin
+        leaf = Dict{String,Any}(
+            "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "leaf"),
+            "models" => Dict{String,Any}("Inner" => Dict{String,Any}(
+                "variables" => Dict{String,Any}(
+                    "x" => Dict{String,Any}("type" => "state", "default" => 1.0)),
+                "equations" => Any[Dict{String,Any}(
+                    "lhs" => Dict{String,Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                    "rhs" => 1.0)])))
+        parent = Dict{String,Any}(
+            "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "parent"),
+            "models" => Dict{String,Any}(
+                "Ref" => Dict{String,Any}("ref" => "leaf.esm")))
+
+        mktempdir() do dir
+            write(joinpath(dir, "leaf.esm"), JSON3.write(leaf))
+            ppath = joinpath(dir, "parent.esm")
+            write(ppath, JSON3.write(parent))
+
+            from_path = EarthSciAST.load(ppath)
+            from_dict = EarthSciAST.load(parent; base_path = dir)
+
+            # The `{ref}` resolved in BOTH: the leaf's model came through.
+            for f in (from_path, from_dict)
+                @test haskey(f.models, "Ref")
+                @test f.models["Ref"] isa Model
+                @test haskey(f.models["Ref"].variables, "x")
+            end
+            # ...and both flatten to the same system — the ref-skip would leave it empty.
+            @test Set(keys(EarthSciAST.flatten(from_dict).state_variables)) ==
+                  Set(keys(EarthSciAST.flatten(from_path).state_variables))
+            @test !isempty(EarthSciAST.flatten(from_dict).state_variables)
+        end
+
+        # Unlike `coerce_esm_file`, `load` schema-validates.
+        bad = Dict{String,Any}(
+            "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "bad"),
+            "models" => Dict{String,Any}("M" => Dict{String,Any}(
+                "variables" => Dict{String,Any}("y" => Dict{String,Any}("type" => "nope")),
+                "equations" => Any[])))
+        @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load(bad)
+    end
+
     @testset "v0.5.0 inline multi-series y (plots.y array form)" begin
         esm_json = """
         {
