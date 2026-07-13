@@ -109,7 +109,49 @@ _forcing_gather_model(N) = ESM.Model(
     [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                   _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
 
+# Scalar (non-arrayop) `interp.*` observeds on the RHS (perf-interp-alloc). Each
+# is a plain scalar equation `D(z) = interp.<op>(<const table/axis>, …, <state>)`,
+# so the RHS compiles to a scalar `_Node` tree walked by `_eval_node_op`'s `:fn`
+# arm — the FastJX-box hot path. The const table/axis are validated + coerced to
+# typed `_Interp*Spec` ONCE at build time and read via a concrete-tuple `isa`
+# match, so a steady-state `f!` call allocates 0 bytes (the fix moved all
+# per-call, value-independent work — the fresh axis `Vector`, the monotonicity
+# re-walk, the `Vector{Any}` splice, the `_fn_const_arg_spec` scan, the boxed
+# `evaluate_closed_function` dispatch — to build time).
+function _scalar_interp_linear_model()
+    axis = _const([0.0, 1.0, 2.0, 3.0]); tab = _const([10.0, 20.0, 30.0, 40.0])
+    vars = Dict("x" => ModelVariable(StateVariable; default=1.5),
+                "z" => ModelVariable(StateVariable; default=0.0))
+    body = _op("fn", tab, axis, _v("x"); name="interp.linear")
+    ESM.Model(vars, [ESM.Equation(_D("z"), body)])
+end
+function _scalar_interp_searchsorted_model()
+    xs = _const([1.0, 2.0, 3.0, 4.0, 5.0])
+    vars = Dict("x" => ModelVariable(StateVariable; default=2.5),
+                "z" => ModelVariable(StateVariable; default=0.0))
+    body = _op("fn", _v("x"), xs; name="interp.searchsorted")
+    ESM.Model(vars, [ESM.Equation(_D("z"), body)])
+end
+function _scalar_interp_bilinear_model()
+    tab = _const([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    ax  = _const([0.0, 1.0, 2.0]); ay = _const([0.0, 10.0, 20.0])
+    vars = Dict("x" => ModelVariable(StateVariable; default=0.5),
+                "y" => ModelVariable(StateVariable; default=5.0),
+                "z" => ModelVariable(StateVariable; default=0.0))
+    body = _op("fn", tab, ax, ay, _v("x"), _v("y"); name="interp.bilinear")
+    ESM.Model(vars, [ESM.Equation(_D("z"), body)])
+end
+
 @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
+
+    @testset "scalar interp.* observed RHS: 0 bytes (perf-interp-alloc)" begin
+        # The FastJX box hot path: a scalar `interp.linear` observed. Must be
+        # allocation-free after the build-time-spec fix.
+        @test built_rhs_alloc_bytes(_scalar_interp_linear_model()) == 0
+        @test built_rhs_alloc_bytes(_scalar_interp_searchsorted_model()) == 0
+        @test built_rhs_alloc_bytes(_scalar_interp_bilinear_model()) == 0
+    end
+
 
     @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
         # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at every

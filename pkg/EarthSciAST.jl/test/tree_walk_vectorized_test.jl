@@ -200,8 +200,16 @@ end
     # seam (the fold site) and end-to-end.
     @testset "constant-query interp folds to a literal; runtime query stays a kernel (ess-wrh)" begin
         table = [10.0, 20.0, 40.0, 80.0, 160.0]; axis = [0.0, 1.0, 2.0, 3.0, 4.0]
+        # `:fn` payload layout (perf-interp-alloc): `(fname, spec)`, where the
+        # typed `_Interp*Spec` is validated + coerced ONCE at compile time by
+        # `_compile_op` via `_build_interp_spec`. Hand-built nodes must use the
+        # same builder so this white-box `_merge_nodes` seam sees exactly what
+        # `_compile_op` produces (the const arrays are no longer re-derived at
+        # merge time).
         mkfn(child) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-            payload=("interp.linear", Any[table, axis]), children=ESM._Node[child])
+            payload=("interp.linear",
+                     ESM._build_interp_spec("interp.linear", Any[table, axis])),
+            children=ESM._Node[child])
 
         @testset "literal on-knot query → _VK_LITERAL = table entry" begin
             lit = mkfn(ESM._mknode(kind=ESM._NK_LITERAL, literal=2.0))  # on knot axis[3]
@@ -219,7 +227,9 @@ end
 
         @testset "searchsorted literal query folds too" begin
             ss = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-                payload=("interp.searchsorted", Any[[1.0, 2.0, 3.0, 4.0, 5.0]]),
+                payload=("interp.searchsorted",
+                         ESM._build_interp_spec("interp.searchsorted",
+                                                Any[[1.0, 2.0, 3.0, 4.0, 5.0]])),
                 children=ESM._Node[ESM._mknode(kind=ESM._NK_LITERAL, literal=2.5)])
             merged = ESM._merge_nodes(ESM._Node[ss], 1)
             @test merged.kind === ESM._VK_LITERAL

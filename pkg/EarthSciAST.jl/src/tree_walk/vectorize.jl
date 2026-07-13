@@ -109,11 +109,10 @@ struct _VecNode
     #                 aliased — refreshed in place by the loader callback);
     #   _VK_FN      → a typed `_Interp*Spec` (zero-box `interp.*` kernels) or
     #                 the boxed closed-function carrier `Tuple{String,Any}`
-    #                 (`(fname, const_args)`) for the all-scalar `datetime.*`
-    #                 path;
+    #                 (`(fname, nothing)`) for the all-scalar `datetime.*` path;
     #   _VK_OP      → whatever `_Node.payload` carried through `_merge_nodes`
-    #                 (a `(name, const_args)` tuple on closed-call ops;
-    #                 `nothing` for ordinary elementwise ops);
+    #                 (`nothing` for ordinary elementwise ops — closed `fn` ops
+    #                 route to `_VK_FN`, not here);
     #   every other kind → `nothing`.
     # Kept `::Any` deliberately: each consumer narrows it with an `isa` split /
     # typeassert (`_eval_vec`'s `_VK_PGATHER` arm, `_eval_vec_fn`,
@@ -271,34 +270,21 @@ function _merge_nodes(nodes::Vector{_Node}, len::Int)::_VecNode
     end
 end
 
-# Build the vectorized node for a closed-function (`fn`) leaf. `interp.*` ops are
-# lowered to a typed `_Interp*Spec` payload (validated + coerced ONCE here at build
-# time) so `_eval_vec_fn` runs a zero-box whole-array kernel; all other closed
-# functions (`datetime.*`, all-scalar args) keep the boxed per-lane path. As a
-# build-time specialization (ess-wrh §4), an interp leaf whose query children are
-# all compile-time constants folds to a single `_VK_LITERAL` — the closed-function
-# call (and its box) vanish entirely for that leaf.
+# Build the vectorized node for a closed-function (`fn`) leaf. `interp.*` ops
+# carry a typed `_Interp*Spec` payload — validated + coerced ONCE at compile time
+# by `_compile_op` (compile.jl) and reused here as-is — so `_eval_vec_fn` runs a
+# zero-box whole-array kernel; all other closed functions (`datetime.*`,
+# all-scalar args) keep the boxed per-lane path. As a build-time specialization
+# (ess-wrh §4), an interp leaf whose query children are all compile-time constants
+# folds to a single `_VK_LITERAL` — the closed-function call (and its box) vanish
+# entirely for that leaf.
 function _merge_fn_node(payload, ch::Vector{_VecNode}, len::Int, m::Int)::_VecNode
-    fname, const_args = payload::Tuple{String,Any}
-    if _fn_const_arg_spec(fname) !== nothing
-        # Const-arg closed function — exactly the `_FN_CONST_ARG_SPECS` rows
-        # (compile.jl), which also pin the payload layout: `const_args` is the
-        # pre-extracted const arrays in that table's `const_positions` order,
-        # so splatting it into the per-function typed-spec builder keeps the
-        # arity/position knowledge in the one table.
-        spec = if fname == "interp.linear"
-            _build_interp_linear_spec(fname, const_args...)
-        elseif fname == "interp.bilinear"
-            _build_interp_bilinear_spec(fname, const_args...)
-        elseif fname == "interp.searchsorted"
-            _build_interp_searchsorted_spec(fname, const_args...)
-        else
-            # Unreachable while every `_FN_CONST_ARG_SPECS` row has a builder
-            # arm above — throw explicitly (mirrors the scalar `:fn` arm)
-            # rather than silently taking the boxed path a new row can't use.
-            throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
-                "fn '$(fname)' carries const args but has no vectorized interp.* lowering"))
-        end
+    fname, spec = payload::Tuple{String,Any}
+    if spec isa _InterpLinearSpec || spec isa _InterpBilinearSpec ||
+       spec isa _InterpSearchsortedSpec
+        # Const-arg closed function — the spec was built once in `_compile_op`
+        # (the `(fname, spec)` payload layout is pinned by the same
+        # `_FN_CONST_ARG_SPECS` table). Reuse it directly (immutable, share-safe).
         folded = _try_fold_const_interp(spec, ch, len)
         folded === nothing || return folded
         return _mkvnode(kind=_VK_FN, op=:fn, payload=spec, children=ch,
@@ -523,8 +509,10 @@ end
 # per-lane `Float64`→`Any` box is tolerated. `interp.*` never reaches here — those
 # are lowered to typed specs at build time.
 function _eval_vec_fn_boxed(n::_VecNode, u, p, t)::Vector{Float64}
-    fname, const_args = n.payload::Tuple{String,Any}
-    const_args === nothing ||
+    fname, spec = n.payload::Tuple{String,Any}
+    # Only the all-scalar `datetime.*` path (payload second slot `nothing`)
+    # reaches here; `interp.*` specs are handled by `_eval_vec_fn` above.
+    spec === nothing ||
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_VEC_OP", string("fn:", fname)))
     c = n.children
     b = n.buf
