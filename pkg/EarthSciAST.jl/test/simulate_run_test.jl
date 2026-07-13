@@ -1,6 +1,7 @@
 using Test
 using EarthSciAST
 import OrdinaryDiffEqTsit5: Tsit5
+using JSON3
 const ESM_S = EarthSciAST
 
 # `simulate` — the one-call run entry: coerce → build_evaluator → seed → solve,
@@ -73,21 +74,36 @@ const ESM_S = EarthSciAST
     end
 
     @testset "additive couple connector adds -k*A to a species ODE (esm-spec §10.3)" begin
-        # A single reaction-system species A (no reactions → D(Chem.A)=0 alone),
-        # plus a `Sink` model exposing parameter k. An additive `couple` edge
-        # Sink.k → Chem.A adds (-Sink.k)*Chem.A to A's tendency, so
-        # D(Chem.A) ~ -k*A and A(t) = A0*exp(-k*t). Before the fix the edge was
-        # dropped to opaque refs, leaving D(Chem.A)=0 and A constant.
+        # Chemistry alone gives A a first-order loss: A --k1--> B, so D(Chem.A) = -k1*A.
+        # A `Sink` model exposes parameter k, and an additive `couple` edge
+        # Sink.k → Chem.A folds (-Sink.k)*Chem.A ONTO that tendency, so
+        #   D(Chem.A) ~ -k1*A - k*A   and   A(t) = A0*exp(-(k1+k)*t).
+        #
+        # The chemistry term is what makes this test discriminating. `additive` must ADD to
+        # the existing RHS: exp(-(k1+k)t) separates it from a dropped edge (exp(-k1*t), the
+        # pre-fix behaviour) AND from `replacement` semantics (exp(-k*t)). An empty
+        # `reactions` list would leave the RHS at 0 and make those three indistinguishable —
+        # and is schema-invalid besides (`reactions` has minItems: 1), which is why this
+        # fixture is schema-checked below.
+        k1 = 0.3      # chemistry rate constant
+        k  = 0.1      # Sink coupling rate
+        A0 = 2.0
         neg_k = Dict{String,Any}("op" => "-", "args" => Any["Sink.k"])
         esm = Dict{String,Any}(
             "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "AdditiveCouple"),
             "reaction_systems" => Dict{String,Any}("Chem" => Dict{String,Any}(
-                "species" => Dict{String,Any}("A" =>
-                    Dict{String,Any}("default" => 2.0, "units" => "mol/mol")),
-                "reactions" => Any[])),
+                "species" => Dict{String,Any}(
+                    "A" => Dict{String,Any}("default" => A0, "units" => "mol/mol"),
+                    "B" => Dict{String,Any}("default" => 0.0, "units" => "mol/mol")),
+                "parameters" => Dict{String,Any}(),
+                "reactions" => Any[Dict{String,Any}(
+                    "id" => "R1",
+                    "substrates" => Any[Dict{String,Any}("stoichiometry" => 1, "species" => "A")],
+                    "products" => Any[Dict{String,Any}("stoichiometry" => 1, "species" => "B")],
+                    "rate" => k1)])),
             "models" => Dict{String,Any}("Sink" => Dict{String,Any}(
                 "variables" => Dict{String,Any}("k" =>
-                    Dict{String,Any}("type" => "parameter", "default" => 0.1)),
+                    Dict{String,Any}("type" => "parameter", "default" => k)),
                 "equations" => Any[])),
             "coupling" => Any[Dict{String,Any}(
                 "type" => "couple", "systems" => Any["Chem", "Sink"],
@@ -96,11 +112,30 @@ const ESM_S = EarthSciAST
                     "expression" => Dict{String,Any}("op" => "*",
                         "args" => Any[neg_k, "Chem.A"]))]))])
 
-        r = ESM_S.simulate(esm, (0.0, 1.0); alg = Tsit5())
+        # Schema-check the fixture explicitly: `simulate` does not do it for a raw document,
+        # and an invalid one lowers to a system with no state variables at all.
+        @test isempty(ESM_S.validate_schema(esm))
+
+        # Go through load → flatten. `simulate(::AbstractDict)` passes the dict straight to
+        # build_evaluator (`_prepare_run_doc`, simulate.jl:99) — it expects an ALREADY
+        # FLATTENED document. Both the reaction-system lowering and the `couple` edge are
+        # applied BY flatten, so handing it a raw authored document would silently drop both
+        # and "succeed" with an empty state vector — which is exactly what this test must not
+        # do, since the additive connector is the thing under test.
+        file = ESM_S.load(IOBuffer(JSON3.write(esm)))
+        sys = ESM_S.flatten(file)
+        @test Set(keys(sys.state_variables)) == Set(["Chem.A", "Chem.B"])
+
+        r = ESM_S.simulate(sys, (0.0, 1.0); alg = Tsit5())
         @test r isa SimulationResult && r.success
-        A0 = 2.0; k = 0.1
-        @test isapprox(r["Chem.A"][end], A0 * exp(-k * 1.0); rtol = 1e-4)
-        # A strictly decayed (before the fix it would stay at A0).
-        @test r["Chem.A"][end] < A0 - 1e-3
+
+        A_end = r["Chem.A"][end]
+        @test isapprox(A_end, A0 * exp(-(k1 + k) * 1.0); rtol = 1e-4)
+        # The coupling term was ADDED, not dropped: strictly faster decay than chemistry alone.
+        @test A_end < A0 * exp(-k1 * 1.0) - 1e-3
+        # ...and the chemistry term survived: this is not `replacement` semantics.
+        @test !isapprox(A_end, A0 * exp(-k * 1.0); rtol = 1e-2)
+        # The reaction really ran (B is fed by chemistry only; the couple never touches it).
+        @test r["Chem.B"][end] > 1e-3
     end
 end
