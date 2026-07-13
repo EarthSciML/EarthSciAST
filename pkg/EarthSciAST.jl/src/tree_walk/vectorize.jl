@@ -846,6 +846,19 @@ function _eval_vec_op(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
         c1 = _eval_vec(c[1], u, p, t, T)
         @. b = ifelse(c1 == 0, 1.0, 0.0); return b
     elseif op === :ifelse
+        # EAGER, BY CONSTRUCTION — and deliberately divergent from the scalar walkers.
+        # Both branches are evaluated over the WHOLE lane vector before the blend,
+        # because the predicate is per-lane: laziness here would mean evaluating each
+        # branch under its own mask, which is a different (masked-gather) kernel, not
+        # a reordering of this one. The consequence is that a guarded-domain
+        # expression inside an `arrayop` is NOT protected by its guard —
+        # `ifelse(u[i] >= 0, sqrt(u[i]), 0)` still calls `sqrt` on the negative lanes
+        # — whereas the same expression in a SCALAR equation is (both `_eval_node_op`
+        # and `_oop_eval_op` short-circuit `ifelse`/`and`/`or`). This is why the CSE
+        # guard rule (compile.jl) is scoped to the scalar path: on the array path
+        # there is no laziness for a hoist to break. Filters lower to a runtime
+        # `ifelse` (resolve.jl), so filtered aggregates inherit this too. Known and
+        # accepted; changing it means changing the kernel, not the CSE pass.
         _expect_arity_n(op, c, 3)
         c1 = _eval_vec(c[1], u, p, t, T)
         c2 = _eval_vec(c[2], u, p, t, T)
@@ -947,6 +960,13 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # the cache makes `f!` non-reentrant (one instance per integrator, which
         # is how ODE RHS closures are used). Empty prelude ⇒ this loop is a no-op
         # and f! is identical to the pre-CSE evaluator.
+        #
+        # This loop is UNCONDITIONAL — every slot is evaluated before any equation
+        # runs, whether or not the guard above its occurrence would have fired. That
+        # is safe only because `_cse_compile_scalar` refuses to hoist a key whose
+        # every occurrence sits under a lazy `ifelse`/`and`/`or` arm (see the GUARDS
+        # note in compile.jl); a slot that exists always has an occurrence the walk
+        # would have evaluated anyway.
         cache = _cse_buf(cse_cache, T)
         @inbounds for s in 1:length(cse_prelude)
             cache[s] = _eval_node(cse_prelude[s], u, p, t, T)

@@ -205,6 +205,219 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
 end
 
 # ====================================================================
+# CSE MUST NOT HOIST OUT FROM BEHIND A GUARD.
+#
+# The prelude is UNCONDITIONAL (`_make_rhs` fills every slot at the top of every
+# call) while the scalar walkers are LAZY: `ifelse` walks only the taken branch and
+# `and`/`or` short-circuit. So a subexpression that occurs ONLY under a guard must
+# never become a cache slot — hoisting it evaluates it when no guard fires, which
+# turned `ifelse(a >= 0, sqrt(a), 0)` at `a = -1` into a `DomainError` *as soon as a
+# second occurrence appeared elsewhere in the model*. Whether a guard protected its
+# operand depended on how many times that operand happened to be written.
+#
+# The rule (`_cse_count!` / `_cse_compile_scalar`): hoist a key iff
+# `total_occurrences >= 2` AND `unconditional_occurrences >= 1`. The second clause is
+# what makes the prelude safe (an unconditional occurrence is evaluated by the walk
+# anyway); the first makes it worth doing. Both halves are pinned below — the crash
+# must be gone, AND a subexpression with one unconditional occurrence must still be
+# shared with its guarded ones.
+# ====================================================================
+@testset "tree_walk CSE respects lazy guards (ifelse / and / or)" begin
+
+    # `run_rhs(model, form)` → the `du` vector, for whichever RHS form. The two
+    # emitters must agree: a Float64 `:oop` run is bit-identical to `:inplace`, which
+    # requires `_oop_eval_op` to short-circuit the guard ops exactly as `_eval_node_op`
+    # does (it filled every child into a buffer before dispatch, i.e. it was EAGER —
+    # so `:oop` threw on models `f!` ran fine, with or without CSE).
+    function _guard_rhs(model, form::Symbol)
+        f, u0, p, _ts, var_map, diag = ESM._build_evaluator_impl(model; form=form)
+        du = form === :inplace ? (d = similar(u0); f(d, u0, p, 0.0); d) : f(u0, p, 0.0)
+        return du, var_map, diag
+    end
+
+    # ----------------------------------------------------------------
+    # The regression itself: a guarded `sqrt(a)` at a NEGATIVE `a`, written twice.
+    #   D(a) =     ifelse(a >= 0, sqrt(a), 0)
+    #   D(b) = 2 * ifelse(a >= 0, sqrt(a), 0)     ← the second occurrence
+    # One occurrence always worked; two used to throw `DomainError with -1.0` from
+    # inside the prelude loop.
+    # ----------------------------------------------------------------
+    @testset "a guarded sqrt is not hoisted out of its ifelse" begin
+        guarded() = _cse_op("ifelse", _cse_op(">=", _cse_v("a"), _cse_n(0)),
+                            _cse_op("sqrt", _cse_v("a")), _cse_n(0))
+        model(a0) = ESM.Model(
+            Dict{String,ModelVariable}(
+                "a" => ModelVariable(StateVariable; default=a0),
+                "b" => ModelVariable(StateVariable; default=0.0),
+            ),
+            ESM.Equation[
+                ESM.Equation(_cse_D("a"), guarded()),
+                ESM.Equation(_cse_D("b"), _cse_op("*", _cse_n(2), guarded())),
+            ])
+
+        for form in (:inplace, :oop)
+            # Guard NOT taken (a < 0): `sqrt(a)` must never be evaluated.
+            du, vm, diag = _guard_rhs(model(-1.0), form)
+            @test du[vm["a"]] === 0.0
+            @test du[vm["b"]] === 0.0
+            # The guarded `sqrt(a)` is left inline (behind its guard), but the whole
+            # `ifelse` — which IS unconditional, twice — is still shared.
+            @test diag.n_cse_slots >= 1
+            @test !isnan(du[vm["a"]])
+
+            # Guard TAKEN (a >= 0): the shared branch still computes, and shares.
+            du4, vm4, _ = _guard_rhs(model(4.0), form)
+            @test du4[vm4["a"]] === sqrt(4.0)
+            @test du4[vm4["b"]] === 2.0 * sqrt(4.0)
+        end
+    end
+
+    # ----------------------------------------------------------------
+    # Same story for a short-circuiting `or`: `log(a)` sits in arg 2, which is only
+    # evaluated when arg 1 is false. Two occurrences used to hoist it into the
+    # prelude and throw at `a = -1`.
+    #   D(a) = D(b) = or(a < 0, log(a) > 1)
+    # ----------------------------------------------------------------
+    @testset "a short-circuited log is not hoisted out of its `or`" begin
+        disj() = _cse_op("or", _cse_op("<", _cse_v("a"), _cse_n(0)),
+                         _cse_op(">", _cse_op("log", _cse_v("a")), _cse_n(1)))
+        m = ESM.Model(
+            Dict{String,ModelVariable}(
+                "a" => ModelVariable(StateVariable; default=-1.0),
+                "b" => ModelVariable(StateVariable; default=0.0),
+            ),
+            ESM.Equation[ESM.Equation(_cse_D("a"), disj()),
+                         ESM.Equation(_cse_D("b"), disj())])
+
+        for form in (:inplace, :oop)
+            du, vm, _diag = _guard_rhs(m, form)
+            # `a < 0` is true, so the disjunction short-circuits to 1.0 without ever
+            # touching `log(-1.0)`.
+            @test du[vm["a"]] === 1.0
+            @test du[vm["b"]] === 1.0
+        end
+    end
+
+    # `and` is the mirror image: arg 2 runs only when arg 1 is TRUE.
+    #   D(a) = D(b) = and(a >= 0, sqrt(a) > 1)      at a = -1 → 0.0, no sqrt(-1)
+    @testset "a short-circuited sqrt is not hoisted out of an `and`" begin
+        conj() = _cse_op("and", _cse_op(">=", _cse_v("a"), _cse_n(0)),
+                         _cse_op(">", _cse_op("sqrt", _cse_v("a")), _cse_n(1)))
+        m = ESM.Model(
+            Dict{String,ModelVariable}(
+                "a" => ModelVariable(StateVariable; default=-1.0),
+                "b" => ModelVariable(StateVariable; default=0.0),
+            ),
+            ESM.Equation[ESM.Equation(_cse_D("a"), conj()),
+                         ESM.Equation(_cse_D("b"), conj())])
+        for form in (:inplace, :oop)
+            du, vm, _ = _guard_rhs(m, form)
+            @test du[vm["a"]] === 0.0
+            @test du[vm["b"]] === 0.0
+        end
+    end
+
+    # ----------------------------------------------------------------
+    # The OTHER half of the rule — the fix must not over-restrict. A key with ONE
+    # unconditional occurrence is still hoisted, and its GUARDED occurrences read the
+    # cache: the unconditional occurrence makes the prelude evaluation safe (the walk
+    # performs it regardless), so there is nothing left to protect.
+    #   D(a) = ifelse(a >= 0, sin(a+b), 0)   ← guarded occurrence of `a+b`
+    #   D(c) = a + b                         ← unconditional occurrence
+    # A "don't recurse into guarded arms" fix would lose this sharing.
+    # ----------------------------------------------------------------
+    @testset "1 unconditional + 1 guarded occurrence is still shared" begin
+        apb() = _cse_op("+", _cse_v("a"), _cse_v("b"))
+        m = ESM.Model(
+            Dict{String,ModelVariable}(
+                "a" => ModelVariable(StateVariable; default=0.3),
+                "b" => ModelVariable(StateVariable; default=0.5),
+                "c" => ModelVariable(StateVariable; default=0.0),
+            ),
+            ESM.Equation[
+                ESM.Equation(_cse_D("a"),
+                    _cse_op("ifelse", _cse_op(">=", _cse_v("a"), _cse_n(0)),
+                            _cse_op("sin", apb()), _cse_n(0))),
+                ESM.Equation(_cse_D("c"), apb()),
+            ])
+        f!, u0, p, _ts, var_map, diag = ESM._build_evaluator_impl(m)
+        @test diag.n_cse_slots >= 1            # `a+b` IS cached
+        @test diag.n_cse_occurrences >= 2      # both occurrences replaced
+
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        @test du[var_map["a"]] === sin(0.3 + 0.5)
+        @test du[var_map["c"]] === 0.3 + 0.5
+    end
+end
+
+# ====================================================================
+# PINNED: CSE keys on CANONICAL identity, so reassociation-equivalent expressions
+# SHARE a slot and the FIRST-SEEN operand order is what every occurrence reads back.
+#
+# `canonical_json` flattens and sorts n-ary `+`/`*`, so `(a+b)+c` and `a+(b+c)` have
+# ONE key. Float `+` is not associative, so the two associations are different
+# numbers — and the consequence, which this test exists to make explicit rather than
+# latent, is that AN EQUATION'S NUMERIC OUTPUT IS NOT A FUNCTION OF THAT EQUATION
+# ALONE: adding a canonically-equal expression elsewhere in the model can shift it.
+#
+# This is a decision, not a bug (see the header note in compile.jl): canonical form
+# IS this format's notion of expression identity — `discretize` canonicalizes every
+# per-cell RHS before it is compiled, so the format reassociates as a matter of
+# course — and keying structurally instead would lose the commutative sharing the
+# tests above pin. The differences are bounded by float reassociation of a
+# CANONICALLY EQUAL expression; catastrophic cancellation is used here only because
+# it makes an otherwise sub-ulp effect visible to `===`.
+# ====================================================================
+@testset "tree_walk CSE keys on canonical identity (reassociation is shared)" begin
+    # (1e16 + -1e16) + 1.0 == 1.0   but   1e16 + (-1e16 + 1.0) == 0.0
+    A, B, C = 1e16, -1e16, 1.0
+    @test (A + B) + C === 1.0
+    @test A + (B + C) === 0.0
+
+    _vars() = Dict{String,ModelVariable}(
+        "a" => ModelVariable(StateVariable; default=A),
+        "b" => ModelVariable(StateVariable; default=B),
+        "c" => ModelVariable(StateVariable; default=C),
+        "x" => ModelVariable(StateVariable; default=0.0),
+        "y" => ModelVariable(StateVariable; default=0.0),
+    )
+    _held() = ESM.Equation[ESM.Equation(_cse_D(s), _cse_n(0)) for s in ("a", "b", "c")]
+    left()  = _cse_op("+", _cse_op("+", _cse_v("a"), _cse_v("b")), _cse_v("c"))
+    right() = _cse_op("+", _cse_v("a"), _cse_op("+", _cse_v("b"), _cse_v("c")))
+
+    # The two trees ARE one canonical expression — this is the whole mechanism.
+    @test ESM.canonical_json(left()) == ESM.canonical_json(right())
+
+    _du(eqs) = begin
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(_vars(), eqs))
+        du = similar(u0); f!(du, u0, p, 0.0)
+        (du, vm, diag)
+    end
+
+    # Alone: nothing to share, so `D(y) = a+(b+c)` evaluates exactly as written.
+    du1, vm1, diag1 = _du(ESM.Equation[_held()..., ESM.Equation(_cse_D("y"), right())])
+    @test diag1.n_cse_slots == 0
+    @test du1[vm1["y"]] === 0.0
+
+    # Add a canonically-equal sibling that is seen FIRST: one slot for both, and
+    # `D(y)` now reads back `(a+b)+c` — the first-seen association.
+    du2, vm2, diag2 = _du(ESM.Equation[_held()...,
+        ESM.Equation(_cse_D("x"), left()), ESM.Equation(_cse_D("y"), right())])
+    @test diag2.n_cse_slots == 1
+    @test diag2.n_cse_occurrences == 2
+    @test du2[vm2["x"]] === 1.0
+    @test du2[vm2["y"]] === 1.0      # ← NOT 0.0: `D(y)`'s own equation is unchanged
+
+    # Swap the order and the OTHER association wins for both — "first-seen", exactly.
+    du3, vm3, diag3 = _du(ESM.Equation[_held()...,
+        ESM.Equation(_cse_D("y"), right()), ESM.Equation(_cse_D("x"), left())])
+    @test diag3.n_cse_slots == 1
+    @test du3[vm3["y"]] === 0.0
+    @test du3[vm3["x"]] === 0.0      # ← NOT 1.0, for the same reason
+end
+
+# ====================================================================
 # CSE through closed-function (`fn`) nodes (ess-obs).
 #
 # `fn` used to be flagged `cse_opaque`, which made every `interp.*` / `datetime.*`
