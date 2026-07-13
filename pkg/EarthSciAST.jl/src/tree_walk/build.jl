@@ -859,23 +859,23 @@ end
 # evaluate such a subscript, so it marks the const-tier materialization seed. An affine
 # subscript (loop vars + const-array gathers, e.g. a conservative regrid's `W[i,j]` or
 # a reshape `(gy−1)·NX+gx`) references no scalar parameter and is NOT flagged.
+# The scan visits EVERY expression-bearing field via the shared `foreach_subexpr`
+# traversal (not a hand-rolled args/expr_body/values subset), so a coordinate gather
+# buried in an aggregate `filter` predicate or a table-lookup axis is seen too.
 function _has_param_indexed_gather(e::ASTExpr, scalar_params::Set{String})
-    e isa OpExpr || return false
-    if e.op == "index" && length(e.args) >= 2
-        for k in 2:length(e.args)
-            any(r -> r in scalar_params, _referenced_var_names(e.args[k])) && return true
+    found = false
+    foreach_subexpr(e) do n
+        found && return nothing
+        n isa OpExpr && n.op == "index" && length(n.args) >= 2 || return nothing
+        for k in 2:length(n.args)
+            if any(r -> r in scalar_params, _referenced_var_names(n.args[k]))
+                found = true
+                return nothing
+            end
         end
+        return nothing
     end
-    for a in e.args
-        _has_param_indexed_gather(a, scalar_params) && return true
-    end
-    e.expr_body !== nothing && _has_param_indexed_gather(e.expr_body, scalar_params) && return true
-    if e.values !== nothing
-        for v in e.values
-            _has_param_indexed_gather(v, scalar_params) && return true
-        end
-    end
-    return false
+    return found
 end
 
 # ---- Stage: cadence materialization split (the discrete + const cuts) ----
@@ -965,6 +965,52 @@ function _discrete_fill_order(discrete_vars, discrete_defs)
             "cyclic dependency among discrete-cadence vars: $(setdiff(discrete_vars, done))")))
 end
 
+# ---- The discrete-cadence STATE-FREEDOM CHECK (ess-5d1) ----
+# `materialize!` evaluates every fill node with `u = zeros(n_states)` and `t = 0.0`,
+# and re-runs only on a data-refresh event — so a fill node that READS a continuous
+# state or `t` does not merely give a wrong number once, it FREEZES the field at
+# `u = 0` for the whole integration, silently. State-freedom is supposed to be
+# guaranteed upstream by `_discrete_materialize_split` (a state-reaching def is never
+# classified discrete), but that guarantee rests on a name-reachability walker, and a
+# walker that misses one expression-bearing field turns the whole class of bug into a
+# wrong trajectory with no error. So we do not ASSUME it — we CHECK it, on the thing
+# that actually runs: the compiled fill node.
+#
+# Legal leaves in a fill: `_NK_LITERAL`, `_NK_PARAM` (a scalar param), `_NK_OP` /
+# `_NK_CONTRACTION`, and — expected, not exceptional — `_NK_PARAM_GATHER`, which is
+# how a fill reads a raw live forcing buffer or an upstream discrete cache.
+# `_NK_CACHED` (a CSE prelude slot) cannot occur: fills compile through plain
+# `_compile`, never `_cse_compile_scalar`. If one ever appears the prelude that backs
+# it is not evaluated by `materialize!`, so the read would be garbage — that is an
+# internal invariant break, and it is reported rather than silenced.
+# (`node` is a `_Node`; it is left unannotated because `compile.jl` — where `_Node`
+# is defined — is `include`d after this file, so the signature cannot name the type.)
+function _check_discrete_fill_state_free(node, name::String)
+    k = node.kind
+    if k === _NK_STATE || k === _NK_TIME
+        what = k === _NK_STATE ? "a continuous state variable" : "the time variable `t`"
+        throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+            "discrete-cadence var '$name' depends on $what. A discrete-cadence cache " *
+            "is filled only when the forcing data refreshes (its fill kernel runs " *
+            "with u = 0 and t = 0), so it CANNOT depend on a continuous state or on " *
+            "`t` — the field would silently freeze at u = 0 instead of tracking the " *
+            "solution. Either drop the state/`t` dependency from '$name' (keep the " *
+            "state-dependent part in its readers, where it stays on the continuous " *
+            "path), or, if the reference reaches '$name' through an expression field " *
+            "the cadence classifier does not walk, that classifier is the bug."))
+    elseif k === _NK_CACHED
+        throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+            "internal: the discrete-cadence fill kernel for '$name' contains a CSE " *
+            "cache reference (_NK_CACHED), whose prelude `materialize!` does not " *
+            "evaluate. Fill kernels compile through `_compile`, not the CSE pass — " *
+            "this is a build-pipeline invariant break, not a model error."))
+    end
+    for c in node.children
+        _check_discrete_fill_state_free(c, name)
+    end
+    return nothing
+end
+
 # ---- Stage: discrete-cadence cache buffers + fill kernels ----
 # Allocate a dense cache buffer per discrete var, register it in `pgather` (so a
 # reader's `index(var, j…)` gathers the cache via `_NK_PARAM_GATHER` — the SAME
@@ -1032,13 +1078,17 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                 (IntExpr(Int64(idx_tuple[d])) for d in 1:length(idx_names))...])
             g_r = _resolve_indices(gather, array_var_info, var_map, const_arrays, pgather)
             node = _compile(g_r, var_map, param_sym_set, reg_funcs)
+            # The cadence cut is CHECKED, not assumed: a fill kernel that reads `u` or
+            # `t` would freeze at u = 0 (see `_check_discrete_fill_state_free`).
+            _check_discrete_fill_state_free(node, name)
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(fills, (cvec, l, node))
         end
     end
     # 3. `materialize!`: eval every fill into its cache (dep order preserved by the
-    #    build order). Discrete vars are state-free, so the zero `u` / `t=0` passed to
-    #    `_eval_node` is never read; `p` carries the scalar params a fill may use.
+    #    build order). Every fill node was CHECKED state-free above, so the zero `u` /
+    #    `t=0` passed to `_eval_node` is provably never read; `p` carries the scalar
+    #    params a fill may use.
     uz = zeros(Float64, n_states)
     pp = isnothing(p) ? NamedTuple() : p
     function materialize!()
