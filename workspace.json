@@ -1,17 +1,46 @@
 {
-  "version": "1.0.0",
-  "updated": "2026-07-13T14:24:41+00:00",
-  "packages": {
-    "julia": "v1.0.0",
-    "typescript": "v1.0.0",
-    "python": "v1.0.0",
-    "rust": "v1.0.0"
+  "name": "EarthSciAST",
+  "workspaces": {
+    "packages": [
+      "pkg/*"
+    ]
   },
-  "release_coordination": {
-    "status": "partial",
-    "completed": "2026-07-13T14:24:41+00:00",
-    "workflow_run_id": "29257719010",
-    "binaries_status": "skipped",
-    "conformance_status": "skipped"
+  "dependencies": {
+    "earthsci-ast-jl": {
+      "path": "./pkg/EarthSciAST.jl",
+      "type": "julia",
+      "julia_name": "EarthSciAST",
+      "registry": "General"
+    },
+    "earthsci-ast-ts": {
+      "path": "./pkg/earthsci-ast-ts",
+      "type": "typescript",
+      "npm_name": "@earthsciml/ast",
+      "registry": "https://registry.npmjs.org"
+    },
+    "earthsci-ast-py": {
+      "path": "./pkg/earthsci-ast-py",
+      "type": "python",
+      "pypi_name": "earthsci-ast",
+      "registry": "https://pypi.org"
+    },
+    "earthsci-ast-rs": {
+      "path": "./pkg/earthsci-ast-rs",
+      "type": "rust",
+      "crate_name": "earthsci-ast",
+      "registry": "https://crates.io"
+    },
+    "earthsci-ast-go": {
+      "path": "./pkg/earthsci-ast-go",
+      "type": "go",
+      "module_path": "github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go",
+      "registry": "https://proxy.golang.org"
+    },
+    "earthsci-ast-editor": {
+      "path": "./pkg/earthsci-ast-editor",
+      "type": "typescript",
+      "npm_name": "@earthsciml/ast-editor",
+      "registry": "https://registry.npmjs.org"
+    }
   }
 }
