@@ -228,7 +228,7 @@ end
 # `evaluate_closed_function` path and the vectorized array kernel
 # (`_eval_vec_interp_searchsorted`), so the two are bit-identical by construction
 # (ess-wrh).
-@inline function _interp_searchsorted_core(name::String, x::Float64, xs)::Int32
+@inline function _interp_searchsorted_core(name::String, x::Real, xs)::Int32
     n = length(xs)
     # An empty table has no valid index; return 1 per the "above-range → N+1"
     # rule extended to N=0 (the only consistent extension that composes with
@@ -293,7 +293,15 @@ end
 # scalar path may pass the raw const array while the vectorized path passes a
 # build-time-coerced `Vector{Float64}` (the coercion is then a no-op). Shared by
 # the scalar `:fn` arm and `_eval_vec_interp_linear` → bit-identical (ess-wrh).
-@inline function _interp_linear_core(table, axis, x::Float64)::Float64
+#
+# The query is `Real`, not `Float64`, so a ForwardDiff `Dual` flows through: the
+# out-of-place RHS (tree_walk/oop.jl) differentiates models whose rate/emission
+# tables are interpolated on a state or on `t`. The flat-extrapolation clamps
+# return the `Float64` table entry, which is exactly right — outside the table the
+# derivative w.r.t. the query IS zero. The `table`/`axis` reads stay `Float64`
+# (they are data, never differentiated), so a `Float64` query specializes to the
+# identical code the annotated form compiled to.
+@inline function _interp_linear_core(table, axis, x::Real)
     n = length(axis)
     @inbounds begin
         # Extrapolate-flat clamps. NaN x bypasses both clamps (IEEE-754 ≤/≥ on
@@ -346,7 +354,7 @@ end
 # (no-op coercion). Shared by the scalar `:fn` arm and `_eval_vec_interp_bilinear`
 # → bit-identical (ess-wrh).
 @inline function _interp_bilinear_core(table, axis_x, axis_y,
-                                       x::Float64, y::Float64)::Float64
+                                       x::Real, y::Real)
     Nx = length(axis_x)
     Ny = length(axis_y)
     # Per-axis extrapolate-flat clamp. NaN x or y propagates through (IEEE-754

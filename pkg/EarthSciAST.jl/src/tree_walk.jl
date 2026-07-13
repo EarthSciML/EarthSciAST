@@ -16,6 +16,12 @@
 # `var_map` is the state-name → index lookup so callers can probe the
 # solution at specific variables.
 #
+# `build_evaluator(model; form = :oop)` returns an OUT-OF-PLACE `f(u, p, t) → du`
+# in the same slot: allocating, but generic in the value type, so ForwardDiff and
+# Enzyme can differentiate it (tree_walk/oop.jl). SciML dispatches `ODEProblem` on
+# RHS arity, so it drops in unchanged. The default `:inplace` form stays the
+# zero-alloc Float64 path to SOLVE with.
+#
 # Dict and EsmFile convenience entry points select a model by name (or
 # the single model, if the file carries only one).
 #
@@ -42,6 +48,8 @@
 #                           scalar walker (zero-alloc hot path)
 #   vectorize.jl       §4b  vectorized array kernels (ess-dhq): merge +
 #                           in-place runtime eval + _make_rhs (zero-alloc)
+#   oop.jl             §4d  out-of-place emitter over the SAME IR: eltype-generic
+#                           f(u,p,t) → du, the AD / device path (`form = :oop`)
 #   stencil.jl         §4c  symbolic stencil compiler (ess-perf)
 #   helpers.jl         §5-5b misc + array-variable helpers (_cell_key /
 #                           _parse_cell_key, field ICs, _eval_const_int)
@@ -56,6 +64,7 @@ include("tree_walk/build_helpers.jl")
 include("tree_walk/build.jl")
 include("tree_walk/compile.jl")
 include("tree_walk/vectorize.jl")
+include("tree_walk/oop.jl")
 include("tree_walk/stencil.jl")
 include("tree_walk/helpers.jl")
 include("tree_walk/semiring.jl")

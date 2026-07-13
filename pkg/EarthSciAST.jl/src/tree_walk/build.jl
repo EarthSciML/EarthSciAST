@@ -1407,7 +1407,8 @@ end
 function _build_compile_evaluator(model::Model, cls, parts, layout;
         registered_functions::AbstractDict, const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
-        initial_conditions::AbstractDict, tspan, inspect, materialize_out)
+        initial_conditions::AbstractDict, tspan, inspect, materialize_out,
+        form::Symbol)
     u0 = layout.u0
     p = layout.p
     var_map = layout.var_map
@@ -1491,7 +1492,17 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     tspan_default = _pick_tspan(tspan, model)
 
     # ---- Closure ----
-    f! = _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
+    # Two emitters over the SAME compiled IR (tree_walk/oop.jl explains why both
+    # exist): `:inplace` is the zero-alloc Float64 production RHS; `:oop` is the
+    # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
+    f! = if form === :inplace
+        _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
+    elseif form === :oop
+        _make_rhs_oop(rhs_list, scalar_prelude, vec_kernels, n_states)
+    else
+        throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
+            "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
+    end
 
     # Diagnostics for the N-independence property (ess-dhq acceptance #3): the
     # number of array kernels and total compiled `_VecNode`s must be invariant
@@ -1565,7 +1576,13 @@ function _build_evaluator_impl(model::Model;
                          # is populated with the caches + `materialize!` closure. When
                          # nothing (every existing caller), such fields stay inlined —
                          # the pre-cut behavior, byte-identical.
-                         materialize_out::Union{Nothing,DiscreteMaterializer}=nothing)
+                         materialize_out::Union{Nothing,DiscreteMaterializer}=nothing,
+                         # Which RHS to emit from the compiled IR (tree_walk/oop.jl):
+                         # `:inplace` → the zero-alloc Float64 `f!(du, u, p, t)`;
+                         # `:oop` → the eltype-generic `f(u, p, t) → du` that
+                         # ForwardDiff/Enzyme can differentiate. Same IR, same
+                         # evaluation order, so a Float64 `:oop` run is bit-identical.
+                         form::Symbol=:inplace)
     _has_value_invention = !isempty(_vi_vars)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
@@ -1591,7 +1608,7 @@ function _build_evaluator_impl(model::Model;
         registered_functions=registered_functions, const_arrays=const_arrays,
         const_array_boundaries=const_array_boundaries, param_arrays=param_arrays,
         initial_conditions=initial_conditions, tspan=tspan, inspect=inspect,
-        materialize_out=materialize_out)
+        materialize_out=materialize_out, form=form)
 end
 
 # ---- Stage: per-derivative compiled-IR list ----
@@ -1893,6 +1910,16 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   the model has no tests, the null default `(0.0, 1.0)` is returned.
 * `registered_functions::Dict{String,<:Function}` — handlers for
   `call` ops, keyed by `handler_id`.
+* `form::Symbol` — which RHS to emit (`:inplace`, the default, or `:oop`).
+  `:inplace` gives the zero-allocation Float64 `f!(du, u, p, t)` above —
+  the form to SOLVE with. `:oop` gives an out-of-place `f(u, p, t) → du`
+  that is generic in its value type, so ForwardDiff (over the state or
+  over the parameters) and Enzyme can differentiate it — the form to
+  DIFFERENTIATE. Both are emitted from the same compiled IR in the same
+  evaluation order, so a Float64 `:oop` call is bit-identical to `f!`; it
+  trades the preallocated buffers (and hence the allocation-free property)
+  for that genericity. SciML dispatches `ODEProblem` on RHS arity, so
+  either drops into `ODEProblem(f, u0, tspan, p)` unchanged.
 """
 function build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)

@@ -1,0 +1,320 @@
+# The out-of-place RHS emitter (src/tree_walk/oop.jl).
+#
+# `build_evaluator(doc; form = :oop)` emits `f(u, p, t) -> du` from the SAME compiled
+# IR as the default in-place `f!`. Two properties are worth having tests for, and they
+# pull in opposite directions:
+#
+#   1. IDENTITY — at Float64 the two emitters must agree BIT FOR BIT, on every node
+#      kind. That is what lets `:oop` be trusted as "the same model, differentiable":
+#      any divergence would silently mean the gradients describe a different function
+#      than the one being solved. Asserted with `==`, never `isapprox`.
+#
+#   2. GENERICITY — the whole point of the second emitter. ForwardDiff must work
+#      through it BOTH over the state (Jacobians for stiff/implicit solvers) and over
+#      the parameters (sensitivities), and the derivatives are checked against central
+#      differences taken on the trusted in-place `f!`.
+#
+# The parameter case is not a redundant variation of the state case: there `u` stays
+# `Vector{Float64}` and only the parameter VALUES become `Dual`, so an output buffer
+# sized from `eltype(u)` compiles fine and then throws `Float64(::Dual)` on the first
+# store. It is the bug that a state-only test cannot see.
+#
+# Also pinned here: the `x^2`-with-negative-x trap (a literal exponent must not be
+# lifted into the differentiable type — see `_oop_pow`), interp tables differentiated
+# on a state, and a ladder-coverage gate so `_oop_op` cannot drift away from the two
+# ladders it mirrors.
+#
+# Enzyme reverse mode also works on this RHS, but only with
+# `Enzyme.API.strictAliasing!(false)` — see the oop.jl header for why. Enzyme is a
+# heavy dependency and is deliberately NOT a test dep; that path is verified
+# out-of-band.
+
+using Test
+using EarthSciAST
+using ForwardDiff
+
+include("testutils.jl")
+
+const ESM = EarthSciAST
+
+_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
+_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
+_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
+_cst(v) = Dict{String,Any}("op" => "const", "value" => v)
+_fnop(nm, a...) = Dict{String,Any}("op" => "fn", "name" => nm, "args" => Any[a...])
+_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+    "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
+    "args" => Any[], "expr" => e)
+
+_doc(name, vars, eqs; index_sets = nothing) = begin
+    d = Dict{String,Any}(
+        "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => name),
+        "models" => Dict{String,Any}("M" => Dict{String,Any}(
+            "variables" => vars, "equations" => eqs)))
+    index_sets === nothing || (d["index_sets"] = index_sets)
+    d
+end
+_nset(N) = Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => N))
+
+_state(; kw...) = Dict{String,Any}("type" => "state",
+                                   (String(k) => v for (k, v) in kw)...)
+_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
+
+# ---- The model battery -------------------------------------------------------
+# Chosen to cover every `_VecNode` kind the emitter can meet: GATHER + boundary
+# CONSTVEC (stencil), INVARIANT (a hoisted `exp(-Ea/T)`), REDUCE (a contraction),
+# FN (an interp table), STATE/PARAM/TIME/LITERAL, plus the scalar `_Node` path with a
+# live CSE prelude.
+
+# 1-D reaction–diffusion. `exp(-Ea/T)` inside the arrayop hoists to `_VK_INVARIANT`;
+# the end cells gather ghosts and form their own kernels; `c[i]^2` is the literal-
+# exponent case. The state is seeded with NEGATIVE cells on purpose.
+function _rd(N)
+    stencil = _o("+", _o("-", _ix("c", _o("-", "i", 1.0)), _o("*", 2.0, _ix("c", "i"))),
+                 _ix("c", _o("+", "i", 1.0)))
+    rate = _o("*", "k_rxn", _o("exp", _o("neg", _o("/", "Ea", "T"))))
+    _doc("RD",
+        Dict{String,Any}("c" => _state(shape = Any["n"]), "k_diff" => _param(0.1),
+                         "k_rxn" => _param(0.3), "Ea" => _param(50.0), "T" => _param(300.0)),
+        Any[Dict{String,Any}("lhs" => _ao(_Dt(_ix("c", "i"))),
+            "rhs" => _ao(_o("-", _o("*", "k_diff", stencil),
+                            _o("*", rate, _o("^", _ix("c", "i"), 2.0)))))];
+        index_sets = _nset(N))
+end
+
+# 0-D, with a subexpression shared across two equations → a non-empty CSE prelude,
+# so `_NK_CACHED` is actually exercised (it is the node whose `Vector{Float64}` cache
+# is exactly what blocks AD on the in-place path).
+function _zerod()
+    shared = _o("*", _o("exp", _o("neg", _o("/", "Ea", "T"))), _o("*", "x", "y"))
+    _doc("Z",
+        Dict{String,Any}("x" => _state(default = 0.7), "y" => _state(default = 0.4),
+                         "Ea" => _param(50.0), "T" => _param(300.0), "k" => _param(1.3)),
+        Any[Dict{String,Any}("lhs" => _Dt("x"), "rhs" => _o("neg", _o("*", "k", shared))),
+            Dict{String,Any}("lhs" => _Dt("y"), "rhs" => shared)])
+end
+
+# Time-varying and trig/comparison/ifelse ops, so the shared ladder is walked over
+# more than arithmetic. `sin(2t)` is lane-invariant but NOT constant — it must be
+# re-evaluated every call, which a build-time fold would silently break.
+function _tv(N)
+    body = _o("*", _o("ifelse", _o(">", _ix("c", "i"), 0.0), _o("sin", _o("*", 2.0, "t")),
+                      _o("cos", "t")),
+              _o("+", _ix("c", "i"), _o("sqrt", _o("abs", _ix("c", "i")))))
+    _doc("TV", Dict{String,Any}("c" => _state(shape = Any["n"])),
+        Any[Dict{String,Any}("lhs" => _ao(_Dt(_ix("c", "i"))), "rhs" => _ao(body))];
+        index_sets = _nset(N))
+end
+
+# interp.linear with a STATE query — the table is differentiated through.
+function _interp()
+    table = Any[0.0, 1.0, 4.0, 9.0, 16.0]
+    axis = Any[0.0, 1.0, 2.0, 3.0, 4.0]
+    _doc("IT", Dict{String,Any}("y" => _state(default = 1.5), "k" => _param(2.0)),
+        Any[Dict{String,Any}("lhs" => _Dt("y"),
+            "rhs" => _o("*", "k", _fnop("interp.linear", _cst(table), _cst(axis), "y")))])
+end
+
+# A state with no `D(...)` equation must keep du = 0, as under `f!`.
+function _nod()
+    _doc("ND", Dict{String,Any}("a" => _state(default = 2.0), "b" => _state(default = 5.0)),
+        Any[Dict{String,Any}("lhs" => _Dt("a"), "rhs" => _o("*", -1.0, "a"))])
+end
+
+# Deliberately signed, so `c[i]^2` sits on a negative base.
+_seed(n) = [0.6sin(0.7k) - 0.15 for k in 1:n]
+
+# `f!` writes only the slots it has equations for: a state with no `D(...)` equation is
+# left UNTOUCHED, so `f!` is only correct when handed an already-zeroed `du` (which is
+# what an integrator does). Zero it here too, or the comparison below would be against
+# uninitialized memory. The out-of-place form has no such precondition — it zero-fills
+# `du` itself — so the two agree exactly when `f!` is called the way it must be.
+_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
+
+function _both(doc)
+    fi, u0, p, _, vm = ESM.build_evaluator(doc)
+    fo, _, _, _, _ = ESM.build_evaluator(doc; form = :oop)
+    return fi, fo, u0, p, vm
+end
+
+@testset "out-of-place RHS emitter (form = :oop)" begin
+
+    @testset "bit-identical to f! at Float64" begin
+        cases = ["reaction-diffusion N=16" => _rd(16),
+                 "reaction-diffusion N=257" => _rd(257),
+                 "0-D with a CSE prelude" => _zerod(),
+                 "time-varying + ifelse/trig" => _tv(64),
+                 "interp.linear on a state" => _interp(),
+                 "state with no D() equation" => _nod()]
+        for (name, doc) in cases
+            @testset "$name" begin
+                fi, fo, u0, p, _ = _both(doc)
+                u = length(u0) == 1 ? [1.5] : _seed(length(u0))
+                for t in (0.0, 0.37, 1.9)
+                    @test _ip(fi, u, p, t) == fo(u, p, t)   # bit-for-bit
+                end
+            end
+        end
+    end
+
+    @testset "the emitters are wired to the SAME IR" begin
+        # If `:oop` silently rebuilt the model (or dropped a phase) the identity test
+        # above could still pass while the two ran different code. Pin the phases the
+        # RD/0-D models are supposed to exercise, so a future refactor that empties one
+        # of them makes the identity assertions fail loudly instead of vacuously.
+        f_rd, = ESM.build_evaluator(_rd(64))
+        @test !isempty(getfield(f_rd, :vec_kernels))         # array kernels present
+        f_z, = ESM.build_evaluator(_zerod())
+        @test !isempty(getfield(f_z, :cse_prelude))          # CSE prelude non-empty
+        @test !isempty(getfield(f_z, :rhs_list))             # scalar equations present
+    end
+
+    @testset "du is zero for a state with no D() equation" begin
+        # The ONE place the two emitters deliberately differ. `f!` writes only the slots
+        # it has equations for, so `b`'s slot keeps whatever the caller's `du` held; the
+        # out-of-place form allocates `du` itself and zero-fills it, so `b` is 0 with no
+        # precondition on the caller. Pin both halves — the guarantee here, and the fact
+        # that `f!` does NOT make it — so a future change to either is a visible one.
+        fi, fo, u0, p, vm = _both(_nod())
+        du = fo([2.0, 5.0], p, 0.0)
+        @test du[vm["a"]] == -2.0
+        @test du[vm["b"]] == 0.0
+
+        dirty = fill(999.0, 2)
+        fi(dirty, [2.0, 5.0], p, 0.0)
+        @test dirty[vm["a"]] == -2.0
+        @test dirty[vm["b"]] == 999.0     # untouched: f! requires a zeroed du
+    end
+
+    @testset "an unknown form is rejected" begin
+        @test_throws ESM.TreeWalkError ESM.build_evaluator(_zerod(); form = :vectorized)
+    end
+
+    # ---- The point of the exercise: AD ---------------------------------------
+
+    @testset "ForwardDiff: Jacobian w.r.t. the state" begin
+        doc = _rd(24)
+        fi, fo, u0, p, _ = _both(doc)
+        u = _seed(length(u0))
+        J = ForwardDiff.jacobian(uu -> fo(uu, p, 0.0), u)
+
+        # Central differences on the TRUSTED in-place evaluator.
+        h = 1e-6
+        n = length(u)
+        Jfd = zeros(n, n)
+        for j in 1:n
+            up = copy(u); up[j] += h
+            um = copy(u); um[j] -= h
+            Jfd[:, j] = (_ip(fi, up, p, 0.0) .- _ip(fi, um, p, 0.0)) ./ 2h
+        end
+        @test maximum(abs, J .- Jfd) < 1e-6 * max(1.0, maximum(abs, Jfd))
+
+        # A 1-D three-point stencil can only couple neighbours: anything outside the
+        # tridiagonal band must be exactly zero, not merely small.
+        @test all(J[i, j] == 0.0 for i in 1:n, j in 1:n if abs(i - j) > 1)
+    end
+
+    @testset "ForwardDiff: gradient w.r.t. the PARAMETERS" begin
+        # `u` stays Vector{Float64} while the parameter values go Dual. An output
+        # buffer sized from `eltype(u)` would throw `Float64(::Dual)` on the first
+        # store — the failure a state-only AD test cannot produce.
+        doc = _rd(24)
+        fi, fo, u0, p, _ = _both(doc)
+        u = _seed(length(u0))
+        syms = keys(p)
+        pv = collect(values(p))
+        mk(v) = NamedTuple{syms}(Tuple(v))
+
+        g = ForwardDiff.gradient(v -> sum(fo(u, mk(v), 0.0)), pv)
+        @test eltype(g) === Float64
+        @test length(g) == length(pv)
+
+        h = 1e-6
+        for i in eachindex(pv)
+            up = copy(pv); up[i] += h
+            um = copy(pv); um[i] -= h
+            fd = (sum(_ip(fi, u, mk(up), 0.0)) - sum(_ip(fi, u, mk(um), 0.0))) / 2h
+            @test isapprox(g[i], fd; rtol = 1e-5, atol = 1e-7)
+        end
+    end
+
+    @testset "a literal exponent is not lifted into the Dual type" begin
+        # `c[i]^2` at NEGATIVE c. Lift the literal 2.0 to a Dual and ForwardDiff must
+        # evaluate ∂(x^y)/∂y = x^y·log(x), so log(negative) makes the whole gradient
+        # NaN — while the value itself still looks fine. Guard the derivative, not
+        # just the primal.
+        doc = _rd(16)
+        _, fo, u0, p, _ = _both(doc)
+        u = _seed(length(u0))
+        @test any(<(0), u)                       # the trap is armed
+        J = ForwardDiff.jacobian(uu -> fo(uu, p, 0.0), u)
+        @test all(isfinite, J)
+        @test !any(isnan, J)
+    end
+
+    @testset "interp tables differentiate, and clamp to zero slope outside" begin
+        fi, fo, u0, p, _ = _both(_interp())
+        # table = x² on axis 0:4, scaled by k = 2 ⇒ d/dy = 2 × (secant slope).
+        for (y, want) in ((1.5, 2 * 3.0),    # between knots (1,1) and (2,4): slope 3
+                          (2.5, 2 * 5.0),    # between knots (2,4) and (3,9): slope 5
+                          (-1.0, 0.0),       # below the table: flat extrapolation
+                          (9.9, 0.0))        # above the table: flat extrapolation
+            @test _ip(fi, [y], p, 0.0) == fo([y], p, 0.0)          # still bit-identical
+            d = ForwardDiff.derivative(yy -> fo([yy], p, 0.0)[1], y)
+            @test d ≈ want
+        end
+    end
+
+    # ---- Anti-drift ----------------------------------------------------------
+
+    @testset "the shared ladder covers every op the scalar ladder does" begin
+        # `_oop_op` is a THIRD op ladder beside `_eval_node_op` and `_eval_vec_op`.
+        # Pin it to the scalar one by differential test: same op, same args, same
+        # value — bit for bit. A registry op added without an `_oop_op` arm fails here
+        # rather than at some user's first `form = :oop` build.
+        u = [0.3, -0.8]
+        p = (a = 1.7,)
+        t = 0.5
+        cache = Float64[]
+        lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
+        scalar(op, vals) = ESM._eval_node(
+            ESM._mknode(kind = ESM._NK_OP, op = op,
+                        children = ESM._Node[lit(v) for v in vals]), u, p, t, )
+
+        # Every mechanical unary op, straight from the registry that generates the arm.
+        for row in ESM._UNARY_ELEMENTWISE_OPS
+            x = row.sym in (:sqrt, :log, :log10, :acosh) ? 1.7 :
+                row.sym in (:asin, :acos, :atanh) ? 0.4 : 0.6
+            @test ESM._oop_op(row.sym, [x], Float64) == scalar(row.sym, [x])
+        end
+
+        # The structurally distinct arms, including every arity that has its own path.
+        cases = Any[
+            (:+, [1.5]), (:+, [1.5, 2.25]), (:+, [1.5, 2.25, -0.5]),
+            (:*, [1.5]), (:*, [1.5, 2.25]), (:*, [1.5, 2.25, -0.5]),
+            (:-, [1.5]), (:-, [1.5, 2.25]),
+            (:neg, [1.5]), (:/, [1.5, 2.0]), (:^, [1.5, 3.0]), (:pow, [1.5, 3.0]),
+            (:<, [1.0, 2.0]), (:<, [2.0, 1.0]),
+            (Symbol("<="), [2.0, 2.0]), (:>, [1.0, 2.0]), (Symbol(">="), [2.0, 2.0]),
+            (Symbol("=="), [2.0, 2.0]), (Symbol("!="), [2.0, 2.0]),
+            (:and, [1.0, 0.0]), (:and, [1.0, 3.0]), (:or, [0.0, 0.0]), (:or, [0.0, 2.0]),
+            (:not, [0.0]), (:not, [1.0]),
+            (:ifelse, [1.0, 7.0, 9.0]), (:ifelse, [0.0, 7.0, 9.0]),
+            (:atan, [0.7]), (:atan, [0.7, 1.3]), (:atan2, [0.7, 1.3]),
+            (:min, [3.0, 1.0]), (:min, [3.0, 1.0, 2.0]),
+            (:max, [3.0, 1.0]), (:max, [3.0, 1.0, 2.0]),
+            (:pi, Float64[]), (:e, Float64[]), (:Pre, [4.25]),
+        ]
+        for (op, vals) in cases
+            @test ESM._oop_op(op, vals, Float64) == scalar(op, vals)
+        end
+    end
+
+    @testset "value type is derived from u, p AND t" begin
+        D = ForwardDiff.Dual{Nothing,Float64,1}
+        @test ESM._oop_value_type(Float64[1.0], (a = 1.0,), 0.0) === Float64
+        @test ESM._oop_value_type(D[D(1.0)], (a = 1.0,), 0.0) === D    # state is Dual
+        @test ESM._oop_value_type(Float64[1.0], (a = D(1.0),), 0.0) === D  # params are
+        @test ESM._oop_value_type(Float64[1.0], nothing, 0.0) === Float64  # no params
+    end
+end
