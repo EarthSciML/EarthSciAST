@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-07-12T18:00:55+00:00",
+  "updated": "2026-07-13T14:24:41+00:00",
   "packages": {
     "julia": "v1.0.0",
     "typescript": "v1.0.0",
@@ -9,8 +9,8 @@
   },
   "release_coordination": {
     "status": "partial",
-    "completed": "2026-07-12T18:00:55+00:00",
-    "workflow_run_id": "29203014923",
+    "completed": "2026-07-13T14:24:41+00:00",
+    "workflow_run_id": "29257719010",
     "binaries_status": "skipped",
     "conformance_status": "skipped"
   }
