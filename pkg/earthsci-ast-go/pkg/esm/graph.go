@@ -467,49 +467,77 @@ func extractVariableFromScoped(scopedRef string) string {
 	return parts[len(parts)-1] // Last part is the variable name
 }
 
-// extractVariableFromLHS extracts the variable name from equation LHS
+// extractVariableFromLHS extracts the variable name an equation's LHS assigns
+// to: a bare name, the target of a derivative `D(v, t)`, the array element of an
+// `index(v, i)`, or — for the array-form equation whose derivative lives in the
+// aggregate's contracted body — the target inside `aggregate.expr`. Mirrors TS
+// `lhsAssignmentTarget` (validate/expr-utils.ts).
 func extractVariableFromLHS(lhs Expression) string {
-	switch v := lhs.(type) {
-	case string:
-		return v
-	case ExprNode:
-		if v.Op == "D" && len(v.Args) > 0 {
-			// For derivative D(var, t), extract the variable
-			if varExpr, ok := v.Args[0].(string); ok {
-				return varExpr
-			}
+	if s, ok := lhs.(string); ok {
+		return s
+	}
+	node, ok := asExprNode(lhs)
+	if !ok {
+		return ""
+	}
+	switch node.Op {
+	case OpDerivative, "index":
+		if len(node.Args) > 0 {
+			return extractVariableFromLHS(node.Args[0])
+		}
+	case "aggregate":
+		if node.Expr != nil {
+			return extractVariableFromLHS(node.Expr)
 		}
 	}
 	return ""
 }
 
-// extractVariablesFromExpression recursively extracts all variable names from an expression
+// extractVariablesFromExpression extracts every variable name an expression
+// references, in a deterministic walk order, with duplicates removed.
+//
+// It used to hand-roll its own recursion over `args` ONLY — and had no
+// `*ExprNode` case at all — so a dependency reachable through a sidecar field
+// (an aggregate's `expr`/`filter`, an integral's bounds, a `table_lookup`'s
+// `axes`, …) contributed NO edge to the dependency graph, silently (audit G11).
+// It now shares the one field-preserving walk that backs FreeVariables, so the
+// graph sees exactly what the rest of the package sees.
+//
+// Order is deterministic (mapExprChildren walks maps in sorted-key order), so
+// the emitted edge list is stable across runs.
 func extractVariablesFromExpression(expr Expression) []string {
 	var vars []string
-
-	switch v := expr.(type) {
-	case string:
-		vars = append(vars, v)
-	case ExprNode:
-		for _, arg := range v.Args {
-			childVars := extractVariablesFromExpression(arg)
-			vars = append(vars, childVars...)
-		}
-	case float64:
-		// Numbers don't contribute variables
-	}
-
-	// Remove duplicates
-	uniqueVars := make([]string, 0)
 	seen := make(map[string]bool)
-	for _, v := range vars {
-		if !seen[v] {
-			uniqueVars = append(uniqueVars, v)
-			seen[v] = true
-		}
-	}
 
-	return uniqueVars
+	var walk func(Expression)
+	walk = func(e Expression) {
+		if s, ok := e.(string); ok {
+			if !seen[s] {
+				seen[s] = true
+				vars = append(vars, s)
+			}
+			return
+		}
+		node, ok := asExprNode(e)
+		if !ok {
+			if list, isList := e.([]any); isList {
+				for _, el := range list {
+					walk(el)
+				}
+			}
+			return
+		}
+		_, _ = mapExprChildren(node, func(child Expression) (Expression, error) {
+			walk(child)
+			return child, nil
+		})
+	}
+	walk(expr)
+
+	if vars == nil {
+		return []string{}
+	}
+	return vars
 }
 
 // ========================================

@@ -884,7 +884,7 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 		if lhsUnits == "" {
 			continue
 		}
-		node, ok := exprAsNode(vdef.Expression)
+		node, ok := asExprNode(vdef.Expression)
 		if !ok || node.Op != "*" || len(node.Args) != 2 {
 			continue
 		}
@@ -957,20 +957,6 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 			},
 		})
 	}
-}
-
-// exprAsNode normalizes Expression to an ExprNode value.
-func exprAsNode(e Expression) (ExprNode, bool) {
-	switch v := e.(type) {
-	case ExprNode:
-		return v, true
-	case *ExprNode:
-		if v == nil {
-			return ExprNode{}, false
-		}
-		return *v, true
-	}
-	return ExprNode{}, false
 }
 
 // isAffineTempUnit reports whether a unit string denotes a temperature scale

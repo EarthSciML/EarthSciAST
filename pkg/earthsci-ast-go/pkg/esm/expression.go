@@ -24,59 +24,70 @@ func (e *EvaluationError) Error() string {
 // DiagnosticCode returns the stable diagnostic code (DiagnosticError).
 func (e *EvaluationError) DiagnosticCode() string { return e.Code }
 
-// FreeVariables returns the set of all variable names that appear in an expression
+// FreeVariables returns the set of all variable names that appear in an
+// expression, including those reachable ONLY through a sidecar (non-`args`)
+// field — an aggregate's `expr`/`filter`/`key`/`join`, an integral's
+// `lower`/`upper`, a table_lookup's `axes`, a makearray's `values`, an
+// apply_expression_template's `bindings`, … The walk is the shared
+// field-preserving one (mapExprChildren), so a name can never again hide from
+// it in a field the walker was not taught about (audit G1 — and G2, where a
+// false-negative Contains made the DAE contract delete a still-referenced
+// equation).
 func FreeVariables(expr Expression) map[string]bool {
 	variables := make(map[string]bool)
 	collectVariables(expr, variables)
 	return variables
 }
 
-// collectVariables recursively collects variable names from an expression
+// collectVariables recursively collects variable names from an expression.
 func collectVariables(expr Expression, variables map[string]bool) {
-	switch e := expr.(type) {
-	case string:
-		// String is a variable name
-		variables[e] = true
-	case float64, int, int64:
-		// Numbers don't contribute variables
+	if s, ok := expr.(string); ok {
+		variables[s] = true
 		return
-	case ExprNode:
-		// Recursively collect from all arguments
-		for _, arg := range e.Args {
-			collectVariables(arg, variables)
+	}
+	node, ok := asExprNode(expr)
+	if !ok {
+		// Numeric / boolean / nil leaves, and non-operator objects, contribute
+		// no variables. A raw []interface{} (a nested literal list in a sidecar)
+		// is descended so a reference inside it is still seen.
+		if list, isList := expr.([]any); isList {
+			for _, el := range list {
+				collectVariables(el, variables)
+			}
 		}
-		// Include wrt variable for derivatives
-		if e.Wrt != nil {
-			variables[*e.Wrt] = true
-		}
-		// Include dim variable for gradients
-		if e.Dim != nil {
-			variables[*e.Dim] = true
-		}
-	case *ExprNode:
-		collectVariables(*e, variables)
+		return
+	}
+
+	// Every child Expression, in every expression-bearing field.
+	_, _ = mapExprChildren(node, func(child Expression) (Expression, error) {
+		collectVariables(child, variables)
+		return child, nil
+	})
+
+	// The variable-NAME slots a node carries outside `args`.
+	if node.Wrt != nil {
+		variables[*node.Wrt] = true
+	}
+	if node.Dim != nil {
+		variables[*node.Dim] = true
 	}
 }
 
-// Contains checks if a specific variable appears anywhere in an expression
+// Contains checks if a specific variable appears anywhere in an expression.
 func Contains(expr Expression, varName string) bool {
 	variables := FreeVariables(expr)
 	return variables[varName]
 }
 
-// Simplify performs constant folding and basic algebraic simplification
+// Simplify performs constant folding and basic algebraic simplification.
+//
+// A typed-nil *ExprNode is returned unchanged rather than dereferenced (audit
+// no audit ID; found while fixing G3), matching Substitute/asExprNode.
 func Simplify(expr Expression) Expression {
-	switch e := expr.(type) {
-	case string, float64, int, int64:
-		// Atomic expressions are already simplified
-		return expr
-	case ExprNode:
-		return simplifyExprNode(e)
-	case *ExprNode:
-		return simplifyExprNode(*e)
-	default:
-		return expr
+	if node, ok := asExprNode(expr); ok {
+		return simplifyExprNode(node)
 	}
+	return expr
 }
 
 // simplifyExprNode performs simplification on an expression node.

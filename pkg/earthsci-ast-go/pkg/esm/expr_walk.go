@@ -1,5 +1,7 @@
 package esm
 
+import "encoding/json"
+
 // expr_walk.go provides the single, field-preserving traversal primitive for
 // the ExprNode operator tree. It exists to end the "N hand-rolled walkers, each
 // covering a different subset of fields" hazard called out in the audit and
@@ -9,15 +11,23 @@ package esm
 // collection, …) should route its recursion through mapExprChildren so it can
 // NEVER silently strip a field again.
 
-// asExprNode normalizes the two on-heap spellings of an operator node — a value
-// ExprNode and a *ExprNode — to a value ExprNode.
+// asExprNode normalizes the THREE on-heap spellings of an operator node — a
+// value ExprNode, a *ExprNode, and a raw decoded map[string]interface{} that
+// carries a string "op" — to a value ExprNode.
 //
-// It returns (node, true) for either spelling and (ExprNode{}, false) for every
+// It returns (node, true) for any of those and (ExprNode{}, false) for every
 // other Expression shape: a bare string, a json.Number, an int64/float64, a
-// bool, nil, or a raw map[string]interface{}. Callers use the bool to decide
-// whether an Expression is an operator node worth recursing into, halving the
-// paired `case ExprNode:` / `case *ExprNode:` switch arms scattered across the
-// package.
+// bool, nil, a typed-nil *ExprNode, or a non-operator object. Callers use the
+// bool to decide whether an Expression is an operator node worth recursing
+// into, collapsing the paired `case ExprNode:` / `case *ExprNode:` switch arms
+// that were scattered across the package.
+//
+// The raw-map arm matters for HAND-BUILT trees. UnmarshalExpression normalizes
+// every expression-bearing field of a decoded document (see decode.go), so a
+// loaded file never presents an operator node as a map — but a tree assembled
+// in Go code, or one round-tripped through a generic map, still can. Accepting
+// it here means no walker built on asExprNode/mapExprChildren can be blind to a
+// subtree merely because of how it was spelled (audit G1/G3/G11/G15).
 func asExprNode(e Expression) (ExprNode, bool) {
 	switch v := e.(type) {
 	case ExprNode:
@@ -27,6 +37,20 @@ func asExprNode(e Expression) (ExprNode, bool) {
 			return ExprNode{}, false
 		}
 		return *v, true
+	case map[string]any:
+		if !isOperatorMap(v) {
+			return ExprNode{}, false
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ExprNode{}, false
+		}
+		expr, err := UnmarshalExpression(b)
+		if err != nil {
+			return ExprNode{}, false
+		}
+		node, ok := expr.(ExprNode)
+		return node, ok
 	default:
 		return ExprNode{}, false
 	}
@@ -43,12 +67,12 @@ func asExprNode(e Expression) (ExprNode, bool) {
 // non-Expression slots — ride through untouched:
 //
 //	Op, Wrt, Dim, Fn, Var, Name, Value, Table, Manifold, Reduce, Semiring,
-//	Distinct, Arg, Shape, Perm, Axis, OutputIdx
+//	Distinct, Arg, Shape, Perm, Axis, OutputIdx, Label, ID, ExpectCadence
 //
-// (Wrt/Dim/Fn/Var/Name/Table/Manifold/Reduce/Semiring/Arg are *string, Distinct
-// a *bool, Value/Axis raw literals, Shape/Perm/OutputIdx structural index
-// slices — none carry child Expressions, so f is intentionally NOT applied to
-// them.)
+// (Wrt/Dim/Fn/Var/Name/Table/Manifold/Reduce/Semiring/Arg/Label/ID/
+// ExpectCadence are *string, Distinct a *bool, Value/Axis raw literals,
+// Shape/Perm/OutputIdx structural index slices — none carry child Expressions,
+// so f is intentionally NOT applied to them.)
 //
 // Fields walked (f applied to each child):
 //

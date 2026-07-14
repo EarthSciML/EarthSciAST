@@ -22,6 +22,18 @@ import (
 // type. Numeric literals preserve the RFC §5.4.6 round-trip parse rule:
 // a JSON-number token with '.', 'e', or 'E' parses to float64; otherwise to
 // int64 (falling back to float64 if out of int64 range).
+//
+// EVERY expression-bearing field is normalized, not just `args`. The decoded
+// node is routed through the shared field-preserving walker (mapExprChildren),
+// so an operator node nested in a sidecar field — an aggregate's `expr` /
+// `filter` / `key` / `join`, an integral's `lower` / `upper`, a table_lookup's
+// `axes` / `output`, a makearray's `values` / `regions`, an
+// apply_expression_template's `bindings` — arrives as a real ExprNode with its
+// own children normalized in turn, exactly like a child of `args`. Before this,
+// only `args` was normalized and every other field stayed a raw
+// map[string]interface{}, which made those subtrees invisible to Substitute,
+// FreeVariables, Canonicalize and the enum-lowering pass (audit G3, and the G15
+// enum-lowering half of it).
 func UnmarshalExpression(data []byte) (Expression, error) {
 	// Try to unmarshal as number first (via json.Number to preserve int/float
 	// distinction).
@@ -36,8 +48,8 @@ func UnmarshalExpression(data []byte) (Expression, error) {
 		return str, nil
 	}
 
-	// Must be an object (ExprNode). Decode via UseNumber so nested literals in
-	// Args keep their int/float shape.
+	// Must be an object (ExprNode). Decode via UseNumber so nested literals
+	// keep their int/float shape.
 	var node ExprNode
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -45,27 +57,102 @@ func UnmarshalExpression(data []byte) (Expression, error) {
 		return nil, fmt.Errorf("expression must be number, string, or object: %w", err)
 	}
 
-	// Recursively normalize Args, handling nested expressions and literals.
-	if node.Args != nil {
-		for i, arg := range node.Args {
-			switch a := arg.(type) {
-			case json.Number:
-				node.Args[i] = normalizeJSONNumber(a)
-			case map[string]any:
-				argBytes, err := json.Marshal(a)
-				if err != nil {
-					return nil, fmt.Errorf("failed to marshal arg for re-processing: %w", err)
-				}
-				unmarshaledArg, err := UnmarshalExpression(argBytes)
-				if err != nil {
-					return nil, fmt.Errorf("failed to unmarshal nested expression in args: %w", err)
-				}
-				node.Args[i] = unmarshaledArg
-			}
-		}
-	}
+	return normalizeExprNode(node)
+}
 
-	return node, nil
+// normalizeExprNode normalizes every expression-bearing child of a freshly
+// decoded node through mapExprChildren, plus the `value` literal payload (which
+// carries no child Expressions and so is deliberately outside the walker's
+// remit, but still needs its json.Number leaves resolved to int64/float64 so
+// the evaluator and the canonical emitter see real numbers).
+func normalizeExprNode(node ExprNode) (ExprNode, error) {
+	out, err := mapExprChildren(node, normalizeDecodedExpression)
+	if err != nil {
+		return out, err
+	}
+	if out.Value != nil {
+		v, err := normalizeDecodedExpression(out.Value)
+		if err != nil {
+			return out, err
+		}
+		out.Value = v
+	}
+	return out, nil
+}
+
+// normalizeDecodedExpression is the TOTAL child function handed to
+// mapExprChildren by normalizeExprNode. It resolves the raw shapes the JSON
+// decoder produces — json.Number leaves, operator objects still spelled as
+// map[string]interface{}, and nested []interface{} — into the normalized
+// Expression union, and returns everything else (strings, bools, nil, already
+// normalized nodes) unchanged, as the walker's totality contract requires.
+//
+// A map is treated as an operator node only when it carries a string "op" key
+// (isOperatorMap). Any other object — an aggregate `ranges` bound pair, a
+// non-operator structural payload — keeps its map shape, but its VALUES are
+// still normalized so numeric leaves inside it are resolved too.
+func normalizeDecodedExpression(child Expression) (Expression, error) {
+	switch c := child.(type) {
+	case json.Number:
+		return normalizeJSONNumber(c), nil
+
+	case map[string]any:
+		if !isOperatorMap(c) {
+			out := make(map[string]any, len(c))
+			for k, v := range c {
+				r, err := normalizeDecodedExpression(v)
+				if err != nil {
+					return nil, err
+				}
+				out[k] = r
+			}
+			return out, nil
+		}
+		b, err := json.Marshal(c)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal nested operator node for re-processing: %w", err)
+		}
+		node, err := UnmarshalExpression(b)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal nested expression: %w", err)
+		}
+		return node, nil
+
+	case []any:
+		out := make([]any, len(c))
+		for i, v := range c {
+			r, err := normalizeDecodedExpression(v)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = r
+		}
+		return out, nil
+
+	case ExprNode:
+		return normalizeExprNode(c)
+
+	case *ExprNode:
+		if c == nil {
+			return nil, nil
+		}
+		return normalizeExprNode(*c)
+
+	default:
+		return child, nil
+	}
+}
+
+// isOperatorMap reports whether a raw decoded JSON object is an operator node —
+// i.e. carries an "op" key whose value is a string. Every other object shape
+// (bound pairs, structural payloads) is data, not an operator node.
+func isOperatorMap(m map[string]any) bool {
+	op, has := m["op"]
+	if !has {
+		return false
+	}
+	_, isStr := op.(string)
+	return isStr
 }
 
 // rawIsPresent reports whether a json.RawMessage carries a real value rather
