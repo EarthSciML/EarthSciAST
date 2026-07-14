@@ -30,6 +30,20 @@ const (
 	CodeCouplingLibraryIllegalPayload = "coupling_library_illegal_payload"
 )
 
+// --- Diagnostic codes: §4.7 subsystem refs. Shared with the structural
+// validator, which reports the same two conditions for a document whose refs
+// were never resolved (tests/invalid/subsystem_ref_not_found.esm,
+// subsystem_ref_ambiguous.esm; the names are pinned by
+// tests/invalid/expected_errors.json). ---
+const (
+	// CodeUnresolvedSubsystemRef: a subsystem `ref` names a file that does not
+	// exist / is not readable, or that was never resolved before validation.
+	CodeUnresolvedSubsystemRef = "unresolved_subsystem_ref"
+	// CodeAmbiguousSubsystemRef: a subsystem `ref` resolves to a file holding
+	// other than exactly one top-level system; §4.7 requires exactly one.
+	CodeAmbiguousSubsystemRef = "ambiguous_subsystem_ref"
+)
+
 // --- Diagnostic codes: structural validation (currently inline string
 // literals in validate.go — the peers of the Error* constants there). ---
 const (
@@ -61,7 +75,9 @@ const (
 // lower_expression_templates.go and is intentionally not redeclared here. ---
 const (
 	OpDerivative  = "D"            // time/spatial derivative
-	OpGrad        = "grad"         // gradient
+	OpGrad        = "grad"         // gradient (spatial sugar, esm-spec §6.3)
+	OpDivergence  = "div"          // divergence  (spatial sugar; NOT the "/" arithmetic op)
+	OpLaplacian   = "laplacian"    // laplacian   (spatial sugar; D(D(u,x),x))
 	OpIC          = "ic"           // initial-condition wrapper
 	OpConst       = "const"        // inline literal payload node
 	OpFn          = "fn"           // closed-registry function call
@@ -83,6 +99,13 @@ const (
 // --- Spec default: the independent variable when Domain.IndependentVariable
 // is unset (esm-spec §11; dae.go defaults to this). ---
 const DefaultIndepVar = "t"
+
+// operatorPlaceholderVar is the esm-spec §6.4 placeholder an operator-style
+// model uses for the state it operates on ("D(_var, t) ~ -u*grad(_var)"). When
+// the model is coupled via `operator_compose` it is substituted with each
+// matching state variable of the target system, so it is a legal reference — in
+// equations and in event affects alike — and never an undeclared variable.
+const operatorPlaceholderVar = "_var"
 
 // --- Render format discriminator (display.go; compared ~50× as a bare
 // string). ---

@@ -150,8 +150,10 @@ func TestResolveSubsystemRefs_MissingFile(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for missing ref, got nil")
 	}
-	if !strings.Contains(err.Error(), "failed to read") {
-		t.Errorf("unexpected error: %v", err)
+	// The failure carries the §4.7 diagnostic code the shared corpus pins
+	// (tests/invalid/subsystem_ref_not_found.esm), not an anonymous I/O message.
+	if !strings.Contains(err.Error(), CodeUnresolvedSubsystemRef) {
+		t.Errorf("want the %s diagnostic code; got: %v", CodeUnresolvedSubsystemRef, err)
 	}
 }
 

@@ -53,26 +53,27 @@ func TestUnitsFixturesCrossBinding(t *testing.T) {
 	}
 }
 
-// TestGradientOperatorMismatchFixtureSchemaValid pins the v0.8.0 contract of
+// TestGradientOperatorMismatchFixtureRejected pins the v0.8.0 contract of
 // tests/invalid/units_gradient_operator_mismatch.esm as declared in
 // tests/invalid/expected_errors.json.
 //
-// That fixture was migrated to be schema-VALID ("schema_errors": []): it
-// carries a grad applied over coordinate 'x' whose units are undeclared, plus a
-// companion 'bad_sum' observed variable that adds metres to kilograms. Its only
-// intended rejections are two *structural* "unit_inconsistency" errors — a
-// units/dimensional check. Per the fixture's own notes, the TypeScript binding
-// is currently the only one that surfaces those; the Go binding performs schema
-// validation and structural reference checks but intentionally implements NO
-// units/dimensional validator, so this units-only rejection is out of scope for
-// Go (see CLAUDE.md task scope and expected_errors.json notes).
+// The fixture is schema-VALID ("schema_errors": []): it carries a grad applied
+// over a coordinate 'x' the model declares WITHOUT units, plus a companion
+// 'bad_sum' observed variable that adds metres to kilograms. Its intended
+// rejections are two *structural* "unit_inconsistency" errors.
 //
-// Therefore Go must (a) load the fixture, (b) report zero schema errors
-// (matching "schema_errors": []), and (c) NOT surface the unit_inconsistency
-// structural errors that Go does not model. This test asserts exactly that so
-// the fixture's schema-validity is guarded even though the dimensional
-// rejection lives only in units-aware bindings.
-func TestGradientOperatorMismatchFixtureSchemaValid(t *testing.T) {
+// This test previously asserted the OPPOSITE — that Go raises no
+// unit_inconsistency at all, on the grounds that Go "intentionally implements NO
+// units/dimensional validator". Go does implement one, and a provable
+// dimensional mismatch is now a hard error, so the fixture must be REJECTED.
+//
+// Go surfaces the 'bad_sum' error (`/models/SpatialModel/variables/bad_sum`).
+// The grad-specific error at `/models/SpatialModel/equations/0` requires
+// resolving the grad `dim` against the model's declared variables, which only
+// Julia does today — the fixture's own notes track that as a follow-up for
+// Go/TS/Rust, and note that `bad_sum` exists precisely so bindings without
+// grad-unit support still reject the file.
+func TestGradientOperatorMismatchFixtureRejected(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
@@ -93,17 +94,23 @@ func TestGradientOperatorMismatchFixtureSchemaValid(t *testing.T) {
 		t.Fatalf("expected fixture to be schema-valid (schema_errors: []), got: %+v", result.SchemaErrors)
 	}
 
-	// The fixture's only intended rejections are structural unit_inconsistency
-	// errors, which are a units/dimensional check the Go binding does not
-	// implement. Confirm Go raises no such error so the reframed contract stays
-	// honest: if a units validator is ever added to Go, this assertion should be
-	// revisited to match the two unit_inconsistency entries in expected_errors.json.
+	if result.IsValid {
+		t.Fatal("fixture is pinned is_valid:false; Go accepted it")
+	}
+	if !hasStructuralError(result, ErrorUnitInconsistency, "/models/SpatialModel/variables/bad_sum") {
+		t.Errorf("want unit_inconsistency @ /models/SpatialModel/variables/bad_sum, got %+v", result.StructuralErrors)
+	}
+}
+
+// hasStructuralError reports whether an error-level structural error with the
+// given code sits at the given JSON Pointer.
+func hasStructuralError(result *ValidationResult, code, path string) bool {
 	for _, e := range result.StructuralErrors {
-		if e.Code == ErrorUnitInconsistency {
-			t.Fatalf("Go does not implement units/dimensional validation; "+
-				"unexpected unit_inconsistency structural error: %+v", e)
+		if e.Code == code && e.Path == path && e.Level == "" {
+			return true
 		}
 	}
+	return false
 }
 
 // TestReactionRateUnitsMismatchFixtureRejected verifies that the shared

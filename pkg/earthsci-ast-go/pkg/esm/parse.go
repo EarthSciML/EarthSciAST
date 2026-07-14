@@ -130,6 +130,17 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// no apply_expression_template nodes, no expression_templates blocks, no
 	// imports, and no metaparameters — the typed struct sees only normal
 	// Expression ASTs (Option A round-trip).
+	//
+	// EXCEPT for the two DECLARATION blocks. §9.6.4 rule 5: Option A expands CALL
+	// SITES; it does not delete DECLARATIONS. The top-level `expression_templates`
+	// registry and `metaparameters` block are peers of `index_sets`, and they
+	// survive parse → emit VERBATIM — a template-library file must round-trip to
+	// itself. The resolver strips them from its working view (it has consumed
+	// them), so they are captured from the AUTHORED document here and reattached to
+	// the typed struct below, which makes "verbatim" literal: whatever the passes
+	// did to their working copy cannot perturb what is re-emitted.
+	authoredTemplates, authoredMetaparams := authoredDeclarationBlocks(jsonStr)
+
 	expanded, err := resolveAndLowerJSON(jsonStr, o.basePath, o.metaparameters)
 	if err != nil {
 		return nil, err
@@ -152,6 +163,10 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// round-trip parse rule: a token containing '.', 'e', or 'E' is a float;
 	// otherwise it is an integer.
 	normalizeNumericLiterals(&esmFile)
+
+	// Reattach the authored declaration blocks (see authoredDeclarationBlocks).
+	esmFile.ExpressionTemplates = authoredTemplates
+	esmFile.Metaparameters = authoredMetaparams
 
 	// v0.3.0 closes the function registry (closed-function-registry RFC).
 	// Reject any v0.2.x file that still carries the removed top-level
@@ -533,4 +548,20 @@ func validateJSONSchema(jsonStr string) (*ValidationResult, error) {
 	}
 
 	return validationResult, nil
+}
+
+// authoredDeclarationBlocks extracts the top-level `expression_templates` and
+// `metaparameters` blocks from a document AS AUTHORED, verbatim.
+//
+// They are declarations, not call sites (esm-spec §9.6.4 rule 5), so they survive
+// parse → emit unchanged. Returning the raw bytes — rather than re-encoding a
+// decoded view — is what makes that survival exact: key order, number spelling and
+// all. A document carrying neither block yields two nils, and both fields are
+// `omitempty`, so nothing is added to a document that never had them.
+func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMessage) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
+		return nil, nil
+	}
+	return top["expression_templates"], top["metaparameters"]
 }

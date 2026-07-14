@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,11 +45,20 @@ func Canonicalize(expr Expression) (Expression, error) {
 		return canonFloat(e)
 	case string:
 		return e, nil
+	case *ExprNode:
+		// Guarded, not dereferenced: a typed-nil *ExprNode used to panic here
+		// (no audit ID; found while fixing G3). Substitute/asExprNode already treat it
+		// as "not a node".
+		if e == nil {
+			return nil, fmt.Errorf("nil expression")
+		}
+		return canonOp(*e)
 	case ExprNode:
 		return canonOp(e)
-	case *ExprNode:
-		return canonOp(*e)
 	default:
+		if node, ok := asExprNode(expr); ok {
+			return canonOp(node)
+		}
 		return nil, fmt.Errorf("unknown expression type: %T", expr)
 	}
 }
@@ -61,20 +71,27 @@ func canonFloat(f float64) (Expression, error) {
 }
 
 // canonicalizeChild is the TOTAL child function handed to mapExprChildren by
-// canonOp. It canonicalizes the leaf/node types that make up the operator tier
-// (numbers, strings, ExprNode/*ExprNode) and passes EVERYTHING ELSE through
-// unchanged. mapExprChildren walks non-`args` fields (Attrs/Bindings/Ranges/
-// Regions/…) that hold RAW decoded JSON — json.Number, bool, raw maps/slices,
-// nil — which are not part of the canonicalizable tier; Canonicalize would
-// reject them with "unknown expression type", so they must be returned as-is to
-// honor the mapExprChildren totality contract.
+// canonOp. It canonicalizes every shape that belongs to the canonicalizable
+// tier — numbers, strings, and operator nodes in ANY spelling (value, pointer,
+// or a raw decoded map carrying a string "op") — and passes EVERYTHING ELSE
+// through unchanged.
+//
+// The raw-map arm is part of the fix for audit G3: a non-`args` subtree spelled as a
+// map used to fall into the `default:` pass-through, so `Canonicalize` left it
+// completely un-canonicalized (an integral's `upper: {+: [0, "a"]}` stayed
+// instead of folding to "a"). mapExprChildren still walks fields that hold raw
+// NON-operator JSON (Attrs/Ranges/Regions bound pairs — json.Number, bool,
+// slices, nil), and those are not canonicalizable, so they must ride through
+// as-is to honor the walker's totality contract.
 func canonicalizeChild(child Expression) (Expression, error) {
 	switch child.(type) {
 	case int, int32, int64, float32, float64, string, ExprNode, *ExprNode:
 		return Canonicalize(child)
-	default:
-		return child, nil
 	}
+	if _, ok := asExprNode(child); ok {
+		return Canonicalize(child)
+	}
+	return child, nil
 }
 
 func canonOp(node ExprNode) (Expression, error) {
@@ -417,6 +434,17 @@ func numericKey(a any) float64 {
 // The input is canonicalized first; pass an already-canonical tree for a
 // no-op canonicalization pass.
 func CanonicalJSON(expr Expression) ([]byte, error) {
+	// Gate the INPUT tree, before any rewriting. The algebraic rewrites
+	// (canonAdd/canonMul/canonNeg) legitimately rebuild their node from scratch —
+	// the op name, arg list, even the node's very existence can change — and in
+	// doing so they DROP every non-`args` field. Screening only the rewritten
+	// tree therefore left the fail-closed gate a fiction for exactly the most
+	// common ops: a `label` on a `*` node was silently dropped rather than
+	// rejected, which is the audit-G9 bug the allow-list exists to prevent.
+	// Screening the input makes the gate independent of what the rewrites do.
+	if err := validateEmissibleFields(expr); err != nil {
+		return nil, err
+	}
 	c, err := Canonicalize(expr)
 	if err != nil {
 		return nil, err
@@ -464,34 +492,94 @@ func validateEmissibleFields(a any) error {
 	return nil
 }
 
-// exprNodeHasNonEmissibleField reports whether n carries any SET field outside
-// the emissible set {op, args, wrt, dim, fn, name, value} and the tolerated set
-// {arg, bindings}. FAIL-CLOSED: every OTHER ExprNode field (types.go) is listed
-// here explicitly, so a newly-added struct field is non-emissible until it is
-// deliberately reclassified. Mirrors the Julia _NON_EMISSIBLE_FIELDS tuple.
+// canonicalEmissibleFields is the CLOSED set of ExprNode JSON field names the
+// pinned canonical encoding (RFC §5.4.6) has a slot for. Extending it is a
+// cross-binding format change, never a Go-local edit.
+var canonicalEmissibleFields = map[string]struct{}{
+	"op": {}, "args": {}, "wrt": {}, "dim": {}, "fn": {}, "name": {}, "value": {},
+}
+
+// canonicalIgnoredFields are fields that MAY be present on a node reaching the
+// canonical emitter and are silently ignored rather than rejected — they are
+// never emitted. Mirrors the Julia reference's _CANONICAL_IGNORED_FIELDS
+// (canonicalize.jl).
+//
+// `id` and `expect_cadence` are here because they are semantically INERT
+// annotations: `id` is an external handle (the referent of a derived index set)
+// and `expect_cadence` is an author's assertion about update frequency. Neither
+// participates in the value the canonical form keys, two nodes differing only in
+// them denote the same value, and both appear on ordinary documents
+// (tests/valid/cadence/*.esm) — so rejecting them would make CanonicalJSON fail
+// on legitimate files. They are dropped from the canonical encoding, not
+// rejected. `label` is deliberately NOT here: it is non-emissible and rejected,
+// matching TS's E_CANONICAL_UNSUPPORTED_FIELD.
+var canonicalIgnoredFields = map[string]struct{}{
+	"arg": {}, "bindings": {}, "id": {}, "expect_cadence": {},
+}
+
+// exprNodeHasNonEmissibleField reports whether n carries any SET field that the
+// canonical encoding has no slot for.
+//
+// ALLOW-LIST, derived by reflection over the ExprNode struct — the point being
+// that it FAILS CLOSED. The previous implementation was a hand-maintained
+// DENY-list which claimed "every OTHER field is listed here explicitly" and then
+// omitted `label`: a skolem node's documentary relation tag was silently DROPPED
+// from the canonical JSON instead of being rejected (audit G9), and `id` /
+// `expect_cadence` would have been dropped the same way the moment they were
+// modeled. Enumerating the struct's own json tags means a NEW field is
+// non-emissible by default and cannot slip through unnoticed — the fail-closed
+// discipline Julia gets from deriving its list from `fieldnames(OpExpr)`.
 func exprNodeHasNonEmissibleField(n ExprNode) bool {
-	return n.Var != nil ||
-		n.Lower != nil ||
-		n.Upper != nil ||
-		n.Table != nil ||
-		len(n.TableAxes) > 0 ||
-		n.Output != nil ||
-		len(n.Attrs) > 0 ||
-		len(n.Regions) > 0 ||
-		len(n.Values) > 0 ||
-		len(n.Shape) > 0 ||
-		len(n.Perm) > 0 ||
-		n.Axis != nil ||
-		n.Manifold != nil ||
-		len(n.OutputIdx) > 0 ||
-		n.Expr != nil ||
-		n.Reduce != nil ||
-		n.Semiring != nil ||
-		len(n.Ranges) > 0 ||
-		len(n.Join) > 0 ||
-		n.Filter != nil ||
-		n.Distinct != nil ||
-		n.Key != nil
+	v := reflect.ValueOf(n)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		name := jsonFieldName(t.Field(i))
+		if name == "" || name == "-" {
+			continue
+		}
+		if _, emissible := canonicalEmissibleFields[name]; emissible {
+			continue
+		}
+		if _, ignored := canonicalIgnoredFields[name]; ignored {
+			continue
+		}
+		if fieldIsSet(v.Field(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonFieldName returns the JSON wire name of a struct field (the part of its
+// `json:` tag before the first comma), falling back to the Go field name.
+func jsonFieldName(f reflect.StructField) string {
+	tag, ok := f.Tag.Lookup("json")
+	if !ok {
+		return f.Name
+	}
+	if i := strings.IndexByte(tag, ','); i >= 0 {
+		tag = tag[:i]
+	}
+	if tag == "" {
+		return f.Name
+	}
+	return tag
+}
+
+// fieldIsSet reports whether a field carries a value: a non-nil pointer /
+// interface, or a non-empty slice / map. Scalars other than those are always
+// "set" (only `op`, a string, is in that class, and it is emissible).
+func fieldIsSet(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		return !v.IsNil()
+	case reflect.Slice, reflect.Map:
+		return v.Len() > 0
+	case reflect.String:
+		return v.Len() > 0
+	default:
+		return !v.IsZero()
+	}
 }
 
 func emitCanonicalJSON(a any) (string, error) {

@@ -90,6 +90,16 @@ var metaSubstSkipKeys = map[string]struct{}{
 	// `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
 	// NAMES, a structural namespace — never expression positions.
 	"where": {},
+	// `op` is the OPERATOR NAME slot — the most structural string field there
+	// is. Omitting it meant a metaparameter that happens to share a name with an
+	// operator rewrote the operator itself: with `max` bound to 3,
+	// {"op":"max", …} became {"op":3, …}, and the document then died in
+	// LoadString with a raw "cannot unmarshal number into ExprNode.op" instead of
+	// a diagnostic (audit G12).
+	"op": {},
+	// `id` / `expect_cadence` are likewise structural annotations on an
+	// ExpressionNode, not expression positions.
+	"id": {}, "expect_cadence": {},
 }
 
 // substituteMetaparams substitutes bound metaparameter names — appearing as
