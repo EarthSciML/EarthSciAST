@@ -71,11 +71,24 @@ def _structural_validation_error_cls() -> type:
             structural pass has always produced (so message-matching callers are
             unchanged); ``err.findings`` is the same set of problems as a list of
             ``(code, message)`` tuples, giving the stable diagnostic codes a
-            machine-readable home alongside the prose blob."""
+            machine-readable home alongside the prose blob.
 
-            def __init__(self, message: str, findings: list[tuple[str, str]] | None = None):
+            ``err.records`` carries the same findings with a JSON-Pointer
+            ``path`` and a ``details`` payload — the shape
+            ``tests/invalid/expected_errors.json`` pins for every binding.
+            ``validation.validate()`` re-emits these as structured
+            ``ValidationError``s so a caller sees ``code`` + ``path`` instead of
+            a single opaque prose blob."""
+
+            def __init__(
+                self,
+                message: str,
+                findings: list[tuple[str, str]] | None = None,
+                records: list[dict] | None = None,
+            ):
                 super().__init__(message)
                 self.findings: list[tuple[str, str]] = list(findings or [])
+                self.records: list[dict] = list(records or [])
 
         _STRUCTURAL_VALIDATION_ERROR_CLS = StructuralValidationError
     return _STRUCTURAL_VALIDATION_ERROR_CLS
@@ -760,10 +773,17 @@ def _is_dimensionless_unit(unit: str | None) -> bool:
 def _walk_expression_for_exponent_checks(
     expr: Any,
     var_units: dict[str, str],
-    path: str,
-    errors: list[str],
+    node_path: str,
+    report_path: str,
+    variable: str | None,
+    errors: list,
 ) -> None:
-    """Walk an expression tree and flag any '^' whose exponent has dimensions."""
+    """Walk an expression tree and flag any '^' whose exponent has dimensions.
+
+    ``node_path`` locates the visited node (used only for recursion bookkeeping);
+    ``report_path`` is the JSON Pointer the finding is REPORTED at — the owning
+    variable or equation, which is what the shared corpus pins.
+    """
     if not isinstance(expr, dict):
         return
     op = expr.get("op")
@@ -775,14 +795,27 @@ def _walk_expression_for_exponent_checks(
             if exp_units is not None and not _is_dimensionless_unit(exp_units):
                 base_units = var_units.get(base_arg) if isinstance(base_arg, str) else None
                 errors.append(
-                    f"{path}: exponent must be dimensionless, got '{exp_units}'"
-                    + (f" for base with units '{base_units}'" if base_units else "")
+                    (
+                        report_path,
+                        f"Exponent must be dimensionless, got '{exp_units}'"
+                        + (f" for base with units '{base_units}'" if base_units else ""),
+                        {
+                            "operation": "exponentiation",
+                            "base_units": base_units,
+                            "exponent_units": exp_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
                 )
     for i, arg in enumerate(args):
-        _walk_expression_for_exponent_checks(arg, var_units, f"{path}/args[{i}]", errors)
+        _walk_expression_for_exponent_checks(
+            arg, var_units, f"{node_path}/args[{i}]", report_path, variable, errors
+        )
     # Also walk arrayop sub-expressions that live outside args.
     if "expr" in expr:
-        _walk_expression_for_exponent_checks(expr["expr"], var_units, f"{path}/expr", errors)
+        _walk_expression_for_exponent_checks(
+            expr["expr"], var_units, f"{node_path}/expr", report_path, variable, errors
+        )
 
 
 def _check_default_units_consistency(data: dict[str, Any], errors: list[str]) -> None:
@@ -1002,8 +1035,104 @@ def _check_physical_constant_units(data: dict[str, Any], errors: list[str]) -> N
             )
 
 
+#: Elementary functions whose dimensional ARGUMENT is a hard STRUCTURAL error
+#: (it fails the file), keyed op -> (operation label, human-readable subject) so
+#: the diagnostic names the operation the way the cross-language corpus does
+#: (``tests/invalid/expected_errors.json``: "Logarithm argument must be
+#: dimensionless…", "Exponential argument must be dimensionless…").
+#:
+#: This set is deliberately NARROWER than the mathematical rule, because the
+#: shared corpus is not self-consistent about that rule and this layer is the
+#: one that REJECTS a file:
+#:
+#:   * ``tests/invalid/units_invalid_logarithm.esm`` pins ``ln(mass)`` (kg) as
+#:     INVALID — ``unit_inconsistency`` at
+#:     ``/models/BadUnitsModel/variables/invalid_log``.
+#:   * ``tests/valid/units_dimensional_analysis.esm`` pins ``S = n*R*log(V)``
+#:     with ``V`` in ``m^3`` as VALID — the same construct (a transcendental
+#:     applied to a dimensional bare variable), spelled ``log`` instead of
+#:     ``ln``.
+#:
+#: Both fixtures are part of the frozen corpus, so a check that fires on every
+#: transcendental would reject a pinned-VALID file. Restricting the STRUCTURAL
+#: (fail-the-file) check to the ops the invalid corpus actually pins honours
+#: both. The full mathematical rule still runs in ``units.py``'s dimensional
+#: engine, which reports the remaining cases (``log``/``log10``/trig/hyperbolic)
+#: as WARNINGS. If the corpus is ever made self-consistent, widen this set.
+_DIMENSIONLESS_ARG_FUNCS: dict[str, tuple[str, str]] = {
+    "ln": ("logarithm", "Logarithm"),
+    "exp": ("exponential", "Exponential"),
+}
+
+
+def _json_pointer_from_message(msg: str) -> str:
+    """Recover a JSON-Pointer path from a legacy ``"a/b/c: message"`` finding.
+
+    The raw structural checks have always prefixed their prose with a
+    slash-delimited location (``models/M/variables/v: ...``,
+    ``models/M/equations[0]: ...``). This turns that prefix into the
+    JSON-Pointer form the shared corpus pins (``/models/M/equations/0``) so
+    every legacy check gets a usable path for free. Returns ``"$"`` when the
+    message carries no recognizable location.
+    """
+    head = msg.split(": ", 1)[0].strip()
+    if not head or "/" not in head or " " in head:
+        return "$"
+    # `equations[0]` -> `equations/0`
+    head = head.replace("[", "/").replace("]", "")
+    return "/" + head.strip("/")
+
+
+def _walk_expression_for_dimensionless_arg_checks(
+    expr: Any,
+    var_units: dict[str, str],
+    node_path: str,
+    report_path: str,
+    variable: str | None,
+    errors: list,
+) -> None:
+    """Flag ``log``/``exp``/``sin``/… applied to a DIMENSIONAL argument.
+
+    Conservative by construction: only a bare declared-variable argument is
+    checked. A numeric literal is dimension-polymorphic in this format (the
+    valid corpus writes Arrhenius as ``exp(-1370 / T)``, where the literal
+    carries kelvin), and a compound subtree is left to the dimensional engine
+    in ``units.py``, so neither is flagged here.
+    """
+    if not isinstance(expr, dict):
+        return
+    op = expr.get("op")
+    args = expr.get("args", []) or []
+    if op in _DIMENSIONLESS_ARG_FUNCS and len(args) >= 1:
+        arg = args[0]
+        if isinstance(arg, str):
+            arg_units = var_units.get(arg)
+            if arg_units is not None and not _is_dimensionless_unit(arg_units):
+                operation, subject = _DIMENSIONLESS_ARG_FUNCS[op]
+                errors.append(
+                    (
+                        report_path,
+                        f"{subject} argument must be dimensionless, got units '{arg_units}'",
+                        {
+                            "operation": operation,
+                            "function": op,
+                            "argument_units": arg_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
+                )
+    for i, arg in enumerate(args):
+        _walk_expression_for_dimensionless_arg_checks(
+            arg, var_units, f"{node_path}/args[{i}]", report_path, variable, errors
+        )
+    if "expr" in expr:
+        _walk_expression_for_dimensionless_arg_checks(
+            expr["expr"], var_units, f"{node_path}/expr", report_path, variable, errors
+        )
+
+
 def _check_unit_consistency(
-    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+    data: dict[str, Any], tables: dict[str, Any], errors: list
 ) -> None:
     """
     Check unit compatibility in equations.
@@ -1013,8 +1142,13 @@ def _check_unit_consistency(
        clearly incompatible with x/time (e.g., velocity-rate set to mass).
     2. Observed variable expressions whose top-level + or - has incompatible operands.
     3. '^' operators whose right operand has non-dimensionless units.
+    4. log/exp/trig/hyperbolic applied to a dimensional bare variable.
 
-    (A former check #4 for grad/div/laplacian spatial-coordinate units was
+    Findings are emitted as ``(json_pointer, message, details)`` triples so the
+    ``unit_inconsistency`` code lands at the path
+    ``tests/invalid/expected_errors.json`` pins for it.
+
+    (A former check for grad/div/laplacian spatial-coordinate units was
     removed with the v0.8.0 geometry rewrite: it read the deleted
     ``Domain.spatial`` / per-model ``domain`` / top-level ``domains`` schema
     constructs and could never fire.)
@@ -1026,6 +1160,7 @@ def _check_unit_consistency(
         for vname, vdef in m.get("variables", {}).items():
             if vdef.get("type") == "observed" and "expression" in vdef:
                 expr = vdef["expression"]
+                var_pointer = f"/models/{mname}/variables/{vname}"
                 if isinstance(expr, dict) and expr.get("op") in ("+", "-"):
                     sub_units = []
                     for arg in expr.get("args", []):
@@ -1036,21 +1171,64 @@ def _check_unit_consistency(
                         ref = non_none[0]
                         for u in non_none[1:]:
                             if not _units_compatible(ref, u):
+                                op_name = (
+                                    "addition" if expr.get("op") == "+" else "subtraction"
+                                )
+                                verb = "add" if expr.get("op") == "+" else "subtract"
                                 errors.append(
-                                    f"models/{mname}/variables/{vname}: expression has incompatible units in addition/subtraction"
+                                    (
+                                        var_pointer,
+                                        f"Cannot {verb} quantities with different units: "
+                                        f"'{ref}' {expr.get('op')} '{u}'",
+                                        {
+                                            "operation": op_name,
+                                            "left_units": ref,
+                                            "right_units": u,
+                                            "variable": vname,
+                                        },
+                                    )
                                 )
                                 break
                 # Check '^' exponents anywhere within the observed expression tree
                 _walk_expression_for_exponent_checks(
-                    expr, var_units, f"models/{mname}/variables/{vname}/expression", errors
+                    expr,
+                    var_units,
+                    f"models/{mname}/variables/{vname}/expression",
+                    var_pointer,
+                    vname,
+                    errors,
+                )
+                # log/exp/trig applied to a dimensional argument (esm-spec §4.2:
+                # the argument of a transcendental function is dimensionless).
+                _walk_expression_for_dimensionless_arg_checks(
+                    expr,
+                    var_units,
+                    f"models/{mname}/variables/{vname}/expression",
+                    var_pointer,
+                    vname,
+                    errors,
                 )
 
-        # Check '^' exponents in equation rhs/lhs expressions as well
+        # Check '^' exponents and transcendental arguments in equation sides too.
         for ei, eq in enumerate(m.get("equations", [])):
+            eq_pointer = f"/models/{mname}/equations/{ei}"
             for side in ("lhs", "rhs"):
                 if side in eq:
                     _walk_expression_for_exponent_checks(
-                        eq[side], var_units, f"models/{mname}/equations[{ei}]/{side}", errors
+                        eq[side],
+                        var_units,
+                        f"models/{mname}/equations[{ei}]/{side}",
+                        eq_pointer,
+                        None,
+                        errors,
+                    )
+                    _walk_expression_for_dimensionless_arg_checks(
+                        eq[side],
+                        var_units,
+                        f"models/{mname}/equations[{ei}]/{side}",
+                        eq_pointer,
+                        None,
+                        errors,
                     )
 
         # Equations: only check D(x)/dt = bare_var case
@@ -1071,8 +1249,20 @@ def _check_unit_consistency(
             if not rhs_units:
                 continue
             if not _is_derivative_compatible(lhs_var_units, rhs_units):
+                wrt = lhs.get("wrt") or "t"
                 errors.append(
-                    f"models/{mname}/equations[{i}]: rhs '{rhs}' units '{rhs_units}' incompatible with time derivative of '{lhs_var_units}'"
+                    (
+                        f"/models/{mname}/equations/{i}",
+                        f"Derivative d({inner})/d{wrt} is incompatible with the units of "
+                        f"'{rhs}': '{rhs_units}' is not the time derivative of '{lhs_var_units}'",
+                        {
+                            "derivative_variable": inner,
+                            "derivative_variable_units": lhs_var_units,
+                            "wrt_variable": wrt,
+                            "actual_units": rhs_units,
+                            "equation_index": i,
+                        },
+                    )
                 )
 
 
@@ -1241,13 +1431,27 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     ``str()`` is the same collapsed prose blob as before.
     """
     findings: list[tuple[str, str]] = []
+    records: list[dict] = []
 
     def collect(code: str, run) -> None:
-        """Run ``run(sub)`` (a check that appends prose messages to ``sub``) and
-        tag every message it produces with ``code``, preserving order."""
-        sub: list[str] = []
+        """Run ``run(sub)`` and tag everything it produced with ``code``.
+
+        A check appends either a bare prose message (legacy form — the
+        JSON-Pointer path is then recovered from the conventional
+        ``"a/b/c: message"`` prefix) or an explicit
+        ``(json_pointer, message, details)`` triple.
+        """
+        sub: list = []
         run(sub)
-        findings.extend((code, msg) for msg in sub)
+        for item in sub:
+            if isinstance(item, tuple):
+                path, msg, details = item
+            else:
+                msg = item
+                path = _json_pointer_from_message(msg)
+                details = {}
+            findings.append((code, msg))
+            records.append({"code": code, "path": path, "message": msg, "details": details})
 
     # Operator arity check (walk all expressions)
     def walk_for_arity(errors, obj, path):
@@ -1302,4 +1506,4 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
         blob = "Structural validation failed:\n" + "\n".join(
             f"  - {msg}" for _code, msg in findings
         )
-        raise _structural_validation_error_cls()(blob, findings=findings)
+        raise _structural_validation_error_cls()(blob, findings=findings, records=records)

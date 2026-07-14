@@ -140,6 +140,30 @@ def validate(esm_file) -> ValidationResult:
         try:
             esm_file = load(esm_file)
         except SchemaValidationError as e:
+            # A STRUCTURAL failure (StructuralValidationError subclasses
+            # SchemaValidationError) carries machine-readable records — a stable
+            # diagnostic `code` and a JSON-Pointer `path` each. Re-emit those as
+            # structured structural_errors instead of collapsing them into one
+            # opaque `$` prose blob filed under schema_errors: the shared
+            # contract in tests/invalid/expected_errors.json pins these fixtures
+            # as `"schema_errors": []` plus a coded structural error at a
+            # specific path (e.g. `unit_inconsistency` @
+            # `/models/BadUnitsModel/equations/0`).
+            records = getattr(e, "records", None)
+            if records:
+                return ValidationResult(
+                    is_valid=False,
+                    schema_errors=[],
+                    structural_errors=[
+                        ValidationError(
+                            path=r.get("path", "$"),
+                            message=r.get("message", ""),
+                            code=r.get("code", ""),
+                            details=r.get("details", {}),
+                        )
+                        for r in records
+                    ],
+                )
             return ValidationResult(
                 is_valid=False,
                 schema_errors=[
