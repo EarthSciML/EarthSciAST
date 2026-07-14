@@ -67,11 +67,16 @@ fn convert_cross_dimension_fails() {
 /// Canonical bead example: given `h` with units `m` and `v` with units `m/s`,
 /// verify that `D(h) ~ v` is dimensionally consistent via expression-level
 /// propagation.
+///
+/// `t` is DECLARED here: an undeclared independent variable leaves the
+/// derivative's dimension indeterminate (no time unit is assumed), in which case
+/// only the weaker time-ratio rule applies.
 #[test]
 fn propagate_dh_equals_v() {
     let mut env: HashMap<String, Unit> = HashMap::new();
     env.insert("h".to_string(), parse_unit("m").unwrap());
     env.insert("v".to_string(), parse_unit("m/s").unwrap());
+    env.insert("t".to_string(), parse_unit("s").unwrap());
 
     let dh = Expr::Operator(ExpressionNode {
         op: "D".to_string(),

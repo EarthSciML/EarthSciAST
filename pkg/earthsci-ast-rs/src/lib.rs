@@ -209,8 +209,10 @@ pub use simulate::{
     SolverChoice, fold_constant_expr, interpret, simulate,
 };
 pub use units::{
-    Dimension, Unit, UnitError, build_unit_env, check_dimensional_consistency, convert_units,
-    parse_unit, validate_equation_dimensions, validate_equation_dimensions_with_coords,
+    Dimension, Unit, UnitError, UnitFinding, UnitSeverity, build_unit_env,
+    check_dimensional_consistency, check_equation_dimensions, check_expression_dimensions,
+    convert_units, parse_unit, validate_equation_dimensions,
+    validate_equation_dimensions_with_coords,
 };
 
 #[cfg(feature = "parallel")]

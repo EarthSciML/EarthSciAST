@@ -1197,18 +1197,20 @@ mod tests {
         };
 
         let result = validate(&esm_file);
-        // Should still be structurally valid (no structural errors)
-        assert!(result.is_valid, "Structural validation should pass");
-        assert!(result.structural_errors.is_empty());
-        // But should have unit warnings
+        // D(x)/dt = k with x in metres and k in kilograms: no time unit can
+        // reconcile the two sides, so this is a PROVABLE mismatch and therefore
+        // a hard error rather than a warning.
         assert!(
-            !result.unit_warnings.is_empty(),
-            "Should have unit warnings"
+            !result.is_valid,
+            "An unreconcilable derivative equation must fail validation: {result:?}"
         );
-        assert!(
-            result.unit_warnings[0].contains("Dimension mismatch"),
-            "Should contain dimension mismatch warning"
-        );
+        let unit_errors: Vec<_> = result
+            .structural_errors
+            .iter()
+            .filter(|e| matches!(e.code, StructuralErrorCode::UnitInconsistency))
+            .collect();
+        assert_eq!(unit_errors.len(), 1, "{:?}", result.structural_errors);
+        assert_eq!(unit_errors[0].path, "/models/test/equations/0");
     }
 
     #[test]
@@ -1404,21 +1406,40 @@ mod tests {
         };
 
         let result = validate(&esm_file);
-        // Should still be structurally valid
+        // `exp(x)` with x in metres is a PROVABLE dimensional inconsistency, so
+        // it is a hard `unit_inconsistency` error, not a warning — the shared
+        // corpus pins `units_*.esm` fixtures as `is_valid: false`.
         assert!(
-            result.is_valid,
-            "Structural validation should pass: {result:?}"
+            !result.is_valid,
+            "A dimensional argument to exp must fail validation: {result:?}"
         );
-        assert!(result.structural_errors.is_empty());
-        // But should have unit warnings about exp requiring dimensionless input
+        let unit_errors: Vec<_> = result
+            .structural_errors
+            .iter()
+            .filter(|e| matches!(e.code, StructuralErrorCode::UnitInconsistency))
+            .collect();
+        // `D(x)/dt = exp(x)` has TWO independent provable defects: the
+        // dimensional argument to `exp`, and the resulting equation (which no
+        // time unit can reconcile). BOTH are reported — propagation no longer
+        // abandons the equation at the first finding, which is what used to let
+        // one defect hide another.
+        assert_eq!(unit_errors.len(), 2, "{:?}", result.structural_errors);
         assert!(
-            !result.unit_warnings.is_empty(),
-            "Should have unit warnings"
+            unit_errors.iter().any(|e| e
+                .message
+                .contains("Argument to 'exp' must be dimensionless")),
+            "{unit_errors:?}"
         );
         assert!(
-            result.unit_warnings[0].contains("must be dimensionless"),
-            "Should warn about dimensionless requirement: {:?}",
-            result.unit_warnings
+            unit_errors
+                .iter()
+                .any(|e| e.message.contains("No time unit can reconcile")),
+            "{unit_errors:?}"
+        );
+        assert!(
+            unit_errors
+                .iter()
+                .all(|e| e.path == "/models/test/equations/0")
         );
     }
 

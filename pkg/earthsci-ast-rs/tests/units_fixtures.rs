@@ -73,23 +73,28 @@ fn units_fixtures_dimensional_propagation() {
     // deliberately not equation-balanced (they showcase unit relationships,
     // not complete ODE systems), so structural validity is not asserted.
     //
-    // `units_dimensional_analysis.esm` carries one KNOWN inconsistency: its
-    // Thermodynamics relaxation equation divides by the bare number 1.0
-    // rather than a `tau: s` constant, so D(T,t) [K/s] != RHS [K]. The
-    // propagator is right to flag it; the sibling bindings assert only that
-    // validation completes, so the shared fixture stays as is and this test
-    // pins the detection instead.
+    // `units_dimensional_analysis.esm` used to raise one warning here: its
+    // Thermodynamics relaxation equation divides by the bare number 1.0 rather
+    // than a `tau: s` constant, and the propagator read that literal as
+    // DIMENSIONLESS, making D(T,t) [K/s] != RHS [K]. A bare literal is now
+    // treated as INDETERMINATE (it may well be an implicit-unit constant), so no
+    // dimension is fabricated for it and the equation is no longer flagged.
+    //
+    // The fixture's REAL dimensional defects — `log` of a volume in the
+    // Thermodynamics S and G observeds — are provable and are now reported as
+    // hard `unit_inconsistency` STRUCTURAL ERRORS rather than warnings, so they
+    // do not appear in this count either.
     let expected_warning_counts = [
         // These counts are DIMENSIONAL-analysis warnings only. Many of these
         // fixtures declare real scientific units (Hz, T, C, BTU, kWh, degC, bar,
         // …) that this crate's minimal unit parser does not recognize (pint /
-        // Unitful in the Python / Julia bindings do). Since the unparseable-unit
-        // leniency fix, each such unit is surfaced as an "unparseable unit;
-        // treated as unknown" warning instead of being silently coerced to
-        // dimensionless — a pre-existing Rust parser-coverage gap, orthogonal to
-        // dimensional propagation, so the assertion below filters those out.
+        // Unitful in the Python / Julia bindings do). Each such unit is surfaced
+        // as an "unparseable unit; treated as unknown" warning instead of being
+        // silently coerced to dimensionless — a pre-existing Rust parser-coverage
+        // gap, orthogonal to dimensional propagation, so the assertion below
+        // filters those out.
         ("units_conversions.esm", 0usize),
-        ("units_dimensional_analysis.esm", 1),
+        ("units_dimensional_analysis.esm", 0),
         ("units_propagation.esm", 0),
     ];
     for (name, content) in UNITS_FIXTURES {

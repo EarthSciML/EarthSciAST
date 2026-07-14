@@ -12,7 +12,9 @@
 //! both layers — see the note in parse.rs before changing a shared rule.
 
 use crate::EsmFile;
-use crate::units::{Unit, build_unit_env, parse_unit, validate_equation_dimensions_with_coords};
+use crate::units::{
+    Unit, build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
+};
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use std::collections::{HashMap, HashSet};
 
@@ -108,13 +110,17 @@ pub(crate) fn validate_model(
             );
         }
 
-        // Validate dimensional consistency of equation via expression-level
-        // propagation over the Expr AST.
-        if let Err(unit_error) =
-            validate_equation_dimensions_with_coords(equation, &unit_env, coord_env_ref)
-        {
-            warnings.push(format!("Equation {eq_idx}: {unit_error} (in {eq_path})"));
-        }
+        // Validate dimensional consistency of the equation via expression-level
+        // propagation over the Expr AST. Every finding is reported: a provable
+        // mismatch is a hard `unit_inconsistency` error, an undeterminable
+        // dimension stays a non-blocking warning. See `record_unit_findings`.
+        record_unit_findings(
+            check_equation_dimensions(equation, &unit_env, coord_env_ref),
+            &eq_path,
+            &format!("Equation {eq_idx}"),
+            errors,
+            warnings,
+        );
     }
 
     // Validate observed variable expressions
@@ -144,6 +150,22 @@ pub(crate) fn validate_model(
                     0,
                     errors,
                 );
+
+                // Dimension-check the defining expression. This is where most
+                // of the shared `units_*.esm` fixtures put their defect (an
+                // observed variable whose expression adds `m` to `kg`, or takes
+                // `ln` of a mass), and it went entirely unchecked while only
+                // `equations` were propagated. The error path is the VARIABLE
+                // — `/models/<M>/variables/<v>` — as pinned by
+                // `tests/invalid/expected_errors.json`.
+                let declared = variable.units.as_deref().and_then(|u| parse_unit(u).ok());
+                record_unit_findings(
+                    check_expression_dimensions(expr, declared.as_ref(), &unit_env, coord_env_ref),
+                    &format!("{model_path}/variables/{var_name}"),
+                    &format!("Observed variable \"{var_name}\""),
+                    errors,
+                    warnings,
+                );
             }
         }
     }
@@ -161,6 +183,46 @@ pub(crate) fn validate_model(
     if let Some(ref continuous_events) = model.continuous_events {
         for (event_idx, event) in continuous_events.iter().enumerate() {
             validate_continuous_event(event, event_idx, &model_path, &defined_vars, errors);
+        }
+    }
+}
+
+/// Route dimensional findings to the right channel.
+///
+/// This is the one place the cross-binding units severity policy is applied:
+///
+/// * A PROVABLE dimensional mismatch ([`UnitSeverity::Error`]) becomes a hard
+///   `unit_inconsistency` structural error at `path`, so `is_valid` is false.
+///   The shared corpus requires this — `tests/invalid/expected_errors.json`
+///   pins every `units_*.esm` fixture as `is_valid: false` with a structural
+///   error, so keeping these as warnings would ACCEPT files the corpus pins
+///   invalid. The code and JSON-Pointer path match the TypeScript reference
+///   (`validate/orchestrator.ts::promoteUnitWarningsToErrors`).
+///
+/// * An ANALYSIS finding — the checker could not DETERMINE a dimension
+///   (unknown variable, unparseable unit, symbolic exponent, an op with no
+///   dimensional rule) — stays a non-blocking warning. It reports what the
+///   checker could not conclude, not a defect in the file.
+fn record_unit_findings(
+    findings: Vec<crate::units::UnitFinding>,
+    path: &str,
+    subject: &str,
+    errors: &mut Vec<StructuralError>,
+    warnings: &mut Vec<String>,
+) {
+    for finding in findings {
+        if finding.is_error() {
+            errors.push(StructuralError {
+                path: path.to_string(),
+                code: StructuralErrorCode::UnitInconsistency,
+                message: finding.message.clone(),
+                details: serde_json::json!({
+                    "subject": subject,
+                    "detail": finding.message,
+                }),
+            });
+        } else {
+            warnings.push(format!("{subject}: {} (in {path})", finding.message));
         }
     }
 }
@@ -533,8 +595,24 @@ fn validate_reaction_rate_units(
             continue;
         }
 
-        let expected_rate_unit = conc_unit.power(1 - total_order as i32).divide(&time);
-        if !rate_unit.is_compatible(&expected_rate_unit) {
+        // The `rate` field is spelled BOTH ways in the shared corpus, and the
+        // AST cannot tell them apart:
+        //
+        //   * as the rate CONSTANT k (`rate: "k"`), whose units for an
+        //     n-th-order reaction are conc^(1-n)/time — this is what
+        //     `units_reaction_rate_mismatch.esm` pins; and
+        //   * as the full mass-action VELOCITY (`rate: k*exp(-Ea/RT)*A*B`),
+        //     which already carries the substrate concentrations and so has
+        //     units of conc/time — as in `expr_graphs_variable_deps.esm`.
+        //
+        // Only a rate that fits NEITHER reading is provably inconsistent.
+        // Assuming the rate-constant reading alone reported a false mismatch on
+        // every fixture that writes out the full rate law.
+        let expected_rate_constant = conc_unit.power(1 - total_order as i32).divide(&time);
+        let expected_velocity = conc_unit.divide(&time);
+        if !rate_unit.is_compatible(&expected_rate_constant)
+            && !rate_unit.is_compatible(&expected_velocity)
+        {
             let rate_units_str = reaction_rate_units_str(&reaction.rate, rs);
             let first_sp_units = rs
                 .species
@@ -1056,9 +1134,7 @@ fn validate_event_expression(
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
-            if var_name != "t"
-                && !is_builtin_function(var_name)
-                && !defined_vars.contains(var_name)
+            if var_name != "t" && !is_builtin_function(var_name) && !defined_vars.contains(var_name)
             {
                 errors.push(StructuralError {
                     path: event_path.to_string(),
