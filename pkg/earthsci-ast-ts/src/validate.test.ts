@@ -1332,3 +1332,113 @@ describe('(h) reference integrity covers the non-model expression sites', () => 
     expect(c[0].path).toBe('/coupling/0/connector/equations/0/expression')
   })
 })
+
+/**
+ * (k) The declaration-site set must be COMPLETE, or tightening a false NEGATIVE
+ * just trades it for a false POSITIVE.
+ */
+describe('(k) complete declaration-site set', () => {
+  it('credits names a `callback` coupling injects into its target_system', () => {
+    // `coupling[i].config.callback_variables[j].name` is a real declaration,
+    // made from OUTSIDE the component. Missing it falsely rejected
+    // `tests/coupling/callback_examples.esm`.
+    const file = (couplingVarName: string) => ({
+      esm: '0.1.0',
+      metadata: { name: 'callback-decl' },
+      models: {
+        WeatherModel: {
+          variables: { temp: { type: 'state', units: 'K' } },
+          equations: [
+            {
+              lhs: { op: 'D', args: ['temp'], wrt: 't' },
+              rhs: { op: '+', args: [0, 'external_temperature_forcing'] },
+            },
+          ],
+        },
+      },
+      coupling: [
+        {
+          type: 'callback',
+          callback_id: 'cb',
+          config: {
+            target_system: 'WeatherModel',
+            callback_variables: [{ name: couplingVarName, units: 'K/s' }],
+          },
+        },
+      ],
+    })
+
+    // The callback declares exactly the name the equation uses.
+    expect(
+      validate(file('external_temperature_forcing')).structural_errors.filter(
+        (e) => e.code === 'undefined_variable',
+      ),
+    ).toEqual([])
+
+    // ...and the check still BITES: a callback declaring some OTHER name leaves
+    // `external_temperature_forcing` genuinely undefined.
+    const errors = validate(file('something_else')).structural_errors.filter(
+      (e) => e.code === 'undefined_variable',
+    )
+    expect(errors).toHaveLength(1)
+    expect((errors[0].details as { variable: string }).variable).toBe(
+      'external_temperature_forcing',
+    )
+  })
+
+  it('emits `details.variable` — not `variable_name` — at the new (h) sites', () => {
+    // CONFORMANCE_SPEC row (j): the corpus settled on `variable`.
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'details-key' },
+      models: {
+        M: {
+          variables: {
+            u: { type: 'state', units: '1' },
+            obs: { type: 'observed', units: '1', expression: { op: '*', args: [2, 'nope'] } },
+          },
+          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+    })
+    const error = result.structural_errors.find((e) => e.code === 'undefined_variable')!
+    expect(error.details).toHaveProperty('variable', 'nope')
+    expect(error.details).not.toHaveProperty('variable_name')
+  })
+})
+
+describe('an observed variable defined as the constant 0 is not "missing" its expression', () => {
+  // `!variable.expression` is true for the NUMBER ZERO. `0.0` is a perfectly
+  // legal Expression, so `tests/valid/events_cross_system.esm` — whose
+  // `temperature_factor` is exactly `0.0` — was reported as missing_observed_expr.
+  const withExpression = (expression: unknown) => ({
+    esm: '0.1.0',
+    metadata: { name: 'falsy-zero' },
+    models: {
+      M: {
+        variables: {
+          u: { type: 'state', units: '1' },
+          obs: { type: 'observed', units: '1', expression },
+        },
+        equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+      },
+    },
+  })
+  const missing = (file: object) =>
+    validate(file).structural_errors.filter((e) => e.code === 'missing_observed_expr')
+
+  it('accepts the constant 0', () => {
+    expect(missing(withExpression(0))).toEqual([])
+    expect(missing(withExpression(0.0))).toEqual([])
+  })
+
+  it('still rejects a genuinely absent expression', () => {
+    // An observed variable with NO `expression` is caught at the SCHEMA layer
+    // (which requires the field), and structural checks only run once the schema
+    // is clean — so assert the rejection, not the structural code specifically.
+    // The point is that the fix admits `0` without admitting "absent".
+    const file = withExpression(undefined)
+    delete (file.models.M.variables.obs as { expression?: unknown }).expression
+    expect(validate(file).is_valid).toBe(false)
+  })
+})

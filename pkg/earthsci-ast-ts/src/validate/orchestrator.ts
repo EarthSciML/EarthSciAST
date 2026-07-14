@@ -146,15 +146,31 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       const modelPath = `/models/${modelName}`
       const isCoupled = coupledSystems.has(modelName)
 
-      // Skip equation balance and reference integrity for coupled models,
-      // as they may reference variables provided by other systems.
+      // Equation balance exempts a coupled model: its unknowns may be driven by
+      // equations another system contributes, so counting locally is meaningless.
       if (!isCoupled) {
         errors.push(...validateEquationBalance(model, modelPath))
-        errors.push(...validateReferenceIntegrity(model, modelPath, esmFile))
       }
+      // An OPERATOR-COMPOSED model is exempt from reference integrity, and the
+      // exemption is semantically required rather than a convenience: such a
+      // model is written against a GENERIC state it does not declare, under a
+      // placeholder name the AUTHOR chooses. `tests/valid/minimal_chemistry.esm`
+      // is the canonical case — its `Advection` operator declares only
+      // `u_wind`/`v_wind` and writes `D(u)/dt = -u_wind*grad(u,x) + …`, where `u`
+      // is the field composition will substitute. No local declaration-site union
+      // can decide `u`, because the name is arbitrary. (§6.4 blesses `_var` for
+      // this; the flagship fixture uses `u` — see the report.)
+      //
+      // A CALLBACK target is NOT exempt: its injected names are knowable, so it
+      // is checked against them (see `declaredNamesFor` site 6). That is the (k)
+      // fix — `callback_examples.esm` was falsely rejected because the names its
+      // callback injects were not credited anywhere.
+      if (!isCoupled) {
+        errors.push(...validateReferenceIntegrity(model, modelPath, esmFile, modelName, isCoupled))
+      }
+
       // `isCoupled` also admits the §6.4 `_var` placeholder as an event-affect
-      // target — the same premise (this model's names may be supplied by the
-      // composition) that skips the two checks above.
+      // target.
       errors.push(...validateEventConsistency(model, modelPath, isCoupled))
       errors.push(...validatePhysicalConstantUnits(model, modelPath))
       errors.push(...validateConversionFactorConsistency(model, modelPath))
@@ -167,7 +183,17 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           const subsystemPath = `${modelPath}/subsystems/${subsystemName}`
           if (!isCoupled) {
             errors.push(...validateEquationBalance(subsystem, subsystemPath))
-            errors.push(...validateReferenceIntegrity(subsystem, subsystemPath, esmFile))
+          }
+          if (!isCoupled) {
+            errors.push(
+              ...validateReferenceIntegrity(
+                subsystem,
+                subsystemPath,
+                esmFile,
+                subsystemName,
+                isCoupled,
+              ),
+            )
           }
           errors.push(...validateEventConsistency(subsystem, subsystemPath, isCoupled))
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
