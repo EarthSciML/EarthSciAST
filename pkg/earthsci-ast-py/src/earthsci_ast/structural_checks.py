@@ -100,34 +100,47 @@ def __getattr__(name: str):  # PEP 562: lazy module-level attribute.
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# Shared pint unit registry, constructed lazily on first use. Unit parsing is
-# hot (per-variable / per-equation checks) and ``pint.UnitRegistry()`` is
-# expensive, so the suite reuses one module-level registry instead of building
-# a fresh one per call. Callers keep the same try/except guards that
-# previously wrapped ``import pint``, so environments without pint behave
-# identically.
-_UREG = None
-
-
+# The ONE unit registry. It is built in ``earthsci_ast.units``, which layers the
+# shared ESM unit contract (docs/content/units-standard.md) on top of pint:
+# ppb/ppt and the *v aliases, the dimensionless count nouns
+# (molec/individuals/vehicles/units/count), Dobson/DU, Ohm, Torr — and, crucially,
+# the OVERRIDES where a vanilla pint registry silently disagrees with the
+# contract (`units` parses as MICRO-NIT, a luminance; `molec` as [substance]).
+#
+# This module used to build its own bare ``pint.UnitRegistry()``, which knew none
+# of that: `ppb`, `ppbv`, `individuals`, `vehicles`, `Dobson`, `Torr` were simply
+# UNDEFINED here, and `molec`/`units` carried the wrong dimension. Every unit
+# check below therefore ran against a registry that disagreed with the one
+# ``units.py`` uses — tolerable while the findings were advisory, a
+# false-rejection factory now that they are hard errors.
 def _get_unit_registry():
-    """Return the module-level pint ``UnitRegistry``, creating it on first use."""
-    global _UREG
-    if _UREG is None:
-        import pint
+    """Return the shared ESM pint ``UnitRegistry`` (see ``earthsci_ast.units``)."""
+    from .units import PINT_AVAILABLE, ureg
 
-        _UREG = pint.UnitRegistry()
-    return _UREG
+    if not PINT_AVAILABLE:
+        raise ImportError("pint library is required for unit validation")
+    return ureg
+
+
+def _unit_dimensionality(unit: str | None):
+    """Dimensionality of a declared unit string, via the shared ESM registry.
+
+    Raises ``UnparseableUnitError`` (a ``ValueError``) when the string does not
+    denote a unit, and ``ImportError`` when pint is absent.
+    """
+    from .units import unit_dimensionality
+
+    return unit_dimensionality(unit)
 
 
 # Exception types that mean "cannot verify these units", never "genuinely
-# inconsistent": either pint is unavailable (``ImportError`` from the lazy
-# ``import pint``) or pint could not parse/convert a unit string. The latter is
-# pint's own error hierarchy — ``UndefinedUnitError``, ``DimensionalityError``,
-# ``DefinitionSyntaxError``, ``OffsetUnitCalculusError``, … — all subclasses of
-# ``pint.errors.PintError``. Narrowing the unit-helper ``except`` clauses to
-# this tuple (instead of a blanket ``except Exception``) keeps the permissive
-# fallback for unparseable units while letting a genuine, unexpected bug
-# propagate instead of being silently swallowed as a spurious pass.
+# inconsistent": either pint is unavailable (``ImportError``) or the string does
+# not denote a unit (``UnparseableUnitError``). An unparseable unit is now
+# reported ONCE, as a hard error, by :func:`_check_unparseable_units`; the
+# helpers below therefore keep treating it as unverifiable so that a single
+# malformed unit string produces a single finding instead of an avalanche of
+# derived mismatches. Narrowing these ``except`` clauses to this tuple (instead
+# of a blanket ``except Exception``) lets a genuine, unexpected bug propagate.
 _PINT_UNVERIFIABLE_ERRORS = None
 
 
@@ -139,7 +152,13 @@ def _pint_unverifiable_errors():
         try:
             import pint
 
-            _PINT_UNVERIFIABLE_ERRORS = (ImportError, pint.errors.PintError)
+            from .units import UnparseableUnitError
+
+            _PINT_UNVERIFIABLE_ERRORS = (
+                ImportError,
+                UnparseableUnitError,
+                pint.errors.PintError,
+            )
         except ImportError:
             _PINT_UNVERIFIABLE_ERRORS = (ImportError,)
     return _PINT_UNVERIFIABLE_ERRORS
@@ -389,13 +408,11 @@ def _units_compatible(u1: str, u2: str) -> bool:
     if n1 == n2:
         return True
     try:
-        ureg = _get_unit_registry()
-        q1 = ureg(n1) if n1 != "dimensionless" else ureg("dimensionless")
-        q2 = ureg(n2) if n2 != "dimensionless" else ureg("dimensionless")
-        return q1.dimensionality == q2.dimensionality
+        return _unit_dimensionality(n1) == _unit_dimensionality(n2)
     except _pint_unverifiable_errors():
         # unparseable unit (or pint unavailable): cannot verify, fall back to
-        # a plain string comparison rather than blocking.
+        # a plain string comparison rather than blocking. The unparseable string
+        # is reported once, on its own, by _check_unparseable_units.
         return n1 == n2
 
 
@@ -733,22 +750,46 @@ def _collect_var_units(tables: dict[str, Any]) -> dict[str, str]:
     return var_units
 
 
-def _is_derivative_compatible(lhs_var_units: str, rhs_units: str) -> bool:
-    """
-    Check whether rhs_units could be the time derivative of lhs_var_units.
-    True if (rhs * second) is dimensionally equal to lhs_var.
-    Also accepts the case where both are dimensionless (decay-style equations).
+def _is_derivative_compatible(
+    lhs_var_units: str, rhs_units: str, wrt_units: str | None = None
+) -> bool:
+    """Can ``rhs_units`` be the derivative of ``lhs_var_units`` w.r.t. the
+    independent variable?
+
+    When the independent variable IS declared (``wrt_units``), the answer is
+    exact: ``dim(rhs) == dim(state)/dim(wrt)``.
+
+    When it is NOT declared — the ordinary case, since ``t`` is rarely given
+    units — its dimension is UNKNOWN, and assuming seconds is a fabrication.
+    This function used to do exactly that (``(rhs * second) / lhs`` must be
+    dimensionless), which rejects a perfectly ordinary acceleration equation
+    (``x`` in ``m``, RHS in ``m/s^2``: the ratio is ``s^2``, a pure power of
+    time, so *some* time unit reconciles them — and the fabricated one-second
+    denominator says otherwise). Under a hard-error policy that is a false
+    rejection.
+
+    The defensible test is the one Go uses (``derivativeTimeMismatch``): the
+    time exponent is free, but the NON-time dimensions cannot move. If
+    ``dim(state)/dim(rhs)`` has any nonzero exponent outside ``[time]``, no
+    choice of time unit reconciles the two sides and the equation is provably
+    wrong. That still rejects what the invalid corpus pins (an ``m`` state
+    assigned a ``kg`` expression) while accepting ``D(x) = -x`` and the
+    acceleration case above.
     """
     n_lhs = _normalize_unit(lhs_var_units)
     n_rhs = _normalize_unit(rhs_units)
-    if n_lhs == "dimensionless" and n_rhs == "dimensionless":
+    if n_lhs == n_rhs == "dimensionless":
         return True
     try:
-        ureg = _get_unit_registry()
-        lhs_q = ureg(n_lhs)
-        rhs_q = ureg(n_rhs)
-        ratio = (rhs_q * ureg("second")) / lhs_q
-        return ratio.dimensionless
+        lhs_dim = _unit_dimensionality(n_lhs)
+        rhs_dim = _unit_dimensionality(n_rhs)
+        if wrt_units:
+            return rhs_dim == lhs_dim / _unit_dimensionality(_normalize_unit(wrt_units))
+        # Undeclared independent variable: only the time exponent is free.
+        ratio = lhs_dim / rhs_dim
+        # A pint dimensionality container drops zero exponents, so any surviving
+        # key other than [time] is a dimension no time unit can cancel.
+        return set(ratio.keys()) <= {"[time]"}
     except _pint_unverifiable_errors():
         # unparseable unit (or pint unavailable): cannot verify, do not block.
         return True
@@ -762,11 +803,12 @@ def _is_dimensionless_unit(unit: str | None) -> bool:
     if normalized in ("dimensionless", "1", ""):
         return True
     try:
-        ureg = _get_unit_registry()
-        return ureg(normalized).dimensionless
+        return not _unit_dimensionality(normalized)
     except _pint_unverifiable_errors():
         # unparseable unit (or pint unavailable): cannot verify, treat as
         # not-dimensionless (do not assert dimensionlessness we can't confirm).
+        # The unparseable string is reported separately by
+        # _check_unparseable_units, so nothing is lost by staying silent here.
         return False
 
 
@@ -828,16 +870,15 @@ def _check_default_units_consistency(data: dict[str, Any], errors: list[str]) ->
     no-op: a default value is presumed to share the declared units.
     """
     try:
-        ureg = _get_unit_registry()
+        _get_unit_registry()
+        from .units import parse_unit
     except ImportError:
         # pint not installed: cannot verify units, do not block.
         return
 
     def units_match(declared: str, provided: str) -> bool:
         try:
-            declared_u = ureg(_normalize_unit(declared)).units
-            provided_u = ureg(_normalize_unit(provided)).units
-            return declared_u == provided_u
+            return parse_unit(_normalize_unit(declared)) == parse_unit(_normalize_unit(provided))
         except _pint_unverifiable_errors():
             # unparseable unit: cannot verify, fall back to a string compare on
             # the normalized form rather than blocking.
@@ -945,7 +986,7 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
             if n_src == n_lhs:
                 continue  # identical — no conversion to check
             try:
-                if ureg(n_src).dimensionality != ureg(n_lhs).dimensionality:
+                if _unit_dimensionality(n_src) != _unit_dimensionality(n_lhs):
                     continue  # dimensional mismatch — handled by other checks
             except _pint_unverifiable_errors():
                 # unparseable unit: cannot verify, skip.
@@ -1041,28 +1082,96 @@ def _check_physical_constant_units(data: dict[str, Any], errors: list[str]) -> N
 #: (``tests/invalid/expected_errors.json``: "Logarithm argument must be
 #: dimensionless…", "Exponential argument must be dimensionless…").
 #:
-#: This set is deliberately NARROWER than the mathematical rule, because the
-#: shared corpus is not self-consistent about that rule and this layer is the
-#: one that REJECTS a file:
+#: This is the FULL mathematical rule: a transcendental function is defined by a
+#: power series, so every term of ``1 + x + x^2/2 + …`` must be addable, which
+#: forces ``x`` to be dimensionless. ``sqrt`` is deliberately absent — it halves
+#: a dimension rather than requiring none.
 #:
-#:   * ``tests/invalid/units_invalid_logarithm.esm`` pins ``ln(mass)`` (kg) as
-#:     INVALID — ``unit_inconsistency`` at
-#:     ``/models/BadUnitsModel/variables/invalid_log``.
-#:   * ``tests/valid/units_dimensional_analysis.esm`` pins ``S = n*R*log(V)``
-#:     with ``V`` in ``m^3`` as VALID — the same construct (a transcendental
-#:     applied to a dimensional bare variable), spelled ``log`` instead of
-#:     ``ln``.
-#:
-#: Both fixtures are part of the frozen corpus, so a check that fires on every
-#: transcendental would reject a pinned-VALID file. Restricting the STRUCTURAL
-#: (fail-the-file) check to the ops the invalid corpus actually pins honours
-#: both. The full mathematical rule still runs in ``units.py``'s dimensional
-#: engine, which reports the remaining cases (``log``/``log10``/trig/hyperbolic)
-#: as WARNINGS. If the corpus is ever made self-consistent, widen this set.
+#: The set was previously narrowed to ``{ln, exp}`` because the shared corpus
+#: contradicted itself — ``tests/invalid/units_invalid_logarithm.esm`` pinned
+#: ``ln(mass)`` as INVALID while ``tests/valid/units_dimensional_analysis.esm``
+#: pinned ``S = n*R*log(V)`` (V in m^3) as VALID. That contradiction is a defect
+#: in the VALID fixture (entropy is ``log(V/V0)``, a ratio) and is being repaired
+#: in the corpus, so the checker now states the rule it actually believes.
 _DIMENSIONLESS_ARG_FUNCS: dict[str, tuple[str, str]] = {
     "ln": ("logarithm", "Logarithm"),
+    "log": ("logarithm", "Logarithm"),
+    "log10": ("logarithm", "Logarithm"),
     "exp": ("exponential", "Exponential"),
+    "sin": ("trigonometric", "Trigonometric function"),
+    "cos": ("trigonometric", "Trigonometric function"),
+    "tan": ("trigonometric", "Trigonometric function"),
+    "asin": ("trigonometric", "Inverse trigonometric function"),
+    "acos": ("trigonometric", "Inverse trigonometric function"),
+    "atan": ("trigonometric", "Inverse trigonometric function"),
+    "sinh": ("hyperbolic", "Hyperbolic function"),
+    "cosh": ("hyperbolic", "Hyperbolic function"),
+    "tanh": ("hyperbolic", "Hyperbolic function"),
+    "asinh": ("hyperbolic", "Inverse hyperbolic function"),
+    "acosh": ("hyperbolic", "Inverse hyperbolic function"),
+    "atanh": ("hyperbolic", "Inverse hyperbolic function"),
 }
+
+
+#: JSON-Pointer templates for every place a DECLARED unit string can appear,
+#: as ``(container-key-path, pointer-prefix)``. Mirrors Go's BuildUnitEnv
+#: coverage (model variables + reaction-system species + parameters).
+_DECLARED_UNIT_SITES = (
+    ("models", "variables"),
+    ("reaction_systems", "species"),
+    ("reaction_systems", "parameters"),
+)
+
+
+def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
+    """Flag every DECLARED unit string that does not denote a real unit.
+
+    This is a HARD ERROR, not a warning. The severity follows from what the
+    finding means: ``"not_a_unit"`` or ``"1/time"`` in a ``units`` field is a
+    defect in the FILE — the declaration is simply false — whereas "I cannot
+    determine this dimension" (a symbolic exponent, an op with no dimensional
+    rule, an undeclared variable) is a statement about the CHECKER and stays a
+    warning. Downgrading the former to a warning means a document can name a
+    unit that does not exist and still be pronounced valid, which is exactly the
+    hole the 2026-07-14 audit found.
+
+    Reported once per declaration site, at the ``units`` pointer. The dimensional
+    helpers all treat an unparseable unit as "unverifiable" (see
+    ``_pint_unverifiable_errors``), so a single bad string yields exactly one
+    finding rather than an avalanche of derived mismatches.
+    """
+    try:
+        from .units import UnparseableUnitError, parse_unit
+    except ImportError:
+        # pint not installed: cannot verify units, do not block.
+        return
+
+    def check(pointer: str, units: Any) -> None:
+        if not isinstance(units, str) or not units.strip():
+            return
+        try:
+            parse_unit(units)
+        except UnparseableUnitError as exc:
+            errors.append(
+                (
+                    pointer,
+                    f"Unit '{units}' is not a known unit: {exc}",
+                    {"units": units, "reason": "unparseable_unit"},
+                )
+            )
+        except ImportError:
+            return
+
+    for container, member in _DECLARED_UNIT_SITES:
+        for sys_name, system in (data.get(container) or {}).items():
+            if not isinstance(system, dict):
+                continue
+            for name, definition in (system.get(member) or {}).items():
+                if not isinstance(definition, dict):
+                    continue
+                base = f"/{container}/{sys_name}/{member}/{name}"
+                check(f"{base}/units", definition.get("units"))
+                check(f"{base}/default_units", definition.get("default_units"))
 
 
 def _json_pointer_from_message(msg: str) -> str:
@@ -1248,8 +1357,10 @@ def _check_unit_consistency(
             rhs_units = var_units.get(rhs)
             if not rhs_units:
                 continue
-            if not _is_derivative_compatible(lhs_var_units, rhs_units):
-                wrt = lhs.get("wrt") or "t"
+            wrt = lhs.get("wrt") or "t"
+            # `t` is almost never declared; when it IS, its units make the
+            # comparison exact instead of "only the time exponent is free".
+            if not _is_derivative_compatible(lhs_var_units, rhs_units, var_units.get(wrt)):
                 errors.append(
                     (
                         f"/models/{mname}/equations/{i}",
@@ -1478,6 +1589,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
     # Subsystem ref existence/parse is checked by resolve_subsystem_refs after
     # structural validation, which raises SubsystemRefError with richer context.
+    collect("unit_inconsistency", lambda sub: _check_unparseable_units(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))

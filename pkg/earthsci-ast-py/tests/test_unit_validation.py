@@ -10,10 +10,13 @@ This module provides comprehensive tests for:
 - Coupling scenarios with dimensional consistency
 """
 
+import json
+
 import pytest
-from conftest import VALID_DIR
+from conftest import CORPUS_UNIT_DEFECTS, VALID_DIR
 from pint import UnitRegistry, DimensionalityError
 from earthsci_ast import load
+from earthsci_ast.validation import validate
 from earthsci_ast.esm_types import (
     ModelVariable,
     Parameter,
@@ -539,12 +542,16 @@ def units_fixtures_dir():
 @pytest.mark.parametrize("fixture_name", UNITS_FIXTURE_NAMES)
 class TestCrossBindingUnitsFixtures:
     def test_fixture_loads(self, units_fixtures_dir, fixture_name):
+        if fixture_name in CORPUS_UNIT_DEFECTS:
+            pytest.skip(f"{fixture_name}: {CORPUS_UNIT_DEFECTS[fixture_name]}")
         path = units_fixtures_dir / fixture_name
         assert path.is_file(), f"missing fixture {path}"
         esm = load(path.read_text())
         assert esm.models, f"{fixture_name}: no models loaded"
 
     def test_unit_validator_runs(self, units_fixtures_dir, fixture_name):
+        if fixture_name in CORPUS_UNIT_DEFECTS:
+            pytest.skip(f"{fixture_name}: {CORPUS_UNIT_DEFECTS[fixture_name]}")
         path = units_fixtures_dir / fixture_name
         esm = load(path.read_text())
         validator = UnitValidator()
@@ -596,34 +603,78 @@ class TestEsmSpecificUnitsStandard:
         assert self.ureg.Quantity(1.0, "pptv").to("ppt").magnitude == pytest.approx(1.0)
 
     def test_dobson_is_areal_number_density(self):
-        # Standard: 1 Dobson = 2.6867e20 molec/m^2 = 2.6867e16 molec/cm^2.
-        # NOT dimensionless — carries `molecule / length^2`.
+        # Standard: 1 Dobson = 2.6867e20 molec/m^2 = 2.6867e16 molec/cm^2, with
+        # dimension [length]^-2 — NOT dimensionless, and NOT [substance]/area:
+        # `molec` is a dimensionless COUNT atom, so an areal molecule density is
+        # a pure inverse area (units-standard.md §"Dobson unit").
         dobson = self.ureg.Quantity(1.0, "Dobson")
-        as_molec_cm2 = dobson.to("molecule / cm**2")
-        assert as_molec_cm2.magnitude == pytest.approx(2.6867e16, rel=1e-6)
+        assert dobson.dimensionality == self.ureg.Quantity(1.0, "1/m**2").dimensionality
+        assert dobson.to("1 / cm**2").magnitude == pytest.approx(2.6867e16, rel=1e-6)
+        assert self.ureg.Quantity(1.0, "DU").to("Dobson").magnitude == pytest.approx(1.0)
 
-    def test_molec_alias_matches_molecule(self):
-        # `molec` is the schema-doc spelling of pint's `molecule`. Identity
-        # must hold so `molec/cm^3` and `molecule/cm^3` parse identically.
-        a = self.ureg.Quantity(1.0, "molec / cm**3")
-        b = self.ureg.Quantity(1.0, "molecule / cm**3")
-        assert a.dimensionality == b.dimensionality
-        assert a.to(b.units).magnitude == pytest.approx(1.0)
+    def test_molec_is_a_dimensionless_count(self):
+        # `molec` is a dimensionless count atom, so `molec/cm^3` (number density)
+        # is [length]^-3 (units-standard.md §"Molecule count atom").
+        #
+        # Vanilla pint disagrees: it aliases `molec` to `particle` (= 1/N_A mol),
+        # giving `molec/cm^3` a [substance]/[length]^3 dimension. The ESM registry
+        # overrides that, otherwise Python alone would type every atmospheric
+        # number density differently from Go/TS/Rust/Julia.
+        dimensionless = self.ureg.dimensionless.dimensionality
+        assert self.ureg.Quantity(1.0, "molec").dimensionality == dimensionless
+        assert (
+            self.ureg.Quantity(1.0, "molec / cm**3").dimensionality
+            == self.ureg.Quantity(1.0, "1 / cm**3").dimensionality
+        )
+        assert (
+            self.ureg.Quantity(1.0, "cm**3 / molec / s").dimensionality
+            == self.ureg.Quantity(1.0, "cm**3 / s").dimensionality
+        )
+
+    def test_count_nouns_are_dimensionless(self):
+        # Counts of discrete things carry no physical dimension. `units` is the
+        # trap: pint has no unit by that name, so its SI-prefix mechanism reads it
+        # as `u` + `nit` = MICRO-NIT, a LUMINANCE — which silently gave the
+        # corpus's clinical `units/L` and `units/s` a [luminosity] dimension.
+        dimensionless = self.ureg.dimensionless.dimensionality
+        for name in ("molec", "individuals", "vehicles", "units", "count"):
+            assert self.ureg.Quantity(1.0, name).dimensionality == dimensionless, (
+                f"{name} must be a dimensionless count noun"
+            )
+        assert (
+            self.ureg.Quantity(1.0, "units / L").dimensionality
+            == self.ureg.Quantity(1.0, "1 / L").dimensionality
+        )
+
+    def test_contract_spellings_absent_from_vanilla_pint(self):
+        # Symbols the shared contract requires that a bare pint registry lacks.
+        assert self.ureg.Quantity(1.0, "Ohm").dimensionality == (
+            self.ureg.Quantity(1.0, "ohm").dimensionality
+        )
+        assert self.ureg.Quantity(1.0, "Torr").to("Pa").magnitude == pytest.approx(133.322, rel=1e-4)
+        assert self.ureg.Quantity(1.0, "individuals / km**2").dimensionality == (
+            self.ureg.Quantity(1.0, "1 / km**2").dimensionality
+        )
 
 
-class TestUnparseableUnitLeniency:
-    """An unparseable unit is a WARNING, not a hard error.
+class TestUnparseableUnitIsAnError:
+    """An unparseable unit is a HARD ERROR, not a warning.
 
-    Per esm-libraries-spec §3.3.3/§3.4 and the Julia reference, a unit string
-    that pint cannot parse must not fail validation: the variable is simply
-    omitted from the known-units registry (treated as unknown), so equations
-    referencing it are skipped rather than flagged as dimensional mismatches.
+    The severity follows from what the finding MEANS. A unit string that does
+    not denote a real unit ("not_a_unit", "1/time") is a defect in the FILE —
+    the declaration is simply false. That is categorically different from "I
+    cannot determine this dimension" (a symbolic exponent, an op with no
+    dimensional rule, an undeclared variable), which is a statement about the
+    CHECKER and stays a warning.
+
+    This suite previously asserted the opposite (``TestUnparseableUnitLeniency``:
+    "is_valid is True"), which let a document name a unit that does not exist
+    and still be pronounced valid.
     """
 
-    def test_variable_unparseable_unit_warns_and_stays_valid(self):
-        model = Model(name="LenientUnits")
-        # A syntactically valid identifier that pint does not know how to
-        # parse (UndefinedUnitError, a PintError subclass).
+    def test_variable_unparseable_unit_is_an_error(self):
+        model = Model(name="BadUnits")
+        # A syntactically valid identifier that is not a unit.
         model.variables["bad"] = ModelVariable(
             type="state", units="not_a_real_unit_zzz"
         )
@@ -632,32 +683,210 @@ class TestUnparseableUnitLeniency:
         validator = UnitValidator()
         result = validator.validate_model(model)
 
-        # Unparseable unit => a warning, never an error.
-        assert result.is_valid is True
-        assert result.errors == []
-        assert any("Invalid unit" in w and "bad" in w for w in result.warnings)
+        assert result.is_valid is False
+        assert any("Invalid unit" in e and "bad" in e for e in result.errors)
 
-        # The bad variable is omitted from the known-units registry, so it is
-        # treated as unknown rather than assigned a bogus dimension.
+        # The bad variable is still omitted from the known-units registry, so it
+        # propagates as an UNKNOWN dimension and cannot also manufacture spurious
+        # downstream mismatches — one bad string, one finding.
         assert "bad" not in result.unit_registry
         assert "good" in result.unit_registry
 
-    def test_no_false_dimensional_mismatch_from_unparseable_unit(self):
-        model = Model(name="LenientUnitsEq")
+    def test_unparseable_unit_does_not_also_manufacture_a_mismatch(self):
+        model = Model(name="BadUnitsEq")
         model.variables["bad"] = ModelVariable(
             type="state", units="not_a_real_unit_zzz"
         )
         model.variables["good"] = ModelVariable(type="observed", units="kelvin")
         # good = bad : `bad` resolves to an unknown dimension (omitted from
-        # known_units), so no dimensional-mismatch error may be produced.
+        # known_units), so the ONLY finding must be the unparseable unit itself.
         model.equations.append(Equation(lhs="good", rhs="bad"))
 
         validator = UnitValidator()
         result = validator.validate_model(model)
 
-        assert result.is_valid is True
-        assert result.errors == []
-        assert not any("mismatch" in w.lower() for w in result.warnings)
+        assert result.is_valid is False
+        assert len(result.errors) == 1
+        assert "Invalid unit" in result.errors[0]
+        assert not any("mismatch" in e.lower() for e in result.errors)
+
+    def test_unparseable_unit_fails_structural_validation(self):
+        """The hard error reaches `load()` / `validate()`, at a JSON-Pointer path."""
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "BadUnits"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "c": {"type": "state", "units": "not_a_unit", "default": 1.0},
+                        "k": {"type": "parameter", "units": "1/s", "default": 0.5},
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "c"]},
+                        }
+                    ],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is False
+        offenders = [
+            e
+            for e in result.structural_errors
+            if e.code == "unit_inconsistency" and e.path == "/models/M/variables/c/units"
+        ]
+        assert offenders, f"expected an unparseable-unit error, got {result.structural_errors}"
+        assert "not_a_unit" in offenders[0].message
+
+    def test_real_units_still_validate(self):
+        """The count nouns and ESM units the contract defines must NOT be rejected."""
+        for unit in (
+            "molec/cm^3",
+            "ppb",
+            "ppb^-1 s^-1",
+            "individuals/km^2",
+            "vehicles/km^2",
+            "units/L",
+            "Dobson",
+            "Torr",
+            "degC/min",  # offset unit in a compound — pint's Quantity path rejects this
+            "μmol/(m^2*s)",
+            "cm^3/molec/s",
+        ):
+            model = Model(name="Ok")
+            model.variables["v"] = ModelVariable(type="state", units=unit)
+            result = UnitValidator().validate_model(model)
+            assert result.is_valid is True, f"{unit!r} must parse: {result.errors}"
+            assert "v" in result.unit_registry
+
+
+class TestDerivativeTimeUnitIsNotFabricated:
+    """``d(x)/dt`` with an UNDECLARED ``t`` has an UNKNOWN time unit.
+
+    The structural check used to assume seconds — ``(rhs * second) / lhs`` had to
+    be dimensionless — which rejects an ordinary acceleration equation (``x`` in
+    ``m``, RHS in ``m/s^2``). Under a hard-error policy that fabricated second is
+    a false-rejection factory.
+
+    The defensible rule (Go's ``derivativeTimeMismatch``): the time exponent is
+    free, the NON-time dimensions are not.
+    """
+
+    def test_undeclared_t_leaves_the_time_exponent_free(self):
+        from earthsci_ast.structural_checks import _is_derivative_compatible
+
+        # Accepted: some time unit reconciles these (the ratio is a power of time).
+        assert _is_derivative_compatible("m", "m/s") is True
+        assert _is_derivative_compatible("m", "m/s^2") is True  # was falsely rejected
+        assert _is_derivative_compatible("1", "1/s") is True
+
+    def test_non_time_dimensions_still_cannot_move(self):
+        from earthsci_ast.structural_checks import _is_derivative_compatible
+
+        # Rejected: no choice of time unit turns a length into a mass.
+        assert _is_derivative_compatible("m", "kg") is False
+        assert _is_derivative_compatible("m/s", "kg") is False
+
+    def test_declared_t_makes_the_comparison_exact(self):
+        from earthsci_ast.structural_checks import _is_derivative_compatible
+
+        assert _is_derivative_compatible("m", "m/s", "s") is True
+        # With t declared, the time exponent is pinned too.
+        assert _is_derivative_compatible("m", "m/s^2", "s") is False
+
+
+class TestTranscendentalArgumentMustBeDimensionless:
+    """The FULL mathematical rule, not just ``ln``/``exp``.
+
+    A transcendental is a power series, so every term of ``1 + x + x^2/2 + …``
+    must be addable — which forces ``x`` to be dimensionless. The structural
+    check was previously narrowed to ``{ln, exp}`` to accommodate a
+    self-contradictory corpus (see conftest.CORPUS_UNIT_DEFECTS).
+    """
+
+    @pytest.mark.parametrize(
+        "op", ["ln", "log", "log10", "exp", "sin", "cos", "tan", "tanh", "asin", "acosh"]
+    )
+    def test_dimensional_argument_is_a_hard_error(self, op):
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "T"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "L": {"type": "state", "units": "m", "default": 1.0},
+                        "bad": {
+                            "type": "observed",
+                            "units": "1",
+                            "expression": {"op": op, "args": ["L"]},
+                        },
+                    },
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}
+                    ],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is False, f"{op}(L) with L in metres must be rejected"
+        offenders = [
+            e
+            for e in result.structural_errors
+            if e.code == "unit_inconsistency" and e.path == "/models/M/variables/bad"
+        ]
+        assert offenders, f"{op}: expected a unit_inconsistency, got {result.structural_errors}"
+        assert "dimensionless" in offenders[0].message
+
+    def test_dimensionless_argument_is_accepted(self):
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "T"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "L": {"type": "state", "units": "m", "default": 1.0},
+                        "L0": {"type": "parameter", "units": "m", "default": 1.0},
+                        # log of a RATIO — the physically meaningful form.
+                        "ok": {
+                            "type": "observed",
+                            "units": "1",
+                            "expression": {"op": "log", "args": [{"op": "/", "args": ["L", "L0"]}]},
+                        },
+                    },
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}
+                    ],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is True, result.structural_errors
+
+    def test_sqrt_is_not_in_the_rule(self):
+        """`sqrt` halves a dimension; it does not require a dimensionless argument."""
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "T"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "A": {"type": "state", "units": "m^2", "default": 1.0},
+                        "side": {
+                            "type": "observed",
+                            "units": "m",
+                            "expression": {"op": "sqrt", "args": ["A"]},
+                        },
+                    },
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": 0.0}
+                    ],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is True, result.structural_errors
 
 
 def _validator_with(**units: str) -> UnitValidator:

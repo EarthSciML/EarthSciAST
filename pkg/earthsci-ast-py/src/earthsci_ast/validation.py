@@ -598,12 +598,20 @@ def _validate_reaction_rate_dimensions(
     contract in ``tests/invalid/expected_errors.json``.
     """
     try:
-        import pint
+        # The SHARED ESM registry, not a bare `pint.UnitRegistry()`. A vanilla
+        # pint registry does not define `ppb`/`ppbv`/`Dobson`/… and gives `molec`
+        # a [substance] dimension, so this check used to run against a registry
+        # that disagreed with every other unit check in the package — silently
+        # skipping (parse_dim -> None) exactly the atmospheric-chemistry rates it
+        # exists to verify.
+        from .units import PINT_AVAILABLE, unit_dimensionality, ureg
+
+        if not PINT_AVAILABLE:
+            return
     except ImportError:
         return
     from .structural_checks import _BUILTIN_SYMBOLS, _normalize_unit
 
-    ureg = pint.UnitRegistry()
     time_dim = ureg("second").dimensionality
     dimensionless_dim = ureg("").dimensionality
 
@@ -611,7 +619,7 @@ def _validate_reaction_rate_dimensions(
         if not unit_str:
             return None
         try:
-            return ureg(_normalize_unit(unit_str)).dimensionality
+            return unit_dimensionality(_normalize_unit(unit_str))
         except Exception:
             return None
 

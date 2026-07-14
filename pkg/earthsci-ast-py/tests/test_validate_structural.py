@@ -7,7 +7,7 @@ focusing on verification of error codes, cross-references, and semantic consiste
 
 import pytest
 import json
-from conftest import FIXTURES_ROOT
+from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
 from earthsci_ast import load
 from earthsci_ast.validation import validate, SchemaValidationError
@@ -576,6 +576,10 @@ class TestValidationWithFixtures:
 
         failed_files = []
         for valid_file in valid_files[:10]:  # Test first 10 to avoid timeout
+            if valid_file.name in CORPUS_UNIT_DEFECTS:
+                # Pinned-valid upstream, but correctly rejected here — see
+                # conftest.CORPUS_UNIT_DEFECTS.
+                continue
             try:
                 with open(valid_file) as f:
                     content = f.read()

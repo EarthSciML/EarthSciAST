@@ -16,24 +16,68 @@ try:
     ureg = pint.UnitRegistry()
     UnitsContainer = pint.util.UnitsContainer
 
-    # ESM-specific units standard (docs/units-standard.md).
-    # Mole-fraction family: dimensionless with scale factors; ppmv/ppbv/pptv
-    # are volume-mixing-ratio aliases that equal ppm/ppb/ppt under the
-    # ideal-gas approximation, so every binding must treat them as identical.
+    # ------------------------------------------------------------------
+    # The shared ESM unit contract (docs/content/units-standard.md).
     #
-    # pint form: `name = <scale>` (omitting the reference unit) registers a
-    # pure scaling of the empty dimension — this avoids a pint bug where
-    # `name = <scale> * dimensionless` stores `dimensionless` as a reference
-    # name and then fails conversion with KeyError: ''.
+    # pint's default registry is a strict SUPERSET of the contract almost
+    # everywhere — it has an SI-prefix mechanism and thousands of unit names,
+    # where the contract is a flat table. That permissiveness is mostly
+    # harmless, but pint DISAGREES with the contract in three places, and every
+    # one of them is a silent wrong-dimension hazard now that a unit finding is
+    # a hard error:
+    #
+    #   1. ``units`` — pint has no unit by that name, so its SI-PREFIX
+    #      mechanism resolves it as ``u`` + ``nit`` = MICRO-NIT, a LUMINANCE
+    #      ([luminosity]/[length]^2). The corpus declares clinical activity as
+    #      ``units/L`` and a rate as ``units/s``; both silently acquired a
+    #      luminosity dimension. The contract says ``units`` is a dimensionless
+    #      COUNT NOUN.
+    #   2. ``molec`` — pint aliases it to ``particle`` (= 1/N_A mol), i.e.
+    #      [substance]. The standard is explicit that ``molec`` is a
+    #      DIMENSIONLESS COUNT and that ``molec/cm^3`` must parse as
+    #      ``[length]^-3`` (units-standard.md §"Molecule count atom"), which is
+    #      also what Go/TS/Rust/Julia do.
+    #   3. ``Dobson`` — follows from (2): dimension ``[length]^-2``, not
+    #      ``[substance]/[length]^2``.
+    #
+    # ``ppb``/``ppt``, the ``*v`` volume-mixing-ratio aliases, ``individuals``,
+    # ``vehicles``, ``Ohm`` and ``Torr`` are simply ABSENT from pint and are
+    # added here. (``ppm``, ``count``, ``C``=coulomb, ``M``=molar, ``L``/``l``,
+    # ``deg``/``degC``/``degF`` already agree with the contract.)
+    #
+    # pint form for a pure scale: `name = <scale>` (omitting the reference
+    # unit) registers a scaling of the empty dimension — writing
+    # `name = <scale> * dimensionless` instead trips a pint bug that stores
+    # `dimensionless` as a reference name and then fails conversion with
+    # KeyError: ''.
+    # ------------------------------------------------------------------
+
+    # Mole-fraction family: dimensionless with scale factors. ppmv/ppbv/pptv are
+    # volume-mixing-ratio aliases that equal ppm/ppb/ppt under the ideal-gas
+    # approximation, so every binding must treat them as identical.
     ureg.define("ppm = 1e-6 = ppmv")
     ureg.define("ppb = 1e-9 = ppbv")
     ureg.define("ppt = 1e-12 = pptv")
-    # `molec` is the schema-doc spelling of pint's predefined `molecule`.
-    ureg.define("@alias molecule = molec")
+
+    # COUNT NOUNS — a count of discrete things carries no physical dimension, so
+    # each is dimensionless with scale 1. `[]` is pint's spelling of "belongs to
+    # the empty dimension"; the trailing `= _` suppresses a symbol.
+    ureg.define("molec = [] = _")
+    ureg.define("individuals = [] = _")
+    ureg.define("vehicles = [] = _")
+    ureg.define("units = [] = _")
+    # (`count` is already a dimensionless unit in pint's default registry.)
+
     ureg.define("molecule_cm3 = 1 / cm**3")
-    # Dobson unit: areal number density of ozone molecules.
+
+    # Dobson unit: areal number density of ozone molecules. Since `molec` is a
+    # dimensionless count, the dimension is [length]^-2.
     # 1 Dobson = 2.6867e20 molec/m^2 = 2.6867e16 molec/cm^2 (per standard).
-    ureg.define("Dobson = 2.6867e16 * molecule * cm**(-2)")
+    ureg.define("Dobson = 2.6867e20 / m**2 = DU")
+
+    # Spellings the contract uses that pint's registry does not carry.
+    ureg.define("@alias ohm = Ohm")
+    ureg.define("@alias torr = Torr")
 
 except ImportError:
     PINT_AVAILABLE = False
@@ -47,13 +91,111 @@ class DimensionalMismatchError(ValueError):
     """A PROVABLE dimensional inconsistency found while typing an expression.
 
     Distinct from "could not determine the dimension" (which is signalled by
-    returning ``None``) and from "pint could not parse this unit" (a
-    ``pint.PintError``). Only this exception is promoted to a validation
-    ERROR; the other two remain warnings/skips.
+    returning ``None``) and from :class:`UnparseableUnitError` ("this string
+    does not denote a real unit"). Both this exception and
+    ``UnparseableUnitError`` are defects in the FILE and are promoted to
+    validation ERRORS; only an indeterminate dimension (``None``) is skipped.
 
     It subclasses ``ValueError`` so that pre-existing
     ``except ValueError`` callers keep catching it.
     """
+
+
+class UnparseableUnitError(ValueError):
+    """A declared unit string that does not denote a real unit.
+
+    This is a defect in the FILE, not a limit of the checker: if ``"not_a_unit"``
+    or ``"1/time"`` is written where a unit belongs, the document is malformed
+    and no amount of analysis can rescue it. It is therefore a HARD ERROR, the
+    same severity as a provable dimensional mismatch — and the same call the
+    other bindings make (Go's ``UnitFindingUnparseable``, TS's ``unit_error``).
+
+    Contrast with a GENUINELY UNDETERMINABLE dimension — a symbolic exponent
+    (``x^n``), an op with no dimensional rule (``aggregate``/``index``/``fn``/
+    ``table_lookup``), an undeclared variable — which is a statement about the
+    checker and stays a WARNING (signalled by ``None``, never by an exception).
+    """
+
+
+#: The three spellings of "no units" the shared contract accepts.
+_DIMENSIONLESS_SPELLINGS = frozenset({"", "1", "dimensionless"})
+
+#: Exception types pint can raise from a garbage unit string. Beyond its own
+#: ``PintError`` hierarchy (``UndefinedUnitError``, ``DefinitionSyntaxError``,
+#: …) the tokenizer leaks ``SyntaxError`` for e.g. an embedded NUL byte, and the
+#: string preprocessor can leak ``ValueError``/``TypeError``/``AttributeError``/
+#: ``KeyError``. Every one of them means the same thing — "this is not a unit" —
+#: so :func:`parse_unit` re-raises them all as :class:`UnparseableUnitError`.
+#: The tuple is deliberately explicit rather than a bare ``except Exception`` so
+#: that a genuine bug in this module still propagates.
+_UNIT_PARSE_ERRORS: tuple[type[BaseException], ...] = (
+    (pint.errors.PintError, SyntaxError, ValueError, TypeError, AttributeError, KeyError)
+    if PINT_AVAILABLE
+    else (SyntaxError, ValueError, TypeError, AttributeError, KeyError)
+)
+
+
+def normalize_unit_string(unit: str) -> str:
+    """Rewrite the non-ASCII spellings the corpus uses into the ASCII grammar.
+
+    A pure SPELLING normalization — no unit is invented, each target already
+    exists in the registry. Mirrors Go's ``normalizeUnitString``:
+
+      * U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → ``u`` (``μg`` → ``ug``)
+      * ``°C``/``°F``/``°K`` → ``degC``/``degF``/``K``, and a bare ``°`` → ``deg``
+
+    pint happens to accept ``µ`` and ``°C`` natively, so this is not strictly
+    required for pint to parse; it is applied anyway so that Python resolves the
+    same STRING SET as the bindings that hand-roll the grammar.
+    """
+    if not any(ch in unit for ch in "µμ°"):
+        return unit
+    for src, dst in (
+        ("°C", "degC"),
+        ("°F", "degF"),
+        ("°K", "K"),
+        ("°", "deg"),
+        ("µ", "u"),  # U+00B5 MICRO SIGN
+        ("μ", "u"),  # U+03BC GREEK SMALL LETTER MU
+    ):
+        unit = unit.replace(src, dst)
+    return unit
+
+
+def parse_unit(unit: str | None):
+    """Resolve a declared unit string to a pint ``Unit``.
+
+    ``None`` and the dimensionless spellings (``""``, ``"1"``,
+    ``"dimensionless"``) resolve to the dimensionless unit. Anything the ESM
+    registry cannot resolve raises :class:`UnparseableUnitError`.
+
+    Uses ``ureg.parse_units`` rather than ``ureg(...)`` because the latter
+    evaluates the string as a QUANTITY expression and therefore rejects any
+    compound containing an offset unit — ``ureg("degC/min")`` raises
+    ``OffsetUnitCalculusError``, which under a hard-error policy would falsely
+    reject a perfectly ordinary heating rate. ``parse_units`` resolves the same
+    string to ``delta_degree_Celsius / minute`` and yields the dimension the
+    contract asks for ([temperature]/[time]).
+    """
+    if not PINT_AVAILABLE:
+        raise ImportError("pint library is required for unit parsing")
+    if unit is None:
+        return ureg.parse_units("")
+    text = normalize_unit_string(unit).strip()
+    if text in _DIMENSIONLESS_SPELLINGS:
+        return ureg.parse_units("")
+    try:
+        return ureg.parse_units(text)
+    except _UNIT_PARSE_ERRORS as exc:
+        raise UnparseableUnitError(f"'{unit}' does not denote a known unit: {exc}") from exc
+
+
+def unit_dimensionality(unit: str | None) -> UnitsContainer:
+    """The dimensionality container of a declared unit string.
+
+    Raises :class:`UnparseableUnitError` when the string is not a unit.
+    """
+    return parse_unit(unit).dimensionality
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +225,7 @@ _DIMENSIONLESS_ARG_FUNCS = frozenset(
     {
         "exp",
         "log",
+        "ln",
         "log10",
         "sin",
         "cos",
@@ -203,16 +346,17 @@ class UnitValidator:
         for var_name, var_info in model.variables.items():
             if var_info.units:
                 try:
-                    unit = self.ureg(var_info.units)
+                    unit = parse_unit(var_info.units)
                     result.unit_registry[var_name] = var_info.units
                     self.known_units[var_name] = unit
-                except pint.PintError as e:
-                    # Per esm-libraries-spec §3.3.3/§3.4 and the Julia
-                    # reference, an unparseable unit is a WARNING, not a hard
-                    # error: the variable is omitted from known_units below
-                    # (treated as unknown), so equations referencing it are
-                    # skipped rather than reported as dimensional mismatches.
-                    result.warnings.append(
+                except UnparseableUnitError as e:
+                    # An unparseable unit is a HARD ERROR: a string that does not
+                    # denote a real unit is a defect in the FILE, not a limit of
+                    # the checker (see UnparseableUnitError). The variable is
+                    # still omitted from known_units, so it propagates as an
+                    # unknown dimension and cannot ALSO manufacture a spurious
+                    # dimensional-mismatch error downstream.
+                    result.errors.append(
                         f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}"
                     )
 
@@ -253,14 +397,14 @@ class UnitValidator:
             for species in rs.species:
                 if species.units:
                     try:
-                        unit = self.ureg(species.units)
+                        unit = parse_unit(species.units)
                         result.unit_registry[species.name] = species.units
                         self.known_units[species.name] = unit
-                    except pint.PintError as e:
-                        # Unparseable unit is a WARNING, not a hard error (see
-                        # validate_model): the species is omitted from
-                        # known_units, so it is treated as unknown.
-                        result.warnings.append(
+                    except UnparseableUnitError as e:
+                        # Unparseable unit is a HARD ERROR (see validate_model);
+                        # the species is still omitted from known_units, so it is
+                        # treated as unknown downstream.
+                        result.errors.append(
                             f"Invalid unit '{species.units}' for species '{species.name}': {e}"
                         )
 
@@ -269,14 +413,14 @@ class UnitValidator:
             for param in rs.parameters:
                 if param.units:
                     try:
-                        unit = self.ureg(param.units)
+                        unit = parse_unit(param.units)
                         result.unit_registry[param.name] = param.units
                         self.known_units[param.name] = unit
-                    except pint.PintError as e:
-                        # Unparseable unit is a WARNING, not a hard error (see
-                        # validate_model): the parameter is omitted from
-                        # known_units, so it is treated as unknown.
-                        result.warnings.append(
+                    except UnparseableUnitError as e:
+                        # Unparseable unit is a HARD ERROR (see validate_model);
+                        # the parameter is still omitted from known_units, so it
+                        # is treated as unknown downstream.
+                        result.errors.append(
                             f"Invalid unit '{param.units}' for parameter '{param.name}': {e}"
                         )
 

@@ -33,13 +33,17 @@ class TestEarthSciASTIntegration:
 
     def test_simulation_model_serialization(self):
         """Test serialization of models suitable for simulation."""
-        # Create a model representing exponential decay
+        # Create a model representing exponential decay.
+        # The units are REAL unit strings: "concentration", "1/time" and "time"
+        # name a physical *quantity*, not a unit, and no binding's registry
+        # resolves them — which is now a hard `unit_inconsistency` error rather
+        # than a silently-ignored warning.
         model = Model(
             name="exponential_decay",
             variables={
-                "x": ModelVariable(type="state", units="concentration", default=1.0),
-                "k": ModelVariable(type="parameter", units="1/time", default=0.1),
-                "t": ModelVariable(type="parameter", units="time", default=0.0),
+                "x": ModelVariable(type="state", units="mol/L", default=1.0),
+                "k": ModelVariable(type="parameter", units="1/s", default=0.1),
+                "t": ModelVariable(type="parameter", units="s", default=0.0),
             },
             equations=[
                 Equation(
