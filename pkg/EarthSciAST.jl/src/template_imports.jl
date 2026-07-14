@@ -1587,8 +1587,20 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
     doc_isets = _substitute_closed_metaparams!(root, top_templates, doc_isets, values)
     _fold_closed_document!(root, top_templates, doc_isets)
 
-    # --- phase 7: root library file — compose bodies (validation), then
-    #     strip; no §9.7 construct survives parse → emit (§9.7.6 round-trip) ---
+    # --- phase 7: root library file — compose bodies (validation), then strip ---
+    #
+    # The registry is stripped from the LOWERED tree, which is right: everything
+    # downstream (evaluators, codegen) consumes the post-expansion form and must
+    # not re-expand. What was wrong is that it was stripped from the EMITTED form
+    # too. Option A expands CALL SITES; it does not delete DECLARATIONS (esm-spec
+    # §9.6.4 rule 5), and a template LIBRARY must round-trip to itself.
+    #
+    # `EsmFile` therefore keeps a VERBATIM snapshot of `expression_templates` and
+    # `metaparameters`, taken from the raw document BEFORE any of this runs (see
+    # `load`) — these declarations are rewritten in place by the folding above, so
+    # snapshotting the lowered form would emit a mangled registry (bodies
+    # composed, `params` gone). The snapshot is what `serialize_esm_file` writes
+    # back.
     if is_library
         _compose_template_bodies!(Dict{String,Any}(top_templates), "document")
         delete!(root, "expression_templates")

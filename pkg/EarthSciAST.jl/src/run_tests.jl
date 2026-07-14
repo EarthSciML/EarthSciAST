@@ -312,17 +312,20 @@ function _catalyst_default_maps(container_kind::Symbol, esm_container, simp,
     defaults_p  = Dict{Any,Float64}()
     (container_kind === :reaction_system && esm_container !== nothing) ||
         return defaults_u0, defaults_p
+    # NO silent skip here. A `try _resolve_handle(...) catch; nothing end` +
+    # `continue` (what this used to do) drops the species/parameter from the
+    # seed, so the inline test runs from a DIFFERENT initial condition than the
+    # file declares — and still reports PASS. A seed that cannot be established
+    # is a build error, not a shrug: the assertions are about to be evaluated
+    # against the wrong problem. `_resolve_handle` already throws a precise
+    # `ArgumentError` naming the variable and the spellings it tried; let it out.
     for sp in esm_container.species
         sp.default === nothing && continue
-        handle = try _resolve_handle(simp, sys_name, sp.name) catch; nothing end
-        handle === nothing && continue
-        defaults_u0[handle] = Float64(sp.default)
+        defaults_u0[_resolve_handle(simp, sys_name, sp.name)] = Float64(sp.default)
     end
     for pr in esm_container.parameters
         pr.default === nothing && continue
-        handle = try _resolve_handle(simp, sys_name, pr.name) catch; nothing end
-        handle === nothing && continue
-        defaults_p[handle] = Float64(pr.default)
+        defaults_p[_resolve_handle(simp, sys_name, pr.name)] = Float64(pr.default)
     end
     return defaults_u0, defaults_p
 end

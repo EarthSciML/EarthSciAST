@@ -598,6 +598,52 @@ end
 # numerically identical to `f!` (the tests pin `:inplace` ≡ `:oop`) and never stale.
 # The build still REPORTS `n_const_slots` / `n_dynamic_slots` for an `:oop` build; the
 # classification is a property of the prelude, not of the emitter.
+# ---------------------------------------------------------------------------
+# J5 — REFUSE TO BE XLA-COMPILED WHILE A LIVE FORCING BUFFER IS BOUND.
+#
+# A `_VK_PGATHER`/`_NK_PARAM_GATHER` payload is an ALIASED HOST `Vector{Float64}`
+# — the same object the caller passed through `param_arrays`, so that a
+# discrete-cadence refresh callback's in-place `buffer .= …` is seen by the RHS
+# with zero reallocation. That aliasing is the whole point of the channel, and it
+# is exactly what an XLA tracer cannot honour: to the tracer the host vector is a
+# CONSTANT, so `@compile` bakes the buffer's compile-time contents into the
+# program and the refresh is never seen again.
+#
+# The failure mode is the dangerous one — not an exception, not a NaN, but THE
+# SAME NUMBERS FOREVER, off by the full magnitude of every forcing update. A
+# silently wrong answer is worse than no answer, so this refuses.
+#
+# The refusal fires during the TRACE (i.e. inside `@compile`), not at build time,
+# because build time cannot distinguish the two consumers: the interpreted
+# out-of-place closure over a `param_arrays` model is perfectly correct and DOES
+# track the refresh — `reactant_oop_test.jl` asserts exactly that — so refusing at
+# `build_evaluator` would reject a working configuration.
+#
+# `_is_traced` deliberately does not depend on Reactant: it asks whether the
+# argument's type comes from the Reactant module at all. ForwardDiff `Dual`s and
+# Enzyme's shadows are NOT Reactant types, so AD is untouched.
+# ---------------------------------------------------------------------------
+_reactant_rooted(x) = nameof(Base.moduleroot(parentmodule(typeof(x)))) === :Reactant
+_is_traced(u, p, t) = _reactant_rooted(u) || _reactant_rooted(t)
+
+# Does this compiled IR read a live forcing buffer anywhere? A `_VK_INVARIANT`
+# carries a scalar `_Node` in its payload, so the scalar side is walked too — a
+# forcing read hoisted into the scalar prelude is still a forcing read.
+_vec_has_pgather(n::_VecNode) =
+    n.kind === _VK_PGATHER ||
+    (n.kind === _VK_INVARIANT && n.payload isa _Node && _scalar_has_pgather(n.payload)) ||
+    any(_vec_has_pgather, n.children)
+
+_scalar_has_pgather(n::_Node) =
+    n.kind === _NK_PARAM_GATHER || any(_scalar_has_pgather, n.children)
+
+function _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
+    any(_scalar_has_pgather, cse_prelude) && return true
+    any(((_, node),) -> _scalar_has_pgather(node), rhs_list) && return true
+    any(_vec_has_pgather, vec_prelude) && return true
+    any(vk -> _vec_has_pgather(vk.template), vec_kernels)
+end
+
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        vec_prelude::AbstractVector{_VecNode},
@@ -605,7 +651,20 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        n_states::Int)
     n_cse = length(cse_prelude)
     n_vec = length(vec_prelude)
+    live_forcing = _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
     function f(u, p, t)
+        if live_forcing && _is_traced(u, p, t)
+            throw(TreeWalkError("E_TREEWALK_XLA_LIVE_FORCING",
+                "This model binds a live forcing buffer through `param_arrays`, and " *
+                "an XLA/Reactant tracer cannot honour it: the buffer is an aliased " *
+                "host array, which the tracer captures as a CONSTANT. `@compile` would " *
+                "bake in its compile-time contents and then silently ignore every " *
+                "in-place refresh a data-refresh callback performs — the same numbers " *
+                "forever, with no exception and no NaN. Either drop `param_arrays` and " *
+                "pass the forcing data as `const_arrays` (frozen, inlined — correct if " *
+                "the data never changes), or run the interpreted evaluator, which does " *
+                "track the refresh."))
+        end
         T = _oop_value_type(u, p, t)
         cache = Vector{T}(undef, n_cse)
         @inbounds for s in 1:n_cse

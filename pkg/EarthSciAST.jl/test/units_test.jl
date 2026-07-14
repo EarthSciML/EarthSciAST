@@ -61,6 +61,258 @@ using Unitful
         @test dimension(dobson) == Unitful.𝐋^-2
     end
 
+    # -----------------------------------------------------------------------
+    # esm-spec §4.8: the cross-binding units contract. The registry (§4.8.1),
+    # the grammar (§4.8.2) and the severity rules (§4.8.4) are pinned HERE
+    # because the audit's lesson was that unwritten policy is what let five
+    # bindings silently diverge.
+    # -----------------------------------------------------------------------
+    @testset "esm-spec §4.8.1 — the flat unit registry" begin
+        P = EarthSciAST.parse_units
+
+        # Every registry symbol resolves.
+        for u in ("m", "kg", "s", "mol", "K", "A", "cd", "rad",
+                  "g", "mg", "ug", "dm", "cm", "mm", "um", "nm", "km",
+                  "ms", "us", "ns", "min", "h", "hr", "day", "yr", "year",
+                  "L", "l", "mL", "kmol", "mmol", "umol", "nmol", "M",
+                  "Hz", "N", "Pa", "J", "kJ", "cal", "kcal", "W", "kW", "MW",
+                  "atm", "bar", "hPa", "kPa", "mbar", "Torr", "mmHg", "psi",
+                  "erg", "BTU", "Wh", "kWh", "C", "V", "Ohm", "F", "T",
+                  "degC", "degF", "deg", "ppm", "ppb", "ppt", "ppmv", "ppbv",
+                  "pptv", "molec", "individuals", "vehicles", "units", "count",
+                  "Dobson", "DU")
+            @test P(u) !== nothing
+        end
+
+        # `C` is the COULOMB, per SI — never Celsius. Binding it to Celsius
+        # injects a temperature dimension into every electromagnetic
+        # expression: charge × field would come out kg*m*K/(s^3*A), not a
+        # newton. This is the assertion that pins it.
+        @test dimension(P("C")) == dimension(u"A*s")
+        @test dimension(P("C") * P("V/m")) == dimension(u"N")
+        # Celsius has its own unambiguous spellings, and they are temperatures.
+        @test dimension(P("degC")) == Unitful.𝚯
+        @test dimension(P("°C")) == Unitful.𝚯
+
+        # `h` is the HOUR. In Unitful `u"h"` is PLANCK'S CONSTANT, which is why
+        # this registry does not delegate to `uparse`: `L/h` used to parse as
+        # litre-per-joule-second and made every pharmacokinetic fixture look
+        # dimensionally inconsistent.
+        @test dimension(P("h")) == Unitful.𝐓
+        @test dimension(P("L/h")) == Unitful.𝐋^3 / Unitful.𝐓
+
+        # Count nouns are dimensionless — they are REAL unit names in the
+        # corpus, and since an unresolvable unit is a hard error, omitting them
+        # would falsely REJECT well-formed files.
+        for u in ("individuals/km^2", "vehicles/km^2", "units/L")
+            @test P(u) !== nothing
+        end
+
+        # There is deliberately NO SI-prefix mechanism: a prefix rule would
+        # accept nonsense and make the legal unit set unbounded across five
+        # bindings.
+        @test P("kmolec") === nothing
+        @test P("nppb") === nothing
+    end
+
+    @testset "esm-spec §4.8.2 — the unit-string grammar" begin
+        P = EarthSciAST.parse_units
+
+        # Parentheses group a compound denominator. A parser without them reads
+        # `J/(mol*K)` as dimensionless and silently disables every check
+        # downstream of it.
+        @test dimension(P("J/(mol*K)")) == dimension(u"J" / (u"mol" * u"K"))
+        @test dimension(P("J/(mol*K)")) != Unitful.NoDims
+
+        # Division is LEFT-associative: "L/mol/s" is L·mol⁻¹·s⁻¹.
+        @test dimension(P("L/mol/s")) == dimension(u"L" / u"mol" / u"s")
+
+        # Whitespace between terms is MULTIPLICATION.
+        @test dimension(P("ppb^-1 s^-1")) == Unitful.𝐓^-1
+
+        # `**` is the Python/pint spelling of `^`.
+        @test dimension(P("Pa*m**3")) == dimension(u"Pa" * u"m"^3)
+
+        # RATIONAL exponents. `1/s^0.5` is the noise intensity of an SDE and is
+        # already in the corpus — a grammar restricted to integer exponents
+        # cannot express it, and under a hard-error severity that is a FALSE
+        # REJECTION of a well-formed file.
+        @test dimension(P("1/s^0.5")) == Unitful.𝐓^(-1//2)
+        @test dimension(P("m^(1/2)")) == Unitful.𝐋^(1//2)
+        @test dimension(P("m^1.5")) == Unitful.𝐋^(3//2)
+
+        # µ/μ normalise to u; °C to degC; Ω to Ohm.
+        @test dimension(P("μg/m^3")) == dimension(u"μg" / u"m"^3)
+        @test P("μmol/(m^2*s)") !== nothing
+        @test dimension(P("Ω")) == dimension(P("Ohm"))
+
+        # SUPERSCRIPT digits and the superscript minus are ordinary
+        # earth-science spelling, not exotica: `W/m²`, `cm³`, `m⁻³`.
+        @test dimension(P("W/m²")) == dimension(u"W" / u"m"^2)
+        @test dimension(P("cm³/molecule/s")) == dimension(u"cm"^3 / u"s")
+        @test dimension(P("m²/s")) == dimension(u"m"^2 / u"s")
+        @test dimension(P("kg/m³")) == dimension(u"kg" / u"m"^3)
+
+        # MIDDOT (U+00B7) and DOT OPERATOR (U+22C5) are multiplication.
+        @test dimension(P("J/(kg·K)")) == dimension(u"J" / (u"kg" * u"K"))
+        @test dimension(P("kg⋅m/s")) == dimension(u"kg" * u"m" / u"s")
+
+        # An AFFINE unit composes as its absolute counterpart: `"°C/min"` is a
+        # rate, and Unitful refuses arithmetic on °C itself. The offset is
+        # deliberately not modelled (§4.8.1) — but a STANDALONE `degC` keeps its
+        # identity, which is what makes `units="K"` / `default_units="degC"`
+        # catchable.
+        @test dimension(P("°C/min")) == Unitful.𝚯 / Unitful.𝐓
+        @test dimension(P("K/h")) == Unitful.𝚯 / Unitful.𝐓
+        @test P("degC") != P("K")
+
+        # Malformed strings do not parse.
+        for bad in ("m/", "m^", "(m", "m)", "m/s2", "not_a_unit", "1/time")
+            @test P(bad) === nothing
+        end
+    end
+
+    @testset "esm-spec §4.8.1 — registry rows the corpus actually uses" begin
+        P = EarthSciAST.parse_units
+        # Real units that a too-narrow registry would FALSELY REJECT. `psu` and
+        # `percent` are dimensionless by definition; `uatm` is the standard unit
+        # of seawater pCO2; `molecule` is the long form of `molec`.
+        @test dimension(P("%")) == Unitful.NoDims
+        @test dimension(P("percent")) == Unitful.NoDims
+        @test dimension(P("psu")) == Unitful.NoDims
+        @test dimension(P("uatm")) == dimension(u"atm")
+        @test dimension(P("molecule")) == Unitful.NoDims
+        @test dimension(P("cm^3/(molecule*s)")) == dimension(P("cm^3/(molec*s)"))
+        # Long-form aliases.
+        @test dimension(P("meters")) == Unitful.𝐋
+        @test dimension(P("meter")) == Unitful.𝐋
+        @test dimension(P("hour")) == Unitful.𝐓
+        @test dimension(P("Celsius")) == Unitful.𝚯
+        @test dimension(P("degrees")) == dimension(P("deg"))
+
+        # `Dobson`/`DU` is NOT dimensionless: one DU is a 10 µm column of pure
+        # O3 at STP — 2.6867e20 molec/m^2 — and `molec` is a dimensionless
+        # count, so the m^-2 is real.
+        @test dimension(P("DU")) == Unitful.𝐋^-2
+        @test dimension(P("Dobson")) == Unitful.𝐋^-2
+
+        # `d` is deliberately NOT a symbol: a bare `d` reads as a deci- prefix
+        # or a differential. The day is spelled `day`.
+        @test P("d") === nothing
+        @test dimension(P("day")) == Unitful.𝐓
+    end
+
+    @testset "esm-spec §4.8.3 — the three-way trig rule" begin
+        E = EarthSciAST.ASTExpr
+        D = EarthSciAST.get_expression_dimensions
+        F = EarthSciAST.expression_unit_findings
+        vu = Dict("theta" => "rad", "ratio" => "1", "m" => "kg", "x" => "m", "y" => "m")
+
+        # CIRCULAR: accept an ANGLE or a dimensionless number, return
+        # dimensionless. A naive "transcendentals require a dimensionless
+        # argument" makes `cos(θ)` illegal under any registry that carries `rad`
+        # as an axis — and that rejects lib/solar.esm itself.
+        for op in ("sin", "cos", "tan")
+            @test isempty(F(OpExpr(op, E[VarExpr("theta")]), vu))       # angle OK
+            @test isempty(F(OpExpr(op, E[VarExpr("ratio")]), vu))       # plain number OK
+            @test !isempty(F(OpExpr(op, E[VarExpr("m")]), vu))          # sin(kg) still an ERROR
+            @test D(OpExpr(op, E[VarExpr("theta")]), vu) == Unitful.NoUnits
+        end
+
+        # INVERSE CIRCULAR: take a dimensionless ratio, RETURN an angle. This is
+        # what makes `solar_zenith_angle: "rad" = acos(cos_zenith)` check out.
+        for op in ("asin", "acos", "atan")
+            @test isempty(F(OpExpr(op, E[VarExpr("ratio")]), vu))
+            @test !isempty(F(OpExpr(op, E[VarExpr("m")]), vu))
+            @test dimension(D(OpExpr(op, E[VarExpr("ratio")]), vu)) == dimension(u"rad")
+        end
+        # atan2(y, x): operands commensurate, result an angle.
+        @test isempty(F(OpExpr("atan2", E[VarExpr("x"), VarExpr("y")]), vu))
+        @test !isempty(F(OpExpr("atan2", E[VarExpr("x"), VarExpr("m")]), vu))
+
+        # The STRICT dimensionless-argument set is the remaining transcendentals.
+        for op in ("ln", "log", "log10", "exp", "sinh", "cosh", "tanh",
+                   "asinh", "acosh", "atanh")
+            @test !isempty(F(OpExpr(op, E[VarExpr("m")]), vu))
+            @test isempty(F(OpExpr(op, E[VarExpr("ratio")]), vu))
+        end
+        # An ANGLE is not a licence for the strict set: rad is dimensionless
+        # here, so `exp(theta)` is fine, but `exp(kg)` is not — covered above.
+
+        # `sqrt` HALVES a dimension; it is NOT in the transcendental set.
+        sq = D(OpExpr("sqrt", E[OpExpr("^", E[VarExpr("x"), IntExpr(2)])]), vu)
+        @test sq !== nothing && dimension(sq) == Unitful.𝐋
+        @test isempty(F(OpExpr("sqrt", E[VarExpr("m")]), vu))
+    end
+
+    @testset "esm-spec §4.8.4 — severity: the four fabrications" begin
+        E = EarthSciAST.ASTExpr
+        D = EarthSciAST.get_expression_dimensions
+        var_units = Dict("y" => "kg", "x" => "m", "alpha" => "", "t" => "s")
+
+        # FABRICATION 1 — a bare numeric literal is INDETERMINATE, not
+        # dimensionless. Reading `0` as dimensionless made `D(y[kg]) = 0` — the
+        # ordinary way to hold y constant — look provably inconsistent.
+        @test D(NumExpr(0.0), var_units) === nothing
+        eq = Equation(OpExpr("D", E[VarExpr("y")]; wrt="t"), NumExpr(0.0))
+        @test isempty(EarthSciAST.equation_unit_findings(eq, Dict("y" => "kg")))
+
+        # ...but an ALL-literal sum really is a pure number, and a literal in
+        # ADDITIVE position is dimension-NEUTRAL (it adopts its sibling's unit).
+        @test D(OpExpr("+", E[NumExpr(1.0), NumExpr(2.0)]), var_units) == Unitful.NoUnits
+        tk = D(OpExpr("-", E[VarExpr("x"), NumExpr(273.15)]), var_units)
+        @test tk !== nothing && dimension(tk) == Unitful.𝐋
+
+        # FABRICATION 2 — a product with an INDETERMINATE factor is
+        # indeterminate, not the product of the factors it could resolve.
+        @test D(OpExpr("*", E[VarExpr("x"), NumExpr(1.23)]), var_units) === nothing
+        @test D(OpExpr("*", E[VarExpr("x"), VarExpr("undeclared")]), var_units) === nothing
+
+        # FABRICATION 3 — a derivative w.r.t. an UNDECLARED `t` is
+        # indeterminate. Defaulting to seconds manufactures `1/s` against `1`
+        # in every nondimensionalized model.
+        @test D(OpExpr("D", E[VarExpr("y")]; wrt="t"), Dict("y" => "kg")) === nothing
+        # When `t` IS declared, the derivative is determinable.
+        dy = D(OpExpr("D", E[VarExpr("y")]; wrt="t"), Dict("y" => "kg", "t" => "s"))
+        @test dy !== nothing && dimension(dy) == Unitful.𝐌 / Unitful.𝐓
+
+        # FABRICATION 4 — a SYMBOLIC exponent is indeterminate on a dimensional
+        # base (the result depends on alpha's runtime value); a LITERAL one is
+        # determinable, which is what makes `^` computable at all.
+        @test D(OpExpr("^", E[VarExpr("x"), VarExpr("alpha")]), var_units) === nothing
+        x2 = D(OpExpr("^", E[VarExpr("x"), IntExpr(2)]), var_units)
+        @test x2 !== nothing && dimension(x2) == Unitful.𝐋^2
+        # A dimensionless base stays dimensionless under any exponent.
+        @test D(OpExpr("^", E[VarExpr("alpha"), VarExpr("alpha")]), var_units) == Unitful.NoUnits
+    end
+
+    @testset "esm-spec §4.8.3/§4.8.4 — provable errors stay hard" begin
+        E = EarthSciAST.ASTExpr
+        F = EarthSciAST.expression_unit_findings
+        var_units = Dict("x" => "m", "z" => "kg", "V" => "m^3", "V0" => "m^3")
+
+        # A transcendental on a DIMENSIONAL argument is a provable mismatch —
+        # not a warning, and not a silent pass. The physics is always written
+        # against a reference: n*R*log(V/V0), never log(V).
+        @test !isempty(F(OpExpr("log", E[VarExpr("V")]), var_units))
+        @test isempty(F(OpExpr("log",
+            E[OpExpr("/", E[VarExpr("V"), VarExpr("V0")])]), var_units))
+        @test !isempty(F(OpExpr("exp", E[VarExpr("z")]), var_units))
+
+        # Adding metres to kilograms; a dimensional exponent.
+        @test !isempty(F(OpExpr("+", E[VarExpr("x"), VarExpr("z")]), var_units))
+        @test !isempty(F(OpExpr("^", E[VarExpr("x"), VarExpr("z")]), var_units))
+
+        # An op with NO dimensional rule is UNDETERMINABLE — never
+        # dimensionless. Reporting it as dimensionless would poison every
+        # equation containing a structural op.
+        for op in ("aggregate", "index", "fn", "table_lookup")
+            @test EarthSciAST.get_expression_dimensions(
+                OpExpr(op, E[VarExpr("x")]), var_units) === nothing
+            @test isempty(F(OpExpr(op, E[VarExpr("x")]), var_units))
+        end
+    end
+
     @testset "Expression Dimensions" begin
         # Test get_expression_dimensions function
 
@@ -73,10 +325,14 @@ using Unitful
             "area" => "m^2"
         )
 
-        # Test NumExpr (dimensionless)
+        # A bare numeric literal is INDETERMINATE, not dimensionless (esm-spec
+        # §4.8.4). Nothing in the AST says whether `5.0` is a pure number or a
+        # rate constant carrying implicit units; under a hard-error severity,
+        # guessing "dimensionless" manufactures false mismatches — `D(y) = 0`
+        # with y in kg is the ordinary way to hold y constant, not an error.
         num_expr = NumExpr(5.0)
         dims = EarthSciAST.get_expression_dimensions(num_expr, var_units)
-        @test dims == Unitful.NoUnits
+        @test dims === nothing
 
         # Test VarExpr
         var_expr_x = VarExpr("x")

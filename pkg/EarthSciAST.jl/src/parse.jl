@@ -575,6 +575,10 @@ function coerce_esm_file(data::Any)::EsmFile
         end
     end
 
+    # NOTE: the top-level `expression_templates` / `metaparameters` DECLARATIONS
+    # are not read here. By this point the lowering has rewritten and stripped
+    # them; `_lower_and_coerce` snapshots them verbatim off the RAW document and
+    # attaches them to the returned `EsmFile` (§9.6.4 rule 5).
     file = EsmFile(esm, metadata,
                   models=models,
                   reaction_systems=reaction_systems,
@@ -1092,8 +1096,16 @@ function coerce_discrete_event(data::Any)::DiscreteEvent
     functional_affect = _maybe(_to_native_json, _get_field(data, :functional_affect, nothing))
 
     description = _opt_string(data, :description)
+
+    # Discrete parameters (MTK `discrete_parameters`): names the event mutates
+    # as parameters rather than states. Kept on the event so `validate` can
+    # check each names a declared parameter, and so serialize round-trips it.
+    discrete_parameters = _maybe(Vector{String},
+                                 _get_field(data, :discrete_parameters, nothing))
+
     return DiscreteEvent(trigger, affects, description=description,
-                         functional_affect=functional_affect)
+                         functional_affect=functional_affect,
+                         discrete_parameters=discrete_parameters)
 end
 
 # Convert a schema AffectEquation JSON object ({lhs, rhs}) into the Julia
@@ -1588,7 +1600,9 @@ function coerce_domain(data::Any)::Domain
     temporal = _maybe(get(data, :temporal, nothing)) do t
         Dict{String,Any}(string(k) => v for (k, v) in pairs(t))
     end
-    return Domain(temporal=temporal)
+    iv = get(data, :independent_variable, nothing)
+    return Domain(independent_variable = iv === nothing ? "t" : string(iv),
+                  temporal = temporal)
 end
 
 """
@@ -1827,6 +1841,15 @@ discretization.
 function _lower_and_coerce(raw_data, base_path::AbstractString;
                            metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                            injected_imports::AbstractVector=Any[])::EsmFile
+    # Snapshot the top-level DECLARATIONS verbatim, BEFORE any lowering touches
+    # them. Option A expands call sites; it does not delete declarations (esm-spec
+    # §9.6.4 rule 5), and a pure template library must round-trip to itself — but
+    # the lowering below rewrites these blocks in place (bodies composed,
+    # metaparameters folded away) and then strips them, so the snapshot has to be
+    # taken here, off the raw document, or the emitted registry is a mangled one.
+    raw_templates = _verbatim_decl(raw_data, :expression_templates)
+    raw_metaparams = _verbatim_decl(raw_data, :metaparameters)
+
     injected_root = apply_scope_injections(raw_data, injected_imports)
     machinery_input = injected_root === nothing ? raw_data : injected_root
     resolved = resolve_template_machinery(machinery_input, String(base_path);
@@ -1839,8 +1862,40 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
         # the JSON3-compatible property surface.
         expanded = JSONLikeDict(_to_dict(expanded))
     end
-    return coerce_esm_file(expanded)
+    file = coerce_esm_file(expanded)
+    return _with_declarations(file, raw_templates, raw_metaparams)
 end
+
+# A deep, plain-`Dict` copy of a top-level declaration block, or `nothing`.
+# Plain `Dict`/`Vector`/scalars only — a JSON3 view or a `JSONLikeDict` would
+# carry a custom type into `serialize_esm_file`, and the schema validator rejects
+# what it cannot recognize as a JSON object.
+function _verbatim_decl(raw_data, key::Symbol)
+    v = _get_field(raw_data, key, nothing)
+    v === nothing && return nothing
+    d = _to_dict(v)
+    d isa AbstractDict || return nothing
+    return Dict{String,Any}(string(k) => _plain_json(val) for (k, val) in pairs(d))
+end
+
+_plain_json(x::AbstractDict) = Dict{String,Any}(string(k) => _plain_json(v) for (k, v) in pairs(x))
+_plain_json(x::AbstractVector) = Any[_plain_json(v) for v in x]
+_plain_json(x) = x
+
+# Rebuild `file` carrying the verbatim declaration blocks. `EsmFile` is immutable.
+_with_declarations(file::EsmFile, templates, metaparams) =
+    (templates === nothing && metaparams === nothing) ? file :
+    EsmFile(file.esm, file.metadata;
+            models=file.models,
+            reaction_systems=file.reaction_systems,
+            data_loaders=file.data_loaders,
+            coupling=file.coupling,
+            domain=file.domain,
+            enums=file.enums,
+            function_tables=file.function_tables,
+            index_sets=file.index_sets,
+            expression_templates=templates,
+            metaparameters=metaparams)
 
 # ========================================
 # Top-level model {ref} resolution (schema §4.7: models.* = oneOf [Model, {ref}])
@@ -2181,10 +2236,36 @@ Exception thrown when subsystem reference resolution fails.
 """
 struct SubsystemRefError <: Exception
     message::String
+    # The MACHINE-READABLE half (finding (f)). A subsystem ref that does not
+    # resolve is a validation finding with a canonical code, a document pointer
+    # and `details` — the corpus pins `unresolved_subsystem_ref` /
+    # `ambiguous_subsystem_ref` at `/models/<M>/subsystems/<S>` — not merely a
+    # thrown string. Load still THROWS (a document with an unresolvable mount
+    # cannot be built), but the throw now carries everything `validate` needs to
+    # render the pinned structural error instead of a bare message.
+    #
+    # The deep site knows the `ref` and the code; only the caller knows which
+    # subsystem of which model it was mounting, so it enriches on the way out.
+    code::String
+    ref::String
+    subsystem::String
+    parent_model::String
+
+    SubsystemRefError(message::AbstractString; code::AbstractString="unresolved_subsystem_ref",
+                      ref::AbstractString="", subsystem::AbstractString="",
+                      parent_model::AbstractString="") =
+        new(String(message), String(code), String(ref), String(subsystem), String(parent_model))
 end
 
 Base.showerror(io::IO, e::SubsystemRefError) =
     print(io, "SubsystemRefError: ", e.message)
+
+# Re-throw `e` with the mount site filled in. The resolver raises from deep
+# inside `_load_ref`, where the parent model and subsystem key are not known.
+_with_mount_site(e::SubsystemRefError, subsystem::AbstractString, parent_model::AbstractString) =
+    SubsystemRefError(e.message; code=e.code, ref=e.ref,
+                      subsystem = isempty(e.subsystem) ? subsystem : e.subsystem,
+                      parent_model = isempty(e.parent_model) ? parent_model : e.parent_model)
 
 """
     resolve_subsystem_refs!(file::EsmFile, base_path::String)
@@ -2250,8 +2331,18 @@ function _resolve_model_refs!(models_dict, name::String,
         if sub_value isa SubsystemRef
             # Replace the reference in place with the loaded component. The
             # loaded file's own refs are already resolved by `_load_ref`.
-            model.subsystems[sub_name] =
+            #
+            # The resolver raises from deep inside `_load_ref`, which knows the
+            # `ref` but not WHERE it was mounted. This is the only frame that
+            # knows both, so it stamps the mount site on the way out — that is
+            # what lets `validate` render the pinned pointer
+            # `/models/<parent>/subsystems/<sub>` (finding (f)).
+            model.subsystems[sub_name] = try
                 _resolve_subsystem_ref(sub_value, base_path, visited, registry)
+            catch e
+                e isa SubsystemRefError || rethrow()
+                throw(_with_mount_site(e, sub_name, name))
+            end
         else
             # Inline Model (recurse into its subsystems) or DataLoader (leaf).
             _resolve_model_refs!(model.subsystems, sub_name, sub_value, base_path,
@@ -2335,8 +2426,9 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
     total = n_models + n_loaders
     if total != 1
         throw(SubsystemRefError(
-            "Subsystem ref '$(ref.ref)' must resolve to exactly one top-level model " *
-            "or data loader, found $(total)"))
+            "Subsystem reference '$(ref.ref)' resolves to a file containing multiple " *
+            "top-level systems; exactly one is required";
+            code="ambiguous_subsystem_ref", ref=ref.ref))
     end
     # esm-spec §4.7: the mounted file's document-scoped index sets (already
     # metaparameter-folded, incl. any brought in by ITS own subsystem refs)
@@ -2548,7 +2640,9 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     resolved_path = abspath(joinpath(base_path, ref))
 
     if !isfile(resolved_path)
-        throw(SubsystemRefError("Referenced file not found: $(resolved_path) (from ref '$(ref)')"))
+        throw(SubsystemRefError(
+            "Subsystem reference '$(ref)' could not be resolved — file does not exist";
+            code="unresolved_subsystem_ref", ref=ref))
     end
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library

@@ -230,13 +230,18 @@ const TOL = 1e-14   # see the header: XLA reassociates and fuses FMAs.
         @test_throws Exception (@compile sync = true fo(ur, pr, RX.ConcreteRNumber(0.0)))
     end
 
-    @testset "a live forcing buffer goes SILENTLY STALE (known bug)" begin
-        # THE ONE THAT DOES NOT FAIL LOUDLY. `wind` is bound by reference through
+    @testset "a live forcing buffer REFUSES to be XLA-compiled (audit J5)" begin
+        # THE ONE THAT USED NOT TO FAIL LOUDLY. `wind` is bound by reference through
         # `param_arrays`; the RHS reads it through `_VK_PGATHER`, whose payload is the
-        # aliased host `Vector{Float64}`. To the tracer that is a constant, so XLA bakes
+        # aliased host `Vector{Float64}`. To the tracer that is a constant, so XLA baked
         # in the buffer's COMPILE-TIME contents. The discrete-cadence refresh callback
-        # then writes the buffer in place — exactly as `build_refresh_callback` does at
-        # every cadence boundary — and the compiled program does not see one bit of it.
+        # then wrote the buffer in place — exactly as `build_refresh_callback` does at
+        # every cadence boundary — and the compiled program did not see one bit of it:
+        # not an exception, not a NaN, but the SAME NUMBERS FOREVER, off by the full
+        # magnitude of the forcing update.
+        #
+        # A silently wrong answer is worse than no answer, so the out-of-place closure
+        # now REFUSES the trace when a live forcing buffer is bound.
         N = 8
         wind = fill(1.0, N)
         fi, _, p, _, _ = ESM.build_evaluator(_forced(N); param_arrays = Dict("wind" => wind))
@@ -245,22 +250,41 @@ const TOL = 1e-14   # see the header: XLA reassociates and fuses FMAs.
         u = _seed(N)
         ur, pr, tr = RX.ConcreteRArray(u), _dev(p), RX.ConcreteRNumber(0.0)
 
-        xla = @compile sync = true fo(ur, pr, tr)
-        before = Array(xla(ur, pr, tr))
-        @test isapprox(before, _ip(fi, u, p, 0.0); rtol = TOL, atol = 1e-15)
+        # The refusal fires during the TRACE, so `@compile` itself throws.
+        @test_throws Exception (@compile sync = true fo(ur, pr, tr))
 
+        # And it says WHY, and how to proceed.
+        err = try
+            @compile sync = true fo(ur, pr, tr)
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing
+        @test occursin("param_arrays", sprint(showerror, err))
+        @test occursin("const_arrays", sprint(showerror, err))
+
+        # The refusal is scoped to the TRACER, not to the model: the interpreted
+        # evaluators over the very same `param_arrays` build are correct and DO track
+        # an in-place refresh. That is why the refusal cannot live at build time.
+        before = _ip(fi, u, p, 0.0)
         wind .= 100.0                       # the in-place refresh, verbatim
-        after = Array(xla(ur, pr, tr))
         fresh = _ip(fi, u, p, 0.0)          # `f!` sees it; that is the whole design
-
-        # The interpreted evaluators track the refresh. Both of them.
-        @test isapprox(fresh, _ip(fi, u, p, 0.0); rtol = 0)
-        @test isapprox(fo(u, p, 0.0), fresh; rtol = TOL)
+        @test isapprox(fo(u, p, 0.0), fresh; rtol = TOL)   # ...and so does the oop one
         @test maximum(abs, fresh .- before) ≈ 99.0 rtol = 1e-12   # it really did change
+    end
 
-        # And the compiled one does not. THIS IS THE BUG: not an exception, not a NaN —
-        # the identical output it produced before the refresh, off by the full 99.0.
-        @test after == before                # <- the staleness, asserted positively
-        @test_broken isapprox(after, fresh; rtol = TOL, atol = 1e-15)
+    @testset "a model with NO live forcing still compiles (J5 refusal is scoped)" begin
+        # The guard must not cost the ordinary XLA path anything: a model that binds no
+        # `param_arrays` traces and compiles exactly as before.
+        N = 8
+        fo, _, p, _, _ = ESM.build_evaluator(_forced(N); form = :oop,
+                                             const_arrays = Dict("wind" => fill(1.0, N)))
+        fi, _, _, _, _ = ESM.build_evaluator(_forced(N);
+                                             const_arrays = Dict("wind" => fill(1.0, N)))
+        u = _seed(N)
+        ur, pr, tr = RX.ConcreteRArray(u), _dev(p), RX.ConcreteRNumber(0.0)
+        xla = @compile sync = true fo(ur, pr, tr)
+        @test isapprox(Array(xla(ur, pr, tr)), _ip(fi, u, p, 0.0); rtol = TOL, atol = 1e-15)
     end
 end
