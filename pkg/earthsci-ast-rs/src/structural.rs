@@ -43,20 +43,39 @@ pub(crate) fn validate_model(
         // This validation would be added once the types are updated to match the spec
     }
 
+    // esm-spec §4.9.1: three classes of symbol are in scope WITHOUT appearing in
+    // the `variables` map, and none of them is an `undefined_variable`. Adding
+    // them to the in-scope set here is what lets every reference check below —
+    // equations, observed expressions, event conditions and event affects —
+    // resolve them uniformly.
+    defined_vars.extend(implicitly_declared_symbols(esm_file));
+
     // Scoped references this model's equations may use that are NOT top-level
     // systems: the `<sub>.<var>` fields of each DataLoader mounted as a
     // subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
     let local_scoped = loader_subsystem_scoped_refs(model);
 
-    // Check equation-unknown balance
-    let ode_equations = count_ode_equations(&model.equations);
-    if ode_equations != state_vars.len() {
+    // Check the equation/unknown balance (esm-spec §4.9.4).
+    //
+    // The check is UNKNOWNS vs EQUATIONS — not "state variables vs
+    // time-derivative equations". An equation is credited whichever form its LHS
+    // takes: a derivative (`D(x)/dt ~ …`), a bare variable (`x ~ …`, an
+    // algebraic/observed equation), or an EXPRESSION (`H*H*SO4 ~ Ksp`, an
+    // implicit algebraic constraint). Crediting only a bare-variable derivative
+    // LHS undercounts every algebraic equation, which is why a
+    // `system_kind: "nonlinear"` equilibrium model — no time derivative anywhere
+    // — was reported as "0 ODE equations, 2 state variables" and rejected.
+    //
+    // `initialization_equations` (§6.2) are a separate block with a separate
+    // balance and are deliberately NOT counted here.
+    let defining_equations = count_defining_equations(&model.equations);
+    if defining_equations != state_vars.len() {
         let (extra_equations_for, missing_equations_for) =
             analyze_equation_mismatch(&model.equations, &state_vars);
 
         let mut details = serde_json::json!({
             "state_variables": state_vars,
-            "ode_equations": ode_equations
+            "equations": defining_equations,
         });
 
         if !missing_equations_for.is_empty() {
@@ -70,8 +89,8 @@ pub(crate) fn validate_model(
             path: model_path.clone(),
             code: StructuralErrorCode::EquationCountMismatch,
             message: format!(
-                "Number of ODE equations ({}) does not match number of state variables ({})",
-                ode_equations,
+                "Number of equations ({}) does not match number of unknowns ({})",
+                defining_equations,
                 state_vars.len()
             ),
             details,
@@ -199,6 +218,113 @@ pub(crate) fn validate_model(
         for (event_idx, event) in continuous_events.iter().enumerate() {
             validate_continuous_event(event, event_idx, &model_path, &defined_vars, errors);
         }
+    }
+}
+
+/// The symbols that are in scope in every model's expressions WITHOUT appearing
+/// in its `variables` map (esm-spec §4.9.1). None of these is an
+/// `undefined_variable`, and each rule here exists because rejecting one of them
+/// rejected a conforming file in the shared corpus.
+///
+/// 1. **The independent variable** — `domain.independent_variable`, default
+///    `"t"`. Every time-dependent model may write `t`; an analytic forcing
+///    `A*sin(omega*t)` is the ordinary spelling. (Rust used to hardcode the
+///    literal `"t"` at one reference site, so a document that RENAMED its
+///    independent variable had every mention of it flagged, while `t` was
+///    accepted even in models that never declared a domain.)
+///
+/// 2. **Spatial coordinate names** — §11.4. A checker resolves as a coordinate
+///    any free symbol that is (i) a key of `index_sets`, (ii) the `dim` of a
+///    spatial differential operator (`grad`/`div`/`curl`/`laplacian`) anywhere
+///    in the document, or (iii) a free symbol in the RHS of an `ic` equation,
+///    which §11.4 *defines* to be a coordinate expression.
+///
+/// 3. **`_var`** — §6.4, the operator-model placeholder, legal wherever a state
+///    variable is legal (equation LHS/RHS, a continuous event's
+///    `affects`/`affect_neg`, a `functional_affect`'s `read_vars`).
+fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
+    let mut symbols = HashSet::new();
+
+    // (1) The independent variable, defaulting to `t`.
+    symbols.insert(independent_variable(esm_file));
+
+    // (3) The operator placeholder.
+    symbols.insert("_var".to_string());
+
+    // (2i) Every declared index set names a coordinate axis.
+    if let Some(index_sets) = &esm_file.index_sets {
+        symbols.extend(index_sets.keys().cloned());
+    }
+
+    // (2ii) + (2iii): walk every expression in the document once, collecting the
+    // `dim` of each spatial differential operator and the free symbols of each
+    // `ic` RHS. Both are document-scoped: a coordinate named by `grad(..., dim:
+    // "x")` in one model is the same axis `x` that another model's initial
+    // condition may reference.
+    if let Some(models) = &esm_file.models {
+        for model in models.values() {
+            for eq in &model.equations {
+                // An `ic` equation's RHS is a COORDINATE EXPRESSION (§11.4): its
+                // free symbols name spatial coordinates, e.g. an ignition front
+                // at `x < x0`.
+                if is_ic_equation(&eq.lhs) {
+                    collect_free_symbols(&eq.rhs, &mut symbols);
+                }
+                collect_coordinate_symbols(&eq.lhs, &mut symbols);
+                collect_coordinate_symbols(&eq.rhs, &mut symbols);
+            }
+            for var in model.variables.values() {
+                if let Some(expr) = &var.expression {
+                    collect_coordinate_symbols(expr, &mut symbols);
+                }
+            }
+        }
+    }
+
+    symbols
+}
+
+/// The document's independent variable — `domain.independent_variable`, or `t`.
+fn independent_variable(esm_file: &EsmFile) -> String {
+    esm_file
+        .domain
+        .as_ref()
+        .and_then(|d| d.independent_variable.clone())
+        .unwrap_or_else(|| "t".to_string())
+}
+
+/// True when this LHS marks an initial condition (`{"op": "ic", ...}`).
+fn is_ic_equation(lhs: &crate::Expr) -> bool {
+    matches!(lhs, crate::Expr::Operator(op) if op.op == "ic")
+}
+
+/// Collect the `dim` of every spatial differential operator in `expr`
+/// (esm-spec §4.9.1 (2ii)) — `grad`, `div`, `curl`, `laplacian`.
+fn collect_coordinate_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
+    if let crate::Expr::Operator(op) = expr {
+        if matches!(op.op.as_str(), "grad" | "div" | "curl" | "laplacian")
+            && let Some(dim) = &op.dim
+        {
+            out.insert(dim.clone());
+        }
+        op.for_each_child(&mut |child| collect_coordinate_symbols(child, out));
+    }
+}
+
+/// Collect every free symbol (bare variable reference) in `expr`.
+fn collect_free_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
+    match expr {
+        crate::Expr::Variable(name) => {
+            // A scoped reference names another system's variable, not a local
+            // coordinate.
+            if !name.contains('.') && !is_builtin_function(name) {
+                out.insert(name.clone());
+            }
+        }
+        crate::Expr::Operator(op) => {
+            op.for_each_child(&mut |child| collect_free_symbols(child, out));
+        }
+        crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
     }
 }
 
@@ -365,31 +491,66 @@ fn expr_references_name(expr: &crate::Expr, name: &str) -> bool {
     }
 }
 
-fn count_ode_equations(equations: &[crate::Equation]) -> usize {
-    equations.iter().filter(|eq| {
-        // Check if LHS is a time derivative (D operation with wrt="t")
-        matches!(&eq.lhs, crate::Expr::Operator(op) if op.op == "D" && op.wrt.as_deref() == Some("t"))
-    }).count()
+/// Count the equations that DEFINE the model's unknowns (esm-spec §4.9.4).
+///
+/// Every equation is credited regardless of the form of its LHS — a derivative
+/// (`D(x)/dt ~ …`), a bare variable (`x ~ …`), or an expression (`H*H*SO4 ~
+/// Ksp`) — because the balance is unknowns vs equations, and an algebraic
+/// constraint is just as much an equation as an ODE.
+///
+/// The one exclusion is an `ic` equation: an initial condition CONSTRAINS a
+/// state at t₀, it does not define its evolution, so counting it would make
+/// every PDE with an initial condition look over-determined.
+fn count_defining_equations(equations: &[crate::Equation]) -> usize {
+    equations
+        .iter()
+        .filter(|eq| !is_ic_equation(&eq.lhs))
+        .count()
 }
 
+/// Attribute equations to unknowns, for the DETAIL payload of an
+/// `equation_count_mismatch` (esm-spec §4.9.4).
+///
+/// An equation is credited to an unknown whichever form its LHS takes:
+///
+/// * a derivative LHS — `D(x)/dt ~ …` credits `x`;
+/// * a bare-variable LHS — `x ~ …`, an algebraic/observed equation, credits `x`;
+/// * an EXPRESSION LHS — `H*H*SO4 ~ Ksp`, an implicit algebraic constraint —
+///   credits every state variable it mentions, since the constraint is what
+///   pins them jointly. (Crediting nothing here is what made the ISORROPIA
+///   equilibrium shape report both of its unknowns as "missing an equation".)
 fn analyze_equation_mismatch(
     equations: &[crate::Equation],
     state_vars: &[String],
 ) -> (Vec<String>, Vec<String>) {
+    let state_vars_set: HashSet<_> = state_vars.iter().cloned().collect();
     let mut lhs_vars = HashSet::new();
 
-    // Extract variables from LHS of ODE equations
     for equation in equations {
-        if let crate::Expr::Operator(op) = &equation.lhs
-            && op.op == "D"
-            && op.wrt.as_deref() == Some("t")
-            && let Some(crate::Expr::Variable(var_name)) = op.args.first()
-        {
-            lhs_vars.insert(var_name.clone());
+        if is_ic_equation(&equation.lhs) {
+            continue; // an initial condition defines nothing (see count above)
+        }
+        match &equation.lhs {
+            // Derivative LHS: `D(x)/dt ~ …`.
+            crate::Expr::Operator(op) if op.op == "D" => {
+                if let Some(crate::Expr::Variable(var_name)) = op.args.first() {
+                    lhs_vars.insert(var_name.clone());
+                }
+            }
+            // Bare-variable LHS: `x ~ …`.
+            crate::Expr::Variable(var_name) => {
+                lhs_vars.insert(var_name.clone());
+            }
+            // Expression LHS: an implicit constraint over whichever unknowns it
+            // names.
+            crate::Expr::Operator(_) => {
+                let mut free = HashSet::new();
+                collect_free_symbols(&equation.lhs, &mut free);
+                lhs_vars.extend(free.intersection(&state_vars_set).cloned());
+            }
+            crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
         }
     }
-
-    let state_vars_set: HashSet<_> = state_vars.iter().cloned().collect();
 
     let extra_equations_for: Vec<_> = lhs_vars.difference(&state_vars_set).cloned().collect();
     let missing_equations_for: Vec<_> = state_vars_set.difference(&lhs_vars).cloned().collect();
@@ -400,7 +561,7 @@ fn analyze_equation_mismatch(
 pub(crate) fn validate_reaction_system(
     rs_name: &str,
     rs: &crate::ReactionSystem,
-    _system_refs: &HashMap<String, SystemInfo>,
+    system_refs: &HashMap<String, SystemInfo>,
     errors: &mut Vec<StructuralError>,
 ) {
     let rs_path = format!("/reaction_systems/{rs_name}");
@@ -479,6 +640,7 @@ pub(crate) fn validate_reaction_system(
         validate_rate_expression(
             &reaction.rate,
             &defined_parameters,
+            system_refs,
             &rxn_path,
             reaction_label,
             errors,
@@ -806,12 +968,42 @@ fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
 fn validate_rate_expression(
     rate: &crate::Expr,
     defined_parameters: &HashSet<String>,
+    system_refs: &HashMap<String, SystemInfo>,
     reaction_path: &str,
     reaction_id: &str,
     errors: &mut Vec<StructuralError>,
 ) {
     match rate {
         crate::Expr::Variable(var_name) => {
+            // esm-spec §4.9.3: a reaction RATE MAY contain SCOPED REFERENCES. A
+            // rate that depends on a coupled system's temperature or photolysis
+            // rate (`MeteorologicalSystem.solar_intensity`) is ordinary
+            // atmospheric chemistry. Resolving a rate's free symbols against the
+            // LOCAL reaction system's parameters only — and reporting
+            // `undefined_parameter` for anything dotted — is wrong.
+            if var_name.contains('.') {
+                // Arbitrary depth (§4.9.2): the NAME is the last segment.
+                let resolved = var_name.rsplit_once('.').is_some_and(|(sys, name)| {
+                    system_refs.get(sys).is_some_and(|s| {
+                        s.variables.contains(name)
+                            || s.species.contains(name)
+                            || s.parameters.contains(name)
+                    })
+                });
+                if !resolved {
+                    errors.push(StructuralError {
+                        path: reaction_path.to_string(),
+                        code: StructuralErrorCode::UnresolvedScopedRef,
+                        message: format!("Scoped reference '{var_name}' cannot be resolved"),
+                        details: serde_json::json!({
+                            "reference": var_name,
+                            "reaction_id": reaction_id,
+                        }),
+                    });
+                }
+                return;
+            }
+
             if !defined_parameters.contains(var_name) {
                 errors.push(StructuralError {
                     path: reaction_path.to_string(),
@@ -838,6 +1030,7 @@ fn validate_rate_expression(
                     validate_rate_expression(
                         arg,
                         defined_parameters,
+                        system_refs,
                         reaction_path,
                         reaction_id,
                         errors,
@@ -847,7 +1040,14 @@ fn validate_rate_expression(
                 let mut scope = defined_parameters.clone();
                 scope.extend(bound);
                 op_node.for_each_child(&mut |arg| {
-                    validate_rate_expression(arg, &scope, reaction_path, reaction_id, errors)
+                    validate_rate_expression(
+                        arg,
+                        &scope,
+                        system_refs,
+                        reaction_path,
+                        reaction_id,
+                        errors,
+                    )
                 });
             }
         }
@@ -889,8 +1089,11 @@ pub(crate) fn validate_expression_references_with_systems(
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
-            // Skip derivatives, time variable, and built-in functions
-            if var_name.starts_with("d(") || var_name == "t" || is_builtin_function(var_name) {
+            // Skip derivatives and built-in functions. The independent variable
+            // (`t`), the spatial coordinates and `_var` are NOT special-cased
+            // here: they are seeded into `defined_vars` as implicitly-declared
+            // symbols (esm-spec §4.9.1), so they resolve like any other name.
+            if var_name.starts_with("d(") || is_builtin_function(var_name) {
                 return; // These are always valid
             }
 
@@ -902,11 +1105,19 @@ pub(crate) fn validate_expression_references_with_systems(
                 return;
             }
 
-            // Check for scoped references (e.g., "ModelA.x")
-            if let Some(dot_pos) = var_name.find('.') {
-                let system_name = &var_name[..dot_pos];
-                let var_suffix = &var_name[dot_pos + 1..];
-
+            // A scoped reference is a dot path of ARBITRARY DEPTH (esm-spec
+            // §4.9.2): `A.B.c` walks A → B and takes `c` from it. So the NAME is
+            // the LAST segment and the SYSTEM is everything before it —
+            // splitting on the FIRST dot and treating segment [1] as the
+            // variable turned every three-or-more-segment reference in the
+            // corpus into a spurious `unresolved_scoped_ref` (reporting
+            // `Meteorology.Temperature.surface_temp` as "variable
+            // `Temperature.surface_temp` not found in system `Meteorology`").
+            //
+            // `build_system_reference_map` registers each nested subsystem under
+            // its full dotted path, so the walk is a single lookup of the
+            // prefix.
+            if let Some((system_name, var_suffix)) = var_name.rsplit_once('.') {
                 // Validate scoped reference
                 if let Some(system) = system_refs.get(system_name) {
                     let var_exists = system.variables.contains(var_suffix)

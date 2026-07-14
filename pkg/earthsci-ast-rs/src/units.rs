@@ -513,10 +513,11 @@ fn propagate_operator_dim(
             if !require_arity(op, 2, findings) {
                 return Dim::Unknown;
             }
-            // Both arguments must share dimensions (their ratio is the angle);
-            // the result is dimensionless.
+            // Both arguments must share dimensions (their RATIO is what is fed
+            // to the arctangent). The result is an ANGLE — `atan2(y, x)` is the
+            // canonical spelling of a bearing.
             propagate_matching_dim(op, env, coords, findings);
-            Dim::Known(Unit::dimensionless())
+            Dim::Known(radian())
         }
         "ifelse" => propagate_ifelse_dim(op, env, coords, findings),
         ">" | "<" | ">=" | "<=" | "==" | "!=" => {
@@ -828,11 +829,36 @@ fn propagate_transcendental_dim(
     coords: Option<&HashMap<String, Unit>>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
+    // `rad` is a real axis here, so the circular functions are NOT symmetric —
+    // and getting this wrong is silently destructive in both directions:
+    //
+    // * FORWARD circular (`sin`/`cos`/`tan`) map an ANGLE to a ratio: they
+    //   accept an angle OR a dimensionless argument, and return DIMENSIONLESS.
+    //   (`sin(kg)` is still an error.)
+    // * INVERSE circular (`asin`/`acos`/`atan`) map a ratio to an ANGLE: they
+    //   require a DIMENSIONLESS argument and RETURN AN ANGLE. Asserting a
+    //   dimensionless result while `rad` is an axis makes every
+    //   `zenith: "rad"` computed by `acos(...)` a guaranteed false mismatch.
+    // * The HYPERBOLIC family takes and returns pure numbers — a hyperbolic
+    //   "angle" is an area, not a plane angle, so `rad` is not involved.
+    // * `exp`/`log` demand strict dimensionlessness: their Taylor series adds
+    //   powers of the argument.
+    let is_inverse_circular = matches!(op.op.as_str(), "asin" | "acos" | "atan");
+    let result = if is_inverse_circular {
+        radian()
+    } else {
+        Unit::dimensionless()
+    };
+
     if !require_arity(op, 1, findings) {
-        // The result is dimensionless whatever the argument turns out to be.
-        return Dim::Known(Unit::dimensionless());
+        // The result is fixed by the operator whatever the argument turns out
+        // to be.
+        return Dim::Known(result);
     }
-    let angle_ok = !matches!(op.op.as_str(), "exp" | "log" | "log10" | "ln");
+
+    // Only the forward circular functions accept an angle.
+    let angle_ok = matches!(op.op.as_str(), "sin" | "cos" | "tan");
+
     let arg = propagate_dim(&op.args[0], env, coords, findings);
     if let Some(u) = arg.known() {
         let acceptable = if angle_ok {
@@ -849,8 +875,13 @@ fn propagate_transcendental_dim(
             )));
         }
     }
-    // Dimensionless by definition, even when the argument was undeterminable.
-    Dim::Known(Unit::dimensionless())
+    Dim::Known(result)
+}
+
+/// The radian — the unit of the `Angle` axis, returned by the inverse circular
+/// functions.
+fn radian() -> Unit {
+    Unit::base(Dimension::Angle, 1, 1.0)
 }
 
 /// Square root HALVES its argument's dimensions — it is not a transcendental
@@ -1547,6 +1578,9 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("hr".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
     units.insert("hour".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
     units.insert("day".to_string(), Unit::base(Dimension::Time, 1, 86400.0));
+    // `d` is the DAY, not the deci- prefix: the registry is consulted before
+    // prefix decomposition, and `lib/calendar.esm` declares `units: "d"`.
+    units.insert("d".to_string(), Unit::base(Dimension::Time, 1, 86400.0));
 
     // Mass units
     units.insert("kg".to_string(), Unit::base(Dimension::Mass, 1, 1.0));

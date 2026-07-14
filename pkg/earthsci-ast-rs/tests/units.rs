@@ -417,3 +417,91 @@ fn units_registry_grammar_discriminators() {
     dim_eq("psu", "dimensionless");
     dim_eq("degrees", "rad");
 }
+
+/// The superscript digits are NOT one contiguous Unicode block: `¹` (U+00B9),
+/// `²` (U+00B2) and `³` (U+00B3) live in Latin-1 Supplement, while `⁰` and
+/// `⁴`–`⁹` live in Superscripts and Subscripts (U+2070…). A character-class
+/// range like `[⁰-⁹]` therefore silently drops exactly the three exponents that
+/// actually occur in real unit strings — `m²`, `cm³`, `W/m²` — while passing a
+/// unit test written against `⁴`. All ten are enumerated, plus superscript
+/// minus `⁻` (U+207B).
+#[test]
+fn every_superscript_digit_normalizes() {
+    for (sup, ascii) in [
+        ("⁰", "0"),
+        ("¹", "1"),
+        ("²", "2"),
+        ("³", "3"),
+        ("⁴", "4"),
+        ("⁵", "5"),
+        ("⁶", "6"),
+        ("⁷", "7"),
+        ("⁸", "8"),
+        ("⁹", "9"),
+    ] {
+        let sup_unit = parse_unit(&format!("m{sup}")).expect("superscript must parse");
+        let ascii_unit = parse_unit(&format!("m^{ascii}")).expect("ascii must parse");
+        assert_eq!(sup_unit, ascii_unit, "m{sup} should equal m^{ascii}");
+    }
+    // Superscript MINUS — a negative exponent, e.g. a number density m⁻³.
+    assert_eq!(
+        parse_unit("m⁻³").unwrap(),
+        parse_unit("m^-3").unwrap(),
+        "m⁻³ should equal m^-3"
+    );
+}
+
+/// With `rad` as a base axis the circular functions are NOT symmetric.
+///
+/// FORWARD circular map an angle to a ratio (accept rad or dimensionless,
+/// return dimensionless); INVERSE circular map a ratio to an ANGLE (require
+/// dimensionless, RETURN rad). Asserting a dimensionless result for `acos` while
+/// `rad` is an axis makes a `zenith: "rad"` computed by `acos(...)` a guaranteed
+/// false mismatch.
+#[test]
+fn trig_angle_rules() {
+    use earthsci_ast::{Expr, ExpressionNode};
+
+    let angle = parse_unit("rad").unwrap();
+    let mut env = HashMap::new();
+    env.insert("theta".to_string(), angle.clone());
+    env.insert("ratio".to_string(), parse_unit("dimensionless").unwrap());
+    env.insert("mass".to_string(), parse_unit("kg").unwrap());
+
+    let call = |name: &str, arg: &str| {
+        Expr::Operator(ExpressionNode {
+            op: name.to_string(),
+            args: vec![Expr::Variable(arg.to_string())],
+            ..ExpressionNode::default()
+        })
+    };
+
+    // Inverse circular RETURN an angle.
+    for f in ["asin", "acos", "atan"] {
+        let unit = Unit::propagate(&call(f, "ratio"), &env)
+            .unwrap_or_else(|e| panic!("{f}(ratio) should propagate: {e}"));
+        assert!(
+            unit.is_compatible(&angle),
+            "{f} must RETURN an angle (rad), got {unit:?}"
+        );
+    }
+
+    // Forward circular accept an angle and return a pure number.
+    for f in ["sin", "cos", "tan"] {
+        let unit = Unit::propagate(&call(f, "theta"), &env)
+            .unwrap_or_else(|e| panic!("{f}(theta) should propagate: {e}"));
+        assert!(unit.is_dimensionless(), "{f} must return a pure number");
+        // ... but still reject a dimensional argument.
+        assert!(
+            Unit::propagate(&call(f, "mass"), &env).is_err(),
+            "{f}(kg) must be rejected"
+        );
+    }
+}
+
+/// `d` is the DAY (`lib/calendar.esm` declares `units: "d"`), not the deci
+/// prefix — the registry is consulted before prefix decomposition.
+#[test]
+fn d_is_the_day() {
+    assert_eq!(parse_unit("d").unwrap(), parse_unit("day").unwrap());
+}
