@@ -472,27 +472,44 @@ After individual language test runners complete, a comparison script analyzes re
 
 ### 5.2 Consistency Thresholds
 
-| Test Category | Pass Threshold | Description |
+**There is no tolerance band. ANY divergence fails.** The percentage thresholds
+that used to sit in this table (Display Unicode 98%, LaTeX 95%, Graph 95%) were
+never enforceable and were actively harmful: the comparator implemented them as
+`PASS ≥ 0.90 / WARN ≥ 0.70` and returned success for **both**, so up to 30%
+cross-language divergence exited 0 — and because two of its three categories were
+structurally vacuous and scored a permanent 1.00, they DILUTED the average and a
+20% validation divergence still came out a PASS (audit 2026-07-14, C2). A
+conformance gate that tolerates a *percentage* of disagreement is not testing
+conformance; it is measuring it and shrugging.
+
+The categories a divergence can be scored against, and what "agree" means in each:
+
+| Test Category | Requirement | Notes |
 |---|---|---|
-| **Validation** | 100% | All implementations must agree on valid/invalid status and error codes |
-| **Display Unicode** | 98% | Minor differences in number formatting acceptable |
-| **Display LaTeX** | 95% | Syntax variations acceptable if mathematically equivalent |
-| **Substitution** | 100% | Expression substitution must be deterministic |
-| **Graph Structure** | 95% | Node/edge sets must match; property differences acceptable |
-| **Simulation** | 90% | Numerical tolerance for ODE solutions |
-| **Relational index sets / dense IDs** | 100% (byte-identical) | Outputs of the value-invention primitives (`distinct`, `skolem`, `rank`) and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** and **NOT** subject to the "minor formatting differences" tolerances above — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
+| **Validation** | Exact | Every binding must reach the fixture's DECLARED outcome (`tests/valid/**` and `lib/**` valid; `tests/invalid/**` rejected) and emit the `(code, path)` pairs pinned in `tests/invalid/expected_errors.json` (§7.1.2). Mutual agreement between bindings is checked too, but SEPARATELY — five bindings can agree on the wrong answer, and did (audit F4). |
+| **Display (unicode / latex / ascii)** | Byte-identical | `tests/display/RENDERING_CONTRACT.md` is normative and already said so: "All language implementations MUST produce byte-identical output, verified by the shared fixtures in this directory". Every fixture case is rendered by every binding and compared to the pinned rendering AND across bindings. Number formatting is part of the contract, not an excusable "minor difference" — it is what a reader of the model sees. |
+| **Substitution** | Byte-identical AST | Compared as the serialized expression, not as a rendering. |
+| **Expression round-trip (property corpus)** | Byte-identical canonical form | §5.5.3. A divergence here is a different *document*. |
+| **Graph Structure** | Node / edge sets identical | See the note below: this category is currently **not enforced by any binding** and the goldens in `tests/graphs/` are asserted by nobody (audit F6). |
+| **Simulation** | Numeric tolerance (§5.9) | The ONE category where a tolerance is legitimate, because the quantity being compared is a floating-point trajectory, not a serialization. Governed by §5.9's explicit rel/abs tolerances — a stated numeric tolerance on a numeric quantity, which is a different thing from a percentage of fixtures allowed to disagree. |
+| **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitives (`distinct`, `skolem`, `rank`) and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
 | **Conservative-regridding geometry (areas / weights)** | Invariants exact; areas within rel + abs tol | The M4 geometry kernel (`intersect_polygon`, the `polygon_area` FAQ, the weights `W_ij`) is **tolerance-based** — FP polygon clipping cannot be made bit-identical. Gated primarily on the physical invariants (conservation + partition-of-unity), with a combined rel + abs area tolerance and a sliver floor; the integer **candidate overlap-pair index set** stays byte-identical (§5.5). Governed by the **§5.8 geometry tolerance contract**. |
 
-> **Note.** The thresholds above for display/graph/simulation deliberately
-> tolerate cosmetic and numerical differences. The determinism contract in
-> **§5.5** is the exception in one direction: relational index sets and dense-ID
-> arrays must be **byte-identical** across bindings. See §5.5 for the normative
-> rules and the adversarial harness that enforces them. The geometry tolerance
-> contract in **§5.8** is the exception in the *other* direction: the M4
-> conservative-regridding kernel is irreducibly floating-point, so its areas /
-> weights are **tolerance-based** by contract — gated on physical invariants —
-> while only its integer **candidate overlap-pair set** falls back under the §5.5
-> byte-identity rule.
+> **Note.** The only two places a tolerance is legitimate are the ones where the
+> compared quantity is irreducibly floating-point: the **§5.9** simulation
+> trajectories and the **§5.8** conservative-regridding areas/weights. Both state
+> the tolerance as a numeric bound on the quantity itself. Neither is a licence to
+> let a *fraction of the fixtures* disagree — that is the construction that made
+> the old gate unable to fail.
+
+> **Note (graph structure).** `tests/graphs/*.json` carries `expected_nodes` /
+> `expected_edges` for 14 fixtures and `tests/graphs/expected_{dot,mermaid,graphml}/`
+> carries export goldens. **No binding asserts any of them**, and the
+> `graph_results` the producers used to emit were never compared by anything. The
+> row above states the requirement; it is not yet enforced. Enforcing it needs the
+> five bindings to agree on a node-ID scheme first (they do not today) — until
+> then this is a documented hole, not a passing check. Do not read a green run as
+> evidence that the graph builders agree.
 
 ### 5.3 Divergence Analysis
 

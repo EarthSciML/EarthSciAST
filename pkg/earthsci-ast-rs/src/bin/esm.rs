@@ -3047,7 +3047,11 @@ struct ManifestValidationEntry {
 #[derive(serde::Deserialize)]
 struct ManifestDisplayCase {
     id: String,
-    kind: String,
+    // The manifest's `kind` ("formula" | "expression") is deliberately not read
+    // here: `Expr` deserializes a bare string as `Expr::Variable`, and the
+    // renderers chemical-subscript a variable name exactly as they do a formula,
+    // so both kinds take the same path. Bindings whose renderer dispatches on a
+    // static type (Julia, Go) do need the tag. Serde ignores the extra key.
     input: serde_json::Value,
 }
 
@@ -3230,13 +3234,7 @@ fn run_conformance_test(
     // structurally unfailable 1.00 that diluted the one real category (audit C2).
     let mut display: BTreeMap<String, Value> = BTreeMap::new();
     for case in &manifest.display_cases {
-        // A "formula" case is a bare chemical-formula string ("O3" → "O₃"); an
-        // "expression" case is a dict-form Expression this binding must parse.
-        let parsed: Result<earthsci_ast::Expr, _> = if case.kind == "formula" {
-            serde_json::from_value(case.input.clone())
-        } else {
-            serde_json::from_value(case.input.clone())
-        };
+        let parsed: Result<earthsci_ast::Expr, _> = serde_json::from_value(case.input.clone());
         match parsed {
             Ok(expr) => {
                 display.insert(

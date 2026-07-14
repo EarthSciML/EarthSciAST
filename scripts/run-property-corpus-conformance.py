@@ -332,9 +332,23 @@ def main() -> int:
             "expressions round-trip DIFFERENTLY across bindings",
             file=sys.stderr,
         )
-        for fixture, entry in sorted(report.items()):
-            if entry.get("diverged"):
-                print(f"  {fixture}: {entry}", file=sys.stderr)
+        # Group by the SHAPE of the divergence (which bindings said what), so a
+        # single root cause reads as one line instead of 44.
+        shapes: Dict[str, List[str]] = {}
+        for entry in report:
+            if not entry.get("diverged"):
+                continue
+            by_output: Dict[str, List[str]] = {}
+            for name, result in sorted(entry.get("bindings", {}).items()):
+                key = json.dumps(result.get("canonical"), sort_keys=True)
+                by_output.setdefault(key, []).append(name)
+            shape = " | ".join(
+                f"{','.join(langs)}={out}" for out, langs in sorted(by_output.items())
+            )
+            shapes.setdefault(shape, []).append(entry.get("fixture", "?"))
+        for shape, fixtures in sorted(shapes.items(), key=lambda kv: -len(kv[1])):
+            print(f"  [{len(fixtures)}x] {shape}", file=sys.stderr)
+            print(f"        e.g. {', '.join(fixtures[:4])}", file=sys.stderr)
         return 1
 
     return 0
