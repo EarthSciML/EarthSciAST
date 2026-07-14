@@ -2,6 +2,8 @@ package esm
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -674,5 +676,254 @@ func TestAuditG14_WarningsDoNotInvalidate(t *testing.T) {
 	}
 	if countStructuralErrorLevel(res.StructuralErrors) != 0 {
 		t.Error("a warning-level finding must not count as an error")
+	}
+}
+
+// --- T4: the units-severity policy ------------------------------------------
+//
+// T4 was a cross-binding POLICY question: TypeScript promoted unit findings to
+// hard validation errors while Go/Python/Rust/Julia kept them as warnings. The
+// policy is now settled, and these tests pin Go's half of it:
+//
+//   - a PROVABLE dimensional mismatch is a HARD ERROR (`unit_inconsistency`);
+//   - an UNREAL/unparseable unit string is a HARD ERROR (the defect is in the
+//     file, not in the checker);
+//   - an UNDETERMINABLE finding stays a WARNING — a symbolic exponent, or an
+//     operator the units engine has no dimensional rule for. Those report what
+//     the checker could not determine, and must never invalidate a document.
+//
+// The rationale is the shared corpus itself: tests/invalid/expected_errors.json
+// pins every units_*.esm fixture as `is_valid: false` with a STRUCTURAL error,
+// so a binding that files these as warnings ACCEPTS files the corpus declares
+// invalid.
+
+// unitsDimensionalFixtures are the eight tests/invalid/units_*.esm fixtures whose
+// pinned defect is a DIMENSIONAL one — i.e. decidable by propagating units
+// through the expression tree — mapped to the JSON Pointer(s) that
+// expected_errors.json pins for them. (The other units_* fixtures are pinned on
+// specialized checks — reaction-rate order, conversion factors, physical
+// constants, coupling maps — which have their own tests.)
+//
+// Every one of these was ACCEPTED by Go before this fix: five of them because
+// the units checker walked only `model.equations` and never looked at observed
+// variables' `expression`, where their defect lives; the other three because a
+// mismatch was filed as an advisory warning.
+var unitsDimensionalFixtures = map[string][]string{
+	"units_incompatible_assignment.esm":      {"/models/BadUnitsModel/equations/0"},
+	"units_invalid_derivative.esm":           {"/models/BadUnitsModel/equations/0"},
+	"units_inconsistent_addition.esm":        {"/models/BadUnitsModel/variables/invalid_sum"},
+	"units_inconsistent_subtraction.esm":     {"/models/BadUnitsModel/variables/invalid_diff"},
+	"units_invalid_exponent.esm":             {"/models/BadUnitsModel/variables/invalid_power"},
+	"units_invalid_logarithm.esm":            {"/models/BadUnitsModel/variables/invalid_log"},
+	"units_gradient_operator_mismatch.esm":   {"/models/SpatialModel/variables/bad_sum"},
+	"units_mixed_dimensional_operations.esm": {"/models/ComplexUnitsModel/variables/invalid_sum", "/models/ComplexUnitsModel/variables/invalid_transcendental"},
+}
+
+func TestAuditT4_DimensionalMismatchIsAHardError(t *testing.T) {
+	for name, wantPaths := range unitsDimensionalFixtures {
+		t.Run(name, func(t *testing.T) {
+			file, content := loadInvalidFixture(t, name)
+			result := ValidateFile(file, content)
+
+			if result.IsValid {
+				t.Fatalf("%s is pinned is_valid:false in expected_errors.json; Go accepted it", name)
+			}
+			for _, wantPath := range wantPaths {
+				if !hasStructuralError(result, ErrorUnitInconsistency, wantPath) {
+					t.Errorf("want %s @ %s; got %+v", ErrorUnitInconsistency, wantPath, result.StructuralErrors)
+				}
+			}
+		})
+	}
+}
+
+// An UNDETERMINABLE finding must never invalidate a document. Both cases here
+// are Go's correct "return unknown and skip the check" behavior (the audit's T3
+// endorses it); this test guards it against being swept up by the promotion.
+func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
+	// In both models an OBSERVED variable is declared `kg` while its expression
+	// is built from an `m` state. The declared units are contradicted only if the
+	// checker claims to know the expression's dimension — and in neither case can
+	// it, so neither may be reported as a defect in the file.
+	//
+	//   - `x ^ alpha`  — a SYMBOLIC exponent: the dimension depends on alpha's
+	//                    runtime VALUE.
+	//   - `table_lookup(x)` — an operator the units engine has no rule for.
+	//
+	// Built as structs (not JSON) so the case is about the units policy and not
+	// about satisfying the schema's shape rules for these ops.
+	observed := func(expr Expression) *ESMFile {
+		return &ESMFile{
+			ESM:      "0.1.0",
+			Metadata: Metadata{Name: "T", Authors: []string{"Test Author"}},
+			Models: map[string]Model{
+				"M": {
+					Variables: map[string]ModelVariable{
+						"x":     {Type: VarTypeState, Units: strPtr("m")},
+						"alpha": {Type: VarTypeParameter, Units: strPtr("dimensionless")},
+						"y":     {Type: VarTypeObserved, Units: strPtr("kg"), Expression: expr},
+					},
+					Equations: []Equation{
+						{LHS: ExprNode{Op: OpDerivative, Args: []any{"x"}, Wrt: strPtr("t")}, RHS: "x"},
+					},
+				},
+			},
+		}
+	}
+	cases := map[string]Expression{
+		"symbolic_exponent": ExprNode{Op: "^", Args: []any{"x", "alpha"}},
+		"unknown_op":        ExprNode{Op: "table_lookup", Args: []any{"x"}},
+	}
+	for label, expr := range cases {
+		t.Run(label, func(t *testing.T) {
+			result := ValidateStructuralWithCodes(observed(expr))
+			for _, se := range result.StructuralErrors {
+				if se.Code == ErrorUnitInconsistency {
+					t.Errorf("an undeterminable finding must not become a hard error: %+v", se)
+				}
+			}
+			if !result.Valid {
+				t.Errorf("document must stay valid: %+v", result.StructuralErrors)
+			}
+		})
+	}
+}
+
+// A checker that hard-fails on mismatches must not FABRICATE a dimension it
+// cannot know. These are the three fabrications that, once findings became hard
+// errors, falsely rejected valid corpus files — 29 of them between them.
+func TestAuditT4_NoFabricatedDimensions(t *testing.T) {
+	env := mkEnv(t, map[string]string{"conc_ppb": "ppb", "x": "m", "n": "dimensionless"})
+
+	// A bare literal is not dimensionless: `conc_ppb * 1.23` is a unit-carrying
+	// conversion, not a dimensionless quantity.
+	u, err := PropagateDimension(ExprNode{Op: "*", Args: []any{"conc_ppb", 1.23}}, env)
+	if err != nil || u != nil {
+		t.Errorf("a product with a literal factor must be indeterminate, got %v (err %v)", u, err)
+	}
+	// A derivative w.r.t. an UNDECLARED independent variable is not "per second".
+	u, err = PropagateDimension(ExprNode{Op: "D", Args: []any{"x"}}, env)
+	if err != nil || u != nil {
+		t.Errorf("D(x) with undeclared t must be indeterminate, got %v (err %v)", u, err)
+	}
+	// A symbolic exponent does not preserve the base's dimension.
+	u, err = PropagateDimension(ExprNode{Op: "^", Args: []any{"x", "n"}}, env)
+	if err != nil || u != nil {
+		t.Errorf("x^n must be indeterminate, got %v (err %v)", u, err)
+	}
+}
+
+// The unit REGISTRY and GRAMMAR are a cross-binding contract: promoting an
+// unresolvable unit string to a hard error is only sound if every unit the
+// shared corpus actually uses resolves. A registry gap would turn into a false
+// rejection of a legitimate file.
+func TestAuditT4_UnitRegistryAndGrammarContract(t *testing.T) {
+	// Every one of these appears in tests/valid/** and MUST parse.
+	for _, s := range []string{
+		// SI base, scaled, and derived.
+		"m", "kg", "s", "mol", "K", "A", "cd", "rad",
+		"g", "mg", "ug", "dm", "cm", "mm", "um", "nm", "km",
+		"ms", "us", "ns", "min", "h", "hr", "day", "yr", "year",
+		"L", "l", "mL", "Hz", "N", "Pa", "J", "kJ", "cal", "kcal", "W",
+		"kmol", "mmol", "umol", "nmol", "M",
+		// Pressure and energy multiples.
+		"atm", "bar", "hPa", "kPa", "mbar", "Torr", "mmHg", "psi",
+		"erg", "BTU", "Wh", "kWh", "kW", "MW",
+		// Electromagnetic. "C" is the COULOMB (Celsius is degC/°C).
+		"C", "V", "Ohm", "F", "T",
+		// Temperature and angle.
+		"degC", "degF", "deg",
+		// Mixing ratios and count nouns.
+		"ppm", "ppb", "ppt", "ppmv", "ppbv", "pptv",
+		"molec", "individuals", "vehicles", "units", "count", "Dobson", "DU",
+		// The dimensionless spellings.
+		"", "1", "dimensionless",
+		// GRAMMAR: parentheses, '**' exponents, whitespace juxtaposition,
+		// negative exponents, and non-ASCII spellings.
+		"J/(mol*K)", "m/s^2", "kg*m^2/s^3", "cm^3/molec/s", "1/s",
+		"Pa*m**3", "m**3", "ppb^-1 s^-1", "kg m^2 s^-2",
+		"°C", "μg/m^3", "µmol/(m^2*s)", "km^2/(individuals*year)",
+	} {
+		if _, err := ParseUnit(s); err != nil {
+			t.Errorf("ParseUnit(%q) must resolve — a registry/grammar gap becomes a FALSE REJECTION now that an unparseable unit is a hard error: %v", s, err)
+		}
+	}
+
+	// "C" must be the coulomb: charge × electric field is a force, and reading C
+	// as Celsius silently injected a temperature dimension into every
+	// electromagnetic expression in tests/valid/units_dimensional_analysis.esm.
+	env := mkEnv(t, map[string]string{"q": "C", "E": "V/m"})
+	force, err := PropagateDimension(ExprNode{Op: "*", Args: []any{"q", "E"}}, env)
+	if err != nil || force == nil {
+		t.Fatalf("q*E: %v (err %v)", force, err)
+	}
+	newton, err := ParseUnit("N")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !force.Dim.Equal(newton.Dim) {
+		t.Errorf("charge × field must be a force (N), got %s — is \"C\" bound to Celsius?", force.Dim)
+	}
+
+	// A string that denotes NO real unit must still fail — the hard error the
+	// policy rests on has to have something to fire on.
+	if _, err := ParseUnit("not_a_unit"); err == nil {
+		t.Error("ParseUnit must reject a unit string that denotes no real unit")
+	}
+}
+
+// loadInvalidFixture loads a shared tests/invalid/*.esm fixture and returns both
+// the parsed file and its raw text (ValidateFile needs both).
+func loadInvalidFixture(t *testing.T, name string) (*ESMFile, string) {
+	t.Helper()
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(repoRoot, "tests", "invalid", name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	file, err := LoadString(string(content))
+	if err != nil {
+		t.Fatalf("load %s: %v", name, err)
+	}
+	return file, string(content)
+}
+
+// --- Schema mirror: the bundled copy must match the ROOT esm-schema.json -----
+//
+// Go validates against a BUNDLED copy of esm-schema.json (pkg/esm/esm-schema.json),
+// synced from the repo root by scripts/sync-schema.sh. The root schema had
+// gained `pattern` constraints for the date-time / URI / DOI formats — because
+// JSON Schema `format` is an ANNOTATION, not an assertion, so those three
+// fixtures passed schema validation in every binding — but the mirrors were
+// never re-synced, leaving Go validating against the old schema.
+//
+// Rather than diff the files (which only restates sync-schema.sh), this pins the
+// BEHAVIOR the re-sync restores: the three malformed-format fixtures are
+// rejected.
+func TestAuditSchemaMirrorEnforcesFormatPatterns(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	for _, name := range []string{
+		"invalid_date_format.esm",
+		"invalid_url_format.esm",
+		"malformed_doi.esm",
+	} {
+		t.Run(name, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(repoRoot, "tests", "invalid", name))
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			// LoadString runs schema validation, so a schema-invalid document
+			// fails to load at all.
+			if _, err := LoadString(string(content)); err == nil {
+				t.Fatalf("%s is pinned is_valid:false; Go accepted it — is the bundled "+
+					"esm-schema.json stale? Run scripts/sync-schema.sh", name)
+			}
+		})
 	}
 }

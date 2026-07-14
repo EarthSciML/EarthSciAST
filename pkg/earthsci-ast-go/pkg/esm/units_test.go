@@ -176,13 +176,43 @@ func mkEnv(t *testing.T, pairs map[string]string) map[string]Unit {
 	return env
 }
 
+// A BARE NUMERIC LITERAL is INDETERMINATE, not dimensionless: nothing in the
+// AST says whether 3.14 is a pure number, a molar volume, or a unit-conversion
+// factor. Since dimensional findings are now hard errors, the checker must not
+// fabricate a dimension it cannot know.
 func TestPropagateDimensionLiteral(t *testing.T) {
 	u, err := PropagateDimension(3.14, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if u != nil {
+		t.Errorf("a bare literal must have an INDETERMINATE dimension, got %v", u.Dim)
+	}
+}
+
+// Where a literal's meaning IS determined, it still behaves correctly: an
+// all-literal sum is a pure number, and additively a literal adopts its
+// sibling's dimension rather than forcing it to be dimensionless.
+func TestPropagateDimensionLiteralNeutrality(t *testing.T) {
+	env := mkEnv(t, map[string]string{"T": "K"})
+
+	sum := ExprNode{Op: "+", Args: []any{1.0, 2.0}}
+	u, err := PropagateDimension(sum, env)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if u == nil || !u.Dim.IsDimensionless() {
-		t.Errorf("literal should be dimensionless, got %v", u)
+		t.Errorf("1 + 2 must be dimensionless, got %v", u)
+	}
+
+	// T - 273.15 is kelvin, not a mismatch.
+	offset := ExprNode{Op: "-", Args: []any{"T", 273.15}}
+	u, err = PropagateDimension(offset, env)
+	if err != nil {
+		t.Fatalf("T - 273.15 must not be a mismatch: %v", err)
+	}
+	if u == nil || u.Dim != (Dimension{dimTemperature: 1}) {
+		t.Errorf("T - 273.15 must be K, got %v", u)
 	}
 }
 
@@ -293,30 +323,91 @@ func TestPropagateDimensionDerivative(t *testing.T) {
 		t.Errorf("D(x,t).Dim = %v, want m/s", u.Dim)
 	}
 
-	// Default wrt = time in seconds when wrt is absent and env lacks "t".
+	// An UNDECLARED independent variable leaves the derivative's dimension
+	// UNKNOWN. Defaulting to seconds was a false-positive factory: in a
+	// nondimensionalized model (state and RHS both "1", `t` undeclared) it
+	// manufactured 1/s on the left against 1 on the right. Coverage is preserved
+	// by the equation-level rule — see TestDerivativeTimeMismatchStillCaught.
 	env2 := mkEnv(t, map[string]string{"x": "m"})
 	node2 := ExprNode{Op: "D", Args: []any{"x"}}
 	u2, err := PropagateDimension(node2, env2)
-	if err != nil || u2 == nil {
-		t.Fatalf("D(x) default: %v %v", u2, err)
+	if err != nil {
+		t.Fatalf("D(x) with undeclared t: %v", err)
 	}
-	if u2.Dim != (Dimension{dimLength: 1, dimTime: -1}) {
-		t.Errorf("D(x).Dim = %v, want m/s", u2.Dim)
+	if u2 != nil {
+		t.Errorf("D(x) with an undeclared independent variable must be INDETERMINATE, got %v", u2.Dim)
+	}
+}
+
+// The derivative rule that replaces the seconds assumption: with `t` undeclared,
+// an equation is provably wrong only when NO time unit could reconcile it.
+func TestDerivativeTimeMismatchStillCaught(t *testing.T) {
+	env := mkEnv(t, map[string]string{"x": "m", "k": "kg", "v": "m/s"})
+	wrt := "t"
+
+	// D(x) = k — metres per (unknown) time against kilograms. No time unit
+	// reconciles those, so this is still a hard dimensional mismatch.
+	bad := Equation{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: &wrt}, RHS: "k"}
+	w := ValidateEquationDimensions(&bad, env, "/models/M/equations/0")
+	if w == nil {
+		t.Fatal("D(x) = k must still be a dimensional mismatch")
+	}
+	if w.Code != UnitFindingDimensionalMismatch {
+		t.Errorf("want dimensional_mismatch, got %q", w.Code)
+	}
+	if w.Path != "/models/M/equations/0" {
+		t.Errorf("want the EQUATION pointer, got %q", w.Path)
+	}
+
+	// D(x) = v — metres per unknown time against m/s. Their ratio IS a power of
+	// time, so some time unit reconciles them: not a mismatch.
+	ok := Equation{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: &wrt}, RHS: "v"}
+	if w := ValidateEquationDimensions(&ok, env, "/models/M/equations/1"); w != nil {
+		t.Errorf("D(x) = v is reconcilable by a time unit, got %+v", w)
 	}
 }
 
 func TestPropagateDimensionComplexExpression(t *testing.T) {
-	// Expression: kinetic energy 1/2 * m * v^2 should have dimension of J.
+	// Kinetic energy m*v^2 has the dimension of J: '^' reads its exponent by
+	// VALUE, so the square is exact.
 	env := mkEnv(t, map[string]string{"m": "kg", "v": "m/s"})
 	v2 := ExprNode{Op: "^", Args: []any{"v", 2}}
-	ke := ExprNode{Op: "*", Args: []any{0.5, "m", v2}}
+	ke := ExprNode{Op: "*", Args: []any{"m", v2}}
 	u, err := PropagateDimension(ke, env)
 	if err != nil || u == nil {
-		t.Fatalf("0.5*m*v^2: %v %v", u, err)
+		t.Fatalf("m*v^2: %v %v", u, err)
 	}
 	want := Dimension{dimMass: 1, dimLength: 2, dimTime: -2}
 	if u.Dim != want {
 		t.Errorf("KE.Dim = %v, want %v", u.Dim, want)
+	}
+
+	// A LITERAL COEFFICIENT makes the product indeterminate. This is deliberate
+	// and is the price of hard-failing on mismatches: the AST cannot distinguish
+	// the pure ½ of ½mv² from the unit-carrying 1.23 of a ppb→µg/m³ conversion,
+	// so multiplying by a literal yields "unknown" rather than a fabricated
+	// dimension. Treating literals as dimensionless here reported `conc_ppb*1.23`
+	// as dimensionless and falsely rejected tests/valid/units_conversions.esm.
+	keHalf := ExprNode{Op: "*", Args: []any{0.5, "m", v2}}
+	u, err = PropagateDimension(keHalf, env)
+	if err != nil {
+		t.Fatalf("0.5*m*v^2 must not error: %v", err)
+	}
+	if u != nil {
+		t.Errorf("a product with a literal factor must be INDETERMINATE, got %v", u.Dim)
+	}
+}
+
+// A SYMBOLIC exponent leaves the result indeterminate — its dimension depends on
+// the exponent's runtime value, so the checker cannot know it.
+func TestPropagateDimensionSymbolicExponent(t *testing.T) {
+	env := mkEnv(t, map[string]string{"x": "mol/L", "alpha": "dimensionless"})
+	u, err := PropagateDimension(ExprNode{Op: "^", Args: []any{"x", "alpha"}}, env)
+	if err != nil {
+		t.Fatalf("x^alpha must not error: %v", err)
+	}
+	if u != nil {
+		t.Errorf("x^alpha must be INDETERMINATE, got %v", u.Dim)
 	}
 }
 

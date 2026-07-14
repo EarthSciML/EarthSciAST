@@ -752,13 +752,19 @@ func TestBoundLoopIndexInAggregateNotFlagged(t *testing.T) {
 	assert.True(t, result.Valid, "valid aggregate should pass: %+v", result.StructuralErrors)
 }
 
-// TestUnparseableUnitYieldsWarningNotError pins the spec §3.3.3/§3.4 leniency:
-// a variable whose declared unit string does not parse is treated as UNKNOWN
-// (omitted from the unit env) and surfaced as a non-blocking UnitWarning, NOT
-// coerced to dimensionless. Coercing to dimensionless would manufacture a false
-// mismatch here — `D(x) = x` with a dimensionless `x` is `1/s` vs `1` — so the
-// absence of any dimension-mismatch warning confirms the unknown treatment.
-func TestUnparseableUnitYieldsWarningNotError(t *testing.T) {
+// TestUnparseableUnitIsAHardError pins the units-severity policy for a declared
+// unit string that denotes NO REAL UNIT.
+//
+// It is a HARD ERROR (`unit_inconsistency`), not an advisory warning: if a
+// declared unit is not a unit, the defect is in the FILE, not in the checker's
+// ability to reach a conclusion. (This reverses the earlier leniency, which this
+// test previously pinned — see the UnitFinding* policy in units.go.)
+//
+// The variable is still treated as UNKNOWN for propagation — never coerced to
+// dimensionless — so no *second*, bogus dimension-mismatch is manufactured on
+// top of it: `D(x) = x` with an unknown-dimension `x` must not also report a
+// mismatch.
+func TestUnparseableUnitIsAHardError(t *testing.T) {
 	esmFile := &ESMFile{
 		ESM:      "0.1.0",
 		Metadata: Metadata{Name: "BadUnit", Authors: []string{"Test Author"}},
@@ -779,22 +785,31 @@ func TestUnparseableUnitYieldsWarningNotError(t *testing.T) {
 
 	result := ValidateStructuralWithCodes(esmFile)
 
-	// A parse warning is recorded ...
-	var sawParseWarning, sawMismatch bool
+	// The finding is recorded, and CODED as unparseable (not as an analysis
+	// limit) ...
+	var sawParseFinding, sawMismatch bool
 	for _, w := range result.UnitWarnings {
 		if strings.Contains(w.Message, "could not parse unit") {
-			sawParseWarning = true
+			sawParseFinding = true
+			assert.Equal(t, UnitFindingUnparseable, w.Code)
+			assert.Equal(t, "/models/BadUnit/variables/x/units", w.Path)
 		}
 		if strings.Contains(w.Message, "does not match") {
 			sawMismatch = true
 		}
 	}
-	assert.True(t, sawParseWarning, "unparseable unit must surface a warning: %+v", result.UnitWarnings)
-	// ... and the variable is treated as UNKNOWN, so no false mismatch is manufactured ...
+	assert.True(t, sawParseFinding, "unparseable unit must surface a finding: %+v", result.UnitWarnings)
+	// ... the variable is treated as UNKNOWN, so no false mismatch is piled on ...
 	assert.False(t, sawMismatch, "unknown-unit variable must not manufacture a dimension mismatch: %+v", result.UnitWarnings)
-	// ... and it is NOT a hard error.
+
+	// ... and it IS a hard error that invalidates the document.
+	var sawHardError bool
 	for _, se := range result.StructuralErrors {
-		assert.NotEqualf(t, ErrorUnitInconsistency, se.Code, "unparseable unit must not be a hard error: %+v", se)
+		if se.Code == ErrorUnitInconsistency {
+			sawHardError = true
+			assert.Empty(t, se.Level, "a provable unit defect must be error-level, not a warning")
+		}
 	}
-	assert.True(t, result.Valid)
+	assert.True(t, sawHardError, "unparseable unit must be a hard unit_inconsistency: %+v", result.StructuralErrors)
+	assert.False(t, result.Valid, "a file with an unreal unit is invalid")
 }

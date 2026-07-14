@@ -47,12 +47,28 @@ func countStructuralErrorLevel(errs []StructuralError) int {
 	return n
 }
 
-// UnitWarning represents dimensional inconsistencies
+// UnitWarning represents a finding from dimensional analysis.
+//
+// Despite the name (kept for wire compatibility — it is the `unit_warnings`
+// field of the spec's ValidationResult), a UnitWarning is not necessarily
+// advisory: Code says whether it is a defect in the FILE or a limit of the
+// ANALYSIS. Findings coded UnitFindingDimensionalMismatch or
+// UnitFindingUnparseable are promoted to hard `unit_inconsistency` structural
+// errors and invalidate the document; UnitFindingAnalysis findings do not. See
+// the UnitFinding* constants in units.go for the policy.
 type UnitWarning struct {
 	Path     string `json:"path"`      // RFC 6901 JSON Pointer to the equation/expression (see StructuralError.Path)
+	Code     string `json:"code"`      // UnitFindingDimensionalMismatch | UnitFindingUnparseable | UnitFindingAnalysis
 	Message  string `json:"message"`   // Human-readable description
 	LhsUnits string `json:"lhs_units"` // Inferred units of the LHS
 	RhsUnits string `json:"rhs_units"` // Inferred units of the RHS
+}
+
+// isPromotable reports whether a unit finding invalidates the document — i.e.
+// whether it states a defect in the FILE (a provable dimensional mismatch, or a
+// unit string that denotes no real unit) rather than a limit of the checker.
+func (w UnitWarning) isPromotable() bool {
+	return w.Code == UnitFindingDimensionalMismatch || w.Code == UnitFindingUnparseable
 }
 
 // ValidationResult holds the result of validation per ESM Libraries Spec Section 3.4
@@ -251,22 +267,61 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 	// surface has parity with the legacy one; warnings do not affect Valid.
 	result.StructuralErrors = append(result.StructuralErrors, collectStructuralErrors(file)...)
 
-	// Unit/dimensional checks (code-bearing surface only).
-	for modelName, model := range file.Models {
-		model := model
+	// Unit/dimensional checks (code-bearing surface only). Models and systems are
+	// visited in sorted order so the emitted findings — and the structural errors
+	// promoted from them below — are deterministic across runs.
+	for _, modelName := range sortedKeys(file.Models) {
+		model := file.Models[modelName]
 		validateModelUnits(modelName, &model, fmt.Sprintf("/models/%s", modelName), file, result)
 	}
-	for systemName, system := range file.ReactionSystems {
-		system := system
+	for _, systemName := range sortedKeys(file.ReactionSystems) {
+		system := file.ReactionSystems[systemName]
 		validateReactionSystemUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), result)
 		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), result)
 	}
+	result.StructuralErrors = append(result.StructuralErrors, promoteUnitFindings(result.UnitWarnings)...)
 
 	// Valid is computed once from the accumulated errors so that checks
 	// appending StructuralErrors need not maintain the flag themselves;
 	// warning-level entries are excluded.
 	result.Valid = countStructuralErrorLevel(result.StructuralErrors) == 0
 	return result
+}
+
+// promoteUnitFindings turns the DEFECT-BEARING unit findings into hard
+// structural errors, leaving the analysis-limited ones as warnings.
+//
+// This is the cross-binding policy, and it is what the shared corpus requires:
+// tests/invalid/expected_errors.json pins every units_*.esm fixture as
+// `is_valid: false` with a STRUCTURAL error, so a binding that files a provable
+// dimensional mismatch as an advisory warning accepts files the corpus declares
+// invalid. The emitted code is `unit_inconsistency` and the path is the JSON
+// Pointer the finding already carries (`/models/<M>/equations/<i>`,
+// `/models/<M>/variables/<v>`) — both exactly as pinned, and identical to what
+// TypeScript emits.
+//
+// What is NOT promoted is just as deliberate: a UnitFindingAnalysis finding
+// (symbolic exponent, an op with no dimensional rule, a malformed arity) reports
+// what the checker could not DETERMINE, not a defect in the file, and must never
+// invalidate a document.
+func promoteUnitFindings(findings []UnitWarning) []StructuralError {
+	var errs []StructuralError
+	for _, w := range findings {
+		if !w.isPromotable() {
+			continue
+		}
+		errs = append(errs, StructuralError{
+			Path:    w.Path,
+			Code:    ErrorUnitInconsistency,
+			Message: w.Message,
+			Details: map[string]any{
+				"finding":   w.Code,
+				"lhs_units": w.LhsUnits,
+				"rhs_units": w.RhsUnits,
+			},
+		})
+	}
+	return errs
 }
 
 // structuralErrorToLegacyMessage adapts a code-bearing StructuralError to the
