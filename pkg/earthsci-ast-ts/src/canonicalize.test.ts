@@ -101,7 +101,9 @@ describe('canonicalize per RFC §5.4 (TS best-effort)', () => {
       '{"args":["x"],"op":"D","wrt":"t"}',
     )
     const bc = { op: 'bc', args: ['u'], fn: 'dirichlet', dim: 'x', name: 'foo' } as never
-    expect(canonicalJson(bc)).toBe('{"args":["u"],"dim":"x","fn":"dirichlet","name":"foo","op":"bc"}')
+    expect(canonicalJson(bc)).toBe(
+      '{"args":["u"],"dim":"x","fn":"dirichlet","name":"foo","op":"bc"}',
+    )
     const c = { op: 'const', args: [], value: 2.5 } as never
     expect(canonicalJson(c)).toBe('{"args":[],"op":"const","value":2.5}')
 
