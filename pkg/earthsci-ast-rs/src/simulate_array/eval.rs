@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::aggregate::effective_reduce_kind;
+use crate::compile_error::CompileError;
 use crate::types::ExpressionNode;
 
 /// The distinct-vertex extent of the FAQ-materialized ring registered under
@@ -88,6 +89,99 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
     }
 }
 
+/// Does [`eval_op`] have an evaluation rule for `op`?
+///
+/// This is the single source of truth for the array interpreter's operator
+/// coverage, and it is deliberately kept adjacent to [`eval_op`] so the two
+/// cannot drift: every name listed here has a `match` arm below, and every arm
+/// below is listed here.
+///
+/// It is NOT the same set as [`crate::op_registry::is_core_op`]. The registry
+/// answers "may this op appear in a legal AST"; this answers "can the per-cell
+/// evaluator produce a number for it". The gap between them is real and is
+/// exactly what [`check_evaluable`] rejects:
+///
+/// * build-time query ops (`skolem`, `rank`, `distinct`, `argmin`, `argmax`) —
+///   resolved by [`crate::value_invention`] before evaluation;
+/// * form / lowering ops (`ic`, `true`, `enum`, `table_lookup`,
+///   `apply_expression_template`) — consumed by their lowering passes;
+/// * the open rewrite-target tier (`grad`, `div`, `laplacian`, a typo'd
+///   `"expp"`, a user op) — must be lowered to a stencil first.
+#[must_use]
+pub fn is_evaluable_op(op: &str) -> bool {
+    matches!(
+        op,
+        // Arithmetic.
+        "+" | "-" | "*" | "/" | "^" | "neg"
+        // Elementary functions.
+        | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+        | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh"
+        | "atan2" | "min" | "max"
+        // Comparisons and booleans.
+        | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
+        | "ifelse"
+        // Form ops with a defined runtime meaning here.
+        | "D" | "Pre" | "const"
+        // Array / geometry ops.
+        | "index" | "aggregate" | "makearray" | "reshape" | "transpose" | "concat"
+        | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
+        // Closed function registry.
+        | "fn"
+    )
+}
+
+/// Reject every operator in `expr` that the array interpreter cannot evaluate.
+///
+/// This is the RUNTIME operator gate, and it closes the last silent-NaN hole in
+/// the evaluator. It layers two checks:
+///
+/// 1. [`check_no_spatial_ops`] (the shared [`crate::op_registry`] gate) — the
+///    open rewrite-target tier (sugar ops, a spatial `D`, a user op, a typo) and
+///    illegal arities.
+/// 2. [`is_evaluable_op`] — evaluable-core ops that are legal in an AST but have
+///    no rule in THIS evaluator because an earlier pipeline stage was supposed to
+///    eliminate them.
+///
+/// Without this, a typo'd or unevaluable op reaching [`eval_op`] fell through to
+/// a `NaN` sentinel, which is indistinguishable from a legitimate numerical
+/// result and silently poisons the solution.
+///
+/// # Errors
+///
+/// [`CompileError::UnloweredOperatorError`], [`CompileError::InvalidOperatorArity`],
+/// [`CompileError::MakearrayRegionInvalid`] (from the registry gate), or
+/// [`CompileError::UnevaluableOperatorError`].
+pub fn check_evaluable(expr: &Expr) -> Result<(), CompileError> {
+    check_no_spatial_ops(expr)?;
+    check_evaluable_ops(expr)
+}
+
+/// The [`is_evaluable_op`] half of [`check_evaluable`], applied over the whole
+/// tree (including sidecar expression fields via `for_each_child`).
+fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
+    let Expr::Operator(node) = expr else {
+        return Ok(());
+    };
+    if !is_evaluable_op(&node.op) {
+        return Err(CompileError::UnevaluableOperatorError {
+            op: node.op.clone(),
+        });
+    }
+    let mut first_err: Option<CompileError> = None;
+    node.for_each_child(&mut |child| {
+        if first_err.is_none()
+            && let Err(e) = check_evaluable_ops(child)
+        {
+            first_err = Some(e);
+        }
+    });
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     match node.op.as_str() {
         // Elementwise / scalar arithmetic. If any operand is an array,
@@ -143,16 +237,6 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // D(anything) = 0 for parity with the scalar interpreter.
         "D" => Value::Scalar(0.0),
 
-        // Rewrite-target sugar ops must be lowered to a stencil by a `match`
-        // rewrite rule before reaching the simulator (esm-spec §4.2 / §9.6.8).
-        // The compile-time `check_no_spatial_ops` walk in `from_model` catches
-        // these with the uniform `unlowered_operator` code. But the public
-        // `eval_expression` entry point bypasses that gate, so this arm IS
-        // reachable — surface the NaN sentinel (the module's convention for an
-        // unevaluable node; the solver reads it as a step failure) rather than
-        // panicking.
-        op if UNLOWERED_SPATIAL_OPS.contains(&op) => Value::Scalar(f64::NAN),
-
         // `Pre` (previous-value marker) is only meaningful under event handling;
         // on the RHS it passes its argument through. Guard the arity so a
         // malformed `Pre` node from `eval_expression` yields the NaN sentinel
@@ -195,7 +279,22 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // here (the fire stack's `FuelModelLookup` is the motivating case).
         "fn" => eval_fn(node, ctx),
 
-        _ => Value::Scalar(f64::NAN),
+        // Unreachable by construction: EVERY path into this evaluator is gated.
+        // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
+        // and the public `eval_expression` gates with `check_evaluable`, which
+        // additionally rejects evaluable-core ops with no arm here (`skolem`,
+        // `rank`, `ic`, `table_lookup`, …).
+        //
+        // This used to be `_ => Value::Scalar(f64::NAN)`. A NaN sentinel is
+        // indistinguishable from a legitimate numerical result, so a typo'd op
+        // ("expp") or an op an earlier stage failed to eliminate produced a
+        // silently poisoned solution instead of a diagnosable failure. Reaching
+        // this arm now means a gate was bypassed — a bug in THIS crate — so it
+        // fails loudly rather than corrupting the answer.
+        other => unreachable!(
+            "operator '{other}' reached eval_op without an evaluation rule; \
+             every entry point must gate with check_evaluable() first"
+        ),
     }
 }
 
@@ -304,50 +403,44 @@ pub(super) fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     acc
 }
 
+/// The all-scalar fast path of [`eval_arith`].
+///
+/// **This function and [`apply_binary`] must compute the same value for every
+/// LEGAL node** — that is the whole contract between the per-cell oracle and the
+/// vectorized overlay, and it is pinned by the
+/// `vectorized_matches_per_cell_oracle` equivalence test.
+///
+/// It did not used to hold. This function special-cased arity — returning `NaN`
+/// for `-`/`/`/`^` unless `len == 2`, and for `min`/`max` unless `len >= 2` —
+/// while the vectorized path left-folded *any* arity through `apply_binary`. So
+/// `-(3,1,1)` was `NaN` here and `1.0` there; `min(5)` was `NaN` here and `5.0`
+/// there. Worse, the oracle contradicted *itself*: the all-scalar guard in
+/// `eval_arith` routed to this function, but a single *array* operand routed to
+/// the left-folding `combine`, so `-(u,1,1)` meant `u-2` for an array `u` and
+/// `NaN` for a scalar one.
+///
+/// Those arities are now rejected before evaluation by [`crate::op_registry`],
+/// so the `NaN` special-cases are not merely unnecessary — they are unreachable,
+/// and keeping them would only re-open the divergence if the gate were ever
+/// bypassed. This is now a plain left-fold of [`apply_binary`], identical in
+/// kernel and in order to the vectorized path.
 pub(super) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
+    // A zero-arity arithmetic node is not legal (the registry rejects it); the
+    // NaN sentinel is the module's convention for an unevaluable node.
+    let Some((first, rest)) = vs.split_first() else {
+        return f64::NAN;
+    };
+    // `and`/`or` are the one family whose n-ary fold is not a repeated binary
+    // apply: they return a strict 1.0/0.0 flag over ALL operands, whereas
+    // left-folding `apply_binary` would compare a raw operand against a flag.
+    // `apply_binary` agrees with this for the legal arity (>= 2), which is what
+    // the equivalence test checks.
     match op {
-        "+" => vs.iter().sum(),
-        "*" => vs.iter().product(),
-        "-" => {
-            if vs.len() == 2 {
-                vs[0] - vs[1]
-            } else {
-                f64::NAN
-            }
-        }
-        "/" => {
-            if vs.len() == 2 {
-                vs[0] / vs[1]
-            } else {
-                f64::NAN
-            }
-        }
-        "^" => {
-            if vs.len() == 2 {
-                vs[0].powf(vs[1])
-            } else {
-                f64::NAN
-            }
-        }
-        "min" => {
-            if vs.len() < 2 {
-                f64::NAN
-            } else {
-                vs.iter().copied().fold(f64::INFINITY, f64::min)
-            }
-        }
-        "max" => {
-            if vs.len() < 2 {
-                f64::NAN
-            } else {
-                vs.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-            }
-        }
-        // n-ary logical connectives (the all-scalar fast path of `eval_arith`).
-        "and" => vs.iter().all(|&v| v != 0.0) as i32 as f64,
-        "or" => vs.iter().any(|&v| v != 0.0) as i32 as f64,
-        _ => f64::NAN,
+        "and" => return vs.iter().all(|&v| v != 0.0) as i32 as f64,
+        "or" => return vs.iter().any(|&v| v != 0.0) as i32 as f64,
+        _ => {}
     }
+    rest.iter().fold(*first, |acc, &v| apply_binary(op, acc, v))
 }
 
 pub(super) fn negate(v: Value) -> Value {
@@ -568,9 +661,21 @@ pub(super) fn apply_unary(op: &str, x: f64) -> f64 {
     }
 }
 
+/// Evaluate a strictly-binary op (`atan2`, the comparisons).
+///
+/// The arity guard is not decoration: this function used to index `args[0]` and
+/// `args[1]` unconditionally, so `{"op":"atan2","args":[1.0]}` — a
+/// *schema-valid* document, since the schema puts no lower bound on `args` —
+/// **panicked** with an index-out-of-bounds. [`crate::op_registry`] now rejects
+/// that node at the compile gate, but `eval_expression` is a public entry point
+/// that bypasses the gate, so the guard stays as the backstop that makes a panic
+/// unreachable rather than merely unlikely.
 pub(super) fn eval_binary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
-    let a = eval(&args[0], ctx);
-    let b = eval(&args[1], ctx);
+    let ([a_expr, b_expr] | [a_expr, b_expr, ..]) = args else {
+        return Value::Scalar(f64::NAN);
+    };
+    let a = eval(a_expr, ctx);
+    let b = eval(b_expr, ctx);
     combine(op, a, b)
 }
 
@@ -666,6 +771,12 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // the dominant per-cell stencil / geometry-table access. Index expressions
     // are evaluated first (they never depend on the indexed array), so the
     // borrow is taken only after `&mut ctx` is no longer needed.
+    // `index` needs at least the array operand (`args[0]`); the registry rejects
+    // a nullary `index`, and this guard keeps the public `eval_expression`
+    // bypass from panicking on one.
+    if node.args.is_empty() {
+        return Value::Scalar(f64::NAN);
+    }
     if let Expr::Variable(name) = &node.args[0]
         && lookup_array_ref(name, ctx).is_some()
     {
@@ -773,11 +884,17 @@ pub(super) fn eval_clip_operands(
         .manifold
         .as_deref()
         .and_then(crate::geometry::Manifold::from_flag)?;
-    let poly_a = match eval(&node.args[0], ctx) {
+    // Both geometry leaves are binary (§4.3). Destructure rather than index, so
+    // an under-applied node from the public `eval_expression` bypass is
+    // un-evaluable (`None`) rather than a panic.
+    let ([a_expr, b_expr] | [a_expr, b_expr, ..]) = node.args.as_slice() else {
+        return None;
+    };
+    let poly_a = match eval(a_expr, ctx) {
         Value::Array(a) => a,
         _ => return None,
     };
-    let poly_b = match eval(&node.args[1], ctx) {
+    let poly_b = match eval(b_expr, ctx) {
         Value::Array(a) => a,
         _ => return None,
     };
@@ -898,13 +1015,23 @@ pub(super) fn lonlat_to_arrayd(ring: &[(f64, f64)]) -> ArrayD<f64> {
 ///
 /// Returns [`Value::Scalar`] for a scalar FAQ output (`output_idx: []`),
 /// [`Value::Array`] otherwise.
+///
+/// # Errors
+///
+/// This is the crate's one UNGATED evaluation entry point — it takes a raw
+/// [`Expr`] that never passed through `from_model`'s compile-time gate — so it
+/// applies [`check_evaluable`] itself. An operator the interpreter cannot
+/// evaluate (a typo, an unlowered `grad`, or a `skolem`/`ic`/`table_lookup` that
+/// an earlier pipeline stage should have eliminated) is reported here rather
+/// than silently evaluating to `NaN`.
 pub fn eval_expression(
     expr: &Expr,
     inputs: &HashMap<String, ArrayD<f64>>,
     params: &[f64],
     param_names: &[String],
     t: f64,
-) -> Value {
+) -> Result<Value, CompileError> {
+    check_evaluable(expr)?;
     let empty: ArrMap = ArrMap::default();
     // Cold public boundary: the standalone evaluator's `inputs` arrive as a std
     // `HashMap` (FAQ rings, coordinate fields). Rehash into the fast [`ArrMap`]
@@ -927,18 +1054,87 @@ pub fn eval_expression(
         derived_rings: &derived_rings,
         forcing: &forcing,
     };
-    eval(expr, &mut ctx)
+    Ok(eval(expr, &mut ctx))
+}
+
+/// The output-index box of the aggregate currently being evaluated: the index
+/// symbol names, and the origin (lower bound) of each output axis.
+///
+/// This is what lets an ARRAY-valued `filter` be resolved to *this* cell's
+/// element — the same positional alignment the vectorized overlay's `VecBox`
+/// uses (`element = array[idx - lo]`).
+pub(super) struct CellBox<'a> {
+    /// The output index symbol names, in axis order.
+    pub names: &'a [String],
+    /// The lower bound of each output axis, in the same order.
+    pub origin: &'a [i64],
 }
 
 /// Evaluate an `aggregate`/`arrayop` `filter` predicate under the current loop
 /// binds and report whether the combination is **excluded** (§5.3): excluded
-/// iff a filter is present and evaluates to false (a zero scalar). With no
-/// filter this is always `false`, so the reduction is byte-identical to the
-/// no-filter form.
-pub(super) fn filter_excludes(filter: Option<&Expr>, ctx: &mut EvalCtx) -> bool {
-    match filter {
-        Some(f) => eval(f, ctx).as_scalar().unwrap_or(0.0) == 0.0,
-        None => false,
+/// iff a filter is present and evaluates to false. With no filter this is always
+/// `false`, so the reduction is byte-identical to the no-filter form.
+///
+/// # An array filter is a per-cell MASK, not "exclude everything"
+///
+/// This function used to read `eval(f, ctx).as_scalar().unwrap_or(0.0) == 0.0`.
+/// A filter that evaluates to an ARRAY — the natural spelling of a regrid
+/// `overlap > 0` sparsity gate or a fuel gate `code >= 1`, where the predicate
+/// names a whole field rather than an indexed element — has no scalar form, so
+/// `as_scalar()` returned `None`, `unwrap_or(0.0)` turned that into `0.0`, and
+/// **every cell was excluded**: the aggregate collapsed to the reduction
+/// identity everywhere.
+///
+/// The vectorized overlay, meanwhile, fed exactly that array into `vec_select`
+/// as a genuine per-cell mask — which is what its doc-comments advertise, and
+/// what the fixtures using it intend. So the same document produced `[10, 0, 10]`
+/// if its body happened to vectorize and `[0, 0, 0]` if a `reshape` in the body
+/// forced it onto this oracle. **Which answer you got depended solely on
+/// incidental vectorizability.**
+///
+/// The per-cell-mask reading is the intended one, so the oracle now implements
+/// it: an array filter is indexed at the current output cell, aligned to the
+/// output box exactly as `VecBox` aligns it. An array that cannot be aligned
+/// (its rank does not match the output box) is treated as *including* the cell —
+/// the conservative direction, since silently dropping every term is the failure
+/// mode this fix exists to remove.
+pub(super) fn filter_excludes(
+    filter: Option<&Expr>,
+    cell: Option<&CellBox>,
+    ctx: &mut EvalCtx,
+) -> bool {
+    let Some(f) = filter else {
+        return false;
+    };
+    match eval(f, ctx) {
+        Value::Scalar(s) => s == 0.0,
+        Value::Array(a) => {
+            // 0-D array — a scalar in array clothing.
+            if a.ndim() == 0 {
+                return a.first().copied().unwrap_or(0.0) == 0.0;
+            }
+            let Some(cell) = cell else {
+                return false;
+            };
+            if a.ndim() != cell.names.len() || cell.origin.len() != cell.names.len() {
+                return false;
+            }
+            let ix: Vec<usize> = cell
+                .names
+                .iter()
+                .zip(cell.origin.iter())
+                .map(|(n, &lo)| {
+                    let bound = ctx.loop_binds.get(n).copied().unwrap_or(lo);
+                    (bound - lo).max(0) as usize
+                })
+                .collect();
+            match a.get(IxDyn(&ix)) {
+                Some(&m) => m == 0.0,
+                // Out of the mask's bounds: include, rather than silently
+                // dropping the term.
+                None => false,
+            }
+        }
     }
 }
 
@@ -959,11 +1155,12 @@ pub(super) fn reduce_contraction(
     body: &Expr,
     reduce: ReduceKind,
     filter: Option<&Expr>,
+    cell: Option<&CellBox>,
     ctx: &mut EvalCtx,
 ) -> f64 {
     if contract_names.is_empty() {
         // Pointwise: a filtered-out cell contributes the additive identity 0̄.
-        return if filter_excludes(filter, ctx) {
+        return if filter_excludes(filter, cell, ctx) {
             reduce.identity()
         } else {
             eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
@@ -991,7 +1188,7 @@ pub(super) fn reduce_contraction(
             set_bind(&mut ctx.loop_binds, kn, *kv);
         }
         // A filtered-out combination contributes 0̄ (acc ⊕ 0̄ = acc) (§5.3).
-        if filter_excludes(filter, ctx) {
+        if filter_excludes(filter, cell, ctx) {
             continue;
         }
         let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
@@ -1145,6 +1342,10 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             body,
             reduce,
             filter,
+            Some(&CellBox {
+                names: idx_names,
+                origin: &origin,
+            }),
             ctx,
         );
         let flat = multi_to_flat_col_major(tuple, &shape, &origin);
@@ -1176,6 +1377,16 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     if regions.is_empty() || values.len() != regions.len() {
         return Value::Scalar(f64::NAN);
     }
+    // Two region shapes used to PANIC here rather than being rejected: a ragged
+    // `regions` list (rank taken from `regions[0]`, then `lo[d]`/`hi[d]` indexed
+    // for every `d` of every region) and an inverted pair like `[5, 2]` (extent
+    // `-2`, cast `as usize`, capacity-overflow in `ArrayD::zeros`). The registry
+    // rejects both at the compile gate; re-checking here keeps the ungated
+    // `eval_expression` entry point panic-free. Note the legal EMPTY spelling
+    // `stop == start - 1` (§4.3.2) survives this check and must still assemble.
+    if crate::op_registry::check_makearray_regions(node).is_err() {
+        return Value::Scalar(f64::NAN);
+    }
     // Compute the bounding box.
     let ndim = regions[0].len();
     let mut lo = vec![i64::MAX; ndim];
@@ -1186,7 +1397,12 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
             hi[d] = hi[d].max(r[1]);
         }
     }
-    let shape: Vec<usize> = (0..ndim).map(|d| (hi[d] - lo[d] + 1) as usize).collect();
+    // `max(0)` before the cast: an all-empty `regions` list legitimately yields a
+    // zero-extent axis, and a negative extent must never wrap into a colossal
+    // `usize`.
+    let shape: Vec<usize> = (0..ndim)
+        .map(|d| (hi[d] - lo[d] + 1).max(0) as usize)
+        .collect();
     let origin = lo.clone();
     let mut arr = ArrayD::<f64>::zeros(IxDyn(&shape));
     for (region, value_expr) in regions.iter().zip(values.iter()) {
@@ -1197,29 +1413,40 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         // aggregate) must span the region box exactly; each region cell then
         // reads its aligned element (mirrors the vectorized
         // `eval_vec_makearray` region-assign and the Julia/Python region
-        // semantics). A shape mismatch keeps the previous skip behaviour.
+        // semantics).
+        //
+        // A shape MISMATCH used to `continue` — silently leaving the region as
+        // the `zeros` fill, so a region `[1, 3]` given a 2-element `const` value
+        // assembled to `[0.0, 0.0, 0.0]` and the caller had no way to tell that
+        // its value expression had been discarded. The vectorized twin refuses
+        // to assemble such a node at all (it bails to this oracle). Poison the
+        // result with the NaN sentinel instead: this interpreter has no error
+        // channel (`eval` returns a `Value`, and the solver reads `NaN` as a step
+        // failure), so a loud `NaN` is the strongest signal available — and it is
+        // strictly better than a plausible-looking zero.
         if let Value::Array(a) = &v
             && a.ndim() > 0
         {
             let region_shape: Vec<usize> = ranges
                 .iter()
-                .map(|(lo, hi)| (hi - lo + 1) as usize)
+                .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
                 .collect();
-            if a.shape() == region_shape.as_slice() {
-                let mut tuples = CartesianTuples::new(&ranges);
-                while let Some(tuple) = tuples.next() {
-                    let out_ix: Vec<usize> = tuple
-                        .iter()
-                        .enumerate()
-                        .map(|(d, x)| (x - origin[d]) as usize)
-                        .collect();
-                    let src_ix: Vec<usize> = tuple
-                        .iter()
-                        .enumerate()
-                        .map(|(d, x)| (x - ranges[d].0) as usize)
-                        .collect();
-                    arr[IxDyn(&out_ix)] = a[IxDyn(&src_ix)];
-                }
+            if a.shape() != region_shape.as_slice() {
+                return Value::Scalar(f64::NAN);
+            }
+            let mut tuples = CartesianTuples::new(&ranges);
+            while let Some(tuple) = tuples.next() {
+                let out_ix: Vec<usize> = tuple
+                    .iter()
+                    .enumerate()
+                    .map(|(d, x)| (x - origin[d]) as usize)
+                    .collect();
+                let src_ix: Vec<usize> = tuple
+                    .iter()
+                    .enumerate()
+                    .map(|(d, x)| (x - ranges[d].0) as usize)
+                    .collect();
+                arr[IxDyn(&out_ix)] = a[IxDyn(&src_ix)];
             }
             continue;
         }
@@ -1406,6 +1633,181 @@ pub(super) fn evaluate_index_range(
 }
 
 #[cfg(test)]
+mod evaluability_gate_tests {
+    //! The public `eval_expression` entry point must never answer a question it
+    //! cannot evaluate with a silent `NaN` — a NaN is indistinguishable from a
+    //! legitimate numerical result and poisons the solution downstream. Every
+    //! unevaluable operator class must surface a diagnosable error instead.
+
+    use super::*;
+    use crate::types::Expr;
+
+    fn node(op: &str, args: Vec<Expr>) -> Expr {
+        Expr::Operator(ExpressionNode {
+            op: op.to_string(),
+            args,
+            ..ExpressionNode::default()
+        })
+    }
+
+    fn eval_it(expr: &Expr) -> Result<Value, CompileError> {
+        eval_expression(expr, &HashMap::new(), &[], &[], 0.0)
+    }
+
+    /// A misspelled operator ("expp") is an open-tier op: `unlowered_operator`.
+    #[test]
+    fn typo_op_is_rejected_not_nan() {
+        let err = eval_it(&node("expp", vec![Expr::Number(1.0)]))
+            .expect_err("a typo'd operator must not evaluate");
+        assert!(
+            matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "expp"),
+            "{err:?}"
+        );
+    }
+
+    /// An unlowered rewrite-target sugar op reaching evaluation is reported,
+    /// where it used to yield the NaN sentinel.
+    #[test]
+    fn unlowered_spatial_op_is_rejected_not_nan() {
+        let err = eval_it(&node("grad", vec![Expr::Variable("c".into())]))
+            .expect_err("an unlowered spatial operator must not evaluate");
+        assert!(
+            matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+            "{err:?}"
+        );
+    }
+
+    /// Build `op` with an argument count its registry arity actually admits, so
+    /// the arity gate passes and the EVALUABILITY gate is what fires.
+    fn node_with_legal_arity(op: &str) -> Expr {
+        let arity = crate::op_registry::arity_of(op).expect("registry-legal op");
+        let n = (0..=3)
+            .find(|n| arity.admits(*n))
+            .expect("some arity in 0..=3 is admitted");
+        node(op, (0..n).map(|_| Expr::Variable("x".into())).collect())
+    }
+
+    /// The gap this closes: ops the REGISTRY calls legal (`is_core_op`) but this
+    /// evaluator has no arm for, because an earlier pipeline stage was supposed
+    /// to eliminate them. They used to fall through to `_ => NaN`.
+    #[test]
+    fn registry_legal_but_unevaluable_ops_are_rejected_not_nan() {
+        for op in [
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "ic",
+            "table_lookup",
+        ] {
+            assert!(
+                crate::op_registry::is_core_op(op),
+                "{op} should be registry-legal, else this test proves nothing"
+            );
+            assert!(
+                !is_evaluable_op(op),
+                "{op} should have no eval arm, else this test proves nothing"
+            );
+            let err = eval_it(&node_with_legal_arity(op)).unwrap_err_or_else_msg(op);
+            assert!(
+                matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == op),
+                "{op}: {err:?}"
+            );
+        }
+    }
+
+    /// The gate is not merely top-level: an unevaluable op NESTED inside an
+    /// otherwise-fine expression is still caught.
+    #[test]
+    fn unevaluable_op_nested_in_expression_is_rejected() {
+        let expr = node(
+            "+",
+            vec![Expr::Number(1.0), node("skolem", vec![Expr::Number(2.0)])],
+        );
+        assert!(
+            eval_it(&expr).is_err(),
+            "nested unevaluable op must be caught"
+        );
+    }
+
+    /// And an evaluable expression still evaluates — the gate is not a blanket
+    /// rejection.
+    #[test]
+    fn evaluable_expression_still_evaluates() {
+        let expr = node("+", vec![Expr::Number(2.0), Expr::Number(3.0)]);
+        match eval_it(&expr).expect("a legal expression must evaluate") {
+            Value::Scalar(s) => assert_eq!(s, 5.0),
+            Value::Array(_) => panic!("expected a scalar"),
+        }
+    }
+
+    /// `is_evaluable_op` must agree with `eval_op`'s arms for every op the
+    /// registry admits: any registry op NOT listed as evaluable must be rejected
+    /// by the gate rather than reaching the `unreachable!` backstop.
+    #[test]
+    fn every_registry_op_is_either_evaluable_or_gated() {
+        for op in [
+            "+",
+            "-",
+            "*",
+            "/",
+            "^",
+            "exp",
+            "log",
+            "sqrt",
+            "min",
+            "max",
+            "ifelse",
+            "index",
+            "aggregate",
+            "makearray",
+            "broadcast",
+            "reshape",
+            "transpose",
+            "concat",
+            "fn",
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "ic",
+            "enum",
+            "table_lookup",
+            "apply_expression_template",
+            "true",
+        ] {
+            if !crate::op_registry::is_core_op(op) {
+                continue;
+            }
+            if is_evaluable_op(op) {
+                continue;
+            }
+            // Not evaluable ⇒ the gate MUST reject it, so `eval_op` never sees it.
+            let err = eval_it(&node_with_legal_arity(op)).unwrap_err_or_else_msg(op);
+            assert!(
+                matches!(err, CompileError::UnevaluableOperatorError { .. }),
+                "{op} is registry-legal and not evaluable, so it must be gated: {err:?}"
+            );
+        }
+    }
+
+    /// Small helper: `Result::unwrap_err` with the op name in the panic message.
+    trait UnwrapErrMsg {
+        fn unwrap_err_or_else_msg(self, op: &str) -> CompileError;
+    }
+    impl UnwrapErrMsg for Result<Value, CompileError> {
+        fn unwrap_err_or_else_msg(self, op: &str) -> CompileError {
+            match self {
+                Ok(v) => panic!("op '{op}' must not evaluate, got {v:?}"),
+                Err(e) => e,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod geometry_eval_tests {
     //! End-to-end evaluation of the M4 geometry kernel through the *real* array
     //! evaluator (bead ess-my4.4.11; RFC `semiring-faq-unified-ir` §8.1): the
@@ -1456,7 +1858,9 @@ mod geometry_eval_tests {
             "args": ["src_poly", "tgt_poly"],
         }))
         .unwrap();
-        match eval_expression(&node, &inputs, &[], &[], 0.0) {
+        match eval_expression(&node, &inputs, &[], &[], 0.0)
+            .expect("test node is built from evaluable ops")
+        {
             Value::Array(a) => arrayd_to_lonlat(&a).expect("[N,2] ring"),
             Value::Scalar(s) => panic!("intersect_polygon evaluated to scalar {s}"),
         }
@@ -1500,7 +1904,9 @@ mod geometry_eval_tests {
             }
         }))
         .unwrap();
-        match eval_expression(&agg, &inputs, &[], &[], 0.0) {
+        match eval_expression(&agg, &inputs, &[], &[], 0.0)
+            .expect("test node is built from evaluable ops")
+        {
             Value::Scalar(s) => s.abs(),
             Value::Array(_) => panic!("scalar polygon_area FAQ expected"),
         }
@@ -1580,6 +1986,7 @@ mod geometry_eval_tests {
         }))
         .unwrap();
         eval_expression(&node, &inputs, &[], &[], 0.0)
+            .expect("test node is built from evaluable ops")
     }
 
     #[test]
@@ -1629,7 +2036,9 @@ mod geometry_eval_tests {
             "args": ["src_poly", "tgt_poly"],
         }))
         .unwrap();
-        match eval_expression(&node, &inputs, &[], &[], 0.0) {
+        match eval_expression(&node, &inputs, &[], &[], 0.0)
+            .expect("test node is built from evaluable ops")
+        {
             Value::Scalar(s) => assert!(s.is_nan(), "missing manifold should be NaN, got {s}"),
             Value::Array(_) => panic!("missing manifold must not produce a scalar area"),
         }
@@ -1652,7 +2061,9 @@ mod geometry_eval_tests {
             "args": ["src_poly", "tgt_poly"],
         }))
         .unwrap();
-        match eval_expression(&node, &inputs, &[], &[], 0.0) {
+        match eval_expression(&node, &inputs, &[], &[], 0.0)
+            .expect("test node is built from evaluable ops")
+        {
             Value::Scalar(s) => assert!(s.is_nan(), "missing manifold should be NaN, got {s}"),
             Value::Array(_) => panic!("missing manifold must not produce a ring"),
         }
@@ -1707,7 +2118,9 @@ mod ragged_eval_tests {
     /// is read fresh for each output cell.
     #[test]
     fn ragged_contraction_uses_per_parent_dynamic_bound() {
-        match eval_expression(&ragged_sum_node(), &nedges(&[2.0, 3.0]), &[], &[], 0.0) {
+        match eval_expression(&ragged_sum_node(), &nedges(&[2.0, 3.0]), &[], &[], 0.0)
+            .expect("test node is built from evaluable ops")
+        {
             Value::Array(a) => {
                 assert_eq!(a.shape(), [2]);
                 assert_eq!(a[IxDyn(&[0])], 3.0);
@@ -1721,7 +2134,9 @@ mod ragged_eval_tests {
     /// additive identity 0̄: `nedges = [0, 2]` ⇒ `out = [0, 1+2] = [0, 3]`.
     #[test]
     fn ragged_empty_segment_yields_additive_identity() {
-        match eval_expression(&ragged_sum_node(), &nedges(&[0.0, 2.0]), &[], &[], 0.0) {
+        match eval_expression(&ragged_sum_node(), &nedges(&[0.0, 2.0]), &[], &[], 0.0)
+            .expect("test node is built from evaluable ops")
+        {
             Value::Array(a) => {
                 assert_eq!(a[IxDyn(&[0])], 0.0);
                 assert_eq!(a[IxDyn(&[1])], 3.0);

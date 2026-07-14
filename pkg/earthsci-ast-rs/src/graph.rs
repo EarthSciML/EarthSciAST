@@ -131,8 +131,7 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
     // (models, reaction systems, data loaders). Coupling kinds that do not name
     // two concrete components (operator_apply, callback, event, coupling_import)
     // contribute no edge to the source-level component graph.
-    let node_ids: std::collections::HashSet<&str> =
-        nodes.iter().map(|n| n.id.as_str()).collect();
+    let node_ids: std::collections::HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
 
     if let Some(ref coupling_entries) = esm_file.coupling {
         for entry in coupling_entries {
@@ -271,6 +270,9 @@ pub enum VariableKind {
     Observed,
     /// Brownian (Wiener) noise source — any present promotes model to SDE
     Brownian,
+    /// Discrete variable: piecewise-constant between refreshes, never
+    /// differentiated by the solver.
+    Discrete,
     /// Chemical species
     Species,
 }
@@ -441,6 +443,7 @@ fn extract_from_model(
             crate::VariableType::Parameter => VariableKind::Parameter,
             crate::VariableType::Observed => VariableKind::Observed,
             crate::VariableType::Brownian => VariableKind::Brownian,
+            crate::VariableType::Discrete => VariableKind::Discrete,
         };
 
         nodes.push(VariableNode {
@@ -784,6 +787,7 @@ impl ExpressionGraph {
                 VariableKind::Parameter => "box",
                 VariableKind::Observed => "diamond",
                 VariableKind::Brownian => "doubleoctagon",
+                VariableKind::Discrete => "hexagon",
                 VariableKind::Species => "circle",
             };
 
@@ -832,6 +836,7 @@ impl ExpressionGraph {
                 VariableKind::Parameter => ("[", "]"),
                 VariableKind::Observed => ("{", "}"),
                 VariableKind::Brownian => ("{{", "}}"),
+                VariableKind::Discrete => ("[/", "/]"),
                 VariableKind::Species => ("((", "))"),
             };
 
@@ -872,6 +877,8 @@ mod tests {
     #[test]
     fn test_component_graph_empty() {
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -945,6 +952,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1007,6 +1016,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1076,6 +1087,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1238,6 +1251,8 @@ mod tests {
         }];
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,

@@ -11,6 +11,43 @@
 [net]
 git-fetch-with-cli = true
 
+# Make `cargo build` work from a CLEAN `target/` with no manual environment.
+#
+# THE BUG. `s2bindings-sys` builds vendored s2geometry through CMake. Its
+# `s2bindings_shim` target compiles `shim.cc`, which includes
+# `s2/util/math/exactfloat/exactfloat.h`, which includes <openssl/bn.h> — but the
+# shim target is never handed OpenSSL's include directory by the upstream
+# CMakeLists (the `s2` target itself gets it; the shim does not inherit it).
+#
+# On LINUX this is invisible: OpenSSL's headers sit in /usr/include, which is on
+# the compiler's DEFAULT search path, so the missing -I never bites. That is why
+# CI (ubuntu-latest, libssl-dev preinstalled) has always been green.
+#
+# On MACOS, Homebrew's openssl is KEG-ONLY — deliberately not symlinked onto the
+# default include path — so the header is genuinely unreachable and the build
+# dies with a bare `fatal error: 'openssl/bn.h' file not found`, 98% of the way
+# through a long native compile. A fresh clone could not build this crate AT ALL;
+# every green build here was riding a `target/` artifact produced earlier.
+#
+# THE FIX. A `build.rs` in THIS crate cannot help: a dependency's build script
+# runs BEFORE its dependents', so `s2bindings-sys` has already failed by the time
+# any code of ours could run. Cargo's `[env]` table is the mechanism that does
+# apply — it is exported to every build script in the graph, dependencies
+# included.
+#
+# Both Homebrew prefixes are listed (ARM /opt/homebrew, Intel /usr/local). A `-I`
+# naming a directory that does not exist is silently ignored by clang and gcc, so
+# this is inert on Linux and on whichever macOS arch lacks the other's prefix: it
+# only ever ADDS a search path. `force` is left false, so an existing CXXFLAGS in
+# the caller's environment still wins and this cannot fight a developer pointing
+# at a custom OpenSSL.
+#
+# The real repair belongs upstream in s2bindings.rs — the shim target should pull
+# in OpenSSL's include dirs (e.g. `target_link_libraries(s2bindings_shim PRIVATE
+# OpenSSL::Crypto)`). Once that lands, this block can be deleted.
+[env]
+CXXFLAGS = "-I/opt/homebrew/opt/openssl@3/include -I/usr/local/opt/openssl@3/include"
+
 # Run the wasm32 test target (`tests/wasm_suite.rs`) under Node.js via the
 # wasm-bindgen test runner. This lets
 #   cargo test --target wasm32-unknown-unknown --test wasm_suite

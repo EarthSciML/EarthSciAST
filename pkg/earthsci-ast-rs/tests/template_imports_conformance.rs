@@ -15,9 +15,7 @@
 use earthsci_ast::lower_expression_templates::{
     MAX_TEMPLATE_EXPANSION_DEPTH, lower_expression_templates,
 };
-use earthsci_ast::template_imports::{
-    reject_template_imports_pre_v08, resolve_template_machinery,
-};
+use earthsci_ast::template_imports::{reject_template_imports_pre_v08, resolve_template_machinery};
 use earthsci_ast::types::Expr;
 use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_with_options};
 use serde_json::{Value, json};
@@ -459,21 +457,88 @@ fn valid_suite_library_and_minimal_consumer() {
     );
 }
 
-/// Round-trip emits the expanded, folded form (§9.7.6): no §9.7 construct
-/// survives parse → emit.
+/// A CONSUMER file round-trips to its expanded, folded form (§9.7.6): the
+/// load-time constructs — `expression_template_imports` (an import directive)
+/// and the `apply_expression_template` CALL SITES it lowers — do not survive.
+///
+/// This fixture declares no top-level `expression_templates` registry and no
+/// top-level `metaparameters` block, so there is no DECLARATION here to preserve
+/// (contrast `template_library_round_trips_to_itself`). Option A expands call
+/// sites; it does not delete declarations (§9.6.4 rule 5) — the two cases are
+/// different, and this test only ever covered the first.
 #[test]
-fn round_trip_emits_expanded_folded_form() {
+fn consumer_round_trip_emits_expanded_folded_form() {
     let f = load_path(conf(&["import_smoke", "fixture.esm"])).expect("load");
     let text = earthsci_ast::save(&f).expect("save");
     assert!(!text.contains("expression_template_imports"));
-    assert!(!text.contains("metaparameters"));
-    assert!(!text.contains("expression_templates"));
     assert!(!text.contains("apply_expression_template"));
     let reloaded = earthsci_ast::load(&text).expect("reload");
     assert_eq!(
         reloaded.index_sets.as_ref().expect("index_sets")["lon"].size,
         Some(288)
     );
+}
+
+/// A TEMPLATE-LIBRARY file MUST round-trip to itself (esm-spec §9.6.4 rule 5).
+///
+/// The top-level `expression_templates` registry and `metaparameters` block are
+/// DECLARATIONS — peers of `index_sets`, not `apply_expression_template` call
+/// sites. Option A expands call sites; it does NOT delete declarations. Both
+/// survive `parse → emit` VERBATIM.
+///
+/// The loader deleted them, so a pure library file emitted as
+/// `{esm, metadata, index_sets}` — carrying NONE of the five top-level payload
+/// keys, which the schema's top-level `anyOf` rejects. With rule 4 (validation
+/// runs post-expansion), a conforming template library was UNREPRESENTABLE:
+/// legal on disk, illegal the moment it was loaded and re-emitted. A document
+/// kind that cannot round-trip to itself is not a document kind.
+///
+/// VERBATIM is asserted, not merely "present": the folding phases mutate the
+/// registry in place, so preserving the WORKING copy would emit the folded form
+/// and a library would still not round-trip to ITSELF.
+#[test]
+fn template_library_round_trips_to_itself() {
+    for lib in ["template_import_lib.esm", "template_import_rename_lib.esm"] {
+        let path = repo_root().join("tests/valid").join(lib);
+        let original: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read"))
+                .expect("parse source");
+
+        let loaded = load_path(&path).unwrap_or_else(|e| panic!("{lib} must load: {e:?}"));
+        let emitted: serde_json::Value =
+            serde_json::from_str(&earthsci_ast::save(&loaded).expect("save")).expect("parse emit");
+
+        for key in ["expression_templates", "metaparameters"] {
+            assert!(
+                original.get(key).is_some(),
+                "{lib} is only a meaningful pin if it authors `{key}`"
+            );
+            assert_eq!(
+                emitted.get(key),
+                original.get(key),
+                "{lib}: `{key}` must survive parse → emit VERBATIM (§9.6.4 rule 5)"
+            );
+        }
+
+        // The emitted document must still carry a top-level payload key — this is
+        // the schema `anyOf` that the deletion violated.
+        assert!(
+            [
+                "models",
+                "reaction_systems",
+                "data_loaders",
+                "operators",
+                "expression_templates"
+            ]
+            .iter()
+            .any(|k| emitted.get(*k).is_some()),
+            "{lib}: emitted form carries none of the five top-level payload keys"
+        );
+
+        // And it must re-load: legal on disk MUST mean legal after a round-trip.
+        earthsci_ast::load(&earthsci_ast::save(&loaded).expect("save"))
+            .unwrap_or_else(|e| panic!("{lib} must re-load after emit: {e:?}"));
+    }
 }
 
 /// Every resolver-level invalid fixture fails with the exact stable
@@ -557,10 +622,7 @@ fn model_json(extra_model_fields: &str, top_fields: &str) -> String {
     )
 }
 
-fn load_in(
-    dir: &Path,
-    text: &str,
-) -> Result<earthsci_ast::EsmFile, earthsci_ast::EsmError> {
+fn load_in(dir: &Path, text: &str) -> Result<earthsci_ast::EsmFile, earthsci_ast::EsmError> {
     let options = LoadOptions {
         base_path: Some(dir.to_path_buf()),
         metaparameters: BTreeMap::new(),

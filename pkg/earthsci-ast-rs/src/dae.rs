@@ -390,6 +390,8 @@ mod tests {
         let mut models = HashMap::new();
         models.insert(model_name.into(), model);
         EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -419,6 +421,7 @@ mod tests {
 
     fn state_var() -> ModelVariable {
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),
@@ -433,6 +436,7 @@ mod tests {
 
     fn observed_var() -> ModelVariable {
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Observed,
             units: None,
             default: None,
@@ -447,6 +451,7 @@ mod tests {
 
     fn param_var() -> ModelVariable {
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(0.5),

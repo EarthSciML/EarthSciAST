@@ -660,10 +660,7 @@ fn contains_redundant_operations(expr: &earthsci_ast::Expr) -> bool {
     }
 }
 
-fn contains_common_subexpressions(
-    lhs: &earthsci_ast::Expr,
-    rhs: &earthsci_ast::Expr,
-) -> bool {
+fn contains_common_subexpressions(lhs: &earthsci_ast::Expr, rhs: &earthsci_ast::Expr) -> bool {
     let mut lhs_subexprs = Vec::new();
     let mut rhs_subexprs = Vec::new();
 
@@ -682,10 +679,7 @@ fn contains_common_subexpressions(
     })
 }
 
-fn collect_subexpressions(
-    expr: &earthsci_ast::Expr,
-    subexprs: &mut Vec<earthsci_ast::Expr>,
-) {
+fn collect_subexpressions(expr: &earthsci_ast::Expr, subexprs: &mut Vec<earthsci_ast::Expr>) {
     subexprs.push(expr.clone());
     if let earthsci_ast::Expr::Operator(node) = expr {
         for arg in &node.args {
@@ -697,9 +691,7 @@ fn collect_subexpressions(
 fn expressions_equal(expr1: &earthsci_ast::Expr, expr2: &earthsci_ast::Expr) -> bool {
     // Simple structural equality check
     match (expr1, expr2) {
-        (earthsci_ast::Expr::Number(n1), earthsci_ast::Expr::Number(n2)) => {
-            (n1 - n2).abs() < 1e-10
-        }
+        (earthsci_ast::Expr::Number(n1), earthsci_ast::Expr::Number(n2)) => (n1 - n2).abs() < 1e-10,
         (earthsci_ast::Expr::Variable(v1), earthsci_ast::Expr::Variable(v2)) => v1 == v2,
         (earthsci_ast::Expr::Operator(op1), earthsci_ast::Expr::Operator(op2)) => {
             op1.op == op2.op
@@ -1526,8 +1518,8 @@ const TEMPLATE_ATMOSPHERIC: &str = r#"{
   "reaction_systems": {
     "atmospheric_chemistry": {
       "species": {
-        "O2": {"units": "molec/cm3", "default": 1.0e18},
-        "O3": {"units": "molec/cm3", "default": 1.0e12}
+        "O2": {"units": "molec/cm^3", "default": 1.0e18},
+        "O3": {"units": "molec/cm^3", "default": 1.0e12}
       },
       "parameters": {
         "k": {"units": "1/s", "default": 1.0e-6, "description": "Rate constant"}
@@ -1555,7 +1547,7 @@ const TEMPLATE_ECOSYSTEM: &str = r#"{
   "models": {
     "ecosystem": {
       "variables": {
-        "biomass": {"type": "state", "units": "kg/m2", "default": 1.0},
+        "biomass": {"type": "state", "units": "kg/m^2", "default": 1.0},
         "r": {"type": "parameter", "units": "1/s", "default": 0.1}
       },
       "equations": [
@@ -1930,6 +1922,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Create a new ESM file with just the requested component
             let mut extracted_esm = earthsci_ast::EsmFile {
                 coupling_roles: None,
+                // The extracted component is a NEW document. Any template call
+                // sites it had were already expanded at load, and metaparameters
+                // already folded, so it declares neither.
+                expression_templates: None,
+                metaparameters: None,
                 esm: esm_file.esm.clone(),
                 metadata: esm_file.metadata.clone(),
                 // Document-scoped registry (v0.8.0): preserve it on the
@@ -2283,8 +2280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         for (i, rule) in coupling.iter().enumerate() {
                             match rule {
                                 earthsci_ast::CouplingEntry::OperatorCompose {
-                                    systems,
-                                    ..
+                                    systems, ..
                                 } => {
                                     if systems.len() >= 2 {
                                         println!(
@@ -2305,24 +2301,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         );
                                     }
                                 }
-                                earthsci_ast::CouplingEntry::VariableMap {
-                                    from, to, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::VariableMap { from, to, .. } => {
                                     println!("  Rule {}: {} -> {} (VariableMap)", i + 1, from, to);
                                 }
-                                earthsci_ast::CouplingEntry::OperatorApply {
-                                    operator, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::OperatorApply { operator, .. } => {
                                     println!("  Rule {}: {} (OperatorApply)", i + 1, operator);
                                 }
-                                earthsci_ast::CouplingEntry::Callback {
-                                    callback_id, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::Callback { callback_id, .. } => {
                                     println!("  Rule {}: {} (Callback)", i + 1, callback_id);
                                 }
-                                earthsci_ast::CouplingEntry::Event {
-                                    name, affects, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::Event { name, affects, .. } => {
                                     let event_name = name.as_deref().unwrap_or("unnamed_event");
                                     let systems: Vec<String> = affects
                                         .as_ref()
@@ -2356,11 +2344,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 earthsci_ast::CouplingEntry::CouplingImport {
                                     reference, ..
                                 } => {
-                                    println!(
-                                        "  Rule {}: {} (CouplingImport)",
-                                        i + 1,
-                                        reference
-                                    );
+                                    println!("  Rule {}: {} (CouplingImport)", i + 1, reference);
                                 }
                             }
                         }
@@ -2380,14 +2364,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let opts = earthsci_ast::SimulateOptions::default();
             let params = HashMap::new();
             let initial_conditions = HashMap::new();
-            let sol = earthsci_ast::simulate(
-                &esm_file,
-                (0.0, time),
-                &params,
-                &initial_conditions,
-                &opts,
-            )
-            .map_err(|e| format!("simulation failed: {e}"))?;
+            let sol =
+                earthsci_ast::simulate(&esm_file, (0.0, time), &params, &initial_conditions, &opts)
+                    .map_err(|e| format!("simulation failed: {e}"))?;
 
             println!(
                 "✓ Simulation complete: {} output points, solver {}",

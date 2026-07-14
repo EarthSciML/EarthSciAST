@@ -24,6 +24,7 @@ fn test_analysis_features_integration() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),
@@ -38,6 +39,7 @@ fn test_analysis_features_integration() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(0.1),
@@ -150,6 +152,8 @@ fn test_analysis_features_integration() {
     reaction_systems.insert("simple_rs".to_string(), rs);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -238,6 +242,7 @@ fn test_editing_operations() {
 
     // Test adding variables
     let new_var = ModelVariable {
+        default_units: None,
         var_type: VariableType::Parameter,
         units: Some("s^-1".to_string()),
         default: Some(0.1),

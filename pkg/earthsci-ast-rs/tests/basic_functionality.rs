@@ -103,6 +103,8 @@ fn test_structural_validation() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -265,6 +267,8 @@ fn test_component_graph() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -332,6 +336,7 @@ fn test_editing() {
 
     // Test adding variables
     let new_var = ModelVariable {
+        default_units: None,
         var_type: VariableType::Parameter,
         units: Some("s^-1".to_string()),
         default: Some(0.1),

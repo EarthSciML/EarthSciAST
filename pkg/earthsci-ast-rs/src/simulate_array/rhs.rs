@@ -684,6 +684,10 @@ pub(super) fn evaluate_rhs_with_scratch(
                 // and we avoid both a fresh `IdxMap` allocation and the per-cell
                 // range re-derivation on every output tuple.
                 let static_ranges = static_contract_ranges(contract_dims);
+                // Origin of the output box — the alignment an ARRAY-valued §5.3
+                // `filter` is resolved against, so a per-cell mask means the same
+                // thing here as it does on the vectorized path.
+                let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
                 let mut ctx = EvalCtx {
                     state_arrays,
                     observed_arrays,
@@ -708,6 +712,10 @@ pub(super) fn evaluate_rhs_with_scratch(
                         body,
                         *reduce,
                         filter,
+                        Some(&CellBox {
+                            names: output_idx_names,
+                            origin: &output_origin,
+                        }),
                         &mut ctx,
                     );
                     let actual_multi: Vec<i64> = lhs_idx_exprs

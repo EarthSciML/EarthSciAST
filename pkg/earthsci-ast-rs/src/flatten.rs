@@ -279,6 +279,12 @@ pub struct FlattenedSystem {
     /// that consume this should target an SDESystem (Julia/MTK) or equivalent.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub brownian_variables: IndexMap<String, ModelVariable>,
+    /// Dot-namespaced DISCRETE variables (piecewise-constant between refreshes).
+    /// Kept in their own bucket rather than folded into `state_variables`: they
+    /// persist across time like a state but are never DIFFERENTIATED, so a
+    /// consumer that integrates `state_variables` must not pick them up.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub discrete_variables: IndexMap<String, ModelVariable>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
     /// classified out of `equations` by [`flatten`]. Each entry is
     /// `(target_state, rhs)` where `target_state` names the (post-lift, grid-
@@ -337,7 +343,10 @@ pub struct FlattenedSystem {
 ///
 /// Returns [`FlattenError`] per §4.7.6.10 error taxonomy.
 pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
-    flatten_with_options(file, &crate::coupling_imports::CouplingImportOptions::default())
+    flatten_with_options(
+        file,
+        &crate::coupling_imports::CouplingImportOptions::default(),
+    )
 }
 
 /// Flatten with explicit [`CouplingImportOptions`] controlling how
@@ -420,6 +429,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         parameters,
         observed_variables,
         brownian_variables,
+        discrete_variables,
         field_ics,
         equations,
         continuous_events,
@@ -432,6 +442,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         parameters,
         observed_variables,
         brownian_variables,
+        discrete_variables,
         field_ics,
         equations,
         continuous_events,
@@ -562,6 +573,7 @@ struct AssembledParts {
     parameters: IndexMap<String, ModelVariable>,
     observed_variables: IndexMap<String, ModelVariable>,
     brownian_variables: IndexMap<String, ModelVariable>,
+    discrete_variables: IndexMap<String, ModelVariable>,
     field_ics: Vec<(String, Expr)>,
     equations: Vec<Equation>,
     continuous_events: Vec<ContinuousEvent>,
@@ -581,6 +593,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
         brownian_variables: IndexMap::new(),
+        discrete_variables: IndexMap::new(),
         field_ics: Vec::new(),
         equations: Vec::new(),
         continuous_events: Vec::new(),
@@ -599,6 +612,9 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         }
         for (name, var) in block.brownian_vars {
             parts.brownian_variables.insert(name, var);
+        }
+        for (name, var) in block.discrete_vars {
+            parts.discrete_variables.insert(name, var);
         }
         for eq in block.equations {
             if let Some(target) = extract_ic_target(&eq.lhs) {
@@ -682,6 +698,7 @@ fn apply_variable_map_removals(
                             var_type: VariableType::Observed,
                             units,
                             default: None,
+                            default_units: None,
                             description,
                             expression: Some(Expr::Operator(node.clone())),
                             shape,
@@ -745,6 +762,10 @@ pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
 
     let file = EsmFile {
         coupling_roles: None,
+        // A synthesized single-system view: it declares no templates and no
+        // metaparameters of its own (the source document's survive on IT).
+        expression_templates: None,
+        metaparameters: None,
         esm: crate::SCHEMA_VERSION.to_string(),
         metadata: Metadata {
             name: None,
@@ -787,6 +808,7 @@ struct SystemBlock {
     parameters: IndexMap<String, ModelVariable>,
     observed_vars: IndexMap<String, ModelVariable>,
     brownian_vars: IndexMap<String, ModelVariable>,
+    discrete_vars: IndexMap<String, ModelVariable>,
     equations: Vec<Equation>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
@@ -855,6 +877,7 @@ fn lower_loader_subsystems(
                     var_type: VariableType::Observed,
                     units: Some(lv.units.clone()),
                     default: None,
+                    default_units: None,
                     description: lv.description.clone(),
                     // No defining equation: the value is served at the RHS
                     // boundary by the provider forcing seam, keyed by this name.
@@ -884,6 +907,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     let mut parameters = IndexMap::new();
     let mut observed_vars = IndexMap::new();
     let mut brownian_vars = IndexMap::new();
+    let mut discrete_vars = IndexMap::new();
 
     // Lower each DataLoader mounted as a subsystem into const-array-backed
     // observeds `<system>.<sub>.<var>` (RFC `pure-io-data-loaders` §4.3). Their
@@ -910,6 +934,9 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
             }
             VariableType::Observed => {
                 observed_vars.insert(namespaced, cloned);
+            }
+            VariableType::Discrete => {
+                discrete_vars.insert(namespaced, cloned);
             }
             VariableType::Brownian => {
                 brownian_vars.insert(namespaced, cloned);
@@ -950,6 +977,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         parameters,
         observed_vars,
         brownian_vars,
+        discrete_vars,
         equations,
         continuous_events,
         discrete_events,
@@ -974,6 +1002,7 @@ fn build_reaction_block(
                 var_type: VariableType::State,
                 units: species.units.clone(),
                 default: species.default,
+                default_units: None,
                 description: species.description.clone(),
                 expression: None,
                 shape: None,
@@ -995,6 +1024,7 @@ fn build_reaction_block(
                 var_type: VariableType::Parameter,
                 units: param.units.clone(),
                 default: param.default,
+                default_units: None,
                 description: param.description.clone(),
                 expression: None,
                 shape: None,
@@ -1020,6 +1050,7 @@ fn build_reaction_block(
         parameters,
         observed_vars: IndexMap::new(),
         brownian_vars: IndexMap::new(),
+        discrete_vars: IndexMap::new(),
         equations,
         continuous_events: Vec::new(),
         discrete_events: Vec::new(),
@@ -1482,6 +1513,7 @@ fn apply_couple(
             parameters: IndexMap::new(),
             observed_vars: IndexMap::new(),
             brownian_vars: IndexMap::new(),
+            discrete_vars: IndexMap::new(),
             equations: new_equations,
             continuous_events: Vec::new(),
             discrete_events: Vec::new(),
@@ -1586,7 +1618,10 @@ fn check_variable_map_units(file: &EsmFile) -> Result<(), FlattenError> {
     };
     for entry in entries {
         let CouplingEntry::VariableMap {
-            from, to, transform, ..
+            from,
+            to,
+            transform,
+            ..
         } = entry
         else {
             continue;
@@ -2026,6 +2061,8 @@ mod tests {
 
     fn empty_file() -> EsmFile {
         EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -2057,6 +2094,7 @@ mod tests {
                 var_type: VariableType::State,
                 units: Some("m".to_string()),
                 default: Some(0.0),
+                default_units: None,
                 description: None,
                 expression: None,
                 shape: None,
@@ -2071,6 +2109,7 @@ mod tests {
                 var_type: VariableType::Parameter,
                 units: None,
                 default: Some(1.0),
+                default_units: None,
                 description: None,
                 expression: None,
                 shape: None,
@@ -2163,6 +2202,7 @@ mod tests {
             var_type: vt,
             units: units.map(|u| u.to_string()),
             default: None,
+            default_units: None,
             description: None,
             expression: None,
             shape: None,
@@ -2291,9 +2331,8 @@ mod tests {
         state_variables.insert("C".to_string(), var(VariableType::State, None));
         let loaded_producers: HashMap<String, usize> = HashMap::new();
 
-        let err =
-            apply_pointwise_lift(&mut equations, &mut state_variables, &loaded_producers)
-                .unwrap_err();
+        let err = apply_pointwise_lift(&mut equations, &mut state_variables, &loaded_producers)
+            .unwrap_err();
         match err {
             FlattenError::DimensionPromotion { message } => {
                 assert!(message.contains("pointwise lift"), "message: {message}");

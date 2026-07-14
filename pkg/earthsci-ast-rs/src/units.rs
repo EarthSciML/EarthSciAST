@@ -21,25 +21,144 @@ use crate::types::{Equation, Expr, ExpressionNode};
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// A dimension exponent.
+///
+/// Exponents are RATIONAL, not integer: `1/s^0.5` — the intensity of an SDE
+/// noise term — is a legitimate unit that appears in the shared corpus
+/// (`tests/fixtures/sde/*.esm`), and `sqrt` halves whatever it is given. An
+/// integer exponent could represent neither, so `sqrt(m^3)` used to be reported
+/// as "not representable" and `s^0.5` failed to parse outright — which, now that
+/// a dimensional mismatch is a HARD ERROR, would falsely reject legitimate
+/// files.
+///
+/// Always stored in lowest terms with a positive denominator, so `PartialEq`
+/// is exact dimensional equality (½ and 2/4 compare equal) and `HashMap` lookups
+/// are sound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Rational {
+    num: i32,
+    den: i32,
+}
+
+impl Rational {
+    /// A whole number exponent.
+    #[must_use]
+    pub fn int(n: i32) -> Self {
+        Rational { num: n, den: 1 }
+    }
+
+    /// `num/den`, reduced. A zero denominator is treated as `0/1`.
+    #[must_use]
+    pub fn new(num: i32, den: i32) -> Self {
+        if den == 0 {
+            return Rational { num: 0, den: 1 };
+        }
+        let sign = if den < 0 { -1 } else { 1 };
+        let (num, den) = (num * sign, den * sign);
+        let g = gcd(num.abs(), den);
+        if g == 0 {
+            return Rational { num: 0, den: 1 };
+        }
+        Rational {
+            num: num / g,
+            den: den / g,
+        }
+    }
+
+    /// Convert a decimal literal (`0.5`, `-1.5`, `2`) to an exact rational.
+    ///
+    /// Goes through the DECIMAL representation rather than the binary float, so
+    /// `0.5` is exactly ½ and `0.1` is exactly 1/10 — a continued-fraction
+    /// expansion of the `f64` would introduce a spurious huge denominator.
+    /// Returns `None` for a non-finite value or one needing more precision than
+    /// an `i32` numerator can hold.
+    #[must_use]
+    pub fn from_f64(x: f64) -> Option<Self> {
+        if !x.is_finite() {
+            return None;
+        }
+        if x.fract() == 0.0 && x.abs() < i32::MAX as f64 {
+            return Some(Rational::int(x as i32));
+        }
+        // Up to 6 decimal places is far more than any real unit exponent needs.
+        for places in 1..=6u32 {
+            let den = 10i32.checked_pow(places)?;
+            let scaled = x * f64::from(den);
+            if scaled.fract().abs() < 1e-9 && scaled.abs() < i32::MAX as f64 {
+                return Some(Rational::new(scaled.round() as i32, den));
+            }
+        }
+        None
+    }
+
+    fn add(self, other: Self) -> Self {
+        Rational::new(
+            self.num * other.den + other.num * self.den,
+            self.den * other.den,
+        )
+    }
+
+    fn sub(self, other: Self) -> Self {
+        Rational::new(
+            self.num * other.den - other.num * self.den,
+            self.den * other.den,
+        )
+    }
+
+    fn mul(self, other: Self) -> Self {
+        Rational::new(self.num * other.num, self.den * other.den)
+    }
+
+    fn is_zero(self) -> bool {
+        self.num == 0
+    }
+
+    /// As an `f64`, for scaling a unit's magnitude by this exponent.
+    fn as_f64(self) -> f64 {
+        f64::from(self.num) / f64::from(self.den)
+    }
+}
+
+impl std::fmt::Display for Rational {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.den == 1 {
+            write!(f, "{}", self.num)
+        } else {
+            write!(f, "{}/{}", self.num, self.den)
+        }
+    }
+}
+
+fn gcd(a: i32, b: i32) -> i32 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
 /// Represents a physical unit with dimensions
 #[derive(Debug, Clone, PartialEq)]
 pub struct Unit {
-    /// Base dimensions with their powers
-    dimensions: HashMap<Dimension, i32>,
+    /// Base dimensions with their (rational) powers
+    dimensions: HashMap<Dimension, Rational>,
     /// Scale factor for unit conversions
     scale: f64,
 }
 
-/// Base physical dimensions
+/// Base physical dimensions — the eight canonical axes shared across the
+/// bindings (`m kg s mol K A cd rad`).
+///
+/// `Angle` is a full axis rather than a synonym for dimensionless, matching the
+/// Go reference. The trigonometric functions therefore accept an angle OR a
+/// dimensionless argument (see `propagate_transcendental_dim`); `exp`/`log` still
+/// demand strict dimensionlessness.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Dimension {
-    Mass,        // M
-    Length,      // L
-    Time,        // T
-    Current,     // I (electric current)
-    Temperature, // Θ (thermodynamic temperature)
-    Amount,      // N (amount of substance)
-    Luminosity,  // J (luminous intensity)
+    Mass,        // M   — kg
+    Length,      // L   — m
+    Time,        // T   — s
+    Current,     // I   — A  (electric current)
+    Temperature, // Θ   — K  (thermodynamic temperature)
+    Amount,      // N   — mol (amount of substance)
+    Luminosity,  // J   — cd (luminous intensity)
+    Angle,       // rad (plane angle)
 }
 
 /// Error types for unit operations
@@ -53,7 +172,112 @@ pub enum UnitError {
     UnknownUnit(String),
 }
 
+/// Severity of a dimensional finding — the cross-binding policy that decides
+/// whether a finding blocks validation.
+///
+/// The split is drawn at *provability*, and it is decided AT THE POINT the
+/// finding is raised (mirroring the TypeScript reference, whose `UnitWarning`
+/// carries the same classification):
+///
+/// * [`UnitSeverity::Error`] — a PROVABLE dimensional inconsistency: every
+///   operand's dimension was determined, and they are incompatible. That is a
+///   defect in the FILE, so it is promoted by `structural.rs` to a
+///   `unit_inconsistency` structural error and makes `is_valid` false. The
+///   shared corpus requires this: `tests/invalid/expected_errors.json` pins the
+///   `units_*.esm` fixtures as `is_valid: false` with a structural error, so a
+///   binding that keeps them as warnings ACCEPTS files the corpus pins invalid.
+///
+/// * [`UnitSeverity::Analysis`] — the checker could not DETERMINE a dimension
+///   (unknown variable, unparseable unit string, symbolic/non-literal exponent,
+///   an operator with no dimensional rule). This reports what the checker could
+///   not conclude, NOT a defect in the file, so it stays a non-blocking warning
+///   and the affected subexpression propagates as [`Dim::Unknown`].
+///
+/// An unknown *variable* stays `Analysis` here only because it is already a
+/// hard `undefined_variable` structural error — the file is still rejected; we
+/// just do not double-report it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitSeverity {
+    /// Provable dimensional inconsistency — blocks validation.
+    Error,
+    /// Undeterminable dimension — non-blocking warning.
+    Analysis,
+}
+
+/// A single dimensional finding produced while propagating an expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnitFinding {
+    /// Whether this finding blocks validation. See [`UnitSeverity`].
+    pub severity: UnitSeverity,
+    /// Human-readable description of the finding.
+    pub message: String,
+}
+
+impl UnitFinding {
+    fn error(message: impl Into<String>) -> Self {
+        UnitFinding {
+            severity: UnitSeverity::Error,
+            message: message.into(),
+        }
+    }
+
+    fn analysis(message: impl Into<String>) -> Self {
+        UnitFinding {
+            severity: UnitSeverity::Analysis,
+            message: message.into(),
+        }
+    }
+
+    /// True when this finding is a provable inconsistency.
+    pub fn is_error(&self) -> bool {
+        self.severity == UnitSeverity::Error
+    }
+}
+
+/// The dimension of a subexpression: either determined, or not.
+///
+/// `Unknown` is what makes multi-finding collection sound. Propagation NEVER
+/// aborts an expression at the first finding — it records the finding, yields
+/// `Unknown` for that subtree, and keeps walking its siblings. An
+/// undeterminable operand therefore cannot SUPPRESS a provable mismatch
+/// elsewhere in the same expression (the old `Result`-based propagation bailed
+/// at the first `Err`, so a single unknown variable hid every real error after
+/// it), and it equally cannot MANUFACTURE one: `Unknown` compares against
+/// nothing, so no finding is raised for it.
+#[derive(Debug, Clone, PartialEq)]
+enum Dim {
+    /// Dimension determined.
+    Known(Unit),
+    /// Dimension could not be determined; an `Analysis` finding was recorded.
+    Unknown,
+}
+
+impl Dim {
+    fn known(&self) -> Option<&Unit> {
+        match self {
+            Dim::Known(u) => Some(u),
+            Dim::Unknown => None,
+        }
+    }
+}
+
 impl Unit {
+    /// The multiplicative factor taking this unit to its SI base (`atm` → 101325).
+    ///
+    /// NOTE: the representation is purely multiplicative — there is no affine
+    /// OFFSET — so `degC` and `K` are indistinguishable here. A check that must
+    /// separate them (the `default_units` identity check) cannot do so by
+    /// dimension and scale alone.
+    pub fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    /// Whether two units measure the same physical quantity, ignoring scale
+    /// (`atm` and `Pa` are the same dimension at different scales).
+    pub fn same_dimensions(&self, other: &Unit) -> bool {
+        self.dimensions == other.dimensions
+    }
+
     /// Create a dimensionless unit
     pub fn dimensionless() -> Self {
         Unit {
@@ -62,10 +286,16 @@ impl Unit {
         }
     }
 
-    /// Create a unit with a single dimension
+    /// Create a unit with a single dimension raised to an integer power.
     pub fn base(dimension: Dimension, power: i32, scale: f64) -> Self {
+        Unit::base_rational(dimension, Rational::int(power), scale)
+    }
+
+    /// Create a unit with a single dimension raised to a RATIONAL power (e.g.
+    /// `s^-1/2`, the dimension of an SDE noise intensity).
+    pub fn base_rational(dimension: Dimension, power: Rational, scale: f64) -> Self {
         let mut dimensions = HashMap::new();
-        if power != 0 {
+        if !power.is_zero() {
             dimensions.insert(dimension, power);
         }
         Unit { dimensions, scale }
@@ -81,54 +311,59 @@ impl Unit {
         self.dimensions.is_empty()
     }
 
+    /// True when this unit is dimensionless OR a pure plane angle.
+    ///
+    /// `rad` is a full dimension axis here (matching the Go reference), but a
+    /// trigonometric function legitimately takes an ANGLE — `sin(theta)` with
+    /// `theta` in radians must not be reported as a dimensional error.
+    pub fn is_dimensionless_or_angle(&self) -> bool {
+        self.dimensions
+            .keys()
+            .all(|d| matches!(d, Dimension::Angle))
+    }
+
     /// Multiply two units
     pub fn multiply(&self, other: &Unit) -> Unit {
-        let mut dimensions = self.dimensions.clone();
-
-        for (dim, power) in &other.dimensions {
-            let entry = dimensions.entry(dim.clone()).or_insert(0);
-            *entry += power;
-            if *entry == 0 {
-                dimensions.remove(dim);
-            }
-        }
-
-        Unit {
-            dimensions,
-            scale: self.scale * other.scale,
-        }
+        self.combine(other, Rational::add, self.scale * other.scale)
     }
 
     /// Divide two units
     pub fn divide(&self, other: &Unit) -> Unit {
-        let mut dimensions = self.dimensions.clone();
+        self.combine(other, Rational::sub, self.scale / other.scale)
+    }
 
+    /// Merge `other`'s exponents into a copy of `self`'s with `op`, dropping any
+    /// axis whose exponent cancels to zero.
+    fn combine(&self, other: &Unit, op: fn(Rational, Rational) -> Rational, scale: f64) -> Unit {
+        let mut dimensions = self.dimensions.clone();
         for (dim, power) in &other.dimensions {
-            let entry = dimensions.entry(dim.clone()).or_insert(0);
-            *entry -= power;
-            if *entry == 0 {
+            let entry = dimensions.entry(dim.clone()).or_insert(Rational::int(0));
+            *entry = op(*entry, *power);
+            if entry.is_zero() {
                 dimensions.remove(dim);
             }
         }
-
-        Unit {
-            dimensions,
-            scale: self.scale / other.scale,
-        }
+        Unit { dimensions, scale }
     }
 
-    /// Raise unit to a power
+    /// Raise unit to an integer power.
     pub fn power(&self, exponent: i32) -> Unit {
+        self.power_rational(Rational::int(exponent))
+    }
+
+    /// Raise unit to a RATIONAL power. `sqrt` is `power_rational(1/2)`, and a
+    /// literal `^0.5` in an expression lands here too.
+    pub fn power_rational(&self, exponent: Rational) -> Unit {
         let dimensions = self
             .dimensions
             .iter()
-            .map(|(dim, power)| (dim.clone(), power * exponent))
-            .filter(|(_, power)| *power != 0)
+            .map(|(dim, power)| (dim.clone(), power.mul(exponent)))
+            .filter(|(_, power)| !power.is_zero())
             .collect();
 
         Unit {
             dimensions,
-            scale: self.scale.powi(exponent),
+            scale: self.scale.powf(exponent.as_f64()),
         }
     }
 
@@ -142,6 +377,11 @@ impl Unit {
     ///
     /// The `t` identifier is treated as the implicit time variable with units
     /// of seconds if not otherwise present in `env`.
+    ///
+    /// This is the single-outcome (`Result`) view, kept for callers that only
+    /// need "does this expression have a unit". Validation uses
+    /// [`check_expression_dimensions`], which reports EVERY finding rather than
+    /// only the first.
     ///
     /// # Arguments
     ///
@@ -160,458 +400,671 @@ impl Unit {
         env: &HashMap<String, Unit>,
         coords: Option<&HashMap<String, Unit>>,
     ) -> Result<Unit, UnitError> {
-        match expr {
-            Expr::Number(_) | Expr::Integer(_) => Ok(Unit::dimensionless()),
-            Expr::Variable(name) => {
-                if let Some(unit) = env.get(name) {
-                    Ok(unit.clone())
-                } else if name == "t" {
-                    // Implicit time variable.
-                    Ok(Unit::base(Dimension::Time, 1, 1.0))
-                } else {
-                    Err(UnitError::UnknownUnit(format!("Variable: {name}")))
-                }
-            }
-            Expr::Operator(op) => propagate_operator(op, env, coords),
+        let mut findings = Vec::new();
+        let dim = propagate_dim(expr, env, coords, &mut findings);
+        // A provable inconsistency outranks an undeterminable dimension.
+        if let Some(err) = findings.iter().find(|f| f.is_error()) {
+            return Err(UnitError::DimensionMismatch(err.message.clone()));
+        }
+        match dim {
+            Dim::Known(unit) => Ok(unit),
+            Dim::Unknown => Err(UnitError::UnknownUnit(
+                findings
+                    .first()
+                    .map(|f| f.message.clone())
+                    .unwrap_or_else(|| "undetermined dimension".to_string()),
+            )),
         }
     }
+}
+
+/// Propagate the dimension of `expr`, recording every finding in `findings`.
+///
+/// Never aborts: an undeterminable subtree yields [`Dim::Unknown`] and the walk
+/// continues, so all provable mismatches in the expression are reported.
+fn propagate_dim(
+    expr: &Expr,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    match expr {
+        // A BARE NUMERIC LITERAL has an INDETERMINATE dimension, not a
+        // dimensionless one: nothing in the AST says whether `273.15` is a pure
+        // number or a temperature offset, or whether `6.022e23` is Avogadro's
+        // constant. Calling it dimensionless manufactured a mismatch on every
+        // line of the valid corpus that uses an implicit-unit constant
+        // (`T - 273.15`, `1 - phi`).
+        //
+        // This matters BECAUSE these findings are now hard errors: a checker
+        // that fails the build must not fabricate a dimension it cannot know.
+        // It costs nothing on the pinned invalid corpus — every fixture there
+        // states its inconsistency between DECLARED quantities (`length + mass`,
+        // `ln(mass)`, `m^kg`), never via a literal. Literals still behave
+        // correctly wherever their meaning IS determined: additively they are
+        // neutral and adopt their sibling's dimension, an all-literal expression
+        // is dimensionless, and an exponent is read BY VALUE.
+        Expr::Number(_) | Expr::Integer(_) => Dim::Unknown,
+        Expr::Variable(name) => {
+            if let Some(unit) = env.get(name) {
+                Dim::Known(unit.clone())
+            } else if name == "t" {
+                // Implicit time variable.
+                Dim::Known(Unit::base(Dimension::Time, 1, 1.0))
+            } else {
+                // Dimension unknown — but NOT reported here, because the reason
+                // is always already reported at the variable itself, and this
+                // path fires once per REFERENCE:
+                //   * genuinely undeclared  ⇒ hard `undefined_variable` error;
+                //   * unparseable unit      ⇒ `build_unit_env` warns once;
+                //   * no `units` field      ⇒ a legitimate choice, not a defect.
+                // Re-reporting per reference would only duplicate those.
+                Dim::Unknown
+            }
+        }
+        Expr::Operator(op) => propagate_operator_dim(op, env, coords, findings),
+    }
+}
+
+/// Propagate every argument, returning their dimensions positionally.
+fn propagate_args(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+    findings: &mut Vec<UnitFinding>,
+) -> Vec<Dim> {
+    op.args
+        .iter()
+        .map(|a| propagate_dim(a, env, coords, findings))
+        .collect()
+}
+
+/// Require exactly `n` arguments. Arity is enforced by the operator registry
+/// and the schema; here a wrong arity simply means we cannot analyse the node,
+/// so it is an `Analysis` finding rather than a dimensional defect.
+fn require_arity(op: &ExpressionNode, n: usize, findings: &mut Vec<UnitFinding>) -> bool {
+    if op.args.len() == n {
+        return true;
+    }
+    findings.push(UnitFinding::analysis(format!(
+        "'{}' expects {} argument(s) but has {}; not dimension-checked",
+        op.op,
+        n,
+        op.args.len()
+    )));
+    false
 }
 
 /// Dispatch one operator node to its family's propagation helper. Kept as a
 /// thin match so each family's dimensional rules live in one named function;
 /// the rules mirror the Python (`units.py::_get_expression_dimension`) and
 /// Julia (`units.jl::get_expression_dimensions`) implementations.
-fn propagate_operator(
+fn propagate_operator_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
     match op.op.as_str() {
-        "+" | "-" => propagate_additive(op, env, coords),
-        "*" | "/" => propagate_multiplicative(op, env, coords),
-        "^" | "power" | "pow" => propagate_power(op, env, coords),
-        "D" | "ic" => propagate_calculus(op, env, coords),
-        "grad" | "div" | "laplacian" => propagate_spatial(op, env, coords),
+        "+" | "-" => propagate_additive_dim(op, env, coords, findings),
+        "*" | "/" => propagate_multiplicative_dim(op, env, coords, findings),
+        "^" | "power" | "pow" => propagate_power_dim(op, env, coords, findings),
+        "D" | "ic" => propagate_calculus_dim(op, env, coords, findings),
+        "grad" | "div" | "laplacian" => propagate_spatial_dim(op, env, coords, findings),
         "exp" | "log" | "log10" | "ln" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
         | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
-            propagate_transcendental(op, env, coords)
+            propagate_transcendental_dim(op, env, coords, findings)
         }
-        "sqrt" => propagate_sqrt(op, env, coords),
+        "sqrt" => propagate_sqrt_dim(op, env, coords, findings),
         // abs/sign/floor/ceil preserve dimensions; `Pre` is an initial-value
         // marker — same dimensions as its argument.
         "abs" | "floor" | "ceil" | "round" | "sign" | "Pre" => {
-            propagate_dimension_preserving(op, env, coords)
+            if !require_arity(op, 1, findings) {
+                return Dim::Unknown;
+            }
+            propagate_dim(&op.args[0], env, coords, findings)
         }
-        "min" | "max" => propagate_min_max(op, env, coords),
-        "atan2" => propagate_atan2(op, env, coords),
-        "ifelse" => propagate_ifelse(op, env, coords),
-        ">" | "<" | ">=" | "<=" | "==" | "!=" => propagate_comparison(op, env, coords),
-        "and" | "or" | "not" => Ok(Unit::dimensionless()),
+        "min" | "max" => propagate_matching_dim(op, env, coords, findings),
+        "atan2" => {
+            if !require_arity(op, 2, findings) {
+                return Dim::Unknown;
+            }
+            // Both arguments must share dimensions (their RATIO is what is fed
+            // to the arctangent). The result is an ANGLE — `atan2(y, x)` is the
+            // canonical spelling of a bearing.
+            propagate_matching_dim(op, env, coords, findings);
+            Dim::Known(radian())
+        }
+        "ifelse" => propagate_ifelse_dim(op, env, coords, findings),
+        ">" | "<" | ">=" | "<=" | "==" | "!=" => {
+            if !require_arity(op, 2, findings) {
+                return Dim::Known(Unit::dimensionless());
+            }
+            // Operands must be comparable; the flag itself is dimensionless.
+            propagate_matching_dim(op, env, coords, findings);
+            Dim::Known(Unit::dimensionless())
+        }
+        "and" | "or" | "not" => Dim::Known(Unit::dimensionless()),
         // Array operators: propagate the element dimension. Shape and
         // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
         // are a separate concern from unit checking).
         "aggregate" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
-            propagate_array(op, env, coords)
+            propagate_array_dim(op, env, coords, findings)
         }
-        // Unknown operator — fail loudly rather than silently returning
-        // dimensionless, which used to mask propagation gaps.
-        other => Err(UnitError::ParseError(format!(
-            "Unknown operator '{other}' in dimensional propagation"
-        ))),
+        // No dimensional rule for this operator. We cannot conclude anything
+        // about the file, so this is an `Analysis` finding and the node's
+        // dimension is unknown — NOT a silent `dimensionless`, which would
+        // manufacture false mismatches in the enclosing expression.
+        other => {
+            findings.push(UnitFinding::analysis(format!(
+                "Operator '{other}' has no dimensional rule; its dimension is unknown"
+            )));
+            Dim::Unknown
+        }
+    }
+}
+
+/// True for a bare numeric literal, which is dimensionally NEUTRAL in an
+/// additive position rather than dimensionless. See [`propagate_dim`].
+fn is_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Number(_) | Expr::Integer(_))
+}
+
+/// Report a provable mismatch among the operands that DID resolve, and return
+/// the shared dimension. Used by `+`/`-`, `min`/`max`, comparisons and `atan2`.
+///
+/// Two operands are only ever compared when BOTH dimensions were determined —
+/// an undeterminable operand is skipped, never assumed dimensionless, so it can
+/// neither hide nor manufacture a mismatch.
+///
+/// Bare numeric literals are skipped entirely: they adopt the dimension of what
+/// they are combined with (`T - 273.15` is a temperature). If EVERY operand is
+/// a literal (`1 + 2`, unary `-1`), the result is dimensionless.
+fn propagate_matching_dim(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    let mut first: Option<Unit> = None;
+    let mut saw_non_literal = false;
+    for arg in &op.args {
+        if is_literal(arg) {
+            continue;
+        }
+        saw_non_literal = true;
+        let dim = propagate_dim(arg, env, coords, findings);
+        let Some(unit) = dim.known() else {
+            continue;
+        };
+        match &first {
+            None => first = Some(unit.clone()),
+            Some(f) if !f.is_compatible(unit) => {
+                findings.push(UnitFinding::error(format!(
+                    "Incompatible dimensions in '{}': {} vs {}",
+                    op.op,
+                    describe(f),
+                    describe(unit)
+                )));
+            }
+            _ => {}
+        }
+    }
+    if !saw_non_literal {
+        return Dim::Known(Unit::dimensionless());
+    }
+    match first {
+        Some(unit) => Dim::Known(unit),
+        None => Dim::Unknown,
     }
 }
 
 /// `+` / `-`: every operand must share dimensions; the result carries them.
 /// A unary minus propagates its single argument unchanged.
-fn propagate_additive(
+fn propagate_additive_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
     if op.args.is_empty() {
-        return Ok(Unit::dimensionless());
+        return Dim::Known(Unit::dimensionless());
     }
     // Unary minus: propagate the single argument.
     if op.op == "-" && op.args.len() == 1 {
-        return Unit::propagate_with_coords(&op.args[0], env, coords);
+        return propagate_dim(&op.args[0], env, coords, findings);
     }
-    let first = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-    for arg in op.args.iter().skip(1) {
-        let other = Unit::propagate_with_coords(arg, env, coords)?;
-        if !first.is_compatible(&other) {
-            return Err(UnitError::DimensionMismatch(format!(
-                "Incompatible dimensions in '{}' operation",
-                op.op
-            )));
-        }
-    }
-    Ok(first)
+    propagate_matching_dim(op, env, coords, findings)
 }
 
 /// `*` / `/`: dimensions multiply / divide, no compatibility requirement.
-fn propagate_multiplicative(
+fn propagate_multiplicative_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    match op.op.as_str() {
-        "*" => {
-            let mut result = Unit::dimensionless();
-            for arg in &op.args {
-                let u = Unit::propagate_with_coords(arg, env, coords)?;
-                result = result.multiply(&u);
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    let dims = propagate_args(op, env, coords, findings);
+    if op.op == "*" {
+        let mut result = Unit::dimensionless();
+        for d in &dims {
+            match d.known() {
+                Some(u) => result = result.multiply(u),
+                None => return Dim::Unknown,
             }
-            Ok(result)
         }
-        _ => {
-            if op.args.len() != 2 {
-                return Err(UnitError::ParseError(
-                    "Division requires exactly 2 arguments".to_string(),
-                ));
-            }
-            let num = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            let den = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-            Ok(num.divide(&den))
-        }
+        return Dim::Known(result);
+    }
+    if !require_arity(op, 2, findings) {
+        return Dim::Unknown;
+    }
+    match (dims[0].known(), dims[1].known()) {
+        (Some(num), Some(den)) => Dim::Known(num.divide(den)),
+        _ => Dim::Unknown,
     }
 }
 
 /// `^` / `power` / `pow`: the exponent must be dimensionless; a dimensional
 /// base additionally requires a literal integer exponent (only integer powers
 /// of dimensions are representable).
-fn propagate_power(
+fn propagate_power_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.len() != 2 {
-        return Err(UnitError::ParseError(
-            "Power operator requires exactly 2 arguments".to_string(),
-        ));
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    if !require_arity(op, 2, findings) {
+        return Dim::Unknown;
     }
-    let base_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-    let exp_unit = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-    if !exp_unit.is_dimensionless() {
-        return Err(UnitError::DimensionMismatch(format!(
-            "Exponent in '{}' must be dimensionless",
-            op.op
+    let base = propagate_dim(&op.args[0], env, coords, findings);
+    let exp = propagate_dim(&op.args[1], env, coords, findings);
+
+    // A dimensional exponent is provably wrong regardless of the base.
+    if let Some(e) = exp.known()
+        && !e.is_dimensionless()
+    {
+        findings.push(UnitFinding::error(format!(
+            "Exponent in '{}' must be dimensionless, got {}",
+            op.op,
+            describe(e)
         )));
+        return Dim::Unknown;
     }
-    // Only integer exponents carry dimensions meaningfully.
+
+    let Some(base_unit) = base.known() else {
+        return Dim::Unknown;
+    };
+    // A dimensionless base stays dimensionless under any exponent, so a
+    // non-literal exponent is only a problem for a DIMENSIONAL base.
     if base_unit.is_dimensionless() {
-        return Ok(Unit::dimensionless());
+        return Dim::Known(Unit::dimensionless());
     }
-    if let Expr::Number(n) = &op.args[1] {
-        if n.fract() == 0.0 {
-            return Ok(base_unit.power(*n as i32));
+
+    // The exponent is read BY VALUE, not by dimension — a literal's dimension is
+    // indeterminate, but its VALUE is exactly what a power needs. It may arrive
+    // as EITHER `Expr::Number` (JSON `2.0`) or `Expr::Integer` (JSON `2`).
+    let literal_exp = match &op.args[1] {
+        Expr::Integer(i) => Some(f64::from(*i as i32)),
+        Expr::Number(n) => Some(*n),
+        _ => None,
+    };
+    match literal_exp {
+        // Exponents are RATIONAL, so a fractional power of a dimensional
+        // quantity (`x^0.5`) is representable and propagates exactly.
+        Some(n) => match Rational::from_f64(n) {
+            Some(r) => Dim::Known(base_unit.power_rational(r)),
+            None => {
+                findings.push(UnitFinding::analysis(format!(
+                    "Exponent {n} is not a representable rational, so the dimension of a \
+                     dimensional base is unknown"
+                )));
+                Dim::Unknown
+            }
+        },
+        // Symbolic exponent (`x^n` for a parameter `n`): the resulting
+        // dimension depends on a value we do not have. Undeterminable, NOT a
+        // mismatch.
+        None => {
+            findings.push(UnitFinding::analysis(format!(
+                "Exponent of '{}' is not a literal, so the dimension of a dimensional \
+                 base is unknown",
+                op.op
+            )));
+            Dim::Unknown
         }
-        return Err(UnitError::DimensionMismatch(format!(
-            "Non-integer exponent {n} applied to dimensional quantity"
-        )));
     }
-    // Non-literal exponent with a dimensional base is ambiguous.
-    Err(UnitError::DimensionMismatch(
-        "Cannot apply non-literal exponent to a dimensional quantity".to_string(),
-    ))
 }
 
 /// Calculus-family operators: the time/coordinate derivative `D` divides its
 /// argument's dimensions by the `wrt` variable's, and the initial-condition
 /// marker `ic` (v0.8.0) is dimension-preserving — the initial value of a field
 /// carries the same units as the field itself.
-fn propagate_calculus(
+fn propagate_calculus_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    match op.op.as_str() {
-        "D" => {
-            if op.args.len() != 1 {
-                return Err(UnitError::ParseError(
-                    "Derivative 'D' requires exactly 1 argument".to_string(),
-                ));
-            }
-            let arg_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            let wrt = op.wrt.as_deref().unwrap_or("t");
-            let wrt_unit = env
-                .get(wrt)
-                .cloned()
-                .or_else(|| {
-                    if wrt == "t" {
-                        Some(Unit::base(Dimension::Time, 1, 1.0))
-                    } else {
-                        None
-                    }
-                })
-                .ok_or_else(|| {
-                    UnitError::UnknownUnit(format!("Derivative wrt unknown variable: {wrt}"))
-                })?;
-            Ok(arg_unit.divide(&wrt_unit))
-        }
-        _ => {
-            // "ic": propagate the unit of the single argument unchanged.
-            if op.args.len() != 1 {
-                return Err(UnitError::ParseError(
-                    "Initial condition 'ic' requires exactly 1 argument".to_string(),
-                ));
-            }
-            Unit::propagate_with_coords(&op.args[0], env, coords)
-        }
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    if !require_arity(op, 1, findings) {
+        return Dim::Unknown;
     }
+    let arg = propagate_dim(&op.args[0], env, coords, findings);
+    if op.op == "ic" {
+        return arg;
+    }
+    let wrt = op.wrt.as_deref().unwrap_or("t");
+    // The independent variable's unit is only known if it was DECLARED. We do
+    // not assume an undeclared `t` means seconds: that would give `D(x)/dt` a
+    // dimension of `[x]/second`, and every dimensionless toy model
+    // (`D(x)/dt = -x`, the idiom used across the shared corpus) would then look
+    // like a mismatch of `time^-1` against `dimensionless`. An undeclared
+    // independent variable leaves the derivative INDETERMINATE here; the
+    // equation-level time-ratio rule in `check_equation_dimensions` still
+    // catches derivative equations that no time unit could reconcile.
+    let (Some(arg_unit), Some(wrt_unit)) = (arg.known(), env.get(wrt)) else {
+        return Dim::Unknown;
+    };
+    Dim::Known(arg_unit.divide(wrt_unit))
+}
+
+/// True when `expr` is `D(x)` taken with respect to an UNDECLARED independent
+/// variable, which makes its dimension indeterminate. Mirrors the TypeScript
+/// reference (`units.ts::derivativeOfUndeclaredTime`).
+fn derivative_of_undeclared_time<'a>(
+    expr: &'a Expr,
+    env: &HashMap<String, Unit>,
+) -> Option<&'a Expr> {
+    let Expr::Operator(op) = expr else {
+        return None;
+    };
+    if op.op != "D" || op.args.len() != 1 {
+        return None;
+    }
+    let wrt = op.wrt.as_deref().unwrap_or("t");
+    (!env.contains_key(wrt)).then(|| &op.args[0])
+}
+
+/// The weaker-but-still-provable rule for `d(state)/dt = rhs` when the time
+/// unit is unknown: whatever time unit `t` carries, it can only ever contribute
+/// powers of TIME to the ratio. So if `dims(state) / dims(rhs)` contains any
+/// NON-time dimension, no choice of time unit could reconcile the two sides and
+/// the equation is provably inconsistent. A ratio that is a pure power of time
+/// (including time^0) is accepted. Mirrors `units.ts::derivativeTimeMismatch`.
+fn derivative_time_mismatch(state: &Unit, rhs: &Unit) -> Option<String> {
+    let ratio = state.divide(rhs);
+    let unreconcilable = ratio
+        .dimensions
+        .iter()
+        .any(|(d, p)| *d != Dimension::Time && !p.is_zero());
+    unreconcilable.then(|| {
+        format!(
+            "No time unit can reconcile d({})/dt with {} (their ratio {} is not a power of time)",
+            describe(state),
+            describe(rhs),
+            describe(&ratio)
+        )
+    })
 }
 
 /// Spatial operators `grad` / `div` / `laplacian`: divide the argument's
 /// dimensions by the coordinate unit raised to the operator's order (1 for
 /// first derivatives, 2 for the laplacian), via [`coord_denominator`].
-fn propagate_spatial(
+fn propagate_spatial_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
     if op.args.is_empty() {
-        return Err(UnitError::ParseError(format!(
-            "'{}' requires at least one argument",
+        findings.push(UnitFinding::analysis(format!(
+            "'{}' requires at least one argument; not dimension-checked",
             op.op
         )));
+        return Dim::Unknown;
     }
-    let arg_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    let arg = propagate_dim(&op.args[0], env, coords, findings);
+    let Some(arg_unit) = arg.known() else {
+        return Dim::Unknown;
+    };
     let power = if op.op == "laplacian" { 2 } else { 1 };
-    let denom = coord_denominator(op, coords, power);
-    Ok(arg_unit.divide(&denom))
+    Dim::Known(arg_unit.divide(&coord_denominator(op, coords, power)))
 }
 
-/// Transcendental and trigonometric functions: argument must be
-/// dimensionless, result is dimensionless.
-fn propagate_transcendental(
+/// Transcendental and trigonometric functions: argument must be dimensionless,
+/// result is dimensionless.
+///
+/// `sqrt` is NOT in this family — it halves its argument's dimensions (see
+/// [`propagate_sqrt_dim`]).
+///
+/// The TRIGONOMETRIC members additionally accept a plane ANGLE: `rad` is a real
+/// dimension axis here, so `sin(theta)` with `theta` in radians is correct, not
+/// an error. `exp`/`log`/`log10`/`ln` still demand strict dimensionlessness.
+fn propagate_transcendental_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.len() != 1 {
-        return Err(UnitError::ParseError(format!(
-            "'{}' requires exactly 1 argument",
-            op.op
-        )));
-    }
-    let arg = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-    if !arg.is_dimensionless() {
-        return Err(UnitError::DimensionMismatch(format!(
-            "Argument to '{}' must be dimensionless",
-            op.op
-        )));
-    }
-    Ok(Unit::dimensionless())
-}
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    // `rad` is a real axis here, so the circular functions are NOT symmetric —
+    // and getting this wrong is silently destructive in both directions:
+    //
+    // * FORWARD circular (`sin`/`cos`/`tan`) map an ANGLE to a ratio: they
+    //   accept an angle OR a dimensionless argument, and return DIMENSIONLESS.
+    //   (`sin(kg)` is still an error.)
+    // * INVERSE circular (`asin`/`acos`/`atan`) map a ratio to an ANGLE: they
+    //   require a DIMENSIONLESS argument and RETURN AN ANGLE. Asserting a
+    //   dimensionless result while `rad` is an axis makes every
+    //   `zenith: "rad"` computed by `acos(...)` a guaranteed false mismatch.
+    // * The HYPERBOLIC family takes and returns pure numbers — a hyperbolic
+    //   "angle" is an area, not a plane angle, so `rad` is not involved.
+    // * `exp`/`log` demand strict dimensionlessness: their Taylor series adds
+    //   powers of the argument.
+    let is_inverse_circular = matches!(op.op.as_str(), "asin" | "acos" | "atan");
+    let result = if is_inverse_circular {
+        radian()
+    } else {
+        Unit::dimensionless()
+    };
 
-/// Square root: halve dimension powers when all even, else error.
-fn propagate_sqrt(
-    op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
-    coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.len() != 1 {
-        return Err(UnitError::ParseError(
-            "'sqrt' requires exactly 1 argument".to_string(),
-        ));
+    if !require_arity(op, 1, findings) {
+        // The result is fixed by the operator whatever the argument turns out
+        // to be.
+        return Dim::Known(result);
     }
-    let arg = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-    if arg.is_dimensionless() {
-        return Ok(Unit::dimensionless());
-    }
-    let mut dims = HashMap::new();
-    for (d, p) in &arg.dimensions {
-        if p % 2 != 0 {
-            return Err(UnitError::DimensionMismatch(
-                "sqrt of a quantity with odd-power dimensions is not representable".to_string(),
-            ));
-        }
-        dims.insert(d.clone(), p / 2);
-    }
-    Ok(Unit {
-        dimensions: dims,
-        scale: arg.scale.sqrt(),
-    })
-}
 
-/// Single-argument dimension-preserving operators (`abs` / `floor` / `ceil` /
-/// `round` / `sign`, and the initial-value marker `Pre`): the result carries
-/// the argument's dimensions unchanged.
-fn propagate_dimension_preserving(
-    op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
-    coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.len() != 1 {
-        return Err(UnitError::ParseError(format!(
-            "'{}' requires exactly 1 argument",
-            op.op
-        )));
-    }
-    Unit::propagate_with_coords(&op.args[0], env, coords)
-}
+    // Only the forward circular functions accept an angle.
+    let angle_ok = matches!(op.op.as_str(), "sin" | "cos" | "tan");
 
-/// `min` / `max` require matching dimensions across every operand; the result
-/// carries them.
-fn propagate_min_max(
-    op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
-    coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.is_empty() {
-        return Ok(Unit::dimensionless());
-    }
-    let first = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-    for arg in op.args.iter().skip(1) {
-        let other = Unit::propagate_with_coords(arg, env, coords)?;
-        if !first.is_compatible(&other) {
-            return Err(UnitError::DimensionMismatch(format!(
-                "Incompatible dimensions in '{}'",
-                op.op
+    let arg = propagate_dim(&op.args[0], env, coords, findings);
+    if let Some(u) = arg.known() {
+        let acceptable = if angle_ok {
+            u.is_dimensionless_or_angle()
+        } else {
+            u.is_dimensionless()
+        };
+        if !acceptable {
+            findings.push(UnitFinding::error(format!(
+                "Argument to '{}' must be dimensionless{}, got {}",
+                op.op,
+                if angle_ok { " (or an angle)" } else { "" },
+                describe(u)
             )));
         }
     }
-    Ok(first)
+    Dim::Known(result)
 }
 
-/// `atan2`: both arguments must share dimensions (their ratio is the angle);
-/// the result is dimensionless.
-fn propagate_atan2(
+/// The radian — the unit of the `Angle` axis, returned by the inverse circular
+/// functions.
+fn radian() -> Unit {
+    Unit::base(Dimension::Angle, 1, 1.0)
+}
+
+/// Square root HALVES its argument's dimensions — it is not a transcendental
+/// function and does NOT require a dimensionless argument. Because exponents are
+/// rational, `sqrt(m^3)` is exactly `m^3/2` rather than "not representable".
+fn propagate_sqrt_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.len() != 2 {
-        return Err(UnitError::ParseError(
-            "'atan2' requires exactly 2 arguments".to_string(),
-        ));
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    if !require_arity(op, 1, findings) {
+        return Dim::Unknown;
     }
-    let a = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-    let b = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-    if !a.is_compatible(&b) {
-        return Err(UnitError::DimensionMismatch(
-            "atan2 arguments must share dimensions (ratio is the angle)".to_string(),
-        ));
+    let arg = propagate_dim(&op.args[0], env, coords, findings);
+    match arg.known() {
+        Some(unit) => Dim::Known(unit.power_rational(Rational::new(1, 2))),
+        None => Dim::Unknown,
     }
-    Ok(Unit::dimensionless())
 }
 
 /// `ifelse`: the two branches must share dimensions; the result carries them.
-fn propagate_ifelse(
+fn propagate_ifelse_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.len() != 3 {
-        return Err(UnitError::ParseError(
-            "'ifelse' requires exactly 3 arguments".to_string(),
-        ));
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    if !require_arity(op, 3, findings) {
+        return Dim::Unknown;
     }
-    // Condition (arg 0) need not be dimensionless — comparison ops
-    // already produce a dimensionless Boolean, and we don't want to
-    // reject bare scalars used as truthiness flags. Branches must
-    // match.
-    let t_unit = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-    let f_unit = Unit::propagate_with_coords(&op.args[2], env, coords)?;
-    if !t_unit.is_compatible(&f_unit) {
-        return Err(UnitError::DimensionMismatch(
-            "'ifelse' branches must share dimensions".to_string(),
-        ));
+    // The condition (arg 0) need not be dimensionless — comparison ops already
+    // produce a dimensionless Boolean, and we don't want to reject bare scalars
+    // used as truthiness flags. It is still walked so findings inside it (e.g.
+    // a mismatched comparison) are reported.
+    propagate_dim(&op.args[0], env, coords, findings);
+    let t = propagate_dim(&op.args[1], env, coords, findings);
+    let f = propagate_dim(&op.args[2], env, coords, findings);
+    match (t.known(), f.known()) {
+        (Some(a), Some(b)) if !a.is_compatible(b) => {
+            findings.push(UnitFinding::error(format!(
+                "'ifelse' branches must share dimensions: {} vs {}",
+                describe(a),
+                describe(b)
+            )));
+            Dim::Unknown
+        }
+        (Some(a), Some(_)) => Dim::Known(a.clone()),
+        _ => Dim::Unknown,
     }
-    Ok(t_unit)
-}
-
-/// Comparison operators return a dimensionless flag, but their operands must
-/// share dimensions (logical `and`/`or`/`not` are handled directly in the
-/// dispatcher — always dimensionless).
-fn propagate_comparison(
-    op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
-    coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
-    if op.args.len() != 2 {
-        return Err(UnitError::ParseError(format!(
-            "'{}' requires exactly 2 arguments",
-            op.op
-        )));
-    }
-    let a = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-    let b = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-    if !a.is_compatible(&b) {
-        return Err(UnitError::DimensionMismatch(format!(
-            "Comparison '{}' requires matching dimensions",
-            op.op
-        )));
-    }
-    Ok(Unit::dimensionless())
 }
 
 /// Array operators: propagate the element dimension. Shape and indexing are
 /// orthogonal to dimension (see gt-t5c / gt-vt3 — shapes are a separate
 /// concern from unit checking). `aggregate` is the unified Functional
 /// Aggregate Query op (RFC §5.6).
-fn propagate_array(
+fn propagate_array_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
-) -> Result<Unit, UnitError> {
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
     match op.op.as_str() {
         "aggregate" => {
             // The body is the scalar expression evaluated for each tuple of
             // loop-index values; its dimension is the array's element
             // dimension.
             if let Some(body) = &op.expr {
-                return Unit::propagate_with_coords(body, env, coords);
+                return propagate_dim(body, env, coords, findings);
             }
             // Fallback: infer from the first positional arg.
-            if let Some(first) = op.args.first() {
-                return Unit::propagate_with_coords(first, env, coords);
+            match op.args.first() {
+                Some(first) => propagate_dim(first, env, coords, findings),
+                None => Dim::Known(Unit::dimensionless()),
             }
-            Ok(Unit::dimensionless())
         }
         "makearray" => {
             // Element dimension is determined by any per-region `values`
             // entry. All regions must share dimensions.
-            if let Some(values) = &op.values
-                && let Some(first) = values.first()
-            {
-                let first_dim = Unit::propagate_with_coords(first, env, coords)?;
-                for v in values.iter().skip(1) {
-                    let v_dim = Unit::propagate_with_coords(v, env, coords)?;
-                    if !first_dim.is_compatible(&v_dim) {
-                        return Err(UnitError::DimensionMismatch(
-                            "'makearray' regions must share dimensions".to_string(),
-                        ));
-                    }
+            let Some(values) = &op.values else {
+                return Dim::Known(Unit::dimensionless());
+            };
+            let dims: Vec<Dim> = values
+                .iter()
+                .map(|v| propagate_dim(v, env, coords, findings))
+                .collect();
+            let mut resolved = dims.iter().filter_map(Dim::known);
+            let Some(first) = resolved.next().cloned() else {
+                return if values.is_empty() {
+                    Dim::Known(Unit::dimensionless())
+                } else {
+                    Dim::Unknown
+                };
+            };
+            let mut mismatched = false;
+            for other in resolved {
+                if !first.is_compatible(other) {
+                    mismatched = true;
+                    findings.push(UnitFinding::error(format!(
+                        "'makearray' regions must share dimensions: {} vs {}",
+                        describe(&first),
+                        describe(other)
+                    )));
                 }
-                return Ok(first_dim);
             }
-            Ok(Unit::dimensionless())
+            if mismatched || dims.iter().any(|d| d.known().is_none()) {
+                return Dim::Unknown;
+            }
+            Dim::Known(first)
         }
         "broadcast" => {
             // Elementwise map over arrays with `fn` naming the scalar
             // operator. Construct a synthetic scalar node and recurse so we
             // reuse the same dimensional rules.
-            let fn_name = op
-                .broadcast_fn
-                .as_deref()
-                .ok_or_else(|| UnitError::ParseError("'broadcast' requires 'fn'".to_string()))?;
+            let Some(fn_name) = op.broadcast_fn.as_deref() else {
+                findings.push(UnitFinding::analysis(
+                    "'broadcast' is missing its 'fn'; its dimension is unknown".to_string(),
+                ));
+                return Dim::Unknown;
+            };
             let synthetic = ExpressionNode {
                 op: fn_name.to_string(),
                 args: op.args.clone(),
                 ..ExpressionNode::default()
             };
-            propagate_operator(&synthetic, env, coords)
+            propagate_operator_dim(&synthetic, env, coords, findings)
         }
         // "index" | "reshape" | "transpose" | "concat"
         _ => {
             // Shape-only reorderings: element dimension is inherited from
             // the first positional arg (the source array).
-            if let Some(first) = op.args.first() {
-                return Unit::propagate_with_coords(first, env, coords);
+            match op.args.first() {
+                Some(first) => propagate_dim(first, env, coords, findings),
+                None => Dim::Known(Unit::dimensionless()),
             }
-            Ok(Unit::dimensionless())
         }
     }
+}
+
+/// Render a unit's dimensions for a diagnostic message.
+fn describe(unit: &Unit) -> String {
+    if unit.is_dimensionless() {
+        return "dimensionless".to_string();
+    }
+    let mut parts: Vec<String> = unit
+        .dimensions
+        .iter()
+        .map(|(d, p)| {
+            let name = match d {
+                Dimension::Mass => "mass",
+                Dimension::Length => "length",
+                Dimension::Time => "time",
+                Dimension::Current => "current",
+                Dimension::Temperature => "temperature",
+                Dimension::Amount => "amount",
+                Dimension::Luminosity => "luminosity",
+                Dimension::Angle => "angle",
+            };
+            if *p == Rational::int(1) {
+                name.to_string()
+            } else {
+                format!("{name}^{p}")
+            }
+        })
+        .collect();
+    parts.sort();
+    parts.join("*")
 }
 
 /// Resolve the denominator unit for a `grad`/`div`/`laplacian` node raised
@@ -645,45 +1098,72 @@ fn coord_denominator(
 /// together with a list of warnings for any variables whose declared unit
 /// string could not be parsed.
 ///
-/// Variables without declared units are treated as dimensionless. A variable
-/// whose declared unit string is *unparseable* is OMITTED from the returned
-/// environment — its dimension is left UNKNOWN, so [`Unit::propagate`] yields
-/// [`UnitError::UnknownUnit`] for any equation referencing it and that equation
-/// is skipped for dimensional checking (surfaced by the caller as a
-/// non-blocking warning). It is deliberately NOT coerced to dimensionless:
-/// doing so would both hide genuine [`UnitError::DimensionMismatch`] errors
-/// (when the variable is used consistently) and manufacture false ones (when
-/// the real unit was, e.g., `m`). This mirrors the Julia (`@warn`) reference
-/// behavior and esm-libraries-spec §3.3.3/§3.4. The returned warnings must not
-/// affect validity — callers report them as non-blocking warnings only.
+/// A variable is entered into the environment ONLY when its dimension is
+/// actually known. Both an *unparseable* unit string and a *missing* one leave
+/// the variable OUT of the map, so [`propagate_dim`] yields [`Dim::Unknown`] for
+/// it and every expression containing it is skipped for dimensional checking.
+///
+/// Neither case is coerced to dimensionless. Doing so would both HIDE genuine
+/// mismatches (when the variable is used consistently) and MANUFACTURE false
+/// ones (when the real unit was, e.g., `m`) — and since a provable mismatch is
+/// now a hard validation error, a fabricated dimension would fail the build on
+/// a legitimate file. A model that declares no units at all (a common idiom in
+/// the shared corpus) is therefore simply not dimension-checked, rather than
+/// being treated as an all-dimensionless model in which `D(u)/dt = A*sin(w*t)`
+/// looks inconsistent.
+///
+/// The two cases are NOT alike, and only one of them is a defect:
+///
+/// * A MISSING `units` field is a legitimate choice — the variable is simply
+///   not dimension-checked.
+/// * An UNPARSEABLE `units` field is a HARD ERROR (`unit_parse_error`,
+///   esm-spec §4.8.4). A unit string either resolves against the shared
+///   registry or it is a defect in the file: silently treating a typo
+///   (`1/time`, `m/s2`) as "dimension unknown" disables every dimensional check
+///   downstream, which is precisely the class of bug the checker exists to
+///   catch. The failures are returned to the caller, which reports each one at
+///   the JSON-Pointer of the offending DECLARATION.
+///
+/// Note this is a *different* case from a genuinely UNDETERMINABLE dimension (a
+/// symbolic exponent), which stays a non-blocking warning: there the checker
+/// cannot conclude, whereas here the author wrote something that is not a unit.
 pub fn build_unit_env(
     variables: &HashMap<String, crate::ModelVariable>,
-) -> (HashMap<String, Unit>, Vec<String>) {
+) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let mut env = HashMap::new();
-    let mut warnings = Vec::new();
+    let mut failures = Vec::new();
     for (name, var) in variables {
-        match &var.units {
-            Some(s) => match parse_unit(s) {
-                Ok(unit) => {
-                    env.insert(name.clone(), unit);
-                }
-                Err(_) => {
-                    // Unparseable unit: omit the variable so its dimension is
-                    // unknown (rather than silently coerced to dimensionless)
-                    // and surface a warning.
-                    warnings.push(format!(
-                        "Variable \"{name}\" has an unparseable unit \"{s}\"; \
-                         treating its dimension as unknown (equations \
-                         referencing it are skipped for dimensional checking)"
-                    ));
-                }
-            },
-            None => {
-                env.insert(name.clone(), Unit::dimensionless());
+        let Some(declared) = &var.units else {
+            // No declared units — dimension unknown, not dimensionless.
+            continue;
+        };
+        match parse_unit(declared) {
+            Ok(unit) => {
+                env.insert(name.clone(), unit);
             }
+            Err(_) => failures.push(UnitParseFailure {
+                name: name.clone(),
+                units: declared.clone(),
+            }),
         }
     }
-    (env, warnings)
+    // `variables` is a HashMap, so iteration order is nondeterministic; sort so
+    // a multi-failure file reports its errors in a stable order.
+    failures.sort_by(|a, b| a.name.cmp(&b.name));
+    (env, failures)
+}
+
+/// A declared unit string that denotes no real unit.
+///
+/// Carries the NAME of the declaration alongside the offending string so the
+/// caller can report `unit_parse_error` at the declaration's JSON-Pointer
+/// rather than at the model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitParseFailure {
+    /// The declaration's name (variable, species, or parameter).
+    pub name: String,
+    /// The unit string exactly as the author wrote it.
+    pub units: String,
 }
 
 /// Validate that an equation's LHS and RHS have matching dimensions.
@@ -691,6 +1171,10 @@ pub fn build_unit_env(
 /// Returns `Ok(())` when both sides propagate to dimensionally-equal units,
 /// and a [`UnitError`] with a descriptive message otherwise. Propagation
 /// errors from either side are surfaced verbatim.
+///
+/// This is the single-outcome view. Validation uses
+/// [`check_equation_dimensions`], which reports EVERY finding and separates
+/// provable mismatches from undeterminable dimensions.
 pub fn validate_equation_dimensions(
     eq: &Equation,
     env: &HashMap<String, Unit>,
@@ -706,16 +1190,99 @@ pub fn validate_equation_dimensions_with_coords(
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
 ) -> Result<(), UnitError> {
-    let lhs = Unit::propagate_with_coords(&eq.lhs, env, coords)?;
-    let rhs = Unit::propagate_with_coords(&eq.rhs, env, coords)?;
-    if lhs.is_compatible(&rhs) {
-        Ok(())
-    } else {
-        Err(UnitError::DimensionMismatch(format!(
-            "Equation LHS dimensions {:?} do not match RHS dimensions {:?}",
-            lhs.dimensions, rhs.dimensions
-        )))
+    if let Some(err) = check_equation_dimensions(eq, env, coords)
+        .iter()
+        .find(|f| f.is_error())
+    {
+        return Err(UnitError::DimensionMismatch(err.message.clone()));
     }
+    // Single-outcome contract: distinguish "checked, consistent" (`Ok`) from
+    // "could not be checked" (`UnknownUnit`) — an equation with an indeterminate
+    // side was SKIPPED, and reporting `Ok` would claim we verified it.
+    let mut sink = Vec::new();
+    let lhs = propagate_dim(&eq.lhs, env, coords, &mut sink);
+    let rhs = propagate_dim(&eq.rhs, env, coords, &mut sink);
+    if lhs.known().is_none() || rhs.known().is_none() {
+        return Err(UnitError::UnknownUnit(
+            "equation has an indeterminate side; skipped for dimensional checking".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Dimension-check an equation, returning EVERY finding.
+///
+/// Both sides are always walked — a finding on the LHS never short-circuits the
+/// RHS — so one undeterminable subexpression cannot hide a provable mismatch
+/// elsewhere in the same equation. The LHS/RHS comparison itself is only made
+/// when BOTH sides resolved: comparing against an unknown dimension could only
+/// ever produce a false mismatch.
+pub fn check_equation_dimensions(
+    eq: &Equation,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Vec<UnitFinding> {
+    let mut findings = Vec::new();
+    let lhs = propagate_dim(&eq.lhs, env, coords, &mut findings);
+    let rhs = propagate_dim(&eq.rhs, env, coords, &mut findings);
+
+    // `D(x)/dt` with an undeclared `t` is indeterminate, so the plain LHS-vs-RHS
+    // comparison below cannot see it. Apply the weaker time-ratio rule instead.
+    if let Some(state) = derivative_of_undeclared_time(&eq.lhs, env) {
+        let state_dim = propagate_dim(state, env, coords, &mut Vec::new());
+        if let (Some(s), Some(r)) = (state_dim.known(), rhs.known())
+            && let Some(message) = derivative_time_mismatch(s, r)
+        {
+            findings.push(UnitFinding::error(message));
+        }
+        return findings;
+    }
+
+    if let (Some(l), Some(r)) = (lhs.known(), rhs.known())
+        && !l.is_compatible(r)
+    {
+        findings.push(UnitFinding::error(format!(
+            "Left-hand side has units of {} but right-hand side has units of {}",
+            describe(l),
+            describe(r)
+        )));
+    }
+    findings
+}
+
+/// Dimension-check a standalone expression (an observed variable's defining
+/// expression), returning EVERY finding.
+///
+/// When `declared` is `Some`, the expression's dimension is additionally
+/// compared against the variable's declared units — the observed-variable
+/// analogue of the equation LHS/RHS check.
+pub fn check_expression_dimensions(
+    expr: &Expr,
+    declared: Option<&Unit>,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Vec<UnitFinding> {
+    let mut findings = Vec::new();
+    let actual = propagate_dim(expr, env, coords, &mut findings);
+
+    // If the expression is ALREADY internally inconsistent, its overall
+    // dimension is whatever the first resolved operand happened to be — so
+    // comparing it against the declaration would report the SAME defect a
+    // second time at the same path. Report the internal mismatch only.
+    if findings.iter().any(UnitFinding::is_error) {
+        return findings;
+    }
+
+    if let (Some(declared), Some(actual)) = (declared, actual.known())
+        && !declared.is_compatible(actual)
+    {
+        findings.push(UnitFinding::error(format!(
+            "Declared units of {} do not match the expression's units of {}",
+            describe(declared),
+            describe(actual)
+        )));
+    }
+    findings
 }
 
 /// Parse a unit string into a Unit struct
@@ -728,71 +1295,255 @@ pub fn validate_equation_dimensions_with_coords(
 /// - integer powers (`"m^2"`, `"s^-1"`)
 /// - dimensionless (`""`, `"1"`, `"dimensionless"`)
 pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
-    let s = unit_str.trim();
+    parse_normalized(&normalize_unit_str(unit_str), unit_str)
+}
+
+/// Rewrite the ordinary earth-science spellings of a unit into the ASCII
+/// grammar, BEFORE parsing.
+///
+/// These are not exotic: `W/m²`, `cm³`, `J/(kg·K)`, `kg⋅m/s`, `μg/m^3`, `°C` and
+/// `Pa*m**3` all appear in the shared corpus and all failed to parse, leaving
+/// their variables dimensionless-unknown and silently unchecked.
+///
+/// * superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` → `^n`
+/// * middot `·` (U+00B7) and dot-operator `⋅` (U+22C5) → `*`
+/// * `µ` (U+00B5) / `μ` (U+03BC) → `u`  (so `μg` is the `u` + `g` prefix form)
+/// * `°C` → `degC`, `Ω` → `Ohm`
+/// * `**` → `^`  (the Python spelling of a power)
+fn normalize_unit_str(s: &str) -> String {
+    // `°C` and `**` are two-character sequences, so handle them first.
+    let s = s.replace("°C", "degC").replace("**", "^");
+
+    let mut out = String::with_capacity(s.len());
+    let mut in_superscript = false;
+    for c in s.chars() {
+        let sup = match c {
+            '⁰' => Some('0'),
+            '¹' => Some('1'),
+            '²' => Some('2'),
+            '³' => Some('3'),
+            '⁴' => Some('4'),
+            '⁵' => Some('5'),
+            '⁶' => Some('6'),
+            '⁷' => Some('7'),
+            '⁸' => Some('8'),
+            '⁹' => Some('9'),
+            '⁻' => Some('-'),
+            _ => None,
+        };
+        match sup {
+            // A run of superscripts is one exponent: emit a single `^` before it.
+            Some(ascii) => {
+                if !in_superscript {
+                    out.push('^');
+                    in_superscript = true;
+                }
+                out.push(ascii);
+            }
+            None => {
+                in_superscript = false;
+                match c {
+                    '·' | '⋅' | '×' => out.push('*'),
+                    'µ' | 'μ' => out.push('u'),
+                    'Ω' => out.push_str("Ohm"),
+                    _ => out.push(c),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Parse an already-normalized unit string. `original` is carried only for
+/// error messages, so a diagnostic quotes what the author actually wrote.
+fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
+    let s = s.trim();
     if s.is_empty() || s == "1" || s == "dimensionless" {
         return Ok(Unit::dimensionless());
     }
 
     // Strip a single layer of surrounding parentheses when they balance.
     if s.starts_with('(') && s.ends_with(')') && parens_balance(&s[1..s.len() - 1]) {
-        return parse_unit(&s[1..s.len() - 1]);
+        return parse_normalized(&s[1..s.len() - 1], original);
     }
 
     let base_units = get_base_units();
     if let Some(unit) = base_units.get(s) {
         return Ok(unit.clone());
     }
-
-    // Division: split on top-level '/', left-associative.
-    if let Some(idx) = find_top_level(s, '/') {
-        let (left, right) = (&s[..idx], &s[idx + 1..]);
-        let num = parse_unit(left)?;
-        let den = parse_unit(right)?;
-        return Ok(num.divide(&den));
+    // An SI-PREFIXED symbol (`mg`, `um`, `nm`, `mL`, `umol`, `dm`). Tried only
+    // after the exact table, so a name that merely LOOKS prefixed (`min`, `mol`,
+    // `cd`, `day`) keeps its own meaning. This is what makes the `µ`/`μ` → `u`
+    // normalization above mean anything: `μg/m^3` reaches here as `ug/m^3`.
+    if let Some(unit) = parse_si_prefixed(s, base_units) {
+        return Ok(unit);
     }
 
-    // Multiplication: split on top-level '*', left-associative.
-    if let Some(idx) = find_top_level(s, '*') {
-        let (left, right) = (&s[..idx], &s[idx + 1..]);
-        let l = parse_unit(left)?;
-        let r = parse_unit(right)?;
-        return Ok(l.multiply(&r));
+    // Product / quotient. `*` and `/` share one precedence level and bind
+    // LEFT-associatively, so we split at the LAST top-level operator and
+    // recurse on the left. Splitting on `/` as a separate, looser level (as
+    // this parser used to) pulls every `*` factor appearing after the last `/`
+    // into the DENOMINATOR: `J/mol*K` parsed as `J/(mol*K)`, silently negating
+    // K's exponent, and `kg/m^3*s` came out as `kg/(m^3*s)`. Equal-precedence
+    // left association is the reading of the Go reference parser and of
+    // pint/Unitful.
+    //
+    // WHITESPACE between two terms is an implicit multiplication (`ppb^-1 s^-1`),
+    // so it is a top-level operator too.
+    if let Some((idx, len, sym)) = find_last_top_level_operator(s) {
+        let (left, right) = (&s[..idx], &s[idx + len..]);
+        if left.trim().is_empty() || right.trim().is_empty() {
+            return Err(UnitError::ParseError(format!(
+                "Dangling '{sym}' in unit \"{original}\""
+            )));
+        }
+        let l = parse_normalized(left, original)?;
+        let r = parse_normalized(right, original)?;
+        return Ok(match sym {
+            '/' => l.divide(&r),
+            _ => l.multiply(&r),
+        });
     }
 
-    // Power: right-most '^'.
+    // Power: right-most '^'. The exponent is RATIONAL — `s^0.5` and `m^(1/2)`
+    // are legitimate (an SDE noise intensity carries `1/s^0.5`).
     if let Some(idx) = s.rfind('^') {
         let (base_s, pow_s) = (&s[..idx], &s[idx + 1..]);
-        let base_unit = parse_unit(base_s)?;
-        let power: i32 = pow_s
-            .trim()
-            .parse()
-            .map_err(|_| UnitError::ParseError(format!("Invalid power: {pow_s}")))?;
-        return Ok(base_unit.power(power));
+        let base_unit = parse_normalized(base_s, original)?;
+        let power = parse_exponent(pow_s).ok_or_else(|| {
+            UnitError::ParseError(format!(
+                "Invalid exponent \"{pow_s}\" in unit \"{original}\""
+            ))
+        })?;
+        return Ok(base_unit.power_rational(power));
     }
 
-    Err(UnitError::UnknownUnit(unit_str.to_string()))
+    // A bare numeric atom is a dimensionless scale factor (`1000`, `0.5`).
+    if let Ok(v) = s.parse::<f64>() {
+        return Ok(Unit {
+            dimensions: HashMap::new(),
+            scale: v,
+        });
+    }
+
+    Err(UnitError::UnknownUnit(original.to_string()))
 }
 
-/// Find the *last* occurrence of `needle` at depth 0 (outside any
-/// parenthesised group), or `None` if there is none.
+/// Decompose an SI-prefixed symbol into prefix × base (`mg` → milli × gram).
 ///
-/// `parse_unit` splits at this index and recurses on the *left* substring, so
-/// returning the last top-level occurrence makes the operator left-associative:
-/// `a/b/c` splits as `(a/b) / c` and `a*b*c` as `(a*b) * c`. This gives the
-/// conventional reading of `W/m^2/K` as `W/(m^2*K)` and matches the
-/// left-associative division of the sibling parsers (Python/pint, TypeScript's
-/// numerator-then-denominators split, and Julia's Unitful `uparse`).
-fn find_top_level(s: &str, needle: char) -> Option<usize> {
+/// Only the symbols in [`PREFIXABLE`] take a prefix, which keeps the
+/// decomposition from inventing units out of arbitrary identifiers — `not_a_unit`
+/// must still fail to parse, and a count like `units` must not be read as
+/// micro-something. Prefixes are tried LONGEST-first so `da` (deca) is not
+/// mistaken for `d` (deci).
+fn parse_si_prefixed(s: &str, base_units: &HashMap<String, Unit>) -> Option<Unit> {
+    /// (symbol, factor), longest symbol first.
+    const PREFIXES: [(&str, f64); 20] = [
+        ("da", 1e1),
+        ("Y", 1e24),
+        ("Z", 1e21),
+        ("E", 1e18),
+        ("P", 1e15),
+        ("T", 1e12),
+        ("G", 1e9),
+        ("M", 1e6),
+        ("k", 1e3),
+        ("h", 1e2),
+        ("d", 1e-1),
+        ("c", 1e-2),
+        ("m", 1e-3),
+        ("u", 1e-6),
+        ("n", 1e-9),
+        ("p", 1e-12),
+        ("f", 1e-15),
+        ("a", 1e-18),
+        ("z", 1e-21),
+        ("y", 1e-24),
+    ];
+    /// Symbols that admit an SI prefix.
+    const PREFIXABLE: [&str; 13] = [
+        "m", "g", "s", "mol", "K", "A", "cd", "L", "N", "Pa", "J", "W", "rad",
+    ];
+
+    for (prefix, factor) in PREFIXES {
+        let Some(base) = s.strip_prefix(prefix) else {
+            continue;
+        };
+        if !PREFIXABLE.contains(&base) {
+            continue;
+        }
+        let mut unit = base_units.get(base)?.clone();
+        unit.scale *= factor;
+        return Some(unit);
+    }
+    None
+}
+
+/// Parse a unit exponent: an integer (`2`, `-1`), a decimal (`0.5`, `-1.5`), or
+/// a parenthesised fraction (`(1/2)`).
+fn parse_exponent(s: &str) -> Option<Rational> {
+    let s = s.trim();
+    let inner = s
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or(s)
+        .trim();
+    if let Some((num, den)) = inner.split_once('/') {
+        return Some(Rational::new(
+            num.trim().parse().ok()?,
+            den.trim().parse().ok()?,
+        ));
+    }
+    if let Ok(n) = inner.parse::<i32>() {
+        return Some(Rational::int(n));
+    }
+    Rational::from_f64(inner.parse::<f64>().ok()?)
+}
+
+/// Find the *last* top-level (outside any parenthesised group) `*` or `/`,
+/// returning its byte index and which operator it is.
+///
+/// `parse_unit` splits here and recurses on the *left* substring, which makes
+/// the two operators share a precedence level and associate left-to-right:
+/// `a/b/c` is `(a/b)/c`, `a*b/c` is `(a*b)/c`, and `a/b*c` is `(a/b)*c`. This
+/// gives the conventional reading of `W/m^2/K` as `W/(m^2*K)` while keeping
+/// `J/mol*K` as `(J/mol)*K`, and matches the sibling parsers (Go's recursive
+/// descent, Python/pint, Julia's Unitful `uparse`).
+/// Returns `(byte index, byte length, operator)`. The length matters because an
+/// implicit multiplication is a RUN of whitespace, which the caller must skip
+/// whole.
+fn find_last_top_level_operator(s: &str) -> Option<(usize, usize, char)> {
     let bytes = s.as_bytes();
     let mut depth = 0i32;
     let mut last = None;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b as char {
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        match c {
             '(' => depth += 1,
             ')' => depth -= 1,
-            c if c == needle && depth == 0 => last = Some(i),
+            '*' | '/' if depth == 0 => last = Some((i, 1, c)),
+            ' ' | '\t' if depth == 0 => {
+                // A run of whitespace BETWEEN two terms is an implicit `*`.
+                // Whitespace merely padding an explicit operator (`m / s`) is
+                // not: the operator arm above already claimed that position, and
+                // a run adjacent to one must not be treated as a second operator.
+                let start = i;
+                while i < bytes.len() && matches!(bytes[i] as char, ' ' | '\t') {
+                    i += 1;
+                }
+                let before = s[..start].trim_end().chars().last();
+                let after = s[i..].chars().next();
+                let padding = matches!(before, Some('*' | '/' | '^') | None)
+                    || matches!(after, Some('*' | '/' | '^') | None);
+                if !padding {
+                    last = Some((start, i - start, '*'));
+                }
+                continue;
+            }
             _ => {}
         }
+        i += 1;
     }
     last
 }
@@ -833,12 +1584,18 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("cm".to_string(), Unit::base(Dimension::Length, 1, 0.01));
     units.insert("km".to_string(), Unit::base(Dimension::Length, 1, 1000.0));
     units.insert("mm".to_string(), Unit::base(Dimension::Length, 1, 0.001));
+    units.insert("meter".to_string(), Unit::base(Dimension::Length, 1, 1.0));
+    units.insert("meters".to_string(), Unit::base(Dimension::Length, 1, 1.0));
 
     // Time units
     units.insert("s".to_string(), Unit::base(Dimension::Time, 1, 1.0));
     units.insert("min".to_string(), Unit::base(Dimension::Time, 1, 60.0));
     units.insert("h".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
     units.insert("hr".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
+    units.insert("hour".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
+    // The canonical spelling of the day is `day`. A bare `d` is deliberately NOT
+    // a unit (esm-spec §4.8.1): a one-letter symbol reads as the deci- prefix or
+    // as a differential, so admitting it would make `d` ambiguous at every site.
     units.insert("day".to_string(), Unit::base(Dimension::Time, 1, 86400.0));
 
     // Mass units
@@ -848,15 +1605,56 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Amount units
     units.insert("mol".to_string(), Unit::base(Dimension::Amount, 1, 1.0));
 
-    // Temperature units
+    // Temperature units. `degC` (and its `°C` spelling, normalized to `degC`
+    // before parsing) shares the TEMPERATURE dimension with kelvin: the two
+    // differ by an affine OFFSET, which a multiplicative dimension algebra
+    // cannot express, and dimensional analysis only cares about the axis.
     units.insert("K".to_string(), Unit::base(Dimension::Temperature, 1, 1.0));
+    units.insert(
+        "degC".to_string(),
+        Unit::base(Dimension::Temperature, 1, 1.0),
+    );
+    units.insert(
+        "Celsius".to_string(),
+        Unit::base(Dimension::Temperature, 1, 1.0),
+    );
 
     // Current / luminous intensity
     units.insert("A".to_string(), Unit::base(Dimension::Current, 1, 1.0));
     units.insert("cd".to_string(), Unit::base(Dimension::Luminosity, 1, 1.0));
 
+    // Plane angle — a real axis (the eighth), not a synonym for dimensionless.
+    // The trig functions accept it; see `propagate_transcendental_dim`.
+    units.insert("rad".to_string(), Unit::base(Dimension::Angle, 1, 1.0));
+    // Degrees of arc — the same axis, scaled. (`deg` is the short spelling; the
+    // TEMPERATURE `degC`/`degF` are separate entries and are matched first, so
+    // there is no collision.)
+    let degree = Unit::base(Dimension::Angle, 1, std::f64::consts::PI / 180.0);
+    units.insert("degrees".to_string(), degree.clone());
+    units.insert("degree".to_string(), degree.clone());
+    units.insert("deg".to_string(), degree);
+
     // Volume (L = dm³ = 10⁻³ m³)
     units.insert("L".to_string(), Unit::base(Dimension::Length, 3, 0.001));
+
+    // Frequency: Hz = s⁻¹.
+    units.insert("Hz".to_string(), Unit::base(Dimension::Time, -1, 1.0));
+
+    // Fahrenheit shares the TEMPERATURE axis with kelvin, like `degC`: the
+    // three differ by affine offset/scale, which a multiplicative dimension
+    // algebra cannot express and dimensional analysis does not need.
+    units.insert(
+        "degF".to_string(),
+        Unit::base(Dimension::Temperature, 1, 1.0),
+    );
+
+    // Year — the Julian-ish 365-day year used by the corpus's ecological
+    // fixtures (`km^2/year`, `1/year`).
+    units.insert(
+        "year".to_string(),
+        Unit::base(Dimension::Time, 1, 3.153_6e7),
+    );
+    units.insert("yr".to_string(), Unit::base(Dimension::Time, 1, 3.153_6e7));
 
     // Derived units
     // Velocity: m/s
@@ -904,12 +1702,49 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("kcal".to_string(), kcal);
 
     // Power: kg*m^2/s^3 (Watt)
+    let watt = Unit::base(Dimension::Mass, 1, 1.0)
+        .multiply(&Unit::base(Dimension::Length, 2, 1.0))
+        .divide(&Unit::base(Dimension::Time, 3, 1.0));
+    units.insert("W".to_string(), watt.clone());
+
+    // Electromagnetic family, all derived from the ampere.
+    //
+    // `C` is the COULOMB (A·s), NOT Celsius — degrees Celsius is spelled
+    // `degC`, and the `°C` form normalizes to it before parsing. A unit string
+    // carries DIMENSIONS ONLY, so a bare `C` can never mean a chemical species
+    // tag either.
+    let ampere = Unit::base(Dimension::Current, 1, 1.0);
+    let coulomb = ampere.multiply(&Unit::base(Dimension::Time, 1, 1.0));
+    units.insert("C".to_string(), coulomb.clone());
+
+    // Volt = W/A = kg*m^2/(s^3*A)
+    let volt = watt.divide(&ampere);
+    units.insert("V".to_string(), volt.clone());
+
+    // Ohm = V/A. Reached from the `Ω` spelling too, which normalizes to `Ohm`.
+    units.insert("Ohm".to_string(), volt.divide(&ampere));
+
+    // Farad = C/V (so `F/m`, the permittivity of the corpus, is F ÷ metre).
+    units.insert("F".to_string(), coulomb.divide(&volt));
+
+    // Tesla = kg/(s^2*A). The weber appears in the corpus as the composite
+    // `V*s`, which the parser builds from `V` and `s`, so it needs no entry.
     units.insert(
-        "W".to_string(),
+        "T".to_string(),
         Unit::base(Dimension::Mass, 1, 1.0)
-            .multiply(&Unit::base(Dimension::Length, 2, 1.0))
-            .divide(&Unit::base(Dimension::Time, 3, 1.0)),
+            .divide(&Unit::base(Dimension::Time, 2, 1.0))
+            .divide(&ampere),
     );
+
+    // Non-SI energies, as multiples of the joule.
+    let joule_scaled = |scale: f64| {
+        let mut u = joule.clone();
+        u.scale *= scale;
+        u
+    };
+    units.insert("erg".to_string(), joule_scaled(1e-7));
+    units.insert("BTU".to_string(), joule_scaled(1_055.055_852_62));
+    units.insert("kWh".to_string(), joule_scaled(3.6e6));
 
     // ESM-specific units standard (docs/units-standard.md).
     // Mole-fraction family: dimensionless with scale factors.
@@ -925,9 +1760,37 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("ppbv".to_string(), dimensionless_scaled(1e-9));
     units.insert("ppt".to_string(), dimensionless_scaled(1e-12));
     units.insert("pptv".to_string(), dimensionless_scaled(1e-12));
-    // `molec` is a dimensionless count atom — composites like `molec/cm^3`
-    // fall out of the compound-unit parser as `[length]^-3`.
-    units.insert("molec".to_string(), Unit::dimensionless());
+    // Percent — dimensionless with a scale, like the mole-fraction family.
+    units.insert("%".to_string(), dimensionless_scaled(0.01));
+    units.insert("percent".to_string(), dimensionless_scaled(0.01));
+
+    // COUNTS carry no dimension axis: they count entities, they do not measure
+    // one. Composites therefore fall out of the parser with the right dimension
+    // on their own — `molec/cm^3` is `[length]^-3`, `individuals/km^2` is
+    // `[length]^-2`.
+    for count in [
+        "molec",
+        "molecule",
+        "count",
+        "individuals",
+        "vehicles",
+        "units",
+    ] {
+        units.insert(count.to_string(), Unit::dimensionless());
+    }
+
+    // Practical salinity — dimensionless by definition (PSS-78).
+    units.insert("psu".to_string(), Unit::dimensionless());
+
+    // Pressure: atmosphere, and the micro-atmosphere used for seawater pCO2.
+    units.insert("atm".to_string(), pascal_scaled(&units, 101_325.0));
+    units.insert("uatm".to_string(), pascal_scaled(&units, 0.101_325));
+    // Non-SI pressures, as multiples of the pascal.
+    units.insert("bar".to_string(), pascal_scaled(&units, 1e5));
+    units.insert("Torr".to_string(), pascal_scaled(&units, 133.322_368_421));
+    units.insert("mmHg".to_string(), pascal_scaled(&units, 133.322_387_415));
+    units.insert("psi".to_string(), pascal_scaled(&units, 6_894.757_293_168));
+
     // Dobson unit: areal number density of ozone molecules.
     // Since `molec` is dimensionless, Dobson resolves to `[length]^-2` with
     // scale 2.6867e20 molec/m^2.
@@ -941,6 +1804,13 @@ fn build_base_units() -> HashMap<String, Unit> {
     );
 
     units
+}
+
+/// A pressure unit expressed as a multiple of the pascal already in `units`.
+fn pascal_scaled(units: &HashMap<String, Unit>, scale: f64) -> Unit {
+    let mut u = units["Pa"].clone();
+    u.scale *= scale;
+    u
 }
 
 /// Check dimensional consistency of an equation
@@ -1020,60 +1890,349 @@ mod tests {
         assert!(parse_unit("dimensionless").unwrap().is_dimensionless());
     }
 
+    /// Exponents are RATIONAL. `1/s^0.5` is the intensity of an SDE noise term
+    /// and appears in the shared corpus (`tests/fixtures/sde/*.esm`); an
+    /// integer-only grammar could not parse it at all.
+    #[test]
+    fn test_rational_exponents() {
+        let half = Rational::new(-1, 2);
+        assert_eq!(
+            parse_unit("1/s^0.5")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Time),
+            Some(&half)
+        );
+        // The fraction and decimal spellings agree.
+        assert_eq!(
+            parse_unit("s^(-1/2)")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Time),
+            Some(&half)
+        );
+        // `**` is the Python spelling of a power.
+        assert_eq!(
+            parse_unit("m**3")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(3))
+        );
+        // Reduced to lowest terms, so 2/4 IS 1/2.
+        assert_eq!(Rational::new(2, 4), Rational::new(1, 2));
+        assert_eq!(Rational::from_f64(0.5), Some(Rational::new(1, 2)));
+    }
+
+    /// Ordinary earth-science spellings must parse: superscripts, the middot and
+    /// dot-operator, micro, degree-Celsius and ohm.
+    #[test]
+    fn test_unicode_normalization() {
+        // W/m² — superscript exponent.
+        let u = parse_unit("W/m²").unwrap();
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-3)));
+        // Length cancels: W carries m^2, divided by m^2.
+        assert_eq!(u.dimensions.get(&Dimension::Length), None);
+
+        assert_eq!(
+            parse_unit("cm³")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(3))
+        );
+        // Superscript minus.
+        assert_eq!(
+            parse_unit("m⁻³")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
+        // Middot (U+00B7) and dot-operator (U+22C5) are multiplication.
+        assert_eq!(
+            parse_unit("J/(kg·K)").unwrap(),
+            parse_unit("J/(kg*K)").unwrap()
+        );
+        assert_eq!(parse_unit("kg⋅m/s").unwrap(), parse_unit("kg*m/s").unwrap());
+        // Micro, in both its spellings.
+        assert_eq!(parse_unit("μg/m^3").unwrap(), parse_unit("ug/m^3").unwrap());
+        assert_eq!(parse_unit("µg").unwrap(), parse_unit("ug").unwrap());
+        // °C shares the temperature axis with K (they differ by an affine
+        // offset, which dimensional analysis does not model).
+        assert!(
+            parse_unit("°C")
+                .unwrap()
+                .is_compatible(&parse_unit("K").unwrap())
+        );
+    }
+
+    /// Whitespace between two terms is an implicit multiplication.
+    #[test]
+    fn test_implicit_multiplication() {
+        assert_eq!(
+            parse_unit("ppb^-1 s^-1").unwrap(),
+            parse_unit("ppb^-1*s^-1").unwrap()
+        );
+        // But whitespace merely PADDING an explicit operator is not a second
+        // operator.
+        assert_eq!(parse_unit("m / s").unwrap(), parse_unit("m/s").unwrap());
+        assert_eq!(parse_unit("kg * m").unwrap(), parse_unit("kg*m").unwrap());
+    }
+
+    /// SI prefixes resolve against the prefixable symbols — which is what makes
+    /// the `µ` → `u` normalization useful — but must not invent units out of
+    /// arbitrary identifiers, nor shadow a name that merely looks prefixed.
+    #[test]
+    fn test_si_prefixes() {
+        assert_eq!(
+            parse_unit("mg").unwrap().dimensions.get(&Dimension::Mass),
+            Some(&Rational::int(1))
+        );
+        assert!((parse_unit("mg").unwrap().scale - 1e-6).abs() < 1e-18);
+        assert!((parse_unit("um").unwrap().scale - 1e-6).abs() < 1e-18);
+        assert!((parse_unit("nm").unwrap().scale - 1e-9).abs() < 1e-21);
+        assert_eq!(parse_unit("mL").unwrap(), {
+            let mut l = parse_unit("L").unwrap();
+            l.scale *= 1e-3;
+            l
+        });
+        assert_eq!(
+            parse_unit("umol")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        // Exact names win over a prefix reading: `min` is minutes, not milli-in.
+        assert!((parse_unit("min").unwrap().scale - 60.0).abs() < 1e-9);
+        assert_eq!(
+            parse_unit("mol")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        // A prefix on a non-prefixable identifier is NOT a unit.
+        assert!(parse_unit("not_a_unit").is_err());
+    }
+
+    /// Counts carry no dimension axis, so composites come out with the right
+    /// dimension on their own.
+    #[test]
+    fn test_counts_are_dimensionless() {
+        for c in [
+            "molec",
+            "molecule",
+            "count",
+            "individuals",
+            "vehicles",
+            "units",
+        ] {
+            assert!(
+                parse_unit(c).unwrap().is_dimensionless(),
+                "{c} must be dimensionless"
+            );
+        }
+        // individuals/km^2 is an inverse area.
+        assert_eq!(
+            parse_unit("individuals/km^2")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(-2))
+        );
+        assert!(parse_unit("psu").unwrap().is_dimensionless());
+        assert!(parse_unit("%").unwrap().is_dimensionless());
+        assert!((parse_unit("%").unwrap().scale - 0.01).abs() < 1e-12);
+        // uatm is a pressure.
+        assert!(
+            parse_unit("uatm")
+                .unwrap()
+                .is_compatible(&parse_unit("Pa").unwrap())
+        );
+    }
+
+    /// `sqrt` HALVES a dimension — it is not a transcendental and does not
+    /// require a dimensionless argument. With rational exponents `sqrt(m^3)` is
+    /// exactly `m^3/2` rather than "not representable".
+    #[test]
+    fn test_sqrt_halves_dimensions() {
+        let env = env_of(&[("area", "m^2"), ("vol", "m^3")]);
+
+        let e = op("sqrt", vec![Expr::Variable("area".into())]);
+        let u = Unit::propagate(&e, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert!(check_expression_dimensions(&e, None, &env, None).is_empty());
+
+        let e = op("sqrt", vec![Expr::Variable("vol".into())]);
+        let u = Unit::propagate(&e, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::new(3, 2))
+        );
+        assert!(
+            !check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "sqrt of an odd power is representable, not an error"
+        );
+    }
+
+    /// `rad` is a real axis, so a trig function accepts an ANGLE — but `exp` and
+    /// `log` still demand strict dimensionlessness.
+    #[test]
+    fn test_trig_accepts_angle_but_exp_does_not() {
+        let env = env_of(&[("theta", "rad"), ("m", "m")]);
+
+        let e = op("sin", vec![Expr::Variable("theta".into())]);
+        assert!(
+            !check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "sin(theta) with theta in radians is correct"
+        );
+
+        // A LENGTH is still wrong for sin.
+        let e = op("sin", vec![Expr::Variable("m".into())]);
+        assert!(
+            check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error)
+        );
+
+        // exp of an angle is a dimensional argument.
+        let e = op("exp", vec![Expr::Variable("theta".into())]);
+        assert!(
+            check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "exp requires strict dimensionlessness"
+        );
+    }
+
+    /// The derivative rule leaves the TIME exponent free and requires only that
+    /// the non-time dimensions reconcile — so `x` in metres with an RHS in
+    /// `m/s^2` is accepted (some time unit reconciles it), while `m` against
+    /// `kg` never can be.
+    #[test]
+    fn test_derivative_time_exponent_is_free() {
+        let env = env_of(&[("x", "m"), ("accel", "m/s^2"), ("mass", "kg")]);
+
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
+            rhs: Expr::Variable("accel".into()),
+        };
+        assert!(
+            !check_equation_dimensions(&eq, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "ratio m/(m/s^2) = s^2 is a power of time ⇒ reconcilable"
+        );
+
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
+            rhs: Expr::Variable("mass".into()),
+        };
+        assert!(
+            check_equation_dimensions(&eq, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "ratio m/kg is not a power of time ⇒ provable mismatch"
+        );
+    }
+
     #[test]
     fn test_parse_base_units() {
         assert_eq!(
             parse_unit("m").unwrap().dimensions.get(&Dimension::Length),
-            Some(&1)
+            Some(&Rational::int(1))
         );
         assert_eq!(
             parse_unit("s").unwrap().dimensions.get(&Dimension::Time),
-            Some(&1)
+            Some(&Rational::int(1))
         );
         assert_eq!(
             parse_unit("kg").unwrap().dimensions.get(&Dimension::Mass),
-            Some(&1)
+            Some(&Rational::int(1))
         );
     }
 
     #[test]
     fn test_parse_compound_units() {
         let u = parse_unit("m/s").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
 
         let u = parse_unit("mol/L").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Amount), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&-3));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
     }
 
     #[test]
     fn test_parse_parenthesised_units() {
         // J/(mol*K) == kg*m^2/(s^2*mol*K)
         let u = parse_unit("J/(mol*K)").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&2));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-2));
-        assert_eq!(u.dimensions.get(&Dimension::Amount), Some(&-1));
-        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&-1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(2))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-2)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(-1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(-1))
+        );
     }
 
     #[test]
     fn test_parse_pascal_and_kg_per_m3() {
         let pa = parse_unit("Pa").unwrap();
-        assert_eq!(pa.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(pa.dimensions.get(&Dimension::Length), Some(&-1));
-        assert_eq!(pa.dimensions.get(&Dimension::Time), Some(&-2));
+        assert_eq!(pa.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            pa.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-1))
+        );
+        assert_eq!(
+            pa.dimensions.get(&Dimension::Time),
+            Some(&Rational::int(-2))
+        );
 
         let rho = parse_unit("kg/m^3").unwrap();
-        assert_eq!(rho.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(rho.dimensions.get(&Dimension::Length), Some(&-3));
+        assert_eq!(
+            rho.dimensions.get(&Dimension::Mass),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            rho.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
     }
 
     #[test]
     fn test_parse_negative_power() {
         let inv_s = parse_unit("s^-1").unwrap();
-        assert_eq!(inv_s.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            inv_s.dimensions.get(&Dimension::Time),
+            Some(&Rational::int(-1))
+        );
     }
 
     #[test]
@@ -1083,31 +2242,93 @@ mod tests {
         // correct result is kg*s^-3*K^-1: Temperature power -1 (a +1 would
         // betray the old right-associative bug).
         let u = parse_unit("W/m^2/K").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-3));
-        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&-1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-3)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(-1))
+        );
         // Length cancels: m^2 (from W) divided by m^2 leaves power 0 (absent).
         assert_eq!(u.dimensions.get(&Dimension::Length), None);
     }
 
     #[test]
-    fn test_find_top_level_splits_at_last_occurrence() {
-        // `a/b/c` splits at the *last* top-level '/' so parse_unit recurses on
-        // the left `a/b`, yielding left-associative `(a/b)/c`.
-        assert_eq!(find_top_level("a/b/c", '/'), Some(3));
-        assert_eq!(find_top_level("a*b*c", '*'), Some(3));
+    fn test_find_last_top_level_operator() {
+        // `a/b/c` splits at the *last* top-level operator so parse_unit recurses
+        // on the left `a/b`, yielding left-associative `(a/b)/c`.
+        assert_eq!(find_last_top_level_operator("a/b/c"), Some((3, 1, '/')));
+        assert_eq!(find_last_top_level_operator("a*b*c"), Some((3, 1, '*')));
+        // `*` and `/` share one precedence level, so the LAST of either wins:
+        // `a/b*c` is `(a/b)*c`, not `a/(b*c)`.
+        assert_eq!(find_last_top_level_operator("a/b*c"), Some((3, 1, '*')));
         // Separators inside parentheses are hidden from the top-level scan.
-        assert_eq!(find_top_level("a/(b/c)", '/'), Some(1));
-        assert_eq!(find_top_level("kg", '/'), None);
+        assert_eq!(find_last_top_level_operator("a/(b/c)"), Some((1, 1, '/')));
+        assert_eq!(find_last_top_level_operator("kg"), None);
+    }
+
+    /// `*` and `/` are the SAME precedence level and associate left-to-right.
+    /// Splitting `/` first (looser) pulled every factor after the last `/` into
+    /// the denominator, so `J/mol*K` parsed as `J/(mol*K)` — silently negating
+    /// K's exponent.
+    #[test]
+    fn test_mixed_product_quotient_is_left_associative() {
+        let u = parse_unit("J/mol*K").unwrap();
+        // (J/mol)*K ⇒ temperature appears with power +1, not -1.
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(-1))
+        );
+
+        let u = parse_unit("kg/m^3*s").unwrap();
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
+
+        // Repeated division stays left-associative: m/s/s == m/s^2.
+        let u = parse_unit("m/s/s").unwrap();
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-2)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+
+        // Parenthesised denominators are unaffected.
+        let u = parse_unit("J/(mol*K)").unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(-1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(-1))
+        );
+    }
+
+    /// A dangling operator is malformed, not silently dimensionless. `"m/"` used
+    /// to parse as metres and `"/s"` as s^-1.
+    #[test]
+    fn test_dangling_operator_is_rejected() {
+        assert!(matches!(parse_unit("m/"), Err(UnitError::ParseError(_))));
+        assert!(matches!(parse_unit("/s"), Err(UnitError::ParseError(_))));
+        assert!(matches!(parse_unit("kg*"), Err(UnitError::ParseError(_))));
     }
 
     #[test]
     fn test_parse_mixed_product_quotient() {
         // Mixed `kg*m/s^2` is the Newton: mass^1 length^1 time^-2.
         let u = parse_unit("kg*m/s^2").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-2));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-2)));
     }
 
     #[test]
@@ -1124,9 +2345,15 @@ mod tests {
         let m = parse_unit("m").unwrap();
         let s = parse_unit("s").unwrap();
         let v = m.divide(&s);
-        assert_eq!(v.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(v.dimensions.get(&Dimension::Time), Some(&-1));
-        assert_eq!(m.power(2).dimensions.get(&Dimension::Length), Some(&2));
+        assert_eq!(
+            v.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(v.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
+        assert_eq!(
+            m.power(2).dimensions.get(&Dimension::Length),
+            Some(&Rational::int(2))
+        );
     }
 
     #[test]
@@ -1155,25 +2382,66 @@ mod tests {
     // ---- propagate ---------------------------------------------------
 
     #[test]
-    fn propagate_number_is_dimensionless() {
+    fn propagate_literal_is_indeterminate() {
+        // A bare numeric literal carries NO knowable dimension: `273.15` may be
+        // a pure number or a temperature offset. It is therefore indeterminate,
+        // not dimensionless — a checker whose findings are hard errors must not
+        // fabricate a dimension it cannot know.
         let env = HashMap::new();
-        let u = Unit::propagate(&Expr::Number(2.5), &env).unwrap();
-        assert!(u.is_dimensionless());
+        assert!(matches!(
+            Unit::propagate(&Expr::Number(2.5), &env),
+            Err(UnitError::UnknownUnit(_))
+        ));
+
+        // Additively, though, a literal is NEUTRAL: it adopts its sibling's
+        // dimension, so `T - 273.15` is a temperature and raises no finding.
+        let env = env_of(&[("T", "K")]);
+        let expr = op("-", vec![Expr::Variable("T".into()), Expr::Number(273.15)]);
+        let u = Unit::propagate(&expr, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(1))
+        );
+        assert!(check_expression_dimensions(&expr, None, &env, None).is_empty());
+
+        // And an all-literal expression is dimensionless.
+        let expr = op("+", vec![Expr::Number(1.0), Expr::Number(2.0)]);
+        assert!(
+            Unit::propagate(&expr, &HashMap::new())
+                .unwrap()
+                .is_dimensionless()
+        );
+    }
+
+    /// An exponent is read BY VALUE, so `L^2` still yields an area even though
+    /// the literal `2` has no dimension of its own.
+    #[test]
+    fn propagate_literal_exponent_is_read_by_value() {
+        let env = env_of(&[("L", "m")]);
+        let expr = op("^", vec![Expr::Variable("L".into()), Expr::Integer(2)]);
+        let u = Unit::propagate(&expr, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(2))
+        );
     }
 
     #[test]
     fn propagate_variable_lookup() {
         let env = env_of(&[("v", "m/s")]);
         let u = Unit::propagate(&Expr::Variable("v".into()), &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
     }
 
     #[test]
     fn propagate_time_variable_default() {
         let env = HashMap::new();
         let u = Unit::propagate(&Expr::Variable("t".into()), &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(1)));
     }
 
     #[test]
@@ -1191,7 +2459,10 @@ mod tests {
             vec![Expr::Variable("h1".into()), Expr::Variable("h2".into())],
         );
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
     }
 
     #[test]
@@ -1213,9 +2484,12 @@ mod tests {
             vec![Expr::Variable("rho".into()), Expr::Variable("v".into())],
         );
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&-2));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-2))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
     }
 
     #[test]
@@ -1226,8 +2500,11 @@ mod tests {
             vec![Expr::Variable("m1".into()), Expr::Variable("V".into())],
         );
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&-3));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
     }
 
     #[test]
@@ -1235,7 +2512,10 @@ mod tests {
         let env = env_of(&[("s", "m")]);
         let e = op("^", vec![Expr::Variable("s".into()), Expr::Number(3.0)]);
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&3));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(3))
+        );
     }
 
     #[test]
@@ -1253,11 +2533,26 @@ mod tests {
     #[test]
     fn propagate_derivative_divides_by_wrt() {
         // Canonical bead example: D(h)/dt should have dimensions of v (m/s).
-        let env = env_of(&[("h", "m"), ("v", "m/s")]);
+        // `t` must be DECLARED for the derivative to be determinate — an
+        // undeclared independent variable leaves it unknown (see
+        // `derivative_of_undeclared_time`).
+        let env = env_of(&[("h", "m"), ("v", "m/s"), ("t", "s")]);
         let dh = op_with_wrt("D", vec![Expr::Variable("h".into())], "t");
         let dh_dim = Unit::propagate(&dh, &env).unwrap();
         let v_dim = Unit::propagate(&Expr::Variable("v".into()), &env).unwrap();
         assert!(dh_dim.is_compatible(&v_dim));
+    }
+
+    /// With an UNDECLARED `t` the derivative's dimension is unknown, so no time
+    /// unit is assumed and the plain LHS/RHS comparison is skipped.
+    #[test]
+    fn propagate_derivative_of_undeclared_time_is_unknown() {
+        let env = env_of(&[("h", "m")]);
+        let dh = op_with_wrt("D", vec![Expr::Variable("h".into())], "t");
+        assert!(matches!(
+            Unit::propagate(&dh, &env),
+            Err(UnitError::UnknownUnit(_))
+        ));
     }
 
     #[test]
@@ -1273,7 +2568,10 @@ mod tests {
         let env = env_of(&[("a", "m^2")]);
         let e = op("sqrt", vec![Expr::Variable("a".into())]);
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
     }
 
     #[test]
@@ -1311,19 +2609,34 @@ mod tests {
         let env = env_of(&[("c", "mol/m^3")]);
         let g = op("grad", vec![Expr::Variable("c".into())]);
         let gu = Unit::propagate(&g, &env).unwrap();
-        assert_eq!(gu.dimensions.get(&Dimension::Amount), Some(&1));
-        assert_eq!(gu.dimensions.get(&Dimension::Length), Some(&-4));
+        assert_eq!(
+            gu.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            gu.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-4))
+        );
 
         let l = op("laplacian", vec![Expr::Variable("c".into())]);
         let lu = Unit::propagate(&l, &env).unwrap();
-        assert_eq!(lu.dimensions.get(&Dimension::Length), Some(&-5));
+        assert_eq!(
+            lu.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-5))
+        );
     }
 
     #[test]
     fn propagate_arrayop_body() {
-        // arrayop { expr: x * 2 } with x having units m/s -> result m/s.
-        let env = env_of(&[("x", "m/s")]);
-        let body = op("*", vec![Expr::Variable("x".into()), Expr::Number(2.0)]);
+        // aggregate { expr: x * scale } with x in m/s and a dimensionless
+        // `scale` -> result m/s. (A bare numeric literal would leave the product
+        // INDETERMINATE — see `propagate_literal_is_indeterminate` — so the
+        // element dimension is exercised with a declared factor.)
+        let env = env_of(&[("x", "m/s"), ("scale", "1")]);
+        let body = op(
+            "*",
+            vec![Expr::Variable("x".into()), Expr::Variable("scale".into())],
+        );
         let node = Expr::Operator(ExpressionNode {
             op: "aggregate".to_string(),
             args: vec![],
@@ -1331,8 +2644,11 @@ mod tests {
             ..ExpressionNode::default()
         });
         let u = Unit::propagate(&node, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
     }
 
     #[test]
@@ -1343,7 +2659,7 @@ mod tests {
             vec![Expr::Variable("arr".into()), Expr::Number(0.0)],
         );
         let u = Unit::propagate(&node, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
     }
 
     #[test]
@@ -1357,20 +2673,63 @@ mod tests {
             ..ExpressionNode::default()
         });
         let u = Unit::propagate(&node, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
     }
 
     #[test]
-    fn propagate_unknown_operator_errors() {
+    fn propagate_unknown_operator_is_analysis_not_error() {
+        // An operator with no dimensional rule means the CHECKER cannot
+        // conclude anything — it is not a defect in the file. So it yields an
+        // `Analysis` finding (non-blocking) and an unknown dimension, never a
+        // promotable `Error` and never a silent `dimensionless`.
         let env = HashMap::new();
         let e = op("zorp", vec![Expr::Number(1.0)]);
-        let err = Unit::propagate(&e, &env).unwrap_err();
-        assert!(matches!(err, UnitError::ParseError(_)));
+        let findings = check_expression_dimensions(&e, None, &env, None);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, UnitSeverity::Analysis);
+        assert!(!findings[0].is_error());
+        assert!(matches!(
+            Unit::propagate(&e, &env),
+            Err(UnitError::UnknownUnit(_))
+        ));
+    }
+
+    /// An undeterminable operand must not SUPPRESS a provable mismatch
+    /// elsewhere in the same expression: propagation records the finding and
+    /// keeps walking instead of bailing at the first one.
+    #[test]
+    fn analysis_finding_does_not_hide_a_real_mismatch() {
+        let env = env_of(&[("len", "m"), ("mass", "kg")]);
+        // (zorp(1) + len) + mass — the unknown op is undeterminable, but the
+        // `len` vs `mass` mismatch after it is still proven.
+        let expr = op(
+            "+",
+            vec![
+                op("zorp", vec![Expr::Number(1.0)]),
+                Expr::Variable("len".into()),
+                Expr::Variable("mass".into()),
+            ],
+        );
+        let findings = check_expression_dimensions(&expr, None, &env, None);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.severity == UnitSeverity::Analysis),
+            "expected the unknown operator to be reported: {findings:?}"
+        );
+        assert!(
+            findings.iter().any(UnitFinding::is_error),
+            "the m-vs-kg mismatch must still be proven: {findings:?}"
+        );
     }
 
     #[test]
     fn validate_equation_dimensions_passes() {
-        let env = env_of(&[("h", "m"), ("v", "m/s")]);
+        // `t` is declared, so D(h)/dt is determinate (m/s) and matches v.
+        let env = env_of(&[("h", "m"), ("v", "m/s"), ("t", "s")]);
         let eq = Equation {
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("v".into()),
@@ -1380,19 +2739,68 @@ mod tests {
 
     #[test]
     fn validate_equation_dimensions_detects_mismatch() {
-        let env = env_of(&[("h", "m"), ("v", "m/s")]);
-        // Wrong: D(h)/dt = h is dimensionally inconsistent.
+        // With `t` DECLARED the derivative is determinate, so the plain
+        // LHS-vs-RHS comparison proves the mismatch: D(h)/dt is m/s, h is m.
+        let env = env_of(&[("h", "m"), ("v", "m/s"), ("t", "s")]);
         let eq = Equation {
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("h".into()),
         };
         assert!(validate_equation_dimensions(&eq, &env).is_err());
+
+        // The consistent equation is accepted.
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
+            rhs: Expr::Variable("v".into()),
+        };
+        assert!(validate_equation_dimensions(&eq, &env).is_ok());
+    }
+
+    /// With an UNDECLARED `t`, the weaker time-ratio rule still proves a
+    /// derivative equation that NO time unit could reconcile — while accepting
+    /// one that some time unit could.
+    #[test]
+    fn derivative_time_ratio_rule() {
+        let env = env_of(&[("h", "m"), ("v", "m/s"), ("mass", "kg")]);
+
+        // d(m)/dt = kg: ratio m/kg is not a power of time ⇒ provable mismatch.
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
+            rhs: Expr::Variable("mass".into()),
+        };
+        let findings = check_equation_dimensions(&eq, &env, None);
+        assert!(findings.iter().any(UnitFinding::is_error), "{findings:?}");
+
+        // d(m)/dt = m/s: ratio is exactly `s` ⇒ reconcilable, no finding.
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
+            rhs: Expr::Variable("v".into()),
+        };
+        assert!(
+            !check_equation_dimensions(&eq, &env, None)
+                .iter()
+                .any(UnitFinding::is_error)
+        );
+
+        // The dimensionless toy idiom `D(x)/dt = -x` (ratio time^0) is accepted:
+        // it is the idiom used across the shared valid corpus.
+        let env = env_of(&[("x", "dimensionless")]);
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
+            rhs: op("-", vec![Expr::Variable("x".into())]),
+        };
+        assert!(
+            !check_equation_dimensions(&eq, &env, None)
+                .iter()
+                .any(UnitFinding::is_error)
+        );
     }
 
     /// Build a bare state [`crate::ModelVariable`] carrying only a declared
     /// unit string (all other metadata omitted).
     fn state_var_with_units(units: Option<&str>) -> crate::ModelVariable {
         crate::ModelVariable {
+            default_units: None,
             var_type: crate::VariableType::State,
             units: units.map(str::to_string),
             default: None,
@@ -1412,17 +2820,25 @@ mod tests {
         variables.insert("x".to_string(), state_var_with_units(Some("not_a_unit")));
         variables.insert("y".to_string(), state_var_with_units(Some("m")));
 
-        let (env, warnings) = build_unit_env(&variables);
+        let (env, failures) = build_unit_env(&variables);
 
         // The unparseable variable is OMITTED (unknown), NOT coerced to a
         // dimensionless unit; the parseable one is present.
-        assert!(!env.contains_key("x"), "unparseable unit must not be in env");
+        assert!(
+            !env.contains_key("x"),
+            "unparseable unit must not be in env"
+        );
         assert!(env.contains_key("y"));
 
-        // A warning is surfaced for the unparseable unit (behavior, not text).
-        assert!(
-            warnings.iter().any(|w| w.contains("x")),
-            "expected a warning mentioning the offending variable, got {warnings:?}"
+        // The failure is REPORTED, naming the offending variable and the string
+        // the author actually wrote, so the caller can raise a hard
+        // `unit_parse_error` at `/models/<M>/variables/x` (esm-spec §4.8.4).
+        assert_eq!(
+            failures,
+            vec![UnitParseFailure {
+                name: "x".to_string(),
+                units: "not_a_unit".to_string(),
+            }]
         );
 
         // An equation `y = x` referencing the unknown-unit variable propagates

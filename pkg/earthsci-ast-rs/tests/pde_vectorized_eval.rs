@@ -681,3 +681,179 @@ fn periodic_wrap_kernel_op_count_is_independent_of_grid_size() {
         s4.kernel_ops, s8.kernel_ops
     );
 }
+
+// ============================================================================
+// Oracle / vectorized equivalence on the shapes where the two paths used to
+// DISAGREE (audit 2026-07-14, findings R3 and R4).
+//
+// The two evaluators are supposed to be one semantics with two
+// implementations. They were not. `fold_scalar` (oracle) special-cased arity —
+// `NaN` for `-`/`/`/`^` unless binary, `NaN` for `min`/`max` unless n >= 2 —
+// while the vectorized overlay left-folded ANY arity through `apply_binary`.
+// And an array-valued `filter` was a per-cell MASK on the vectorized path but
+// "exclude every cell" on the oracle. In both cases the answer you got depended
+// on whether the enclosing body happened to vectorize, which is an
+// implementation detail.
+//
+// The illegal arities are now rejected before evaluation (see
+// `op_registry`), so what remains to prove is the other half of the contract:
+// for every arity that IS legal, the two paths compute the same number.
+// ============================================================================
+
+/// Every legal arity of the ops that used to diverge, in one vectorizable body.
+fn all_legal_arities_json(n: usize) -> String {
+    const TEMPLATE: &str = r#"{
+ "esm": "0.1.0",
+ "metadata": {"name": "arity_matrix"},
+ "models": {
+  "ArityMatrix": {
+   "variables": {"u": {"type": "state", "shape": ["i"]}},
+   "equations": [
+    {
+     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+             "ranges": {"i": [1, __N__]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "ranges": {"i": [1, __N__]},
+             "expr": {"op": "+", "args": [
+               {"op": "-",     "args": [{"op": "index", "args": ["u", "i"]}, 1]},
+               {"op": "-",     "args": [{"op": "index", "args": ["u", "i"]}]},
+               {"op": "neg",   "args": [{"op": "index", "args": ["u", "i"]}]},
+               {"op": "/",     "args": [{"op": "index", "args": ["u", "i"]}, 2]},
+               {"op": "^",     "args": [{"op": "index", "args": ["u", "i"]}, 2]},
+               {"op": "min",   "args": [{"op": "index", "args": ["u", "i"]}, 1, 2]},
+               {"op": "max",   "args": [{"op": "index", "args": ["u", "i"]}, 0]},
+               {"op": "atan2", "args": [{"op": "index", "args": ["u", "i"]}, 2]},
+               {"op": "and",   "args": [{"op": "index", "args": ["u", "i"]}, 1]},
+               {"op": "or",    "args": [{"op": "index", "args": ["u", "i"]}, 0]},
+               {"op": "*",     "args": [{"op": "index", "args": ["u", "i"]}, 2, 3]}
+             ]}}
+    }
+   ]
+  }
+ }
+}"#;
+    TEMPLATE.replace("__N__", &n.to_string())
+}
+
+/// R3: for every arity the spec calls LEGAL, the per-cell oracle and the
+/// vectorized overlay must compute the same value — including the n-ary
+/// `+`/`*`/`min`, the unary-vs-binary `-`, and the n-ary `and`/`or` whose fold
+/// is a strict 1.0/0.0 flag rather than a raw operand.
+#[test]
+fn vectorized_matches_oracle_on_every_legal_arity() {
+    let compiled = compile_json(&all_legal_arities_json(6));
+    let state = sample_state(6);
+    let (dy_vec, vstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (dy_scalar, sstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+
+    assert_eq!(
+        vstats.vectorized_rules, 1,
+        "the arity matrix must actually take the vectorized path, else this \
+         test proves nothing: {vstats:?}"
+    );
+    assert_eq!(sstats.scalar_rules, 1, "force_scalar must use the oracle");
+    assert_eq!(dy_vec.len(), dy_scalar.len());
+    for (k, (a, b)) in dy_vec.iter().zip(dy_scalar.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= 1e-12,
+            "oracle/vectorized divergence at slot {k}: vectorized={a} oracle={b}"
+        );
+        assert!(
+            a.is_finite(),
+            "slot {k} is not finite ({a}) — a legal arity must not produce the \
+             NaN sentinel that `fold_scalar` used to return"
+        );
+    }
+}
+
+/// The `mask = [1, 0, 1]` / `filter: mask > 0.5` / `body = 10` document from
+/// audit finding R4, with a body that vectorizes.
+fn array_filter_json() -> String {
+    r#"{
+ "esm": "0.1.0",
+ "metadata": {"name": "array_filter"},
+ "models": {
+  "ArrayFilter": {
+   "variables": {
+     "u":    {"type": "state", "shape": ["i"]},
+     "mask": {"type": "state", "shape": ["i"]}
+   },
+   "equations": [
+    {
+     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+             "ranges": {"i": [1, 3]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "ranges": {"i": [1, 3]},
+             "filter": {"op": ">", "args": ["mask", 0.5]},
+             "expr": 10}
+    },
+    {
+     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "expr": {"op": "D", "args": [{"op": "index", "args": ["mask", "i"]}], "wrt": "t"},
+             "ranges": {"i": [1, 3]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "ranges": {"i": [1, 3]},
+             "expr": 0}
+    }
+   ]
+  }
+ }
+}"#
+    .to_string()
+}
+
+/// R4: an ARRAY-valued `filter` is a per-cell mask on BOTH paths.
+///
+/// This test pins the *value*, not merely the agreement — `[0, 0, 0]` on both
+/// paths would satisfy an equality-only assertion while still being the wrong
+/// answer (it is precisely the bug: the oracle coerced the non-scalar filter to
+/// `0.0` and excluded every cell). The intended reading, the one the vectorized
+/// path's `vec_select` already implemented and its doc-comments advertise, is a
+/// genuine per-cell gate.
+#[test]
+fn array_valued_filter_is_a_per_cell_mask_on_both_paths() {
+    let compiled = compile_json(&array_filter_json());
+    let names = compiled.state_variable_names();
+    assert_eq!(names.len(), 6, "expected u[3] + mask[3], got {names:?}");
+
+    // Slot order follows `state_variable_names`; build the state from it so the
+    // test does not hard-code a layout.
+    let state: Vec<f64> = names
+        .iter()
+        .map(|n| {
+            if !n.contains("mask") {
+                return 0.0;
+            }
+            // mask = [1, 0, 1] — the middle cell is gated OFF.
+            if n.contains("[2]") { 0.0 } else { 1.0 }
+        })
+        .collect();
+
+    let (dy_vec, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (dy_scalar, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+
+    let u_of = |dy: &[f64]| -> Vec<f64> {
+        names
+            .iter()
+            .zip(dy.iter())
+            .filter(|(n, _)| !n.contains("mask"))
+            .map(|(_, v)| *v)
+            .collect()
+    };
+    let (u_vec, u_scalar) = (u_of(&dy_vec), u_of(&dy_scalar));
+
+    assert_eq!(
+        u_vec, u_scalar,
+        "the two paths disagree on an array-valued filter: vectorized={u_vec:?} \
+         oracle={u_scalar:?}"
+    );
+    assert_eq!(
+        u_vec,
+        vec![10.0, 0.0, 10.0],
+        "an array filter must gate PER CELL (mask=[1,0,1] => [10,0,10]); \
+         [0,0,0] means the filter was coerced to a false scalar and every cell \
+         was dropped, which is the R4 bug"
+    );
+}

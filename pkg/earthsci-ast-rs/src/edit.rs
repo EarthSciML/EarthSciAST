@@ -564,6 +564,8 @@ mod tests {
 
     fn create_empty_esm_file() -> EsmFile {
         EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -644,6 +646,7 @@ mod tests {
     fn test_add_variable() {
         let model = create_simple_model();
         let variable = ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: Some("mol/L".to_string()),
             default: Some(1.0),
@@ -668,6 +671,7 @@ mod tests {
         model.variables.insert(
             "existing_var".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: None,
                 default: None,
@@ -681,6 +685,7 @@ mod tests {
         );
 
         let variable = ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: Some("mol/L".to_string()),
             default: Some(1.0),

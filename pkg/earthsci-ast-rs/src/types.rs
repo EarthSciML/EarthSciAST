@@ -23,6 +23,23 @@ pub struct EsmFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_sets: Option<HashMap<String, IndexSet>>,
 
+    /// Top-level rewrite-rule registry — the payload of a template-library file
+    /// (esm-spec §9.7.1).
+    ///
+    /// A DECLARATION, and a peer of `index_sets` — not an
+    /// `apply_expression_template` call site. Option A expands call sites; it
+    /// does not delete declarations (§9.6.4 rule 5), so this survives
+    /// `parse → emit` VERBATIM and a template-library file round-trips to
+    /// itself. Held as raw JSON precisely so that "verbatim" is achievable: a
+    /// typed re-serialization could not promise byte-identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression_templates: Option<serde_json::Value>,
+
+    /// Top-level metaparameter block (esm-spec §9.7.1) — likewise a DECLARATION
+    /// that survives `parse → emit` verbatim (§9.6.4 rule 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metaparameters: Option<serde_json::Value>,
+
     /// ODE-based model components, keyed by unique identifier
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<HashMap<String, Model>>,
@@ -1005,6 +1022,17 @@ pub struct ModelVariable {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<f64>,
 
+    /// The unit the `default` VALUE is expressed in, when it is not the
+    /// variable's declared `units` (schema `ModelVariable.default_units`).
+    ///
+    /// The schema's contract is that `default` is given in the declared `units`,
+    /// so a `default_units` naming a DIFFERENT unit is a defect: `units: "K"`
+    /// with `default: 25.0, default_units: "degC"` means the stored number is 25
+    /// but the variable actually reads 298.15. Rust did not model the field at
+    /// all, so the mismatch was silently dropped on load.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_units: Option<String>,
+
     /// Brief description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -1048,6 +1076,16 @@ pub enum VariableType {
     /// variable promotes the enclosing model from an ODE system to an SDE
     /// system. Maps to MTK `@brownians` and an `SDESystem`.
     Brownian,
+    /// Discrete variable: piecewise-constant between refreshes rather than
+    /// continuously integrated. It holds its value until an event, a `cadence`,
+    /// or a loader refresh assigns a new one, so it is a state the SOLVER never
+    /// differentiates.
+    ///
+    /// This is the fifth member of the schema's `ModelVariable.type` enum, and
+    /// Rust simply never had it — so `serde` rejected the whole document at
+    /// parse with `unknown variant 'discrete'`, and five valid fixtures could not
+    /// even be LOADED, let alone validated.
+    Discrete,
 }
 
 /// Differential equation

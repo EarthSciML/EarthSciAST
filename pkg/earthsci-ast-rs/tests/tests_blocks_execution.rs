@@ -86,6 +86,8 @@ fn model_only_subset(file: &EsmFile, model_key: &str) -> EsmFile {
         models.insert(model_key.to_string(), m.clone());
     }
     EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -110,6 +112,8 @@ fn reaction_system_only_subset(file: &EsmFile, rs_key: &str) -> EsmFile {
         rs.insert(rs_key.to_string(), r.clone());
     }
     EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,

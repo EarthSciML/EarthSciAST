@@ -15,9 +15,18 @@
 //!    invoked per component from `lower_expression_templates`);
 //! 5. the §9.6.3 fixpoint on fully-concrete trees.
 //!
-//! Round-trip is Option A: `expression_template_imports`, `metaparameters`,
-//! and top-level `expression_templates` do not survive `parse → emit`; the
-//! emitted form is the expanded, folded document.
+//! Round-trip is Option A, which expands CALL SITES and does NOT delete
+//! DECLARATIONS (esm-spec §9.6.4 rule 5). `expression_template_imports` is an
+//! import directive consumed by the fixpoint and does not survive `parse →
+//! emit`; the `apply_expression_template` call sites it lowers do not survive
+//! either. But a top-level `expression_templates` registry and a top-level
+//! `metaparameters` block are DECLARATIONS — peers of `index_sets` — and they
+//! survive VERBATIM: a template-library file MUST round-trip to itself.
+//!
+//! This module used to delete all three, so a pure library file emitted as
+//! `{esm, metadata, index_sets}` — none of the five top-level payload keys —
+//! which the schema's top-level `anyOf` rejects. A conforming library was legal
+//! on disk and illegal the instant it was loaded and re-emitted.
 //!
 //! All diagnostics are raised as [`ExpressionTemplateError`] with the stable
 //! §9.6.6 codes so they are machine-checkable across bindings. Mirrors the
@@ -429,7 +438,9 @@ fn validate_meta_expr(x: &Value, ctx: &str) -> Result<(), ExpressionTemplateErro
     if x.is_boolean() || x.is_number() {
         return Err(err(
             "metaparameter_type_error",
-            format!("{ctx}: non-integer literal {x} in a metaparameter expression (esm-spec §9.7.6)"),
+            format!(
+                "{ctx}: non-integer literal {x} in a metaparameter expression (esm-spec §9.7.6)"
+            ),
         ));
     }
     let Some(obj) = x.as_object() else {
@@ -452,7 +463,9 @@ fn validate_meta_expr(x: &Value, ctx: &str) -> Result<(), ExpressionTemplateErro
         }
         _ => Err(err(
             "metaparameter_type_error",
-            format!("{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"),
+            format!(
+                "{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"
+            ),
         )),
     }
 }
@@ -484,8 +497,10 @@ pub(crate) fn eval_meta_expr(
     env: &BTreeMap<String, i64>,
     ctx: &str,
 ) -> Result<i64, ExpressionTemplateError> {
-    let env_values: BTreeMap<String, Value> =
-        env.iter().map(|(k, v)| (k.clone(), Value::from(*v))).collect();
+    let env_values: BTreeMap<String, Value> = env
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::from(*v)))
+        .collect();
     let substituted = substitute_metaparams(expr, &env_values);
     match try_fold(&substituted, ctx)? {
         Some(v) => Ok(v),
@@ -1767,10 +1782,11 @@ fn has_import_machinery(raw: &Value) -> bool {
 ///
 /// Returns an order-preserving JSON tree ready for
 /// [`crate::lower_expression_templates::lower_expression_templates`] with
-/// `expression_template_imports`, `metaparameters`, and top-level
-/// `expression_templates` consumed (Option A round-trip: none survives
-/// `parse → emit`), or `Ok(None)` when the document carries no §9.7
-/// machinery (the legacy fast path).
+/// `expression_template_imports` consumed, and the top-level
+/// `expression_templates` / `metaparameters` DECLARATIONS restored verbatim from
+/// a pre-folding snapshot (esm-spec §9.6.4 rule 5 — Option A expands call sites,
+/// it does not delete declarations). `Ok(None)` when the document carries no
+/// §9.7 machinery (the legacy fast path).
 ///
 /// The document is processed as six named phases (each a helper below, in
 /// this exact order): top-level scope resolution, per-component imports,
@@ -1800,6 +1816,12 @@ pub fn resolve_template_machinery(
         .cloned()
         .expect("has_import_machinery implies an object");
     let mut stack: Vec<String> = Vec::new();
+
+    // Snapshot the §9.7.1 DECLARATIONS exactly as authored, before any phase
+    // below composes a body or folds a metaparameter into the working copies.
+    // These are restored verbatim at the end — see esm-spec §9.6.4 rule 5 there.
+    let original_templates = root.get("expression_templates").cloned();
+    let original_metaparameters = root.get("metaparameters").cloned();
 
     let mut doc_meta = collect_metaparam_decls(raw_data, "document")?;
     let mut doc_isets: Map<String, Value> = root
@@ -1834,14 +1856,42 @@ pub fn resolve_template_machinery(
     // --- fold structural sites on the closed document ---
     fold_closed_document(&mut root, &mut top_templates, &mut doc_isets)?;
 
-    // --- root library file: compose bodies (validation), then strip; no
-    //     §9.7 construct survives parse → emit (esm-spec §9.7.6 round-trip) ---
+    // --- root library file: compose bodies (VALIDATION only) ---
     if is_library {
         compose_template_bodies(&mut top_templates, "document")?;
-        root.remove("expression_templates");
     }
+
+    // esm-spec §9.6.4 rule 5: OPTION A EXPANDS CALL SITES; IT DOES NOT DELETE
+    // DECLARATIONS.
+    //
+    // A top-level `expression_templates` registry and a top-level
+    // `metaparameters` block (§9.7.1) are DECLARATIONS — peers of `index_sets` —
+    // not `apply_expression_template` call sites. Both survive `parse → emit`
+    // VERBATIM, and a template-library file MUST round-trip to itself.
+    //
+    // This code deleted them, reading "no §9.7 construct survives parse → emit"
+    // as covering the declarations too. The consequence: a pure library file
+    // emitted as `{esm, metadata, index_sets}` — carrying NONE of the five
+    // top-level payload keys — which the schema's top-level `anyOf` rejects.
+    // Combined with rule 4 (validation runs post-expansion), a conforming
+    // template library was UNREPRESENTABLE: legal on disk, illegal the moment it
+    // was loaded and re-emitted.
+    //
+    // The ORIGINALS are restored, not the working copies: `top_templates` has had
+    // its bodies composed and its metaparameters substituted in place, and
+    // emitting that would round-trip a library to a DIFFERENT (expanded) library.
+    // Verbatim means verbatim.
+    if let Some(templates) = original_templates {
+        root.insert("expression_templates".to_string(), templates);
+    }
+    if let Some(metaparams) = original_metaparameters {
+        root.insert("metaparameters".to_string(), metaparams);
+    }
+
+    // `expression_template_imports`, by contrast, IS a load-time construct
+    // consumed by the fixpoint — an import directive, not a declaration — and
+    // correctly does not survive (§9.7.6 round-trip).
     root.remove("expression_template_imports");
-    root.remove("metaparameters");
     if !doc_isets.is_empty() {
         root.insert("index_sets".to_string(), Value::Object(doc_isets));
     }
@@ -2497,7 +2547,10 @@ mod tests {
             lexical_normalize(Path::new("a/../../x")),
             PathBuf::from("../x")
         );
-        assert_eq!(lexical_normalize(Path::new("./../x")), PathBuf::from("../x"));
+        assert_eq!(
+            lexical_normalize(Path::new("./../x")),
+            PathBuf::from("../x")
+        );
         // The single-`..` case is unchanged.
         assert_eq!(lexical_normalize(Path::new("../x")), PathBuf::from("../x"));
     }
@@ -2542,15 +2595,22 @@ mod tests {
     fn eval_meta_expr_folds_product() {
         // A `{op:*, args:[name, name]}` value folds against the closed env.
         assert_eq!(
-            eval_meta_expr(&json!({"op": "*", "args": ["NX", "NY"]}), &env(&[("NX", 18), ("NY", 20)]), "t")
-                .unwrap(),
+            eval_meta_expr(
+                &json!({"op": "*", "args": ["NX", "NY"]}),
+                &env(&[("NX", 18), ("NY", 20)]),
+                "t"
+            )
+            .unwrap(),
             360
         );
     }
 
     #[test]
     fn eval_meta_expr_name_and_literal() {
-        assert_eq!(eval_meta_expr(&json!("NX"), &env(&[("NX", 7)]), "t").unwrap(), 7);
+        assert_eq!(
+            eval_meta_expr(&json!("NX"), &env(&[("NX", 7)]), "t").unwrap(),
+            7
+        );
         assert_eq!(eval_meta_expr(&json!(5), &env(&[]), "t").unwrap(), 5);
     }
 
@@ -2558,7 +2618,10 @@ mod tests {
     fn eval_meta_expr_nested_arithmetic() {
         // (NX + 2) * NY  with NX=4, NY=3  ->  18
         let expr = json!({"op": "*", "args": [{"op": "+", "args": ["NX", 2]}, "NY"]});
-        assert_eq!(eval_meta_expr(&expr, &env(&[("NX", 4), ("NY", 3)]), "t").unwrap(), 18);
+        assert_eq!(
+            eval_meta_expr(&expr, &env(&[("NX", 4), ("NY", 3)]), "t").unwrap(),
+            18
+        );
     }
 
     #[test]
@@ -2573,8 +2636,16 @@ mod tests {
         // first error wins, mirroring the Python parametrized helper test.
         let cases: Vec<(Value, BTreeMap<String, i64>, &str)> = vec![
             // Bad op is caught structurally at the edge, even with a symbolic arg.
-            (json!({"op": "%", "args": ["NX", 2]}), env(&[]), "metaparameter_type_error"),
-            (json!({"op": "*", "args": []}), env(&[]), "metaparameter_type_error"),
+            (
+                json!({"op": "%", "args": ["NX", 2]}),
+                env(&[]),
+                "metaparameter_type_error",
+            ),
+            (
+                json!({"op": "*", "args": []}),
+                env(&[]),
+                "metaparameter_type_error",
+            ),
             (json!(1.5), env(&[]), "metaparameter_type_error"),
             // Unknown free name is caught at fold time.
             (
@@ -2583,7 +2654,11 @@ mod tests {
                 "template_import_unknown_name",
             ),
             // Inexact division is rejected.
-            (json!({"op": "/", "args": ["NX", 7]}), env(&[("NX", 18)]), "metaparameter_type_error"),
+            (
+                json!({"op": "/", "args": ["NX", 7]}),
+                env(&[("NX", 18)]),
+                "metaparameter_type_error",
+            ),
         ];
         for (expr, e, code) in cases {
             let got = require_meta_expr(&expr, "t")
