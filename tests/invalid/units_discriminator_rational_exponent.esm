@@ -1,0 +1,63 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnitsDiscriminatorRationalExponent",
+    "description": "Invalid: Unit exponents are RATIONAL (§4.8.2): `1/s^0.5` is s^-0.5, NOT s^-1. `bad_noise` is declared `1/s` but its expression is `noise_intensity`, in `1/s^0.5` (the intensity of a Wiener noise term). A correct binding rejects. A parser that rounds or truncates a fractional exponent to the nearest integer reads `s^0.5` as `s` and ACCEPTS. This is the NEGATIVE half of the discriminator in tests/valid/units_registry_grammar.esm. A VALID fixture can only prove a binding does not FALSELY REJECT; it CANNOT prove the binding checks anything -- mutation testing showed every observed variable in the valid fixture could be corrupted and still pass, because no binding compared a declared unit against the dimension its expression computes. This file makes the same assertion in the contrapositive: a CORRECT binding REJECTS it, and a binding carrying the bug ACCEPTS it. Everything but the one observed variable is dimensionally clean.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State. Dimensionally clean; not part of the defect."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate. Dimensionally clean; not part of the defect."
+        },
+        "noise_intensity": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "default": 1.0,
+          "description": "Wiener noise intensity: a HALF power of time."
+        },
+        "bad_noise": {
+          "type": "observed",
+          "units": "1/s",
+          "description": "THE ONLY DEFECT: declared units do not match the dimension its expression computes.",
+          "expression": "noise_intensity"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

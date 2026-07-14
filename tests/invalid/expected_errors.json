@@ -2581,5 +2581,104 @@
       }
     ],
     "is_valid": false
+  },
+  "units_discriminator_C_is_coulomb.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_temp",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_units_is_count.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_luminance",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_molec_is_count.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_amount",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_DU_is_column_density.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_dimensionless",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_solidus_associativity.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_assoc",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_rational_exponent.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_noise",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_middot_multiplication.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_cp",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_circular_trig_arg.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_cos",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
+  },
+  "units_discriminator_atan2_commensurate.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_atan2",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the dimension computed by its expression"
+      }
+    ],
+    "is_valid": false
   }
 }

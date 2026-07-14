@@ -687,6 +687,7 @@ atom     := number | symbol | '(' unit ')'
 | comparisons, `and` `or` `not` | Operands must be mutually commensurate; the result is dimensionless (a boolean). |
 | **Circular trig** — `sin` `cos` `tan` | The argument MUST be an **angle** (`rad`, or `deg`, which carries the `rad` dimension) **or dimensionless**. The result is dimensionless. |
 | **Inverse circular trig** — `asin` `acos` `atan` | The argument MUST be **dimensionless**. The result is an **angle** (`rad`). |
+| `atan2` (2-ary) | The two operands MUST be **COMMENSURATE with each other** — same dimension, but ANY dimension, not necessarily dimensionless. The result is an **angle** (`rad`). `atan2` is the ONE inverse-trig op that does not take a dimensionless argument: it takes a *ratio not yet formed*, so `atan2(dy_m, dx_m)` is the ordinary spelling of a bearing and MUST be admitted. A checker that gives `atan2` the `asin`/`acos`/`atan` dimensionless-argument rule rejects it. `atan2(dy_m, dx_s)` remains an ERROR — the operands are not commensurate. |
 | **Strict transcendentals** | The argument MUST be **dimensionless**, and the result is dimensionless. The set is EXACTLY: `ln` `log` `log10` `exp` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` — ten ops, and no others. It is a CLOSED list, not a category to be extended by intuition: `sqrt`, `abs`, `min`, `max` are not members and have their own rules above. |
 | any other op | No dimensional rule ⇒ the result is UNDETERMINABLE (§4.8.4). It is **not** dimensionless. |
 

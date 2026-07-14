@@ -35,14 +35,12 @@
           "default": 0.01,
           "description": "First-order loss rate."
         },
-
         "noise_intensity": {
           "type": "parameter",
           "units": "1/s^0.5",
           "default": 0.05,
           "description": "RATIONAL EXPONENT (§4.8.2). The intensity of a Wiener noise term — the unit of every SDE brownian variable in the corpus. An integer-only exponent grammar cannot parse this at all, and under the §4.8.4 hard-error severity it would falsely reject every conforming SDE file."
         },
-
         "R_slash_star": {
           "type": "parameter",
           "units": "J/mol*K",
@@ -85,7 +83,6 @@
             ]
           }
         },
-
         "k_ws": {
           "type": "parameter",
           "units": "ppb^-1 s^-1",
@@ -98,7 +95,6 @@
           "description": "k_ws, unchanged. Passes only if the space between `ppb^-1` and `s^-1` was read as a multiplication (and `ppb` as dimensionless).",
           "expression": "k_ws"
         },
-
         "heat_flux": {
           "type": "parameter",
           "units": "W/m²",
@@ -159,11 +155,10 @@
           "description": "trend, unchanged. `%/h` = s⁻¹ — a percent is a pure number.",
           "expression": "trend"
         },
-
         "n_air": {
           "type": "parameter",
           "units": "molec/cm^3",
-          "default": 2.5e19,
+          "default": 2.5e+19,
           "description": "COUNTS ARE DIMENSIONLESS (§4.8.1). A number density of air molecules."
         },
         "n_air_is_a_number_density": {
@@ -202,7 +197,6 @@
           "description": "dose, unchanged. DISCRIMINATOR: passes only if the count noun `units` carries NO dimension. A binding that delegates its registry to a general-purpose units library and lets it resolve `units` as MICRO-NIT — a luminance — gets cd·m⁻⁵ and fails. This is not hypothetical; it shipped.",
           "expression": "dose"
         },
-
         "charge": {
           "type": "parameter",
           "units": "C",
@@ -227,7 +221,6 @@
             ]
           }
         },
-
         "ke2": {
           "type": "parameter",
           "units": "m^2/s^2",
@@ -245,7 +238,6 @@
             ]
           }
         },
-
         "salinity": {
           "type": "parameter",
           "units": "psu",
@@ -300,7 +292,6 @@
             ]
           }
         },
-
         "ozone_column": {
           "type": "parameter",
           "units": "DU",
@@ -312,6 +303,30 @@
           "units": "1/m^2",
           "description": "ozone_column, unchanged. Passes only if `DU` is an areal number density, not a dimensionless scalar.",
           "expression": "ozone_column"
+        },
+        "dy_north": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Northward offset; an atan2 operand."
+        },
+        "dx_east": {
+          "type": "parameter",
+          "units": "m",
+          "default": 4.0,
+          "description": "Eastward offset; the other atan2 operand, COMMENSURATE with dy_north."
+        },
+        "bearing_is_an_angle": {
+          "type": "observed",
+          "units": "rad",
+          "description": "DISCRIMINATOR (atan2, §4.8.3): atan2 requires its two operands to be COMMENSURATE with EACH OTHER (here both m) and returns an ANGLE. atan2 is the one inverse-trig op that does NOT take a dimensionless argument -- it takes a ratio not yet formed. A checker that gives atan2 the asin/acos/atan dimensionless-argument rule FALSELY REJECTS this, the ordinary spelling of a bearing.",
+          "expression": {
+            "op": "atan2",
+            "args": [
+              "dy_north",
+              "dx_east"
+            ]
+          }
         }
       },
       "equations": [
