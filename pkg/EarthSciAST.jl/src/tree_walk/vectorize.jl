@@ -36,7 +36,8 @@
 #       - arithmetic / comparison / transcendental ops    → `_VK_OP` (broadcast)
 #       - `_NK_CONTRACTION` reductions                     → `_VK_REDUCE`
 #         (axis fold in the same order as the scalar path)
-#       - closed `fn` ops                                  → `_VK_FN` (per-lane map)
+#       - closed `fn` ops with a per-cell query            → `_VK_FN` (per-lane map;
+#         a lane-invariant one hoists like any other op — see below)
 #   Each merged template evaluates over its whole cell-axis with array ops, then
 #   `du[out_slots] .= result` scatters the lane values back.
 #
@@ -92,12 +93,24 @@ const _VK_INVARIANT = UInt8(11) # LANE-INVARIANT subtree: `payload` is the repre
 # one scalar `_eval_node` call per RHS, one `fill!`, and every interior buffer in
 # it disappears.
 #
-# Which vec kinds are lane-invariant: a LITERAL that merged equal across cells, a
-# STATE whose slot merged equal (a 0-D state read inside an arrayop), a PARAM, TIME,
-# and a subtree already hoisted to INVARIANT. Deliberately NOT invariant: CONSTVEC
-# and GATHER/PGATHER (per-cell by construction), and REDUCE/FN (left alone — a
-# contraction's per-cell child count is not pinned by the structural signature, and
-# an unhoisted `fn` keeps its existing const-fold/typed-spec lowering).
+# Which LOWERED vec kinds count as lane-invariant CHILDREN: a LITERAL that merged equal
+# across cells, a STATE whose slot merged equal (a 0-D state read inside an arrayop), a
+# PARAM, TIME, and a subtree already hoisted to INVARIANT. Deliberately NOT in that set:
+# CONSTVEC and GATHER/PGATHER (per-cell by construction), REDUCE (see below), and — note
+# — `_VK_FN` itself, because a `fn` whose query IS per-cell (`interp.linear(tbl, ax, u[i])`)
+# is genuinely lane-VARYING and must stay a per-lane `_VK_FN`.
+#
+# A closed `fn` is nevertheless a HOIST CANDIDATE like any other op: the decision is made
+# on its CHILDREN, not on its kind. `interp.linear(tbl, ax, t)` — the const table/axis live
+# in the typed spec, so its only child is `_VK_TIME` — is identical in every lane, and is
+# hoisted to a single `_VK_INVARIANT` (one table lookup per RHS call, not N). This is the
+# same barrier ess-obs removed from the scalar CSE pass (see op_registry.jl): a closed
+# function is pure and deterministic, so flagging it opaque only defeats sharing. It is
+# hoisted from `_merge_fn_node`, AFTER the const-query fold — an all-literal query folds to
+# a `_VK_LITERAL` at build time, which is strictly better than one scalar eval per call.
+# `_VK_REDUCE` stays unhoisted: reconstructing it would need an `_NK_CONTRACTION` scalar
+# node (a different kind + the identity seed in `literal`), which `_maybe_hoist_invariant`'s
+# `_NK_OP` reconstruction does not model.
 #
 # The hoist is safe precisely BECAUSE the check is on the merged children: `_VK_LITERAL`
 # only exists when every cell's literal was equal (an unequal one becomes CONSTVEC) and
@@ -167,7 +180,9 @@ struct _VecNode
     #                 (`(fname, nothing)`) for the all-scalar `datetime.*` path;
     #   _VK_OP      → whatever `_Node.payload` carried through `_merge_nodes`
     #                 (`nothing` for ordinary elementwise ops — closed `fn` ops
-    #                 route to `_VK_FN`, not here);
+    #                 route to `_VK_FN` or `_VK_INVARIANT`, not here);
+    #   _VK_INVARIANT → the representative scalar `_Node` (which MAY itself be an
+    #                 `op === :fn` node carrying the source `(fname, spec)` payload);
     #   every other kind → `nothing`.
     # Kept `::Any` deliberately: each consumer narrows it with an `isa` split /
     # typeassert (`_eval_vec`'s `_VK_PGATHER` arm, `_eval_vec_fn`,
@@ -224,9 +239,13 @@ const _VecVal{T} = Union{Vector{Float64},Vector{T}}
 # placeholders, not lane values. Reconstructing from the lowered node is correct for
 # both builders; reconstructing from the source node would silently read a placeholder.
 #
-# Total over exactly the kinds `_vk_lane_invariant` admits, minus `fn` (a lowered
-# `_VK_FN` carries a typed `_Interp*Spec`, not the scalar `(fname, const_args)`
-# payload, so it is not reconstructible here — `fn` subtrees are simply not hoisted).
+# Total over exactly the kinds `_vk_lane_invariant` admits, plus `_VK_OP`. A lowered
+# `_VK_FN` is deliberately NOT reconstructible here and never reaches this function: a
+# `fn` node is hoisted by its CALLER (`_merge_fn_node`), which still holds the SOURCE
+# scalar payload `(fname, spec)` — the exact tuple `_eval_node_op`'s `:fn` arm expects —
+# so no lowered→scalar reconstruction of the `fn` node itself is ever needed. Only its
+# CHILDREN come through here, and a lane-invariant child is never a `_VK_FN` (a nested
+# invariant `fn` has already become `_VK_INVARIANT`, whose payload is a scalar `_Node`).
 function _vk_to_scalar(n::_VecNode)::_Node
     k = n.kind
     k === _VK_LITERAL   && return _mknode(kind=_NK_LITERAL, literal=n.literal)
@@ -240,13 +259,21 @@ function _vk_to_scalar(n::_VecNode)::_Node
         "lane-invariant hoist: unexpected vec kind $(k)"))
 end
 
-# Shared by BOTH vec builders (`_merge_nodes` and stencil.jl's `_lower_template`):
-# if every lowered child of this op is lane-invariant, collapse the whole subtree to a
-# single `_VK_INVARIANT` node. Returns `nothing` when it does not apply, so each caller
-# falls through to its normal `_VK_OP`. `fn` ops are excluded (see `_vk_to_scalar`);
-# a childless op is degenerate and left alone.
+# Shared by BOTH vec builders (`_merge_nodes` and stencil.jl's `_lower_template`, the
+# latter via `_merge_fn_node` for `fn`): if every lowered child of this op is
+# lane-invariant, collapse the whole subtree to a single `_VK_INVARIANT` node. Returns
+# `nothing` when it does not apply, so each caller falls through to its normal `_VK_OP` /
+# `_VK_FN`. A childless op is degenerate and left alone.
+#
+# `payload` MUST be the SOURCE scalar node's payload, since the reconstructed node is a
+# scalar `_Node` handed to `_eval_node`. Both callers satisfy this: it is `nothing` for
+# every ordinary elementwise op, and `(fname, spec_or_nothing)` for `fn` — and in the
+# stencil builder a `fn`'s const table/axis args are loop-INVARIANT, returned verbatim by
+# `_stencilize`, so its spec is a real build-time spec and not a lane recipe. (Only
+# LITERAL/STATE *leaf* fields are recipe placeholders there, which is why `_vk_to_scalar`
+# reads the CHILDREN off the lowered nodes.)
 function _maybe_hoist_invariant(op::Symbol, payload, ch::Vector{_VecNode}, len::Int)
-    (op === :fn || isempty(ch)) && return nothing
+    isempty(ch) && return nothing
     all(_vk_lane_invariant, ch) || return nothing
     scalar = _mknode(kind=_NK_OP, op=op, payload=payload,
                      children=_Node[_vk_to_scalar(c) for c in ch])
@@ -410,19 +437,32 @@ end
 # (ess-wrh §4), an interp leaf whose query children are all compile-time constants
 # folds to a single `_VK_LITERAL` — the closed-function call (and its box) vanish
 # entirely for that leaf.
+#
+# A closed function is PURE, so it is a lane-invariant hoist candidate exactly like an
+# arithmetic op: if every query child is lane-invariant the call has one value for the
+# whole kernel. The three lowerings are tried in decreasing strength — build-time fold
+# (`_VK_LITERAL`, zero runtime work) ▸ once-per-call hoist (`_VK_INVARIANT`) ▸ per-lane
+# map (`_VK_FN`) — and the middle one is what makes `interp.linear(tbl, ax, t)` (a pure
+# function of time, the FastJX shape) ONE table lookup per RHS call instead of N, and lets
+# its ancestors hoist too (an unhoistable child used to bar every ancestor as well).
+# `payload` is the source scalar `(fname, spec)`, i.e. precisely what the scalar `:fn` arm
+# of `_eval_node_op` reads, so the hoisted node needs no reconstruction of the `fn` itself.
 function _merge_fn_node(payload, ch::Vector{_VecNode}, len::Int, m::Int)::_VecNode
     fname, spec = payload::Tuple{String,Any}
-    if spec isa _InterpLinearSpec || spec isa _InterpBilinearSpec ||
-       spec isa _InterpSearchsortedSpec
+    typed = spec isa _InterpLinearSpec || spec isa _InterpBilinearSpec ||
+            spec isa _InterpSearchsortedSpec
+    if typed
         # Const-arg closed function — the spec was built once in `_compile_op`
         # (the `(fname, spec)` payload layout is pinned by the same
         # `_FN_CONST_ARG_SPECS` table). Reuse it directly (immutable, share-safe).
         folded = _try_fold_const_interp(spec, ch, len)
         folded === nothing || return folded
-        return _mkvnode(kind=_VK_FN, op=:fn, payload=spec, children=ch,
-                        buf=Vector{Float64}(undef, len))
     end
-    # All-scalar closed functions (e.g. `datetime.*`): boxed per-lane path.
+    hoisted = _maybe_hoist_invariant(:fn, payload, ch, len)
+    hoisted === nothing || return hoisted
+    typed && return _mkvnode(kind=_VK_FN, op=:fn, payload=spec, children=ch,
+                             buf=Vector{Float64}(undef, len))
+    # All-scalar closed functions (e.g. `datetime.*`): boxed per-lane map.
     return _mkvnode(kind=_VK_FN, op=:fn, payload=payload, children=ch,
                     buf=Vector{Float64}(undef, len),
                     fnargs=_make_fnargs(m),
