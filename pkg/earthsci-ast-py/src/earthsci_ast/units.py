@@ -3,88 +3,189 @@ Unit validation and dimensional analysis for ESM Format.
 
 Provides unit validation functionality using the pint library to ensure
 dimensional consistency across models, reaction systems, and expressions.
+
+The registry is CLOSED: it is exactly the flat table of esm-spec §4.8.1, and
+nothing else resolves. See :data:`_CONTRACT_DEFINITIONS`.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
+
+# ---------------------------------------------------------------------------
+# The shared ESM unit contract (esm-spec §4.8 / docs/content/units-standard.md).
+#
+# The registry is a FLAT, EXACT-MATCH TABLE with **no SI-prefix mechanism**. A
+# symbol is either one of the names below or the unit string does not resolve.
+# This is a deliberate narrowing, not an oversight:
+#
+#   * A prefix mechanism makes the legal-unit-string set unbounded and therefore
+#     un-pinnable across five bindings: it silently accepts `kmolec`, `nppb`,
+#     `Tunits`. Worse, it is AMBIGUOUS against the table — `T` is TESLA but also
+#     reads as tera-, and `M` is MOLAR but also reads as mega-.
+#   * The cost is that a new prefixed unit is a one-line addition here. That is
+#     the intended trade.
+#
+# pint is used for the DIMENSION ALGEBRA only. Its default registry is a wild
+# superset of the contract (~1050 names, a full prefix mechanism, imperial
+# units, physical constants as units), and every extra name is a silent
+# wrong-dimension hazard now that a unit finding is a hard error. Three of them
+# were live defects against this corpus:
+#
+#   1. ``units`` — pint has no unit by that name, so its prefix mechanism
+#      resolved it as ``u`` + ``nit`` = MICRO-NIT, a LUMINANCE. The corpus
+#      declares ``units/L`` and ``units/s``; both silently acquired a luminosity
+#      dimension. The contract says ``units`` is a dimensionless COUNT NOUN.
+#   2. ``molec`` — pint aliased it to ``particle`` (= 1/N_A mol), i.e.
+#      [substance]. The contract says ``molec/cm^3`` MUST be ``[length]^-3``.
+#   3. ``C`` — must be the COULOMB (SI), never Celsius.
+#
+# ``pint.UnitRegistry(filename=None)`` builds an EMPTY registry: no units, no
+# dimensions, and — crucially — no prefixes. Defining only the table below is
+# therefore what DISABLES the prefix mechanism; there is no prefix left to
+# apply. (`km` resolves because it is a table entry, not because `k` is a
+# prefix: with `m` defined and no prefixes, pint rejects `Tm` and `dam`.)
+# ---------------------------------------------------------------------------
+
+#: The contract table, in pint definition syntax, in dependency order.
+#: ``name = <definition> = _ = <alias>`` — the ``_`` suppresses a symbol so the
+#: third field reads as an alias. A bare scale (``ppm = 1e-6``) registers a
+#: scaling of the EMPTY dimension; writing ``1e-6 * dimensionless`` instead
+#: trips a pint bug that stores ``dimensionless`` as a reference name and then
+#: fails conversion with ``KeyError: ''``.
+_CONTRACT_DEFINITIONS: tuple[str, ...] = (
+    # --- the eight canonical axes (esm-spec §4.8.1) -------------------------
+    # `rad` is an axis, not a dimensionless alias: an angle is tracked so that
+    # `deg` and `rad` are commensurate with each other and with nothing else.
+    "m = [length]",
+    "kg = [mass]",
+    "s = [time]",
+    "mol = [substance]",
+    "K = [temperature]",
+    "A = [current]",
+    "cd = [luminosity]",
+    "rad = [angle]",
+    # --- mass ---------------------------------------------------------------
+    "g = 1e-3 kg",
+    "mg = 1e-6 kg",
+    "ug = 1e-9 kg",
+    # --- length -------------------------------------------------------------
+    "dm = 1e-1 m",
+    "cm = 1e-2 m",
+    "mm = 1e-3 m",
+    "um = 1e-6 m",
+    "nm = 1e-9 m",
+    "km = 1e3 m",
+    # --- time ---------------------------------------------------------------
+    "ms = 1e-3 s",
+    "us = 1e-6 s",
+    "ns = 1e-9 s",
+    "min = 60 s",
+    "h = 3600 s",
+    "hr = 3600 s",
+    "day = 86400 s",
+    # Julian year (365.25 d) — the astronomical/climate convention.
+    "yr = 31557600 s",
+    "year = 31557600 s",
+    # `d` is the ISO/CF spelling of a day and is what the shipped
+    # `lib/calendar.esm` declares. Unambiguous here precisely BECAUSE there is no
+    # prefix mechanism: with prefixes on, `d` would read as deci-.
+    "@alias day = d",
+    # --- volume -------------------------------------------------------------
+    "L = 1e-3 m ** 3",
+    "l = 1e-3 m ** 3",
+    "mL = 1e-6 m ** 3",
+    # --- amount -------------------------------------------------------------
+    "kmol = 1e3 mol",
+    "mmol = 1e-3 mol",
+    "umol = 1e-6 mol",
+    "nmol = 1e-9 mol",
+    "M = mol / L",  # MOLAR — never mega-
+    # --- derived ------------------------------------------------------------
+    "Hz = 1 / s",
+    "N = kg * m / s ** 2",
+    "Pa = N / m ** 2",
+    "J = N * m",
+    "kJ = 1e3 J",
+    "cal = 4.184 J",
+    "kcal = 4184 J",
+    "W = J / s",
+    "kW = 1e3 W",
+    "MW = 1e6 W",
+    # --- pressure -----------------------------------------------------------
+    "atm = 101325 Pa",
+    "bar = 1e5 Pa",
+    "hPa = 100 Pa",
+    "kPa = 1e3 Pa",
+    "mbar = 100 Pa",
+    "Torr = 101325 / 760 Pa",
+    "mmHg = 133.322387415 Pa",
+    "psi = 6894.757293168361 Pa",
+    "uatm = 1e-6 atm",
+    # --- energy -------------------------------------------------------------
+    "erg = 1e-7 J",
+    "BTU = 1055.05585262 J",
+    "Wh = 3600 J",
+    "kWh = 3.6e6 J",
+    # --- electromagnetic ----------------------------------------------------
+    "C = A * s",  # COULOMB — never Celsius
+    "V = kg * m ** 2 / (A * s ** 3)",
+    "Ohm = V / A",
+    "F = C / V",
+    "T = kg / (A * s ** 2)",  # TESLA — never tera-
+    # --- temperature / angle ------------------------------------------------
+    # Affine offsets are NOT modelled (esm-spec §4.8.1): degC/degF carry the
+    # Kelvin DIMENSION and their SCALE; the zero offset is irrelevant to
+    # dimensional analysis. A conversion that needs the offset is a
+    # `unit_conversion` expression, not a dimensional judgement.
+    "degC = K",
+    "degF = 5 / 9 K",
+    "deg = 0.017453292519943295 rad",
+    # --- mixing ratios (dimensionless) --------------------------------------
+    # ppmv/ppbv/pptv are volume-mixing-ratio spellings that equal ppm/ppb/ppt
+    # under the ideal-gas approximation, so every binding treats them as one.
+    "ppm = 1e-6 = _ = ppmv",
+    "ppb = 1e-9 = _ = ppbv",
+    "ppt = 1e-12 = _ = pptv",
+    # --- counts (DIMENSIONLESS) ---------------------------------------------
+    # A count of discrete things carries no physical dimension: scale 1 over the
+    # empty dimension (`[]`). This is what makes `molec/cm^3` == `1/cm^3`.
+    "molec = [] = _ = molecule",
+    "count = [] = _",
+    "individuals = [] = _",
+    "vehicles = [] = _",
+    "units = [] = _",
+    # --- column amount (dimensionless count per area) ------------------------
+    # 1 Dobson = 2.6867e20 molec/m^2; `molec` is dimensionless, so [length]^-2.
+    "Dobson = 2.6867e20 / m ** 2 = _ = DU",
+    # --- misc ---------------------------------------------------------------
+    "percent = 1e-2 = %",
+    "psu = [] = _",  # practical salinity — a dimensionless ratio
+    # --- long-form aliases the contract admits ------------------------------
+    "@alias m = meter = meters",
+    "@alias h = hour",
+    "@alias degC = Celsius",
+    "@alias deg = degree = degrees",
+)
 
 try:
     import pint
 
     PINT_AVAILABLE = True
-    ureg = pint.UnitRegistry()
+    #: An EMPTY pint registry — no units, no dimensions, NO PREFIX MECHANISM —
+    #: populated with exactly the contract table. This is the whole narrowing.
+    ureg = pint.UnitRegistry(filename=None)
+    for _definition in _CONTRACT_DEFINITIONS:
+        ureg.define(_definition)
     UnitsContainer = pint.util.UnitsContainer
-
-    # ------------------------------------------------------------------
-    # The shared ESM unit contract (docs/content/units-standard.md).
-    #
-    # pint's default registry is a strict SUPERSET of the contract almost
-    # everywhere — it has an SI-prefix mechanism and thousands of unit names,
-    # where the contract is a flat table. That permissiveness is mostly
-    # harmless, but pint DISAGREES with the contract in three places, and every
-    # one of them is a silent wrong-dimension hazard now that a unit finding is
-    # a hard error:
-    #
-    #   1. ``units`` — pint has no unit by that name, so its SI-PREFIX
-    #      mechanism resolves it as ``u`` + ``nit`` = MICRO-NIT, a LUMINANCE
-    #      ([luminosity]/[length]^2). The corpus declares clinical activity as
-    #      ``units/L`` and a rate as ``units/s``; both silently acquired a
-    #      luminosity dimension. The contract says ``units`` is a dimensionless
-    #      COUNT NOUN.
-    #   2. ``molec`` — pint aliases it to ``particle`` (= 1/N_A mol), i.e.
-    #      [substance]. The standard is explicit that ``molec`` is a
-    #      DIMENSIONLESS COUNT and that ``molec/cm^3`` must parse as
-    #      ``[length]^-3`` (units-standard.md §"Molecule count atom"), which is
-    #      also what Go/TS/Rust/Julia do.
-    #   3. ``Dobson`` — follows from (2): dimension ``[length]^-2``, not
-    #      ``[substance]/[length]^2``.
-    #
-    # ``ppb``/``ppt``, the ``*v`` volume-mixing-ratio aliases, ``individuals``,
-    # ``vehicles``, ``Ohm`` and ``Torr`` are simply ABSENT from pint and are
-    # added here. (``ppm``, ``count``, ``C``=coulomb, ``M``=molar, ``L``/``l``,
-    # ``deg``/``degC``/``degF`` already agree with the contract.)
-    #
-    # pint form for a pure scale: `name = <scale>` (omitting the reference
-    # unit) registers a scaling of the empty dimension — writing
-    # `name = <scale> * dimensionless` instead trips a pint bug that stores
-    # `dimensionless` as a reference name and then fails conversion with
-    # KeyError: ''.
-    # ------------------------------------------------------------------
-
-    # Mole-fraction family: dimensionless with scale factors. ppmv/ppbv/pptv are
-    # volume-mixing-ratio aliases that equal ppm/ppb/ppt under the ideal-gas
-    # approximation, so every binding must treat them as identical.
-    ureg.define("ppm = 1e-6 = ppmv")
-    ureg.define("ppb = 1e-9 = ppbv")
-    ureg.define("ppt = 1e-12 = pptv")
-
-    # COUNT NOUNS — a count of discrete things carries no physical dimension, so
-    # each is dimensionless with scale 1. `[]` is pint's spelling of "belongs to
-    # the empty dimension"; the trailing `= _` suppresses a symbol.
-    ureg.define("molec = [] = _")
-    ureg.define("individuals = [] = _")
-    ureg.define("vehicles = [] = _")
-    ureg.define("units = [] = _")
-    # (`count` is already a dimensionless unit in pint's default registry.)
-
-    ureg.define("molecule_cm3 = 1 / cm**3")
-
-    # Dobson unit: areal number density of ozone molecules. Since `molec` is a
-    # dimensionless count, the dimension is [length]^-2.
-    # 1 Dobson = 2.6867e20 molec/m^2 = 2.6867e16 molec/cm^2 (per standard).
-    ureg.define("Dobson = 2.6867e20 / m**2 = DU")
-
-    # Spellings the contract uses that pint's registry does not carry.
-    ureg.define("@alias ohm = Ohm")
-    ureg.define("@alias torr = Torr")
 
 except ImportError:
     PINT_AVAILABLE = False
     ureg = None
     UnitsContainer = Any
-
-from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
 
 
 class DimensionalMismatchError(ValueError):
@@ -120,6 +221,21 @@ class UnparseableUnitError(ValueError):
 #: The three spellings of "no units" the shared contract accepts.
 _DIMENSIONLESS_SPELLINGS = frozenset({"", "1", "dimensionless"})
 
+#: Units whose real-world conversion needs an additive OFFSET, which the
+#: contract deliberately does not model (esm-spec §4.8.1): the registry gives
+#: them the Kelvin dimension and their scale only. A caller computing a
+#: multiplicative conversion FACTOR must therefore refuse to compute one for
+#: these, rather than silently reporting the (dimensionally correct but
+#: physically wrong) pure scale.
+AFFINE_UNITS = frozenset({"degC", "degF", "Celsius"})
+
+
+def has_affine_unit(unit: str | None) -> bool:
+    """True if ``unit`` mentions a unit whose conversion requires an offset."""
+    if not unit:
+        return False
+    return any(re.search(rf"\b{sym}\b", unit) for sym in AFFINE_UNITS)
+
 #: Exception types pint can raise from a garbage unit string. Beyond its own
 #: ``PintError`` hierarchy (``UndefinedUnitError``, ``DefinitionSyntaxError``,
 #: …) the tokenizer leaks ``SyntaxError`` for e.g. an embedded NUL byte, and the
@@ -135,47 +251,249 @@ _UNIT_PARSE_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 
+#: Unicode → ASCII rewrites applied BEFORE parsing (esm-spec §4.8.2). A pure
+#: SPELLING normalization: no unit is invented, every target is already a table
+#: entry. Longest-first so ``°C`` wins over a bare ``°``.
+#:
+#: Spelled with explicit ``\u`` ESCAPES, never with the literal glyph. Several of
+#: these characters have a visually identical twin at another codepoint
+#: (``Ω`` U+03A9 GREEK CAPITAL OMEGA vs ``Ω`` U+2126 OHM SIGN; ``µ`` U+00B5 MICRO
+#: SIGN vs ``μ`` U+03BC GREEK SMALL MU), and an editor, a formatter, or a
+#: copy-paste through an NFC-normalizing tool will silently collapse one onto the
+#: other — leaving a rewrite table that LOOKS like it covers both and covers only
+#: one. That is exactly what happened here: both omega entries were written as
+#: literals and both ended up as U+03A9, so `Ω*m` spelled with the OHM SIGN was
+#: rejected while the source read as though it were handled.
+_UNICODE_REWRITES: tuple[tuple[str, str], ...] = (
+    ("\u00b0C", "degC"),
+    ("\u00b0F", "degF"),
+    ("\u00b0K", "K"),
+    ("\u00b0", "deg"),  # bare DEGREE SIGN
+    ("\u00b5", "u"),  # MICRO SIGN
+    ("\u03bc", "u"),  # GREEK SMALL LETTER MU
+    ("\u00b7", "*"),  # MIDDLE DOT
+    ("\u22c5", "*"),  # DOT OPERATOR
+    ("\u03a9", "Ohm"),  # GREEK CAPITAL LETTER OMEGA
+    ("\u2126", "Ohm"),  # OHM SIGN
+)
+
+#: Unicode superscript digits / minus → the ASCII exponent they denote, so that
+#: ``m⁻³`` normalizes to ``m^-3``.
+#:
+#: ENUMERATED, never a character range: the superscript digits are NOT contiguous
+#: in Unicode. ``¹`` (U+00B9), ``²`` (U+00B2) and ``³`` (U+00B3) live in Latin-1
+#: Supplement, while ``⁰⁴⁵⁶⁷⁸⁹`` live at U+2070+. A ``[⁰-⁹]`` class —
+#: the obvious spelling — silently drops exactly the three exponents that
+#: actually occur in real unit strings (``m²``, ``cm³``, ``W/m²``).
+_SUPERSCRIPTS: dict[str, str] = {
+    "\u2070": "0",
+    "\u00b9": "1",  # Latin-1 Supplement, NOT U+2071
+    "\u00b2": "2",  # Latin-1 Supplement
+    "\u00b3": "3",  # Latin-1 Supplement
+    "\u2074": "4",
+    "\u2075": "5",
+    "\u2076": "6",
+    "\u2077": "7",
+    "\u2078": "8",
+    "\u2079": "9",
+    "\u207b": "-",  # SUPERSCRIPT MINUS
+}
+
+
 def normalize_unit_string(unit: str) -> str:
     """Rewrite the non-ASCII spellings the corpus uses into the ASCII grammar.
 
-    A pure SPELLING normalization — no unit is invented, each target already
-    exists in the registry. Mirrors Go's ``normalizeUnitString``:
-
-      * U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → ``u`` (``μg`` → ``ug``)
-      * ``°C``/``°F``/``°K`` → ``degC``/``degF``/``K``, and a bare ``°`` → ``deg``
-
-    pint happens to accept ``µ`` and ``°C`` natively, so this is not strictly
-    required for pint to parse; it is applied anyway so that Python resolves the
-    same STRING SET as the bindings that hand-roll the grammar.
+    Applies the esm-spec §4.8.1 pre-parse normalization, identically in every
+    binding: superscript runs (``⁻³``) become ``^-3``; ``·``/``⋅`` become ``*``;
+    ``µ``/``μ`` become ``u``; ``°C`` becomes ``degC``; ``Ω`` becomes ``Ohm``.
     """
-    if not any(ch in unit for ch in "µμ°"):
-        return unit
-    for src, dst in (
-        ("°C", "degC"),
-        ("°F", "degF"),
-        ("°K", "K"),
-        ("°", "deg"),
-        ("µ", "u"),  # U+00B5 MICRO SIGN
-        ("μ", "u"),  # U+03BC GREEK SMALL LETTER MU
-    ):
+    for src, dst in _UNICODE_REWRITES:
         unit = unit.replace(src, dst)
-    return unit
+    if not any(ch in _SUPERSCRIPTS for ch in unit):
+        return unit
+    # A RUN of superscripts is one exponent: `m⁻¹²` is `m^-12`, not `m^-1^2`.
+    out: list[str] = []
+    run: list[str] = []
+    for ch in unit:
+        if ch in _SUPERSCRIPTS:
+            run.append(_SUPERSCRIPTS[ch])
+            continue
+        if run:
+            out.append("^" + "".join(run))
+            run = []
+        out.append(ch)
+    if run:
+        out.append("^" + "".join(run))
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# The unit-string grammar (esm-spec §4.8.2), enforced BEFORE pint sees the
+# string:
+#
+#     unit     := term (('*' | '/')? term)*        # a bare space is '*'
+#     term     := atom (('^' | '**') exponent)?
+#     exponent := sign? (integer | decimal) | '(' sign? int '/' sign? int ')'
+#     atom     := number | symbol | '(' unit ')'
+#
+# pint's own parser is LOOSER than this in ways that matter. It evaluates the
+# string as Python, so `kg**2**3` silently means `kg**8` (right-associative
+# chained power) — not in the grammar, and a typo that would otherwise pass. It
+# also has its own preprocessor whose acceptance surface is not the contract's.
+# Gating on our own tokenizer means the set of legal unit STRINGS is the
+# contract's, not pint's, and the symbol table is checked explicitly (which
+# yields the exact "not in the ESM unit table" message rather than pint's
+# prefix-flavoured guesswork).
+#
+# EXPONENTS ARE RATIONAL, deliberately: `1/s^0.5` is the noise coefficient of a
+# scalar SDE and appears in the corpus. `integer | decimal | (p/q)` are all
+# admissible.
+# ---------------------------------------------------------------------------
+
+_TOKEN_RE = re.compile(
+    r"""
+      (?P<space>\s+)
+    | (?P<pow>\*\*|\^)
+    | (?P<mul>\*)
+    | (?P<div>/)
+    | (?P<lpar>\()
+    | (?P<rpar>\))
+    | (?P<sign>[+-])
+    | (?P<number>\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)
+    | (?P<symbol>%|[A-Za-z_][A-Za-z0-9_]*)
+    """,
+    re.VERBOSE,
+)
+
+
+class _UnitGrammar:
+    """Recursive-descent gate for the §4.8.2 grammar. Raises
+    :class:`UnparseableUnitError` on anything outside it."""
+
+    def __init__(self, text: str, original: str):
+        self.original = original
+        self.toks: list[tuple[str, str]] = []
+        pos = 0
+        while pos < len(text):
+            m = _TOKEN_RE.match(text, pos)
+            if not m:
+                self.fail(f"unexpected character {text[pos]!r}")
+            pos = m.end()
+            kind = m.lastgroup
+            if kind != "space":
+                self.toks.append((kind, m.group()))
+        self.i = 0
+
+    def fail(self, why: str):
+        raise UnparseableUnitError(f"'{self.original}' is not a valid unit string: {why}")
+
+    def peek(self) -> str | None:
+        return self.toks[self.i][0] if self.i < len(self.toks) else None
+
+    def take(self) -> tuple[str, str]:
+        tok = self.toks[self.i]
+        self.i += 1
+        return tok
+
+    def parse(self) -> None:
+        if not self.toks:
+            self.fail("empty")
+        self.unit()
+        if self.i != len(self.toks):
+            self.fail(f"trailing {self.toks[self.i][1]!r}")
+
+    def unit(self) -> None:
+        self.term()
+        while True:
+            kind = self.peek()
+            if kind in ("mul", "div"):
+                self.take()
+                self.term()
+            elif kind in ("number", "symbol", "lpar"):
+                # Whitespace between terms IS multiplication (§4.8.2):
+                # "ppb^-1 s^-1" is ppb⁻¹·s⁻¹.
+                self.term()
+            else:
+                return
+
+    def term(self) -> None:
+        self.atom()
+        if self.peek() == "pow":
+            self.take()
+            self.exponent()
+            if self.peek() == "pow":
+                # `kg**2**3` is not in the grammar. pint would read it as
+                # kg**(2**3) = kg**8; the contract rejects it outright.
+                self.fail("chained exponent (`a^b^c`) is not a unit expression")
+
+    def exponent(self) -> None:
+        if self.peek() == "lpar":
+            # A rational exponent: `(1/2)`, `(-3/2)`.
+            self.take()
+            self.signed_number()
+            if self.peek() != "div":
+                self.fail("a parenthesised exponent must be a rational `(p/q)`")
+            self.take()
+            self.signed_number()
+            if self.peek() != "rpar":
+                self.fail("unclosed exponent '('")
+            self.take()
+            return
+        self.signed_number()
+
+    def signed_number(self) -> None:
+        if self.peek() == "sign":
+            self.take()
+        if self.peek() != "number":
+            self.fail("an exponent must be an integer, a decimal, or a rational `(p/q)`")
+        self.take()
+
+    def atom(self) -> None:
+        kind = self.peek()
+        if kind is None:
+            self.fail("unexpected end of input")
+        if kind == "lpar":
+            self.take()
+            self.unit()
+            if self.peek() != "rpar":
+                self.fail("unclosed '('")
+            self.take()
+            return
+        if kind == "number":
+            self.take()
+            return
+        if kind == "symbol":
+            _, name = self.take()
+            if name not in _CONTRACT_SYMBOLS:
+                # No prefix mechanism, no fallback: the table is the contract.
+                self.fail(f"'{name}' is not in the ESM unit table (esm-spec §4.8.1)")
+            return
+        self.fail(f"unexpected {self.toks[self.i][1]!r}")
+
+
+def _contract_symbols() -> frozenset[str]:
+    """Every name the closed registry resolves — the §4.8.1 table plus its
+    aliases, read back OFF the registry so the gate and pint can never drift."""
+    if not PINT_AVAILABLE:
+        return frozenset()
+    return frozenset(ureg._units.keys())
+
+
+#: The complete set of legal unit symbols. Nothing else parses.
+_CONTRACT_SYMBOLS: frozenset[str] = _contract_symbols()
 
 
 def parse_unit(unit: str | None):
     """Resolve a declared unit string to a pint ``Unit``.
 
     ``None`` and the dimensionless spellings (``""``, ``"1"``,
-    ``"dimensionless"``) resolve to the dimensionless unit. Anything the ESM
-    registry cannot resolve raises :class:`UnparseableUnitError`.
+    ``"dimensionless"``) resolve to the dimensionless unit. Anything outside the
+    §4.8.2 grammar, or naming a symbol outside the §4.8.1 table, raises
+    :class:`UnparseableUnitError`.
 
     Uses ``ureg.parse_units`` rather than ``ureg(...)`` because the latter
-    evaluates the string as a QUANTITY expression and therefore rejects any
-    compound containing an offset unit — ``ureg("degC/min")`` raises
-    ``OffsetUnitCalculusError``, which under a hard-error policy would falsely
-    reject a perfectly ordinary heating rate. ``parse_units`` resolves the same
-    string to ``delta_degree_Celsius / minute`` and yields the dimension the
-    contract asks for ([temperature]/[time]).
+    evaluates the string as a QUANTITY expression; ``parse_units`` yields the
+    unit, which is all a dimensional judgement needs.
     """
     if not PINT_AVAILABLE:
         raise ImportError("pint library is required for unit parsing")
@@ -184,6 +502,9 @@ def parse_unit(unit: str | None):
     text = normalize_unit_string(unit).strip()
     if text in _DIMENSIONLESS_SPELLINGS:
         return ureg.parse_units("")
+    # Gate on the contract grammar + table FIRST, so the accepted string set is
+    # the spec's rather than pint's.
+    _UnitGrammar(text, unit).parse()
     try:
         return ureg.parse_units(text)
     except _UNIT_PARSE_ERRORS as exc:
@@ -219,20 +540,15 @@ _DIM_PRESERVING_NARY = frozenset({"+", "-", "min", "max"})
 #: magnitude and therefore units.)
 _DIM_PRESERVING_UNARY = frozenset({"abs", "floor", "ceil", "ic", "Pre"})
 
-#: Elementary functions whose ARGUMENT must be dimensionless and whose result
-#: is dimensionless. `sqrt` is deliberately NOT here — it halves the dimension.
+#: Elementary functions whose ARGUMENT must be dimensionless and whose result is
+#: dimensionless. `sqrt` is deliberately NOT here — it halves the dimension —
+#: and neither are the CIRCULAR functions, which have their own rules below.
 _DIMENSIONLESS_ARG_FUNCS = frozenset(
     {
         "exp",
         "log",
         "ln",
         "log10",
-        "sin",
-        "cos",
-        "tan",
-        "asin",
-        "acos",
-        "atan",
         "sinh",
         "cosh",
         "tanh",
@@ -241,6 +557,32 @@ _DIMENSIONLESS_ARG_FUNCS = frozenset(
         "atanh",
     }
 )
+
+# ---------------------------------------------------------------------------
+# Circular trigonometry, and why it is NOT just "argument must be dimensionless".
+#
+# `rad` is one of the eight canonical AXES (esm-spec §4.8.1), so an angle is a
+# DIMENSION here — `rad` is not a spelling of "dimensionless". Two rules follow,
+# and folding the circular functions into the generic transcendental set gets
+# BOTH of them wrong, in opposite directions:
+#
+#   * `sin`/`cos`/`tan` take an ANGLE. Requiring a dimensionless argument
+#     REJECTS `cos(gamma)` with `gamma` in `rad` — which is every line of
+#     `lib/solar.esm`. They accept an angle OR a dimensionless number (a phase
+#     in turns/cycles is written dimensionless), and return a dimensionless
+#     ratio. `sin(kg)` is still an error.
+#   * `asin`/`acos`/`atan` RETURN an angle. Reporting a dimensionless result
+#     makes `solar_zenith_angle: "rad" = acos(...)` a GUARANTEED mismatch — a
+#     live false rejection of the shipped stdlib.
+# ---------------------------------------------------------------------------
+
+#: Circular functions: argument is an ANGLE or dimensionless; result is a
+#: dimensionless ratio.
+_CIRCULAR_FUNCS = frozenset({"sin", "cos", "tan"})
+
+#: Inverse circular functions: argument is a dimensionless ratio; result is an
+#: ANGLE (`rad`). `atan2` is handled separately (it is binary).
+_INVERSE_CIRCULAR_FUNCS = frozenset({"asin", "acos", "atan"})
 
 #: Comparisons: operands must share a dimension; the result is a dimensionless
 #: boolean.
@@ -583,6 +925,28 @@ class UnitValidator:
     def _dimensionless(self) -> UnitsContainer:
         return self.ureg.dimensionless.dimensionality
 
+    @property
+    def _angle(self) -> UnitsContainer:
+        """The `[angle]` dimension — the axis `rad` and `deg` live on."""
+        return self.ureg.parse_units("rad").dimensionality
+
+    def _require_angle_or_dimensionless(self, dim: UnitsContainer | None, op: str) -> None:
+        """Raise if ``dim`` is known and is neither an angle nor dimensionless.
+
+        A circular function's argument is an ANGLE; a dimensionless argument is
+        also admitted (a phase written as a pure number). Anything else —
+        ``sin(kg)`` — is a provable inconsistency.
+        """
+        if dim is None:
+            return
+        if self._dimensions_compatible(dim, self._angle):
+            return
+        if self._dimensions_compatible(dim, self._dimensionless):
+            return
+        raise DimensionalMismatchError(
+            f"{op} argument must be an angle or dimensionless, got {dim}"
+        )
+
     def _agree(self, dims: list[UnitsContainer | None], op: str) -> UnitsContainer | None:
         """Require every KNOWN dimension in ``dims`` to be the same, and return
         it (or ``None`` if every operand's dimension is unknown).
@@ -643,11 +1007,21 @@ class UnitValidator:
             self._require_dimensionless(arg_dims[0], op, "argument")
             return self._dimensionless
 
-        if op == "atan2":
-            # atan2(y, x): both operands share a dimension; the angle is
-            # dimensionless.
-            self._agree(arg_dims, op)
+        if op in _CIRCULAR_FUNCS:
+            # sin/cos/tan take an ANGLE or a dimensionless number, and return a
+            # dimensionless ratio. `sin(kg)` is still an error.
+            self._require_angle_or_dimensionless(arg_dims[0], op)
             return self._dimensionless
+
+        if op in _INVERSE_CIRCULAR_FUNCS:
+            # asin/acos/atan take a dimensionless ratio and RETURN AN ANGLE.
+            self._require_dimensionless(arg_dims[0], op, "argument")
+            return self._angle
+
+        if op == "atan2":
+            # atan2(y, x): both operands share a dimension; the result is an ANGLE.
+            self._agree(arg_dims, op)
+            return self._angle
 
         if op == "sqrt":
             base = arg_dims[0]

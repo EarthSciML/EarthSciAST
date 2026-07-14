@@ -208,6 +208,10 @@ def validate(esm_file) -> ValidationResult:
         # 4. Event Consistency validation
         _validate_event_consistency(esm_file, structural_errors)
 
+        # 4b. An observed variable's DECLARED units must equal the dimension its
+        # expression computes (esm-spec §4.8.4) — a HARD error, not a warning.
+        _validate_observed_dimensions(esm_file, structural_errors)
+
         # 5. Unit validation (warnings only)
         _validate_units(esm_file, unit_warnings)
 
@@ -604,7 +608,7 @@ def _validate_reaction_rate_dimensions(
         # that disagreed with every other unit check in the package — silently
         # skipping (parse_dim -> None) exactly the atmospheric-chemistry rates it
         # exists to verify.
-        from .units import PINT_AVAILABLE, unit_dimensionality, ureg
+        from .units import PINT_AVAILABLE, unit_dimensionality
 
         if not PINT_AVAILABLE:
             return
@@ -612,8 +616,12 @@ def _validate_reaction_rate_dimensions(
         return
     from .structural_checks import _BUILTIN_SYMBOLS, _normalize_unit
 
-    time_dim = ureg("second").dimensionality
-    dimensionless_dim = ureg("").dimensionality
+    # Spell these with TABLE symbols. The ESM registry is the closed §4.8.1
+    # table, so pint's long-form names (`second`, `meter`, `celsius`, …) are no
+    # longer defined — `ureg("second")` used to work only because the registry
+    # was vanilla pint, and it now raises UndefinedUnitError.
+    time_dim = unit_dimensionality("s")
+    dimensionless_dim = unit_dimensionality("")
 
     def parse_dim(unit_str):
         if not unit_str:
@@ -660,7 +668,7 @@ def _validate_reaction_rate_dimensions(
                 # Julia parity: skip mole-fraction families.
                 continue
 
-            substrate_dim = ureg("").dimensionality
+            substrate_dim = dimensionless_dim
             total_order = 0
             resolvable = True
             for sp_name, stoich in reaction.reactants.items():
@@ -846,6 +854,109 @@ def _validate_functional_affect(
                     details={
                         "parameter": mod_param,
                         "available_parameters": sorted(all_parameters),
+                    },
+                )
+            )
+
+
+def _validate_observed_dimensions(
+    esm_file: EsmFile, structural_errors: list[ValidationError]
+) -> None:
+    """esm-spec §4.8.4: an observed variable whose DECLARED units disagree with
+    the dimension its EXPRESSION computes is a *provable* dimensional mismatch,
+    and therefore a hard error (``unit_inconsistency``).
+
+    This is the check the whole §4.8 dimensional apparatus exists to make, and
+    it was missing: ``units.UnitValidator`` could type an expression (each op
+    carries a dimensional rule), and ``structural_checks`` could reject an
+    unreal unit STRING — but nothing ever compared the two, so
+    ``{"units": "N", "expression": charge * efield}`` was accepted no matter
+    what dimension the right-hand side actually had. Every discriminator in
+    ``tests/valid/units_registry_grammar.esm`` passed *vacuously* until this
+    landed.
+
+    The §4.8.4 severity contract is honoured exactly:
+
+    * an UNDETERMINABLE dimension (``None`` — a symbolic exponent, an op with no
+      dimensional rule, an undeclared operand) SKIPS the check; it is never
+      treated as dimensionless;
+    * an unparseable declared unit is skipped here — it is reported once, on its
+      own, by ``structural_checks._check_unparseable_units``;
+    * only a mismatch between two KNOWN dimensions is reported.
+    """
+    try:
+        from .units import (
+            PINT_AVAILABLE,
+            DimensionalMismatchError,
+            UnitValidator,
+            UnparseableUnitError,
+            parse_unit,
+        )
+
+        if not PINT_AVAILABLE:
+            return
+    except ImportError:
+        return
+
+    for model in esm_file.models.values():
+        # Seed the typer with every declared unit in THIS model, so bare-name
+        # operands resolve (and a name reused in another model cannot collide).
+        known = {}
+        for name, var in model.variables.items():
+            if not var.units:
+                continue
+            try:
+                known[name] = parse_unit(var.units)
+            except UnparseableUnitError:
+                continue  # reported by _check_unparseable_units; not our finding
+
+        validator = UnitValidator()
+        validator.known_units = known
+
+        for vname, var in model.variables.items():
+            if var.type != "observed" or var.expression is None or not var.units:
+                continue
+            if vname not in known:
+                continue  # its own declared unit is unparseable — already reported
+
+            declared = known[vname].dimensionality
+            path = f"/models/{model.name}/variables/{vname}"
+            try:
+                computed = validator._get_expression_dimension(var.expression)
+            except DimensionalMismatchError as exc:
+                # A provable inconsistency INSIDE the expression (adding metres
+                # to kilograms, a transcendental with a dimensional argument).
+                structural_errors.append(
+                    ValidationError(
+                        path=path,
+                        message=(
+                            f"Observed variable '{vname}' has a dimensionally "
+                            f"inconsistent expression: {exc}"
+                        ),
+                        code=ErrorCode.UNIT_INCONSISTENCY.value,
+                        details={"variable": vname, "declared_units": var.units},
+                    )
+                )
+                continue
+
+            if computed is None:
+                continue  # undeterminable (§4.8.4) — skip, never assume dimensionless
+            if computed == declared:
+                continue
+
+            structural_errors.append(
+                ValidationError(
+                    path=path,
+                    message=(
+                        f"Observed variable '{vname}' is declared as '{var.units}' "
+                        f"({declared}) but its expression has dimension {computed}"
+                    ),
+                    code=ErrorCode.UNIT_INCONSISTENCY.value,
+                    details={
+                        "variable": vname,
+                        "declared_units": var.units,
+                        "declared_dimension": str(declared),
+                        "expression_dimension": str(computed),
                     },
                 )
             )

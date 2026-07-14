@@ -646,15 +646,182 @@ class TestEsmSpecificUnitsStandard:
             == self.ureg.Quantity(1.0, "1 / L").dimensionality
         )
 
-    def test_contract_spellings_absent_from_vanilla_pint(self):
-        # Symbols the shared contract requires that a bare pint registry lacks.
-        assert self.ureg.Quantity(1.0, "Ohm").dimensionality == (
-            self.ureg.Quantity(1.0, "ohm").dimensionality
-        )
+    def test_contract_spellings_resolve(self):
+        # Symbols the shared contract requires (esm-spec §4.8.1).
         assert self.ureg.Quantity(1.0, "Torr").to("Pa").magnitude == pytest.approx(133.322, rel=1e-4)
         assert self.ureg.Quantity(1.0, "individuals / km**2").dimensionality == (
             self.ureg.Quantity(1.0, "1 / km**2").dimensionality
         )
+        assert self.ureg.Quantity(1.0, "Ohm").dimensionality == (
+            self.ureg.Quantity(1.0, "V / A").dimensionality
+        )
+
+    def test_registry_is_closed_and_has_no_prefix_mechanism(self):
+        """The registry is EXACTLY the §4.8.1 table — a flat, exact-match set.
+
+        This is the whole narrowing, and it is what the other assertions in this
+        class depend on. pint's default registry carries ~1050 names plus an
+        SI-prefix mechanism; under the §4.8.4 hard-error severity every one of
+        those extra names is a way for a typo (or a species tag) to acquire a
+        plausible-but-wrong dimension instead of being rejected.
+        """
+        from earthsci_ast.units import UnparseableUnitError, parse_unit
+
+        # pint's long-form / imperial / constant names are NOT in the contract.
+        for name in ("meter/second", "kelvin", "celsius", "inch", "pound", "liter", "joule", "nit"):
+            with pytest.raises(UnparseableUnitError):
+                parse_unit(name)
+
+        # The prefix mechanism is OFF: a prefix + a table entry is not a unit.
+        # `kmolec`/`nppb` are the nonsense it would otherwise manufacture, and
+        # `Tm`/`Mmol` are the collisions that make `T`=tesla and `M`=molar safe.
+        for name in ("kmolec", "nppb", "Tm", "Mmol", "dam"):
+            with pytest.raises(UnparseableUnitError):
+                parse_unit(name)
+
+        # A digit run not separated by `^` is a DIFFERENT symbol, not an
+        # exponent (§4.8.2), and a chained power is not in the grammar.
+        for name in ("cm3", "m/s2", "kg**2**3"):
+            with pytest.raises(UnparseableUnitError):
+                parse_unit(name)
+
+    def test_c_is_the_coulomb_and_t_is_the_tesla(self):
+        """§4.8.1: `C` is the COULOMB and `T` the TESLA — never Celsius, never
+        tera-. Binding `C` to Celsius makes charge x field come out as
+        `kg*m*K/(s^3*A)` instead of a newton, and nothing downstream can see it."""
+        assert self.ureg.Quantity(1.0, "C").dimensionality == (
+            self.ureg.Quantity(1.0, "A * s").dimensionality
+        )
+        # charge x electric field == force
+        assert self.ureg.Quantity(1.0, "C * V / m").dimensionality == (
+            self.ureg.Quantity(1.0, "N").dimensionality
+        )
+        assert self.ureg.Quantity(1.0, "T").dimensionality == (
+            self.ureg.Quantity(1.0, "kg / (A * s**2)").dimensionality
+        )
+
+    def test_dobson_is_a_column_number_density(self):
+        """§4.8.1: counts are dimensionless, so `DU` is `m^-2` with scale
+        exactly 2.6867e20 (pinned — two bindings shipped different roundings)."""
+        assert self.ureg.Quantity(1.0, "DU").dimensionality == (
+            self.ureg.Quantity(1.0, "1 / m**2").dimensionality
+        )
+        assert self.ureg.Quantity(1.0, "Dobson").to("1 / m**2").magnitude == pytest.approx(
+            2.6867e20, rel=1e-9
+        )
+
+    def test_unicode_normalisation_and_whitespace_multiplication(self):
+        """§4.8.2: superscripts, middot/dot-operator, micro sign, degree sign and
+        the ohm sign normalise BEFORE parsing; whitespace between terms is
+        multiplication; `*` and `/` are one precedence level, left to right."""
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        assert dim("W/m²") == dim("W/m^2")
+        assert dim("J/(kg·K)") == dim("J/(kg*K)")
+        assert dim("kg⋅m/s") == dim("kg*m/s")
+        assert dim("°C/min") == dim("degC/min")
+        assert dim("s⁻¹") == dim("1/s")
+        # whitespace IS multiplication
+        assert dim("ppb^-1 s^-1") == dim("ppb^-1 * s^-1")
+        # left-to-right: J/mol*K has a POSITIVE K exponent, J/(mol*K) a negative one
+        assert dim("J/mol*K") == dim("J*K/mol")
+        assert dim("J/mol*K") != dim("J/(mol*K)")
+        # rational exponents are admissible (the SDE noise intensity)
+        assert dim("1/s^0.5") == dim("1/s^(1/2)")
+
+    def test_unicode_twins_both_resolve(self):
+        """Several normalised characters have a visually IDENTICAL twin at another
+        codepoint. Both must resolve — a rewrite table written with literal glyphs
+        can silently collapse onto one of them and still *look* correct."""
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        # U+03A9 GREEK CAPITAL OMEGA vs U+2126 OHM SIGN
+        assert dim("Ω*m") == dim("Ohm*m")
+        assert dim("Ω*m") == dim("Ohm*m")
+        # U+00B5 MICRO SIGN vs U+03BC GREEK SMALL LETTER MU
+        assert dim("µg/m^3") == dim("ug/m^3")
+        assert dim("μg/m^3") == dim("ug/m^3")
+
+    def test_superscript_digits_are_not_a_contiguous_range(self):
+        """The superscript digits are NOT contiguous in Unicode: `¹` `²` `³` live
+        in Latin-1 Supplement (U+00B9/B2/B3), the rest at U+2070+. A `[⁰-⁹]`
+        character class silently drops exactly the three exponents that actually
+        occur in real unit strings (`m²`, `cm³`, `W/m²`)."""
+        from earthsci_ast.units import normalize_unit_string as norm
+
+        for glyph, digit in zip("⁰¹²³⁴⁵⁶⁷⁸⁹",
+                                "0123456789"):
+            assert norm(f"m{glyph}") == f"m^{digit}", f"U+{ord(glyph):04X} not normalised"
+        assert norm("s⁻¹") == "s^-1"  # superscript minus + superscript one
+
+    def test_day_resolves_as_d(self):
+        """`d` is the ISO/CF spelling of a day and is what `lib/calendar.esm`
+        declares. It is unambiguous precisely BECAUSE there is no prefix
+        mechanism — with prefixes on, `d` would read as deci-."""
+        assert self.ureg.Quantity(1.0, "d").to("s").magnitude == pytest.approx(86400.0)
+
+
+class TestCircularTrigonometryAndTheAngleAxis:
+    """`rad` is a canonical AXIS (§4.8.1), so an angle is not "dimensionless".
+
+    Folding the circular functions into the generic transcendental
+    dimensionless-argument set gets both directions wrong:
+
+    * requiring a dimensionless ARGUMENT rejects `cos(gamma)` with `gamma` in
+      `rad` — every line of the shipped `lib/solar.esm`;
+    * reporting a dimensionless RESULT for `acos` makes
+      `solar_zenith_angle: "rad" = acos(...)` a guaranteed mismatch.
+    """
+
+    @staticmethod
+    def _validator():
+        from earthsci_ast.units import UnitValidator, parse_unit
+
+        v = UnitValidator()
+        v.known_units = {
+            "gamma": parse_unit("rad"),
+            "lat": parse_unit("deg"),
+            "ratio": parse_unit("1"),
+            "mass": parse_unit("kg"),
+        }
+        return v
+
+    def test_circular_functions_accept_an_angle(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        for op, arg in (("cos", "gamma"), ("sin", "lat"), ("tan", "gamma")):
+            assert v._get_expression_dimension(ExprNode(op=op, args=[arg])) == dim("1")
+
+    def test_circular_functions_accept_a_dimensionless_argument(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        assert v._get_expression_dimension(ExprNode(op="sin", args=["ratio"])) == dim("1")
+
+    def test_circular_function_of_a_dimensional_non_angle_is_an_error(self):
+        v = self._validator()
+        with pytest.raises(DimensionalMismatchError):
+            v._get_expression_dimension(ExprNode(op="sin", args=["mass"]))
+
+    def test_inverse_circular_functions_return_an_angle(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        for op in ("asin", "acos", "atan"):
+            assert v._get_expression_dimension(ExprNode(op=op, args=["ratio"])) == dim("rad")
+
+    def test_atan2_returns_an_angle(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        got = v._get_expression_dimension(ExprNode(op="atan2", args=["mass", "mass"]))
+        assert got == dim("rad")
+
+    def test_inverse_circular_of_a_dimensional_argument_is_an_error(self):
+        v = self._validator()
+        with pytest.raises(DimensionalMismatchError):
+            v._get_expression_dimension(ExprNode(op="acos", args=["mass"]))
 
 
 class TestUnparseableUnitIsAnError:
@@ -678,7 +845,7 @@ class TestUnparseableUnitIsAnError:
         model.variables["bad"] = ModelVariable(
             type="state", units="not_a_real_unit_zzz"
         )
-        model.variables["good"] = ModelVariable(type="state", units="kelvin")
+        model.variables["good"] = ModelVariable(type="state", units="K")
 
         validator = UnitValidator()
         result = validator.validate_model(model)
@@ -697,7 +864,7 @@ class TestUnparseableUnitIsAnError:
         model.variables["bad"] = ModelVariable(
             type="state", units="not_a_real_unit_zzz"
         )
-        model.variables["good"] = ModelVariable(type="observed", units="kelvin")
+        model.variables["good"] = ModelVariable(type="observed", units="K")
         # good = bad : `bad` resolves to an unknown dimension (omitted from
         # known_units), so the ONLY finding must be the unparseable unit itself.
         model.equations.append(Equation(lhs="good", rhs="bad"))
@@ -1071,16 +1238,16 @@ class TestNumericLiteralsArePolymorphic:
     """
 
     def test_literal_added_to_a_dimensional_quantity_is_not_a_mismatch(self):
-        validator = _validator_with(T_kelvin="kelvin")
+        validator = _validator_with(T_kelvin="K")
         dim = validator._get_expression_dimension(
             ExprNode(op="+", args=["T_kelvin", -273.15])
         )
-        assert dim == validator.ureg.Unit("kelvin").dimensionality
+        assert dim == validator.ureg.Unit("K").dimensionality
 
     def test_literal_over_dimensional_quantity_does_not_break_exp(self):
         """`exp(-1370 / T)` — the literal carries kelvin, so the quotient is
         dimensionless and `exp` must not raise."""
-        validator = _validator_with(T="kelvin")
+        validator = _validator_with(T="K")
         dim = validator._get_expression_dimension(
             ExprNode(
                 op="exp", args=[ExprNode(op="/", args=[-1370.0, "T"])]

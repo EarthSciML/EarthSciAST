@@ -812,6 +812,22 @@ def _is_dimensionless_unit(unit: str | None) -> bool:
         return False
 
 
+def _is_angle_unit(unit: str | None) -> bool:
+    """Return True if a unit string denotes an ANGLE (the `rad` axis).
+
+    `rad` is one of the eight canonical dimension axes (esm-spec §4.8.1), so
+    `rad`/`deg` are NOT dimensionless — which is precisely why a circular
+    function's argument needs its own predicate rather than reusing
+    :func:`_is_dimensionless_unit`.
+    """
+    if unit is None:
+        return False
+    try:
+        return _unit_dimensionality(_normalize_unit(unit)) == _unit_dimensionality("rad")
+    except _pint_unverifiable_errors():
+        return False
+
+
 def _walk_expression_for_exponent_checks(
     expr: Any,
     var_units: dict[str, str],
@@ -942,7 +958,18 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
         # pint not installed: cannot verify units, do not block.
         return
 
+    from .units import has_affine_unit
+
     def linear_factor(from_unit: str, to_unit: str):
+        # An affine conversion (degC -> K) has no single multiplicative factor.
+        # The ESM registry does not model the offset at all (esm-spec §4.8.1:
+        # degC carries the Kelvin dimension and its scale, never its zero
+        # point), so probing `Quantity(0, degC).to(K)` now returns 0.0 and can
+        # no longer detect affineness on its own — the unit names must be
+        # checked directly, or a `<factor> * T_degC` expression assigned to a
+        # kelvin variable would be "checked" against a fabricated factor of 1.
+        if has_affine_unit(from_unit) or has_affine_unit(to_unit):
+            return None
         try:
             q0 = ureg.Quantity(0.0, from_unit).to(to_unit).magnitude
             q1 = ureg.Quantity(1.0, from_unit).to(to_unit).magnitude
@@ -950,7 +977,7 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
             # unparseable or inconvertible unit: cannot verify, skip.
             return None
         if abs(q0) > 1e-12:
-            return None  # affine (e.g., degC -> K)
+            return None  # affine
         return q1
 
     for mname, m in data.get("models", {}).items():
@@ -1093,14 +1120,23 @@ def _check_physical_constant_units(data: dict[str, Any], errors: list[str]) -> N
 #: pinned ``S = n*R*log(V)`` (V in m^3) as VALID. That contradiction is a defect
 #: in the VALID fixture (entropy is ``log(V/V0)``, a ratio) and is being repaired
 #: in the corpus, so the checker now states the rule it actually believes.
+#: Functions whose ARGUMENT must be strictly dimensionless.
+#:
+#: The CIRCULAR functions (`sin`/`cos`/`tan`) are deliberately ABSENT: `rad` is a
+#: canonical dimension axis (esm-spec §4.8.1), so their argument is an ANGLE, and
+#: requiring it to be dimensionless falsely rejects `cos(gamma)` with `gamma` in
+#: `rad` — i.e. every line of the shipped `lib/solar.esm`. Their (looser) rule
+#: lives in ``units.UnitValidator``, which can actually compute the dimension of
+#: a compound argument; this walker only inspects a BARE declared variable, so
+#: admitting angles here would be its whole contribution anyway.
+#:
+#: The INVERSE circular functions (`asin`/`acos`/`atan`) do take a dimensionless
+#: argument, so they stay.
 _DIMENSIONLESS_ARG_FUNCS: dict[str, tuple[str, str]] = {
     "ln": ("logarithm", "Logarithm"),
     "log": ("logarithm", "Logarithm"),
     "log10": ("logarithm", "Logarithm"),
     "exp": ("exponential", "Exponential"),
-    "sin": ("trigonometric", "Trigonometric function"),
-    "cos": ("trigonometric", "Trigonometric function"),
-    "tan": ("trigonometric", "Trigonometric function"),
     "asin": ("trigonometric", "Inverse trigonometric function"),
     "acos": ("trigonometric", "Inverse trigonometric function"),
     "atan": ("trigonometric", "Inverse trigonometric function"),
@@ -1110,6 +1146,14 @@ _DIMENSIONLESS_ARG_FUNCS: dict[str, tuple[str, str]] = {
     "asinh": ("hyperbolic", "Inverse hyperbolic function"),
     "acosh": ("hyperbolic", "Inverse hyperbolic function"),
     "atanh": ("hyperbolic", "Inverse hyperbolic function"),
+}
+
+#: Circular functions: the argument is an ANGLE or dimensionless. Flagged here
+#: only when a bare declared variable is provably NEITHER (e.g. `sin(mass)`).
+_CIRCULAR_ARG_FUNCS: dict[str, tuple[str, str]] = {
+    "sin": ("trigonometric", "Trigonometric function"),
+    "cos": ("trigonometric", "Trigonometric function"),
+    "tan": ("trigonometric", "Trigonometric function"),
 }
 
 
@@ -1222,6 +1266,31 @@ def _walk_expression_for_dimensionless_arg_checks(
                     (
                         report_path,
                         f"{subject} argument must be dimensionless, got units '{arg_units}'",
+                        {
+                            "operation": operation,
+                            "function": op,
+                            "argument_units": arg_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
+                )
+    elif op in _CIRCULAR_ARG_FUNCS and len(args) >= 1:
+        # sin/cos/tan accept an ANGLE (`rad`, `deg`) or a dimensionless number;
+        # anything else (`sin(mass)`) is a provable inconsistency.
+        arg = args[0]
+        if isinstance(arg, str):
+            arg_units = var_units.get(arg)
+            if (
+                arg_units is not None
+                and not _is_dimensionless_unit(arg_units)
+                and not _is_angle_unit(arg_units)
+            ):
+                operation, subject = _CIRCULAR_ARG_FUNCS[op]
+                errors.append(
+                    (
+                        report_path,
+                        f"{subject} argument must be an angle or dimensionless, "
+                        f"got units '{arg_units}'",
                         {
                             "operation": operation,
                             "function": op,
