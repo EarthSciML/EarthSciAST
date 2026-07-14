@@ -31,7 +31,7 @@ other: every parameter-only subexpression the CSE pass finds is recomputed on ev
 | 2 | "Bit-exact" is false: canonical keys collapse float association order | **P1** | documented + pinned |
 | 6 | Array cadence classifier is blind to `filter`/`key` → state-dependent field silently frozen at `u=0` | **P1** | fixed + fail-loud guard |
 | 3 | CSE is silently disabled for *any* expression touching a live forcing buffer | **P2** | fixed |
-| 4 | No CSE on the array path — four levels, incl. a `fn` hoist barrier | **P2** | (b)(c)(d) fixed; (a) deferred |
+| 4 | No CSE on the array path — four levels, incl. a `fn` hoist barrier | **P2** | fixed — (b)(c)(d) via `invariant_share.jl`; (a) via `vec_share.jl` |
 | 5 | No const-cadence tier: parameter-only prelude slots recompute every step | **P2** | fixed |
 
 Finding **#7 was not in the original audit** — it surfaced while fixing #4b, and it is the most serious
@@ -459,3 +459,38 @@ arms against what `_merge_nodes` collapses.
    independently testable, and `n_cse_slots` / `n_cse_occurrences` extend naturally into per-tier counts
    that pin the result. True value-numbering inside a kernel template (#4a) is the genuine follow-up and
    should be scoped separately.
+
+---
+
+## Addendum — #4(a) is now closed too (`vec_share.jl`, bead cp5)
+
+Scoped separately, as advised above, and then done. Everything (b)(c)(d) shared was a **scalar**: a
+`_VK_INVARIANT` payload is one value broadcast to every lane, and the `_CSECache` it lands in is a
+`Vector{Float64}` of scalar slots. So that work removed the *scalar* redundancy that happened to be
+written inside array equations — the Arrhenius factor, the `interp.linear(tbl, ax, t)` — and left the
+redundancy in the array **values** untouched. Nothing shared a vector.
+
+`vec_share.jl` adds the missing half: a second prelude, of `_VecNode` defs holding whole N-lane vectors.
+An exact structural value number over `_VecNode` — keyed on the LANE DATA (gather `slots` by value,
+constvec/literal bits, `len`, `fn` spec content, pgather buffer identity, `_VK_INVARIANT` by its scalar
+value number) — hash-conses the templates into a DAG; every node with in-degree ≥ 2 is lifted into the
+vec prelude and its occurrences become `_VK_VCACHED` refs.
+
+Two things worth recording, because both were load-bearing and neither was obvious from the audit:
+
+* **Cross-kernel sharing needed no notion of "the same cells."** The audit assumed it would: kernel A's
+  lane 3 and kernel B's lane 3 are different cells, so a shared vector looks meaningless. But sharing
+  does not require the kernels to *mean* the same cells, only to *compute* the same vector — and a
+  `_VK_GATHER`'s value is determined entirely by its `slots`. Keying `slots` by value already proves it.
+  **The slots vector IS the lane identity.** So the hard-looking case (a flux shared across two species'
+  balances — the shape a real chemistry-transport RHS has) fell out of the same mechanism as the easy one.
+* **Building the DAG *before* counting is what makes the hoist rule exact.** Counting duplicate subtrees
+  on the original trees over-counts: `sin(x+y) + cos(x+y)` has two copies of `x+y` but also two of the
+  gather `x` inside them, and once `x+y` is hoisted there is only one `x` left — a count-on-the-tree rule
+  would mint a pointless slot for it. On the DAG, `x` has in-degree 1 and correctly stays inline.
+
+Verification: existing suite unchanged at **8387 pass / 28 broken / 0 fail**; `:inplace` ≡ `:oop` bitwise;
+`@allocated f! == 0` preserved (including with a shared PGATHER def); ForwardDiff through a shared def
+matches analytically, over state *and* over parameters; and a shared `u[i]^2` over negative lanes still
+gives `8u` with no NaN — the literal exponent is not widened to a `Dual` behind the ref, which is the one
+way this pass could have silently poisoned a gradient.

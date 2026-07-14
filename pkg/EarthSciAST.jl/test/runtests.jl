@@ -68,6 +68,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_arrayop_test.jl")
     include("tree_walk_vectorized_test.jl")
     include("tree_walk_invariant_hoist_test.jl")
+    include("tree_walk_vec_share_test.jl")
     include("tree_walk_oop_test.jl")
     include("tree_walk_iip_generic_test.jl")
     # XLA tracing of the out-of-place RHS (ext/EarthSciASTReactantExt.jl). OPT-IN:

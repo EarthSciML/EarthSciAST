@@ -62,6 +62,14 @@
 #                           kernel subtrees into the shared CSE prelude, so one
 #                           subtree is evaluated once per RHS call across every
 #                           kernel AND the scalar equations (ha2)
+#   vec_share.jl       §4f  the same idea one level up: shares whole N-LANE
+#                           VECTORS. Value-numbers the _VecNode templates on
+#                           their lane data, hash-conses them into a DAG, and
+#                           lifts every node used twice into a vec prelude of
+#                           _VecNode defs evaluated once per RHS call (cp5)
+#   const_tier.jl      §4g  partitions the (final) scalar prelude by cadence:
+#                           slots that depend only on `p` are refilled only when
+#                           `p` moves, not once per stage of every step (4qf)
 #   stencil.jl         §4c  symbolic stencil compiler (ess-perf)
 #   helpers.jl         §5-5b misc + array-variable helpers (_cell_key /
 #                           _parse_cell_key, field ICs, _eval_const_int)
@@ -78,6 +86,7 @@ include("tree_walk/compile.jl")
 include("tree_walk/vectorize.jl")
 include("tree_walk/oop.jl")
 include("tree_walk/invariant_share.jl")
+include("tree_walk/vec_share.jl")
 include("tree_walk/const_tier.jl")
 include("tree_walk/stencil.jl")
 include("tree_walk/helpers.jl")

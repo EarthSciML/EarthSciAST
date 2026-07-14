@@ -83,6 +83,9 @@ const _VK_FN       = UInt8(9)   # closed-function map (interp.* = whole-array)
 const _VK_PGATHER  = UInt8(10)  # forcing[slots] — gather over a captured live p-buffer (ess-14f.3)
 const _VK_INVARIANT = UInt8(11) # LANE-INVARIANT subtree: `payload` is the representative
                                 # scalar `_Node`, evaluated ONCE per RHS call and broadcast.
+const _VK_VCACHED  = UInt8(12)  # LANE-VARYING shared vector: a reference to a VEC-PRELUDE
+                                # def (`payload`, a `_VecNode`; `idx` is its 1-based slot).
+                                # Reads the buffer that def already wrote — see vec_share.jl.
 
 # ---- Lane-invariant hoisting -------------------------------------------------
 # A subtree with no free cell index — `exp(-Ea/T)` written inside an `arrayop`,
@@ -224,6 +227,65 @@ end
 # vectorized walker is then exactly the pre-AD one. Under AD it is a two-member
 # union that Julia union-splits at each broadcast.
 const _VecVal{T} = Union{Vector{Float64},Vector{T}}
+
+# ---- `_VK_VCACHED`: reading a shared lane vector (vec_share.jl) ---------------
+#
+# The vec prelude evaluates each shared def ONCE per RHS call; every occurrence of it
+# became a `_VK_VCACHED` node whose `payload` IS that def. So reading the shared value
+# is just "hand back the buffer the def already wrote" — but WHICH buffer that is is
+# per-kind, and getting it wrong would silently return an unwritten one:
+#
+#   * `_VK_CONSTVEC` never writes a buffer at all — its lanes ARE `vals`.
+#   * `_VK_LITERAL` / `_VK_PGATHER` deliberately stay `Vector{Float64}` at EVERY value
+#     type (their lanes are data with a genuinely zero derivative — see the `altbuf`
+#     commentary and the `^` arm of `_eval_vec_op`), so they write `buf`, never `altbuf`.
+#     A ref that widened them to `Vector{T}` would reintroduce exactly the `Dual^Dual`
+#     NaN this design exists to avoid.
+#   * everything else writes `_vbuf(n, T)`.
+#
+# So this mirrors `_eval_vec`'s own return discipline arm for arm. It is TOTAL over
+# every kind — correctness here does not depend on which kinds `_vk_hoistable` admits,
+# which is what lets that policy be tuned freely.
+@inline function _vk_cached_buf(d::_VecNode, ::Type{T})::_VecVal{T} where {T}
+    k = d.kind
+    k === _VK_CONSTVEC && return d.vals
+    (k === _VK_LITERAL || k === _VK_PGATHER) && return d.buf
+    return _vbuf(d, T)
+end
+
+# The node's lane count. `_VK_CONSTVEC` is the ONE kind either builder constructs without
+# a `buf` (it is read straight from `vals`), so its length lives there instead — checked
+# against every `_mkvnode` call site in this file and in stencil.jl, not assumed. That
+# exhaustiveness is load-bearing: `len` is part of the vec_share.jl value-number key, and a
+# kind that silently reported 0 here could merge two nodes with genuinely different lane
+# counts. A kind added without a `buf` must be handled here, and `_vec_vn!` fails closed on
+# the one bufless kind that is NOT a source node (`_VK_VCACHED`, which vec_share.jl itself
+# mints and never re-keys).
+@inline _vk_len(n::_VecNode) = n.kind === _VK_CONSTVEC ? length(n.vals) : length(n.buf)
+
+# May this node be lifted into the vec prelude (vec_share.jl)? Two independent bars:
+#
+#  1. It must OWN the buffer it returns. The pass-through arms of `_eval_vec_op`
+#     (1-ary `+`/`*`, `Pre`) return their CHILD's buffer and never touch their own, so a
+#     `_VK_VCACHED` ref to one would read a buffer nothing ever wrote. They are no-op
+#     wrappers anyway: their child is keyed and shared on its own merits, and the wrapper
+#     then costs nothing.
+#  2. It must cost more than the O(1) buffer read that replaces it. That rules out the
+#     broadcast-fill leaves (LITERAL/STATE/PARAM/TIME, and — after invariant_share.jl has
+#     already given its payload a scalar cache slot — INVARIANT): each is a `fill!` of a
+#     value that is already in hand, so lifting one trades an O(len) fill for an O(len)
+#     fill plus a slot. CONSTVEC is O(1) already (`_eval_vec` returns `vals` as-is).
+#     GATHER and PGATHER, despite being leaves, are O(len) index loops — sharing those IS
+#     a win, which is why the leaf/interior line is drawn on COST, not on arity.
+@inline function _vk_hoistable(n::_VecNode)
+    k = n.kind
+    if k === _VK_OP
+        n.op === :Pre && return false
+        ((n.op === :+ || n.op === :*) && length(n.children) == 1) && return false
+        return true
+    end
+    return k === _VK_REDUCE || k === _VK_FN || k === _VK_GATHER || k === _VK_PGATHER
+end
 
 # Lane-invariant test for a LOWERED child (see the `_VK_INVARIANT` commentary above).
 @inline _vk_lane_invariant(n::_VecNode) =
@@ -643,7 +705,12 @@ end
 # correct gradient and a silent NaN.
 function _eval_vec(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     k = n.kind
-    if k === _VK_CONSTVEC
+    if k === _VK_VCACHED
+        # A shared lane vector (vec_share.jl). The vec prelude ran this node's DEF
+        # already, this call, before any kernel — so the whole subtree collapses to one
+        # buffer read. `payload` IS the def node, so there is not even a slot lookup.
+        return _vk_cached_buf(n.payload::_VecNode, T)
+    elseif k === _VK_CONSTVEC
         return n.vals
     elseif k === _VK_GATHER
         b = _vbuf(n, T); s = n.slots
@@ -870,9 +937,14 @@ end
 # mirrors the corresponding scalar arm in `_eval_node_op` — fused `@.` broadcasts
 # apply the identical scalar op lane-by-lane, so lane j equals the scalar value
 # for cell j (bit-identical). Children are read but never mutated; `n.buf` is
-# disjoint from every child buffer, so writing it is always safe. Pure
-# pass-through arms (1-ary `+`/`*`/`min`/`max`, `Pre`) return the child buffer
-# directly — the parent only reads it.
+# disjoint from every child buffer, so writing it is always safe.
+#
+# PASS-THROUGH ARMS — exactly three: 1-ary `+`, 1-ary `*`, and `Pre`. They return the
+# CHILD's buffer directly and never touch their own (the parent only reads it). That is
+# the exhaustive list, and it is exhaustive on purpose: `_vk_hoistable` (vec_share.jl)
+# must refuse to lift precisely these, because a `_VK_VCACHED` ref to one would read the
+# buffer they never wrote. `min`/`max` are NOT among them despite an earlier version of
+# this comment saying so — both throw below arity 2, so a 1-ary form does not exist.
 function _eval_vec_op(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     op = n.op
     c = n.children
@@ -1088,6 +1160,7 @@ end
 function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    cse_prelude::AbstractVector{_Node},
                    cse_cache::_CSECache,
+                   vec_prelude::AbstractVector{_VecNode},
                    vec_kernels::AbstractVector{_VecKernel},
                    const_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int})
@@ -1140,6 +1213,23 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
             idx_and_node = rhs_list[k]
             du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
         end
+
+        # ---- Vec prelude: the shared LANE VECTORS (cp5, vec_share.jl) ----
+        # The scalar prelude above shares scalars; this shares whole N-lane vectors —
+        # `u[i]+w[i]` used by both a `sin` and a `cos` lane-varying arm, a flux
+        # `k*A[i]*B[i]` used by two species' kernels. Each def writes ITS OWN buffer and
+        # the result is dropped here: the value is collected at the `_VK_VCACHED` refs
+        # that replaced every occurrence, which read that same buffer. Slot order is
+        # topological (a def's refs point strictly below it), so each read is filled.
+        #
+        # UNCONDITIONAL, like the scalar prelude — and here that needs no argument at
+        # all, because `_eval_vec` is EAGER by construction (its `ifelse` arm evaluates
+        # all three branches before blending; see that arm). Every node in a template is
+        # already evaluated on every call, so lifting one out adds no evaluation.
+        @inbounds for j in 1:length(vec_prelude)
+            _eval_vec(vec_prelude[j], u, p, t, T)
+        end
+
         @inbounds for j in 1:length(vec_kernels)
             vk = vec_kernels[j]
             res = _eval_vec(vk.template, u, p, t, T)

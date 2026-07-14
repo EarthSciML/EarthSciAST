@@ -57,12 +57,16 @@
 # on every call regardless, because the kernels need it; the rewrite removes work, it
 # does not add any.
 #
-# WHAT IS DELIBERATELY NOT DONE
-# -----------------------------
-#   * Intra-template value numbering (audit finding #4a — `sin(u[i]+w[i]) +
-#     cos(u[i]+w[i])` lowering `u[i]+w[i]` twice, each with its own lane buffer) is
-#     OUT OF SCOPE. It needs a structural key over `_VecNode` plus a per-call
-#     lane-buffer cache, which is a different mechanism from this one.
+# WHAT THIS PASS DOES NOT DO — AND WHERE THAT IS PICKED UP
+# --------------------------------------------------------
+#   * Everything shared here is a SCALAR: a `_VK_INVARIANT` payload is one value
+#     broadcast to every lane, and the `_CSECache` it lands in is a `Vector{Float64}`
+#     of scalar slots. Redundancy in the array VALUES themselves — `sin(u[i]+w[i]) +
+#     cos(u[i]+w[i])` lowering `u[i]+w[i]` twice, each with its own lane buffer; a flux
+#     `k*A[i]*B[i]` recomputed once per species balance — is a different mechanism: it
+#     needs a structural key over `_VecNode` and a prelude of LANE BUFFERS rather than
+#     scalar slots. That is vec_share.jl (section 4f), which runs immediately after this
+#     pass and keys `_VK_INVARIANT` nodes by the value numbers computed here.
 #   * The ORIGINAL prelude defs are never rewritten. A def could in principle contain
 #     a subtree that this pass gave a (higher) slot to, but a def may only read slots
 #     BELOW its own, so rewriting it would break the prelude's topological order.

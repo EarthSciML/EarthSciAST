@@ -1558,6 +1558,20 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # run before the closure captures them. A model with no array kernels is untouched.
     inv_diag = _share_lane_invariants!(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
 
+    # ---- Lane-VARYING vector sharing (cp5, vec_share.jl) ----
+    # The pass above shares SCALARS (a lane-invariant subtree collapses to one cache slot
+    # broadcast over the lanes). Nothing shared an N-lane VECTOR: `u[i]+w[i]` feeding both
+    # a `sin` and a `cos` lowered twice, and a flux `k*A[i]*B[i]` appearing in two species'
+    # balances was recomputed once per balance. This pass value-numbers the `_VecNode`
+    # templates on their LANE DATA (gather slots by value, constvec bits, fn spec content,
+    # `_VK_INVARIANT` by its scalar value number), hash-conses them into a DAG, and lifts
+    # every node with in-degree ≥ 2 into a VEC PRELUDE of defs evaluated once per RHS call;
+    # occurrences become `_VK_VCACHED` refs that read the def's buffer. Cross-kernel comes
+    # free: the slots vector IS the lane identity, so equal keys provably hold equal
+    # vectors. Runs AFTER the invariant pass so a shared invariant payload is already an
+    # `_NK_CACHED` slot here. Mutates `vec_kernels` in place.
+    vec_prelude, vec_diag = _share_lane_vectors!(vec_kernels, scalar_prelude, scalar_cache)
+
     # ---- Cadence tiers of the (now final) prelude (4qf, const_tier.jl) ----
     # Runs AFTER the sharing pass, because that pass APPENDS prelude defs — a
     # lane-invariant kernel subtree hoisted into the scalar prelude is a const-cadence
@@ -1576,10 +1590,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # exist): `:inplace` is the zero-alloc Float64 production RHS; `:oop` is the
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
-        _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels,
+        _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_prelude, vec_kernels,
                   const_slots, dyn_slots)
     elseif form === :oop
-        _make_rhs_oop(rhs_list, scalar_prelude, vec_kernels, n_states)
+        _make_rhs_oop(rhs_list, scalar_prelude, vec_prelude, vec_kernels, n_states)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
@@ -1607,6 +1621,15 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # slots `f!` skips on a call whose `p` has not moved. (Reported for an `:oop` build
     # too — the classification is a property of the prelude, not of the emitter — but
     # only `:inplace` acts on it; see `_make_rhs_oop`.)
+    #
+    # The `n_vec_*` triple is the LANE-VARYING vector sharing (cp5) — a SECOND prelude,
+    # of `_VecNode` defs holding whole N-lane vectors, disjoint from the scalar one above:
+    #   n_vec_slots         — shared lane vectors lifted into the vec prelude
+    #   n_vec_shared        — occurrence SITES collapsed onto them (≥ 2 × n_vec_slots)
+    #   n_vec_prelude_nodes — compiled `_VecNode`s in those defs. Like `template_node_count`
+    #                         it is N-INDEPENDENT: sharing moves nodes from the templates
+    #                         into the prelude, so the two must be read together — the sum
+    #                         is what shrinks, and `template_node_count` alone can only fall.
     diag = (; n_vec_kernels = length(vec_kernels),
               n_scalar_entries = length(rhs_list),
               template_node_count =
@@ -1616,6 +1639,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               n_invariant_slots = inv_diag.n_invariant_slots,
               n_invariant_shared = inv_diag.n_invariant_shared,
               n_invariant_scalar_shared = inv_diag.n_invariant_scalar_shared,
+              n_vec_slots = vec_diag.n_vec_slots,
+              n_vec_shared = vec_diag.n_vec_shared,
+              n_vec_prelude_nodes = vec_diag.n_vec_prelude_nodes,
               n_const_slots = length(const_slots),
               n_dynamic_slots = length(dyn_slots))
 
