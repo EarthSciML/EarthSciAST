@@ -405,11 +405,13 @@ end
 """
     validate_model_unit_consistency(model::Model, path::String) -> Vector{StructuralError}
 
-Promote every PROVABLE dimensional inconsistency in `model` to a structural error
-with the corpus-pinned code `unit_inconsistency`. The findings (and the
-"provable vs unknown" discipline that makes them trustworthy) come from
-[`model_unit_findings`](@ref) in units.jl; this function only attaches the
-model's JSON pointer and recurses into subsystems.
+Promote every units finding in `model` to a structural error under its own
+esm-spec §4.8.4 code — `unit_inconsistency` for a PROVABLE dimensional
+inconsistency, `unit_parse_error` for a unit string that names no real unit.
+Both are hard errors; a GENUINELY UNDETERMINABLE dimension is not a finding at
+all. The findings (and the "provable vs unknown" discipline that makes them
+trustworthy) come from [`model_unit_findings`](@ref) in units.jl; this function
+only attaches the model's JSON pointer and recurses into subsystems.
 
 This is what wires the units engine into `validate()`. Before the 2026-07-14
 audit the engine had no caller outside its own test file.
@@ -417,8 +419,8 @@ audit the engine had no caller outside its own test file.
 function validate_model_unit_consistency(model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
-    for (subpath, message) in model_unit_findings(model)
-        push!(errors, StructuralError("$path/$subpath", message, "unit_inconsistency"))
+    for f in model_unit_findings(model)
+        push!(errors, StructuralError("$path/$(f.subpath)", f.message, f.code))
     end
 
     for (subsys_name, subsys) in model_subsystems(model)

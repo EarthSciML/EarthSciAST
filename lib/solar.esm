@@ -44,20 +44,20 @@
         },
         "hour": {
           "type": "observed",
-          "units": "1",
-          "description": "UTC hour of `t_utc`, 0..23.",
+          "units": "h",
+          "description": "UTC hour of `t_utc`, 0..23. Declared in HOURS, not as a dimensionless count: `true_solar_time` adds `hour*60` to a quantity in minutes, so a dimensionless `hour` makes that sum dimensionally inconsistent (esm-spec §4.8.3). The `60` is the implicit min/h conversion.",
           "expression": { "op": "fn", "name": "datetime.hour", "args": ["t_utc"] }
         },
         "minute": {
           "type": "observed",
-          "units": "1",
-          "description": "UTC minute of `t_utc`, 0..59.",
+          "units": "min",
+          "description": "UTC minute of `t_utc`, 0..59. Declared in MINUTES — see `hour`.",
           "expression": { "op": "fn", "name": "datetime.minute", "args": ["t_utc"] }
         },
         "second": {
           "type": "observed",
-          "units": "1",
-          "description": "UTC second of `t_utc`, 0..59.",
+          "units": "s",
+          "description": "UTC second of `t_utc`, 0..59. Declared in SECONDS — see `hour`.",
           "expression": { "op": "fn", "name": "datetime.second", "args": ["t_utc"] }
         },
         "gamma": {

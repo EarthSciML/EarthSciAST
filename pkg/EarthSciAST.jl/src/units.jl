@@ -7,72 +7,297 @@ expressions, equations, and models as specified in ESM Libraries Spec Section 3.
 
 using Unitful
 
-# ESM-specific dimensionless mole-fraction units (see docs/units-standard.md).
-# All elements are dimensionally-equivalent to Unitful.NoUnits; the scale factor
-# listed in the canonical doc is applied only during conversion, not dimensional
-# checking.
-const _ESM_DIMENSIONLESS_UNITS = Set([
-    "mol/mol", "ppm", "ppmv", "ppb", "ppbv", "ppt", "pptv",
-])
+# ---------------------------------------------------------------------------
+# THE UNIT REGISTRY (esm-spec §4.8.1).
+#
+# A FLAT symbol table, and deliberately so: a symbol is either in it or the
+# unit string does not resolve. There is NO SI-prefix mechanism — `mm` is a row
+# here, not `m` composed with `milli-`. A prefix rule would silently accept
+# nonsense (`kmolec`, `nppb`) and make the set of legal unit strings unbounded
+# and un-pinnable across five language bindings.
+#
+# This replaces a `Unitful.uparse` call. `uparse` is the wrong tool for a
+# CROSS-BINDING contract for three reasons, each of which bit us:
+#
+#   * it has an open SI-prefix mechanism, so the accepted set is not the
+#     spec's set (and cannot be, since Julia's prefix table is Julia's);
+#   * its symbol meanings are Unitful's, not the ESM registry's — `u"h"` is
+#     PLANCK'S CONSTANT, so `L/h` parsed as litre-per-joule-second and made
+#     every pharmacokinetic fixture look dimensionally inconsistent;
+#   * it knows nothing of the ESM count nouns (`molec`, `individuals`,
+#     `vehicles`, `units`, `count`), which are REAL unit names in the corpus.
+#     Under the §4.8.4 severity contract — where an unresolvable unit string is
+#     a HARD ERROR — an incomplete registry is not a missing warning, it is a
+#     FALSE REJECTION of a well-formed file. The registry must be complete, and
+#     an incomplete one must never be papered over by downgrading the severity.
+#
+# The values are `Unitful.Units` objects, so Unitful still supplies the
+# dimension algebra and the scale (`uconvert`, needed by the conversion-factor
+# and physical-constant checks). Only the SPELLING is ours.
+# ---------------------------------------------------------------------------
 
-# Unit strings we have already warned about. `parse_units` is called inside
-# per-reaction / per-equation loops, so warn only once per distinct string.
-# NOTE: this cache grows monotonically for the lifetime of the process (it is
-# never cleared; bounded in practice by the number of distinct unparseable
-# unit strings encountered) and is NOT thread-safe — concurrent `parse_units`
-# calls may race on the Set (worst case: a duplicate warning, or an undefined
-# mutation race). Acceptable for the current single-threaded validation paths.
-const _WARNED_UNIT_STRINGS = Set{String}()
+# 1 mmHg = 133.322387415 Pa exactly (BIPM). Unitful has `Torr` (101325/760 Pa)
+# but not `mmHg`; the two differ by ~1.4e-7 relative, so they are NOT aliased.
+# `false` = do not auto-generate SI prefixes for this symbol.
+Unitful.@unit _u_mmHg "mmHg" MillimetreOfMercury 133.322387415 * Unitful.u"Pa" false
+
+# `Dobson` / `DU`: areal number density of ozone. 1 DU = 2.6867e20 molec/m^2,
+# and `molec` is a dimensionless count atom, so the DIMENSION is [length]^-2.
+const _U_DOBSON = Unitful.unit(1.0 * Unitful.u"m"^-2)
+
+# The flat table, grouped exactly as esm-spec §4.8.1 lists it.
+const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
+    # SI base.
+    "m" => u"m", "kg" => u"kg", "s" => u"s", "mol" => u"mol",
+    "K" => u"K", "A" => u"A", "cd" => u"cd", "rad" => u"rad",
+
+    # Mass.
+    "g" => u"g", "mg" => u"mg", "ug" => u"μg",
+
+    # Length.
+    "dm" => u"dm", "cm" => u"cm", "mm" => u"mm", "um" => u"μm",
+    "nm" => u"nm", "km" => u"km",
+
+    # Time. `h` is the HOUR here, not Unitful's Planck constant.
+    "ms" => u"ms", "us" => u"μs", "ns" => u"ns", "min" => u"minute",
+    "h" => u"hr", "hr" => u"hr", "day" => u"d", "yr" => u"yr", "year" => u"yr",
+
+    # Volume.
+    "L" => u"L", "l" => u"L", "mL" => u"mL",
+
+    # Amount of substance. `M` is molarity (mol/L).
+    "kmol" => u"kmol", "mmol" => u"mmol", "umol" => u"μmol",
+    "nmol" => u"nmol", "M" => u"M",
+
+    # Derived.
+    "Hz" => u"Hz", "N" => u"N", "Pa" => u"Pa", "J" => u"J", "kJ" => u"kJ",
+    "cal" => u"cal", "kcal" => u"kcal", "W" => u"W", "kW" => u"kW", "MW" => u"MW",
+
+    # Pressure.
+    "atm" => u"atm", "bar" => u"bar", "hPa" => u"hPa", "kPa" => u"kPa",
+    "mbar" => u"mbar", "Torr" => u"Torr", "mmHg" => _u_mmHg, "psi" => u"psi",
+
+    # Energy.
+    "erg" => u"erg", "BTU" => u"btu", "Wh" => u"W*hr", "kWh" => u"kW*hr",
+
+    # Electromagnetic. `C` is the COULOMB, per SI — never Celsius. Binding it
+    # to Celsius injects a temperature dimension into every electromagnetic
+    # expression: charge × field then comes out kg*m*K/(s^3*A) instead of a
+    # newton. Celsius has its own unambiguous spellings, `degC` and `°C`.
+    "C" => u"C", "V" => u"V", "Ohm" => u"Ω", "F" => u"F", "T" => u"T",
+
+    # Temperature / plane angle. The affine OFFSET of degC/degF is irrelevant
+    # to dimensional analysis and is not modelled (see `_absolute_unit`).
+    "degC" => u"°C", "degF" => u"°F", "deg" => u"°",
+
+    # Mixing ratios — dimensionless. The "v" (by-volume) spellings name the
+    # same quantity.
+    "ppm" => u"ppm", "ppb" => u"ppb", "ppt" => u"ppt",
+    "ppmv" => u"ppm", "ppbv" => u"ppb", "pptv" => u"ppt",
+
+    # COUNT NOUNS — a count of discrete things carries no physical dimension,
+    # so each is dimensionless. They are real unit names in the shared corpus
+    # (`molec/cm^3`, `individuals/km^2`, `vehicles/km^2`, `units/L`), and since
+    # an unresolvable unit string is now a hard error, omitting them would
+    # falsely REJECT those files.
+    "molec" => Unitful.NoUnits, "individuals" => Unitful.NoUnits,
+    "vehicles" => Unitful.NoUnits, "units" => Unitful.NoUnits,
+    "count" => Unitful.NoUnits,
+
+    # Column amount.
+    "Dobson" => _U_DOBSON, "DU" => _U_DOBSON,
+)
+
+# Spelling normalisation applied BEFORE the scanner, which only recognises
+# ASCII identifier characters. Pure spelling: every target already exists in
+# the registry above; no unit is invented here.
+const _UNIT_SPELLINGS = [
+    "°C" => "degC",
+    "°F" => "degF",
+    "°K" => "K",
+    "°"  => "deg",
+    "µ"  => "u",   # U+00B5 MICRO SIGN
+    "μ"  => "u",   # U+03BC GREEK SMALL LETTER MU
+]
+
+function _normalize_unit_string(s::AbstractString)::String
+    out = String(s)
+    for (from, to) in _UNIT_SPELLINGS
+        occursin(from, out) && (out = replace(out, from => to))
+    end
+    return out
+end
+
+# Raised by the recursive-descent parser and caught by `parse_units`, which
+# turns it into `nothing`. Callers distinguish "unresolvable" from "absent" by
+# checking for `nothing`, and the structural validator promotes it to a hard
+# `unit_parse_error` (esm-spec §4.8.4).
+struct _UnitParseError <: Exception
+    msg::String
+end
+
+mutable struct _UnitParser
+    src::Vector{Char}
+    pos::Int
+end
+
+_up_eof(p::_UnitParser) = p.pos > length(p.src)
+
+function _up_skip_space!(p::_UnitParser)
+    while !_up_eof(p) && isspace(p.src[p.pos])
+        p.pos += 1
+    end
+end
+
+# Peek at the next non-space character, or `nothing` at end of input.
+function _up_peek(p::_UnitParser)
+    _up_skip_space!(p)
+    _up_eof(p) ? nothing : p.src[p.pos]
+end
+
+_up_ident_start(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_'
+_up_ident_cont(c::Char) = _up_ident_start(c) || ('0' <= c <= '9')
+# Can `c` BEGIN an atom? This is the lookahead that drives implicit
+# multiplication (`"ppb^-1 s^-1"`).
+_up_starts_atom(c) = c !== nothing && (_up_ident_start(c) || ('0' <= c <= '9') || c == '(')
+
+# unit := term (('*' | '/')? term)*
+#
+# Whitespace between two terms means MULTIPLICATION. Division is LEFT
+# associative: "L/mol/s" is L·mol⁻¹·s⁻¹, not L/(mol/s).
+function _up_unit!(p::_UnitParser)
+    u = _up_term!(p)
+    while true
+        c = _up_peek(p)
+        if c == '*' || c == '/'
+            p.pos += 1
+            rhs = _up_term!(p)
+            u = c == '*' ? u * rhs : u / rhs
+        elseif _up_starts_atom(c)
+            # Juxtaposition. The scanner is greedy over identifier characters,
+            # so `ms` stays ONE symbol (millisecond) rather than m*s —
+            # juxtaposition can only arise across a real token boundary.
+            u = u * _up_term!(p)
+        else
+            return u
+        end
+    end
+end
+
+# term := atom (('^' | '**') integer)?
+function _up_term!(p::_UnitParser)
+    u = _up_atom!(p)
+    c = _up_peek(p)
+    if c == '^'
+        p.pos += 1
+    elseif c == '*' && p.pos + 1 <= length(p.src) && p.src[p.pos + 1] == '*'
+        # `**` is the Python/pint spelling of `^` ("Pa*m**3"). `_up_peek` has
+        # already skipped whitespace, so `p.pos` is on the first `*`.
+        p.pos += 2
+    else
+        return u
+    end
+    return u^_up_int!(p)
+end
+
+# atom := number | symbol | '(' unit ')'
+function _up_atom!(p::_UnitParser)
+    _up_skip_space!(p)
+    _up_eof(p) && throw(_UnitParseError("unexpected end of input"))
+    c = p.src[p.pos]
+
+    if c == '('
+        p.pos += 1
+        u = _up_unit!(p)
+        _up_peek(p) == ')' || throw(_UnitParseError("missing ')'"))
+        p.pos += 1
+        return u
+    end
+
+    if '0' <= c <= '9'
+        start = p.pos
+        while !_up_eof(p) && (('0' <= p.src[p.pos] <= '9') || p.src[p.pos] == '.')
+            p.pos += 1
+        end
+        tok = String(p.src[start:(p.pos - 1)])
+        tryparse(Float64, tok) === nothing && throw(_UnitParseError("invalid number '$tok'"))
+        # A numeric atom is DIMENSIONALLY the dimensionless unit. Its magnitude
+        # is not carried: a `Unitful.Units` object cannot hold a free scalar
+        # factor, so `"1000/s"` resolves to the dimension 1/s with the 1000
+        # dropped. That is exact for the only numeric atom the grammar really
+        # needs (`"1"`), and dimensionally correct for any other; only a
+        # CONVERSION-factor check would notice the missing magnitude, and no
+        # unit string in the corpus carries one.
+        return Unitful.NoUnits
+    end
+
+    _up_ident_start(c) || throw(_UnitParseError("unexpected '$c' at position $(p.pos)"))
+    start = p.pos
+    p.pos += 1
+    while !_up_eof(p) && _up_ident_cont(p.src[p.pos])
+        p.pos += 1
+    end
+    sym = String(p.src[start:(p.pos - 1)])
+    u = get(_UNIT_REGISTRY, sym, nothing)
+    u === nothing && throw(_UnitParseError("unknown unit '$sym'"))
+    return u
+end
+
+# An exponent MUST be an integer literal (esm-spec §4.8.2).
+function _up_int!(p::_UnitParser)
+    _up_skip_space!(p)
+    start = p.pos
+    if !_up_eof(p) && (p.src[p.pos] == '-' || p.src[p.pos] == '+')
+        p.pos += 1
+    end
+    digits = p.pos
+    while !_up_eof(p) && '0' <= p.src[p.pos] <= '9'
+        p.pos += 1
+    end
+    digits == p.pos && throw(_UnitParseError("expected an integer exponent at position $start"))
+    return parse(Int, String(p.src[start:(p.pos - 1)]))
+end
 
 """
-Parse a unit string into a Unitful.Units object.
+    parse_units(unit_str) -> Union{Unitful.Units, Nothing}
 
-Handles common scientific units and compositions used in Earth system models.
+Resolve a unit string against the ESM registry (esm-spec §4.8.1) using the ESM
+grammar (§4.8.2):
+
+    unit := term (('*' | '/')? term)*
+    term := atom (('^' | '**') integer)?
+    atom := number | symbol | '(' unit ')'
+
+Whitespace between terms is multiplication (`"ppb^-1 s^-1"`); division is
+LEFT-associative (`"L/mol/s"` is L·mol⁻¹·s⁻¹); parentheses group a compound
+denominator (`"J/(mol*K)"`). `µ`/`μ` normalise to `u` and `°C` to `degC` before
+parsing. `""`, `"1"` and `"dimensionless"` are the dimensionless unit.
+
+Returns `nothing` when the string does not parse or names a symbol outside the
+registry. That is a DEFECT IN THE FILE, not a limit of the checker: the
+structural validator promotes it to a hard `unit_parse_error` (§4.8.4). It is
+therefore silent here — the caller decides the severity, and an incomplete
+registry must be fixed by extending the registry, never by downgrading this to
+a warning.
 """
 function parse_units(unit_str::AbstractString)::Union{Unitful.Units, Nothing}
-    if isempty(unit_str) || unit_str == "dimensionless" || unit_str == "1"
+    s = strip(unit_str)
+    if isempty(s) || s == "dimensionless" || s == "1"
         return Unitful.NoUnits
     end
 
-    # ESM-specific mole-fraction family: all dimensionless.
-    if unit_str in _ESM_DIMENSIONLESS_UNITS
-        return Unitful.NoUnits
-    end
-
-    # Dobson unit: areal number density of ozone molecules.
-    # 1 Dobson = 2.6867e20 molec/m^2 — dimension is [length]^-2 since the
-    # ESM standard treats `molec` as a dimensionless count atom.
-    if unit_str == "Dobson"
-        return Unitful.unit(1.0 * u"m"^-2)
-    end
-
+    p = _UnitParser(collect(_normalize_unit_string(s)), 1)
     try
-        # Replace the ESM-specific `molec` count atom with `1` so Unitful can
-        # parse composite forms like `molec/cm^3` → `1/cm^3`. Only replace
-        # whole-word occurrences to avoid clobbering substrings.
-        normalized = replace(unit_str, r"\bmolec\b" => "1")
-
-        # `h` means HOUR in the ESM unit vocabulary (`L/h`, `mg/h`, `km/h`).
-        # In Unitful, `u"h"` is PLANCK'S CONSTANT (6.626e-34 J·s) — so `L/h`
-        # silently parsed as litre per joule-second and made every
-        # pharmacokinetic fixture look dimensionally inconsistent. Rewrite the
-        # whole-word atom to Unitful's `hr` before parsing.
-        normalized = replace(normalized, r"\bh\b" => "hr")
-
-        # Try to parse with Unitful
-        parsed = uparse(normalized)
-        # Handle both FreeUnits (for unit strings like "mol/L") and Quantity (for strings like "1/s")
-        if isa(parsed, Unitful.Units)
-            return parsed  # Already units
-        else
-            return unit(parsed)  # Extract units from quantity
-        end
+        u = _up_unit!(p)
+        _up_skip_space!(p)
+        _up_eof(p) || throw(_UnitParseError("unexpected trailing input"))
+        return u
     catch e
-        if !(unit_str in _WARNED_UNIT_STRINGS)
-            push!(_WARNED_UNIT_STRINGS, unit_str)
-            @warn "Unable to parse unit string: '$unit_str'" exception=e
-        end
-        return nothing
+        e isa _UnitParseError && return nothing
+        # Unitful can still reject an otherwise well-formed composition (e.g. a
+        # power it cannot represent). Unresolvable is unresolvable.
+        e isa ArgumentError && return nothing
+        rethrow()
     end
 end
 
@@ -107,27 +332,50 @@ end
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# IMPLICIT UNITS ON NUMERIC LITERALS.
+# IMPLICIT UNITS ON NUMERIC LITERALS — FABRICATION #1.
 #
-# A bare number in a dimension-bearing position carries units the document does
-# not spell out. `D(n) = 0.001 * droplet_number` (kg m⁻³ s⁻¹ = ? × m⁻³) is not an
-# error: the `0.001` IS a rate constant with units kg s⁻¹. The corpus is written
-# this way throughout, and this module's sibling `validate_reaction_rate_units`
-# already states the rule — "atmospheric-chemistry rate constants routinely carry
-# implicit units on numeric literals, which defeats literal dimensional analysis"
-# — and skips such expressions.
+# A bare number has an INDETERMINATE dimension, not a dimensionless one. Nothing
+# in the AST says whether `273.15` is a pure number or a temperature offset,
+# whether `0.0224` is a molar volume, or whether `1.23` is a ppb→µg/m³
+# conversion factor. `D(n) = 0.001 * droplet_number` (kg m⁻³ s⁻¹ = ? × m⁻³) is
+# not an error: the `0.001` IS a rate constant carrying kg s⁻¹. The corpus is
+# written this way throughout, and this module's sibling
+# `validate_reaction_rate_units` already states the rule — "atmospheric-chemistry
+# rate constants routinely carry implicit units on numeric literals, which
+# defeats literal dimensional analysis" — and skips such expressions.
 #
-# So: a literal operand of `*` or `/` makes the RESULT indeterminate, and a
-# literal operand of `+` or `-` imposes NO constraint (it adopts whatever
-# dimension its siblings have: `T - 273.15` is fine).
+# This matters BECAUSE a dimensional finding is now a hard error (esm-spec
+# §4.8.4): a checker that fails the build must not fabricate a dimension it
+# cannot know. Reading `0` as dimensionless is what made `D(y) = 0` with y in kg
+# — the ordinary way to say "y is held constant" — look provably inconsistent.
 #
-# The exceptions, where a literal really is dimensionless and treating it as
-# opaque would gut the check:
-#   * an EXPONENT (`x^2`) — that is what makes `^` computable at all;
-#   * a TRANSCENDENTAL ARGUMENT (`exp(2)`) — the rule under test.
-# Those two rules read the literal directly and do not consult `_is_literal`.
+# `_expr_dimensions!` therefore returns `nothing` for a literal leaf, and the
+# nothing-propagation in `*` and `/` carries the indeterminacy outward. The
+# three positions where a literal's meaning IS determined are handled by their
+# own rules:
+#
+#   * ADDITIVE position (`T - 273.15`, `1 - phi`) — dimensionally NEUTRAL: the
+#     literal adopts its siblings' dimension, so `_same_dimensions_over` SKIPS
+#     literal operands rather than comparing them. An all-literal sum (`1 + 2`)
+#     is a pure number.
+#   * an EXPONENT (`x^2`) — read by VALUE off the AST, which is what makes `^`
+#     computable at all.
+#   * a TRANSCENDENTAL ARGUMENT (`exp(2)`) — indeterminate, hence unconstrained,
+#     and the result is dimensionless either way.
+#
+# Costs nothing on the invalid corpus, where every pinned inconsistency is
+# stated between DECLARED quantities (`length + mass`, `ln(mass)`, `m^kg`).
 # ---------------------------------------------------------------------------
 _is_literal(e::ASTExpr) = e isa NumExpr || e isa IntExpr
+
+# The numeric value of a literal AST node, or `nothing` if it is not one. The
+# `^` rule reads its exponent through this rather than through the dimensional
+# engine (which reports every literal as indeterminate).
+function _literal_value(e::ASTExpr)
+    e isa IntExpr && return e.value
+    (e isa NumExpr && e.value isa Number) && return e.value
+    return nothing
+end
 
 # Same-dimensions core shared by the "+"/"-" rule and the "min"/"max" rule:
 # every NON-LITERAL argument whose dimensions can be determined must agree, and
@@ -140,6 +388,10 @@ _is_literal(e::ASTExpr) = e isa NumExpr || e isa IntExpr
 function _same_dimensions_over(args, var_units, findings, describe)
     # Literals impose no constraint here — see the implicit-units note above.
     constrained = [a for a in args if !_is_literal(a)]
+    # An ALL-literal sum (`1 + 2`) is a pure number: nothing carries an implicit
+    # unit for the literals to adopt, so the result really is dimensionless.
+    isempty(constrained) && return Unitful.NoUnits
+
     # Still descend the literals' subtrees? They have none — a literal is a leaf.
     arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in constrained]
 
@@ -172,26 +424,25 @@ _minmax_rule(expr, var_units, findings) =
         (first_dim, dim) -> "Dimensional inconsistency in $(expr.op): " *
             "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
 
-# "*": multiply dimensions. An unknown factor — or a LITERAL one, which carries
-# implicit units — makes the PRODUCT unknown. See the conservatism corollary and
-# the implicit-units note above.
+# "*": multiply dimensions. A SINGLE indeterminate factor makes the whole
+# product indeterminate — FABRICATION #2. Skipping the unknown factor and
+# returning the product of the known ones silently asserts the unknown one is
+# dimensionless, which is exactly wrong for the implicit-unit constants the
+# corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³ conversion, and
+# reporting its dimension as "ppb" manufactures a mismatch against the declared
+# µg/m³. See the conservatism corollary above.
 function _product_rule(expr, var_units, findings)
     result = Unitful.NoUnits
-    opaque = false
     for arg in expr.args
-        if _is_literal(arg)
-            opaque = true
-            continue
-        end
         arg_dim = _expr_dimensions!(findings, arg, var_units)
-        arg_dim === nothing && (opaque = true; continue)
+        arg_dim === nothing && return nothing
         result = result * arg_dim
     end
-    return opaque ? nothing : result
+    return result
 end
 
-# "/": divide dimensions. A literal numerator or denominator carries implicit
-# units → the quotient is indeterminate.
+# "/": divide dimensions. A literal numerator or denominator is indeterminate
+# (it carries implicit units), so the quotient is too.
 function _quotient_rule(expr, var_units, findings)
     if length(expr.args) != 2
         # Arity is a STRUCTURAL defect, not a dimensional one — not a finding.
@@ -199,18 +450,21 @@ function _quotient_rule(expr, var_units, findings)
         return nothing
     end
 
-    num_lit = _is_literal(expr.args[1])
-    den_lit = _is_literal(expr.args[2])
-    num_dim = num_lit ? nothing : _expr_dimensions!(findings, expr.args[1], var_units)
-    den_dim = den_lit ? nothing : _expr_dimensions!(findings, expr.args[2], var_units)
-
-    (num_lit || den_lit) && return nothing
+    num_dim = _expr_dimensions!(findings, expr.args[1], var_units)
+    den_dim = _expr_dimensions!(findings, expr.args[2], var_units)
     (num_dim === nothing || den_dim === nothing) && return nothing
     return num_dim / den_dim
 end
 
-# "^" / "pow": raise dimension to power. The exponent must be dimensionless —
-# that is a provable inconsistency when its dimension is known and non-trivial.
+# "^" / "pow": raise the base's dimension to the power. The exponent must be
+# dimensionless — a provable inconsistency when its dimension is known and
+# non-trivial.
+#
+# FABRICATION #4: a SYMBOLIC exponent (`x^alpha` — a fitted reaction order is
+# ordinary chemistry) makes the result's dimension depend on alpha's RUNTIME
+# VALUE, so it is genuinely undeterminable. Assuming the base's dimension
+# manufactures a clean `1/s` for `k2 * x^alpha * z^beta` and then reports a
+# mismatch against the true LHS, rejecting a valid file.
 function _power_rule(expr, var_units, findings)
     if length(expr.args) != 2
         @debug "Power operator requires exactly 2 arguments"
@@ -218,31 +472,37 @@ function _power_rule(expr, var_units, findings)
     end
 
     base_dim = _expr_dimensions!(findings, expr.args[1], var_units)
-    exp_dim = _expr_dimensions!(findings, expr.args[2], var_units)
 
-    # A dimensional exponent is provably wrong regardless of the base.
-    if exp_dim !== nothing && dimension(exp_dim) != dimension(Unitful.NoUnits)
-        push!(findings, "Exponent must be dimensionless, got '$(_ustr(exp_dim))'" *
-            (base_dim === nothing ? "" : " for base with units '$(_ustr(base_dim))'"))
+    # The exponent is read by VALUE off the AST, not through the engine: the
+    # engine reports every literal as indeterminate (fabrication #1), and a
+    # literal exponent is precisely the case that makes `^` computable.
+    power = _literal_value(expr.args[2])
+
+    if power === nothing
+        # Non-literal exponent: it must still be dimensionless, and THAT is
+        # provable whenever its dimension is known.
+        exp_dim = _expr_dimensions!(findings, expr.args[2], var_units)
+        if exp_dim !== nothing && dimension(exp_dim) != dimension(Unitful.NoUnits)
+            push!(findings, "Exponent must be dimensionless, got '$(_ustr(exp_dim))'" *
+                (base_dim === nothing ? "" : " for base with units '$(_ustr(base_dim))'"))
+            return nothing
+        end
+        base_dim === nothing && return nothing
+        # A dimensionless base stays dimensionless under ANY exponent; a
+        # dimensional one has no static dimension under a symbolic exponent.
+        dimension(base_dim) == dimension(Unitful.NoUnits) && return Unitful.NoUnits
         return nothing
     end
 
-    (base_dim === nothing || exp_dim === nothing) && return nothing
-
-    # A literal integer exponent is the only case whose result dimension is
-    # determinable. `x^n` for a symbolic (or fractional) `n` on a DIMENSIONAL
-    # base has no static dimension → unknown. On a dimensionless base the result
-    # is dimensionless whatever the exponent.
-    power = if expr.args[2] isa IntExpr
-        Int(expr.args[2].value)
-    elseif expr.args[2] isa NumExpr && expr.args[2].value isa Number && isinteger(expr.args[2].value)
-        Int(expr.args[2].value)
-    else
-        nothing
+    base_dim === nothing && return nothing
+    # A literal INTEGER or RATIONAL exponent is determinable (esm-spec §4.8.3).
+    # Unitful represents rational powers, so `x^0.5` on `m^2` is `m`; a power it
+    # cannot represent is unknown, not an inconsistency.
+    try
+        return isinteger(power) ? base_dim^Int(power) : base_dim^rationalize(float(power))
+    catch
+        return nothing
     end
-    power !== nothing && return base_dim^power
-    dimension(base_dim) == dimension(Unitful.NoUnits) && return Unitful.NoUnits
-    return nothing
 end
 
 # "sqrt": halves the dimension. NOT a transcendental — `sqrt(area)` is a
@@ -314,14 +574,35 @@ end
 # "sign": strips dimensions — the result is a dimensionless -1/0/+1.
 _dimensionless_result_rule(expr, var_units, findings) = Unitful.NoUnits
 
+# "<", ">", "<=", ">=", "==", "!=": the operands must be mutually commensurate
+# (comparing a length to a mass is provably wrong); the result is a
+# dimensionless boolean. Literal operands are dimension-neutral here for the
+# same reason they are under "+" — `x > 0` says nothing about the units of 0.
+function _comparison_rule(expr, var_units, findings)
+    _same_dimensions_over(expr.args, var_units, findings,
+        (first_dim, dim) -> "Cannot compare quantities with different units: " *
+            "'$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'")
+    return Unitful.NoUnits
+end
+
 # "abs": preserves dimensions.
 function _preserve_dimension_rule(expr, var_units, findings)
     length(expr.args) == 1 || return nothing
     return _expr_dimensions!(findings, expr.args[1], var_units)
 end
 
-# "D": derivative — dimensions of the differentiated variable over the
-# dimensions of the `wrt` variable (defaulting to time in seconds).
+# "D": derivative — the differentiated variable's dimension over the `wrt`
+# variable's dimension.
+#
+# FABRICATION #3: an UNDECLARED independent variable has an unknown dimension,
+# so the derivative's dimension is unknown too. Defaulting `t` to SECONDS is a
+# false-positive factory: in a nondimensionalized model (state and RHS both
+# declared "1", `t` undeclared) it manufactures `1/s` on the left against `1` on
+# the right and reports a mismatch in a perfectly well-formed file.
+#
+# No coverage is lost. The EQUATION-level rule (`equation_unit_findings`) still
+# rejects a derivative equation that no choice of time unit could reconcile,
+# which is what the invalid corpus actually pins.
 function _derivative_rule(expr, var_units, findings)
     if length(expr.args) != 1
         @debug "Derivative operator D requires exactly 1 argument"
@@ -330,9 +611,9 @@ function _derivative_rule(expr, var_units, findings)
 
     var_dim = _expr_dimensions!(findings, expr.args[1], var_units)
 
-    wrt = expr.wrt !== nothing ? expr.wrt : "t"  # Default to time
-    wrt_unit_str = get(var_units, wrt, "s")      # Default to seconds
-    wrt_dim = parse_units(wrt_unit_str)
+    wrt = expr.wrt !== nothing ? expr.wrt : "t"
+    haskey(var_units, wrt) || return nothing
+    wrt_dim = _absolute_unit(parse_units(var_units[wrt]))
 
     (var_dim === nothing || wrt_dim === nothing) && return nothing
     return var_dim / wrt_dim
@@ -348,7 +629,13 @@ end
 # than requiring a dimensionless one.
 const _TRANSCENDENTAL_OPS = Set(["sin", "cos", "tan", "exp", "log", "ln",
                                  "log10", "log2", "tanh", "sinh", "cosh",
-                                 "asin", "acos", "atan", "expm1"])
+                                 "asin", "acos", "atan", "expm1",
+                                 "asinh", "acosh", "atanh"])
+
+# Comparisons and the boolean connectives. Their operands must be mutually
+# commensurate (esm-spec §4.8.3) and the RESULT is a dimensionless boolean.
+const _COMPARISON_OPS = Set(["<", ">", "<=", ">=", "==", "!="])
+const _BOOLEAN_OPS = Set(["and", "or", "not"])
 
 # Operator name → dimensional rule. Ops absent from this table have no
 # dimensional rule and degrade silently to `nothing` (see `_expr_dimensions!`).
@@ -365,10 +652,21 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         "ifelse" => _ifelse_rule,
         "sign"   => _dimensionless_result_rule,
         "abs"    => _preserve_dimension_rule,
+        # `Pre` PRESERVES its operand's dimension (esm-spec §4.8.3) — it names
+        # the operand's value at the previous step, not a dimensionless one.
+        "Pre"    => _preserve_dimension_rule,
         "D"      => _derivative_rule,
     )
     for op in _TRANSCENDENTAL_OPS
         rules[op] = _dimensionless_arg_rule
+    end
+    for op in _COMPARISON_OPS
+        rules[op] = _comparison_rule
+    end
+    for op in _BOOLEAN_OPS
+        # A boolean connective's operands are already booleans; the result is a
+        # dimensionless boolean either way.
+        rules[op] = _dimensionless_result_rule
     end
     rules
 end
@@ -379,8 +677,10 @@ end
 function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
                            var_units::AbstractDict)::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
-        # Numbers are dimensionless unless specified otherwise
-        return Unitful.NoUnits
+        # A bare number's dimension is INDETERMINATE, not dimensionless — see
+        # the implicit-units note (fabrication #1). The three positions where a
+        # literal's meaning IS determined are handled by their own rules.
+        return nothing
     elseif expr isa VarExpr
         # Look up variable units; a variable we know nothing about has
         # *unknown* dimensions, not dimensionless ones.
@@ -501,11 +801,10 @@ function equation_unit_findings(eq::Equation, var_units::AbstractDict)::Vector{S
 
     # A BARE-LITERAL right-hand side asserts nothing dimensionally. `D(y) = 0`
     # (`tests/valid/metadata_author_variations.esm`, y in kg) is the ordinary way
-    # to say "y is held constant"; the literal carries the implicit units kg/s,
-    # exactly as the implicit-units note at the top of this file describes for a
-    # literal factor of `*` or `/`. Reading it as dimensionless instead makes
-    # every `D(<dimensional>) = <literal>` equation look provably inconsistent.
-    _is_literal(eq.rhs) && return findings
+    # to say "y is held constant"; the literal carries the implicit units kg/s.
+    # No special case is needed for it any more — a literal's dimension is
+    # INDETERMINATE (fabrication #1), so `rhs_dim` below comes back `nothing`
+    # and the comparison is skipped, exactly as it should be.
 
     scratch = String[]   # internal findings are out of scope here; see above
     u_dim = _expr_dimensions!(scratch, lhs.args[1], var_units)
@@ -553,24 +852,52 @@ function validate_equation_dimensions(eq::Equation, var_units::AbstractDict)::Bo
 end
 
 """
-    model_unit_findings(model::Model) -> Vector{Pair{String,String}}
+    UnitFinding
 
-Every PROVABLE dimensional inconsistency in `model`, as `subpath => message`
-pairs where `subpath` is RELATIVE to the model's own JSON pointer (e.g.
-`"equations/0"`, `"variables/invalid_sum"`). Callers prefix their pointer and
-promote each pair to an error; see `validate_model_unit_consistency` in
-validate.jl, the single structural caller.
+A units finding: `subpath` RELATIVE to the owning model's JSON pointer (e.g.
+`"equations/0"`, `"variables/invalid_sum"`), a human-readable `message`, and the
+esm-spec §4.8.4 severity `code`.
 
-Three families are checked:
+Both codes are HARD ERRORS — the type exists to distinguish *why* the file is
+wrong, not to distinguish an error from a warning. An UNDETERMINABLE dimension
+is never a finding at all: it is reported by returning `nothing` from the
+engine, and the enclosing check is skipped.
+"""
+struct UnitFinding
+    subpath::String
+    message::String
+    code::String
+end
 
-1. **Declared vs default units** — a parameter whose `default` is supplied in
+# esm-spec §4.8.4. A PROVABLE dimensional inconsistency; the structural layer
+# emits it as `unit_inconsistency`.
+const UNIT_DIMENSION_MISMATCH = "unit_inconsistency"
+# A declared unit string that does not parse under the §4.8.2 grammar or names a
+# symbol outside the §4.8.1 registry. A defect in the FILE, not a limit of the
+# checker — so it is a hard error, never a warning, and never silently coerced
+# to dimensionless (which would disable every dimensional check downstream of
+# it: a typo like `"1/time"` or `"m/s2"` would simply turn the checker off).
+const UNIT_PARSE_ERROR = "unit_parse_error"
+
+"""
+    model_unit_findings(model::Model) -> Vector{UnitFinding}
+
+Every units finding in `model`. Callers prefix their JSON pointer and promote
+each finding to a structural error under its own code; see
+`validate_model_unit_consistency` in validate.jl, the single structural caller.
+
+Four families are checked:
+
+1. **Unresolvable unit strings** (`unit_parse_error`) — a `units` or
+   `default_units` string that does not resolve against the registry.
+2. **Declared vs default units** — a parameter whose `default` is supplied in
    `default_units` that are not the same unit as its declared `units`.
-2. **Observed-variable defining expressions** — an inconsistency *inside* the
+3. **Observed-variable defining expressions** — an inconsistency *inside* the
    `expression` of an observed variable (`length + mass`, `exp(mass)`, …).
    The declared units of the variable are deliberately NOT compared against the
    computed dimension of its expression: that comparison is a different (and
    much more false-positive-prone) rule, and the shared corpus does not pin it.
-3. **Equations** — an inconsistency inside either side, or an LHS/RHS mismatch.
+4. **Equations** — an inconsistency inside either side, or an LHS/RHS mismatch.
 
 Subsystems are NOT recursed here (the caller owns path construction and does the
 recursion), keeping this function's pointers purely model-local.
@@ -578,42 +905,58 @@ recursion), keeping this function's pointers purely model-local.
 Iteration over `model.variables` is sorted by name so the finding order is
 deterministic regardless of Dict hashing.
 """
-function model_unit_findings(model::Model)::Vector{Pair{String,String}}
-    # Only EXPLICITLY declared units enter the environment. A variable with no
-    # declared units is unknown, not dimensionless.
+function model_unit_findings(model::Model)::Vector{UnitFinding}
+    # Only EXPLICITLY declared units enter the environment, and only those that
+    # RESOLVE. A variable with no declared units is unknown, not dimensionless;
+    # one whose declared units do not resolve is reported separately below and
+    # then treated as unknown, so a single bad string cannot cascade into a
+    # bogus mismatch at every site that mentions the variable.
     var_units = Dict{String, String}()
     for (name, var) in model.variables
-        var.units !== nothing && !isempty(var.units) && (var_units[name] = var.units)
+        var.units !== nothing && !isempty(var.units) &&
+            parse_units(var.units) !== nothing && (var_units[name] = var.units)
     end
 
-    out = Pair{String,String}[]
+    out = UnitFinding[]
 
     for name in sort!(collect(keys(model.variables)))
         var = model.variables[name]
 
-        # 1. default_units vs units.
+        # 1. Unresolvable unit strings — a defect in the file (§4.8.4).
+        for (field, str) in (("units", var.units), ("default_units", var.default_units))
+            str === nothing && continue
+            isempty(str) && continue
+            parse_units(str) === nothing || continue
+            push!(out, UnitFinding("variables/$name",
+                "Unit string '$str' is not a recognised unit " *
+                "(variable '$name', field '$field')", UNIT_PARSE_ERROR))
+        end
+
+        # 2. default_units vs units.
         du, u = var.default_units, var.units
         if du !== nothing && !isempty(du) && u !== nothing && !isempty(u) && du != u
             du_parsed, u_parsed = parse_units(du), parse_units(u)
             if du_parsed !== nothing && u_parsed !== nothing && du_parsed != u_parsed
-                push!(out, "variables/$name" =>
+                push!(out, UnitFinding("variables/$name",
                     "Parameter default value units do not match declared units " *
-                    "(variable '$name', declared_units='$u', default_units='$du')")
+                    "(variable '$name', declared_units='$u', default_units='$du')",
+                    UNIT_DIMENSION_MISMATCH))
             end
         end
 
-        # 2. observed-variable defining expression.
+        # 3. observed-variable defining expression.
         if var.expression !== nothing
             for msg in expression_unit_findings(var.expression, var_units)
-                push!(out, "variables/$name" => "$msg (variable '$name')")
+                push!(out, UnitFinding("variables/$name", "$msg (variable '$name')",
+                                       UNIT_DIMENSION_MISMATCH))
             end
         end
     end
 
-    # 3. equations.
+    # 4. equations.
     for (i, eq) in enumerate(model.equations)
         for msg in equation_unit_findings(eq, var_units)
-            push!(out, "equations/$(i-1)" => msg)
+            push!(out, UnitFinding("equations/$(i-1)", msg, UNIT_DIMENSION_MISMATCH))
         end
     end
 
@@ -628,8 +971,8 @@ Recurses into model subsystems.
 """
 function validate_model_dimensions(model::Model)::Bool
     findings = model_unit_findings(model)
-    for (subpath, msg) in findings
-        @warn "Dimensional inconsistency at $subpath: $msg"
+    for f in findings
+        @warn "Unit finding at $(f.subpath) [$(f.code)]: $(f.message)"
     end
 
     all_valid = isempty(findings)
