@@ -28,9 +28,18 @@ export function isExprNode(e: unknown): e is ExpressionNode {
 }
 
 /**
- * Extract all variable references from an expression
- * @param expr Expression to analyze
- * @returns Set of variable names referenced in the expression
+ * Extract all variable references from an expression.
+ *
+ * Routes through {@link forEachChild} — the ONE walker — so every
+ * expression-bearing field is seen, not just `args`. Walking `args` alone made
+ * whole sidecar subtrees invisible:
+ *
+ *   - `table_lookup{axes:{temp:'T_air'}}`      → `[]`      (missed `T_air`)
+ *   - `aggregate{args:['A'], expr:{*:['A','w']}}` → `['A']`  (missed `w`)
+ *   - `integral{lower:'a', upper:{+:['b',1]}}` → missed `a`, `b`
+ *
+ * `graph.ts` builds the dependency DAG from this, so every one of those misses
+ * was a silently-absent edge.
  */
 export function freeVariables(expr: Expr): Set<string> {
   const variables = new Set<string>()
@@ -41,11 +50,9 @@ export function freeVariables(expr: Expr): Set<string> {
     // Numeric literals contain no variables
     return variables
   } else if (isExprNode(expr)) {
-    // ExpressionNode - recursively analyze arguments
-    for (const arg of expr.args) {
-      const childVars = freeVariables(arg)
-      childVars.forEach((v) => variables.add(v))
-    }
+    forEachChild(expr, (child) => {
+      freeVariables(child).forEach((v) => variables.add(v))
+    })
   }
 
   return variables
@@ -83,8 +90,15 @@ export function contains(expr: Expr, varName: string): boolean {
   } else if (typeof expr === 'number' || isNumericLiteral(expr)) {
     return false
   } else if (isExprNode(expr)) {
-    // ExpressionNode - recursively check arguments
-    return expr.args.some((arg) => contains(arg, varName))
+    // Every expression-bearing field, not just `args` — a reference hiding in
+    // `expr` / `axes` / `lower` used to read as a false NEGATIVE, which is the
+    // dangerous direction: a caller asking "is `y` still referenced?" would be
+    // told no and delete `y`'s defining equation.
+    let found = false
+    forEachChild(expr, (child) => {
+      if (!found && contains(child, varName)) found = true
+    })
+    return found
   }
 
   return false
@@ -108,8 +122,13 @@ export function simplify(expr: Expr): Expr {
   }
 
   if (isExprNode(expr)) {
-    // First simplify all arguments recursively
-    const simplifiedArgs = expr.args.map((arg) => simplify(arg))
+    // Simplify EVERY expression-bearing child through the one walker — `args`
+    // AND the sidecars (`expr`, `lower`, `upper`, `filter`, `axes`, ...). The
+    // old code mapped `args` only, so a subtree living in `aggregate.expr` or
+    // `integral.lower` was returned unsimplified (the spread preserved it, so
+    // nothing was lost — it was simply never visited).
+    const pre = mapChildren(expr, (child) => simplify(child) as Expression)
+    const simplifiedArgs = pre.args ?? []
 
     // Apply simplification rules based on operator
     switch (expr.op) {
@@ -135,15 +154,15 @@ export function simplify(expr: Expr): Expr {
             // If constant sum is zero, just return variables
             return variables.length === 1
               ? variables[0]
-              : { ...expr, args: variables as [Expression, ...Expression[]] }
+              : { ...pre, args: variables as [Expression, ...Expression[]] }
           } else {
             // Include the folded constant with variables
             const finalTerms = [...variables, constantSum]
-            return { ...expr, args: finalTerms as [Expression, ...Expression[]] }
+            return { ...pre, args: finalTerms as [Expression, ...Expression[]] }
           }
         }
 
-        return { ...expr, args: nonZeroTerms as [Expression, ...Expression[]] }
+        return { ...pre, args: nonZeroTerms as [Expression, ...Expression[]] }
       }
 
       case '*': {
@@ -173,15 +192,15 @@ export function simplify(expr: Expr): Expr {
             // If constant product is one, just return variables
             return variableFactors.length === 1
               ? variableFactors[0]
-              : { ...expr, args: variableFactors as [Expression, ...Expression[]] }
+              : { ...pre, args: variableFactors as [Expression, ...Expression[]] }
           } else {
             // Include the folded constant with variables
             const finalFactors = [...variableFactors, constantProd]
-            return { ...expr, args: finalFactors as [Expression, ...Expression[]] }
+            return { ...pre, args: finalFactors as [Expression, ...Expression[]] }
           }
         }
 
-        return { ...expr, args: nonOneFactors as [Expression, ...Expression[]] }
+        return { ...pre, args: nonOneFactors as [Expression, ...Expression[]] }
       }
 
       case '-':
@@ -200,7 +219,7 @@ export function simplify(expr: Expr): Expr {
           }
         }
 
-        return { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] }
+        return { ...pre, args: simplifiedArgs as [Expression, ...Expression[]] }
 
       case '/':
         if (simplifiedArgs.length === 2) {
@@ -219,7 +238,7 @@ export function simplify(expr: Expr): Expr {
           }
         }
 
-        return { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] }
+        return { ...pre, args: simplifiedArgs as [Expression, ...Expression[]] }
 
       case '^':
         if (simplifiedArgs.length === 2) {
@@ -241,7 +260,7 @@ export function simplify(expr: Expr): Expr {
           }
         }
 
-        return { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] }
+        return { ...pre, args: simplifiedArgs as [Expression, ...Expression[]] }
 
       default:
         // For other operators, apply constant folding if all args are
@@ -251,15 +270,15 @@ export function simplify(expr: Expr): Expr {
           try {
             const tempBindings = new Map<string, number>()
             return evaluateExpression(
-              { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] },
+              { ...pre, args: simplifiedArgs as [Expression, ...Expression[]] },
               tempBindings,
             )
           } catch {
-            return { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] }
+            return { ...pre, args: simplifiedArgs as [Expression, ...Expression[]] }
           }
         }
 
-        return { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] }
+        return { ...pre, args: simplifiedArgs as [Expression, ...Expression[]] }
     }
   }
 
@@ -356,7 +375,11 @@ export function mapChildren(node: ExpressionNode, fn: ChildMapper): ExpressionNo
   // only the expression-bearing keys below are overwritten.
   const out: Record<string, unknown> = { ...node }
 
-  out.args = node.args.map((child, i) => fn(child, 'args', i))
+  // `args` is OPTIONAL at runtime: a `const` / `enum` node legitimately carries
+  // only `value`, and `evalExprNode` explicitly tolerates that shape. Mapping it
+  // unconditionally threw `TypeError: Cannot read properties of undefined` for
+  // `substitute({op:'const', value:5}, {})`.
+  if (node.args !== undefined) out.args = node.args.map((child, i) => fn(child, 'args', i))
 
   if (node.lower !== undefined) out.lower = fn(node.lower, 'lower')
   if (node.upper !== undefined) out.upper = fn(node.upper, 'upper')
@@ -396,7 +419,8 @@ function mapRecordChildren(
  * same key/index conventions documented on {@link mapChildren}.
  */
 export function forEachChild(node: ExpressionNode, fn: ChildVisitor): void {
-  node.args.forEach((child, i) => fn(child, 'args', i))
+  // `args` is optional at runtime — see the note in `mapChildren`.
+  if (node.args !== undefined) node.args.forEach((child, i) => fn(child, 'args', i))
 
   if (node.lower !== undefined) fn(node.lower, 'lower')
   if (node.upper !== undefined) fn(node.upper, 'upper')
