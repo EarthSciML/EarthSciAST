@@ -7,11 +7,123 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
-// Dimension is a vector of exponents over the 7 SI base units plus radian.
-// Index order: m, kg, s, mol, K, A, cd, rad.
-type Dimension [8]int8
+// Rat is an exact RATIONAL unit exponent (num/den).
+//
+// Dimension exponents are rational, not integer: `1/s^0.5` is the noise
+// intensity of an SDE (tests/fixtures/sde/*.esm), `m^(1/2)` and `s^(-1/2)`
+// appear wherever a square root of a dimensional quantity does, and `sqrt(x)`
+// halves whatever exponents x carries. An int8 exponent vector cannot represent
+// any of them, so — now that an unparseable unit is a HARD ERROR — an integer
+// representation falsely rejects those files.
+//
+// The ZERO VALUE is the exponent 0: every operation normalizes a zero (or
+// missing) denominator to 1 via fix(), so `Rat{}` and a composite literal such
+// as `Rat{Num: 2}` are both well-formed. Nothing compares two Rats (or two
+// Dimensions) with `==` — Equal cross-multiplies, so a non-reduced value never
+// silently compares unequal to its reduced form.
+type Rat struct {
+	Num int32 `json:"num"`
+	Den int32 `json:"den"`
+}
+
+// newRat builds a Rat in lowest terms with a positive denominator. A zero
+// denominator is treated as 1 (see the Rat doc comment).
+func newRat(num, den int64) Rat {
+	if den == 0 {
+		den = 1
+	}
+	if den < 0 {
+		num, den = -num, -den
+	}
+	if g := gcd64(num, den); g > 1 {
+		num, den = num/g, den/g
+	}
+	return Rat{Num: int32(num), Den: int32(den)}
+}
+
+func gcd64(a, b int64) int64 {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
+}
+
+// fix normalizes the zero-value / int-literal spelling (Den == 0) to a proper
+// fraction over 1.
+func (r Rat) fix() Rat {
+	if r.Den == 0 {
+		return Rat{Num: r.Num, Den: 1}
+	}
+	return r
+}
+
+// ratInt is the exponent n/1.
+func ratInt(n int) Rat { return Rat{Num: int32(n), Den: 1} }
+
+// Add returns r + o.
+func (r Rat) Add(o Rat) Rat {
+	a, b := r.fix(), o.fix()
+	return newRat(int64(a.Num)*int64(b.Den)+int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+}
+
+// Sub returns r − o.
+func (r Rat) Sub(o Rat) Rat {
+	a, b := r.fix(), o.fix()
+	return newRat(int64(a.Num)*int64(b.Den)-int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+}
+
+// Mul returns r × o.
+func (r Rat) Mul(o Rat) Rat {
+	a, b := r.fix(), o.fix()
+	return newRat(int64(a.Num)*int64(b.Num), int64(a.Den)*int64(b.Den))
+}
+
+// Equal reports whether two exponents denote the same rational number,
+// regardless of whether either is in lowest terms.
+func (r Rat) Equal(o Rat) bool {
+	a, b := r.fix(), o.fix()
+	return int64(a.Num)*int64(b.Den) == int64(b.Num)*int64(a.Den)
+}
+
+// IsZero reports whether the exponent is 0.
+func (r Rat) IsZero() bool { return r.fix().Num == 0 }
+
+// Float returns the exponent as a float64 (used for scale arithmetic).
+func (r Rat) Float() float64 {
+	a := r.fix()
+	return float64(a.Num) / float64(a.Den)
+}
+
+// Neg returns −r.
+func (r Rat) Neg() Rat {
+	a := r.fix()
+	return Rat{Num: -a.Num, Den: a.Den}
+}
+
+// String renders the exponent: "2", "-1", "1/2", "-3/2".
+func (r Rat) String() string {
+	a := r.fix()
+	if a.Den == 1 {
+		return strconv.Itoa(int(a.Num))
+	}
+	return fmt.Sprintf("%d/%d", a.Num, a.Den)
+}
+
+// Dimension is a vector of RATIONAL exponents over the 7 SI base units plus
+// radian. Index order: m, kg, s, mol, K, A, cd, rad.
+type Dimension [8]Rat
 
 const (
 	dimLength = iota
@@ -31,7 +143,7 @@ var Dimensionless = Dimension{}
 func (d Dimension) Multiply(other Dimension) Dimension {
 	var r Dimension
 	for i := range d {
-		r[i] = d[i] + other[i]
+		r[i] = d[i].Add(other[i])
 	}
 	return r
 }
@@ -40,51 +152,61 @@ func (d Dimension) Multiply(other Dimension) Dimension {
 func (d Dimension) Divide(other Dimension) Dimension {
 	var r Dimension
 	for i := range d {
-		r[i] = d[i] - other[i]
+		r[i] = d[i].Sub(other[i])
 	}
 	return r
 }
 
-// Power scales each exponent by n.
+// Power scales each exponent by the integer n.
 func (d Dimension) Power(n int) Dimension {
+	return d.PowerRat(ratInt(n))
+}
+
+// PowerRat scales each exponent by the rational e — the operation `sqrt` and a
+// fractional literal exponent both need.
+func (d Dimension) PowerRat(e Rat) Dimension {
 	var r Dimension
 	for i := range d {
-		r[i] = int8(int(d[i]) * n)
+		r[i] = d[i].Mul(e)
 	}
 	return r
 }
 
-// Equal reports whether two dimensions are identical.
+// Equal reports whether two dimensions denote the same exponent vector.
 func (d Dimension) Equal(other Dimension) bool {
-	return d == other
+	for i := range d {
+		if !d[i].Equal(other[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // IsDimensionless reports whether every exponent is zero.
 func (d Dimension) IsDimensionless() bool {
-	return d == Dimensionless
+	for i := range d {
+		if !d[i].IsZero() {
+			return false
+		}
+	}
+	return true
 }
 
-// String renders a dimension vector in SI-base notation (e.g. "m*kg/s^2").
+// String renders a dimension vector in SI-base notation (e.g. "m*kg/s^2",
+// "1/s^(1/2)").
 func (d Dimension) String() string {
 	if d.IsDimensionless() {
 		return "1"
 	}
 	symbols := [8]string{"m", "kg", "s", "mol", "K", "A", "cd", "rad"}
 	var num, den []string
-	for i, e := range d {
+	for i := range d {
+		e := d[i].fix()
 		switch {
-		case e > 0:
-			if e == 1 {
-				num = append(num, symbols[i])
-			} else {
-				num = append(num, fmt.Sprintf("%s^%d", symbols[i], e))
-			}
-		case e < 0:
-			if e == -1 {
-				den = append(den, symbols[i])
-			} else {
-				den = append(den, fmt.Sprintf("%s^%d", symbols[i], -e))
-			}
+		case e.Num > 0:
+			num = append(num, dimFactor(symbols[i], e))
+		case e.Num < 0:
+			den = append(den, dimFactor(symbols[i], e.Neg()))
 		}
 	}
 	var sb strings.Builder
@@ -98,6 +220,20 @@ func (d Dimension) String() string {
 		sb.WriteString(strings.Join(den, "/"))
 	}
 	return sb.String()
+}
+
+// dimFactor renders one base-unit factor with a POSITIVE exponent: "m",
+// "m^2", "m^(1/2)".
+func dimFactor(symbol string, e Rat) string {
+	e = e.fix()
+	switch {
+	case e.Num == 1 && e.Den == 1:
+		return symbol
+	case e.Den == 1:
+		return fmt.Sprintf("%s^%d", symbol, e.Num)
+	default:
+		return fmt.Sprintf("%s^(%s)", symbol, e)
+	}
 }
 
 // Unit is a named physical unit with a dimension vector and a scale factor
@@ -120,13 +256,18 @@ func (u Unit) Divide(other Unit) Unit {
 
 // Power raises a unit to an integer power.
 func (u Unit) Power(n int) Unit {
-	return Unit{Dim: u.Dim.Power(n), Scale: math.Pow(u.Scale, float64(n))}
+	return u.PowerRat(ratInt(n))
+}
+
+// PowerRat raises a unit to a RATIONAL power (`s^(-1/2)`, `sqrt(m^3)`).
+func (u Unit) PowerRat(e Rat) Unit {
+	return Unit{Dim: u.Dim.PowerRat(e), Scale: math.Pow(u.Scale, e.Float())}
 }
 
 // baseUnit constructs a single-dimension unit with an explicit scale.
 func baseUnit(idx int, scale float64) Unit {
 	var d Dimension
-	d[idx] = 1
+	d[idx] = ratInt(1)
 	return Unit{Dim: d, Scale: scale}
 }
 
@@ -166,6 +307,7 @@ func buildUnitRegistry() map[string]Unit {
 	r["min"] = Unit{Dim: r["s"].Dim, Scale: 60}
 	r["h"] = Unit{Dim: r["s"].Dim, Scale: 3600}
 	r["hr"] = Unit{Dim: r["s"].Dim, Scale: 3600}
+	r["hour"] = r["h"]
 	r["day"] = Unit{Dim: r["s"].Dim, Scale: 86400}
 	r["yr"] = Unit{Dim: r["s"].Dim, Scale: 365.25 * 86400}
 	r["year"] = r["yr"]
@@ -176,11 +318,17 @@ func buildUnitRegistry() map[string]Unit {
 	r["l"] = liter
 	r["mL"] = Unit{Dim: liter.Dim, Scale: 1e-6}
 
+	// Length, long form. The corpus spells metres out ("meters/second" in a
+	// description-driven fixture); both spellings are the same unit.
+	r["meter"] = r["m"]
+	r["meters"] = r["m"]
+
 	// Temperature (Celsius shares the Kelvin dimension; offset is not modeled).
-	// Celsius is spelled "degC" or "°C" (normalizeUnitString folds the latter
-	// into the former). The bare symbol "C" is NOT Celsius — see the coulomb
-	// entry below.
+	// Celsius is spelled "degC", "Celsius" or "°C" (normalizeUnitString folds
+	// the latter into "degC"). The bare symbol "C" is NOT Celsius — see the
+	// coulomb entry below.
 	r["degC"] = r["K"]
+	r["Celsius"] = r["K"]
 
 	// Derived coherent SI units (scale 1 except where noted).
 	r["Hz"] = Unit{Dim: r["s"].Dim.Power(-1), Scale: 1}
@@ -194,6 +342,9 @@ func buildUnitRegistry() map[string]Unit {
 
 	// Pressure (non-SI but ubiquitous in atmospheric science).
 	r["atm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325}
+	// Micro-atmosphere: the standard unit of seawater/air CO2 partial pressure
+	// (pCO2) throughout the ocean-carbon corpus.
+	r["uatm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325e-6}
 	r["bar"] = Unit{Dim: r["Pa"].Dim, Scale: 1e5}
 	r["hPa"] = Unit{Dim: r["Pa"].Dim, Scale: 100}
 	r["kPa"] = Unit{Dim: r["Pa"].Dim, Scale: 1000}
@@ -260,12 +411,31 @@ func buildUnitRegistry() map[string]Unit {
 	// unresolvable unit string is now a hard error (see UnitFindingUnparseable),
 	// omitting them would falsely reject those files.
 	r["molec"] = Unit{Dim: Dimensionless, Scale: 1}
+	r["molecule"] = r["molec"]
 	r["individuals"] = Unit{Dim: Dimensionless, Scale: 1}
 	r["vehicles"] = Unit{Dim: Dimensionless, Scale: 1}
 	r["units"] = Unit{Dim: Dimensionless, Scale: 1}
 	r["count"] = Unit{Dim: Dimensionless, Scale: 1}
-	// Dobson unit: 2.69e16 molec/cm^2 → dimension is length^-2.
-	r["Dobson"] = Unit{Dim: r["m"].Dim.Power(-2), Scale: 2.69e20} // 2.69e16 * (1/cm^2 → 1/m^2 ×1e4)
+
+	// Dimensionless RATIOS with a scale.
+	//
+	// "%" is a real unit token in the corpus (cloud fraction, relative humidity,
+	// soil moisture). It is not an identifier byte, so parseAtom recognises it as
+	// a symbol of its own; "percent" is the spelled-out alias.
+	r["%"] = Unit{Dim: Dimensionless, Scale: 0.01}
+	r["percent"] = r["%"]
+	// Practical salinity: dimensionless by definition (PSS-78 is a conductivity
+	// ratio), scale 1 — the ocean corpus declares salinity in "psu".
+	r["psu"] = Unit{Dim: Dimensionless, Scale: 1}
+
+	// Dobson unit: 2.6867e16 molec/cm^2 → dimension is length^-2.
+	//
+	// The constant is 2.6867e20 m^-2, NOT the rounded 2.69e20 this used to
+	// carry: Rust checks conversion factors against the physically correct value
+	// and Go's conversion tolerance is 1e-9 relative, so the two bindings
+	// disagreed — by 5e-3 relative — on the SAME file, one accepting a declared
+	// factor the other rejected. The exact value is the cross-binding contract.
+	r["Dobson"] = Unit{Dim: r["m"].Dim.Power(-2), Scale: 2.6867e20} // 2.6867e16 * (1/cm^2 → 1/m^2 ×1e4)
 	r["DU"] = r["Dobson"]
 
 	return r
@@ -274,45 +444,127 @@ func buildUnitRegistry() map[string]Unit {
 // normalizeUnitString rewrites the non-ASCII and alternate spellings the shared
 // corpus uses into the ASCII grammar ParseUnit implements. It is a pure
 // spelling normalization — no unit is invented here, each target already exists
-// in the registry:
+// in the registry — and it runs before the byte-level scanner, which only
+// recognizes ASCII bytes:
 //
+//   - SUPERSCRIPT DIGITS ⁰¹²³⁴⁵⁶⁷⁸⁹ and superscript sign ⁻/⁺ → "^n"
+//     ("W/m²" → "W/m^2", "cm³" → "cm^3", "m⁻³" → "m^-3"). A RUN of superscript
+//     characters is one exponent, so "m¹⁰" is m^10, not m^1*0.
+//   - MIDDOT · (U+00B7) and DOT OPERATOR ⋅ (U+22C5) → "*" ("J/(kg·K)",
+//     "kg⋅m/s"). Both are multiplication in SI typography.
 //   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → "u" ("μg" → "ug")
 //   - "°C"/"°F"/"°K" → degC/degF/K, and a bare "°" → "deg"
+//   - Ω (U+03A9 GREEK CAPITAL OMEGA) and Ω (U+2126 OHM SIGN) → "Ohm"
 //
-// This runs before the byte-level scanner, which only recognizes ASCII
-// identifier bytes.
+// These spellings are pervasive in tests/libraries and the spec's own examples;
+// each of them used to be a parse failure, which — now that an unresolvable unit
+// string is a HARD ERROR — is a false rejection of a valid file.
 func normalizeUnitString(s string) string {
-	if !strings.ContainsAny(s, "µμ°") {
+	if isASCIIString(s) {
 		return s
 	}
-	replacer := strings.NewReplacer(
-		"°C", "degC",
-		"°F", "degF",
-		"°K", "K",
-		"°", "deg",
-		"µ", "u", // U+00B5 MICRO SIGN
-		"μ", "u", // U+03BC GREEK SMALL LETTER MU
-	)
-	return replacer.Replace(s)
+	runes := []rune(s)
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if isSuperscriptRune(r) {
+			// A run of superscript characters is a single exponent.
+			b.WriteByte('^')
+			for i < len(runes) && isSuperscriptRune(runes[i]) {
+				b.WriteByte(superscriptASCII(runes[i]))
+				i++
+			}
+			i-- // the outer loop advances past the last consumed rune
+			continue
+		}
+		switch r {
+		case '·', '⋅': // MIDDLE DOT, DOT OPERATOR
+			b.WriteByte('*')
+		case 'µ', 'μ': // MICRO SIGN, GREEK SMALL LETTER MU
+			b.WriteByte('u')
+		case 'Ω', 'Ω': // GREEK CAPITAL OMEGA, OHM SIGN
+			b.WriteString("Ohm")
+		case '°': // DEGREE SIGN
+			if i+1 < len(runes) {
+				switch runes[i+1] {
+				case 'C':
+					b.WriteString("degC")
+					i++
+					continue
+				case 'F':
+					b.WriteString("degF")
+					i++
+					continue
+				case 'K':
+					b.WriteString("K")
+					i++
+					continue
+				}
+			}
+			b.WriteString("deg")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
+
+// isASCIIString reports whether s needs no Unicode normalization.
+func isASCIIString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// superscriptTable maps every superscript rune to the ASCII byte it denotes.
+var superscriptTable = map[rune]byte{
+	'⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+	'⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+	'⁻': '-', '⁺': '+',
+}
+
+func isSuperscriptRune(r rune) bool {
+	_, ok := superscriptTable[r]
+	return ok
+}
+
+func superscriptASCII(r rune) byte { return superscriptTable[r] }
 
 // ParseUnit parses a unit string into a Unit. Grammar:
 //
-//	unit    := term ( ('*'|'/')? term )*
-//	term    := atom ( ('^'|'**') integer )?
-//	atom    := number | symbol | '(' unit ')' | '1'
+//	unit     := term ( ('*'|'/')? term )*
+//	term     := atom ( ('^'|'**') exponent )?
+//	exponent := integer | decimal | '(' integer '/' integer ')'
+//	atom     := number | symbol | '%' | '(' unit ')' | '1'
+//
+// EXPONENTS ARE RATIONAL. "1/s^0.5" (SDE noise intensity), "s^(-1/2)" and
+// "m^(3/2)" are legitimate corpus units; an integer-only exponent grammar
+// cannot express them and — under the hard-error severity for an unparseable
+// unit — falsely rejects the files that carry them.
+//
+// '*' AND '/' ARE ONE PRECEDENCE LEVEL, applied strictly left to right:
+// "J/mol*K" is (J/mol)*K, NOT J/(mol*K), and "a/b/c" is a/(b*c). Giving '*' a
+// tighter binding silently negates the exponent of every factor after a '/'.
 //
 // Whitespace separates tokens and, between two terms, means MULTIPLICATION —
-// the SI style "kg m^2 s^-2" and the corpus's "ppb^-1 s^-1". An explicit '*' is
-// equivalent. '**' is accepted as a synonym for '^' (the Python/pint spelling,
-// e.g. "Pa*m**3"). Division is left-associative: "a/b/c" == "a/(b*c)".
+// the SI style "kg m^2 s^-2" and the corpus's "ppb^-1 s^-1" (== ppb^-1 *
+// s^-1). An explicit '*' is equivalent. '**' is accepted as a synonym for '^'
+// (the Python/pint spelling, e.g. "Pa*m**3").
+//
+// A unit string carries DIMENSIONS ONLY: there is no species-tag convention, so
+// the "C" of "kg C/m^2" is the coulomb, not a carbon tag.
 //
 // The empty string, "1" and "dimensionless" are the dimensionless unit.
-// Non-ASCII spellings (μg, °C) are normalized first — see normalizeUnitString.
-// Examples that must parse:
+// Non-ASCII spellings (μg, °C, W/m², J/(kg·K), Ω) are normalized first — see
+// normalizeUnitString. Examples that must parse:
 //
 //	"m", "m/s", "m/s^2", "kg*m^2/s^3", "cm^3/molec/s", "mol/mol", "1/s",
-//	"Pa", "J/(mol*K)", "Pa*m**3", "ppb^-1 s^-1", "μg/m^3", "°C", "".
+//	"Pa", "J/(mol*K)", "Pa*m**3", "ppb^-1 s^-1", "μg/m^3", "°C", "1/s^0.5",
+//	"s^(-1/2)", "W/m²", "J/(kg·K)", "%", "".
 func ParseUnit(s string) (Unit, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "1" || s == "dimensionless" {
@@ -386,10 +638,11 @@ func (p *unitParser) parseUnit() (Unit, error) {
 	}
 }
 
-// startsAtom reports whether c can begin an atom (identifier, number, or a
-// parenthesized sub-unit) — the lookahead that drives implicit multiplication.
+// startsAtom reports whether c can begin an atom (identifier, number, percent,
+// or a parenthesized sub-unit) — the lookahead that drives implicit
+// multiplication.
 func startsAtom(c byte) bool {
-	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '('
+	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '(' || c == '%'
 }
 
 func (p *unitParser) parseTerm() (Unit, error) {
@@ -407,11 +660,11 @@ func (p *unitParser) parseTerm() (Unit, error) {
 	default:
 		return u, nil
 	}
-	exp, err := p.parseInt()
+	exp, err := p.parseExponent()
 	if err != nil {
 		return Unit{}, err
 	}
-	return u.Power(exp), nil
+	return u.PowerRat(exp), nil
 }
 
 func (p *unitParser) parseAtom() (Unit, error) {
@@ -431,6 +684,11 @@ func (p *unitParser) parseAtom() (Unit, error) {
 		}
 		p.pos++
 		return u, nil
+	}
+	// "%" is a unit symbol, not an identifier byte, so it is scanned on its own.
+	if c == '%' {
+		p.pos++
+		return unitRegistry["%"], nil
 	}
 	// Bare integer "1" is dimensionless; any other bare number is a scalar factor.
 	if c >= '0' && c <= '9' {
@@ -461,23 +719,122 @@ func (p *unitParser) parseAtom() (Unit, error) {
 	return u, nil
 }
 
-func (p *unitParser) parseInt() (int, error) {
+// parseExponent parses a RATIONAL exponent:
+//
+//	exponent := integer | decimal | '(' integer '/' integer ')'
+//
+// e.g. "2", "-1", "0.5", "(1/2)", "(-1/2)". A parenthesized form may also hold
+// a plain (possibly decimal) number — "m^(-2)" is the common pint spelling.
+// The decimal form is converted EXACTLY (0.5 → 1/2, 1.25 → 5/4), never through
+// a float, so two spellings of the same exponent compare equal.
+func (p *unitParser) parseExponent() (Rat, error) {
+	p.skipSpace()
+	if p.pos < len(p.src) && p.src[p.pos] == '(' {
+		p.pos++
+		num, err := p.parseSignedNumber()
+		if err != nil {
+			return Rat{}, err
+		}
+		exp := num
+		if p.peek() == '/' {
+			p.pos++
+			den, err := p.parseSignedNumber()
+			if err != nil {
+				return Rat{}, err
+			}
+			if den.IsZero() {
+				return Rat{}, fmt.Errorf("zero denominator in exponent")
+			}
+			// Both sides are rationals; the quotient is num * den^-1.
+			d := den.fix()
+			exp = num.Mul(Rat{Num: d.Den, Den: d.Num})
+		}
+		if p.peek() != ')' {
+			return Rat{}, fmt.Errorf("missing ')' closing exponent at position %d", p.pos)
+		}
+		p.pos++
+		return exp, nil
+	}
+	return p.parseSignedNumber()
+}
+
+// parseSignedNumber scans an optionally signed integer or decimal literal and
+// returns it as an exact rational.
+func (p *unitParser) parseSignedNumber() (Rat, error) {
 	p.skipSpace()
 	start := p.pos
 	if p.pos < len(p.src) && (p.src[p.pos] == '-' || p.src[p.pos] == '+') {
 		p.pos++
 	}
+	digits := 0
 	for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
 		p.pos++
+		digits++
 	}
-	if start == p.pos || (p.pos-start == 1 && (p.src[start] == '-' || p.src[start] == '+')) {
-		return 0, fmt.Errorf("expected integer exponent at position %d", start)
+	frac := 0
+	if p.pos < len(p.src) && p.src[p.pos] == '.' {
+		p.pos++
+		for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
+			p.pos++
+			frac++
+		}
 	}
-	n, err := strconv.Atoi(p.src[start:p.pos])
+	if digits == 0 && frac == 0 {
+		return Rat{}, fmt.Errorf("expected a numeric exponent at position %d", start)
+	}
+	return ratFromDecimalLiteral(p.src[start:p.pos])
+}
+
+// ratFromFloat converts a literal exponent VALUE from the AST (where a number
+// arrives as a float64) into an exact rational. Whole numbers and the short
+// decimals that actually occur (0.5, 1.5, 0.25, 0.3333…) round-trip through the
+// shortest decimal representation, which is exactly what strconv.FormatFloat
+// with 'f'/-1 produces.
+func ratFromFloat(v float64) (Rat, error) {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return Rat{}, fmt.Errorf("exponent is not finite")
+	}
+	if v == math.Trunc(v) && math.Abs(v) < 1e9 {
+		return ratInt(int(v)), nil
+	}
+	return ratFromDecimalLiteral(strconv.FormatFloat(v, 'f', -1, 64))
+}
+
+// ratFromDecimalLiteral converts a signed decimal literal ("-1", "0.5",
+// "1.25") to an exact rational: the digits are read as an integer over the
+// corresponding power of ten. No float is involved, so "0.5", ".5" and "(1/2)"
+// all yield exactly 1/2.
+func ratFromDecimalLiteral(lit string) (Rat, error) {
+	neg := false
+	switch {
+	case strings.HasPrefix(lit, "-"):
+		neg, lit = true, lit[1:]
+	case strings.HasPrefix(lit, "+"):
+		lit = lit[1:]
+	}
+	intPart, fracPart, _ := strings.Cut(lit, ".")
+	if intPart == "" {
+		intPart = "0"
+	}
+	// An exponent with more than 9 fractional digits cannot be represented as an
+	// int32 fraction; nothing in the corpus needs one, and a silent overflow
+	// would corrupt the dimension.
+	if len(fracPart) > 9 || len(intPart) > 9 {
+		return Rat{}, fmt.Errorf("exponent %q has too many digits to represent exactly", lit)
+	}
+	digits := intPart + fracPart
+	n, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil {
-		return 0, err
+		return Rat{}, fmt.Errorf("invalid exponent %q", lit)
 	}
-	return n, nil
+	den := int64(1)
+	for i := 0; i < len(fracPart); i++ {
+		den *= 10
+	}
+	if neg {
+		n = -n
+	}
+	return newRat(n, den), nil
 }
 
 func isIdentStart(c byte) bool {
@@ -715,10 +1072,13 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 			// the valid tests/valid/expr_graphs_variable_deps.esm.
 			return nil, nil
 		}
-		if expVal != math.Trunc(expVal) {
-			return nil, analysisErrf("non-integer exponent %v in '%s' not supported for dimensional analysis", expVal, node.Op)
+		// A FRACTIONAL literal exponent is fine: dimension exponents are
+		// rational, so `p^0.5` is p's dimension halved.
+		exp, err := ratFromFloat(expVal)
+		if err != nil {
+			return nil, analysisErrf("exponent %v in '%s' is not a representable rational: %v", expVal, node.Op, err)
 		}
-		r := base.Power(int(expVal))
+		r := base.PowerRat(exp)
 		return &r, nil
 
 	case "sin", "cos", "tan", "asin", "acos", "atan",
@@ -735,15 +1095,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 			if base == nil {
 				return nil, nil
 			}
-			// sqrt halves exponents — require each to be even.
-			var r Dimension
-			for i, e := range base.Dim {
-				if e%2 != 0 {
-					return nil, mismatchErrf("sqrt of non-square dimension %s", base.Dim)
-				}
-				r[i] = e / 2
-			}
-			return &Unit{Dim: r, Scale: math.Sqrt(base.Scale)}, nil
+			// sqrt halves every exponent. With RATIONAL exponents that is always
+			// defined — sqrt(m^3) is m^(3/2), a perfectly good dimension — so the
+			// old "non-square dimension" rejection was an artifact of the integer
+			// exponent vector, not a defect in the file.
+			return &Unit{Dim: base.Dim.PowerRat(newRat(1, 2)), Scale: math.Sqrt(base.Scale)}, nil
 		}
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
@@ -968,8 +1324,8 @@ func derivativeTimeMismatch(state, rhs *Unit) error {
 		return nil
 	}
 	ratio := state.Dim.Divide(rhs.Dim)
-	for i, e := range ratio {
-		if i == dimTime || e == 0 {
+	for i := range ratio {
+		if i == dimTime || ratio[i].IsZero() {
 			continue
 		}
 		return mismatchErrf(
@@ -1362,7 +1718,7 @@ func isAffineTempUnit(s string) bool {
 func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
 	env, _ := buildSystemUnitEnv(system)
 
-	timeUnit := Unit{Dim: Dimension{dimTime: 1}, Scale: 1.0}
+	timeUnit := Unit{Dim: Dimension{dimTime: ratInt(1)}, Scale: 1.0}
 
 	for i, rx := range system.Reactions {
 		rxPath := fmt.Sprintf("%s/reactions/%d", basePath, i)

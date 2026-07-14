@@ -5,26 +5,46 @@ import (
 	"testing"
 )
 
+// dim builds a Dimension from (index, integer-exponent) pairs — the test
+// spelling of what used to be a bare `Dimension{dimLength: 1}` literal, now
+// that an exponent is a rational rather than an int8.
+func dim(pairs ...int) Dimension {
+	var d Dimension
+	for i := 0; i+1 < len(pairs); i += 2 {
+		d[pairs[i]] = ratInt(pairs[i+1])
+	}
+	return d
+}
+
+// dimRat builds a Dimension from (index, num, den) triples.
+func dimRat(triples ...int) Dimension {
+	var d Dimension
+	for i := 0; i+2 < len(triples); i += 3 {
+		d[triples[i]] = newRat(int64(triples[i+1]), int64(triples[i+2]))
+	}
+	return d
+}
+
 func TestParseUnitBaseSymbols(t *testing.T) {
 	cases := []struct {
 		in  string
 		dim Dimension
 	}{
-		{"m", Dimension{dimLength: 1}},
-		{"kg", Dimension{dimMass: 1}},
-		{"s", Dimension{dimTime: 1}},
-		{"mol", Dimension{dimAmount: 1}},
-		{"K", Dimension{dimTemperature: 1}},
-		{"A", Dimension{dimCurrent: 1}},
-		{"cd", Dimension{dimLuminosity: 1}},
-		{"rad", Dimension{dimAngle: 1}},
+		{"m", dim(dimLength, 1)},
+		{"kg", dim(dimMass, 1)},
+		{"s", dim(dimTime, 1)},
+		{"mol", dim(dimAmount, 1)},
+		{"K", dim(dimTemperature, 1)},
+		{"A", dim(dimCurrent, 1)},
+		{"cd", dim(dimLuminosity, 1)},
+		{"rad", dim(dimAngle, 1)},
 	}
 	for _, c := range cases {
 		u, err := ParseUnit(c.in)
 		if err != nil {
 			t.Fatalf("ParseUnit(%q): %v", c.in, err)
 		}
-		if u.Dim != c.dim {
+		if !u.Dim.Equal(c.dim) {
 			t.Errorf("ParseUnit(%q).Dim = %v, want %v", c.in, u.Dim, c.dim)
 		}
 	}
@@ -65,8 +85,8 @@ func TestParseUnitESMSpecific(t *testing.T) {
 
 	// Dobson has dimensions of length^-2 (column density).
 	du, _ := ParseUnit("Dobson")
-	want := Dimension{dimLength: -2}
-	if du.Dim != want {
+	want := dim(dimLength, -2)
+	if !du.Dim.Equal(want) {
 		t.Errorf("Dobson.Dim = %v, want %v", du.Dim, want)
 	}
 }
@@ -76,21 +96,21 @@ func TestParseUnitCompound(t *testing.T) {
 		in  string
 		dim Dimension
 	}{
-		{"m/s", Dimension{dimLength: 1, dimTime: -1}},
-		{"m/s^2", Dimension{dimLength: 1, dimTime: -2}},
-		{"kg*m/s^2", Dimension{dimMass: 1, dimLength: 1, dimTime: -2}},
-		{"kg*m^2/s^3", Dimension{dimMass: 1, dimLength: 2, dimTime: -3}},
-		{"cm^3/molec/s", Dimension{dimLength: 3, dimTime: -1}},
-		{"1/s", Dimension{dimTime: -1}},
-		{"mol/(m^3*s)", Dimension{dimAmount: 1, dimLength: -3, dimTime: -1}},
-		{"J/(mol*K)", Dimension{dimMass: 1, dimLength: 2, dimTime: -2, dimAmount: -1, dimTemperature: -1}},
+		{"m/s", dim(dimLength, 1, dimTime, -1)},
+		{"m/s^2", dim(dimLength, 1, dimTime, -2)},
+		{"kg*m/s^2", dim(dimMass, 1, dimLength, 1, dimTime, -2)},
+		{"kg*m^2/s^3", dim(dimMass, 1, dimLength, 2, dimTime, -3)},
+		{"cm^3/molec/s", dim(dimLength, 3, dimTime, -1)},
+		{"1/s", dim(dimTime, -1)},
+		{"mol/(m^3*s)", dim(dimAmount, 1, dimLength, -3, dimTime, -1)},
+		{"J/(mol*K)", dim(dimMass, 1, dimLength, 2, dimTime, -2, dimAmount, -1, dimTemperature, -1)},
 	}
 	for _, c := range cases {
 		u, err := ParseUnit(c.in)
 		if err != nil {
 			t.Fatalf("ParseUnit(%q): %v", c.in, err)
 		}
-		if u.Dim != c.dim {
+		if !u.Dim.Equal(c.dim) {
 			t.Errorf("ParseUnit(%q).Dim = %v, want %v", c.in, u.Dim, c.dim)
 		}
 	}
@@ -102,22 +122,22 @@ func TestParseUnitDerivedSymbols(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Dimension{dimMass: 1, dimLength: 1, dimTime: -2}
-	if n.Dim != want {
+	want := dim(dimMass, 1, dimLength, 1, dimTime, -2)
+	if !n.Dim.Equal(want) {
 		t.Errorf("N.Dim = %v, want %v", n.Dim, want)
 	}
 
 	// Pascal = N/m^2 = kg/(m*s^2)
 	pa, _ := ParseUnit("Pa")
-	wantPa := Dimension{dimMass: 1, dimLength: -1, dimTime: -2}
-	if pa.Dim != wantPa {
+	wantPa := dim(dimMass, 1, dimLength, -1, dimTime, -2)
+	if !pa.Dim.Equal(wantPa) {
 		t.Errorf("Pa.Dim = %v, want %v", pa.Dim, wantPa)
 	}
 
 	// Joule = N*m = kg*m^2/s^2
 	j, _ := ParseUnit("J")
-	wantJ := Dimension{dimMass: 1, dimLength: 2, dimTime: -2}
-	if j.Dim != wantJ {
+	wantJ := dim(dimMass, 1, dimLength, 2, dimTime, -2)
+	if !j.Dim.Equal(wantJ) {
 		t.Errorf("J.Dim = %v, want %v", j.Dim, wantJ)
 	}
 }
@@ -144,23 +164,23 @@ func TestParseUnitErrors(t *testing.T) {
 }
 
 func TestDimensionArithmetic(t *testing.T) {
-	m := Dimension{dimLength: 1}
-	s := Dimension{dimTime: 1}
+	m := dim(dimLength, 1)
+	s := dim(dimTime, 1)
 	v := m.Divide(s) // m/s
-	if v != (Dimension{dimLength: 1, dimTime: -1}) {
+	if !v.Equal(dim(dimLength, 1, dimTime, -1)) {
 		t.Errorf("m/s dimension = %v", v)
 	}
 	a := v.Divide(s) // m/s^2
-	if a != (Dimension{dimLength: 1, dimTime: -2}) {
+	if !a.Equal(dim(dimLength, 1, dimTime, -2)) {
 		t.Errorf("m/s^2 dimension = %v", a)
 	}
-	kg := Dimension{dimMass: 1}
+	kg := dim(dimMass, 1)
 	f := kg.Multiply(a) // kg*m/s^2
-	if f != (Dimension{dimMass: 1, dimLength: 1, dimTime: -2}) {
+	if !f.Equal(dim(dimMass, 1, dimLength, 1, dimTime, -2)) {
 		t.Errorf("kg*m/s^2 dimension = %v", f)
 	}
 	m2 := m.Power(2)
-	if m2 != (Dimension{dimLength: 2}) {
+	if !m2.Equal(dim(dimLength, 2)) {
 		t.Errorf("m^2 dimension = %v", m2)
 	}
 }
@@ -211,7 +231,7 @@ func TestPropagateDimensionLiteralNeutrality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("T - 273.15 must not be a mismatch: %v", err)
 	}
-	if u == nil || u.Dim != (Dimension{dimTemperature: 1}) {
+	if u == nil || !u.Dim.Equal(dim(dimTemperature, 1)) {
 		t.Errorf("T - 273.15 must be K, got %v", u)
 	}
 }
@@ -222,7 +242,7 @@ func TestPropagateDimensionVarLookup(t *testing.T) {
 	if err != nil || u == nil {
 		t.Fatalf("PropagateDimension(x): %v %v", u, err)
 	}
-	if u.Dim != (Dimension{dimLength: 1}) {
+	if !u.Dim.Equal(dim(dimLength, 1)) {
 		t.Errorf("x.Dim = %v", u.Dim)
 	}
 
@@ -238,7 +258,7 @@ func TestPropagateDimensionAddition(t *testing.T) {
 
 	// a + b: same dim → m
 	ok := ExprNode{Op: "+", Args: []any{"a", "b"}}
-	if u, err := PropagateDimension(ok, env); err != nil || u == nil || u.Dim != (Dimension{dimLength: 1}) {
+	if u, err := PropagateDimension(ok, env); err != nil || u == nil || !u.Dim.Equal(dim(dimLength, 1)) {
 		t.Errorf("a+b: %v %v", u, err)
 	}
 
@@ -257,7 +277,7 @@ func TestPropagateDimensionMultiplication(t *testing.T) {
 	if err != nil || u == nil {
 		t.Fatalf("v*t: %v %v", u, err)
 	}
-	if u.Dim != (Dimension{dimLength: 1}) {
+	if !u.Dim.Equal(dim(dimLength, 1)) {
 		t.Errorf("v*t.Dim = %v, want m", u.Dim)
 	}
 }
@@ -269,7 +289,7 @@ func TestPropagateDimensionDivision(t *testing.T) {
 	if err != nil || u == nil {
 		t.Fatalf("x/t: %v %v", u, err)
 	}
-	if u.Dim != (Dimension{dimLength: 1, dimTime: -1}) {
+	if !u.Dim.Equal(dim(dimLength, 1, dimTime, -1)) {
 		t.Errorf("x/t.Dim = %v", u.Dim)
 	}
 }
@@ -279,7 +299,7 @@ func TestPropagateDimensionPower(t *testing.T) {
 	// r^2 → m^2
 	node := ExprNode{Op: "^", Args: []any{"r", 2}}
 	u, err := PropagateDimension(node, env)
-	if err != nil || u == nil || u.Dim != (Dimension{dimLength: 2}) {
+	if err != nil || u == nil || !u.Dim.Equal(dim(dimLength, 2)) {
 		t.Errorf("r^2: %v %v", u, err)
 	}
 
@@ -319,7 +339,7 @@ func TestPropagateDimensionDerivative(t *testing.T) {
 	if err != nil || u == nil {
 		t.Fatalf("D(x,t): %v %v", u, err)
 	}
-	if u.Dim != (Dimension{dimLength: 1, dimTime: -1}) {
+	if !u.Dim.Equal(dim(dimLength, 1, dimTime, -1)) {
 		t.Errorf("D(x,t).Dim = %v, want m/s", u.Dim)
 	}
 
@@ -377,8 +397,8 @@ func TestPropagateDimensionComplexExpression(t *testing.T) {
 	if err != nil || u == nil {
 		t.Fatalf("m*v^2: %v %v", u, err)
 	}
-	want := Dimension{dimMass: 1, dimLength: 2, dimTime: -2}
-	if u.Dim != want {
+	want := dim(dimMass, 1, dimLength, 2, dimTime, -2)
+	if !u.Dim.Equal(want) {
 		t.Errorf("KE.Dim = %v, want %v", u.Dim, want)
 	}
 

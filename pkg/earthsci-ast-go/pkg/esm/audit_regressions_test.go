@@ -2,6 +2,7 @@ package esm
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -869,6 +870,184 @@ func TestAuditT4_UnitRegistryAndGrammarContract(t *testing.T) {
 	// policy rests on has to have something to fire on.
 	if _, err := ParseUnit("not_a_unit"); err == nil {
 		t.Error("ParseUnit must reject a unit string that denotes no real unit")
+	}
+}
+
+// TestUnitsV2_RationalExponents pins contract item A.1: dimension exponents are
+// RATIONAL, not integer. "1/s^0.5" is the noise intensity of every SDE fixture
+// (tests/fixtures/sde/*.esm); an int-only `term := atom ('^' int)?` grammar
+// cannot express it, so under the hard-error severity for an unparseable unit
+// the whole SDE corpus was falsely rejected.
+func TestUnitsV2_RationalExponents(t *testing.T) {
+	half := newRat(1, 2)
+
+	for _, c := range []struct {
+		in   string
+		want Dimension
+	}{
+		{"1/s^0.5", dimRat(dimTime, -1, 2)},
+		{"s^-0.5", dimRat(dimTime, -1, 2)},
+		{"s^(-1/2)", dimRat(dimTime, -1, 2)},
+		{"m^(3/2)", dimRat(dimLength, 3, 2)},
+		{"m^1.5", dimRat(dimLength, 3, 2)},
+		{"m^(-2)", dim(dimLength, -2)},
+		{"kg^0.25", dimRat(dimMass, 1, 4)},
+		{"m**0.5", dimRat(dimLength, 1, 2)},
+	} {
+		u, err := ParseUnit(c.in)
+		if err != nil {
+			t.Fatalf("ParseUnit(%q): %v", c.in, err)
+		}
+		if !u.Dim.Equal(c.want) {
+			t.Errorf("ParseUnit(%q).Dim = %s, want %s", c.in, u.Dim, c.want)
+		}
+	}
+
+	// The decimal and the fraction spelling of the same exponent are the SAME
+	// dimension (the decimal is converted exactly, never through a float).
+	a, _ := ParseUnit("s^0.5")
+	b, _ := ParseUnit("s^(1/2)")
+	if !a.Dim.Equal(b.Dim) {
+		t.Errorf("s^0.5 (%s) and s^(1/2) (%s) must be the same dimension", a.Dim, b.Dim)
+	}
+	// …and half of it twice is one whole second.
+	if !a.Dim.Multiply(b.Dim).Equal(dim(dimTime, 1)) {
+		t.Errorf("s^(1/2) * s^(1/2) must be s, got %s", a.Dim.Multiply(b.Dim))
+	}
+
+	// sqrt of a non-square dimension is now a legal rational dimension, not a
+	// "non-square dimension" rejection.
+	env := mkEnv(t, map[string]string{"vol": "m^3"})
+	u, err := PropagateDimension(ExprNode{Op: "sqrt", Args: []any{"vol"}}, env)
+	if err != nil || u == nil {
+		t.Fatalf("sqrt(m^3): %v (err %v)", u, err)
+	}
+	if !u.Dim.Equal(dimRat(dimLength, 3, 2)) {
+		t.Errorf("sqrt(m^3) must be m^(3/2), got %s", u.Dim)
+	}
+	if !half.Equal(newRat(2, 4)) {
+		t.Error("Rat.Equal must compare rationals by value, not by representation")
+	}
+}
+
+// TestUnitsV2_UnicodeNormalization pins contract item A.2: the non-ASCII
+// spellings the corpus and the spec's own examples use — superscript exponents,
+// the middot/dot-operator multiplication signs, µ, °C, Ω — are normalized before
+// parsing instead of failing as "unknown unit".
+func TestUnitsV2_UnicodeNormalization(t *testing.T) {
+	for _, c := range []struct {
+		in    string
+		equiv string
+	}{
+		{"W/m²", "W/m^2"},
+		{"cm³", "cm^3"},
+		{"m⁻³", "m^-3"},
+		{"kg/m³", "kg/m^3"},
+		{"J/(kg·K)", "J/(kg*K)"},        // U+00B7 MIDDLE DOT
+		{"kg⋅m/s", "kg*m/s"},            // U+22C5 DOT OPERATOR
+		{"μg/m³", "ug/m^3"},             // U+03BC MU
+		{"µmol/(m²·s)", "umol/(m^2*s)"}, // U+00B5 MICRO SIGN
+		{"°C", "degC"},
+		{"Ω", "Ohm"},      // U+03A9 GREEK CAPITAL OMEGA
+		{"Ω", "Ohm"},      // U+2126 OHM SIGN
+		{"m⁻¹⁰", "m^-10"}, // a RUN of superscripts is ONE exponent
+	} {
+		got, err := ParseUnit(c.in)
+		if err != nil {
+			t.Errorf("ParseUnit(%q) must resolve: %v", c.in, err)
+			continue
+		}
+		want, err := ParseUnit(c.equiv)
+		if err != nil {
+			t.Fatalf("ParseUnit(%q): %v", c.equiv, err)
+		}
+		if !got.Dim.Equal(want.Dim) {
+			t.Errorf("ParseUnit(%q).Dim = %s, want %s (as %q)", c.in, got.Dim, want.Dim, c.equiv)
+		}
+		if math.Abs(got.Scale-want.Scale) > 1e-12*math.Max(1, math.Abs(want.Scale)) {
+			t.Errorf("ParseUnit(%q).Scale = %v, want %v (as %q)", c.in, got.Scale, want.Scale, c.equiv)
+		}
+	}
+}
+
+// TestUnitsV2_RegistryAdditions pins contract item A.3 (the new symbols), A.5
+// (the Dobson scale) and A.6 (one precedence level for '*' and '/').
+func TestUnitsV2_RegistryAdditions(t *testing.T) {
+	for _, s := range []string{"%", "percent", "psu", "uatm", "molecule", "meter", "meters", "hour", "Celsius"} {
+		if _, err := ParseUnit(s); err != nil {
+			t.Errorf("ParseUnit(%q) must resolve: %v", s, err)
+		}
+	}
+	// "%" is dimensionless with scale 1/100 and composes like any other symbol.
+	pct, _ := ParseUnit("%")
+	if !pct.Dim.IsDimensionless() || math.Abs(pct.Scale-0.01) > 1e-15 {
+		t.Errorf("%% must be dimensionless with scale 0.01, got dim %s scale %v", pct.Dim, pct.Scale)
+	}
+	if _, err := ParseUnit("%/day"); err != nil {
+		t.Errorf("ParseUnit(%q): %v", "%/day", err)
+	}
+	// molecule == molec, meter == m, hour == h, Celsius == degC.
+	for _, pair := range [][2]string{{"molecule", "molec"}, {"meter", "m"}, {"meters", "m"}, {"hour", "h"}, {"Celsius", "degC"}} {
+		a, _ := ParseUnit(pair[0])
+		b, _ := ParseUnit(pair[1])
+		if !a.Dim.Equal(b.Dim) || a.Scale != b.Scale {
+			t.Errorf("%q must be an alias of %q", pair[0], pair[1])
+		}
+	}
+
+	// A.5: the Dobson scale is the physically correct 2.6867e20 m^-2, NOT the
+	// rounded 2.69e20 — Rust uses the exact value and Go's conversion check has a
+	// 1e-9 relative tolerance, so the rounding made the two bindings emit
+	// different errors on the SAME file.
+	du, err := ParseUnit("DU")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(du.Scale-2.6867e20) > 1e12 {
+		t.Errorf("Dobson scale = %v, want 2.6867e20", du.Scale)
+	}
+
+	// A.6: '*' and '/' are ONE precedence level, left to right. "J/mol*K" is
+	// (J/mol)*K — K in the NUMERATOR. Reading it as J/(mol*K) silently negates
+	// K's exponent (the bug Rust carried).
+	got, err := ParseUnit("J/mol*K")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := ParseUnit("(J/mol)*K")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Dim.Equal(want.Dim) {
+		t.Errorf("J/mol*K must parse as (J/mol)*K = %s, got %s", want.Dim, got.Dim)
+	}
+	molK, _ := ParseUnit("J/(mol*K)")
+	if got.Dim.Equal(molK.Dim) {
+		t.Error("J/mol*K must NOT parse as J/(mol*K) — '*' and '/' are one precedence level")
+	}
+	// Left-associative division: "a/b/c" == "a/(b*c)".
+	abc, _ := ParseUnit("m/s/s")
+	if !abc.Dim.Equal(dim(dimLength, 1, dimTime, -2)) {
+		t.Errorf("m/s/s must be m/s^2, got %s", abc.Dim)
+	}
+
+	// A.4: whitespace is multiplication, and a unit string carries DIMENSIONS
+	// ONLY — "kg C/m^2" is kilogram·coulomb per square metre (no species tag).
+	ws, err := ParseUnit("ppb^-1 s^-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	star, _ := ParseUnit("ppb^-1 * s^-1")
+	if !ws.Dim.Equal(star.Dim) {
+		t.Errorf("whitespace must be multiplication: %s vs %s", ws.Dim, star.Dim)
+	}
+	tagged, err := ParseUnit("kg C/m^2")
+	if err != nil {
+		t.Fatalf("ParseUnit(%q): %v", "kg C/m^2", err)
+	}
+	coulomb, _ := ParseUnit("kg*C/m^2")
+	if !tagged.Dim.Equal(coulomb.Dim) {
+		t.Errorf("\"kg C/m^2\" must be kg*C/m^2 (C is the coulomb), got %s", tagged.Dim)
 	}
 }
 
