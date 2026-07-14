@@ -26,7 +26,6 @@ import {
   contains,
 } from './index.js'
 import * as toolkit from './index.js'
-import { resolveSubsystemRefs, RefLoadError } from './ref-loading.js'
 import { fixturesDir } from './test-helpers.js'
 import type { Expr, Expression } from './types.js'
 
@@ -129,34 +128,28 @@ describe('Conformance Test Suite', () => {
       expect(validFiles.length).toBeGreaterThan(50)
     })
 
-    it.each(validFiles)('should validate %s', async (filePath) => {
+    it.each(validFiles)('should validate %s', (filePath) => {
       const content = readFileSync(filePath, 'utf-8')
-      const basePath = dirname(filePath)
       const raw = JSON.parse(content) as Record<string, unknown>
 
       // A pure TEMPLATE-LIBRARY file (§9.7.1) is a registry document, not a
       // component document, and its §9.7 payload deliberately does not survive
-      // parse → emit (§9.7.6, "Option A"). Emitting one and validating THAT would
-      // check a document the library never claimed to be — an empty shell with no
-      // payload, which then fails the top-level `anyOf`. The schema admits the
-      // library shape directly (`anyOf` branch `required: [expression_templates]`,
-      // spec §9.7.1), so the library is asserted valid AS AUTHORED. It is still
-      // asserted — this is not a quarantine.
+      // parse → emit (§9.7.6, "Option A"). The schema admits the library shape
+      // directly (`anyOf` branch `required: [expression_templates]`), so it is
+      // asserted valid AS AUTHORED. Still asserted — not a quarantine.
       const isTemplateLibrary =
         'expression_templates' in raw &&
         !('models' in raw) &&
         !('reaction_systems' in raw) &&
         !('data_loaders' in raw)
 
-      let result
-      if (isTemplateLibrary) {
-        result = validate(content)
-      } else {
-        const file = load(content, { basePath })
-        // Give the document the file I/O that `validate()` deliberately withholds.
-        await resolveSubsystemRefs(file, basePath)
-        result = validate(save(file))
-      }
+      // `basePath` is the whole point: it lets `validate()` OPEN relative `{ref}`
+      // and `expression_template_imports` targets, exactly as a consumer holding
+      // the file on disk would. Without it a `{ref}` mount is merely "unresolved"
+      // and a present target is indistinguishable from a missing one.
+      const result = isTemplateLibrary
+        ? validate(content)
+        : validate(content, { basePath: dirname(filePath) })
 
       if (!result.is_valid) {
         // Surface WHAT failed — a bare `false !== true` on a 200-line fixture is
@@ -306,34 +299,19 @@ describe('Conformance Test Suite', () => {
     // work, advertised as a test that passes.
     const PENDING_BINDING_PHASE = new Set<string>([])
 
-    it.each(invalidFiles)('should detect errors in %s', async (filePath) => {
+    it.each(invalidFiles)('should detect errors in %s', (filePath) => {
       const content = readFileSync(filePath, 'utf-8')
 
       if (PENDING_BINDING_PHASE.has(basename(filePath))) {
         return
       }
 
-      // Attempt to validate - should find schema or structural errors
-      const result = validate(content)
-
-      // A defect that only the RESOLVER can see (it alone reads the referenced
-      // file) surfaces as a thrown `RefLoadError`, not as a `validate()` error —
-      // e.g. `subsystem_ref_ambiguous.esm`, whose target holds three top-level
-      // components, is `ambiguous_subsystem_ref`; the I/O-free `validate()` can
-      // only ever call that `unresolved_subsystem_ref`. Fold the resolver's
-      // verdict in, so the fixture is judged by the code the corpus actually
-      // pins rather than by the coarser one the no-I/O layer can reach.
-      const resolverErrors: { code: string; path: string; message: string }[] = []
-      if (result.schema_errors.length === 0) {
-        try {
-          const file = load(content, { basePath: dirname(filePath) })
-          await resolveSubsystemRefs(file, dirname(filePath))
-        } catch (error) {
-          if (error instanceof RefLoadError) {
-            resolverErrors.push({ code: error.code, path: '$', message: error.message })
-          }
-        }
-      }
+      // `basePath` lets `validate()` OPEN the ref targets, so a defect only the
+      // RESOLVER can see is reported with the code the corpus actually pins:
+      // `subsystem_ref_ambiguous.esm`'s target holds three top-level components,
+      // which is `ambiguous_subsystem_ref` — a verdict the I/O-free path cannot
+      // reach, since without opening the file it can only say "unresolved".
+      const result = validate(content, { basePath: dirname(filePath) })
 
       if (expectedErrors[basename(filePath)]?.resolver_only) {
         // Resolver-only: the JSON-Schema layer must ACCEPT it (no schema_errors).
@@ -345,11 +323,10 @@ describe('Conformance Test Suite', () => {
         return
       }
 
-      const all = [...result.schema_errors, ...result.structural_errors, ...resolverErrors]
-
-      // Rejected by EITHER layer: the I/O-free `validate()`, or the resolver.
-      const rejected = !result.is_valid || resolverErrors.length > 0
-      expect(rejected, `${basename(filePath)} is pinned invalid but was accepted`).toBe(true)
+      const all = [...result.schema_errors, ...result.structural_errors]
+      expect(result.is_valid, `${basename(filePath)} is pinned invalid but was accepted`).toBe(
+        false,
+      )
       expect(all.length).toBeGreaterThan(0)
 
       // Ensure each error has required fields
@@ -686,12 +663,9 @@ describe('Conformance Test Suite', () => {
     // `validate()`, `console.warn`ed whatever came back, and then asserted only
     // that `load()` does not throw — so an end-to-end system could fail every
     // structural check in the book and the test stayed green. Assert the result.
-    it.each(endToEndFiles)('should validate complex system %s', async (filePath) => {
-      const basePath = dirname(filePath)
-      const file = load(readFileSync(filePath, 'utf-8'), { basePath })
-      await resolveSubsystemRefs(file, basePath)
+    it.each(endToEndFiles)('should validate complex system %s', (filePath) => {
+      const result = validate(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
 
-      const result = validate(save(file))
       if (!result.is_valid) {
         const detail = [...result.schema_errors, ...result.structural_errors]
           .map((e) => `  ${e.code} @ ${e.path}\n    ${e.message}`)

@@ -3,8 +3,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { validate } from './validate.js'
-import { readFixture } from './test-helpers.js'
+import { readFixture, REPO_ROOT } from './test-helpers.js'
 
 describe('Structural validation', () => {
   it('should detect equation count mismatch', () => {
@@ -1440,5 +1442,77 @@ describe('an observed variable defined as the constant 0 is not "missing" its ex
     const file = withExpression(undefined)
     delete (file.models.M.variables.obs as { expression?: unknown }).expression
     expect(validate(file).is_valid).toBe(false)
+  })
+})
+
+/**
+ * F-2 — `validate(data, { basePath })`.
+ *
+ * `validate()` is contractually I/O-free, which means that WITHOUT a base
+ * directory it cannot open a `{ref}` target and therefore cannot tell a MISSING
+ * mount from a PRESENT one: both come back `unresolved_subsystem_ref`. Every
+ * subsystem-ref and template-import pin in the shared corpus is unsatisfiable
+ * under that signature — the harness asserts a `(code, path)` pair the binding
+ * has no way to compute.
+ *
+ * `basePath` closes that hole. It is OPTIONAL, so the old signature keeps its old
+ * behaviour exactly.
+ */
+describe('validate({ basePath }) resolves relative refs and template imports', () => {
+  const fixture = (rel: string) => join(REPO_ROOT, rel)
+  const codes = (r: ReturnType<typeof validate>) =>
+    [...r.schema_errors, ...r.structural_errors].map((e) => `${e.code}@${e.path}`)
+
+  it('validates a subsystem-ref fixture clean WITH a basePath, and reports it unresolved WITHOUT one', () => {
+    const path = fixture('tests/valid/lib_calendar_subsystem_inclusion.esm')
+    const content = readFileSync(path, 'utf-8')
+
+    // WITH: the `{ref}` mount is opened, the component is inlined, and the
+    // observed expression's `Calendar.seconds_since_midnight` now resolves.
+    expect(validate(content, { basePath: dirname(path) }).is_valid).toBe(true)
+
+    // WITHOUT: unchanged legacy behaviour — the mount is honestly reported as
+    // unresolved rather than silently passed over.
+    const without = validate(content)
+    expect(without.is_valid).toBe(false)
+    expect(codes(without)).toContain('unresolved_subsystem_ref@/models/Diurnal/subsystems/Calendar')
+  })
+
+  it('resolves the §4.7 index-set merge and §9.7 template imports through a basePath', () => {
+    for (const rel of [
+      'tests/valid/subsystem_index_set_merge.esm',
+      'tests/valid/template_import_minimal.esm',
+    ]) {
+      const path = fixture(rel)
+      const result = validate(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
+      expect(result.is_valid, `${rel}: ${codes(result).join(', ')}`).toBe(true)
+    }
+  })
+
+  it('still REJECTS a ref whose target does not exist, at the offending mount', () => {
+    // The point of `basePath` is that a present target and a missing one become
+    // distinguishable. This one is genuinely missing, and must stay rejected —
+    // with the pinned code, at the pinned path (the mount, not the document root).
+    const path = fixture('tests/invalid/subsystem_ref_not_found.esm')
+    const result = validate(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
+    expect(result.is_valid).toBe(false)
+    expect(codes(result)).toContain(
+      'unresolved_subsystem_ref@/models/Atmosphere/subsystems/Missing',
+    )
+  })
+
+  it('reports an AMBIGUOUS target — a verdict only reachable by opening the file', () => {
+    // §4.7 requires a referenced file to hold exactly one top-level component;
+    // this target holds three. No I/O-free checker can know that, so without a
+    // `basePath` the best available answer is the coarser "unresolved".
+    const path = fixture('tests/invalid/subsystem_ref_ambiguous.esm')
+    const content = readFileSync(path, 'utf-8')
+
+    expect(codes(validate(content, { basePath: dirname(path) }))).toContain(
+      'ambiguous_subsystem_ref@/models/ClimateModel/subsystems/Atm',
+    )
+    expect(codes(validate(content))).toContain(
+      'unresolved_subsystem_ref@/models/ClimateModel/subsystems/Atm',
+    )
   })
 })
