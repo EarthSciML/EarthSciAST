@@ -740,13 +740,13 @@
     "schema_errors": [
       {
         "path": "/metadata/created",
-        "message": "Does not match format 'date-time'",
-        "keyword": "format"
+        "message": "Does not match the required pattern",
+        "keyword": "pattern"
       },
       {
         "path": "/metadata/modified",
-        "message": "Does not match format 'date-time'",
-        "keyword": "format"
+        "message": "Does not match the required pattern",
+        "keyword": "pattern"
       }
     ],
     "structural_errors": [],
@@ -754,23 +754,34 @@
   },
 
   "malformed_doi.esm": {
-    "schema_errors": [],
+    "schema_errors": [
+      {
+        "path": "/metadata/references/0/doi",
+        "message": "Does not match the required pattern",
+        "keyword": "pattern"
+      },
+      {
+        "path": "/metadata/references/1/doi",
+        "message": "Does not match the required pattern",
+        "keyword": "pattern"
+      }
+    ],
     "structural_errors": [],
     "is_valid": false,
-    "notes": "DOI format validation may be implementation-specific. Some validators may accept any string, others may validate DOI patterns."
+    "notes": "Pinned by the schema `pattern` on Reference.doi (10.<registrant>/<suffix>). This entry previously pinned zero errors while asserting is_valid:false, so no binding could fail it."
   },
 
   "invalid_url_format.esm": {
     "schema_errors": [
       {
         "path": "/metadata/references/0/url",
-        "message": "Does not match format 'uri'",
-        "keyword": "format"
+        "message": "Does not match the required pattern",
+        "keyword": "pattern"
       },
       {
         "path": "/metadata/references/2/url",
-        "message": "Does not match format 'uri'",
-        "keyword": "format"
+        "message": "Does not match the required pattern",
+        "keyword": "pattern"
       }
     ],
     "structural_errors": [],
@@ -1045,8 +1056,8 @@
       },
       {
         "path": "/metadata/created",
-        "message": "Does not match format 'date-time'",
-        "keyword": "format"
+        "message": "Does not match the required pattern",
+        "keyword": "pattern"
       },
       {
         "path": "/metadata/tags",
@@ -1076,7 +1087,7 @@
   "empty_required_arrays.esm": {
     "schema_errors": [
       {
-        "path": "/models/TestModel/equations",
+        "path": "/metadata/authors",
         "message": "Array must contain at least 1 item(s)",
         "keyword": "minItems"
       }
@@ -1628,7 +1639,7 @@
   "event_error_conditions.esm": {
     "schema_errors": [
       {
-        "path": "/models/ErrorTestModel/discrete_events/0/trigger/type",
+        "path": "/models/ErrorTestModel/discrete_events/1/trigger/type",
         "message": "Value 'invalid_trigger_type' is not one of the allowed trigger types",
         "keyword": "enum"
       },
@@ -1643,7 +1654,7 @@
         "keyword": "minItems"
       },
       {
-        "path": "/models/ErrorTestModel/discrete_events/6",
+        "path": "/models/ErrorTestModel/discrete_events/5",
         "message": "Event must have either 'affects' or 'functional_affect', but not both",
         "keyword": "oneOf"
       }
