@@ -1535,8 +1535,14 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # into a prelude that fills a per-call scratch cache, and each occurrence is a
     # `_NK_CACHED` ref. Numerically identical to per-equation `_compile`; with no
     # shared subexpressions the prelude is empty and the rhs nodes are byte-identical.
+    # `has_pgather` tells the pass whether any resolved live-forcing gather can be in
+    # the trees — if so it keys them through a canonicalizable stand-in, without which
+    # every expression built over a forcing buffer declines sharing (ess-qic). Note
+    # `pgather` holds BOTH the raw `param_arrays` buffers and the discrete-cadence
+    # caches, which is why this is read after `_build_discrete_materializer!` ran.
     rhs_list, scalar_prelude, scalar_cache, cse_diag =
-        _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs)
+        _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
+                            has_pgather = !isempty(pgather))
 
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)

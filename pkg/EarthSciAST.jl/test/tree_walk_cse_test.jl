@@ -583,3 +583,194 @@ end
         @test du[var_map["b"]] === ipl
     end
 end
+
+# ================================================================
+# CSE over LIVE forcing buffers (ess-qic).
+#
+# A resolved `param_arrays` gather is an argless `index` node carrying a
+# `_PGatherRef` runtime payload in `value`. `canonical_json` emits `value`, and
+# a `_PGatherRef` is not a JSON type — so keying ANY ancestor of a live gather
+# threw `E_CANONICAL_BAD_CONST`, `_cse_key` caught it and declined, and CSE was
+# silently switched off for every expression built over a forcing buffer (the
+# met→physics stack, i.e. the biggest CSE target there is). The gather now keys
+# as a leaf with a canonicalizable `(buffer name, linear offset)` identity, and
+# stays CSE-opaque so it is never itself hoisted.
+# ================================================================
+@testset "tree_walk CSE over live forcing buffers (ess-qic)" begin
+
+    # `F[1]*k` three times over: twice inside D(x), once as D(y).
+    #   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
+    _pg_shared_model() = ESM.Model(
+        Dict{String,ModelVariable}(
+            "x" => ModelVariable(StateVariable; default=1.0),
+            "y" => ModelVariable(StateVariable; default=1.0),
+            "k" => ModelVariable(ParameterVariable; default=2.0),
+        ),
+        begin
+            fk() = _cse_op("*", _idx("F", _i(1)), _cse_v("k"))
+            ESM.Equation[
+                ESM.Equation(_cse_D("x"),
+                    _cse_op("+", _cse_op("sin", fk()), _cse_op("cos", fk()))),
+                ESM.Equation(_cse_D("y"), fk()),
+            ]
+        end)
+
+    @testset "a shared expression over a LIVE forcing buffer is cached (ess-qic)" begin
+        # Baseline: bound as a FROZEN const array the gather folds to a literal, so
+        # `F[1]*k` is a plain parameter product — 1 slot, 3 occurrences.
+        _, _, _, _, _, d_const = ESM._build_evaluator_impl(_pg_shared_model();
+            const_arrays=Dict("F" => [5.0, 6.0]))
+        @test d_const.n_cse_slots == 1
+        @test d_const.n_cse_occurrences == 3
+
+        # The SAME model with `F` bound as a LIVE buffer must share identically.
+        # Before ess-qic this reported 0 slots / 0 occurrences.
+        buf = [5.0, 6.0]
+        f!, u0, p, _ts, vm, d_live = ESM._build_evaluator_impl(_pg_shared_model();
+            param_arrays=Dict("F" => buf))
+        @test d_live.n_cse_slots == 1
+        @test d_live.n_cse_occurrences == 3
+
+        # Bit-exact against the un-CSE'd evaluation: the cached slot holds exactly
+        # the `F[1]*k` an inline walk would have computed, so `===`, not `≈`.
+        k, F1 = 2.0, 5.0
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        @test du[vm["x"]] === sin(F1 * k) + cos(F1 * k)
+        @test du[vm["y"]] === F1 * k
+    end
+
+    @testset "live-gather keys are distinct per OFFSET and per BUFFER (ess-qic)" begin
+        # The one way this change could be catastrophic: if two gathers collided on a
+        # key, CSE would MERGE two different reads into one slot and the model would
+        # compute silently wrong numbers. Three products that must NOT share —
+        # `F[1]*k` (buffer F, offset 1), `F[2]*k` (SAME buffer, different offset), and
+        # `G[1]*k` (DIFFERENT buffer, SAME offset) — each duplicated so each is a
+        # hoist candidate in its own right. Distinct buffer VALUES make a merge show
+        # up as a wrong number, not just a wrong slot count.
+        vars = Dict{String,ModelVariable}(
+            "x" => ModelVariable(StateVariable; default=1.0),
+            "y" => ModelVariable(StateVariable; default=1.0),
+            "z" => ModelVariable(StateVariable; default=1.0),
+            "w" => ModelVariable(StateVariable; default=1.0),
+            "k" => ModelVariable(ParameterVariable; default=2.0),
+        )
+        prod(buf, off) = _cse_op("*", _idx(buf, _i(off)), _cse_v("k"))
+        both(e) = _cse_op("+", _cse_op("sin", e), _cse_op("cos", e))
+        eqs = ESM.Equation[
+            ESM.Equation(_cse_D("x"), both(prod("F", 1))),
+            ESM.Equation(_cse_D("y"), both(prod("F", 2))),
+            ESM.Equation(_cse_D("z"), both(prod("G", 1))),
+            ESM.Equation(_cse_D("w"), prod("F", 1)),   # 3rd occurrence of F[1]*k
+        ]
+        F = [3.0, 5.0]
+        G = [7.0, 11.0]
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs);
+            param_arrays=Dict("F" => F, "G" => G))
+
+        # THREE slots, not one: F[1]*k, F[2]*k, G[1]*k are three distinct values.
+        @test diag.n_cse_slots == 3
+        @test diag.n_cse_occurrences == 7   # 3 + 2 + 2
+
+        # And — the assertion that actually matters — every equation still computes
+        # its OWN gather. A key collision would make two of these four agree.
+        k = 2.0
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        @test du[vm["x"]] === sin(3.0 * k) + cos(3.0 * k)
+        @test du[vm["y"]] === sin(5.0 * k) + cos(5.0 * k)
+        @test du[vm["z"]] === sin(7.0 * k) + cos(7.0 * k)
+        @test du[vm["w"]] === 3.0 * k
+    end
+
+    @testset "a CSE'd live gather still reads the buffer LIVE (ess-qic)" begin
+        # Hoisting caches the value for ONE `f!` call: the prelude is refilled at the
+        # top of every call, and the buffer cannot change mid-call. So an in-place
+        # refresh BETWEEN calls must show through the cached slot.
+        buf = [5.0, 6.0]
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_pg_shared_model();
+            param_arrays=Dict("F" => buf))
+        @test diag.n_cse_slots >= 1          # the expression IS cached...
+        k = 2.0
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        @test du[vm["y"]] === 5.0 * k
+
+        buf[1] = 42.0                        # ...and still tracks the live buffer.
+        f!(du, u0, p, 0.0)
+        @test du[vm["x"]] === sin(42.0 * k) + cos(42.0 * k)
+        @test du[vm["y"]] === 42.0 * k
+    end
+
+    # ---- discrete-cadence caches ride the same `pgather` channel ----
+    # `_build_discrete_materializer!` registers each discrete var's cache buffer in
+    # the SAME `pgather` dict, so a reader's `index(g, j)` resolves to a live gather
+    # over the cache and gets a `_PGatherRef` exactly like a raw forcing read. These
+    # must key distinctly from each other AND refresh (their contents change on a
+    # data-refresh event, between calls — a `materialize!`).
+    _PG_W = [1.0 2.0 3.0; 4.0 5.0 6.0]   # W[i,j], i=1..2, j=1..3
+    _pg_agg(scale) = OpExpr("aggregate", ESM.ASTExpr[];
+        output_idx=Any["j"], reduce="+", ranges=Dict("j" => [1, 3], "i" => [1, 2]),
+        expr_body=_cse_op("*", _cse_n(scale),
+                          _cse_op("*", _idx("W", _v("i"), _v("j")), _idx("src", _v("i")))))
+    # g[j] = Σᵢ W[i,j]·src[i];  h[j] = Σᵢ 3·W[i,j]·src[i]  (both state-free +
+    # param-tainted ⇒ discrete caches). Scalar readers:
+    #   D(x) = sin(g[1]*k) + cos(g[1]*k);  D(y) = g[1]*k;  D(z) = sin(h[1]*k) + cos(h[1]*k)
+    _pg_discrete_model() = ESM.Model(
+        Dict{String,ModelVariable}(
+            "x" => ModelVariable(StateVariable; default=1.0),
+            "y" => ModelVariable(StateVariable; default=1.0),
+            "z" => ModelVariable(StateVariable; default=1.0),
+            "k" => ModelVariable(ParameterVariable; default=2.0),
+            "g" => ModelVariable(ObservedVariable; shape=["j"], expression=_pg_agg(1.0)),
+            "h" => ModelVariable(ObservedVariable; shape=["j"], expression=_pg_agg(3.0)),
+        ),
+        begin
+            gk() = _cse_op("*", _idx("g", _i(1)), _cse_v("k"))
+            hk() = _cse_op("*", _idx("h", _i(1)), _cse_v("k"))
+            ESM.Equation[
+                ESM.Equation(_cse_D("x"),
+                    _cse_op("+", _cse_op("sin", gk()), _cse_op("cos", gk()))),
+                ESM.Equation(_cse_D("y"), gk()),
+                ESM.Equation(_cse_D("z"),
+                    _cse_op("+", _cse_op("sin", hk()), _cse_op("cos", hk()))),
+            ]
+        end)
+
+    @testset "discrete-cadence cache gathers are CSE'd, distinct, and refresh (ess-qic)" begin
+        src = [1.0, 1.0]
+        dm = ESM.DiscreteMaterializer()
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_pg_discrete_model();
+            const_arrays=Dict("W" => _PG_W), param_arrays=Dict("src" => src),
+            materialize_out=dm)
+        @test haskey(dm.caches, "g") && haskey(dm.caches, "h")
+
+        # TWO slots — `g[1]*k` and `h[1]*k` gather two DIFFERENT cache buffers at the
+        # SAME offset, so a name-blind key would collapse them into one.
+        @test diag.n_cse_slots == 2
+        @test diag.n_cse_occurrences == 5   # 3 × g[1]*k + 2 × h[1]*k
+
+        k = 2.0
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        g1, h1 = dm.caches["g"][1], dm.caches["h"][1]
+        @test g1 ≈ 1.0 * 1.0 + 4.0 * 1.0      # Σᵢ W[i,1]·src[i]
+        @test h1 ≈ 3.0 * g1
+        @test du[vm["x"]] === sin(g1 * k) + cos(g1 * k)
+        @test du[vm["y"]] === g1 * k
+        @test du[vm["z"]] === sin(h1 * k) + cos(h1 * k)
+
+        # A data-refresh event: the raw buffer changes in place and `materialize!`
+        # refills the caches. The CSE'd readers must track — the prelude re-gathers
+        # the cache on every call.
+        src .= [2.0, 3.0]
+        dm.materialize!()
+        g1n, h1n = dm.caches["g"][1], dm.caches["h"][1]
+        @test g1n ≈ 1.0 * 2.0 + 4.0 * 3.0
+        @test g1n != g1
+        f!(du, u0, p, 0.0)
+        @test du[vm["x"]] === sin(g1n * k) + cos(g1n * k)
+        @test du[vm["y"]] === g1n * k
+        @test du[vm["z"]] === sin(h1n * k) + cos(h1n * k)
+    end
+end

@@ -121,6 +121,45 @@ const ESM = EarthSciAST
         @test du == Float64[2.0 * buf[i] for i in 1:N]
     end
 
+    @testset "a CSE'd expression over the buffer still reads it LIVE (ess-qic)" begin
+        # A live gather used to make `_cse_key` throw (its `_PGatherRef` payload is not
+        # canonicalizable), so CSE silently declined every expression above a forcing
+        # buffer. It is now keyed by (buffer name, offset) and CAN be hoisted into the
+        # prelude. That is only sound if the hoist caches the value for exactly ONE
+        # `f!` call — the prelude is refilled at the top of every call, and the buffer
+        # cannot change mid-call — so the live-refresh contract above must survive the
+        # hoist. This is the same in-place `buf[2] = 42.0` refresh, run through a
+        # CSE'd expression instead of a bare gather.
+        #   D(y) = sin(forcing[2]*a) + cos(forcing[2]*a);  D(z) = forcing[2]*a
+        vars = Dict("y" => ModelVariable(StateVariable),
+                    "z" => ModelVariable(StateVariable),
+                    "a" => ModelVariable(ParameterVariable; default=0.5))
+        fa() = _op("*", _idx("forcing", _i(2)), _v("a"))
+        model = ESM.Model(vars, [
+            ESM.Equation(_op("D", _v("y"); wrt="t"),
+                         _op("+", _op("sin", fa()), _op("cos", fa()))),
+            ESM.Equation(_op("D", _v("z"); wrt="t"), fa())])
+        buf = [3.0, 7.0, 11.0]
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
+            initial_conditions=Dict("y" => 0.0, "z" => 0.0),
+            param_arrays=Dict("forcing" => buf))
+        # The shared `forcing[2]*a` IS hoisted (3 occurrences) — without that this
+        # test would pass vacuously, so pin it.
+        @test diag.n_cse_slots >= 1
+        @test diag.n_cse_occurrences >= 3
+
+        a = 0.5
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        @test du[vm["y"]] === sin(7.0 * a) + cos(7.0 * a)
+        @test du[vm["z"]] === 7.0 * a
+        # In-place refresh of the SAME buffer object → the CACHED expression tracks it.
+        buf[2] = 42.0
+        f!(du, u0, p, 0.0)
+        @test du[vm["y"]] === sin(42.0 * a) + cos(42.0 * a)
+        @test du[vm["z"]] === 42.0 * a
+    end
+
     @testset "build-time guards" begin
         N = 3
         mk(body) = ESM.Model(Dict("u" => ModelVariable(StateVariable)),

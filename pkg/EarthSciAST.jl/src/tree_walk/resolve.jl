@@ -566,7 +566,11 @@ function _resolve_indices_op(expr::OpExpr,
         # literal. Bounds-check and column-major-linearize the constant indices at
         # build time, then carry the aliased flat buffer + the offset to `_compile`
         # (which emits a `_NK_PARAM_GATHER`) as a typed `_PGatherRef` in `value`.
-        # `index` is CSE-opaque, so the runtime payload is canonicalization-safe.
+        # The ref also carries the buffer's registry NAME, which is what gives the
+        # gather a canonicalizable CSE identity — `index` being CSE-opaque only stops
+        # the gather from being hoisted itself, it does NOT keep the ref out of
+        # `canonical_json`, which sees it as a child of every hoistable ancestor
+        # (ess-qic; see `_PGatherRef` / `_pgather_key_expr` in compile.jl).
         if first_arg isa VarExpr && haskey(pgather, first_arg.name)
             pg = pgather[first_arg.name]::_PGatherArray
             idx_args_expr = expr.args[2:end]
@@ -583,7 +587,8 @@ function _resolve_indices_op(expr::OpExpr,
                           "out of range [1, $(pg.dims[d])] on dim $(d)"))
             end
             lin = LinearIndices(Tuple(pg.dims))[int_indices...]
-            return OpExpr("index", ASTExpr[]; value=_PGatherRef(pg.flat, lin))
+            return OpExpr("index", ASTExpr[];
+                          value=_PGatherRef(pg.flat, lin, first_arg.name))
         end
         # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays):
         # inline the value as a NumExpr literal.
