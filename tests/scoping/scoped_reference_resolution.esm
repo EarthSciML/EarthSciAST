@@ -398,15 +398,15 @@
       "variables": {
         "carbon_pool": {
           "type": "state",
-          "units": "kg C/m^2",
+          "units": "kg/m^2",
           "default": 5.0,
-          "description": "Total carbon pool"
+          "description": "Total CARBON pool (kilograms of carbon per square metre). The species is named here, not in the unit string: esm-spec §4.8.1 — a unit string carries dimensions only, and 'kg C/m^2' would parse as kg*coulomb/m^2 under whitespace-as-multiplication."
         },
         "respiration_rate": {
           "type": "parameter",
-          "units": "kg C/m^2/s",
+          "units": "kg/m^2/s",
           "default": 1e-08,
-          "description": "Ecosystem respiration rate"
+          "description": "Ecosystem respiration rate, as CARBON mass flux (kilograms of carbon per square metre per second)."
         }
       },
       "equations": [
@@ -418,16 +418,11 @@
             ],
             "wrt": "t"
           },
+          "_comment": "d(carbon_pool)/dt = -respiration_rate. respiration_rate is an ecosystem respiration FLUX (kg of carbon per m^2 per second), so it is subtracted directly; multiplying it by carbon_pool as well (as this equation used to) double-counts the pool and yields kg^2/m^4/s against a kg/m^2/s LHS. The defect was invisible while the units read `kg C/m^2` — the species tag made the string unparseable, so every dimensional check on this model was silently skipped (esm-spec §4.8.1, §4.8.4).",
           "rhs": {
-            "op": "*",
+            "op": "-",
             "args": [
-              {
-                "op": "-",
-                "args": [
-                  "respiration_rate"
-                ]
-              },
-              "carbon_pool"
+              "respiration_rate"
             ]
           }
         },
@@ -452,9 +447,9 @@
             },
             "photosynthesis_rate": {
               "type": "parameter",
-              "units": "kg C/m^2/s",
+              "units": "kg/m^2/s",
               "default": 2e-08,
-              "description": "Photosynthesis rate"
+              "description": "Photosynthesis rate, as CARBON mass flux (kilograms of carbon per square metre per second)."
             }
           },
           "equations": []
@@ -471,8 +466,8 @@
       "variables": {
         "NO_emissions": {
           "file_variable": "NO_emissions",
-          "units": "kg N/m^2/s",
-          "description": "Nitrogen oxide emissions"
+          "units": "kg/m^2/s",
+          "description": "Nitrogen oxide emissions, as NITROGEN mass flux (kilograms of N per square metre per second). The species is named here, not in the unit string (esm-spec §4.8.1)."
         },
         "temperature_profile": {
           "file_variable": "temperature_profile",

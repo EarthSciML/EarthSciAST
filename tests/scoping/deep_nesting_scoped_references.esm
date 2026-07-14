@@ -266,9 +266,9 @@
               "variables": {
                 "bacterial_production": {
                   "type": "state",
-                  "units": "mg C/m^3/d",
+                  "units": "mg/m^3/day",
                   "default": 50.0,
-                  "description": "Bacterial production"
+                  "description": "Bacterial production, as CARBON mass flux (milligrams of carbon per cubic metre per day). The species is named here, not in the unit string: esm-spec §4.8.1 — a unit string carries dimensions only. `d` is not a registry symbol; the day is `day`."
                 }
               },
               "equations": [],
@@ -288,9 +288,9 @@
                       "variables": {
                         "denitrification_rate": {
                           "type": "parameter",
-                          "units": "umol/L/d",
+                          "units": "umol/L/day",
                           "default": 0.1,
-                          "description": "Denitrification rate"
+                          "description": "Denitrification rate (micromoles of NITRATE per litre per day). `d` is not a registry symbol; the day is `day` (esm-spec §4.8.1)."
                         }
                       },
                       "equations": [],
@@ -305,9 +305,9 @@
                             },
                             "enzyme_activity": {
                               "type": "state",
-                              "units": "U/mg",
+                              "units": "umol/(min*mg)",
                               "default": 0.5,
-                              "description": "Nitrate reductase activity"
+                              "description": "Nitrate reductase activity. The enzyme unit `U` is not a registry symbol; it is spelled out as its definition — one micromole of substrate turned over per minute, per milligram of protein (esm-spec §4.8.1)."
                             }
                           },
                           "equations": [

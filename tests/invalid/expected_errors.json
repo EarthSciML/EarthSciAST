@@ -1397,7 +1397,7 @@
     "structural_errors": [
       {
         "path": "/models/Atmosphere/subsystems/Missing",
-        "code": "ref_not_found",
+        "code": "unresolved_subsystem_ref",
         "message": "Subsystem reference './does_not_exist.esm' could not be resolved — file does not exist",
         "details": {
           "ref": "./does_not_exist.esm",
@@ -1413,7 +1413,7 @@
     "structural_errors": [
       {
         "path": "/models/ClimateModel/subsystems/Atm",
-        "code": "ref_ambiguous_system",
+        "code": "ambiguous_subsystem_ref",
         "message": "Subsystem reference '../scoping/nested_subsystems.esm' resolves to a file containing multiple top-level systems; exactly one is required",
         "details": {
           "ref": "../scoping/nested_subsystems.esm",

@@ -13,9 +13,9 @@
       "variables": {
         "asset_price": {
           "type": "state",
-          "units": "USD",
+          "units": "1",
           "default": 100.0,
-          "description": "Asset price"
+          "description": "Asset price, in US DOLLARS. A currency is not one of the eight dimension axes (esm-spec §4.8.1), so — exactly like a species tag — it is named here and the unit string is dimensionless."
         },
         "volatility": {
           "type": "state",

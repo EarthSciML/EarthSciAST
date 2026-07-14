@@ -362,9 +362,9 @@
               "variables": {
                 "gpp": {
                   "type": "state",
-                  "units": "kg C/m^2/s",
+                  "units": "kg/m^2/s",
                   "default": 1e-08,
-                  "description": "Gross primary productivity"
+                  "description": "Gross primary productivity, as CARBON mass flux (kilograms of carbon per square metre per second). The species is named here, not in the unit string: esm-spec §4.8.1 — a unit string carries dimensions only."
                 },
                 "quantum_efficiency": {
                   "type": "parameter",

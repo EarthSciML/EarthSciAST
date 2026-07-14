@@ -17,14 +17,14 @@
           "description": "Methane in ppbv (old unit convention)"
         },
         "OH": {
-          "units": "molec/cm3",
+          "units": "molec/cm^3",
           "default": 2000000.0,
           "description": "Hydroxyl radical"
         }
       },
       "parameters": {
         "k_CH4_OH": {
-          "units": "cm3/molec/s",
+          "units": "cm^3/molec/s",
           "default": 6.4e-15,
           "description": "CH4 + OH rate constant"
         }
