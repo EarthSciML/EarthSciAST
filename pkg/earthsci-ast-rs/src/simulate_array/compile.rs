@@ -7,6 +7,7 @@
 use super::*;
 use crate::aggregate::{effective_reduce_kind, is_aggregate_op, resolve_aggregate_ranges};
 use crate::flatten::FlattenedSystem;
+use crate::op_registry::OpError;
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use std::collections::HashSet;
@@ -98,50 +99,46 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
 }
 
 /// Rewrite-target spatial operators that MUST be lowered to stencils before
-/// reaching any binding's simulator (esm-spec §4.2 / §9.6.8). One list feeds
-/// both the compile-time reject walk ([`check_no_spatial_ops`]) and the
-/// runtime defense-in-depth backstop in `eval_op`.
-pub(super) const UNLOWERED_SPATIAL_OPS: [&str; 5] = ["grad", "div", "laplacian", "curl", "∇"];
+/// reaching any binding's simulator (esm-spec §4.2 / §9.6.8).
+///
+/// Re-exported from [`crate::op_registry`] so the compile-time gate and the
+/// runtime backstop in `eval_op` cannot drift apart from the registry that now
+/// defines the two operator tiers.
+pub(super) use crate::op_registry::REWRITE_TARGET_SUGAR as UNLOWERED_SPATIAL_OPS;
 
-/// Walk an expression and reject any spatial differential operator
-/// (`grad`/`div`/`laplacian`). Per the canonical pipeline contract, ESD
-/// discretization rules MUST rewrite these into `arrayop` AST before
-/// reaching any binding's simulator. Encountering one here means
-/// `discretize` was skipped or did not rewrite the node — silently
-/// substituting zeros (the previous behaviour) would mask the broken
-/// pipeline. (esm-i7b)
+/// Walk an expression and reject every operator node that may not reach an
+/// evaluator (esm-spec §4.2 / §9.6.8).
+///
+/// This is the crate's single compile-time operator gate. It used to check only
+/// for unlowered *spatial* ops — which meant a malformed-but-schema-valid node
+/// (`atan2` with one argument, `min` with one, a ragged `makearray`, a typo'd
+/// `"expp"`) sailed straight into the evaluators. There it either **panicked**
+/// on an out-of-bounds `args[1]`, or, more insidiously, was quietly assigned two
+/// *different* values by the per-cell oracle and the vectorized overlay
+/// depending on whether the enclosing body happened to vectorize.
+///
+/// Delegating to [`crate::op_registry`] closes all of that at once: past this
+/// gate, every surviving node is an evaluable-core op with a legal arity, so the
+/// evaluators only ever have to agree on nodes that are *legal* — and for those
+/// they agree by construction.
+///
+/// The walk uses `for_each_child`, so it descends into sidecar expression fields
+/// (`aggregate.expr`, `makearray.values`, `filter`, `key`, …), not just `args`.
+///
+/// # Errors
+///
+/// [`CompileError::UnloweredOperatorError`] for a rewrite-target op (sugar, a
+/// spatial `D`, a user op, or a misspelling); [`CompileError::InvalidOperatorArity`]
+/// for a core op with the wrong argument count;
+/// [`CompileError::MakearrayRegionInvalid`] for a ragged or inverted `makearray`.
 pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
-    match expr {
-        Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => Ok(()),
-        Expr::Operator(node) => {
-            // Reject unlowered rewrite-target ops (esm-spec §4.2 / §9.6.8). This
-            // walk sees both the equation LHS and RHS, so it must NOT reject the
-            // structural time derivative `D(_, t)` (evaluable-core); only a
-            // SPATIAL `D` (`wrt` != "t") is a rewrite-target.
-            let unlowered = match node.op.as_str() {
-                op if UNLOWERED_SPATIAL_OPS.contains(&op) => true,
-                "D" => node.wrt.as_deref().is_some_and(|w| w != "t"),
-                _ => false,
-            };
-            if unlowered {
-                return Err(CompileError::UnloweredOperatorError {
-                    op: node.op.clone(),
-                });
-            }
-            let mut first_err: Option<CompileError> = None;
-            node.for_each_child(&mut |child| {
-                if first_err.is_none()
-                    && let Err(e) = check_no_spatial_ops(child)
-                {
-                    first_err = Some(e);
-                }
-            });
-            match first_err {
-                Some(e) => Err(e),
-                None => Ok(()),
-            }
+    crate::op_registry::check_expr(expr).map_err(|e| match e {
+        OpError::Unlowered { op } => CompileError::UnloweredOperatorError { op },
+        OpError::Arity { op, got, expected } => {
+            CompileError::InvalidOperatorArity { op, got, expected }
         }
-    }
+        OpError::MakearrayRegion { reason } => CompileError::MakearrayRegionInvalid { reason },
+    })
 }
 
 // ============================================================================

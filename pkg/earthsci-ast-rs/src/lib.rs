@@ -58,6 +58,7 @@ pub mod join;
 pub mod lower_enums;
 pub mod lower_expression_templates;
 pub mod migration;
+pub mod op_registry;
 pub mod parse;
 pub mod provider;
 pub mod reactions;

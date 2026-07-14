@@ -543,21 +543,25 @@ pub(super) fn eval_vec_op<'a>(
         // whose body mixes arithmetic with a wind/slope `atan2` or an
         // `and(code>=1, code<=13)` fuel gate stay on the vectorized path.
         "+" | "-" | "*" | "/" | "^" | "min" | "max" | "atan2" | "and" | "or" => {
-            if node.op == "-" && node.args.len() == 1 {
-                return Some(vec_negate(
-                    eval_vec(&node.args[0], bx, ctx, pool, ops)?,
-                    pool,
-                ));
+            // `args[0]` was indexed with no emptiness guard, so an aggregate body
+            // containing e.g. `{"op":"+","args":[]}` PANICKED here while the
+            // oracle tolerated it — the two paths did not even agree on whether
+            // the node was evaluable. The registry now rejects every such node
+            // before evaluation; bailing to the oracle (`None`) keeps this path
+            // panic-free for the `eval_expression` bypass, which is not gated.
+            let (first, rest) = node.args.split_first()?;
+            if node.op == "-" && rest.is_empty() {
+                return Some(vec_negate(eval_vec(first, bx, ctx, pool, ops)?, pool));
             }
-            let mut acc = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
-            for a in &node.args[1..] {
+            let mut acc = eval_vec(first, bx, ctx, pool, ops)?;
+            for a in rest {
                 let v = eval_vec(a, bx, ctx, pool, ops)?;
                 acc = vec_combine(&node.op, acc, v, pool)?;
             }
             Some(acc)
         }
         "neg" => Some(vec_negate(
-            eval_vec(&node.args[0], bx, ctx, pool, ops)?,
+            eval_vec(node.args.first()?, bx, ctx, pool, ops)?,
             pool,
         )),
         "index" => eval_vec_index(node, bx, ctx, pool, ops),

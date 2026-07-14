@@ -934,8 +934,13 @@ fn test_error_grad_in_array_simulator_rejected() {
         "i".to_string(),
         earthsci_ast::types::RangeSpec::Interval([1i64, 2i64]),
     );
+    // NOTE: this used to carry the legacy `op: "arrayop"` spelling, which ESM
+    // v0.8.0 removed (`aggregate::is_aggregate_op` no longer accepts it). The op
+    // registry now rejects that dead name as an unlowered operator in its own
+    // right, which would shadow the `grad` this test is actually about — so use
+    // the current `aggregate` tag and keep asserting on the inner `grad`.
     let arrayop_body = Expr::Operator(ExpressionNode {
-        op: "arrayop".to_string(),
+        op: "aggregate".to_string(),
         args: vec![],
         expr: Some(Box::new(op("grad", vec![var("u")]))),
         output_idx: Some(vec!["i".to_string()]),

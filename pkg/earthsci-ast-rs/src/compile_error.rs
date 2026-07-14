@@ -66,6 +66,39 @@ pub enum CompileError {
         op: String,
     },
 
+    /// An evaluable-core operator (esm-spec §4.2) applied to the wrong number
+    /// of arguments — e.g. `atan2` with one argument, or `min` with fewer than
+    /// two. The schema cannot express per-operator arity (`args` is
+    /// `minItems: 0`), so this is the gate that keeps a malformed-but-
+    /// schema-valid node out of the evaluators, where it would otherwise either
+    /// panic on an out-of-bounds index or — worse — be silently assigned two
+    /// different values by the per-cell oracle and the vectorized overlay.
+    /// See [`crate::op_registry`].
+    #[error(
+        "invalid_operator_arity: operator '{op}' takes {expected} argument(s), got {got} \
+         (esm-spec §4.2)"
+    )]
+    InvalidOperatorArity {
+        /// The offending operator name (e.g. `"atan2"`).
+        op: String,
+        /// How many arguments the node actually carried.
+        got: usize,
+        /// What the spec says the operator takes (e.g. `"exactly 2"`).
+        expected: String,
+    },
+
+    /// A `makearray` node whose `regions` are malformed: either the regions
+    /// disagree on rank (a ragged `regions` list), or a bound pair is inverted
+    /// beyond the legal empty spelling. Per esm-spec §4.3.2 a pair with
+    /// `stop == start - 1` is the canonical **empty** region and is legal;
+    /// anything further inverted (`stop < start - 1`) is rejected with
+    /// `makearray_region_inverted`.
+    #[error("makearray_region_inverted: {reason} (esm-spec §4.3.2)")]
+    MakearrayRegionInvalid {
+        /// What is wrong with the regions.
+        reason: String,
+    },
+
     /// The convenience constructors flattened the input first; that step
     /// failed.
     #[error("Flatten failed: {0}")]
