@@ -745,6 +745,30 @@ The check is **unknowns vs equations**, not *state variables vs time-derivative 
 - For `system_kind: "nonlinear"` (algebraic equilibrium — no time derivative at all) and for the algebraic block of a DAE, the balance is between the **unknowns** (the `state` variables) and the **equations**, of any form. `tests/valid/nonlinear_isorropia_shape.esm` declares two states (`H`, `SO4`) and two algebraic equations (`H ~ …` and `H*H*SO4 ~ Ksp`) and is BALANCED; a checker that reports "1 ODE equation, 2 state variables" has miscounted, not found a defect.
 - `initialization_equations` (§6.2) are a *separate* block with a separate balance and MUST NOT be counted into the main one.
 
+#### 4.9.5 Reference integrity applies to EVERY expression-bearing field
+
+A checker MUST resolve the free symbols of **every** Expression in the document, wherever it appears — not only the ones in `equations`. This is pinned because it was false in every binding: the reference-integrity walkers descended `models[*].equations` (and reaction `rate`) and **nothing else**, so an undefined name anywhere else in the document was invisible to all five. Thirteen fields carry an Expression; eleven of them were unchecked.
+
+| Expression-bearing field | JSON Pointer of the defect | Code |
+|---|---|---|
+| `models[M].equations[i].{lhs,rhs}` | …`/equations/i/rhs` | `undefined_variable` |
+| `models[M].variables[v].expression` (observed) | …`/variables/v/expression` | `undefined_variable` |
+| `models[M].guesses[v]` | …`/guesses/v` | `undefined_variable` |
+| `models[M].initialization_equations[i].{lhs,rhs}` | …`/initialization_equations/i/rhs` | `undefined_variable` |
+| `models[M].continuous_events[i].conditions[j]` | …`/continuous_events/i/conditions/j` | `undefined_variable` |
+| `models[M].continuous_events[i].{affects,affect_neg}[j].rhs` | …`/affects/j/rhs` | `undefined_variable` |
+| `models[M].discrete_events[i].trigger.expression` | …`/discrete_events/i/trigger/expression` | `undefined_variable` |
+| `models[M].discrete_events[i].affects[j].rhs` | …`/discrete_events/i/affects/j/rhs` | `undefined_variable` |
+| `models[M].tests[i].assertions[j].reference` | …`/tests/i/assertions/j/reference` | `undefined_variable` |
+| `reaction_systems[S].reactions[i].rate` | …`/reactions/i/rate` | `undefined_parameter` |
+| `data_loaders[L].variables[v].unit_conversion` | …`/variables/v/unit_conversion` | `undefined_variable` |
+| `coupling[i].connector.equations[j].expression` | …`/connector/equations/j/expression` | `unresolved_scoped_ref` |
+| `coupling[i].transform` (Expression form) | `/coupling/i/transform` | `unresolved_scoped_ref` |
+
+**And within an Expression, the walk MUST descend every child field, not just `args`.** An `ExpressionNode` carries eight further Expression-valued children: `expr`, `filter`, `key` (aggregate), `lower`, `upper` (integral bounds), `values` (makearray), `axes` (table_lookup) and `bindings` (apply_expression_template). A hand-rolled walker that recurses `args` alone misses an undefined name in any of them *even inside an equation*. (`ranges`, `regions` and `join` carry load-time metaparameter/index expressions rather than runtime variable references, and are a separate concern — §9.7.6.)
+
+The rule is one sentence — *resolve the free symbols of every Expression* — and the way to satisfy it is one shared traversal (a `mapChildren`/`forEachChild` combinator over the node's Expression-valued fields), used by every pass. Every binding that hand-rolled a per-pass walker grew this hole, and grew it in a different place. `tests/invalid/undefined_variable_in_*.esm` and `tests/invalid/unresolved_scoped_ref_in_*.esm` pin one fixture per field, container and sidecar alike.
+
 ## 5. Events
 
 Events enable changes to system state or parameters when certain conditions are met, or detection of discontinuities during simulation. This section is designed to be compatible with ModelingToolkit.jl's `SymbolicContinuousCallback` and `SymbolicDiscreteCallback` semantics, while remaining language-agnostic.

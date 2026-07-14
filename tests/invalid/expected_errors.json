@@ -2427,5 +2427,159 @@
     ],
     "is_valid": false,
     "notes": "POLICY REVERSAL. This fixture used to live in tests/valid pinning the OPPOSITE contract (\"an unparseable unit is a warning; is_valid stays true\"). The units severity contract is now: a PROVABLE dimensional mismatch is a hard error; an unresolvable/unreal unit string is a hard error (`unit_parse_error`); only a GENUINELY UNDETERMINABLE dimension (symbolic exponent, an op with no dimensional rule) is a warning, reported as \"unknown\" and skipped — never assumed dimensionless. See esm-spec §4.8. Bindings whose unit registry is incomplete must extend the registry, not downgrade the severity: TypeScript currently reports this as an `analysis` warning and accepts the file (quarantined in conformance.test.ts)."
+  },
+  "undefined_variable_in_observed_expression.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/variables/z/expression",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in observed variable expression but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_guesses.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/guesses/y",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in guesses expression but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_initialization_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/initialization_equations/0/rhs",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in initialization equation but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_continuous_event_condition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/continuous_events/0/conditions/0",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in continuous event condition but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_continuous_event_affect.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/continuous_events/0/affects/0/rhs",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in continuous event affect RHS but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_discrete_event_trigger.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/discrete_events/0/trigger/expression",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in discrete event trigger expression but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_discrete_event_affect.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/discrete_events/0/affects/0/rhs",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in discrete event affect RHS but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_assertion_reference.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0/reference",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_unit_conversion.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/data_loaders/L/variables/v/unit_conversion",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in unit_conversion expression but not declared",
+        "details": {
+          "variable_name": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unresolved_scoped_ref_in_connector_expression.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/coupling/0/connector/equations/0/expression",
+        "code": "unresolved_scoped_ref",
+        "message": "Variable \"TestModel.undefined_xyz\" referenced in connector equation expression does not resolve",
+        "details": {
+          "variable_name": "TestModel.undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unresolved_scoped_ref_in_variable_map_transform.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/coupling/0/transform",
+        "code": "unresolved_scoped_ref",
+        "message": "Variable \"TestModel.undefined_xyz\" referenced in variable_map Expression transform does not resolve",
+        "details": {
+          "variable_name": "TestModel.undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
   }
 }
