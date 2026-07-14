@@ -320,8 +320,10 @@ func buildUnitRegistry() map[string]Unit {
 	r["h"] = Unit{Dim: r["s"].Dim, Scale: 3600}
 	r["hr"] = Unit{Dim: r["s"].Dim, Scale: 3600}
 	r["hour"] = r["h"]
+	// The day is spelled "day". The one-letter "d" is DELIBERATELY NOT a unit
+	// (§4.8.1): it reads as a deci- prefix or as a differential, and a binding
+	// that accepts it diverges permissively from the spec registry.
 	r["day"] = Unit{Dim: r["s"].Dim, Scale: 86400}
-	r["d"] = r["day"] // the shipped stdlib declares a day as "d" (lib/calendar.esm)
 	r["yr"] = Unit{Dim: r["s"].Dim, Scale: 365.25 * 86400}
 	r["year"] = r["yr"]
 

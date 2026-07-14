@@ -1523,6 +1523,26 @@ func TestUnitsV2_TrigReturnsAnAngle(t *testing.T) {
 	if _, err := PropagateDimension(ExprNode{Op: "sin", Args: []any{"mass"}}, env); err == nil {
 		t.Error("sin(kg) must still be rejected")
 	}
+
+	// The STRICT dimensionless-argument set is exactly these ten — no more (an
+	// angle argument is legal for sin/cos/tan) and no fewer (sqrt is not a
+	// transcendental at all; it halves). Each takes a pure number and returns a
+	// pure number, and each rejects a dimensioned argument.
+	for _, op := range []string{
+		"ln", "log", "log10", "exp",
+		"sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+	} {
+		u, err := PropagateDimension(ExprNode{Op: op, Args: []any{"ratio"}}, env)
+		if err != nil || u == nil || !u.Dim.IsDimensionless() {
+			t.Errorf("%s(pure number) must be dimensionless: %v (err %v)", op, u, err)
+		}
+		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"theta"}}, env); err == nil {
+			t.Errorf("%s takes a DIMENSIONLESS argument — an angle must be rejected", op)
+		}
+		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"mass"}}, env); err == nil {
+			t.Errorf("%s(kg) must be rejected", op)
+		}
+	}
 	// The zenith-angle shape from lib/solar.esm: acos of a clamped cosine,
 	// declared in radians, must type-check.
 	zenith := ExprNode{Op: "acos", Args: []any{
@@ -1556,13 +1576,96 @@ func TestUnitsV2_SuperscriptDigitsAreNotAContiguousRange(t *testing.T) {
 			t.Errorf("ParseUnit(%q).Dim = %s, want %s", "m"+sup, got.Dim, want.Dim)
 		}
 	}
-	// The day symbol "d" (lib/calendar.esm declares `units: "d"`).
-	day, err := ParseUnit("d")
-	if err != nil {
-		t.Fatalf("ParseUnit(%q) must resolve — the stdlib declares a day as \"d\": %v", "d", err)
+	// The day is spelled "day" — and ONLY "day". The one-letter "d" is
+	// deliberately NOT in the §4.8.1 registry (it reads as a deci- prefix or as a
+	// differential), so accepting it is a permissive divergence from the spec.
+	if _, err := ParseUnit("day"); err != nil {
+		t.Errorf("ParseUnit(%q) must resolve: %v", "day", err)
 	}
-	full, _ := ParseUnit("day")
-	if !day.Dim.Equal(full.Dim) || day.Scale != full.Scale {
-		t.Errorf("\"d\" must be the day: got dim %s scale %v", day.Dim, day.Scale)
+	if _, err := ParseUnit("d"); err == nil {
+		t.Error(`ParseUnit("d") must FAIL — the day is spelled "day"; a one-letter "d" is ` +
+			`excluded from the §4.8.1 registry on purpose`)
+	}
+}
+
+// --- (g) a construct's BOUND INDEX is in scope inside its body --------------
+
+// `aggregate`, `makearray`, `index`, `integral` and the geometry constructs BIND
+// loop indices (`i`, `j`, `e`, `g`, `p`, …). A bound index is a loop position,
+// not a declared variable, and must never be reported as `undefined_variable`
+// inside the construct that binds it — Rust measured this as 45 of its 68
+// remaining valid-corpus rejections.
+//
+// The scope is exactly the binding construct's body (and nested bodies): a name
+// that NO enclosing construct binds is still undefined. This is a real scope
+// walk (boundIndexSymbols + equationBoundSymbols), not a single-letter
+// allowlist, and this test pins both halves.
+func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
+	// An aggregate binds `i` on the LHS and uses it on the RHS (the array-form
+	// IR routinely binds on one side and reads on the other), and a nested
+	// makearray/aggregate binds `j` in its own body.
+	src := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"bound-indices","authors":["t"]},
+	  "index_sets":{"cells":{"kind":"interval","size":3}},
+	  "models":{"M":{
+	    "variables":{
+	      "u":{"type":"state","units":"1","shape":["cells"],"default":0.0},
+	      "k":{"type":"parameter","units":"1/s","default":0.1}},
+	    "equations":[{
+	      "lhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	             "expr":{"op":"D","args":[{"op":"index","args":["u","i"]}],"wrt":"t"},
+	             "ranges":{"i":[1,3]}},
+	      "rhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	             "ranges":{"i":[1,3]},
+	             "expr":{"op":"*","args":[
+	               {"op":"-","args":["k"]},
+	               {"op":"index","args":["u","i"]}]}}}]}}}`
+	result := validateSrc(t, src)
+	if hasCode(result, ErrorUndefinedVariable) {
+		t.Errorf("a loop index BOUND by an aggregate is in scope in its body and must never be "+
+			"undefined_variable: %+v", result.StructuralErrors)
+	}
+	if !result.IsValid {
+		t.Errorf("document must be valid: %+v", result.StructuralErrors)
+	}
+
+	// The binder scope is REAL, not a single-letter allowlist: a name that no
+	// enclosing construct binds is still undefined — even a one-letter one, and
+	// even deep inside an aggregate body.
+	unbound := strings.Replace(src,
+		`{"op":"index","args":["u","i"]}]}}}]}}}`,
+		`{"op":"index","args":["u","i"]},"q"]}}}]}}}`, 1)
+	bad := validateSrc(t, unbound)
+	if !hasCode(bad, ErrorUndefinedVariable) {
+		t.Errorf("`q` is bound by NOTHING — it must still be undefined_variable inside an aggregate "+
+			"body (the binder scope is a walk, not an allowlist): %+v", bad.StructuralErrors)
+	}
+
+	// A bound index does NOT leak to a construct that does not bind it: `i` is
+	// bound by equation 0's aggregate, and naming it in equation 1 — which binds
+	// nothing — is still an undefined variable. (Binders are unioned across the
+	// two SIDES of one equation, because the array-form IR binds on the LHS and
+	// reads on the RHS; the equation is the scope unit.)
+	leaked := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"index-does-not-leak","authors":["t"]},
+	  "index_sets":{"cells":{"kind":"interval","size":3}},
+	  "models":{"M":{
+	    "variables":{
+	      "u":{"type":"state","units":"1","shape":["cells"],"default":0.0},
+	      "w":{"type":"state","units":"1","default":0.0}},
+	    "equations":[
+	      {"lhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	              "expr":{"op":"D","args":[{"op":"index","args":["u","i"]}],"wrt":"t"},
+	              "ranges":{"i":[1,3]}},
+	       "rhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	              "ranges":{"i":[1,3]},"expr":0}},
+	      {"lhs":{"op":"D","args":["w"],"wrt":"t"},"rhs":"i"}
+	    ]}}}`
+	leakResult := validateSrc(t, leaked)
+	if !hasCode(leakResult, ErrorUndefinedVariable) {
+		t.Errorf("`i` is bound by the aggregate in equation 0 only; naming it in equation 1 — which "+
+			"binds nothing — must still be undefined_variable: %+v", leakResult.StructuralErrors)
 	}
 }
