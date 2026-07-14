@@ -396,7 +396,7 @@
             "from": "ConflictingNamesSystem.temperature",
             "to": "AlgebraicSystem.y",
             "transform": "replacement",
-            "expression": "temperature"
+            "expression": "ConflictingNamesSystem.temperature"
           },
           {
             "from": "AlgebraicSystem.y",
@@ -406,7 +406,7 @@
               "op": "*",
               "args": [
                 0.01,
-                "y"
+                "AlgebraicSystem.y"
               ]
             }
           }

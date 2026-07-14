@@ -2436,7 +2436,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in observed variable expression but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2450,7 +2450,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in guesses expression but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2464,7 +2464,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in initialization equation but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2478,7 +2478,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in continuous event condition but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2492,7 +2492,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in continuous event affect RHS but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2506,7 +2506,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in discrete event trigger expression but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2520,7 +2520,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in discrete event affect RHS but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2534,7 +2534,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2548,7 +2548,7 @@
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in unit_conversion expression but not declared",
         "details": {
-          "variable_name": "undefined_xyz"
+          "variable": "undefined_xyz"
         }
       }
     ],
@@ -2562,7 +2562,7 @@
         "code": "unresolved_scoped_ref",
         "message": "Variable \"TestModel.undefined_xyz\" referenced in connector equation expression does not resolve",
         "details": {
-          "variable_name": "TestModel.undefined_xyz"
+          "variable": "TestModel.undefined_xyz"
         }
       }
     ],
@@ -2576,7 +2576,7 @@
         "code": "unresolved_scoped_ref",
         "message": "Variable \"TestModel.undefined_xyz\" referenced in variable_map Expression transform does not resolve",
         "details": {
-          "variable_name": "TestModel.undefined_xyz"
+          "variable": "TestModel.undefined_xyz"
         }
       }
     ],

@@ -2,7 +2,7 @@
   "esm": "0.7.0",
   "metadata": {
     "name": "discrete_materialize_contraction",
-    "description": "Cross-language conformance fixture for DISCRETE-CADENCE MATERIALIZATION (the middle cadence phase; CONFORMANCE_SPEC.md §5.13). Model M mixes a CONST weight matrix `W` (an in-file const observed) with a DISCRETE forcing field `src` (a bare, undeclared forcing name delivered through each binding's forcing/loader/param buffer) inside a conservative-regrid-shaped CONTRACTION `g[j] = sum_i W[i,j]*src[i]`: state-free but forcing-tainted, so it changes ONLY when `src` is refreshed at a cadence boundary — a DISCRETE field a materializing binding caches once per refresh and gathers into the hot RHS. A sibling contraction `k[j] = sum_i W[i,j]*offset` reads only const/parameter data (W, the scalar parameter `offset`): state-free AND forcing-free, so it is CONST-cadence and stays on the build-once/inline path (the regression guard against an over-broad discrete cut). The per-cell ODE `D(c[j]) = g[j] + k[j]` couples both into the continuous state. The forcing is piecewise-constant across the cadence segments, so the segmented trajectory is analytic and exact. Strictly offline (no providers, no network): each binding's adapter drives the segments, writing `src` from the golden's `forcing.by_anchor` snapshots at the golden's `refresh_times`. Dense index ranges (no `index_sets`) so the array-simulate compilers consume it directly."
+    "description": "Cross-language conformance fixture for DISCRETE-CADENCE MATERIALIZATION (the middle cadence phase; CONFORMANCE_SPEC.md \u00a75.13). Model M mixes a CONST weight matrix `W` (an in-file const observed) with a DISCRETE forcing field `src` (declared `type: \"discrete\"`, delivered through each binding's forcing/loader/param buffer) inside a conservative-regrid-shaped CONTRACTION `g[j] = sum_i W[i,j]*src[i]`: state-free but forcing-tainted, so it changes ONLY when `src` is refreshed at a cadence boundary \u2014 a DISCRETE field a materializing binding caches once per refresh and gathers into the hot RHS. A sibling contraction `k[j] = sum_i W[i,j]*offset` reads only const/parameter data (W, the scalar parameter `offset`): state-free AND forcing-free, so it is CONST-cadence and stays on the build-once/inline path (the regression guard against an over-broad discrete cut). The per-cell ODE `D(c[j]) = g[j] + k[j]` couples both into the continuous state. The forcing is piecewise-constant across the cadence segments, so the segmented trajectory is analytic and exact. Strictly offline (no providers, no network): each binding's adapter drives the segments, writing `src` from the golden's `forcing.by_anchor` snapshots at the golden's `refresh_times`. Dense index ranges (no `index_sets`) so the array-simulate compilers consume it directly."
   },
   "models": {
     "M": {
@@ -16,33 +16,80 @@
         "W": {
           "type": "observed",
           "units": "1",
-          "shape": ["i", "j"],
+          "shape": [
+            "i",
+            "j"
+          ],
           "description": "Const weight matrix W[i,j] (i=1..2, j=1..3): the build-once mixing weights of the contraction. W = [[1,2,3],[4,5,6]].",
           "expression": {
             "op": "const",
             "args": [],
             "value": [
-              [1.0, 2.0, 3.0],
-              [4.0, 5.0, 6.0]
+              [
+                1.0,
+                2.0,
+                3.0
+              ],
+              [
+                4.0,
+                5.0,
+                6.0
+              ]
             ]
           }
+        },
+        "src": {
+          "type": "discrete",
+          "units": "1",
+          "shape": [
+            "i"
+          ],
+          "description": "DISCRETE forcing field src[i] (i=1..2), refreshed at each cadence boundary by the adapter from the golden's forcing.by_anchor snapshots. Declared `discrete` -- the established spelling for a loader/forcing-fed variable (CONFORMANCE_SPEC 5.10.1) -- rather than left as a BARE UNDECLARED name: an undeclared forcing name is indistinguishable from a typo, which is the exact false-negative class esm-spec 4.9.5 closes. Declaring it changes no cadence semantics: src remains the forcing that taints g to DISCRETE while k stays CONST."
         },
         "g": {
           "type": "observed",
           "units": "1",
-          "shape": ["j"],
-          "description": "DISCRETE-materialized contraction g[j] = sum_i W[i,j]*src[i]. Mixes const W with the DISCRETE forcing src, so it is state-free but forcing-tainted — a discrete cache refreshed once per cadence boundary.",
+          "shape": [
+            "j"
+          ],
+          "description": "DISCRETE-materialized contraction g[j] = sum_i W[i,j]*src[i]. Mixes const W with the DISCRETE forcing src, so it is state-free but forcing-tainted \u2014 a discrete cache refreshed once per cadence boundary.",
           "expression": {
             "op": "aggregate",
-            "output_idx": ["j"],
-            "args": ["W"],
-            "ranges": { "j": [1, 3], "i": [1, 2] },
+            "output_idx": [
+              "j"
+            ],
+            "args": [
+              "W"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ],
+              "i": [
+                1,
+                2
+              ]
+            },
             "reduce": "+",
             "expr": {
               "op": "*",
               "args": [
-                { "op": "index", "args": ["W", "i", "j"] },
-                { "op": "index", "args": ["src", "i"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "W",
+                    "i",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "src",
+                    "i"
+                  ]
+                }
               ]
             }
           }
@@ -50,18 +97,40 @@
         "k": {
           "type": "observed",
           "units": "1",
-          "shape": ["j"],
-          "description": "CONST-cadence sibling contraction k[j] = sum_i W[i,j]*offset. Reads only const W and the scalar parameter offset — forcing-free, so it stays on the build-once/inline path and MUST NOT become a per-refresh discrete cache. k = [5,7,9].",
+          "shape": [
+            "j"
+          ],
+          "description": "CONST-cadence sibling contraction k[j] = sum_i W[i,j]*offset. Reads only const W and the scalar parameter offset \u2014 forcing-free, so it stays on the build-once/inline path and MUST NOT become a per-refresh discrete cache. k = [5,7,9].",
           "expression": {
             "op": "aggregate",
-            "output_idx": ["j"],
-            "args": ["W"],
-            "ranges": { "j": [1, 3], "i": [1, 2] },
+            "output_idx": [
+              "j"
+            ],
+            "args": [
+              "W"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ],
+              "i": [
+                1,
+                2
+              ]
+            },
             "reduce": "+",
             "expr": {
               "op": "*",
               "args": [
-                { "op": "index", "args": ["W", "i", "j"] },
+                {
+                  "op": "index",
+                  "args": [
+                    "W",
+                    "i",
+                    "j"
+                  ]
+                },
                 "offset"
               ]
             }
@@ -69,7 +138,9 @@
         },
         "c": {
           "type": "state",
-          "shape": ["j"],
+          "shape": [
+            "j"
+          ],
           "default": 0.0,
           "description": "Per-cell tracer accumulating the coupled rate. D(c[j]) = g[j] + k[j]; with the forcing frozen per segment the rate is segment-constant and c accumulates piecewise-linearly."
         }
@@ -79,20 +150,58 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "ranges": { "j": [1, 3] },
-            "expr": { "op": "D", "args": [ { "op": "index", "args": ["c", "j"] } ], "wrt": "t" }
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "ranges": { "j": [1, 3] },
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
             "expr": {
               "op": "+",
               "args": [
-                { "op": "index", "args": ["g", "j"] },
-                { "op": "index", "args": ["k", "j"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "g",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "k",
+                    "j"
+                  ]
+                }
               ]
             }
           }
