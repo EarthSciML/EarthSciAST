@@ -191,6 +191,43 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
       )
     }
 
+    // LAZY OPS — evaluated BEFORE the eager `args.map` below.
+    //
+    // `ifelse`, `and` and `or` short-circuit: an operand that the semantics say
+    // is not reached must not be evaluated. Running them eagerly breaks the
+    // canonical guard idiom, because the *untaken* branch's domain error still
+    // propagates:
+    //
+    //     ifelse(x > 0, log(x), 0)   at x = -1   ->  threw "log argument must be positive"
+    //     ifelse(x != 0, 1/x, 0)     at x = 0    ->  threw "Division by zero"
+    //     or(1, <unbound>)                       ->  threw "Unbound variable"
+    //
+    // all of which must instead yield the guarded value. (Julia's `_eval_node_op`
+    // is lazy for exactly these three.)
+    const truthy = (v: number): boolean => v !== 0
+    if (node.op === 'ifelse') {
+      checkArity(node.op, node.args.length)
+      return truthy(evalExprNode(node.args[0], bindings))
+        ? evalExprNode(node.args[1], bindings)
+        : evalExprNode(node.args[2], bindings)
+    }
+    if (node.op === 'and') {
+      checkArity(node.op, node.args.length)
+      // Short-circuit on the first falsy operand.
+      for (const arg of node.args) {
+        if (!truthy(evalExprNode(arg, bindings))) return 0
+      }
+      return 1
+    }
+    if (node.op === 'or') {
+      checkArity(node.op, node.args.length)
+      // Short-circuit on the first truthy operand.
+      for (const arg of node.args) {
+        if (truthy(evalExprNode(arg, bindings))) return 1
+      }
+      return 0
+    }
+
     // Scalar operators dispatch through the central op registry: arity
     // bounds and the evaluator body live in ONE table (op-registry.ts), so
     // adding an operator is a single registry entry.
