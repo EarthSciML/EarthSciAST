@@ -1558,6 +1558,16 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # run before the closure captures them. A model with no array kernels is untouched.
     inv_diag = _share_lane_invariants!(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
 
+    # ---- Cadence tiers of the (now final) prelude (4qf, const_tier.jl) ----
+    # Runs AFTER the sharing pass, because that pass APPENDS prelude defs — a
+    # lane-invariant kernel subtree hoisted into the scalar prelude is a const-cadence
+    # candidate exactly like any other def. A slot is CONST iff its def touches no
+    # state / time / live forcing buffer AND every cache ref in it lands on a slot that
+    # is itself CONST (that second clause is the trap: an `_NK_CACHED` node carries no
+    # leaf of its own, so a leaf scan alone would call a def const while it reads a
+    # dynamic slot). `f!` then refills the const slots only when `p` has moved.
+    const_slots, dyn_slots = _classify_const_slots(scalar_prelude, scalar_cache)
+
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
@@ -1566,7 +1576,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # exist): `:inplace` is the zero-alloc Float64 production RHS; `:oop` is the
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
-        _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
+        _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels,
+                  const_slots, dyn_slots)
     elseif form === :oop
         _make_rhs_oop(rhs_list, scalar_prelude, vec_kernels, n_states)
     else
@@ -1590,6 +1601,12 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     #   n_invariant_scalar_shared — occurrences in SCALAR equations rewritten onto one of
     #                              those slots (the kernel→scalar direction, which the
     #                              AST-level count pass structurally cannot see)
+    #
+    # `n_const_slots` / `n_dynamic_slots` partition the FINAL prelude by cadence (4qf):
+    # they sum to `n_cse_slots + n_invariant_slots`. `n_const_slots` is the number of
+    # slots `f!` skips on a call whose `p` has not moved. (Reported for an `:oop` build
+    # too — the classification is a property of the prelude, not of the emitter — but
+    # only `:inplace` acts on it; see `_make_rhs_oop`.)
     diag = (; n_vec_kernels = length(vec_kernels),
               n_scalar_entries = length(rhs_list),
               template_node_count =
@@ -1598,7 +1615,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               n_cse_occurrences = cse_diag.n_occurrences,
               n_invariant_slots = inv_diag.n_invariant_slots,
               n_invariant_shared = inv_diag.n_invariant_shared,
-              n_invariant_scalar_shared = inv_diag.n_invariant_scalar_shared)
+              n_invariant_scalar_shared = inv_diag.n_invariant_scalar_shared,
+              n_const_slots = length(const_slots),
+              n_dynamic_slots = length(dyn_slots))
 
     return f!, u0, p, tspan_default, var_map, diag
 end

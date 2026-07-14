@@ -18,6 +18,7 @@
 
 using Test
 using EarthSciAST
+using ForwardDiff
 import OrdinaryDiffEqTsit5
 const ESM = EarthSciAST
 
@@ -772,5 +773,344 @@ end
         @test du[vm["x"]] === sin(g1n * k) + cos(g1n * k)
         @test du[vm["y"]] === g1n * k
         @test du[vm["z"]] === sin(h1n * k) + cos(h1n * k)
+    end
+end
+
+# ================================================================
+# The CONST-CADENCE tier of the prelude (4qf; audit finding #5).
+#
+# The prelude used to refill EVERY slot on EVERY call. Many slots are pure parameter
+# algebra — an Arrhenius factor `A*exp(-Ea/(R*Tref))`, all four leaves parameters —
+# and `p` does not move between the stages of a step. `f!` now refills the CONST slots
+# only when `p` has changed (`_classify_const_slots` / `_cse_const_stale`).
+#
+# THE FAILURE MODE THESE TESTS EXIST FOR IS SILENT. A const tier that freezes too much
+# passes every Float64 test that never changes `p` and then returns WRONG DERIVATIVES.
+# So the load-bearing assertions here are the AD ones, and they assert VALUES (against
+# finite differences, and against zero) — not just the slot classification.
+# ================================================================
+
+# `f!` with a `du` of whatever value type the call induces (`Dual` under AD).
+_ct_call(f!, u, p, t, ::Type{T}=Float64) where {T} =
+    (d = zeros(T, length(u)); f!(d, u, p, t); d)
+
+# The model's `p` with every value lifted to a 1-partial `Dual` — the shape ForwardDiff
+# hands `f!` when differentiating w.r.t. the PARAMETERS.
+_ct_dualp(p) = NamedTuple{keys(p)}(map(v -> ForwardDiff.Dual{Nothing}(v, 1.0), values(p)))
+
+# The audit's probe model. `k = A*exp(-Ea/(R*Tref))` — every leaf a PARAMETER — shared
+# across two equations, so CSE names the whole chain (neg · * · / · exp · *) and all
+# five slots are const-cadence.
+#   D(x) = k*x ;  D(y) = (-k)*y
+_ct_arrhenius() = ESM.Model(
+    Dict{String,ModelVariable}(
+        "x"    => ModelVariable(StateVariable; default=1.5),
+        "y"    => ModelVariable(StateVariable; default=2.5),
+        "A"    => ModelVariable(ParameterVariable; default=3.2e5),
+        "Ea"   => ModelVariable(ParameterVariable; default=5.0e4),
+        "R"    => ModelVariable(ParameterVariable; default=8.314),
+        "Tref" => ModelVariable(ParameterVariable; default=300.0),
+    ),
+    begin
+        arr() = _cse_op("*", _cse_v("A"),
+                    _cse_op("exp", _cse_op("/", _cse_op("neg", _cse_v("Ea")),
+                                _cse_op("*", _cse_v("R"), _cse_v("Tref")))))
+        ESM.Equation[
+            ESM.Equation(_cse_D("x"), _cse_op("*", arr(), _cse_v("x"))),
+            ESM.Equation(_cse_D("y"), _cse_op("*", _cse_op("neg", arr()), _cse_v("y"))),
+        ]
+    end)
+
+_ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
+
+@testset "tree_walk CSE const-cadence tier (4qf)" begin
+
+    # ----------------------------------------------------------------
+    # (5) The probe. The audit measured "5 of 5 prelude slots state-free AND
+    # time-free" and the prelude re-evaluated all five — including the `exp` — on
+    # every stage of every step. All five are now CONST, and the numbers are
+    # BIT-IDENTICAL to the untiered evaluator.
+    # ----------------------------------------------------------------
+    @testset "the Arrhenius probe: 5/5 prelude slots are const-cadence" begin
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_ct_arrhenius())
+
+        @test diag.n_cse_slots == 5              # neg · * · / · exp · *
+        @test diag.n_const_slots == 5
+        @test diag.n_dynamic_slots == 0
+        # The two counters partition the FINAL prelude (CSE slots + invariant slots).
+        @test diag.n_const_slots + diag.n_dynamic_slots ==
+              diag.n_cse_slots + diag.n_invariant_slots
+
+        # Bit-exact — `===`, not `≈`. Skipping the const refill must not perturb a
+        # single bit of the arithmetic the untiered prelude did.
+        k = _ct_k(p)
+        du = _ct_call(f!, u0, p, 0.0)
+        @test du[vm["x"]] === k * u0[vm["x"]]
+        @test du[vm["y"]] === -k * u0[vm["y"]]
+
+        # ...and it stays bit-exact on the SECOND call, the one that actually takes
+        # the skip. (A first call fills the const slots; a stale-but-plausible tier
+        # would show up here, not above.)
+        du2 = _ct_call(f!, u0, p, 0.0)
+        @test du2 == du
+    end
+
+    # ----------------------------------------------------------------
+    # (1) THE TEST THAT MATTERS. ForwardDiff over the PARAMETERS, where the RHS
+    # depends on `A`/`Ea`/`R`/`Tref` ONLY through const-tier slots. Hoisting those
+    # slots to build time — or keying their validity on `==` instead of `===` —
+    # returns a ZERO (or stale-seed) derivative that still looks plausible.
+    #
+    # Chunk{1} is deliberate: it makes ForwardDiff call `f!` FOUR times, once per
+    # parameter, with four DIFFERENT `Dual` NamedTuples that have the SAME values and
+    # different PARTIALS. ForwardDiff's `==` on `Dual` compares values only — so a
+    # validity stamp keyed on `==` would call chunks 2..4 "unchanged", reuse chunk 1's
+    # seed, and silently return the wrong gradient. `===` (egal) sees the partials.
+    # ----------------------------------------------------------------
+    @testset "ForwardDiff over PARAMETERS through a const-tier slot" begin
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        @test diag.n_const_slots == 5
+
+        syms = keys(p)
+        pv = collect(values(p))
+        mk(v) = NamedTuple{syms}(Tuple(v))
+        gfun = v -> sum(_ct_call(f!, u0, mk(v), 0.0, eltype(v)))
+
+        cfg = ForwardDiff.GradientConfig(gfun, pv, ForwardDiff.Chunk{1}())
+        g = ForwardDiff.gradient(gfun, pv, cfg)
+        @test eltype(g) === Float64
+        @test length(g) == length(pv)
+
+        # A frozen const slot returns EXACTLY zero for every parameter sensitivity.
+        # Assert it did not.
+        @test all(!iszero, g)
+
+        # And assert the actual values against central differences on `f!` itself.
+        h = 1e-6
+        for i in eachindex(pv)
+            s = h * max(1.0, abs(pv[i]))
+            up = copy(pv); up[i] += s
+            um = copy(pv); um[i] -= s
+            fd = (sum(_ct_call(f!, u0, mk(up), 0.0)) -
+                  sum(_ct_call(f!, u0, mk(um), 0.0))) / 2s
+            @test isapprox(g[i], fd; rtol=1e-5, atol=1e-12)
+        end
+
+        # The closed form, for the one the chain rule makes easiest to get wrong:
+        # ∂/∂A [k*x + (-k)*y] = exp(-Ea/(R*Tref)) * (x - y).
+        E = exp(-p.Ea / (p.R * p.Tref))
+        @test isapprox(g[findfirst(==(:A), collect(syms))],
+                       E * (u0[vm["x"]] - u0[vm["y"]]); rtol=1e-12)
+    end
+
+    # ----------------------------------------------------------------
+    # (2) ForwardDiff over the STATE still correct: the const slots must be PRESENT
+    # and correctly typed in the Dual buffer. A freshly allocated `alt` buffer is
+    # `undef` — if its stamp were not invalidated on allocation, the const slots would
+    # be read as GARBAGE on the very first Dual call.
+    # ----------------------------------------------------------------
+    @testset "ForwardDiff over the STATE, through the const tier" begin
+        f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        u = [1.25, -0.75]
+        J = ForwardDiff.jacobian((d, uu) -> f!(d, uu, p, 0.0), zeros(2), u)
+
+        # D(x) = k*x, D(y) = -k*y ⇒ J = diag(k, -k) in var_map order.
+        k = _ct_k(p)
+        ix, iy = vm["x"], vm["y"]
+        @test J[ix, ix] ≈ k
+        @test J[iy, iy] ≈ -k
+        @test J[ix, iy] == 0.0
+        @test J[iy, ix] == 0.0
+        @test all(isfinite, J)
+    end
+
+    # ----------------------------------------------------------------
+    # (3) `p` CHANGED between calls — what `remake` and a parameter sweep do. The
+    # const slots are keyed on `p`, so a new NamedTuple with different values must
+    # refill them. This is the plain-Float64 half of the staleness question.
+    # ----------------------------------------------------------------
+    @testset "a changed `p` refills the const slots (remake / sweep)" begin
+        f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+
+        du1 = _ct_call(f!, u0, p, 0.0)
+        @test du1[vm["x"]] === _ct_k(p) * u0[vm["x"]]
+
+        # A DIFFERENT NamedTuple, same shape — exactly what `remake(prob; p = …)` hands
+        # the RHS. Every equation depends on these only through const-tier slots.
+        p2 = merge(p, (; A = 2.0 * p.A, Tref = 350.0))
+        du2 = _ct_call(f!, u0, p2, 0.0)
+        @test du2[vm["x"]] === _ct_k(p2) * u0[vm["x"]]
+        @test du2[vm["y"]] === -_ct_k(p2) * u0[vm["y"]]
+        @test du2[vm["x"]] != du1[vm["x"]]
+
+        # ...and back again. A stamp that only ever moved forward would fail here.
+        du3 = _ct_call(f!, u0, p, 0.0)
+        @test du3 == du1
+
+        # A SEPARATELY CONSTRUCTED NamedTuple with the same values. `===` on an
+        # `isbits` immutable is a BITWISE compare, not an object-identity compare, so
+        # this is egal to `p` and the tier skips the refill — which is exactly right,
+        # and is why the stamp may use `===` at all: same bits ⇒ same parameter values
+        # ⇒ same const slots. (Egal is strictly finer than `==`: it separates `0.0`
+        # from `-0.0` and never merges two `p`s whose const slots could differ.)
+        pdup = NamedTuple{keys(p)}(Tuple(collect(values(p))))
+        @test pdup === p
+        @test _ct_call(f!, u0, pdup, 0.0) == du1
+    end
+
+    # ----------------------------------------------------------------
+    # (4) THE BUFFER-STALENESS KILLER. `_CSECache` holds TWO buffers (`f64`, and the
+    # lazily created `alt` for a non-Float64 value type), so the validity stamp must be
+    # PER BUFFER. Alternate Float64 and Dual calls, repeatedly, in BOTH orders: a
+    # single shared stamp would let a Float64 call's "p unchanged" mark the `undef`
+    # Dual buffer valid (garbage), or vice versa.
+    # ----------------------------------------------------------------
+    @testset "alternating Float64 and Dual calls, both orders" begin
+        for float_first in (true, false)
+            f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+            k = _ct_k(p)
+            pd = _ct_dualp(p)
+            D1 = ForwardDiff.Dual{Nothing,Float64,1}
+            kd = _ct_k(pd)
+
+            float_first || _ct_call(f!, u0, pd, 0.0, D1)   # Dual buffer created first
+
+            for _ in 1:3
+                duf = _ct_call(f!, u0, p, 0.0)
+                @test duf[vm["x"]] === k * u0[vm["x"]]
+                @test duf[vm["y"]] === -k * u0[vm["y"]]
+
+                dud = _ct_call(f!, u0, pd, 0.0, D1)
+                # Primal AND partials — a garbage/stale const slot in the Dual buffer
+                # shows up in one or the other.
+                @test ForwardDiff.value(dud[vm["x"]]) ≈ ForwardDiff.value(kd * u0[vm["x"]])
+                @test ForwardDiff.partials(dud[vm["x"]], 1) ≈
+                      ForwardDiff.partials(kd * u0[vm["x"]], 1)
+                @test ForwardDiff.partials(dud[vm["y"]], 1) ≈
+                      ForwardDiff.partials(-kd * u0[vm["y"]], 1)
+                @test all(isfinite ∘ ForwardDiff.value, dud)
+                @test any(!iszero, ForwardDiff.partials.(dud, 1))
+            end
+        end
+    end
+
+    # ----------------------------------------------------------------
+    # (6) TRAP, HALF ONE — `_NK_PARAM_GATHER`. A live forcing buffer is refreshed IN
+    # PLACE between calls while `p` never moves, so a `p`-keyed stamp cannot see it
+    # change: a slot reading one is DISCRETE cadence, not const. The model carries BOTH
+    # a param-only chain (const) and a gather chain (dynamic), so "all dynamic" cannot
+    # pass this vacuously.
+    #   D(x) = sin(F[1]*k) + cos(F[1]*k) ;  D(y) = F[1]*k ;  D(z) = exp(k*m) + 2*exp(k*m)
+    # ----------------------------------------------------------------
+    @testset "a slot reading a live forcing buffer is DYNAMIC, not const" begin
+        vars = Dict{String,ModelVariable}(
+            "x" => ModelVariable(StateVariable; default=1.0),
+            "y" => ModelVariable(StateVariable; default=1.0),
+            "z" => ModelVariable(StateVariable; default=1.0),
+            "k" => ModelVariable(ParameterVariable; default=2.0),
+            "m" => ModelVariable(ParameterVariable; default=3.0),
+        )
+        km() = _cse_op("exp", _cse_op("*", _cse_v("k"), _cse_v("m")))   # → CONST
+        fk() = _cse_op("*", _idx("F", _i(1)), _cse_v("k"))              # → DYNAMIC
+        eqs = ESM.Equation[
+            ESM.Equation(_cse_D("x"),
+                _cse_op("+", _cse_op("sin", fk()), _cse_op("cos", fk()))),
+            ESM.Equation(_cse_D("y"), fk()),
+            ESM.Equation(_cse_D("z"),
+                _cse_op("+", km(), _cse_op("*", _cse_n(2.0), km()))),
+        ]
+        buf = [5.0, 6.0]
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs);
+            param_arrays=Dict("F" => buf))
+
+        # 3 slots: `k*m` and `exp(k*m)` are const; `F[1]*k` reads the live buffer.
+        @test diag.n_cse_slots == 3
+        @test diag.n_const_slots == 2
+        @test diag.n_dynamic_slots == 1
+
+        k, m = 2.0, 3.0
+        du = _ct_call(f!, u0, p, 0.0)
+        @test du[vm["y"]] === 5.0 * k
+        @test du[vm["z"]] === exp(k * m) + 2.0 * exp(k * m)
+
+        # THE ASSERTION. Refresh the buffer in place — `p` is unchanged, so a const
+        # classification of the gather slot would freeze `F[1]*k` at 10.0 forever.
+        buf[1] = 42.0
+        du = _ct_call(f!, u0, p, 0.0)
+        @test du[vm["x"]] === sin(42.0 * k) + cos(42.0 * k)
+        @test du[vm["y"]] === 42.0 * k
+        @test du[vm["z"]] === exp(k * m) + 2.0 * exp(k * m)   # the const chain holds
+    end
+
+    # ----------------------------------------------------------------
+    # (7) TRAP, HALF TWO — `_NK_CACHED`. A cache ref carries NO leaf of its own, so a
+    # def whose only child is one looks state-free to a naive leaf scan. Here
+    #   slot 1 = a+b            (states → DYNAMIC)
+    #   slot 2 = sin(cache[1])  (leaf-clean! but reads a DYNAMIC slot ⇒ DYNAMIC)
+    # A naive classifier reports `n_const_slots == 1` and then freezes `sin(a+b)` at
+    # its first-call value: `f!` keeps returning the u₀ answer for every later `u`.
+    #   D(a) = sin(a+b) + cos(sin(a+b)) ;  D(b) = 2*sin(a+b)
+    # ----------------------------------------------------------------
+    @testset "a def reading a DYNAMIC slot through a cache ref is DYNAMIC" begin
+        vars = Dict{String,ModelVariable}(
+            "a" => ModelVariable(StateVariable; default=0.3),
+            "b" => ModelVariable(StateVariable; default=0.5),
+        )
+        S() = _cse_op("+", _cse_v("a"), _cse_v("b"))
+        Q() = _cse_op("sin", S())
+        eqs = ESM.Equation[
+            ESM.Equation(_cse_D("a"), _cse_op("+", Q(), _cse_op("cos", Q()))),
+            ESM.Equation(_cse_D("b"), _cse_op("*", _cse_n(2.0), Q())),
+        ]
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
+
+        # The classification itself: BOTH slots dynamic. The naive scan says 1 const.
+        @test diag.n_cse_slots == 2
+        @test diag.n_const_slots == 0
+        @test diag.n_dynamic_slots == 2
+
+        # And the values, which is what the misclassification would actually corrupt.
+        ia, ib = vm["a"], vm["b"]
+        for u in ([0.3, 0.5], [1.1, -0.4], [-2.0, 0.25])
+            uu = zeros(2); uu[ia] = u[1]; uu[ib] = u[2]
+            s = uu[ia] + uu[ib]
+            du = _ct_call(f!, uu, p, 0.0)
+            @test du[ia] === sin(s) + cos(sin(s))
+            @test du[ib] === 2.0 * sin(s)
+        end
+    end
+
+    # ----------------------------------------------------------------
+    # (8) The const tier must not cost the Float64 hot path its zero-allocation
+    # property. The stamp lives in an `Any` field, so ASSIGNING it boxes — but that
+    # happens only when `p` CHANGES, never on the repeated same-`p` calls an
+    # integrator makes. Reading it back and comparing with `===` must not box.
+    # ----------------------------------------------------------------
+    @testset "zero-allocation `f!` on repeated same-`p` calls" begin
+        f!, u0, p, _ts, _vm, diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        @test diag.n_const_slots == 5
+        du = similar(u0)
+        @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
+    end
+
+    # ----------------------------------------------------------------
+    # (9) `:inplace` (tiered) ≡ `:oop` (untiered — it allocates a fresh cache per call
+    # and refills every slot, so it IS the pre-tier evaluator). Bit-for-bit, across a
+    # `p` change and repeated calls.
+    # ----------------------------------------------------------------
+    @testset "`form=:inplace` (tiered) agrees bit-for-bit with `form=:oop`" begin
+        fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
+        fo, _u0, _p, _ts2, _vm2, dobj =
+            ESM._build_evaluator_impl(_ct_arrhenius(); form=:oop)
+
+        # The classification is a property of the PRELUDE, so an `:oop` build reports
+        # the same counts — it simply does not act on them.
+        @test di.n_const_slots == dobj.n_const_slots == 5
+        @test di.n_dynamic_slots == dobj.n_dynamic_slots == 0
+
+        p2 = merge(p, (; A = 7.0 * p.A, R = 8.0))
+        for (u, pp) in ((u0, p), (u0, p2), ([0.4, -1.3], p), (u0, p), ([2.0, 2.0], p2))
+            @test _ct_call(fi, u, pp, 0.0) == fo(u, pp, 0.0)
+        end
     end
 end
