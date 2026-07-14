@@ -52,6 +52,15 @@ JULIA_OUTPUT="$OUTPUT_DIR/julia"
 TYPESCRIPT_OUTPUT="$OUTPUT_DIR/typescript"
 PYTHON_OUTPUT="$OUTPUT_DIR/python"
 RUST_OUTPUT="$OUTPUT_DIR/rust"
+GO_OUTPUT="$OUTPUT_DIR/go"
+
+# The shared CORPUS MANIFEST: the ONE recursive sweep of tests/valid, tests/invalid
+# and lib, plus the expanded display / substitution case lists. Every producer is
+# handed this file and emits a record per entry; the comparator then asserts that
+# each binding covered every entry. Producers no longer enumerate the corpus
+# themselves — four hand-rolled non-recursive walks are what let 69 fixtures go
+# unswept in every binding at once (audit F5).
+CORPUS_MANIFEST="$OUTPUT_DIR/corpus_manifest.json"
 
 log() {
     echo -e "${BLUE}[$(date +'%H:%M:%S')]${NC} $1"
@@ -73,78 +82,69 @@ warning() {
 setup_output_dirs() {
     log "Setting up output directories..."
     rm -rf "$OUTPUT_DIR"
-    mkdir -p "$JULIA_OUTPUT" "$TYPESCRIPT_OUTPUT" "$PYTHON_OUTPUT" "$RUST_OUTPUT"
+    mkdir -p "$JULIA_OUTPUT" "$TYPESCRIPT_OUTPUT" "$PYTHON_OUTPUT" "$RUST_OUTPUT" "$GO_OUTPUT"
     mkdir -p "$OUTPUT_DIR/comparison" "$OUTPUT_DIR/reports"
 }
 
-# Check if language implementation exists and can be tested
-check_language_availability() {
-    local language=$1
-    local dir=$2
-
-    case $language in
-        "julia")
-            if [ -d "$dir" ] && [ -f "$dir/Project.toml" ]; then
-                if command -v julia &> /dev/null; then
-                    return 0
-                else
-                    warning "Julia command not found, skipping Julia tests"
-                    return 1
-                fi
-            fi
-            ;;
-        "typescript")
-            if [ -d "$dir" ] && [ -f "$dir/package.json" ]; then
-                if command -v npm &> /dev/null; then
-                    return 0
-                else
-                    warning "npm command not found, skipping TypeScript tests"
-                    return 1
-                fi
-            fi
-            ;;
-        "python")
-            if [ -d "$dir" ] && [ -f "$dir/pyproject.toml" ]; then
-                if command -v python3 &> /dev/null; then
-                    return 0
-                else
-                    warning "python3 command not found, skipping Python tests"
-                    return 1
-                fi
-            fi
-            ;;
-        "rust")
-            if [ -d "$dir" ] && [ -f "$dir/Cargo.toml" ]; then
-                if command -v cargo &> /dev/null; then
-                    return 0
-                else
-                    warning "cargo command not found, skipping Rust tests"
-                    return 1
-                fi
-            fi
-            ;;
-        "go")
-            if [ -d "$dir" ] && [ -f "$dir/go.mod" ]; then
-                if command -v go &> /dev/null; then
-                    return 0
-                else
-                    warning "go command not found, skipping Go tests"
-                    return 1
-                fi
-            fi
-            ;;
-    esac
+# Build the shared corpus manifest. Every producer reads it; if it cannot be
+# built there is nothing to test, so this is fatal.
+build_corpus_manifest() {
+    log "Building the shared corpus manifest..."
+    if python3 "$SCRIPT_DIR/conformance_corpus.py" --output "$CORPUS_MANIFEST"; then
+        export ESM_CONFORMANCE_MANIFEST="$CORPUS_MANIFEST"
+        return 0
+    fi
+    error "Could not build the corpus manifest"
     return 1
 }
 
-# Run Go tests. The Go binding has no separate conformance-output runner;
-# this exercises the binding's `go test ./...` suite, which includes the
-# function_tables lowering harness (esm-spec §9.5.6, esm-lhm).
+# Every binding in this repo is REQUIRED. A missing toolchain is a broken
+# environment, not a smaller test run.
+#
+# This used to `return 1` with a warning, and every caller treated that as
+# "skip" — so a box without Julia produced a fully GREEN run with ZERO Julia
+# coverage, and a `bindings_required` gate silently became a no-op (audit F10).
+# There is no way to express "I could not check this" in an exit code, so the
+# only honest answer is failure.
+check_language_availability() {
+    local language=$1
+    local dir=$2
+    local tool
+    local marker
+
+    case $language in
+        "julia")      tool="julia";   marker="Project.toml" ;;
+        "typescript") tool="npm";     marker="package.json" ;;
+        "python")     tool="python3"; marker="pyproject.toml" ;;
+        "rust")       tool="cargo";   marker="Cargo.toml" ;;
+        "go")         tool="go";      marker="go.mod" ;;
+        *)
+            error "Unknown language: $language"
+            return 1
+            ;;
+    esac
+
+    if [ ! -d "$dir" ] || [ ! -f "$dir/$marker" ]; then
+        error "$language implementation not found at $dir (no $marker)"
+        return 1
+    fi
+    if ! command -v "$tool" &> /dev/null; then
+        error "$tool not found on PATH — $language is a REQUIRED binding, not an optional one"
+        return 1
+    fi
+    return 0
+}
+
+# Run the Go test suite and generate Go conformance outputs.
+#
+# Go had NO conformance producer at all (audit F9): this ran `go test ./...` and
+# stopped, and `compare_outputs` hardcoded `--languages julia typescript python
+# rust`, so the most conformant binding in the repo contributed nothing to the
+# cross-language comparison.
 run_go_tests() {
     log "Running Go conformance tests..."
 
     if ! check_language_availability "go" "$GO_DIR"; then
-        warning "Go implementation not available, skipping"
         return 1
     fi
 
@@ -157,7 +157,11 @@ run_go_tests() {
         error "Go tests failed"
         return 1
     fi
-    return 0
+
+    log "Generating Go conformance outputs..."
+    go run ./cmd/esm-conformance "$GO_OUTPUT" "$CORPUS_MANIFEST"
+
+    return $?
 }
 
 # Run Julia tests and generate conformance outputs
@@ -165,7 +169,6 @@ run_julia_tests() {
     log "Running Julia conformance tests..."
 
     if ! check_language_availability "julia" "$JULIA_DIR"; then
-        warning "Julia implementation not available, skipping"
         return 1
     fi
 
@@ -182,7 +185,7 @@ run_julia_tests() {
 
     # Generate conformance test outputs
     log "Generating Julia conformance outputs..."
-    julia --project=. "$SCRIPT_DIR/run-julia-conformance.jl" "$JULIA_OUTPUT"
+    julia --project=. "$SCRIPT_DIR/run-julia-conformance.jl" "$JULIA_OUTPUT" "$CORPUS_MANIFEST"
 
     return $?
 }
@@ -192,7 +195,6 @@ run_typescript_tests() {
     log "Running TypeScript conformance tests..."
 
     if ! check_language_availability "typescript" "$TYPESCRIPT_DIR"; then
-        warning "TypeScript implementation not available, skipping"
         return 1
     fi
 
@@ -219,7 +221,7 @@ run_typescript_tests() {
 
     # Generate conformance outputs
     log "Generating TypeScript conformance outputs..."
-    node "$SCRIPT_DIR/run-typescript-conformance.js" "$TYPESCRIPT_OUTPUT"
+    node "$SCRIPT_DIR/run-typescript-conformance.js" "$TYPESCRIPT_OUTPUT" "$CORPUS_MANIFEST"
 
     return $?
 }
@@ -229,7 +231,6 @@ run_python_tests() {
     log "Running Python conformance tests..."
 
     if ! check_language_availability "python" "$PYTHON_DIR"; then
-        warning "Python implementation not available, skipping"
         return 1
     fi
 
@@ -246,7 +247,7 @@ run_python_tests() {
 
     # Generate conformance outputs
     log "Generating Python conformance outputs..."
-    python3 "$SCRIPT_DIR/run-python-conformance.py" "$PYTHON_OUTPUT"
+    python3 "$SCRIPT_DIR/run-python-conformance.py" "$PYTHON_OUTPUT" "$CORPUS_MANIFEST"
 
     return $?
 }
@@ -256,7 +257,6 @@ run_rust_tests() {
     log "Running Rust conformance tests..."
 
     if ! check_language_availability "rust" "$RUST_DIR"; then
-        warning "Rust implementation not available, skipping"
         return 1
     fi
 
@@ -273,32 +273,45 @@ run_rust_tests() {
 
     # Generate conformance outputs
     log "Generating Rust conformance outputs..."
-    cargo run --bin esm -- conformance-test "$RUST_OUTPUT"
+    cargo run --bin esm -- conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
 
     return $?
 }
 
-# Compare outputs between languages and detect divergence
+# Compare outputs between languages and detect divergence.
+#
+# ALL FIVE bindings are compared (Go was missing entirely — audit F9), and the
+# comparator now asserts each fixture against its DECLARED outcome and its pinned
+# error codes/paths, not merely against the other bindings. Any divergence exits
+# non-zero: there is no longer a threshold band that passes at 70% (audit C2).
 compare_outputs() {
     log "Comparing cross-language outputs..."
 
     python3 "$SCRIPT_DIR/compare-conformance-outputs.py" \
         --output-dir "$OUTPUT_DIR" \
-        --languages julia typescript python rust \
+        --languages julia typescript python rust go \
+        --manifest "$CORPUS_MANIFEST" \
         --comparison-output "$OUTPUT_DIR/comparison/analysis.json"
 
     return $?
 }
 
-# Generate HTML conformance report
+# Generate HTML conformance report.
+#
+# The `return $?` is load-bearing: without it this function fell off the end with
+# the exit status of the `success` echo, so a CRASHING report generator still
+# printed "Conformance report generated successfully" (audit F8).
 generate_report() {
     log "Generating conformance report..."
 
-    python3 "$SCRIPT_DIR/generate-conformance-report.py" \
+    if python3 "$SCRIPT_DIR/generate-conformance-report.py" \
         --analysis-file "$OUTPUT_DIR/comparison/analysis.json" \
-        --output-file "$OUTPUT_DIR/reports/conformance_report_${TIMESTAMP}.html"
-
-    success "Conformance report generated: $OUTPUT_DIR/reports/conformance_report_${TIMESTAMP}.html"
+        --output-file "$OUTPUT_DIR/reports/conformance_report_${TIMESTAMP}.html"; then
+        success "Conformance report generated: $OUTPUT_DIR/reports/conformance_report_${TIMESTAMP}.html"
+        return 0
+    fi
+    error "Report generation FAILED"
+    return 1
 }
 
 # Run the property-corpus cross-binding round-trip check (gt-3fbf). Each
@@ -334,8 +347,8 @@ run_determinism_conformance_self_test() {
 # missing producer (when the language is available) fails.
 run_determinism_conformance_julia() {
     if ! check_language_availability "julia" "$JULIA_DIR"; then
-        warning "Julia unavailable — skipping Julia determinism producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running determinism conformance with the Julia relational engine..."
     EARTHSCI_DETERMINISM_ADAPTER_JULIA="julia --project=$JULIA_DIR $JULIA_DIR/scripts/determinism_adapter.jl" \
@@ -346,8 +359,8 @@ run_determinism_conformance_julia() {
 
 run_determinism_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
-        warning "Rust unavailable — skipping Rust determinism producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running determinism conformance with the Rust relational engine..."
     EARTHSCI_DETERMINISM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-determinism-adapter-rust --" \
@@ -358,8 +371,8 @@ run_determinism_conformance_rust() {
 
 run_determinism_conformance_python() {
     if ! check_language_availability "python" "$PYTHON_DIR"; then
-        warning "Python unavailable — skipping Python determinism producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running determinism conformance with the Python relational engine..."
     # PYTHONPATH pins the adapter to THIS worktree's src (mirrors the cadence /
@@ -432,8 +445,8 @@ run_cadence_conformance_self_test() {
 # siblings register the same way as they land.
 run_cadence_conformance_julia() {
     if ! check_language_availability "julia" "$JULIA_DIR"; then
-        warning "Julia unavailable — skipping Julia cadence-partition producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running cadence-partition conformance with the Julia partition pass..."
     EARTHSCI_CADENCE_ADAPTER_JULIA="julia --project=$JULIA_DIR $JULIA_DIR/scripts/cadence_adapter.jl" \
@@ -450,8 +463,8 @@ run_cadence_conformance_julia() {
 # MISMATCH fails. (Mirrors run_cadence_conformance_julia; ess-my4.3.10.)
 run_cadence_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
-        warning "Rust unavailable — skipping Rust cadence-partition producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running cadence-partition conformance with the Rust partition pass..."
     EARTHSCI_CADENCE_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-cadence-adapter-rust --" \
@@ -467,8 +480,8 @@ run_cadence_conformance_rust() {
 # fails. (Mirrors run_cadence_conformance_julia; ess-my4.3.10.)
 run_cadence_conformance_python() {
     if ! check_language_availability "python" "$PYTHON_DIR"; then
-        warning "Python unavailable — skipping Python cadence-partition producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running cadence-partition conformance with the Python partition pass..."
     # PYTHONPATH pins the adapter to THIS worktree's src (mirrors the PDE-sim
@@ -512,8 +525,8 @@ run_pde_simulation_conformance_self_test() {
 # the committed golden (golden it produced) AND the analytic anchors.
 run_pde_simulation_conformance_julia() {
     if ! check_language_availability "julia" "$JULIA_DIR"; then
-        warning "Julia unavailable — skipping Julia PDE-simulation producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running PDE-simulation conformance with the Julia reference simulator..."
     EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl" \
@@ -526,8 +539,8 @@ run_pde_simulation_conformance_julia() {
 # diffsol. `cargo run` provisions the s2bindings shim lib path. ess-fmw.
 run_pde_simulation_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
-        warning "Rust unavailable — skipping Rust PDE-simulation producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running PDE-simulation conformance with the Rust vectorized simulator..."
     EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-pde-sim-adapter-rust --" \
@@ -541,8 +554,8 @@ run_pde_simulation_conformance_rust() {
 # resolve from this checkout, not a stray editable install. ess-fmw.
 run_pde_simulation_conformance_python() {
     if ! check_language_availability "python" "$PYTHON_DIR"; then
-        warning "Python unavailable — skipping Python PDE-simulation producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running PDE-simulation conformance with the Python simulator..."
     EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.pde_simulation_adapter" \
@@ -583,8 +596,8 @@ run_pde_pipeline_conformance_self_test() {
 # committed golden (golden it produced) AND the independent reference.
 run_pde_pipeline_conformance_julia() {
     if ! check_language_availability "julia" "$JULIA_DIR"; then
-        warning "Julia unavailable — skipping Julia full-pipeline PDE producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running full-pipeline PDE conformance with the Julia reference simulator..."
     EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl" \
@@ -599,8 +612,8 @@ run_pde_pipeline_conformance_julia() {
 # compiled instance. `cargo run` provisions the s2bindings shim lib path.
 run_pde_pipeline_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
-        warning "Rust unavailable — skipping Rust full-pipeline PDE producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running full-pipeline PDE conformance with the Rust vectorized simulator..."
     EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-pde-sim-adapter-rust --" \
@@ -615,8 +628,8 @@ run_pde_pipeline_conformance_rust() {
 # the repo's package src so the adapter resolves from this checkout.
 run_pde_pipeline_conformance_python() {
     if ! check_language_availability "python" "$PYTHON_DIR"; then
-        warning "Python unavailable — skipping Python full-pipeline PDE producer check"
-        return 0
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
     fi
     log "Running full-pipeline PDE conformance with the Python simulator..."
     EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.pde_simulation_adapter" \
@@ -635,58 +648,71 @@ run_property_corpus() {
         python3 "$SCRIPT_DIR/generate-property-corpus.py" --count 50 --out "$corpus"
     fi
 
-    # --require-divergence guards against the corpus regressing to a shape
-    # where every binding agrees trivially; the phase-2 corpus is meant to
-    # surface divergence. Zero divergences should prompt a corpus refresh.
+    # THE gate: bindings that re-serialize the same expression differently do not
+    # implement one format, so any divergence fails.
+    #
+    # This used to pass `--require-divergence`, which exits 1 **iff
+    # diverged_count == 0** — so real divergence could never fail the harness and
+    # fixing every divergence would have turned the build RED (audit F7). The
+    # corpus-quality question that flag answers is real, but it belongs to the
+    # corpus generator's own acceptance check, not to the conformance gate.
     python3 "$SCRIPT_DIR/run-property-corpus-conformance.py" \
         --corpus "$corpus" \
         --output "$OUTPUT_DIR/property_corpus_report.json" \
-        --require-divergence
+        --fail-on-divergence \
+        --require-all-bindings
 }
 
 # Main execution
+#
+# EVERY gate runs, and EVERY failure is collected, so one run produces the whole
+# failure list rather than the first one. The run then exits NON-ZERO if anything
+# failed.
+#
+# What this replaces (audit C1): `failed_languages` was printed via `error()` and
+# then never consulted. `main` proceeded whenever >= 2 languages succeeded and
+# ended on an unconditional `success` echo — so the command CLAUDE.md tells
+# developers to run printed "Cross-language conformance testing completed
+# successfully!" and **exited 0 with Julia, Rust and Go all failing**. There is no
+# ">= 2 succeeded" clause any more: all five bindings are required.
+declare -a FAILED_STAGES=()
+
+run_stage() {
+    local name="$1"
+    shift
+    if "$@"; then
+        success "$name"
+    else
+        error "$name FAILED"
+        FAILED_STAGES+=("$name")
+    fi
+}
+
 main() {
     log "Starting cross-language conformance testing..."
     log "Project root: $PROJECT_ROOT"
 
     setup_output_dirs
 
-    # Track which languages succeeded
+    # Nothing can be tested without the corpus manifest, so this one IS fatal.
+    if ! build_corpus_manifest; then
+        error "Corpus manifest could not be built — nothing to test"
+        exit 1
+    fi
+
     declare -a successful_languages=()
     declare -a failed_languages=()
 
-    # Run tests for each language
-    if run_julia_tests; then
-        successful_languages+=("julia")
-    else
-        failed_languages+=("julia")
-    fi
+    for lang in julia typescript python rust go; do
+        if "run_${lang}_tests"; then
+            successful_languages+=("$lang")
+        else
+            failed_languages+=("$lang")
+            FAILED_STAGES+=("binding:$lang")
+        fi
+        cd "$PROJECT_ROOT"
+    done
 
-    if run_typescript_tests; then
-        successful_languages+=("typescript")
-    else
-        failed_languages+=("typescript")
-    fi
-
-    if run_python_tests; then
-        successful_languages+=("python")
-    else
-        failed_languages+=("python")
-    fi
-
-    if run_rust_tests; then
-        successful_languages+=("rust")
-    else
-        failed_languages+=("rust")
-    fi
-
-    if run_go_tests; then
-        successful_languages+=("go")
-    else
-        failed_languages+=("go")
-    fi
-
-    # Report summary
     log "Test execution summary:"
     if [ ${#successful_languages[@]} -gt 0 ]; then
         success "Successful languages: ${successful_languages[*]}"
@@ -695,157 +721,51 @@ main() {
         error "Failed languages: ${failed_languages[*]}"
     fi
 
-    # Only proceed with comparison if we have at least 2 successful languages
-    if [ ${#successful_languages[@]} -ge 2 ]; then
-        log "Proceeding with cross-language comparison..."
+    # The cross-language gates run even when a binding failed: a binding whose
+    # test suite is red may still have produced results.json, and the comparator
+    # reports a MISSING results.json as a coverage failure. Either way the run
+    # already exits non-zero — running the rest just makes the report complete.
+    log "Running cross-language gates..."
 
-        if compare_outputs; then
-            success "Cross-language comparison completed"
-        else
-            error "Cross-language comparison failed"
-            exit 1
-        fi
+    run_stage "cross-language comparison" compare_outputs
+    run_stage "conformance report" generate_report
+    run_stage "property-corpus round-trip" run_property_corpus
 
-        if generate_report; then
-            success "Conformance report generated successfully"
-        else
-            error "Report generation failed"
-            exit 1
-        fi
+    run_stage "determinism self-test" run_determinism_conformance_self_test
+    run_stage "determinism producer (julia)" run_determinism_conformance_julia
+    run_stage "determinism producer (rust)" run_determinism_conformance_rust
+    run_stage "determinism producer (python)" run_determinism_conformance_python
 
-        if run_property_corpus; then
-            success "Property-corpus round-trip completed"
-        else
-            error "Property-corpus round-trip failed"
-            exit 1
-        fi
+    run_stage "geometry self-test" run_geometry_conformance_self_test
 
-        if run_determinism_conformance_self_test; then
-            success "Determinism-conformance harness self-test completed"
-        else
-            error "Determinism-conformance harness self-test failed"
-            exit 1
-        fi
+    run_stage "cadence self-test" run_cadence_conformance_self_test
+    run_stage "cadence producer (julia)" run_cadence_conformance_julia
+    run_stage "cadence producer (rust)" run_cadence_conformance_rust
+    run_stage "cadence producer (python)" run_cadence_conformance_python
 
-        if run_determinism_conformance_julia; then
-            success "Determinism Julia producer check completed"
-        else
-            error "Determinism Julia producer check failed"
-            exit 1
-        fi
+    run_stage "PDE-simulation self-test" run_pde_simulation_conformance_self_test
+    run_stage "PDE-simulation producer (julia)" run_pde_simulation_conformance_julia
+    run_stage "PDE-simulation producer (rust)" run_pde_simulation_conformance_rust
+    run_stage "PDE-simulation producer (python)" run_pde_simulation_conformance_python
 
-        if run_determinism_conformance_rust; then
-            success "Determinism Rust producer check completed"
-        else
-            error "Determinism Rust producer check failed"
-            exit 1
-        fi
+    run_stage "full-pipeline PDE self-test" run_pde_pipeline_conformance_self_test
+    run_stage "full-pipeline PDE producer (julia)" run_pde_pipeline_conformance_julia
+    run_stage "full-pipeline PDE producer (rust)" run_pde_pipeline_conformance_rust
+    run_stage "full-pipeline PDE producer (python)" run_pde_pipeline_conformance_python
 
-        if run_determinism_conformance_python; then
-            success "Determinism Python producer check completed"
-        else
-            error "Determinism Python producer check failed"
-            exit 1
-        fi
-
-        if run_geometry_conformance_self_test; then
-            success "Geometry-conformance harness self-test completed"
-        else
-            error "Geometry-conformance harness self-test failed"
-            exit 1
-        fi
-
-        if run_cadence_conformance_self_test; then
-            success "Cadence-partition conformance harness self-test completed"
-        else
-            error "Cadence-partition conformance harness self-test failed"
-            exit 1
-        fi
-
-        if run_cadence_conformance_julia; then
-            success "Cadence-partition Julia producer check completed"
-        else
-            error "Cadence-partition Julia producer check failed"
-            exit 1
-        fi
-
-        if run_cadence_conformance_rust; then
-            success "Cadence-partition Rust producer check completed"
-        else
-            error "Cadence-partition Rust producer check failed"
-            exit 1
-        fi
-
-        if run_cadence_conformance_python; then
-            success "Cadence-partition Python producer check completed"
-        else
-            error "Cadence-partition Python producer check failed"
-            exit 1
-        fi
-
-        if run_pde_simulation_conformance_self_test; then
-            success "PDE-simulation conformance harness self-test completed"
-        else
-            error "PDE-simulation conformance harness self-test failed"
-            exit 1
-        fi
-
-        if run_pde_simulation_conformance_julia; then
-            success "PDE-simulation Julia producer check completed"
-        else
-            error "PDE-simulation Julia producer check failed"
-            exit 1
-        fi
-
-        if run_pde_simulation_conformance_rust; then
-            success "PDE-simulation Rust producer check completed"
-        else
-            error "PDE-simulation Rust producer check failed"
-            exit 1
-        fi
-
-        if run_pde_simulation_conformance_python; then
-            success "PDE-simulation Python producer check completed"
-        else
-            error "PDE-simulation Python producer check failed"
-            exit 1
-        fi
-
-        if run_pde_pipeline_conformance_self_test; then
-            success "Full-pipeline PDE conformance harness self-test completed"
-        else
-            error "Full-pipeline PDE conformance harness self-test failed"
-            exit 1
-        fi
-
-        if run_pde_pipeline_conformance_julia; then
-            success "Full-pipeline PDE Julia producer check completed"
-        else
-            error "Full-pipeline PDE Julia producer check failed"
-            exit 1
-        fi
-
-        if run_pde_pipeline_conformance_rust; then
-            success "Full-pipeline PDE Rust producer check completed"
-        else
-            error "Full-pipeline PDE Rust producer check failed"
-            exit 1
-        fi
-
-        if run_pde_pipeline_conformance_python; then
-            success "Full-pipeline PDE Python producer check completed"
-        else
-            error "Full-pipeline PDE Python producer check failed"
-            exit 1
-        fi
-
-        success "Cross-language conformance testing completed successfully!"
+    echo
+    if [ ${#FAILED_STAGES[@]} -eq 0 ]; then
+        success "Cross-language conformance testing PASSED"
         log "Results available in: $OUTPUT_DIR"
-
-    else
-        error "Need at least 2 successful language implementations to perform comparison"
-        exit 1
+        exit 0
     fi
+
+    error "Cross-language conformance testing FAILED — ${#FAILED_STAGES[@]} stage(s):"
+    for stage in "${FAILED_STAGES[@]}"; do
+        error "  · $stage"
+    done
+    log "Results available in: $OUTPUT_DIR"
+    exit 1
 }
 
 # Check if script is being run directly
