@@ -1759,8 +1759,53 @@ Validation tests must use these standardized error codes:
 | `null_reaction` | Structural | Reaction with both null substrates and products |
 | `missing_observed_expr` | Structural | Observed variable missing expression |
 | `event_var_undeclared` | Structural | Event affects undeclared variable |
-| `unit_dimension_mismatch` | Units | Dimensional analysis failure |
-| `unit_parse_error` | Units | Unrecognized unit string |
+| `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
+| `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
+
+### 7.1.1 Units severity contract
+
+Normative definition: **esm-spec §4.8**. Restated here because it is the contract the
+shared corpus pins and the one the five bindings must not re-diverge on:
+
+| Situation | Severity |
+|---|---|
+| Provable dimensional mismatch (all operand dimensions known, a §4.8.3 rule violated) | **hard error** — `unit_dimension_mismatch` / `unit_inconsistency` |
+| Unresolvable or unreal unit string (`"not_a_unit"`, `"1/time"`) | **hard error** — `unit_parse_error` |
+| Genuinely undeterminable dimension (symbolic exponent, op with no dimensional rule, undeclared operand) | **warning** — report `unknown` and SKIP the enclosing check |
+
+A transcendental (`log`, `ln`, `exp`, `sin`, …) applied to a dimensional argument is a
+**provable mismatch**, not an undeterminable case (esm-spec §4.8.3).
+
+An undeterminable dimension MUST NOT be reported as *dimensionless* — that manufactures
+false mismatches against well-formed files. An incomplete unit registry MUST NOT be
+worked around by downgrading a severity; extend the registry.
+
+### 7.1.2 The `tests/invalid/expected_errors.json` pin contract
+
+Every fixture under `tests/invalid/**` has an entry keyed by its **basename**. An entry is
+a claim about *why* the file is invalid, not merely *that* it is:
+
+- `schema_errors` — JSON-Schema violations the file MUST produce. Each pinned entry is a
+  `{path, message, keyword}` triple and is a **required subset** of what a binding emits
+  (a binding may emit additional, incidental schema errors; ajv-style validators enumerate
+  `oneOf`/`anyOf` branches differently).
+- `structural_errors` — post-schema findings the file MUST produce, each a `{path, code}`
+  pair, again a required subset. **A schema-invalid file never reaches structural
+  validation**, so a fixture with a non-empty `schema_errors` MUST have
+  `structural_errors: []`. A fixture that wants to pin a structural check must be
+  schema-VALID.
+- `path` is the **JSON Pointer of the node that carries the defect** — `/models/M/equations/0/rhs`,
+  not `/models/M`; `/coupling/0/from`, not `/coupling/0`.
+- `resolver_only: true` — the file is schema-valid and is rejected only by an
+  evaluator/resolver that a schema-only binding does not run. Such a binding must assert
+  `schema_errors == []` and nothing more.
+- `structural_coverage_intended` — a fixture that has ROTTED: it was written to pin the
+  listed structural findings but is currently rejected earlier, at the schema layer (a
+  legacy shape, or a schema rule that has since absorbed the check). Restoring the coverage
+  means modernising the fixture, never relaxing a checker.
+
+A conforming harness MUST compare emitted `(code, path)` pairs against these pins. Asserting
+only "some error was produced" is what let 42 pins drift undetected (audit 2026-07-14, F4).
 | `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
 | `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 

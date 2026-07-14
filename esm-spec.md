@@ -591,6 +591,84 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 
 **Injecting a discretization at the mount (§9.7.10).** A subsystem-ref object MAY additionally carry an `expression_template_imports` array — an ordered `TemplateImport[]` (§9.7.2 shape) registered into the **referenced** component's own template scope, so an assembler can choose the discretization for a mounted, discretization-agnostic PDE leaf without editing that leaf's file. The target is implicit (this edge mounts exactly one component); no selector is needed or allowed. It composes with the edge's other fields: `bindings` still closes the *referenced document's* metaparameters (site 3 above), while `expression_template_imports[k].bindings` closes the *imported library's* metaparameters (e.g. the stencil's grid size), and the injected list appends to the referenced component's own imports in the §9.7.10 merge order. Load-time only, consumed by the §9.6.3 fixpoint before the mounted form is finalized; it does not survive `parse → emit`. The injected `ref` MUST resolve to a template-library file (`template_import_not_library` otherwise); the subsystem `ref` itself still MUST resolve to a component file.
 
+### 4.8 Units and Dimensional Analysis
+
+Every `units` string in a document (variables, parameters, species, loader `provides`) is resolved against **one shared registry** with **one grammar**, and every dimensional judgement follows **one severity contract**. This section is normative. Before it existed, each binding invented its own answers and the five silently diverged — the units subsystem was broken in four of the five bindings, in four different ways, and no cross-binding test could see it because nothing was written down.
+
+#### 4.8.1 The unit registry
+
+The registry is a **flat table**: a symbol is either in it or the unit string does not resolve. There is deliberately **no SI-prefix mechanism** — `mm` is a table entry, not `m` composed with `milli-`. A prefix mechanism would silently accept nonsense (`kmolec`, `nppb`) and make the set of legal unit strings unbounded and un-pinnable across five languages. The cost is that a new prefixed unit must be added to the table; that is a one-line change and a deliberate one.
+
+| Group | Symbols |
+|---|---|
+| SI base | `m` `kg` `s` `mol` `K` `A` `cd` `rad` |
+| Mass | `g` `mg` `ug` |
+| Length | `dm` `cm` `mm` `um` `nm` `km` |
+| Time | `ms` `us` `ns` `min` `h` `hr` `day` `yr` `year` |
+| Volume | `L` `l` `mL` |
+| Amount | `kmol` `mmol` `umol` `nmol` `M` |
+| Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` |
+| Pressure | `atm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `psi` |
+| Energy | `erg` `BTU` `Wh` `kWh` |
+| Electromagnetic | `C` `V` `Ohm` `F` `T` |
+| Temperature / angle | `degC` `degF` `deg` |
+| Mixing ratios (dimensionless) | `ppm` `ppb` `ppt` `ppmv` `ppbv` `pptv` |
+| Counts (dimensionless) | `molec` `individuals` `vehicles` `units` `count` |
+| Column amount (dimensionless) | `Dobson` `DU` |
+| Dimensionless spellings | `""` · `"1"` · `"dimensionless"` |
+
+**`C` is the COULOMB**, per SI — never Celsius. Celsius has its own unambiguous spellings (`degC`, `°C`); binding `C` to Celsius silently injects a temperature dimension into every electromagnetic expression, so that charge × field comes out as `kg*m*K/(s^3*A)` instead of a newton.
+
+**Affine offsets are not modelled.** `degC` and `degF` carry the Kelvin *dimension* and their *scale* (1 and 5/9); their zero offset is irrelevant to dimensional analysis and is not represented. A unit conversion that needs the offset is a `unit_conversion` expression (§8), not a dimensional judgement.
+
+**Normalisation before parsing:** `µ`/`μ` → `u`, and `°C` → `degC`.
+
+#### 4.8.2 Unit-string grammar
+
+```
+unit := term (('*' | '/')? term)*
+term := atom (('^' | '**') integer)?
+atom := number | symbol | '(' unit ')'
+```
+
+- Whitespace between terms means **multiplication** — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`.
+- Division is **left-associative** — `"kg/m*s"` is `kg·m⁻¹·s⁻¹`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.
+- Grouping with parentheses is REQUIRED to express a compound denominator: `"J/(mol*K)"`, `"cm^3/(molec*s)"`. A parser that cannot handle parentheses will read `J/(mol*K)` as dimensionless and disable every check that depends on it.
+- An exponent MUST be an integer literal (positive or negative). A non-integer or symbolic exponent in a *unit string* is not admissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
+
+#### 4.8.3 Dimensional rules for operators
+
+| Op | Rule |
+|---|---|
+| `+` `-` (n-ary) | All operands MUST share a dimension; the result is that dimension. A bare numeric literal is dimension-neutral in this position. |
+| `*` `/` | Dimensions multiply / divide. |
+| `^` | The exponent MUST be dimensionless. With a **literal integer or rational** exponent the base dimension is raised to it (`L^2` with `L` in `m` is `m^2`). With a **symbolic** exponent the result is UNDETERMINABLE (§4.8.4) — not dimensionless. |
+| `sqrt` | Halves every exponent of the operand's dimension. |
+| `D` (`wrt: t`) | `d(X)/dt` has dimension `[X]/[t]`. |
+| `min` `max` `abs` `ifelse` `Pre` | PRESERVE the operand dimension (all value operands must agree); they are not dimensionless. |
+| comparisons, `and` `or` `not` | Operands must be mutually commensurate; the result is dimensionless (a boolean). |
+| **Transcendentals** — `log` `ln` `log10` `exp` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `tanh`, and any other transcendental | The argument MUST be **dimensionless**, and the result is dimensionless. |
+| any other op | No dimensional rule ⇒ the result is UNDETERMINABLE (§4.8.4). It is **not** dimensionless. |
+
+**Transcendentals require a dimensionless argument.** `log(V)` with `V` in `m³` is an ERROR, not a warning and not a silent pass: the Taylor series of a transcendental adds powers of its argument, so an argument with a dimension is dimensionally meaningless. The physics is always written against a reference: the ideal-gas entropy is `n*R*log(V/V0)`, and Arrhenius is `exp(-Ea/(R*T))` — never `exp(-1000/T)` with a bare literal standing in for an activation temperature. `tests/invalid/units_invalid_logarithm.esm` pins the error; `tests/valid/units_dimensional_analysis.esm` and `tests/valid/expr_graphs_variable_deps.esm` pin the well-formed spellings.
+
+#### 4.8.4 Severity contract
+
+Three outcomes, and only three. The distinction that matters is between *"the file is wrong"* and *"the checker cannot tell"* — collapsing the two is what let the bindings diverge.
+
+| Outcome | Severity | Code | When |
+|---|---|---|---|
+| **Provable dimensional mismatch** | **hard error** (`is_valid: false`) | `unit_dimension_mismatch` (emitted as `unit_inconsistency` by the structural layer) | Every operand dimension is known and the §4.8.3 rule is violated: adding metres to kilograms, a derivative whose two sides cannot be reconciled by any time unit, a transcendental with a dimensional argument, an observed variable whose declared units disagree with its expression, a reaction rate that does not match its stoichiometric order (§7.4). |
+| **Unresolvable unit string** | **hard error** (`is_valid: false`) | `unit_parse_error` | The declared string does not parse under §4.8.2, or names a symbol absent from the §4.8.1 registry — `"not_a_unit"`, `"1/time"` (`time` is a DIMENSION name, not a unit), `"m/s2"`. This is a defect in the file, not a limit of the checker. |
+| **Undeterminable dimension** | **warning**; report `unknown` and SKIP the enclosing check | — | The checker genuinely cannot compute a dimension: a **symbolic exponent** (`k * x^alpha` — a fitted reaction order is ordinary chemistry), an **op with no dimensional rule**, or an operand naming an **undeclared or out-of-scope** variable. |
+
+Two consequences follow, and both have been violated in this repository:
+
+1. **An undeterminable dimension MUST NOT be reported as dimensionless.** Returning "dimensionless" for an op the checker does not model manufactures *false* mismatches against real, well-formed files — every structural op (`index`, `fn`, `aggregate`, `table_lookup`, `makearray`, …) would poison the equation containing it. Return "unknown" and skip.
+2. **An incomplete registry MUST NOT be papered over by downgrading the severity.** If a binding cannot parse `J/(mol*K)` or does not know `V`, the fix is the parser and the registry — *not* re-classifying an unresolvable unit as a warning, and not coercing it to dimensionless. Both of those turn a missing feature into a silently-disabled check across every file in the corpus.
+
+An error is reported at the **JSON Pointer of the node that carries the defect** — `/models/<M>/equations/<i>` for an equation, `/models/<M>/variables/<v>` for an observed variable or a declaration, `/reaction_systems/<S>/reactions/<i>` for a rate.
+
 ## 5. Events
 
 Events enable changes to system state or parameters when certain conditions are met, or detection of discontinuities during simulation. This section is designed to be compatible with ModelingToolkit.jl's `SymbolicContinuousCallback` and `SymbolicDiscreteCallback` semantics, while remaining language-agnostic.
