@@ -11,7 +11,15 @@ tolerance precedence ``assertion → test → model`` (fallback ``rtol=1e-6``).
 
 The ``SIMULATION_SKIP`` map records fixtures that cannot yet execute in the
 Python binding. Each entry points at the bead tracking the underlying gap so
-the skip is self-documenting — remove the entry once the bead closes.
+the skip is self-documenting.
+
+Entries are enforced STRICTLY and are self-cleaning: fixture-level blocks are
+declarative ``xfail(strict=True)`` marks and component-level blocks are still
+executed (:func:`_run_component`), so the moment a blocker is fixed the entry
+reports XPASS / raises ``STALE COMPONENT_SKIP`` and the suite fails until it is
+removed. Do NOT reintroduce an imperative ``pytest.xfail()`` in the test body:
+it raises before the body runs, XPASS becomes structurally impossible, and the
+map silently rots (it had accumulated twelve dead entries this way).
 
 Fixtures without any inline ``tests`` block (e.g. spatial_limitation.esm)
 are silently passed over by the fixture walk.
@@ -42,61 +50,39 @@ SIMULATION_DIR = str(FIXTURES_ROOT / "simulation")
 # points at the bead tracking the gap so the skip is self-documenting.
 SIMULATION_SKIP: Dict[str, str] = {
     # gt-qgui: parse bug — load() on empty domain temporal block crashes.
-    "autocatalytic_reaction.esm": "gt-qgui",
-    "coupled_oscillators.esm": "gt-qgui",
-    "event_chain.esm": "gt-qgui",
-    "performance_benchmarks.esm": "gt-qgui",
     "periodic_dosing.esm": "gt-qgui",
-    "simple_ode.esm": "gt-qgui",
-    "spatial_diffusion.esm": "gt-qgui",
     "spatial_limitation.esm": "gt-qgui",
-    "stiff_ode_system.esm": "gt-qgui",
-    # gt-i7e1: simulate() treats bare-string RHS ("v") as constant, so the
-    # SimpleOscillator model's dx/dt = v never evolves x.
-    "julia_mtk_integration.esm": "gt-i7e1",
-    # continuous events are parsed but their affect equations don't propagate
-    # into the SciPy backend's state-reset step; the ball never actually
-    # bounces. Tracked alongside Julia's SymbolicContinuousCallback skip.
+    # gt-i7e1: continuous events are parsed but their affect equations don't
+    # propagate into the SciPy backend's state-reset step; the ball never
+    # actually bounces. Tracked alongside Julia's SymbolicContinuousCallback
+    # skip.
     "bouncing_ball.esm": "gt-i7e1",
-    # esm-mvc: Python simulate() returns 'Unsupported operation: abs' / 'min' /
-    # 'max' / 'pow' on AST RHSes that use these op aliases. The clamp-via-abs,
-    # n-ary-min/max, and pow-Bernoulli fixtures (esm-sph) cannot run until the
-    # op-alias gap closes. Julia/MTK handles these correctly; the fixtures
-    # remain consumed by the Julia and (TBD) Rust runners.
-    "clamp_via_abs.esm": "esm-mvc",
-    "nary_min_max.esm": "esm-mvc",
-    "pow_logistic.esm": "esm-mvc",
-    # esm-y3n: Python flatten/simulate silently drops authored algebraic
-    # equations (lhs is a bare variable name), leaving the algebraic
-    # intermediates pinned at their default values and corrupting the
-    # downstream ODE — the diameter-growth-shaped fixture (esm-sph) reproduces
-    # nux's audit at 1000x error magnitudes. Closes once esm-y3n lands proper
-    # algebraic-elimination support.
-    "algebraic_diameter_growth.esm": "esm-y3n",
 }
+# NOTE: twelve entries were deleted here, not fixed — they were ALREADY passing.
+# The map was maintained with an imperative `pytest.xfail()` inside the test
+# body, which aborts before the body runs, so a blocker that had since been
+# fixed kept reporting `xfailed` forever and no one could see it was stale.
+# Switching to a declarative `xfail(strict=True)` mark (see `_fixture_params`)
+# ran the bodies and reported XPASS for: autocatalytic_reaction,
+# coupled_oscillators, event_chain, performance_benchmarks, simple_ode,
+# stiff_ode_system (gt-qgui); julia_mtk_integration (gt-i7e1); clamp_via_abs,
+# nary_min_max, pow_logistic (esm-mvc); algebraic_diameter_growth (esm-y3n);
+# plus spatial_diffusion, whose gt-qgui load crash is gone and which carries no
+# inline tests anyway. The three entries above are the only ones still real.
 
 
 # Per-component skips. Keyed by ``(fixture, "models"|"reaction_systems",
 # component_name)``. Use when one component in a multi-component fixture is
 # broken but other components should still execute. Each entry points at the
 # tracking bead so the skip is self-documenting.
-COMPONENT_SKIP: Dict[Tuple[str, str, str], str] = {
-    # gt-pcj5: reaction-rate lowering bug in simulate()'s flatten path —
-    # explicit rate expressions (e.g. k*A) get multiplied by substrate
-    # concentrations again during mass-action lowering, producing k*A*A.
-    # Affects every reaction_system in mathematical_correctness.esm.
-    # Julia runs the same fixtures correctly.
-    (
-        "mathematical_correctness.esm",
-        "reaction_systems",
-        "MassConservationTest",
-    ): "gt-pcj5",
-    (
-        "mathematical_correctness.esm",
-        "reaction_systems",
-        "LinearChain",
-    ): "gt-pcj5",
-}
+#
+# Currently EMPTY. Both entries it held (`mathematical_correctness.esm`'s
+# `MassConservationTest` and `LinearChain`, both blocked on the gt-pcj5
+# mass-action rate-lowering bug) turned out to be STALE: once `_run_component`
+# started actually RUNNING skipped components instead of jumping over them, both
+# passed. gt-pcj5 is fixed. Nothing was silently dropped — the old code merely
+# warned and moved on, so the fix went unnoticed.
+COMPONENT_SKIP: Dict[Tuple[str, str, str], str] = {}
 
 
 def _list_simulation_fixtures() -> list[str]:
@@ -200,17 +186,44 @@ def _execute_component_tests(
             )
 
 
-@pytest.mark.parametrize("fixture", _list_simulation_fixtures())
+def _fixture_params():
+    """Parametrization for the fixture walk, with blocked fixtures carried as
+    DECLARATIVE ``xfail(strict=True)`` marks.
+
+    This must not be ``pytest.xfail(...)`` called from inside the test body.
+    The imperative form raises immediately, so the body NEVER RUNS: a blocker
+    that has since been fixed keeps reporting ``xfailed`` forever and the entry
+    can never be seen to be stale. XPASS was structurally impossible, and the
+    map rotted — most entries were dead.
+
+    The declarative mark runs the body and compares the outcome to the claim.
+    ``strict=True`` turns an unexpected PASS into a FAILURE, so the moment a
+    blocker is fixed the suite demands the entry be deleted. A skip map is only
+    honest if a stale entry breaks the build.
+    """
+    params = []
+    for fixture in _list_simulation_fixtures():
+        bead = SIMULATION_SKIP.get(fixture)
+        marks = (
+            pytest.mark.xfail(
+                reason=f"{fixture}: blocked by {bead} (Python binding gap)",
+                strict=True,
+            )
+            if bead is not None
+            else ()
+        )
+        params.append(pytest.param(fixture, marks=marks))
+    return params
+
+
+@pytest.mark.parametrize("fixture", _fixture_params())
 def test_simulation_fixture_tests_blocks(fixture: str) -> None:
     """For every model/reaction_system with a tests block in
     ``tests/simulation/<fixture>``, run simulate() and verify assertions.
 
-    Fixtures in ``SIMULATION_SKIP`` are xfail-marked — the bead ID in the map
-    value identifies the blocker.
+    Fixtures in ``SIMULATION_SKIP`` are xfail-marked (strict) — the bead ID in
+    the map value identifies the blocker.
     """
-    if fixture in SIMULATION_SKIP:
-        pytest.xfail(f"{fixture}: blocked by {SIMULATION_SKIP[fixture]} (Python binding gap)")
-
     path = os.path.join(SIMULATION_DIR, fixture)
     with open(path) as fp:
         raw = json.load(fp)
@@ -219,41 +232,69 @@ def test_simulation_fixture_tests_blocks(fixture: str) -> None:
     any_executed = False
     xfail_reasons: list[str] = []
 
+    def _run_component(kind: str, name: str, subset, tests, tol) -> bool:
+        """Execute one component's inline tests. Returns True if it EXECUTED.
+
+        A component listed in ``COMPONENT_SKIP`` is still RUN — it is never
+        silently jumped over. If it fails, the recorded blocker is confirmed and
+        the skip stands. If it PASSES, the entry is stale and this raises: the
+        same strictness the declarative ``xfail(strict=True)`` gives the
+        fixture-level map. Otherwise a fixed blocker would sit in the map
+        forever, unnoticed, exactly as the imperative `pytest.xfail` allowed.
+        """
+        skip_bead = COMPONENT_SKIP.get((fixture, kind, name))
+        label = f"{fixture}/{kind}/{name}"
+        if skip_bead is None:
+            _execute_component_tests(
+                label=label,
+                file_subset=subset(),
+                component_name=name,
+                tests=tests,
+                model_tol=tol,
+            )
+            return True
+        try:
+            _execute_component_tests(
+                label=label,
+                file_subset=subset(),
+                component_name=name,
+                tests=tests,
+                model_tol=tol,
+            )
+        except Exception:
+            # Still blocked, as recorded — the skip is doing real work.
+            xfail_reasons.append(f"{kind}/{name}: {skip_bead}")
+            return False
+        raise AssertionError(
+            f"STALE COMPONENT_SKIP: ({fixture!r}, {kind!r}, {name!r}) is recorded as "
+            f"blocked by {skip_bead}, but its inline tests now PASS. Remove the entry."
+        )
+
     for mname, mraw in (raw.get("models") or {}).items():
         tests = mraw.get("tests") or []
         if not tests:
             continue
-        skip_bead = COMPONENT_SKIP.get((fixture, "models", mname))
-        if skip_bead is not None:
-            xfail_reasons.append(f"models/{mname}: {skip_bead}")
-            continue
-        subset = _single_model_subset(file, mname)
-        _execute_component_tests(
-            label=f"{fixture}/models/{mname}",
-            file_subset=subset,
-            component_name=mname,
-            tests=tests,
-            model_tol=mraw.get("tolerance"),
-        )
-        any_executed = True
+        if _run_component(
+            "models",
+            mname,
+            lambda: _single_model_subset(file, mname),
+            tests,
+            mraw.get("tolerance"),
+        ):
+            any_executed = True
 
     for rsname, rraw in (raw.get("reaction_systems") or {}).items():
         tests = rraw.get("tests") or []
         if not tests:
             continue
-        skip_bead = COMPONENT_SKIP.get((fixture, "reaction_systems", rsname))
-        if skip_bead is not None:
-            xfail_reasons.append(f"reaction_systems/{rsname}: {skip_bead}")
-            continue
-        subset = _single_rs_subset(file, rsname)
-        _execute_component_tests(
-            label=f"{fixture}/reaction_systems/{rsname}",
-            file_subset=subset,
-            component_name=rsname,
-            tests=tests,
-            model_tol=rraw.get("tolerance"),
-        )
-        any_executed = True
+        if _run_component(
+            "reaction_systems",
+            rsname,
+            lambda: _single_rs_subset(file, rsname),
+            tests,
+            rraw.get("tolerance"),
+        ):
+            any_executed = True
 
     for reason in xfail_reasons:
         warnings.warn(
@@ -261,7 +302,10 @@ def test_simulation_fixture_tests_blocks(fixture: str) -> None:
             stacklevel=1,
         )
     if xfail_reasons and not any_executed:
-        pytest.xfail(f"{fixture}: all components blocked — " + "; ".join(xfail_reasons))
+        # Every component is blocked and each was RUN and confirmed still
+        # failing (see `_run_component`), so failing here is honest: the fixture
+        # carries a strict xfail mark, which this satisfies.
+        raise AssertionError(f"{fixture}: all components blocked — " + "; ".join(xfail_reasons))
     if not any_executed:
         pytest.skip(f"{fixture}: no inline tests blocks to execute")
 
