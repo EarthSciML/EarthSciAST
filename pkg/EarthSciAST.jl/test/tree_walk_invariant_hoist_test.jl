@@ -382,3 +382,484 @@ _fn_build(body, N; params = Dict{String,Float64}(), u = k -> 1.0 + 0.01k) =
         end
     end
 end
+
+# ---------------------------------------------------------------------------
+# SHARING a lane-invariant subtree — across kernels, and with the scalar CSE
+# prelude (EarthSciSerialization-ha2; audit finding #4 (c) and (d)).
+#
+# The hoist above makes an invariant subtree cost ONE scalar eval per kernel per
+# RHS call instead of N. But each kernel hoisted in isolation, and none of them
+# talked to the scalar CSE prelude, so a factor written into two array equations
+# and one scalar equation was still evaluated THREE times per call — and the
+# scalar occurrence looked like a SINGLETON to `_cse_count!` (which walks
+# `ASTExpr` entries; the array path produces none), so it did not even get a
+# prelude slot of its own.
+#
+# `_share_lane_invariants!` (tree_walk/invariant_share.jl) closes both directions
+# with a post-pass over the compiled `_Node` IR. What these tests pin:
+#
+#   1. THE REPRO — 2 array kernels + 1 scalar equation, one slot, one evaluation.
+#   2. Cross-kernel sharing with no scalar occurrence at all.
+#   3. Kernel → EXISTING prelude slot: an invariant that a scalar-CSE'd def
+#      already computes reuses that slot rather than minting a new one. This is
+#      the case that forces the value-number key to EXPAND through `_NK_CACHED`:
+#      the def's own body is already compressed into cache reads, the payload is
+#      written out in full, and they must still be recognized as one value.
+#   4. THE KEY IS EXACT — invariants that merely LOOK alike (different parameter,
+#      different literal, different `interp.linear` table, different forcing-buffer
+#      offset) must never collide. Asserted on the VALUES, because a bad key here
+#      produces silently wrong numbers, not a crash. `_struct_sig!` would merge
+#      three of these four (it ignores literal values and the `fn` spec by design,
+#      to group cells into one template) — which is exactly why this pass has its
+#      own key and does not reuse it.
+#   5. A kernel-unique invariant is LEFT ALONE (a slot would cost more than it saves).
+#   6. `:inplace` and `:oop` agree bit-for-bit, and `f!` still allocates nothing.
+# ---------------------------------------------------------------------------
+
+# Every `_VK_INVARIANT` payload across every kernel of a built evaluator, in
+# kernel order.
+function _inv_payloads(f!)
+    out = ESM._Node[]
+    walk(n) = (n.kind === ESM._VK_INVARIANT && push!(out, n.payload::ESM._Node);
+               foreach(walk, n.children))
+    for vk in getfield(f!, :vec_kernels)
+        walk(vk.template)
+    end
+    return out
+end
+
+# Is `n` a bare read of CSE prelude slot `s`?
+_is_cached(n::ESM._Node, s::Int) = n.kind === ESM._NK_CACHED && n.idx == s
+_is_cached(n::ESM._Node) = n.kind === ESM._NK_CACHED
+
+# Does `n` (a compiled scalar tree) contain a read of slot `s`?
+_reads_slot(n::ESM._Node, s::Int) =
+    _is_cached(n, s) || any(c -> _reads_slot(c, s), n.children)
+
+# How many `_NK_OP` nodes with op `o` are actually EVALUATED per RHS call: the
+# prelude runs once, each scalar equation's tree runs once, and each kernel's
+# `_VK_INVARIANT` payload runs once. (Lane-varying `_VK_OP`s are a different
+# question — this counts the once-per-call scalar work, which is what the pass
+# is about.)
+function _evals_per_call(f!, o::Symbol)
+    cnt(n::ESM._Node) = (n.kind === ESM._NK_OP && n.op === o ? 1 : 0) +
+                        sum(cnt, n.children; init = 0)
+    tot = sum(cnt, getfield(f!, :cse_prelude); init = 0)
+    tot += sum(cnt(nd) for (_, nd) in getfield(f!, :rhs_list); init = 0)
+    tot += sum(cnt, _inv_payloads(f!); init = 0)
+    return tot
+end
+
+# The lane-invariant Arrhenius factor `A*exp(-Ea/(R*Tref))`: pure parameter
+# algebra, no free cell index, and structurally identical wherever it is written.
+_arrh() = _op("*", _v("A"), _op("exp", _op("/", _op("neg", _v("Ea")),
+                                           _op("*", _v("R"), _v("Tref")))))
+_arrh_val(; A = 1e6, Ea = 5000.0, R = 8.314, Tref = 298.0) = A * exp(-Ea / (R * Tref))
+
+_arrh_params() = Dict{String,ESM.ModelVariable}(
+    "A"    => ModelVariable(ParameterVariable; default = 1e6),
+    "Ea"   => ModelVariable(ParameterVariable; default = 5000.0),
+    "R"    => ModelVariable(ParameterVariable; default = 8.314),
+    "Tref" => ModelVariable(ParameterVariable; default = 298.0))
+
+@testset "lane-invariant subtrees are shared across kernels and with the prelude" begin
+
+    # ---------------------------------------------------------------------
+    # 1. THE REPRO. `A*exp(-Ea/(R*Tref))` in two array equations AND one scalar
+    #    equation. Before: `_VK_INVARIANT` per kernel = [1, 1], `n_cse_slots = 0`
+    #    → the identical subtree evaluated 3× per RHS call.
+    # ---------------------------------------------------------------------
+    @testset "2 array kernels + 1 scalar equation → ONE slot, ONE evaluation" begin
+        N = 8
+        vars = merge(_arrh_params(), Dict{String,ESM.ModelVariable}(
+            "u" => ModelVariable(StateVariable),
+            "w" => ModelVariable(StateVariable),
+            "s" => ModelVariable(StateVariable; default = 1.0)))
+        eqs = ESM.Equation[
+            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
+                         _ao1(_op("*", _arrh(), _idx("u", _v("i"))), "i", 1, N)),
+            ESM.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N),
+                         _ao1(_op("*", _arrh(), _idx("w", _v("i"))), "i", 1, N)),
+            ESM.Equation(_op("D", _v("s"); wrt = "t"), _op("*", _arrh(), _v("s"))),
+        ]
+        ics = merge(Dict("u[$k]" => 1.0 for k in 1:N), Dict("w[$k]" => 1.0 for k in 1:N))
+        f!, u0, p, _, vm, diag =
+            ESM._build_evaluator_impl(ESM.Model(vars, eqs); initial_conditions = ics)
+
+        # -- structural --
+        @test diag.n_vec_kernels == 2
+        @test diag.n_cse_slots == 0            # the scalar pass still sees a singleton...
+        @test diag.n_invariant_slots == 1      # ...and the IR post-pass names it once
+        @test diag.n_invariant_shared == 2     # both kernels' payloads collapsed
+        @test diag.n_invariant_scalar_shared == 1   # ...and the scalar occurrence too
+
+        prelude = getfield(f!, :cse_prelude)
+        @test length(prelude) == 1
+        @test length(getfield(f!, :cse_cache).f64) == 1   # scratch grew with it
+
+        # Both kernels' invariant payloads are now a bare read of THE SAME slot...
+        pls = _inv_payloads(f!)
+        @test length(pls) == 2
+        @test all(n -> _is_cached(n, 1), pls)
+        # ...and so is the scalar equation's occurrence.
+        @test length(getfield(f!, :rhs_list)) == 1
+        @test _reads_slot(getfield(f!, :rhs_list)[1][2], 1)
+
+        # The `exp` — the expensive part — is now evaluated ONCE per RHS call, not 3×.
+        @test _evals_per_call(f!, :exp) == 1
+
+        # -- numeric: bit-identical to the value computed directly --
+        k = _arrh_val()
+        u = copy(u0)
+        for i in 1:N
+            u[vm["u[$i]"]] = 0.5i
+            u[vm["w[$i]"]] = 0.25i
+        end
+        u[vm["s"]] = 3.0
+        du = similar(u); f!(du, u, p, 0.0)
+        for i in 1:N
+            @test du[vm["u[$i]"]] == k * (0.5i)     # bit-for-bit
+            @test du[vm["w[$i]"]] == k * (0.25i)
+        end
+        @test du[vm["s"]] == k * 3.0
+    end
+
+    # ---------------------------------------------------------------------
+    # 2. Cross-kernel only (audit finding #4c): no scalar equation anywhere.
+    # ---------------------------------------------------------------------
+    @testset "cross-kernel only: two array equations share one slot" begin
+        N = 12
+        vars = merge(_arrh_params(), Dict{String,ESM.ModelVariable}(
+            "u" => ModelVariable(StateVariable), "w" => ModelVariable(StateVariable)))
+        eqs = ESM.Equation[
+            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
+                         _ao1(_op("*", _arrh(), _idx("u", _v("i"))), "i", 1, N)),
+            ESM.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N),
+                         _ao1(_op("+", _arrh(), _idx("w", _v("i"))), "i", 1, N)),
+        ]
+        ics = merge(Dict("u[$k]" => 0.0 for k in 1:N), Dict("w[$k]" => 0.0 for k in 1:N))
+        f!, u0, p, _, vm, diag =
+            ESM._build_evaluator_impl(ESM.Model(vars, eqs); initial_conditions = ics)
+
+        @test diag.n_vec_kernels == 2
+        @test diag.n_scalar_entries == 0
+        @test diag.n_invariant_slots == 1
+        @test diag.n_invariant_shared == 2
+        @test diag.n_invariant_scalar_shared == 0
+        pls = _inv_payloads(f!)
+        @test length(pls) == 2
+        @test all(n -> _is_cached(n, 1), pls)
+        @test _evals_per_call(f!, :exp) == 1
+
+        k = _arrh_val()
+        u = copy(u0)
+        for i in 1:N
+            u[vm["u[$i]"]] = 2.0i
+            u[vm["w[$i]"]] = 3.0i
+        end
+        du = similar(u); f!(du, u, p, 0.0)
+        for i in 1:N
+            @test du[vm["u[$i]"]] == k * (2.0i)
+            @test du[vm["w[$i]"]] == k + (3.0i)
+        end
+    end
+
+    # ---------------------------------------------------------------------
+    # 3. Kernel → EXISTING prelude slot (audit finding #4d proper). The scalar
+    #    equations already share `exp(-Ea/(R*Tref))` twice, so the scalar pass
+    #    caches it. The kernel's invariant is the SAME value and must reuse that
+    #    slot, minting no new one.
+    #
+    #    This is the test that forces `_NK_CACHED` expansion in the key: the
+    #    prelude def's body has itself been compressed into cache reads
+    #    (`exp(CACHED(j))`), while the kernel payload is written out in full
+    #    (`exp(/(neg(Ea), *(R,Tref)))`). A key that did not expand through the
+    #    cached ref would see two different computations and miss the share.
+    # ---------------------------------------------------------------------
+    @testset "an invariant that a prelude def already computes reuses that slot" begin
+        N = 6
+        expfac() = _op("exp", _op("/", _op("neg", _v("Ea")),
+                                  _op("*", _v("R"), _v("Tref"))))
+        vars = merge(_arrh_params(), Dict{String,ESM.ModelVariable}(
+            "c" => ModelVariable(StateVariable),
+            "x" => ModelVariable(StateVariable; default = 2.0),
+            "y" => ModelVariable(StateVariable; default = 5.0)))
+        eqs = ESM.Equation[
+            ESM.Equation(_op("D", _v("x"); wrt = "t"), _op("*", expfac(), _v("x"))),
+            ESM.Equation(_op("D", _v("y"); wrt = "t"), _op("*", expfac(), _v("y"))),
+            ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, N),
+                         _ao1(_op("*", expfac(), _idx("c", _v("i"))), "i", 1, N)),
+        ]
+        ics = Dict("c[$k]" => 1.0 for k in 1:N)
+        f!, u0, p, _, vm, diag =
+            ESM._build_evaluator_impl(ESM.Model(vars, eqs); initial_conditions = ics)
+
+        @test diag.n_cse_slots >= 1            # the scalar pass cached `exp(...)`
+        @test diag.n_invariant_slots == 0      # no NEW slot was needed...
+        @test diag.n_invariant_shared == 1     # ...the kernel reused the existing one
+        pls = _inv_payloads(f!)
+        @test length(pls) == 1
+        @test _is_cached(pls[1])
+        # The slot it reads is one the SCALAR pass created, not one appended here.
+        @test pls[1].idx <= diag.n_cse_slots
+        # ...and the prelude is still exactly the scalar pass's.
+        @test length(getfield(f!, :cse_prelude)) == diag.n_cse_slots
+        @test _evals_per_call(f!, :exp) == 1
+
+        e = exp(-5000.0 / (8.314 * 298.0))
+        u = copy(u0)
+        for i in 1:N; u[vm["c[$i]"]] = 0.5i; end
+        u[vm["x"]] = 2.0; u[vm["y"]] = 5.0
+        du = similar(u); f!(du, u, p, 0.0)
+        @test du[vm["x"]] == e * 2.0
+        @test du[vm["y"]] == e * 5.0
+        for i in 1:N
+            @test du[vm["c[$i]"]] == e * (0.5i)
+        end
+    end
+
+    # ---------------------------------------------------------------------
+    # 4. THE KEY MUST BE EXACT. Four families of near-miss invariants: each
+    #    appears in TWO kernels (so a correct key gives each its OWN slot) and
+    #    differs from its neighbour only in a leaf value or a `fn` spec — the
+    #    very things `_struct_sig!` throws away. Values are the assertion.
+    # ---------------------------------------------------------------------
+    @testset "near-miss invariants never collide" begin
+
+        @testset "different PARAMETERS" begin
+            # exp(-Ea/(R*T1)) in kernels 1,2 · exp(-Ea/(R*T2)) in kernels 3,4
+            N = 5
+            fac(T) = _op("exp", _op("/", _op("neg", _v("Ea")),
+                                    _op("*", _v("R"), _v(T))))
+            vars = Dict{String,ESM.ModelVariable}(
+                "Ea" => ModelVariable(ParameterVariable; default = 5000.0),
+                "R"  => ModelVariable(ParameterVariable; default = 8.314),
+                "T1" => ModelVariable(ParameterVariable; default = 298.0),
+                "T2" => ModelVariable(ParameterVariable; default = 350.0))
+            names = ["a", "b", "c", "d"]
+            for nm in names
+                vars[nm] = ModelVariable(StateVariable)
+            end
+            eqs = [ESM.Equation(_ao1(_Didx(nm, _v("i")), "i", 1, N),
+                                _ao1(_op("*", fac(j <= 2 ? "T1" : "T2"),
+                                         _idx(nm, _v("i"))), "i", 1, N))
+                   for (j, nm) in enumerate(names)]
+            ics = Dict("$(nm)[$k]" => 1.0 for nm in names for k in 1:N)
+            f!, u0, p, _, vm, diag =
+                ESM._build_evaluator_impl(ESM.Model(vars, eqs); initial_conditions = ics)
+            @test diag.n_invariant_slots == 2       # TWO distinct values → two slots
+            @test diag.n_invariant_shared == 4
+
+            e1 = exp(-5000.0 / (8.314 * 298.0))
+            e2 = exp(-5000.0 / (8.314 * 350.0))
+            @test e1 != e2
+            u = copy(u0)
+            for nm in names, k in 1:N; u[vm["$(nm)[$k]"]] = 1.0 + 0.1k; end
+            du = similar(u); f!(du, u, p, 0.0)
+            for (j, nm) in enumerate(names), k in 1:N
+                @test du[vm["$(nm)[$k]"]] == (j <= 2 ? e1 : e2) * (1.0 + 0.1k)
+            end
+        end
+
+        @testset "different LITERALS (what `_struct_sig!` deliberately ignores)" begin
+            # exp(2.0*g) in kernels 1,2 · exp(3.0*g) in kernels 3,4. `_struct_sig!`
+            # prints a bare `L` for BOTH literals — sharing on that key would give
+            # every equation the first-seen literal's value.
+            N = 5
+            fac(c) = _op("exp", _op("*", _n(c), _v("g")))
+            vars = Dict{String,ESM.ModelVariable}(
+                "g" => ModelVariable(ParameterVariable; default = 0.25))
+            names = ["a", "b", "c", "d"]
+            for nm in names
+                vars[nm] = ModelVariable(StateVariable)
+            end
+            eqs = [ESM.Equation(_ao1(_Didx(nm, _v("i")), "i", 1, N),
+                                _ao1(_op("*", fac(j <= 2 ? 2.0 : 3.0),
+                                         _idx(nm, _v("i"))), "i", 1, N))
+                   for (j, nm) in enumerate(names)]
+            ics = Dict("$(nm)[$k]" => 1.0 for nm in names for k in 1:N)
+            f!, u0, p, _, vm, diag =
+                ESM._build_evaluator_impl(ESM.Model(vars, eqs); initial_conditions = ics)
+            @test diag.n_invariant_slots == 2
+            @test diag.n_invariant_shared == 4
+
+            e1 = exp(2.0 * 0.25)
+            e2 = exp(3.0 * 0.25)
+            @test e1 != e2
+            u = copy(u0)
+            for nm in names, k in 1:N; u[vm["$(nm)[$k]"]] = 2.0 + 0.5k; end
+            du = similar(u); f!(du, u, p, 0.0)
+            for (j, nm) in enumerate(names), k in 1:N
+                @test du[vm["$(nm)[$k]"]] == (j <= 2 ? e1 : e2) * (2.0 + 0.5k)
+            end
+        end
+
+        @testset "`interp.linear` with different const TABLES" begin
+            # `_struct_sig!` keys a `fn` on `payload[1]` — the NAME — and not on the
+            # typed spec, so it cannot tell these two apart. This key must.
+            N = 5
+            tblA = [10.0, 20.0, 40.0, 80.0, 160.0]
+            tblB = [-1.0, -2.0, -4.0, -8.0, -16.0]
+            ax = [0.0, 1.0, 2.0, 3.0, 4.0]
+            fac(tbl) = _op("fn", _const(tbl), _const(ax), _v("t"); name = "interp.linear")
+            names = ["a", "b", "c", "d"]
+            vars = Dict{String,ESM.ModelVariable}(
+                nm => ModelVariable(StateVariable) for nm in names)
+            eqs = [ESM.Equation(_ao1(_Didx(nm, _v("i")), "i", 1, N),
+                                _ao1(_op("*", fac(j <= 2 ? tblA : tblB),
+                                         _idx(nm, _v("i"))), "i", 1, N))
+                   for (j, nm) in enumerate(names)]
+            ics = Dict("$(nm)[$k]" => 1.0 for nm in names for k in 1:N)
+            f!, u0, p, _, vm, diag =
+                ESM._build_evaluator_impl(ESM.Model(vars, eqs); initial_conditions = ics)
+            @test diag.n_invariant_slots == 2
+            @test diag.n_invariant_shared == 4
+
+            u = copy(u0)
+            for nm in names, k in 1:N; u[vm["$(nm)[$k]"]] = 1.0 + 0.3k; end
+            du = similar(u)
+            for t in (0.5, 2.25, 3.75)
+                f!(du, u, p, t)
+                rA = Float64(ESM.evaluate_closed_function("interp.linear", Any[tblA, ax, t]))
+                rB = Float64(ESM.evaluate_closed_function("interp.linear", Any[tblB, ax, t]))
+                @test rA != rB
+                for (j, nm) in enumerate(names), k in 1:N
+                    @test du[vm["$(nm)[$k]"]] == (j <= 2 ? rA : rB) * (1.0 + 0.3k)
+                end
+            end
+        end
+
+        @testset "different forcing-buffer OFFSETS" begin
+            # Live `param_arrays` gathers reach the prelude through the SCALAR pass
+            # (a `_VK_INVARIANT` payload can never hold one — `_VK_PGATHER` is not
+            # lane-invariant), so the key is exercised here by NUMBERING those defs:
+            # a key that ignored the gather's offset would map two different prelude
+            # slots to one value number and let a later rewrite read the wrong one.
+            # An array equation is present so the pass actually runs.
+            N = 4
+            buf = [2.0, 5.0, 11.0]
+            g(k) = _op("exp", _idx("forcing", _i(k)))
+            vars = Dict{String,ESM.ModelVariable}(
+                "c" => ModelVariable(StateVariable),
+                "q" => ModelVariable(ParameterVariable; default = 1.5),
+                "x" => ModelVariable(StateVariable; default = 1.0),
+                "y" => ModelVariable(StateVariable; default = 1.0),
+                "z" => ModelVariable(StateVariable; default = 1.0),
+                "w" => ModelVariable(StateVariable; default = 1.0))
+            eqs = ESM.Equation[
+                # `exp(forcing[1])` twice and `exp(forcing[2])` twice ⇒ two prelude slots.
+                ESM.Equation(_op("D", _v("x"); wrt = "t"), _op("*", g(1), _v("x"))),
+                ESM.Equation(_op("D", _v("y"); wrt = "t"), _op("+", g(1), _v("y"))),
+                ESM.Equation(_op("D", _v("z"); wrt = "t"), _op("*", g(2), _v("z"))),
+                ESM.Equation(_op("D", _v("w"); wrt = "t"), _op("+", g(2), _v("w"))),
+                ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, N),
+                             _ao1(_op("*", _op("exp", _v("q")), _idx("c", _v("i"))),
+                                  "i", 1, N)),
+            ]
+            ics = Dict("c[$k]" => 1.0 for k in 1:N)
+            f!, u0, p, _, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs);
+                initial_conditions = ics, param_arrays = Dict("forcing" => buf))
+            @test diag.n_cse_slots >= 2         # the two gathers were NOT merged
+
+            u = copy(u0)
+            u[vm["x"]] = 3.0; u[vm["y"]] = 4.0; u[vm["z"]] = 5.0; u[vm["w"]] = 6.0
+            for k in 1:N; u[vm["c[$k]"]] = 0.5k; end
+            du = similar(u); f!(du, u, p, 0.0)
+            e1, e2 = exp(2.0), exp(5.0)
+            @test e1 != e2
+            @test du[vm["x"]] == e1 * 3.0
+            @test du[vm["y"]] == e1 + 4.0
+            @test du[vm["z"]] == e2 * 5.0       # NOT e1 — a merged key would show here
+            @test du[vm["w"]] == e2 + 6.0
+            for k in 1:N
+                @test du[vm["c[$k]"]] == exp(1.5) * (0.5k)
+            end
+        end
+    end
+
+    # ---------------------------------------------------------------------
+    # 5. A kernel-unique invariant is LEFT ALONE. The `_VK_INVARIANT` node already
+    #    evaluates it exactly once per call; a slot would add a store and a load to
+    #    save nothing.
+    # ---------------------------------------------------------------------
+    @testset "a kernel-unique invariant is not promoted to a slot" begin
+        N = 7
+        vars = Dict{String,ESM.ModelVariable}(
+            "u" => ModelVariable(StateVariable), "w" => ModelVariable(StateVariable),
+            "g" => ModelVariable(ParameterVariable; default = 0.25),
+            "h" => ModelVariable(ParameterVariable; default = 4.0))
+        eqs = ESM.Equation[
+            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
+                         _ao1(_op("*", _op("exp", _v("g")), _idx("u", _v("i"))), "i", 1, N)),
+            ESM.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N),
+                         _ao1(_op("*", _op("sin", _v("h")), _idx("w", _v("i"))), "i", 1, N)),
+        ]
+        ics = merge(Dict("u[$k]" => 1.0 for k in 1:N), Dict("w[$k]" => 1.0 for k in 1:N))
+        f!, u0, p, _, vm, diag =
+            ESM._build_evaluator_impl(ESM.Model(vars, eqs); initial_conditions = ics)
+
+        @test diag.n_vec_kernels == 2
+        @test diag.n_invariant_slots == 0
+        @test diag.n_invariant_shared == 0
+        @test isempty(getfield(f!, :cse_prelude))
+        # Both stay plain `_VK_INVARIANT`s over a real subtree, not a cache read.
+        pls = _inv_payloads(f!)
+        @test length(pls) == 2
+        @test all(n -> n.kind === ESM._NK_OP, pls)
+        @test !any(_is_cached, pls)
+
+        u = copy(u0)
+        for k in 1:N; u[vm["u[$k]"]] = 1.0k; u[vm["w[$k]"]] = 2.0k; end
+        du = similar(u); f!(du, u, p, 0.0)
+        for k in 1:N
+            @test du[vm["u[$k]"]] == exp(0.25) * (1.0k)
+            @test du[vm["w[$k]"]] == sin(4.0) * (2.0k)
+        end
+    end
+
+    # ---------------------------------------------------------------------
+    # 6. Both emitters, and the zero-alloc property.
+    # ---------------------------------------------------------------------
+    @testset ":inplace and :oop agree bit-for-bit, and f! still allocates nothing" begin
+        N = 16
+        vars = merge(_arrh_params(), Dict{String,ESM.ModelVariable}(
+            "u" => ModelVariable(StateVariable),
+            "w" => ModelVariable(StateVariable),
+            "s" => ModelVariable(StateVariable; default = 1.0)))
+        eqs = ESM.Equation[
+            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
+                         _ao1(_op("*", _arrh(), _idx("u", _v("i"))), "i", 1, N)),
+            ESM.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N),
+                         _ao1(_op("*", _arrh(), _op("+", _idx("w", _v("i")), _v("t"))),
+                              "i", 1, N)),
+            ESM.Equation(_op("D", _v("s"); wrt = "t"), _op("*", _arrh(), _v("s"))),
+        ]
+        model = ESM.Model(vars, eqs)
+        ics = merge(Dict("u[$k]" => 1.0 for k in 1:N), Dict("w[$k]" => 1.0 for k in 1:N))
+
+        fi!, u0, p, _, vm = ESM.build_evaluator(model; initial_conditions = ics)
+        fo, _, po, _, _ = ESM.build_evaluator(model; initial_conditions = ics, form = :oop)
+
+        k = _arrh_val()
+        u = copy(u0)
+        for i in 1:N
+            u[vm["u[$i]"]] = 0.5i
+            u[vm["w[$i]"]] = 0.25i
+        end
+        u[vm["s"]] = 3.0
+        for t in (0.0, 1.75, -0.5)
+            du = similar(u); fi!(du, u, p, t)
+            @test fo(u, po, t) == du            # the two emitters, bit-for-bit
+            for i in 1:N
+                @test du[vm["u[$i]"]] == k * (0.5i)
+                @test du[vm["w[$i]"]] == k * (0.25i + t)
+            end
+            @test du[vm["s"]] == k * 3.0
+        end
+
+        # The prelude read is a field load into a preallocated scratch, so the RHS
+        # stays allocation-free — the property the shared slot must not cost.
+        du = similar(u0)
+        @test rhs_alloc_bytes(fi!, du, u0, p, 1.25) == 0
+    end
+end
