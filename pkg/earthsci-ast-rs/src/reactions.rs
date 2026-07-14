@@ -180,6 +180,7 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
                 var_type: VariableType::State,
                 units: species.units.clone(),
                 default: species.default,
+                default_units: None,
                 description: species.description.clone(),
                 expression: None,
                 shape: None,
@@ -219,10 +220,7 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
 /// Infallible — every path yields an [`Expr`] (the mass-action lowering cannot
 /// fail once the substrates are known), so it returns a bare `Expr` rather than
 /// a `Result`.
-fn enhance_rate_with_mass_action(
-    rate: &Expr,
-    substrates: &[crate::StoichiometricEntry],
-) -> Expr {
+fn enhance_rate_with_mass_action(rate: &Expr, substrates: &[crate::StoichiometricEntry]) -> Expr {
     // If no substrates (source reaction), return rate as-is
     if substrates.is_empty() {
         return rate.clone();

@@ -55,6 +55,35 @@ pub(crate) fn validate_model(
     // subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
     let local_scoped = loader_subsystem_scoped_refs(model);
 
+    // A COUPLED model does not own every name it mentions, and its own equations
+    // need not balance its own unknowns (see `coupled_system_names`). Reference
+    // integrity and equation balance are therefore SKIPPED for it — the settled
+    // contract, matching Go `validate.go` and TS `validate/orchestrator.ts`.
+    // Event consistency still runs, with the §6.4 `_var` placeholder credited,
+    // which is where a genuinely undeclared event target is still caught.
+    let is_coupled = coupled_system_names(esm_file).contains(model_name);
+
+    // Every reference check routes through this one gate, so "a coupled model
+    // skips reference integrity" is enforced in ONE place rather than sprinkled
+    // across the five call sites below. Unit propagation is deliberately NOT
+    // gated: a coupled model may not own every NAME it mentions, but the
+    // dimensions of what it does spell still have to agree.
+    let check_refs =
+        |expr: &crate::Expr, path: &str, idx: usize, errs: &mut Vec<StructuralError>| {
+            if is_coupled {
+                return;
+            }
+            validate_expression_references_with_systems(
+                expr,
+                &defined_vars,
+                system_refs,
+                &local_scoped,
+                path,
+                idx,
+                errs,
+            );
+        };
+
     // Check the equation/unknown balance (esm-spec §4.9.4).
     //
     // The check is UNKNOWNS vs EQUATIONS — not "state variables vs
@@ -69,7 +98,7 @@ pub(crate) fn validate_model(
     // `initialization_equations` (§6.2) are a separate block with a separate
     // balance and are deliberately NOT counted here.
     let defining_equations = count_defining_equations(&model.equations);
-    if defining_equations != state_vars.len() {
+    if !is_coupled && defining_equations != state_vars.len() {
         let (extra_equations_for, missing_equations_for) =
             analyze_equation_mismatch(&model.equations, &state_vars);
 
@@ -140,15 +169,7 @@ pub(crate) fn validate_model(
     for (eq_idx, equation) in model.initialization_equations.iter().flatten().enumerate() {
         let eq_path = format!("{model_path}/initialization_equations/{eq_idx}");
         for expr in [&equation.lhs, &equation.rhs] {
-            validate_expression_references_with_systems(
-                expr,
-                &defined_vars,
-                system_refs,
-                &local_scoped,
-                &eq_path,
-                eq_idx,
-                errors,
-            );
+            check_refs(expr, &eq_path, eq_idx, errors);
         }
     }
 
@@ -158,11 +179,8 @@ pub(crate) fn validate_model(
         let Ok(expr) = serde_json::from_value::<crate::Expr>(guess.clone()) else {
             continue; // not an expression (a bare number is fine)
         };
-        validate_expression_references_with_systems(
+        check_refs(
             &expr,
-            &defined_vars,
-            system_refs,
-            &local_scoped,
             &format!("{model_path}/guesses/{var_name}"),
             0,
             errors,
@@ -180,11 +198,8 @@ pub(crate) fn validate_model(
             else {
                 continue;
             };
-            validate_expression_references_with_systems(
+            check_refs(
                 reference,
-                &defined_vars,
-                system_refs,
-                &local_scoped,
                 &format!("{model_path}/tests/{t_idx}/assertions/{a_idx}/reference"),
                 0,
                 errors,
@@ -196,15 +211,7 @@ pub(crate) fn validate_model(
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         let eq_path = format!("{model_path}/equations/{eq_idx}");
         for expr in [&equation.lhs, &equation.rhs] {
-            validate_expression_references_with_systems(
-                expr,
-                &defined_vars,
-                system_refs,
-                &local_scoped,
-                &eq_path,
-                eq_idx,
-                errors,
-            );
+            check_refs(expr, &eq_path, eq_idx, errors);
         }
 
         // Validate dimensional consistency of the equation via expression-level
@@ -218,6 +225,39 @@ pub(crate) fn validate_model(
             errors,
             warnings,
         );
+    }
+
+    // A `default_units` that names a unit OTHER than the declared `units` means
+    // the `default` NUMBER is expressed in the wrong unit — `units: "K"` with
+    // `default: 25.0, default_units: "degC"` stores 25 for a variable that
+    // actually reads 298.15 (esm-spec §4.8; `tests/invalid/
+    // units_parameter_default_mismatch.esm`).
+    //
+    // The comparison is on unit IDENTITY, not dimension: `K` and `degC` share a
+    // dimension and (in a purely multiplicative model) a scale, differing only
+    // by an affine OFFSET that `Unit` cannot represent — so a dimensional check
+    // is structurally incapable of catching this, which is why every binding but
+    // Python missed it. Matching Python, any difference is reported.
+    for (var_name, variable) in &model.variables {
+        let (Some(declared), Some(default_units)) =
+            (variable.units.as_deref(), variable.default_units.as_deref())
+        else {
+            continue;
+        };
+        if declared.trim() == default_units.trim() {
+            continue;
+        }
+        errors.push(StructuralError {
+            path: format!("{model_path}/variables/{var_name}"),
+            code: StructuralErrorCode::UnitInconsistency,
+            message: "Parameter default value units do not match declared units".to_string(),
+            details: serde_json::json!({
+                "variable": var_name,
+                "declared_units": declared,
+                "default_value": variable.default,
+                "inferred_default_units": default_units,
+            }),
+        });
     }
 
     // Validate observed variable expressions
@@ -240,15 +280,7 @@ pub(crate) fn validate_model(
             // If the expression exists, validate its variable references
             if let Some(ref expr) = variable.expression {
                 let expr_path = format!("{model_path}/variables/{var_name}/expression");
-                validate_expression_references_with_systems(
-                    expr,
-                    &defined_vars,
-                    system_refs,
-                    &local_scoped,
-                    &expr_path,
-                    0,
-                    errors,
-                );
+                check_refs(expr, &expr_path, 0, errors);
 
                 // Dimension-check the defining expression. This is where most
                 // of the shared `units_*.esm` fixtures put their defect (an
@@ -265,6 +297,17 @@ pub(crate) fn validate_model(
                     errors,
                     warnings,
                 );
+
+                if let Some(declared) = &declared {
+                    check_linear_conversion_factor(
+                        expr,
+                        declared,
+                        model,
+                        &format!("{model_path}/variables/{var_name}"),
+                        var_name,
+                        errors,
+                    );
+                }
             }
         }
     }
@@ -284,6 +327,146 @@ pub(crate) fn validate_model(
             validate_continuous_event(event, event_idx, &model_path, &defined_vars, errors);
         }
     }
+}
+
+/// A literal-scaled UNIT CONVERSION whose numeric factor is wrong
+/// (`tests/invalid/units_conversion_factor_error.esm`).
+///
+/// The shape is exactly `<literal> * <variable>` where the variable's declared
+/// unit has the SAME DIMENSION as the observed variable's but a DIFFERENT SCALE
+/// — that is what makes the expression a unit conversion rather than ordinary
+/// arithmetic. In that case the literal is not free: it MUST be the conversion
+/// factor between the two units. `converted_pressure [Pa] ~ 50000 * p_atm [atm]`
+/// is dimensionally impeccable and numerically nonsense — the factor has to be
+/// 101325.
+///
+/// The same-scale case is deliberately SKIPPED, and that is what keeps the check
+/// sound: `y [m] ~ 2 * x [m]` is a legitimate coefficient, not a botched
+/// conversion, and a naive "the literal must make the scales agree" rule would
+/// reject it. No conversion is implied when the units are already identical, so
+/// nothing is asserted about the coefficient. (This is the formulation Python
+/// arrived at; Go and TS check neither case.)
+fn check_linear_conversion_factor(
+    expr: &crate::Expr,
+    declared: &crate::units::Unit,
+    model: &crate::Model,
+    path: &str,
+    var_name: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    let crate::Expr::Operator(node) = expr else {
+        return;
+    };
+    if node.op != "*" || node.args.len() != 2 {
+        return;
+    }
+
+    // Exactly one literal factor and one bare variable reference.
+    let (factor, src_name) = match (&node.args[0], &node.args[1]) {
+        (crate::Expr::Number(f), crate::Expr::Variable(v)) => (*f, v),
+        (crate::Expr::Variable(v), crate::Expr::Number(f)) => (*f, v),
+        (crate::Expr::Integer(i), crate::Expr::Variable(v)) => (*i as f64, v),
+        (crate::Expr::Variable(v), crate::Expr::Integer(i)) => (*i as f64, v),
+        _ => return,
+    };
+
+    let Some(src_units) = model
+        .variables
+        .get(src_name)
+        .and_then(|v| v.units.as_deref())
+    else {
+        return;
+    };
+    let Ok(src) = parse_unit(src_units) else {
+        return;
+    };
+
+    // A dimension MISMATCH is a different defect, already reported by
+    // `check_expression_dimensions`; do not double-report it here.
+    if !src.same_dimensions(declared) {
+        return;
+    }
+
+    let (src_scale, dst_scale) = (src.scale(), declared.scale());
+    if !src_scale.is_finite() || !dst_scale.is_finite() || dst_scale == 0.0 {
+        return;
+    }
+    // Identical units ⇒ no conversion is implied ⇒ the coefficient is free.
+    if (src_scale - dst_scale).abs() <= 1e-9 * src_scale.abs().max(dst_scale.abs()) {
+        return;
+    }
+
+    let expected = src_scale / dst_scale;
+    if (factor - expected).abs() <= 1e-6 * expected.abs() {
+        return;
+    }
+
+    errors.push(StructuralError {
+        path: path.to_string(),
+        code: StructuralErrorCode::UnitInconsistency,
+        message: "Unit conversion factor is incorrect for specified unit transformation"
+            .to_string(),
+        details: serde_json::json!({
+            "variable": var_name,
+            "declared_units": model.variables[var_name].units,
+            "source_units": src_units,
+            "declared_factor": factor,
+            "expected_factor": expected,
+        }),
+    });
+}
+
+/// Every system a coupling entry NAMES — as a `systems` member (including the
+/// root of a dotted subsystem path) or as the system half of a `from`/`to`
+/// scoped reference.
+///
+/// A COUPLED system does not own all the names its equations mention. An
+/// operator-style model spells its operand as the §6.4 placeholder `_var` (or a
+/// bare stand-in name), and a `variable_map` supplies a value the target model
+/// never declares; its `equations` may likewise drive a state that lives in the
+/// system it is composed with, so its own equation/unknown count need not
+/// balance. Reference integrity and equation balance are therefore SKIPPED for
+/// these systems — the settled cross-binding contract (Go `coupledSystemNames`,
+/// TS `validate/orchestrator.ts` `coupledSystems`). Event consistency still runs
+/// with `_var` credited, which is where a genuinely undeclared event target is
+/// still caught.
+///
+/// Rust applied both checks unconditionally, which is why it rejected nine valid
+/// coupled documents that Go and TS accept: `equation_count_mismatch` on models
+/// whose equations live in their partner, and `undefined_variable` on the very
+/// operands coupling supplies.
+pub(crate) fn coupled_system_names(esm_file: &EsmFile) -> HashSet<String> {
+    let mut coupled = HashSet::new();
+    let mut add = |name: &str| {
+        if name.is_empty() {
+            return;
+        }
+        coupled.insert(name.to_string());
+        // A dotted endpoint ("Atmosphere.Chemistry.O3") couples the ROOT system
+        // too — that is the model whose checks must relax.
+        if let Some((root, _)) = name.split_once('.') {
+            coupled.insert(root.to_string());
+        }
+    };
+
+    for entry in esm_file.coupling.iter().flatten() {
+        match entry {
+            crate::CouplingEntry::OperatorCompose { systems, .. }
+            | crate::CouplingEntry::Couple { systems, .. } => {
+                for s in systems {
+                    add(s);
+                }
+            }
+            crate::CouplingEntry::VariableMap { from, to, .. } => {
+                add(from);
+                add(to);
+            }
+            // `operator_apply`, `callback` and `event` do not name a pair of
+            // systems whose equations merge, so they do not relax anything.
+            _ => {}
+        }
+    }
+    coupled
 }
 
 /// Reference-check every data-loader variable's `unit_conversion` Expression
@@ -1247,8 +1430,21 @@ fn loader_subsystem_scoped_refs(model: &crate::Model) -> HashSet<String> {
         return refs;
     };
     for (sub_name, value) in subs {
-        if let Ok(loader) = serde_json::from_value::<crate::types::DataLoader>(value.clone()) {
-            for var in loader.variables.keys() {
+        // ANY mounted subsystem exposes `<sub>.<var>` to the owning model — a
+        // DataLoader (RFC pure-io-data-loaders §4.3) and equally a MODEL mounted
+        // by `ref` (§4.7 subsystem inclusion, e.g. `Solar` from lib/solar.esm,
+        // read as `Solar.solar_zenith_angle`). Matching only the DataLoader
+        // SHAPE meant a ref-mounted model subsystem resolved to nothing, and
+        // every reference into it was reported `unresolved_scoped_ref` — which
+        // rejected both standard-library inclusion fixtures. The ref resolver
+        // has already flattened the mount to `{variables, equations}` by now, so
+        // one pass over `variables` (plus `species`, for a reaction subsystem)
+        // covers every mount kind.
+        for field in ["variables", "species"] {
+            let Some(members) = value.get(field).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for var in members.keys() {
                 refs.insert(format!("{sub_name}.{var}"));
             }
         }
@@ -1608,16 +1804,16 @@ pub(crate) fn check_circular_dependencies_in_models(
 
         for equation in &model.equations {
             // Check RHS for scoped references
-            extract_model_dependencies(&equation.rhs, &mut model_deps);
+            extract_model_dependencies(&equation.rhs, &mut model_deps, model_name, models);
 
             // Check LHS for scoped references (though less common)
-            extract_model_dependencies(&equation.lhs, &mut model_deps);
+            extract_model_dependencies(&equation.lhs, &mut model_deps, model_name, models);
         }
 
         // Also check observed variable expressions
         for variable in model.variables.values() {
             if let Some(ref expr) = variable.expression {
-                extract_model_dependencies(expr, &mut model_deps);
+                extract_model_dependencies(expr, &mut model_deps, model_name, models);
             }
         }
 
@@ -1652,13 +1848,33 @@ pub(crate) fn check_circular_dependencies_in_models(
 }
 
 /// Extract model dependencies from an expression by finding scoped references
-fn extract_model_dependencies(expr: &crate::Expr, deps: &mut HashSet<String>) {
+fn extract_model_dependencies(
+    expr: &crate::Expr,
+    deps: &mut HashSet<String>,
+    self_name: &str,
+    models: &HashMap<String, crate::Model>,
+) {
     match expr {
         crate::Expr::Variable(var_name) => {
             // Check if it's a scoped reference (e.g., "ModelA.x")
             if let Some(dot_pos) = var_name.find('.') {
                 let model_name = &var_name[..dot_pos];
-                deps.insert(model_name.to_string());
+                // A model reading into its OWN mounted subsystem
+                // (`EarthSystem.Atmosphere.temp` from inside `EarthSystem`) is
+                // NOT a dependency on itself — it is a reference DOWNWARD into
+                // its own contents. Counting it produced the self-edge
+                // `EarthSystem -> EarthSystem`, which the cycle detector then
+                // reported as a circular dependency, rejecting the valid
+                // scoped_refs_nested.esm. Mirrors Go `addModelDep`'s
+                // `root == self` guard.
+                if model_name == self_name {
+                    return;
+                }
+                // Only a real model can be depended ON: a dotted ref into a data
+                // loader or a reaction system is not a model edge.
+                if models.contains_key(model_name) {
+                    deps.insert(model_name.to_string());
+                }
             }
         }
         crate::Expr::Operator(op_node) => {
@@ -1667,7 +1883,9 @@ fn extract_model_dependencies(expr: &crate::Expr, deps: &mut HashSet<String>) {
             // filter predicates, integral bounds, etc. are picked up. Only
             // dotted `System.var` refs matter here, so the node's bound index
             // symbols (bare names) are naturally ignored.
-            op_node.for_each_child(&mut |arg| extract_model_dependencies(arg, deps));
+            op_node.for_each_child(&mut |arg| {
+                extract_model_dependencies(arg, deps, self_name, models)
+            });
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {
             // Numbers don't reference models

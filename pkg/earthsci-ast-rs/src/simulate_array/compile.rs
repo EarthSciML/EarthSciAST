@@ -622,6 +622,20 @@ fn classify_variables(
             VariableType::State => state_vars.push(name),
             VariableType::Parameter => param_vars.push(name),
             VariableType::Observed => observed_vars.push((name, var)),
+            VariableType::Discrete => {
+                // A discrete variable is piecewise-constant and refreshed by an
+                // event / cadence / loader. The array backend has no refresh
+                // machinery, so binning it as a state (integrated) or a
+                // parameter (frozen) would both be WRONG — and silently so. Fail
+                // loudly instead; the document still VALIDATES, it just cannot be
+                // simulated by this backend yet.
+                return Err(CompileError::UnsupportedFeatureError {
+                    feature: "discrete".to_string(),
+                    message: format!(
+                        "Rust array simulation backend does not yet support discrete (piecewise-constant) variables; variable '{name}' is discrete"
+                    ),
+                });
+            }
             VariableType::Brownian => {
                 return Err(CompileError::UnsupportedFeatureError {
                     feature: "brownian".to_string(),

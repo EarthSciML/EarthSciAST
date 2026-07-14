@@ -1922,6 +1922,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Create a new ESM file with just the requested component
             let mut extracted_esm = earthsci_ast::EsmFile {
                 coupling_roles: None,
+                // The extracted component is a NEW document. Any template call
+                // sites it had were already expanded at load, and metaparameters
+                // already folded, so it declares neither.
+                expression_templates: None,
+                metaparameters: None,
                 esm: esm_file.esm.clone(),
                 metadata: esm_file.metadata.clone(),
                 // Document-scoped registry (v0.8.0): preserve it on the

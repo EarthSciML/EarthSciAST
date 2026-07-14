@@ -906,3 +906,206 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
         r.structural_errors
     );
 }
+
+/// A COUPLED system skips reference integrity AND equation balance; an
+/// UNCOUPLED one does not.
+///
+/// A coupled model does not own every name it mentions — an operator-style model
+/// spells its operand as the §6.4 placeholder `_var` or a bare stand-in, a
+/// `variable_map` supplies a value the target never declares, and its equations
+/// may drive a state living in its partner, so its own equation/unknown count
+/// need not balance. Rust applied both checks unconditionally and so rejected
+/// nine valid coupled documents that Go and TS accept. This is the settled
+/// contract (Go `coupledSystemNames`, TS `coupledSystems`).
+///
+/// The negative half is the point: the same document with the coupling REMOVED
+/// must still report both defects, so the relaxation is scoped to coupling and
+/// has not simply switched the checks off.
+#[test]
+fn coupled_systems_skip_reference_integrity_and_equation_balance() {
+    // `Advection` names `u` (supplied by its partner) and carries one equation
+    // for zero of its own unknowns. Coupled ⇒ both checks stand down.
+    let coupled = r#"{
+      "esm": "0.8.0",
+      "metadata": { "name": "C", "description": "coupled" },
+      "models": {
+        "Advection": {
+          "variables": { "c": { "type": "observed", "units": "kg/m^3",
+                                "expression": { "op": "*", "args": ["u", 2] } } },
+          "equations": [{ "lhs": "c", "rhs": { "op": "*", "args": ["u", 2] } }]
+        },
+        "Wind": {
+          "variables": { "u": { "type": "parameter", "units": "m/s", "default": 1.0 } },
+          "equations": []
+        }
+      },
+      "coupling": [{ "type": "couple", "systems": ["Advection", "Wind"] }]
+    }"#;
+    let r = validate_complete(coupled);
+    assert!(
+        r.structural_errors.is_empty(),
+        "a coupled model must skip reference integrity and equation balance: {:?}",
+        r.structural_errors
+    );
+
+    // Same document, coupling REMOVED: `u` is now genuinely undefined.
+    let uncoupled = coupled.replace(
+        r#""coupling": [{ "type": "couple", "systems": ["Advection", "Wind"] }]"#,
+        r#""coupling": []"#,
+    );
+    let r = validate_complete(&uncoupled);
+    assert!(
+        r.structural_errors
+            .iter()
+            .any(|e| matches!(e.code, StructuralErrorCode::UndefinedVariable)),
+        "an UNCOUPLED model must still be reference-checked: {:?}",
+        r.structural_errors
+    );
+}
+
+/// `discrete` is the fifth member of the schema's `ModelVariable.type` enum.
+///
+/// Rust simply never had it, so `serde` rejected the entire document at parse
+/// with `unknown variant 'discrete'` — five valid fixtures could not even be
+/// LOADED, let alone validated.
+#[test]
+fn discrete_variable_type_loads() {
+    // A `discrete` variable is piecewise-constant and array-shaped (the schema
+    // requires `shape` for it), refreshed by an event / cadence / loader rather
+    // than integrated.
+    let doc = r#"{
+      "esm": "0.8.0",
+      "metadata": { "name": "D", "description": "discrete variable" },
+      "index_sets": { "cells": { "kind": "interval", "size": 3 } },
+      "models": { "M": {
+        "variables": {
+          "x": { "type": "state", "units": "m", "default": 0.0 },
+          "held": { "type": "discrete", "units": "m", "shape": ["cells"] }
+        },
+        "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 1 }]
+      } }
+    }"#;
+    let r = validate_complete(doc);
+    assert!(
+        r.schema_errors.is_empty(),
+        "a `discrete` variable must parse: {:?}",
+        r.schema_errors
+    );
+    assert!(r.is_valid, "and validate: {:?}", r.structural_errors);
+
+    // The variable really is typed `discrete` — not silently coerced.
+    let esm = earthsci_ast::load(doc).expect("load");
+    assert_eq!(
+        esm.models.as_ref().expect("models")["M"].variables["held"].var_type,
+        earthsci_ast::VariableType::Discrete
+    );
+}
+
+/// A `default_units` naming a unit OTHER than the declared `units` means the
+/// `default` NUMBER is in the wrong unit (`units: "K"` + `default: 25.0,
+/// default_units: "degC"` stores 25 for a variable that reads 298.15).
+///
+/// The comparison is on unit IDENTITY, not dimension: `K` and `degC` share a
+/// dimension and a multiplicative scale, differing only by an affine OFFSET that
+/// the `Unit` model cannot represent — so a dimensional check is structurally
+/// incapable of catching this. That is why every binding but Python missed it,
+/// and why Rust did not even model the field.
+#[test]
+fn default_units_must_match_declared_units() {
+    let doc = |default_units: &str| {
+        format!(
+            r#"{{
+              "esm": "0.8.0",
+              "metadata": {{ "name": "U", "description": "default units" }},
+              "models": {{ "M": {{
+                "variables": {{
+                  "temperature": {{ "type": "parameter", "units": "K",
+                                    "default": 25.0, "default_units": "{default_units}" }},
+                  "x": {{ "type": "state", "units": "m", "default": 0.0 }}
+                }},
+                "equations": [{{ "lhs": {{ "op": "D", "args": ["x"], "wrt": "t" }}, "rhs": 1 }}]
+              }} }}
+            }}"#
+        )
+    };
+
+    let bad = validate_complete(&doc("degC"));
+    let e = bad
+        .structural_errors
+        .iter()
+        .find(|e| matches!(e.code, StructuralErrorCode::UnitInconsistency))
+        .expect("K vs degC must be a unit_inconsistency");
+    assert_eq!(e.path, "/models/M/variables/temperature");
+    assert_eq!(e.details["declared_units"], "K");
+    assert_eq!(e.details["inferred_default_units"], "degC");
+
+    // A `default_units` that AGREES is redundant but clean.
+    assert!(
+        validate_complete(&doc("K")).structural_errors.is_empty(),
+        "matching default_units must not be reported"
+    );
+}
+
+/// A literal-scaled UNIT CONVERSION whose factor is wrong — and, crucially, the
+/// ordinary coefficient that must NOT be reported.
+///
+/// `converted_pressure [Pa] ~ 50000 * p_atm [atm]` is dimensionally impeccable
+/// and numerically nonsense: the factor has to be 101325. The check fires only
+/// when the source and declared units share a DIMENSION but differ in SCALE —
+/// that is what makes the expression a conversion rather than arithmetic.
+///
+/// The same-scale case is skipped, and that is what keeps the check sound:
+/// `y [m] ~ 2 * x [m]` is a legitimate coefficient, and the naive rule "the
+/// literal must reconcile the scales" would reject it. No conversion is implied
+/// when the units are already identical, so nothing is asserted about the
+/// coefficient.
+#[test]
+fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
+    let doc = |declared: &str, factor: &str, src_units: &str| {
+        format!(
+            r#"{{
+              "esm": "0.8.0",
+              "metadata": {{ "name": "F", "description": "conversion factor" }},
+              "models": {{ "M": {{
+                "variables": {{
+                  "src": {{ "type": "parameter", "units": "{src_units}", "default": 1.0 }},
+                  "out": {{ "type": "observed", "units": "{declared}",
+                            "expression": {{ "op": "*", "args": [{factor}, "src"] }} }},
+                  "x": {{ "type": "state", "units": "m", "default": 0.0 }}
+                }},
+                "equations": [{{ "lhs": {{ "op": "D", "args": ["x"], "wrt": "t" }}, "rhs": 1 }}]
+              }} }}
+            }}"#
+        )
+    };
+
+    // Wrong conversion factor: Pa from atm needs 101325, not 50000.
+    let bad = validate_complete(&doc("Pa", "50000", "atm"));
+    let e = bad
+        .structural_errors
+        .iter()
+        .find(|e| e.message.contains("conversion factor"))
+        .expect("a wrong conversion factor must be caught");
+    assert!(matches!(e.code, StructuralErrorCode::UnitInconsistency));
+    assert_eq!(e.path, "/models/M/variables/out");
+    assert_eq!(e.details["declared_factor"], 50000.0);
+
+    // The CORRECT factor validates.
+    assert!(
+        !validate_complete(&doc("Pa", "101325", "atm"))
+            .structural_errors
+            .iter()
+            .any(|e| e.message.contains("conversion factor")),
+        "the correct conversion factor must not be reported"
+    );
+
+    // THE SOUNDNESS GUARD: identical units ⇒ the coefficient is free.
+    // `y [m] ~ 2 * x [m]` must not be touched.
+    assert!(
+        !validate_complete(&doc("m", "2", "m"))
+            .structural_errors
+            .iter()
+            .any(|e| e.message.contains("conversion factor")),
+        "a plain coefficient over identical units must NOT be reported"
+    );
+}

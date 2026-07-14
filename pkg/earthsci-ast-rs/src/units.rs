@@ -262,6 +262,22 @@ impl Dim {
 }
 
 impl Unit {
+    /// The multiplicative factor taking this unit to its SI base (`atm` → 101325).
+    ///
+    /// NOTE: the representation is purely multiplicative — there is no affine
+    /// OFFSET — so `degC` and `K` are indistinguishable here. A check that must
+    /// separate them (the `default_units` identity check) cannot do so by
+    /// dimension and scale alone.
+    pub fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    /// Whether two units measure the same physical quantity, ignoring scale
+    /// (`atm` and `Pa` are the same dimension at different scales).
+    pub fn same_dimensions(&self, other: &Unit) -> bool {
+        self.dimensions == other.dimensions
+    }
+
     /// Create a dimensionless unit
     pub fn dimensionless() -> Self {
         Unit {
@@ -2784,6 +2800,7 @@ mod tests {
     /// unit string (all other metadata omitted).
     fn state_var_with_units(units: Option<&str>) -> crate::ModelVariable {
         crate::ModelVariable {
+            default_units: None,
             var_type: crate::VariableType::State,
             units: units.map(str::to_string),
             default: None,

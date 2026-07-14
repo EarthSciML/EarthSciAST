@@ -2148,6 +2148,8 @@ mod tests {
 
         // Create ESM file
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,

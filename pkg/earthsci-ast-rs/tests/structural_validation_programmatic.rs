@@ -20,6 +20,7 @@ fn test_undefined_variable_in_model() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            default_units: Default::default(),
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),
@@ -55,6 +56,8 @@ fn test_undefined_variable_in_model() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -106,6 +109,7 @@ fn test_equation_count_mismatch() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            default_units: Default::default(),
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),
@@ -120,6 +124,7 @@ fn test_equation_count_mismatch() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            default_units: Default::default(),
             var_type: VariableType::Parameter,
             units: None,
             default: Some(0.1),
@@ -161,6 +166,8 @@ fn test_equation_count_mismatch() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -252,6 +259,8 @@ fn test_undefined_species_in_reaction() {
     reaction_systems.insert("test".to_string(), rs);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -335,6 +344,7 @@ fn test_valid_file_passes() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            default_units: Default::default(),
             var_type: VariableType::Parameter,
             units: None,
             default: Some(0.1),
@@ -367,6 +377,8 @@ fn test_valid_file_passes() {
     models.insert("valid".to_string(), model);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,

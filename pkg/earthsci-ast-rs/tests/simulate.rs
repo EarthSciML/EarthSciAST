@@ -47,6 +47,8 @@ fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
     let mut models = std::collections::HashMap::new();
     models.insert(model_name.to_string(), model);
     EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -67,6 +69,7 @@ fn state(name: &str, default: f64) -> (String, ModelVariable) {
     (
         name.to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(default),
@@ -84,6 +87,7 @@ fn param(name: &str, default: f64) -> (String, ModelVariable) {
     (
         name.to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(default),
@@ -769,6 +773,7 @@ fn test_error_invalid_parameter_name() {
 fn test_error_missing_initial_condition() {
     // State variable with NO default → must be supplied via IC.
     let mut state_x = ModelVariable {
+        default_units: None,
         var_type: VariableType::State,
         units: None,
         default: None,
@@ -817,6 +822,7 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
     state_variables.insert(
         "u".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),
@@ -829,6 +835,7 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
         },
     );
     FlattenedSystem {
+        discrete_variables: Default::default(),
         independent_variables: vec!["t".to_string()],
         state_variables,
         parameters: IndexMap::new(),
@@ -982,6 +989,7 @@ fn test_error_grad_in_array_simulator_rejected() {
 #[allow(dead_code)]
 fn dummy_flat() -> FlattenedSystem {
     FlattenedSystem {
+        discrete_variables: Default::default(),
         independent_variables: vec!["t".to_string()],
         state_variables: IndexMap::new(),
         parameters: IndexMap::new(),

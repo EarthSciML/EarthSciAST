@@ -533,6 +533,8 @@ mod tests {
     #[test]
     fn test_validate_empty_file() {
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -573,6 +575,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: None,
                 default: None,
@@ -614,6 +617,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -664,6 +669,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: None,
                 default: None,
@@ -678,6 +684,7 @@ mod tests {
         variables.insert(
             "y".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: None,
                 default: None,
@@ -722,6 +729,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -774,6 +783,8 @@ mod tests {
     fn test_validation_result_structure() {
         // Test that the new ValidationResult structure works as expected
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -819,6 +830,7 @@ mod tests {
         variables.insert(
             "total".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Observed,
                 units: None,
                 default: None,
@@ -851,6 +863,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -902,6 +916,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()),
                 default: Some(1.0),
@@ -918,6 +933,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("1/s".to_string()),
                 default: Some(0.1),
@@ -934,6 +950,7 @@ mod tests {
         variables.insert(
             "rate".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Observed,
                 units: Some("m/s".to_string()),
                 default: None,
@@ -984,6 +1001,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1090,6 +1109,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
@@ -1106,6 +1126,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("1/s".to_string()), // per second
                 default: Some(0.1),
@@ -1156,6 +1177,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1209,6 +1232,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
@@ -1225,6 +1249,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("kg".to_string()), // mass units (incompatible)
                 default: Some(0.1),
@@ -1266,6 +1291,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1320,6 +1347,7 @@ mod tests {
         variables.insert(
             "position".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()),
                 default: Some(0.0),
@@ -1336,6 +1364,7 @@ mod tests {
         variables.insert(
             "velocity".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("m/s".to_string()),
                 default: Some(1.0),
@@ -1377,6 +1406,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1428,6 +1459,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
@@ -1475,6 +1507,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1547,6 +1581,8 @@ mod tests {
 
         // Create a valid EsmFile structure
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
