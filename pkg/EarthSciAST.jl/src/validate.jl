@@ -167,6 +167,24 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         end
     end
 
+    # 3b. Data-loader `unit_conversion` expressions (audit finding (h)). A
+    # loader variable's conversion may be an Expression rather than a numeric
+    # factor, and nothing walked it — an undefined name in one was invisible.
+    # Its scope is the loader's own declared variables.
+    if file.data_loaders !== nothing
+        for loader_name in sort!(collect(keys(file.data_loaders)))
+            loader = file.data_loaders[loader_name]
+            lscope = Set{String}(keys(loader.variables))
+            for vname in sort!(collect(keys(loader.variables)))
+                uc = loader.variables[vname].unit_conversion
+                isa(uc, ASTExpr) || continue
+                append!(errors, validate_expression_references(
+                    file, uc, "/data_loaders/$loader_name/variables/$vname/unit_conversion";
+                    scope=lscope))
+            end
+        end
+    end
+
     # 4. Validate event consistency
     if file.models !== nothing
         for (model_name, model) in file.models
@@ -570,6 +588,36 @@ function _equation_lhs_target(eq::Equation)::Union{String,Nothing}
 end
 
 """
+    _callback_injected_names(file::EsmFile) -> Set{String}
+
+Every name a `callback` coupling entry INJECTS into the system it targets, read
+off `coupling[i].config.callback_variables[j].name` (the config is raw JSON, so
+this reads it defensively).
+
+These are declaration sites (esm-spec §4.9.5, checker row (k)) and must be in
+scope, or reference integrity reports a name the document really does declare.
+The set is DOCUMENT-scoped rather than per-target: `config` is untyped, so the
+target cannot be resolved reliably, and being slightly over-permissive here is
+the right trade — a missed typo is a lesser harm than rejecting a valid file.
+"""
+function _callback_injected_names(file::EsmFile)::Set{String}
+    names = Set{String}()
+    for entry in file.coupling
+        entry isa CouplingCallback || continue
+        cfg = entry.config
+        cfg === nothing && continue
+        cvs = get(cfg, "callback_variables", nothing)
+        cvs isa AbstractVector || continue
+        for cv in cvs
+            cv isa AbstractDict || continue
+            nm = get(cv, "name", nothing)
+            nm isa AbstractString && push!(names, String(nm))
+        end
+    end
+    return names
+end
+
+"""
     validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
 
 Validate variable references within a model.
@@ -592,20 +640,87 @@ function validate_model_references(file::EsmFile, model::Model, path::String)::V
         target === nothing || push!(scope, target)
     end
 
+    # A model's variable table is NOT the complete set of declaration sites, and
+    # widening reference integrity to every expression-bearing field (finding
+    # (h)) makes that bite: a name declared somewhere ELSE would now be reported
+    # as `undefined_variable`. A false-negative fix that becomes a false-positive
+    # bug is a net loss, so the check runs against the UNION of declaration sites.
+    #
+    # `coupling[i].config.callback_variables[j].name` is the one the corpus
+    # caught: a callback INJECTS those names into the system it targets
+    # (tests/coupling/callback_examples.esm declares
+    # `external_temperature_forcing` exactly this way and nowhere else).
+    union!(scope, _callback_injected_names(file))
+
     # Validate equation references
     for (i, eq) in enumerate(model.equations)
         append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i-1)/lhs"; scope=scope))
         append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i-1)/rhs"; scope=scope))
     end
 
-    # Validate discrete event references
+    # ---------------------------------------------------------------------
+    # EVERY OTHER EXPRESSION-BEARING FIELD (audit finding (h)).
+    #
+    # Reference integrity used to run on `equations` (and reaction `rate`) and
+    # NOTHING ELSE. The expression WALKER was complete — it descends every
+    # sidecar (`expr`, `filter`, `key`, `lower`/`upper`, `values`, `axes`,
+    # `bindings`) — but it was only ever CALLED from those two places, so an
+    # undefined name anywhere else was simply never looked at. That is a silent
+    # false negative: nothing catches it, and no fixture pinned it.
+    #
+    # The events were the subtler half: they WERE walked, but with `scope`
+    # defaulted to `nothing`, which switches the bare-variable check off
+    # (`_check_bare_variable!` returns immediately). They descended the tree and
+    # then declined to look at it.
+    #
+    # Julia accepted 10 of the corpus's 11 pinned fixtures for this before this
+    # change.
+    # ---------------------------------------------------------------------
+
+    # 1. Observed variables' defining expressions.
+    for name in sort!(collect(keys(model.variables)))
+        expr = model.variables[name].expression
+        expr === nothing && continue
+        append!(errors, validate_expression_references(
+            file, expr, "$path/variables/$name/expression"; scope=scope))
+    end
+
+    # 2. `guesses` — an initial guess may be a bare number (nothing to check) or
+    #    an expression over the model's names.
+    for name in sort!(collect(keys(model.guesses)))
+        g = model.guesses[name]
+        isa(g, ASTExpr) || continue
+        append!(errors, validate_expression_references(
+            file, g, "$path/guesses/$name"; scope=scope))
+    end
+
+    # 3. `initialization_equations`.
+    for (i, eq) in enumerate(model.initialization_equations)
+        append!(errors, validate_expression_references(
+            file, eq.lhs, "$path/initialization_equations/$(i-1)/lhs"; scope=scope))
+        append!(errors, validate_expression_references(
+            file, eq.rhs, "$path/initialization_equations/$(i-1)/rhs"; scope=scope))
+    end
+
+    # 4. Inline `tests` blocks: an assertion may carry a `reference` expression.
+    for (i, t) in enumerate(model.tests)
+        for (j, a) in enumerate(t.assertions)
+            ref = a.reference
+            ref === nothing && continue
+            append!(errors, validate_expression_references(
+                file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
+        end
+    end
+
+    # Validate discrete event references. `scope` is threaded now — without it
+    # the descent happened but the bare-variable check was a no-op.
     for (i, event) in enumerate(model.discrete_events)
-        append!(errors, validate_event_references(file, event, "$path/discrete_events/$(i-1)"))
+        append!(errors, validate_event_references(file, event, "$path/discrete_events/$(i-1)"; scope=scope))
     end
 
     # Validate continuous event references
     for (i, event) in enumerate(model.continuous_events)
-        append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i-1)"))
+        append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i-1)"; scope=scope))
     end
 
     # Recursively check subsystems
@@ -649,6 +764,19 @@ indices of an `index(array, i, j, …)` node, the invented-key name of a
 `skolem(name, …)` node, and `bindings` keys (`apply_expression_template`
 formal parameters).
 """
+# Every bare name inside a SUBSCRIPT expression. `index(u, i+1)` is index space,
+# so `i` is a loop index; the arithmetic around it is the stencil offset.
+function _collect_index_names!(syms::Vector{String}, e::ASTExpr)
+    if e isa VarExpr
+        occursin('.', e.name) || push!(syms, e.name)
+    elseif e isa OpExpr
+        for a in e.args
+            _collect_index_names!(syms, a)
+        end
+    end
+    return syms
+end
+
 function _bound_index_symbols(op::OpExpr)::Vector{String}
     syms = String[]
     if op.output_idx !== nothing
@@ -663,11 +791,31 @@ function _bound_index_symbols(op::OpExpr)::Vector{String}
     end
     op.int_var !== nothing && push!(syms, op.int_var)
     op.arg !== nothing && push!(syms, op.arg)
+
+    # NOTE: an `integral`'s `lower`/`upper` are NOT exempted. It is tempting to
+    # call them coordinate-space bounds and wave them through — that would make
+    # tests/valid/integral_operator_pide.esm pass, whose `lower` is an undeclared
+    # `xmin` — but tests/invalid/undefined_variable_in_integral_bound.esm pins the
+    # opposite: an undefined name in an integral bound IS `undefined_variable`.
+    # The corpus decides, and it says the bounds are ordinary expressions. The
+    # `xmin` in that "valid" fixture is therefore a fixture defect, not a checker
+    # one, and is reported upstream rather than papered over here.
     if op.op == "index"
-        # index(array, pos…): the positional element indices after the array
-        # head that are bare names are bound index symbols.
+        # index(array, pos…): every SUBSCRIPT position after the array head is
+        # index space, so the free names appearing in one are loop indices.
+        #
+        # Binding only the BARE names (`index(u, i)`) and not the ones inside a
+        # subscript EXPRESSION (`index(u, i+1)`) is what made every lowered
+        # stencil look broken: a finite-difference scheme is written
+        # `index(u, i-1)`, `index(u, i+1)` — the offsets ARE the stencil — and
+        # the `i` inside the offset was reported `undefined_variable`, rejecting
+        # tests/valid/advection_reaction_loaded_ic_bc.esm with 12 errors.
+        #
+        # This is a subscript-position rule, NOT an allowlist of short names: a
+        # name is bound because of WHERE it appears (index space), and a name
+        # outside index space that nothing declares is still `undefined_variable`.
         for i in 2:length(op.args)
-            op.args[i] isa VarExpr && push!(syms, op.args[i].name)
+            _collect_index_names!(syms, op.args[i])
         end
     elseif op.op == "skolem"
         # skolem(name, …): the first positional arg is the invented-key binder.
@@ -873,6 +1021,20 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
                                "Cannot resolve 'to' reference", "unresolved_reference")
         end
 
+        # `transform` may be an EXPRESSION rather than one of the named string
+        # transforms, and it was never walked (audit finding (h)). Its names are
+        # cross-system references, so they are fully qualified (§4.6) and are
+        # resolved by the qualified-reference resolver, not against a model scope.
+        if isa(coupling_entry.transform, ASTExpr)
+            append!(errors, validate_expression_references(
+                file, coupling_entry.transform, "$path/transform"))
+            for name in _referenced_var_names(coupling_entry.transform)
+                occursin('.', name) || continue
+                _check_resolvable!(errors, file, name, "$path/transform",
+                                   "Cannot resolve reference", "unresolved_scoped_ref")
+            end
+        end
+
     elseif isa(coupling_entry, CouplingOperatorApply)
         # The top-level `operators` block was removed in esm-spec v0.3.0 (§9
         # closure), so the referenced operator can never resolve — flag it.
@@ -926,35 +1088,45 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
 end
 
 """
-    validate_event_references(file::EsmFile, event::EventType, path::String) -> Vector{StructuralError}
+    validate_event_references(file::EsmFile, event::EventType, path::String;
+                              scope=nothing) -> Vector{StructuralError}
 
 Validate event variable references.
+
+`scope` is the enclosing model's name set. It MUST be threaded from a model call
+site: without it `_check_bare_variable!` is a no-op, so the descent walks the
+whole event tree and then declines to look at any of it — which is exactly how an
+undefined name in a trigger, a condition or an affect stayed invisible (audit
+finding (h)). It stays optional (`nothing`) only for the coupling-level event
+call sites, whose names are fully-qualified cross-system references resolved by
+the qualified-reference resolver rather than against any one model's scope.
 """
-function validate_event_references(file::EsmFile, event::EventType, path::String)::Vector{StructuralError}
+function validate_event_references(file::EsmFile, event::EventType, path::String;
+                                   scope::Union{Set{String},Nothing}=nothing)::Vector{StructuralError}
     errors = StructuralError[]
 
     if isa(event, ContinuousEvent)
         # Validate condition expressions
         for (i, condition) in enumerate(event.conditions)
-            append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i-1)"))
+            append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i-1)"; scope=scope))
         end
 
         # Validate affect references
         for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"))
+            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"; scope=scope))
             # affect.lhs is a string (variable name) - would need model context to validate
         end
 
     elseif isa(event, DiscreteEvent)
         # Validate functional affect references
         for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.expression, "$path/affects/$(i-1)/expression"))
+            append!(errors, validate_expression_references(file, affect.expression, "$path/affects/$(i-1)/expression"; scope=scope))
             # affect.target is a string (variable name) - would need model context to validate
         end
 
         # Validate trigger references (if condition-based)
         if isa(event.trigger, ConditionTrigger)
-            append!(errors, validate_expression_references(file, event.trigger.expression, "$path/trigger/expression"))
+            append!(errors, validate_expression_references(file, event.trigger.expression, "$path/trigger/expression"; scope=scope))
         end
     end
 
