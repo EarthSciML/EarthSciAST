@@ -29,6 +29,7 @@ Layer boundary (what lives where):
   semantic rule is owned here, the raw-dict twin over there carries a
   cross-reference back to this module.
 """
+
 from __future__ import annotations
 
 import math
@@ -48,7 +49,7 @@ from .error_handling import (
     Severity,
 )
 from .esm_types import EsmFile
-from .parse import SchemaValidationError, load
+from .parse import SchemaValidationError, SubsystemRefError, load
 
 
 @dataclass
@@ -170,6 +171,24 @@ def validate(esm_file) -> ValidationResult:
                     ValidationError(path="$", message=str(e), code=ErrorCode.SCHEMA.value)
                 ],
                 structural_errors=[],
+            )
+        except SubsystemRefError as e:
+            # A §4.7 mount that does not resolve is a STRUCTURAL defect at the
+            # pointer of the mount, not a parse failure of the document as a
+            # whole: `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
+            # `/models/<M>/subsystems/<name>` (tests/invalid/expected_errors.json
+            # pins these fixtures as `"schema_errors": []`).
+            return ValidationResult(
+                is_valid=False,
+                schema_errors=[],
+                structural_errors=[
+                    ValidationError(
+                        path=getattr(e, "path", "") or "$",
+                        message=str(e),
+                        code=getattr(e, "code", "") or ErrorCode.PARSE.value,
+                        details=getattr(e, "details", None) or {},
+                    )
+                ],
             )
         except Exception as e:
             return ValidationResult(
@@ -305,9 +324,45 @@ def _is_initial_condition_equation(equation) -> bool:
     return getattr(lhs, "op", None) == "ic"
 
 
+def _is_operator_style(model) -> bool:
+    """True if the model is an OPERATOR (spec §6.4) — its equations are written
+    against the reserved ``_var`` placeholder rather than against locally
+    declared states.
+
+    An operator is a rewrite rule applied to *another* system's states, so it
+    balances no equations of its own: `Transport` carries one `D(_var) = ...`
+    equation and zero state variables. Counting its equations against its
+    (empty) state list is meaningless and reports a spurious imbalance.
+    """
+    from .expression import free_variables
+
+    for eq in model.equations:
+        for side in (getattr(eq, "lhs", None), getattr(eq, "rhs", None)):
+            if side is not None and "_var" in free_variables(side):
+                return True
+    return False
+
+
 def _validate_equation_balance_enhanced(esm_file: EsmFile, error_collector: ErrorCollector) -> None:
-    """Enhanced equation-unknown balance validation with detailed suggestions."""
+    """Enhanced equation-unknown balance validation with detailed suggestions.
+
+    Equation balance is a property of a system solved on its OWN. It is skipped
+    for two shapes that are balanced only after composition, matching the Go
+    reference (which reaches 82/82 on the valid corpus):
+
+    * a COUPLED document — a model's states may be driven by equations
+      contributed at the coupling edge, so the model's own equation count is not
+      the whole story;
+    * an OPERATOR-style model (§6.4) — see :func:`_is_operator_style`.
+
+    Counting either against its locally declared states produced a false
+    ``equation_count_mismatch`` on 8 valid fixtures.
+    """
+    is_coupled = bool(getattr(esm_file, "coupling", None))
     for _i, model in enumerate(esm_file.models.values()):
+        if is_coupled or _is_operator_style(model):
+            continue
+
         # Count state variables (unknowns)
         state_vars = [name for name, var in model.variables.items() if var.type == "state"]
         num_unknowns = len(state_vars)
@@ -528,7 +583,11 @@ def _validate_rate_expression(
     from .expression import free_variables
 
     if isinstance(rate_expr, str):
-        # Simple parameter reference
+        # Simple parameter reference. A SCOPED one (`Other.k`) names a symbol in
+        # another system and is resolved at coupling/flatten time — see the
+        # matching note in the expression branch below.
+        if "." in rate_expr:
+            return
         if rate_expr not in param_names:
             structural_errors.append(
                 ValidationError(
@@ -552,6 +611,17 @@ def _validate_rate_expression(
 
             # Check that all referenced variables are declared parameters or species
             for var in referenced_vars:
+                # A SCOPED reference (`Meteorology.temperature`) names a symbol in
+                # ANOTHER system, so it is not expected in this reaction system's
+                # own parameters/species — a rate expression MAY carry one
+                # (esm-spec §4.6; `tests/valid/events_cross_system.esm` drives an
+                # atmospheric rate from `MeteorologicalSystem.solar_intensity`).
+                # It is resolved by the coupling/flatten layer, exactly as a
+                # scoped ref in a model equation is deferred there; checking it
+                # against the LOCAL symbol table can only produce false
+                # `undeclared_rate_variable` findings.
+                if "." in var:
+                    continue
                 if var not in param_names and var not in species_names:
                     # Variable is not declared in this reaction system
                     structural_errors.append(
@@ -799,23 +869,17 @@ def _validate_functional_affect(
     ``affects`` vs ``"Affect_neg functional affect"`` for ``affect_neg``); the
     emitted errors are otherwise identical to the previously inlined checks.
     """
-    # Validate handler_id exists as an operator
-    if affect.handler_id not in all_operators:
-        structural_errors.append(
-            ValidationError(
-                path=f"{affect_path}/handler_id",
-                message=f"Operator '{affect.handler_id}' is not defined",
-                code=ErrorCode.UNDEFINED_OPERATOR.value,
-                details={
-                    "operator": affect.handler_id,
-                    "available_operators": sorted(all_operators),
-                },
-            )
-        )
+    # A `handler_id` is NOT required to name an entry in the document's
+    # `operators` block: a FunctionalAffect's handler may be supplied by the HOST
+    # (a `callback` handler registered by the runtime), and `full_coupled.esm`
+    # — a valid fixture — declares no `operators` block at all. Requiring
+    # `handler_id in operators` rejected it. The Go reference accepts it; a
+    # handler the host does not register is a run-time error, not a structural
+    # one, so nothing is checked here.
 
     # Validate read_vars exist
     for var_idx, read_var in enumerate(affect.read_vars):
-        if read_var not in all_variables:
+        if not _is_operator_placeholder(read_var) and read_var not in all_variables:
             structural_errors.append(
                 ValidationError(
                     path=f"{affect_path}/read_vars/{var_idx}",
@@ -962,6 +1026,20 @@ def _validate_observed_dimensions(
             )
 
 
+#: The reserved OPERATOR PLACEHOLDER (esm-spec §6.4). In an operator-style model
+#: `_var` stands for "each matching state variable of the target system", and is
+#: substituted at `operator_compose` time — so it is never a declared symbol, and
+#: an event affect that writes it (`_var ~ Pre(_var) * decay`) is legal in exactly
+#: the operator-composed / coupled models that `operator_compose` exists for.
+#: Reporting it as `event_var_undeclared` rejects `tests/valid/full_coupled.esm`,
+#: which the spec's own §6.4 example is written from.
+_OPERATOR_PLACEHOLDER = "_var"
+
+
+def _is_operator_placeholder(name: object) -> bool:
+    return name == _OPERATOR_PLACEHOLDER
+
+
 def _validate_event_consistency(
     esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
@@ -975,6 +1053,9 @@ def _validate_event_consistency(
     - Variables in affect_neg (direction-dependent affects) are declared
     - Functional affect references are valid (handler_id, read_vars, read_params, modified_params)
     - discrete_parameters in coupling entries are valid
+
+    The reserved `_var` placeholder is never an undeclared variable — see
+    :data:`_OPERATOR_PLACEHOLDER`.
     """
     # Build variable lookup for validation
     all_variables = set()
@@ -1012,7 +1093,7 @@ def _validate_event_consistency(
             affect_path = f"{event_path}/affects/{affect_idx}"
 
             if hasattr(affect, "lhs"):  # AffectEquation
-                if affect.lhs not in all_variables:
+                if not _is_operator_placeholder(affect.lhs) and affect.lhs not in all_variables:
                     structural_errors.append(
                         ValidationError(
                             path=f"{affect_path}/lhs",
@@ -1041,7 +1122,7 @@ def _validate_event_consistency(
                 affect_path = f"{event_path}/affect_neg/{affect_idx}"
 
                 if hasattr(affect, "lhs"):  # AffectEquation
-                    if affect.lhs not in all_variables:
+                    if not _is_operator_placeholder(affect.lhs) and affect.lhs not in all_variables:
                         structural_errors.append(
                             ValidationError(
                                 path=f"{affect_path}/lhs",

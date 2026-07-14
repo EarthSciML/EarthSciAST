@@ -7,6 +7,7 @@ dimensional consistency across models, reaction systems, and expressions.
 The registry is CLOSED: it is exactly the flat table of esm-spec §4.8.1, and
 nothing else resolves. See :data:`_CONTRACT_DEFINITIONS`.
 """
+
 from __future__ import annotations
 
 import re
@@ -86,14 +87,15 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "min = 60 s",
     "h = 3600 s",
     "hr = 3600 s",
+    # The canonical spelling of a day is `day`. `d` is DELIBERATELY EXCLUDED from
+    # the table (§4.8.1): a one-letter `d` reads as a deci- prefix or as a
+    # differential, so it is precisely the kind of symbol the flat table exists to
+    # keep out. Nothing here defines it, so `units: "d"` does not resolve — which
+    # is the intended answer, not a gap.
     "day = 86400 s",
-    # Julian year (365.25 d) — the astronomical/climate convention.
+    # Julian year (365.25 days) — the astronomical/climate convention.
     "yr = 31557600 s",
     "year = 31557600 s",
-    # `d` is the ISO/CF spelling of a day and is what the shipped
-    # `lib/calendar.esm` declares. Unambiguous here precisely BECAUSE there is no
-    # prefix mechanism: with prefixes on, `d` would read as deci-.
-    "@alias day = d",
     # --- volume -------------------------------------------------------------
     "L = 1e-3 m ** 3",
     "l = 1e-3 m ** 3",
@@ -235,6 +237,7 @@ def has_affine_unit(unit: str | None) -> bool:
     if not unit:
         return False
     return any(re.search(rf"\b{sym}\b", unit) for sym in AFFINE_UNITS)
+
 
 #: Exception types pint can raise from a garbage unit string. Beyond its own
 #: ``PintError`` hierarchy (``UndefinedUnitError``, ``DefinitionSyntaxError``,
@@ -962,9 +965,7 @@ class UnitValidator:
         first = known[0]
         for dim in known[1:]:
             if not self._dimensions_compatible(first, dim):
-                raise DimensionalMismatchError(
-                    f"Incompatible dimensions in {op}: {first} vs {dim}"
-                )
+                raise DimensionalMismatchError(f"Incompatible dimensions in {op}: {first} vs {dim}")
         return first
 
     def _require_dimensionless(self, dim: UnitsContainer | None, op: str, what: str) -> None:
@@ -1025,7 +1026,7 @@ class UnitValidator:
 
         if op == "sqrt":
             base = arg_dims[0]
-            return None if base is None else base ** 0.5
+            return None if base is None else base**0.5
 
         if op == "ifelse":
             # ifelse(cond, then, else): the condition is a dimensionless
@@ -1067,8 +1068,10 @@ class UnitValidator:
             if self._dimensions_compatible(base, self._dimensionless):
                 return self._dimensionless
             # A dimensional base needs a literal exponent to give a dimension.
-            if len(node.args) > 1 and isinstance(node.args[1], (int, float)) and not isinstance(
-                node.args[1], bool
+            if (
+                len(node.args) > 1
+                and isinstance(node.args[1], (int, float))
+                and not isinstance(node.args[1], bool)
             ):
                 return base ** node.args[1]
             return None

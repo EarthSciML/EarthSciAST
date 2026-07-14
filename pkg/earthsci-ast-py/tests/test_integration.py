@@ -32,6 +32,12 @@ class TestFullWorkflowIntegration:
                 "simple": {
                     "variables": {
                         "x": {"type": "state", "units": "kg"},
+                        # `param1`/`param2` were USED but never DECLARED. Reference
+                        # integrity now covers an observed variable's `expression`
+                        # (esm-spec §4.9.5), which surfaced `param2` as a genuine
+                        # undefined reference in this fixture.
+                        "param1": {"type": "parameter", "units": "kg/s", "default": 1.0},
+                        "param2": {"type": "parameter", "units": "kg", "default": 0.0},
                         "y": {
                             "type": "observed",
                             "expression": {"op": "+", "args": ["x", "param2"]},

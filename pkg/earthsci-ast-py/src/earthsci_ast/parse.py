@@ -4,6 +4,7 @@ ESM Format parsing module.
 This module provides functions to parse JSON data into ESM format objects,
 with schema validation using the bundled esm-schema.json file.
 """
+
 from __future__ import annotations
 
 import copy
@@ -115,9 +116,38 @@ class CircularReferenceError(EarthSciAstError):
 
 
 class SubsystemRefError(EarthSciAstError):
-    """Exception raised when a subsystem reference cannot be resolved."""
+    """Exception raised when a subsystem reference cannot be resolved.
 
-    pass
+    Carries the shared diagnostic ``code`` and JSON-Pointer ``path`` so that
+    :func:`earthsci_ast.validation.validate` can surface it as a *structural*
+    finding rather than an opaque ``parse`` blob at ``$``. The cross-language
+    contract (``tests/invalid/expected_errors.json``) pins these fixtures as
+    ``"schema_errors": []`` plus one coded structural error at the pointer of the
+    offending mount — e.g. ``unresolved_subsystem_ref`` @
+    ``/models/Atmosphere/subsystems/Missing``.
+    """
+
+    def __init__(self, message: str, code: str = "", path: str = ""):
+        super().__init__(message)
+        self.code = code
+        self.path = path
+
+
+#: A subsystem `ref` that does not resolve to a file (esm-spec §4.7).
+UNRESOLVED_SUBSYSTEM_REF = "unresolved_subsystem_ref"
+
+#: A subsystem `ref` whose file carries MORE THAN ONE top-level system. The mount
+#: names exactly one component, so there is no rule for choosing among them.
+AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref"
+
+
+def _count_top_level_systems(parsed) -> int:
+    """How many top-level components a referenced document declares."""
+    return (
+        len(parsed.models or {})
+        + len(parsed.reaction_systems or {})
+        + len(parsed.data_loaders or {})
+    )
 
 
 # Current library version for compatibility checking. Bumped to 0.8.0 with the
@@ -1353,10 +1383,11 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
         path_exists=os.path.exists,
         encoding=None,
         url_error_types=(urllib.error.URLError, urllib.error.HTTPError),
-        on_url_error=lambda r, e: SubsystemRefError(f"Failed to fetch subsystem ref URL '{r}': {e}"),
+        on_url_error=lambda r, e: SubsystemRefError(
+            f"Failed to fetch subsystem ref URL '{r}': {e}"
+        ),
         on_missing=lambda r, p: SubsystemRefError(
-            f"Subsystem ref file not found: '{p}' "
-            f"(resolved from '{r}' relative to '{base_path}')"
+            f"Subsystem ref file not found: '{p}' (resolved from '{r}' relative to '{base_path}')"
         ),
     )
     return text
@@ -1698,12 +1729,43 @@ def _resolve_subsystems_generic(
             # into the referenced component's scope (esm-spec §9.7.10 form A).
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
             injected = _subsystem_ref_injected_imports(sub_value)
-            ref_data, new_base = _load_ref_data(ref_str, base_path, bindings, "subsystem", injected)
+            # The JSON Pointer of THIS mount. Only this frame knows both the
+            # owning component and the subsystem key, so it is where a
+            # SubsystemRefError raised anywhere below gets its `path` (and, for
+            # the errors raised out of the generic ref loader, its `code`).
+            kind = "reaction_systems" if isinstance(component, ReactionSystem) else "models"
+            mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
+            try:
+                ref_data, new_base = _load_ref_data(
+                    ref_str, base_path, bindings, "subsystem", injected
+                )
 
-            parsed = _parse_esm_data(ref_data)
-            resolved_subsystems[sub_name] = resolve_ref(
-                parsed, sub_name, new_base, new_seen, new_chain, ref_str
-            )
+                parsed = _parse_esm_data(ref_data)
+                # esm-spec §4.7: a mount names exactly ONE component. A file with
+                # several top-level systems gives no rule for choosing among them,
+                # so silently taking the first (which is what `next(iter(...))`
+                # below does) picks an arbitrary one — dependent on dict order.
+                if _count_top_level_systems(parsed) > 1:
+                    raise SubsystemRefError(
+                        f"Subsystem reference '{ref_str}' resolves to a file containing "
+                        f"multiple top-level systems; exactly one is required",
+                        code=AMBIGUOUS_SUBSYSTEM_REF,
+                        path=mount_pointer,
+                    )
+                resolved_subsystems[sub_name] = resolve_ref(
+                    parsed, sub_name, new_base, new_seen, new_chain, ref_str
+                )
+            except SubsystemRefError as exc:
+                if not getattr(exc, "code", ""):
+                    exc.code = UNRESOLVED_SUBSYSTEM_REF
+                if not getattr(exc, "path", ""):
+                    exc.path = mount_pointer
+                exc.details = {
+                    "ref": ref_str,
+                    "subsystem": sub_name,
+                    "parent_model": component.name,
+                }
+                raise
         else:
             # Already a component object, just recurse into it.
             recurse_resolved(sub_value, base_path, seen_refs, chain)
@@ -1800,9 +1862,7 @@ def _resolve_reaction_system_subsystems(
             sub_rs.name = sub_name
             _resolve_reaction_system_subsystems(sub_rs, new_base, new_seen, new_chain)
             return sub_rs
-        raise SubsystemRefError(
-            f"Subsystem ref '{ref_str}' does not contain a reaction system"
-        )
+        raise SubsystemRefError(f"Subsystem ref '{ref_str}' does not contain a reaction system")
 
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, ReactionSystem):
@@ -2086,8 +2146,10 @@ def load(
     _root_meta_decls = data.get("metaparameters")
     if isinstance(_root_meta_decls, dict):
         for _mn, _md in _root_meta_decls.items():
-            if isinstance(_md, dict) and isinstance(_md.get("default"), int) and not isinstance(
-                _md.get("default"), bool
+            if (
+                isinstance(_md, dict)
+                and isinstance(_md.get("default"), int)
+                and not isinstance(_md.get("default"), bool)
             ):
                 root_meta_env[str(_mn)] = _md["default"]
     if metaparameters:

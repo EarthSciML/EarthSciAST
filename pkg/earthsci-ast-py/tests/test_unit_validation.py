@@ -648,7 +648,9 @@ class TestEsmSpecificUnitsStandard:
 
     def test_contract_spellings_resolve(self):
         # Symbols the shared contract requires (esm-spec §4.8.1).
-        assert self.ureg.Quantity(1.0, "Torr").to("Pa").magnitude == pytest.approx(133.322, rel=1e-4)
+        assert self.ureg.Quantity(1.0, "Torr").to("Pa").magnitude == pytest.approx(
+            133.322, rel=1e-4
+        )
         assert self.ureg.Quantity(1.0, "individuals / km**2").dimensionality == (
             self.ureg.Quantity(1.0, "1 / km**2").dimensionality
         )
@@ -749,16 +751,20 @@ class TestEsmSpecificUnitsStandard:
         occur in real unit strings (`m²`, `cm³`, `W/m²`)."""
         from earthsci_ast.units import normalize_unit_string as norm
 
-        for glyph, digit in zip("⁰¹²³⁴⁵⁶⁷⁸⁹",
-                                "0123456789"):
+        for glyph, digit in zip("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789"):
             assert norm(f"m{glyph}") == f"m^{digit}", f"U+{ord(glyph):04X} not normalised"
         assert norm("s⁻¹") == "s^-1"  # superscript minus + superscript one
 
-    def test_day_resolves_as_d(self):
-        """`d` is the ISO/CF spelling of a day and is what `lib/calendar.esm`
-        declares. It is unambiguous precisely BECAUSE there is no prefix
-        mechanism — with prefixes on, `d` would read as deci-."""
-        assert self.ureg.Quantity(1.0, "d").to("s").magnitude == pytest.approx(86400.0)
+    def test_day_is_spelled_day_and_bare_d_is_rejected(self):
+        """The canonical spelling of a day is `day`. `d` is DELIBERATELY excluded
+        from the table (§4.8.1): a one-letter `d` reads as a deci- prefix or as a
+        differential. This is an over-permissiveness to SUPPRESS, not a gap —
+        a general-purpose units library will happily parse `d` as a day."""
+        from earthsci_ast.units import UnparseableUnitError, parse_unit
+
+        assert self.ureg.Quantity(1.0, "day").to("s").magnitude == pytest.approx(86400.0)
+        with pytest.raises(UnparseableUnitError):
+            parse_unit("d")
 
 
 class TestCircularTrigonometryAndTheAngleAxis:
@@ -842,9 +848,7 @@ class TestUnparseableUnitIsAnError:
     def test_variable_unparseable_unit_is_an_error(self):
         model = Model(name="BadUnits")
         # A syntactically valid identifier that is not a unit.
-        model.variables["bad"] = ModelVariable(
-            type="state", units="not_a_real_unit_zzz"
-        )
+        model.variables["bad"] = ModelVariable(type="state", units="not_a_real_unit_zzz")
         model.variables["good"] = ModelVariable(type="state", units="K")
 
         validator = UnitValidator()
@@ -861,9 +865,7 @@ class TestUnparseableUnitIsAnError:
 
     def test_unparseable_unit_does_not_also_manufacture_a_mismatch(self):
         model = Model(name="BadUnitsEq")
-        model.variables["bad"] = ModelVariable(
-            type="state", units="not_a_real_unit_zzz"
-        )
+        model.variables["bad"] = ModelVariable(type="state", units="not_a_real_unit_zzz")
         model.variables["good"] = ModelVariable(type="observed", units="K")
         # good = bad : `bad` resolves to an unknown dimension (omitted from
         # known_units), so the ONLY finding must be the unparseable unit itself.
@@ -902,7 +904,7 @@ class TestUnparseableUnitIsAnError:
         offenders = [
             e
             for e in result.structural_errors
-            if e.code == "unit_inconsistency" and e.path == "/models/M/variables/c/units"
+            if e.code == "unit_parse_error" and e.path == "/models/M/variables/c"
         ]
         assert offenders, f"expected an unparseable-unit error, got {result.structural_errors}"
         assert "not_a_unit" in offenders[0].message
@@ -990,9 +992,7 @@ class TestTranscendentalArgumentMustBeDimensionless:
                             "expression": {"op": op, "args": ["L"]},
                         },
                     },
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}
-                    ],
+                    "equations": [{"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}],
                 }
             },
         }
@@ -1022,9 +1022,7 @@ class TestTranscendentalArgumentMustBeDimensionless:
                             "expression": {"op": "log", "args": [{"op": "/", "args": ["L", "L0"]}]},
                         },
                     },
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}
-                    ],
+                    "equations": [{"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}],
                 }
             },
         }
@@ -1046,9 +1044,7 @@ class TestTranscendentalArgumentMustBeDimensionless:
                             "expression": {"op": "sqrt", "args": ["A"]},
                         },
                     },
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": 0.0}
-                    ],
+                    "equations": [{"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": 0.0}],
                 }
             },
         }
@@ -1059,9 +1055,7 @@ class TestTranscendentalArgumentMustBeDimensionless:
 def _validator_with(**units: str) -> UnitValidator:
     """A UnitValidator whose known_units are exactly ``units`` (name -> unit)."""
     validator = UnitValidator()
-    validator.known_units = {
-        name: validator.ureg.Unit(unit) for name, unit in units.items()
-    }
+    validator.known_units = {name: validator.ureg.Unit(unit) for name, unit in units.items()}
     return validator
 
 
@@ -1094,9 +1088,7 @@ class TestDimensionalMismatchIsDetected:
         assert validator._dimensions_compatible(length, dimensionless) is False
         # Same dimension via different units still compatible.
         assert (
-            validator._dimensions_compatible(
-                length, validator.ureg.Unit("km").dimensionality
-            )
+            validator._dimensions_compatible(length, validator.ureg.Unit("km").dimensionality)
             is True
         )
 
@@ -1109,9 +1101,7 @@ class TestDimensionalMismatchIsDetected:
         model = Model(name="BadAddition")
         model.variables["x"] = ModelVariable(type="state", units="m")
         model.variables["tt"] = ModelVariable(type="parameter", units="s")
-        model.equations.append(
-            Equation(lhs="x", rhs=ExprNode(op="+", args=["x", "tt"]))
-        )
+        model.equations.append(Equation(lhs="x", rhs=ExprNode(op="+", args=["x", "tt"])))
 
         result = UnitValidator().validate_model(model)
 
@@ -1126,9 +1116,7 @@ class TestDimensionalMismatchIsDetected:
         model = Model(name="ErrorNotWarning")
         model.variables["L"] = ModelVariable(type="state", units="m")
         model.variables["tt"] = ModelVariable(type="parameter", units="s")
-        model.equations.append(
-            Equation(lhs="L", rhs=ExprNode(op="-", args=["L", "tt"]))
-        )
+        model.equations.append(Equation(lhs="L", rhs=ExprNode(op="-", args=["L", "tt"])))
 
         result = UnitValidator().validate_model(model)
 
@@ -1191,16 +1179,12 @@ class TestOperatorDimensionRules:
         [time], the exact *inverse* of the only defensible answer.
         """
         validator = _validator_with(t="s")
-        dim = validator._get_expression_dimension(
-            ExprNode(op="/", args=["unknown_x", "t"])
-        )
+        dim = validator._get_expression_dimension(ExprNode(op="/", args=["unknown_x", "t"]))
         assert dim is None
 
     def test_multiplication_by_an_unknown_operand_is_indeterminate(self):
         validator = _validator_with(t="s")
-        dim = validator._get_expression_dimension(
-            ExprNode(op="*", args=["unknown_x", "t"])
-        )
+        dim = validator._get_expression_dimension(ExprNode(op="*", args=["unknown_x", "t"]))
         assert dim is None
 
     def test_known_division_still_divides(self):
@@ -1221,9 +1205,7 @@ class TestOperatorDimensionRules:
         mismatches once the compatibility predicate actually discriminates.
         """
         validator = _validator_with(w="m")
-        dim = validator._get_expression_dimension(
-            ExprNode(op="table_lookup", args=["w"])
-        )
+        dim = validator._get_expression_dimension(ExprNode(op="table_lookup", args=["w"]))
         assert dim is None
 
 
@@ -1239,9 +1221,7 @@ class TestNumericLiteralsArePolymorphic:
 
     def test_literal_added_to_a_dimensional_quantity_is_not_a_mismatch(self):
         validator = _validator_with(T_kelvin="K")
-        dim = validator._get_expression_dimension(
-            ExprNode(op="+", args=["T_kelvin", -273.15])
-        )
+        dim = validator._get_expression_dimension(ExprNode(op="+", args=["T_kelvin", -273.15]))
         assert dim == validator.ureg.Unit("K").dimensionality
 
     def test_literal_over_dimensional_quantity_does_not_break_exp(self):
@@ -1249,9 +1229,7 @@ class TestNumericLiteralsArePolymorphic:
         dimensionless and `exp` must not raise."""
         validator = _validator_with(T="K")
         dim = validator._get_expression_dimension(
-            ExprNode(
-                op="exp", args=[ExprNode(op="/", args=[-1370.0, "T"])]
-            )
+            ExprNode(op="exp", args=[ExprNode(op="/", args=[-1370.0, "T"])])
         )
         assert dim == validator.ureg.dimensionless.dimensionality
 

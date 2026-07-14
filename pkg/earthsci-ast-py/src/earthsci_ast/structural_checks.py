@@ -38,6 +38,7 @@ and :func:`_structural_validation_error_cls` (for
 :class:`~earthsci_ast.parse.SchemaValidationError`), keeping the
 module-import graph acyclic.
 """
+
 from __future__ import annotations
 
 import re
@@ -219,7 +220,15 @@ _OPERATOR_ARITY = {
     "const": (0, 0),
 }
 
-# Built-in symbols always available in expressions
+# Built-in symbols always available in expressions.
+#
+# The COORDINATE names here are the conventional spellings, kept as a fallback
+# for a document that declares no `index_sets`. The authoritative source is the
+# DOCUMENT — see :func:`_implicit_document_symbols`, which adds the domain's
+# `independent_variable` and every declared index-set name. A model is never
+# required to declare its independent variable or its spatial coordinates as
+# variables (esm-spec §5.3's own example writes `t` undeclared), so neither may
+# ever be reported as an `undefined_variable`.
 _BUILTIN_SYMBOLS = frozenset(
     {
         "t",
@@ -239,6 +248,38 @@ _BUILTIN_SYMBOLS = frozenset(
     }
 )
 
+
+def _implicit_document_symbols(data: dict[str, Any]) -> set[str]:
+    """Symbols a document declares IMPLICITLY, and which are therefore always in
+    scope in its expressions (esm-spec §5.3, §11.1).
+
+    Two sources:
+
+    * the domain's ``independent_variable`` (default ``"t"``) — the time symbol
+      an equation differentiates with respect to; and
+    * every ``index_sets`` key — the document-scoped registry of iteration
+      domains, i.e. the spatial/categorical AXES a model's variables are shaped
+      over (``lon``, ``lat``, ``lev``, …).
+
+    Neither is ever declared as a *variable*, so a checker that only consults
+    ``variables`` reports both as undefined. This function is why
+    ``_BUILTIN_SYMBOLS``' hard-coded coordinate list is a fallback rather than
+    the rule: a document is free to name its independent variable ``tau`` or its
+    axis ``depth``, and those are just as implicitly declared as ``t`` and
+    ``lon``.
+    """
+    symbols: set[str] = set()
+    domain = data.get("domain")
+    if isinstance(domain, dict):
+        symbols.add(str(domain.get("independent_variable") or "t"))
+    else:
+        symbols.add("t")
+    index_sets = data.get("index_sets")
+    if isinstance(index_sets, dict):
+        symbols.update(str(k) for k in index_sets)
+    return symbols
+
+
 # Pint-compatible unit aliases for normalizing
 _UNIT_ALIASES = {
     "1": "dimensionless",
@@ -253,6 +294,7 @@ _UNIT_ALIASES = {
 # ``{name: expr}`` MAP (the dataclass ``table_axes``; its raw JSON key is
 # ``axes``), so they are walked separately below.
 _EXPR_STRING_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
+
 
 # Fields that BIND index/integration symbols for a node's body (esm-spec §5;
 # expr_walk.py's module docstring). A symbol introduced here is a bound
@@ -330,6 +372,8 @@ def _expression_bound_symbols(expr) -> set[str]:
     if isinstance(bindings, dict):
         for child in bindings.values():
             bound |= _expression_bound_symbols(child)
+    for bound_pair in _iter_region_bounds(expr):
+        bound |= _expression_bound_symbols(bound_pair)
     return bound
 
 
@@ -375,7 +419,31 @@ def _walk_expression_strings(expr) -> list[str]:
     if isinstance(bindings, dict):
         for child in bindings.values():
             descend(child)
+    # `makearray` REGIONS are `[[lo, hi], ...]` bound pairs per axis, and each
+    # bound is an EXPRESSION — `[[2, {op:"-", args:["N", 1]}], [1, 3]]`. A
+    # reference hidden in a region bound (the metaparameter `N` above) is a
+    # reference like any other.
+    for bound_pair in _iter_region_bounds(expr):
+        descend(bound_pair)
     return result
+
+
+def _iter_region_bounds(expr):
+    """Yield every expression nested in a ``makearray``'s ``regions``.
+
+    ``regions`` is a list (per region) of lists (per axis) of ``[lo, hi]`` pairs,
+    each of which may be a literal, a name, or an op-node.
+    """
+    regions = expr.get("regions")
+    if not isinstance(regions, list):
+        return
+    stack = list(regions)
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, (str, dict)):
+            yield item
 
 
 def _check_expression_arity(expr, errors: list[str], path: str) -> None:
@@ -452,14 +520,32 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
             loader_info[vname] = vdef
         data_loaders[dname] = loader_info
 
-    # Global symbol set: all variable/species/parameter names anywhere
-    global_symbols = set(_BUILTIN_SYMBOLS)
+    # Global symbol set: the UNION of every DECLARATION site. Reference integrity
+    # (§4.9.5) is only as good as this set — a name that is genuinely declared but
+    # missing here turns the false-negative fix into a FALSE-POSITIVE rejection,
+    # which is a net loss. The sites are: every model variable/parameter, every
+    # reaction species/parameter, every data-loader variable, the symbols the
+    # DOCUMENT declares implicitly (the domain's independent variable and every
+    # index-set / coordinate name — §5.3), and a coupling edge's
+    # `config.callback_variables`, which a callback INJECTS into the target
+    # system (§4.9.5 row (k); `tests/coupling/callback_examples.esm`).
+    global_symbols = set(_BUILTIN_SYMBOLS) | _implicit_document_symbols(data)
     for m in models.values():
         global_symbols.update(m.keys())
     for rs in reaction_systems.values():
         global_symbols.update(rs.keys())
     for d in data_loaders.values():
         global_symbols.update(d.keys())
+    for c in data.get("coupling", []) or []:
+        if not isinstance(c, dict):
+            continue
+        for cv in (c.get("config") or {}).get("callback_variables") or []:
+            name = cv.get("name") if isinstance(cv, dict) else None
+            if isinstance(name, str):
+                # A callback variable may be injected under a bare or a qualified
+                # name; register both spellings' tail so either resolves.
+                global_symbols.add(name)
+                global_symbols.add(name.split(".")[-1])
 
     return {
         "models": models,
@@ -473,12 +559,26 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
 
 def _resolve_scoped_ref(ref: str, tables: dict[str, Any]) -> tuple:
     """
-    Try to resolve a 'System.var' style reference.
-    Returns (system_name, var_name, status) where status is one of:
-    - 'ok': resolved successfully
-    - 'no_system': system not found
-    - 'no_var': system found but variable not in it
-    - 'not_scoped': ref doesn't have a dot
+    Resolve a scoped reference against the document's symbol tables.
+
+    Scoped references are ARBITRARY DEPTH (esm-spec §4.6): ``System.var``,
+    ``System.Sub.var``, ``A.B.C.d``. The path walks a chain of SUBSYSTEM mounts
+    and ends at a variable. Splitting on ``"."`` and taking ``[0]`` / ``[-1]``
+    is therefore only ever right for the two-part case: for ``A.B.c`` it asks
+    whether ``c`` is a variable of ``A``, when ``c`` actually lives in ``A``'s
+    subsystem ``B``.
+
+    Only the DEPTH-2 case can be decided here. A deeper reference walks into a
+    subsystem whose contents come from another FILE, which structural validation
+    has not loaded — so it is deferred (``ok``) once its head names a real
+    system, exactly as a ref-included model is. Resolution proper happens in
+    ``resolve_subsystem_refs`` / flatten, which do have the mounted document.
+
+    Returns ``(system_name, var_name, status)`` where status is one of:
+    - ``'ok'``: resolved, or deferred to a layer that can resolve it
+    - ``'no_system'``: the HEAD of the path is not a system in this document
+    - ``'no_var'``: a depth-2 ref whose variable is not in the named system
+    - ``'not_scoped'``: the ref has no dot
     """
     if "." not in ref:
         return (None, None, "not_scoped")
@@ -490,11 +590,15 @@ def _resolve_scoped_ref(ref: str, tables: dict[str, Any]) -> tuple:
     # A model included by reference has its variables in another file not
     # available during structural validation — accept any var against it
     # (deferred to resolve_model_refs, which schema-validates the referenced
-    # file, and to coupling/flatten resolution). Mirrors the leniency for
-    # subsystem-nested (3+ part) refs.
+    # file, and to coupling/flatten resolution).
     if system in tables.get("ref_systems", set()):
         return (system, var, "ok")
-    # Check if var exists in that system
+    # Depth 3+: the tail names a symbol inside a SUBSYSTEM of `system`, not a
+    # variable of `system` itself. The subsystem's contents live in another file,
+    # so defer rather than test the tail against the wrong table.
+    if len(parts) > 2:
+        return (system, var, "ok")
+    # Depth 2 — the only case this layer can actually decide.
     if system in tables["models"]:
         if var in tables["models"][system]:
             return (system, var, "ok")
@@ -511,85 +615,303 @@ def _check_variable_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """
-    Check variable references in equations.
+    Check variable references in every EXPRESSION-BEARING field of a model.
 
     Two flavors of check:
     1. Scoped refs (Model.var): system must exist; for 2-part refs the var must exist
-       in the named system.
-    2. Bare-string refs in the RHS of D() (derivative) equations: every ref must
-       resolve to a symbol declared somewhere in the file. Plain assignment-style
-       equations are not checked because they often use coupled-in vars.
+       in the named system. Deeper refs walk subsystem mounts and are deferred (§4.6).
+    2. Bare-string refs: every ref must resolve to a symbol declared somewhere in
+       the file (or implicitly by the document — see
+       :func:`_implicit_document_symbols`).
 
-    The walker (:func:`_walk_expression_strings`) now descends the full child
-    set, so refs hidden in aggregate bodies are visible here. Index/integration
-    symbols bound by the equation's own aggregate/makearray/integral nodes are
-    collected via :func:`_expression_bound_symbols` and skipped — they are bound
-    variables, not references to declared symbols.
+    Reference integrity applies to every field that CARRIES an expression, not
+    just ``equations``. An observed variable's ``expression`` is a governing
+    definition like any other, and an undefined name inside one used to be
+    invisible — a silent FALSE NEGATIVE that no fixture pinned. The
+    expression-bearing sites are enumerated by :func:`_model_expression_sites`.
+
+    Within an expression, the walker (:func:`_walk_expression_strings`) descends
+    the full child-field set — ``args``, ``expr``, ``axes``, ``lower``, ``upper``,
+    ``filter``, ``key``, ``values``, ``bindings``, ``regions`` — so a reference
+    hidden in an aggregate body, a filter predicate, an integral bound, a Skolem
+    key or a ``makearray`` region bound is visible here. Index symbols BOUND by
+    the expression's own aggregate/makearray/integral nodes are collected via
+    :func:`_expression_bound_symbols` and skipped: they are binders, not
+    references (esm-spec §5).
     """
     global_symbols = tables["global_symbols"]
     for mname, m in data.get("models", {}).items():
-        for i, eq in enumerate(m.get("equations", [])):
-            lhs_is_derivative = isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
-            bound_symbols = _expression_bound_symbols(eq.get("lhs")) | _expression_bound_symbols(
-                eq.get("rhs")
-            )
-            for side in ("lhs", "rhs"):
-                if side not in eq:
+        subsystems = m.get("subsystems") or {}
+        for location, expr, check_bare, phrase, extra in _model_expression_sites(m, mname):
+            bound_symbols = _expression_bound_symbols(expr)
+            for ref in _walk_expression_strings(expr):
+                # `_var` is the reserved operator placeholder (spec §6.4): in an
+                # operator-style model it is substituted with each matching state
+                # variable of the target system at operator_compose time. It is
+                # never a declared symbol, so it is a valid reference at ANY
+                # nesting depth — not merely in the top-level `D(_var)` position
+                # but also nested, as in the advection idiom `grad(_var, dim)`.
+                if ref == "_var":
                     continue
-                refs = _walk_expression_strings(eq[side])
-                for ref in refs:
-                    # `_var` is the reserved operator placeholder (spec §6.4):
-                    # in an operator-style model it is substituted with each
-                    # matching state variable of the target system at
-                    # operator_compose time. It is never a declared symbol, so
-                    # it is a valid reference at ANY nesting depth — not merely
-                    # in the top-level `D(_var)` derivative position, but also
-                    # when nested inside an operator, e.g. the canonical
-                    # advection idiom `grad(_var, dim)`. Skip it so it is not
-                    # flagged as an undefined variable reference.
-                    if ref == "_var":
+                # A symbol BOUND by an aggregate/makearray/integral in this
+                # expression (a contracted index like `i`/`j`/`e`, or an
+                # integration variable) is a binder, not a reference. It is in
+                # scope inside the construct that introduces it.
+                if ref in bound_symbols:
+                    continue
+                if "." in ref:
+                    # A ref whose HEAD is a SUBSYSTEM of the current model is
+                    # subsystem-LOCAL dot-notation, not a `System.var` reference.
+                    # A pure-I/O data-loader mounted as a subsystem (RFC
+                    # pure-io-data-loaders §4.3) is consumed by the owning model's
+                    # own equations this way — `raw.elevation` for
+                    # `models.<mname>.subsystems.raw` — and flatten lowers it to
+                    # the observed `<mname>.raw.elevation`. Its target lives in the
+                    # mounted file, so it is deferred to flatten. This holds at ANY
+                    # depth (`raw.grid.elevation`), so the HEAD — not a fixed part
+                    # count — is what decides it.
+                    if ref.split(".")[0] in subsystems:
                         continue
-                    # A symbol bound by an aggregate/makearray/integral in this
-                    # equation (a contracted index like `i`/`j`/`e`, or an
-                    # integration variable) is not a declared-symbol reference.
-                    if ref in bound_symbols:
-                        continue
-                    if "." in ref:
-                        # 3+ part refs may use subsystem nesting; only check top-level system
-                        if ref.count(".") > 1:
-                            top_system = ref.split(".")[0]
-                            if top_system not in tables["all_systems"]:
-                                errors.append(
-                                    f"models/{mname}/equations[{i}]: reference '{ref}' to undefined system '{top_system}'"
-                                )
-                            continue
-                        # A 2-part ref whose first component is a SUBSYSTEM of the
-                        # current model is subsystem-LOCAL dot-notation, not a
-                        # `System.var` reference. A pure-I/O data-loader mounted as
-                        # a subsystem (RFC pure-io-data-loaders §4.3) is consumed by
-                        # the owning model's own equations this way — `raw.elevation`
-                        # for `models.<mname>.subsystems.raw` — and flatten lowers it
-                        # to the observed `<mname>.raw.elevation`. Defer it exactly as
-                        # the 3+ part subsystem-nested refs are deferred (the
-                        # subsystem's variables are resolved at flatten time).
-                        if ref.split(".")[0] in (m.get("subsystems") or {}):
-                            continue
-                        system, var, status = _resolve_scoped_ref(ref, tables)
-                        if status == "no_system":
-                            errors.append(
-                                f"models/{mname}/equations[{i}]: reference '{ref}' to undefined system '{system}'"
+                    # Arbitrary depth (§4.6): _resolve_scoped_ref decides the
+                    # depth-2 case and defers deeper ones once their head names a
+                    # real system.
+                    system, var, status = _resolve_scoped_ref(ref, tables)
+                    if status == "no_system":
+                        errors.append(
+                            f"{location}: reference '{ref}' to undefined system '{system}'"
+                        )
+                    elif status == "no_var":
+                        errors.append(
+                            f"{location}: reference '{ref}' — variable '{var}' not found "
+                            f"in system '{system}'"
+                        )
+                elif check_bare and ref not in global_symbols:
+                    # Report against the field that actually CARRIES the defect, in
+                    # the corpus-pinned message/details shape. `details.variable` is
+                    # the settled key across bindings (CONFORMANCE_SPEC row (j)).
+                    if phrase is None:
+                        errors.append(
+                            (
+                                _pointer(location),
+                                f"Variable '{ref}' referenced in equation is not declared",
+                                {"variable": ref, **extra},
                             )
-                        elif status == "no_var":
-                            errors.append(
-                                f"models/{mname}/equations[{i}]: reference '{ref}' — variable '{var}' not found in system '{system}'"
-                            )
+                        )
                     else:
-                        # Bare-string refs only checked inside derivative equations
-                        if lhs_is_derivative and side == "rhs":
-                            if ref not in global_symbols:
-                                errors.append(
-                                    f"models/{mname}/equations[{i}]: undefined variable reference '{ref}'"
-                                )
+                        errors.append(
+                            (
+                                _pointer(location),
+                                f'Variable "{ref}" referenced in {phrase} but not declared',
+                                {"variable": ref},
+                            )
+                        )
+
+
+def _model_expression_sites(m: dict[str, Any], mname: str):
+    """Every EXPRESSION-BEARING field of a model, as
+    ``(location, expression, check_bare_names, phrase)``.
+
+    This is the ONE shared traversal esm-spec §4.9.5 prescribes. Reference
+    integrity applies to every field that CARRIES an expression, not just
+    ``equations``: the walkers descended ``equations`` (and reaction ``rate``)
+    and NOTHING else, so an undefined name in any of the other nine model sites
+    was invisible — a silent FALSE NEGATIVE in every binding, pinned now by
+    ``tests/invalid/undefined_variable_in_*.esm``.
+
+    ``location`` is the slash-delimited path that :func:`_json_pointer_from_message`
+    turns into the JSON Pointer reported with the finding, so an error names the
+    field that actually carries the defect.
+
+    ``phrase`` names the site in the emitted message (``None`` for an equation,
+    which keeps its established finding shape).
+
+    ``check_bare_names`` gates the BARE-name check (scoped refs are always
+    checked). An equation's RHS is checked only when the LHS is a derivative: a
+    plain assignment-style equation is the shape an operator-composed model uses
+    for values coupled in from another system, which are not declared locally.
+    Every other site is a closed definition — every name in it must resolve.
+    """
+    for i, eq in enumerate(m.get("equations", []) or []):
+        lhs_is_derivative = isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
+        for side in ("lhs", "rhs"):
+            if side in eq:
+                yield (
+                    f"models/{mname}/equations[{i}]/{side}",
+                    eq[side],
+                    lhs_is_derivative and side == "rhs",
+                    None,
+                    {"equation_index": i, "expected_in": "variables"},
+                )
+
+    for vname, vdef in (m.get("variables") or {}).items():
+        if isinstance(vdef, dict) and vdef.get("expression") is not None:
+            yield (
+                f"models/{mname}/variables/{vname}/expression",
+                vdef["expression"],
+                True,
+                "observed variable expression",
+                {},
+            )
+
+    for vname, expr in (m.get("guesses") or {}).items():
+        yield (f"models/{mname}/guesses/{vname}", expr, True, "guesses expression", {})
+
+    for i, eq in enumerate(m.get("initialization_equations", []) or []):
+        if not isinstance(eq, dict):
+            continue
+        for side in ("lhs", "rhs"):
+            if side in eq:
+                yield (
+                    f"models/{mname}/initialization_equations[{i}]/{side}",
+                    eq[side],
+                    True,
+                    "initialization equation",
+                    {},
+                )
+
+    for i, ev in enumerate(m.get("continuous_events", []) or []):
+        if not isinstance(ev, dict):
+            continue
+        for j, cond in enumerate(ev.get("conditions", []) or []):
+            yield (
+                f"models/{mname}/continuous_events[{i}]/conditions[{j}]",
+                cond,
+                True,
+                "continuous event condition",
+                {},
+            )
+        for key in ("affects", "affect_neg"):
+            for j, aff in enumerate(ev.get(key, []) or []):
+                # A FunctionalAffect (handler_id/read_vars) carries no `rhs`.
+                if isinstance(aff, dict) and "rhs" in aff:
+                    yield (
+                        f"models/{mname}/continuous_events[{i}]/{key}[{j}]/rhs",
+                        aff["rhs"],
+                        True,
+                        "continuous event affect RHS",
+                        {},
+                    )
+
+    for i, ev in enumerate(m.get("discrete_events", []) or []):
+        if not isinstance(ev, dict):
+            continue
+        trigger = ev.get("trigger")
+        if isinstance(trigger, dict) and trigger.get("expression") is not None:
+            yield (
+                f"models/{mname}/discrete_events[{i}]/trigger/expression",
+                trigger["expression"],
+                True,
+                "discrete event trigger expression",
+                {},
+            )
+        for j, aff in enumerate(ev.get("affects", []) or []):
+            if isinstance(aff, dict) and "rhs" in aff:
+                yield (
+                    f"models/{mname}/discrete_events[{i}]/affects[{j}]/rhs",
+                    aff["rhs"],
+                    True,
+                    "discrete event affect RHS",
+                    {},
+                )
+
+    for i, t in enumerate(m.get("tests", []) or []):
+        if not isinstance(t, dict):
+            continue
+        for j, a in enumerate(t.get("assertions", []) or []):
+            if isinstance(a, dict) and a.get("reference") is not None:
+                yield (
+                    f"models/{mname}/tests[{i}]/assertions[{j}]/reference",
+                    a["reference"],
+                    True,
+                    "assertion reference expression",
+                    {},
+                )
+
+
+def _pointer(location: str) -> str:
+    """Slash/bracket location (``models/M/equations[0]/rhs``) -> JSON Pointer."""
+    return "/" + location.replace("[", "/").replace("]", "").strip("/")
+
+
+def _check_data_loader_expressions(
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+) -> None:
+    """§4.9.5: a data loader's ``unit_conversion`` is an Expression, so its free
+    symbols must resolve like any other. It was never walked, so an undefined
+    name here was invisible."""
+    global_symbols = tables["global_symbols"]
+    for lname, loader in (data.get("data_loaders") or {}).items():
+        if not isinstance(loader, dict):
+            continue
+        for vname, vdef in (loader.get("variables") or {}).items():
+            if not isinstance(vdef, dict):
+                continue
+            expr = vdef.get("unit_conversion")
+            if expr is None:
+                continue
+            bound = _expression_bound_symbols(expr)
+            for ref in _walk_expression_strings(expr):
+                if ref == "_var" or ref in bound or "." in ref:
+                    continue
+                if ref not in global_symbols:
+                    errors.append(
+                        (
+                            f"/data_loaders/{lname}/variables/{vname}/unit_conversion",
+                            f'Variable "{ref}" referenced in unit_conversion expression '
+                            f"but not declared",
+                            {"variable": ref},
+                        )
+                    )
+
+
+def _check_coupling_expressions(
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+) -> None:
+    """§4.9.5: the two Expression-bearing fields of a coupling edge — a
+    connector equation's ``expression`` and a ``variable_map``'s Expression-form
+    ``transform``. Coupling refs are FULLY QUALIFIED (§4.6), so an unresolvable
+    name here is an ``unresolved_scoped_ref``, not an ``undefined_variable``.
+    Bare names are left alone: a coupling expression may legitimately name the
+    edge's own operands, which are not document symbols.
+    """
+
+    def check(expr, pointer: str, what: str) -> None:
+        bound = _expression_bound_symbols(expr)
+        for ref in _walk_expression_strings(expr):
+            if ref == "_var" or ref in bound or "." not in ref:
+                continue
+            _system, _var, status = _resolve_scoped_ref(ref, tables)
+            if status in ("no_system", "no_var"):
+                errors.append(
+                    (
+                        "unresolved_scoped_ref",
+                        pointer,
+                        f'Variable "{ref}" referenced in {what} does not resolve',
+                        {"variable": ref},
+                    )
+                )
+
+    for i, c in enumerate(data.get("coupling", []) or []):
+        if not isinstance(c, dict):
+            continue
+        connector = c.get("connector")
+        if isinstance(connector, dict):
+            for j, eq in enumerate(connector.get("equations", []) or []):
+                if isinstance(eq, dict) and eq.get("expression") is not None:
+                    check(
+                        eq["expression"],
+                        f"/coupling/{i}/connector/equations/{j}/expression",
+                        "connector equation expression",
+                    )
+        # `transform` is a string (a named transform like "additive") OR an
+        # Expression; only the Expression form carries references.
+        transform = c.get("transform")
+        if isinstance(transform, dict):
+            check(
+                transform,
+                f"/coupling/{i}/transform",
+                "variable_map Expression transform",
+            )
 
 
 def _check_coupling_references(
@@ -601,14 +923,9 @@ def _check_coupling_references(
         ref = c.get("from")
         if not isinstance(ref, str) or "." not in ref:
             continue
-        # For 3+ part refs (subsystem nesting), only verify the top-level system exists
-        if ref.count(".") > 1:
-            top_system = ref.split(".")[0]
-            if top_system not in tables["all_systems"]:
-                errors.append(
-                    f"coupling[{i}]/from: reference '{ref}' to undefined system '{top_system}'"
-                )
-            continue
+        # Scoped refs are ARBITRARY DEPTH (§4.6). _resolve_scoped_ref decides the
+        # depth-2 case and defers deeper ones (their target lives in a mounted
+        # file) once their head names a real system.
         system, var, status = _resolve_scoped_ref(ref, tables)
         if status == "no_system":
             errors.append(f"coupling[{i}]/from: reference '{ref}' to undefined system '{system}'")
@@ -1179,8 +1496,19 @@ def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
     unit that does not exist and still be pronounced valid, which is exactly the
     hole the 2026-07-14 audit found.
 
-    Reported once per declaration site, at the ``units`` pointer. The dimensional
-    helpers all treat an unparseable unit as "unverifiable" (see
+    Carries its OWN code, ``unit_parse_error`` — NOT ``unit_inconsistency``. The
+    two are different findings and the contract keeps them apart (esm-spec §4.8.4):
+
+      * ``unit_parse_error``   — the unit STRING is unreadable or unreal.
+      * ``unit_inconsistency`` — the unit string is fine and the DIMENSIONS
+                                 provably disagree.
+
+    Collapsing them loses the distinction that tells an author whether to fix a
+    spelling or fix the physics.
+
+    Reported once per declaration site, at the pointer of the DECLARATION (not of
+    its ``units`` member — ``/models/M/variables/c``, as the corpus pins). The
+    dimensional helpers all treat an unparseable unit as "unverifiable" (see
     ``_pint_unverifiable_errors``), so a single bad string yields exactly one
     finding rather than an avalanche of derived mismatches.
     """
@@ -1190,17 +1518,17 @@ def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
         # pint not installed: cannot verify units, do not block.
         return
 
-    def check(pointer: str, units: Any) -> None:
+    def check(pointer: str, name: str, units: Any) -> None:
         if not isinstance(units, str) or not units.strip():
             return
         try:
             parse_unit(units)
-        except UnparseableUnitError as exc:
+        except UnparseableUnitError:
             errors.append(
                 (
                     pointer,
-                    f"Unit '{units}' is not a known unit: {exc}",
-                    {"units": units, "reason": "unparseable_unit"},
+                    f"Unit string '{units}' is not a recognised unit",
+                    {"variable": name, "units": units},
                 )
             )
         except ImportError:
@@ -1214,8 +1542,8 @@ def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
                 if not isinstance(definition, dict):
                     continue
                 base = f"/{container}/{sys_name}/{member}/{name}"
-                check(f"{base}/units", definition.get("units"))
-                check(f"{base}/default_units", definition.get("default_units"))
+                check(base, name, definition.get("units"))
+                check(base, name, definition.get("default_units"))
 
 
 def _json_pointer_from_message(msg: str) -> str:
@@ -1309,9 +1637,7 @@ def _walk_expression_for_dimensionless_arg_checks(
         )
 
 
-def _check_unit_consistency(
-    data: dict[str, Any], tables: dict[str, Any], errors: list
-) -> None:
+def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors: list) -> None:
     """
     Check unit compatibility in equations.
 
@@ -1349,9 +1675,7 @@ def _check_unit_consistency(
                         ref = non_none[0]
                         for u in non_none[1:]:
                             if not _units_compatible(ref, u):
-                                op_name = (
-                                    "addition" if expr.get("op") == "+" else "subtraction"
-                                )
+                                op_name = "addition" if expr.get("op") == "+" else "subtraction"
                                 verb = "add" if expr.get("op") == "+" else "subtract"
                                 errors.append(
                                     (
@@ -1618,20 +1942,30 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
 
         A check appends either a bare prose message (legacy form — the
         JSON-Pointer path is then recovered from the conventional
-        ``"a/b/c: message"`` prefix) or an explicit
-        ``(json_pointer, message, details)`` triple.
+        ``"a/b/c: message"`` prefix), an explicit
+        ``(json_pointer, message, details)`` triple, or a
+        ``(code, json_pointer, message, details)`` 4-tuple that OVERRIDES the
+        collect-level code. The override exists because one pass may legitimately
+        emit findings under different codes: the §4.9.5 reference-integrity walk
+        reports a bare undefined name as ``undefined_variable`` but an
+        unresolvable *scoped* (``System.var``) ref in a coupling expression as
+        ``unresolved_scoped_ref``.
         """
         sub: list = []
         run(sub)
         for item in sub:
+            item_code = code
             if isinstance(item, tuple):
-                path, msg, details = item
+                if len(item) == 4:
+                    item_code, path, msg, details = item
+                else:
+                    path, msg, details = item
             else:
                 msg = item
                 path = _json_pointer_from_message(msg)
                 details = {}
-            findings.append((code, msg))
-            records.append({"code": code, "path": path, "message": msg, "details": details})
+            findings.append((item_code, msg))
+            records.append({"code": item_code, "path": path, "message": msg, "details": details})
 
     # Operator arity check (walk all expressions)
     def walk_for_arity(errors, obj, path):
@@ -1649,8 +1983,16 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
 
     tables = _build_symbol_tables(data)
 
-    collect("undefined_reference", lambda sub: _check_variable_references(data, tables, sub))
-    collect("undefined_reference", lambda sub: _check_coupling_references(data, tables, sub))
+    # `undefined_variable` (NOT `undefined_reference`): the corpus pins
+    # `undefined_variable` and Python was the only binding spelling it otherwise
+    # — a cross-language conformance gap, not a cosmetic one.
+    collect("undefined_variable", lambda sub: _check_variable_references(data, tables, sub))
+    collect("undefined_variable", lambda sub: _check_coupling_references(data, tables, sub))
+    # §4.9.5: reference integrity applies to EVERY expression-bearing field —
+    # including the two that live outside `models`: a data loader's
+    # `unit_conversion` and a coupling edge's connector/transform expressions.
+    collect("undefined_variable", lambda sub: _check_data_loader_expressions(data, tables, sub))
+    collect("unresolved_scoped_ref", lambda sub: _check_coupling_expressions(data, tables, sub))
     collect("circular_reference", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_loader_config", lambda sub: _check_data_loader_variables(data, sub))
     collect("invalid_discrete_param", lambda sub: _check_discrete_parameters(data, sub))
@@ -1658,7 +2000,10 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
     # Subsystem ref existence/parse is checked by resolve_subsystem_refs after
     # structural validation, which raises SubsystemRefError with richer context.
-    collect("unit_inconsistency", lambda sub: _check_unparseable_units(data, sub))
+    # An unreal unit STRING and a provable dimensional MISMATCH are different
+    # findings with different codes (esm-spec §4.8.4) — the first tells the author
+    # to fix a spelling, the second to fix the physics.
+    collect("unit_parse_error", lambda sub: _check_unparseable_units(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))
