@@ -188,11 +188,13 @@ export const schema: AnySchemaObject = {
         "created": {
           "type": "string",
           "format": "date-time",
-          "description": "ISO 8601 creation timestamp."
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+          "description": "ISO 8601 creation timestamp. The pattern duplicates `format: date-time` because `format` is an annotation, not an assertion, in JSON Schema — validators ignore it unless separately configured, so the pattern is what makes the constraint portable across bindings."
         },
         "modified": {
           "type": "string",
           "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
           "description": "ISO 8601 last-modified timestamp."
         },
         "tags": {
@@ -252,14 +254,18 @@ export const schema: AnySchemaObject = {
       "additionalProperties": false,
       "properties": {
         "doi": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^10\\.\\d{4,9}/\\S+$",
+          "description": "DOI in the standard `10.<registrant>/<suffix>` form."
         },
         "citation": {
           "type": "string"
         },
         "url": {
           "type": "string",
-          "format": "uri"
+          "format": "uri",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9+.-]*://[^\\s]+$|^(mailto|urn):[^\\s]+$",
+          "description": "Absolute URI. The pattern duplicates `format: uri` because `format` is an annotation, not an assertion, in JSON Schema."
         },
         "notes": {
           "type": "string"
