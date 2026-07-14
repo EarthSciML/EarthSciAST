@@ -951,6 +951,18 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     if getattr(esm_file, "index_sets", None):
         result["index_sets"] = esm_file.index_sets
 
+    # Serialize the top-level DECLARATIONS (esm-spec §9.7.1) — peers of
+    # `index_sets`. Option A expands `apply_expression_template` CALL SITES; it
+    # does NOT delete these declarations (§9.6.4 rule 5), so they round-trip
+    # VERBATIM. Dropping them emitted a pure template-library file as
+    # `{esm, metadata, index_sets}` — none of the five top-level payload keys —
+    # which the schema's top-level `anyOf` rejects, making a conforming library
+    # file unrepresentable: legal on disk, illegal once loaded and re-emitted.
+    if getattr(esm_file, "metaparameters", None):
+        result["metaparameters"] = esm_file.metaparameters
+    if getattr(esm_file, "expression_templates", None):
+        result["expression_templates"] = esm_file.expression_templates
+
     # Serialize data loaders
     if esm_file.data_loaders:
         result["data_loaders"] = {

@@ -7,8 +7,9 @@ Shared fixture + analytic golden live under
 (``discrete_materialize_conformance.rs``) reproduce the same golden.
 
 Model ``M`` mixes a CONST weight matrix ``W`` (an in-file ``const`` observed) with
-a DISCRETE forcing field ``src`` (a bare, undeclared forcing name resolved through
-the array evaluator's ``input_arrays``) inside a conservative-regrid-shaped
+a DISCRETE forcing field ``src`` (declared ``type: "discrete"`` — the spelling for
+a loader/forcing-fed variable, CONFORMANCE_SPEC §5.10.1 — and fed at run time
+through the array evaluator's ``input_arrays``) inside a conservative-regrid-shaped
 CONTRACTION ``g[j] = sum_i W[i,j]*src[i]`` — state-free but forcing-tainted, so it
 changes only when ``src`` is refreshed at a cadence boundary. A sibling
 ``k[j] = sum_i W[i,j]*offset`` reads only const/parameter data, so it is
@@ -34,38 +35,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import earthsci_ast.parse as _parse
 from earthsci_ast.flatten import flatten
+from earthsci_ast.parse import load
 from earthsci_ast.simulation_array import _simulate_with_numpy
-
-
-def load(path):
-    """``load()`` with the §4.9.5 structural gate bypassed.
-
-    The SHARED fixture (`tests/conformance/discrete_materialize/fixtures/`,
-    also consumed by the Julia and Rust runners) reads a DISCRETE forcing field
-    `src` that is a bare, UNDECLARED name — it is supplied at run time through
-    the array evaluator's `input_arrays` injection seam (Rust's forcing buffer).
-
-    Nothing in the spec sanctions an undeclared name: esm-spec §4.9.5 requires
-    every free symbol of every Expression to resolve, so `src` inside the
-    observed `g = sum_i W[i,j]*src[i]` is an `undefined_variable` and the fixture
-    is, as written, INVALID. The fixture's own docstring calls `src` a "DISCRETE
-    forcing field", and the schema's `ModelVariable.type` enum already has a
-    `discrete` member — so the fix is almost certainly to DECLARE
-    `src: {"type": "discrete", ...}` in the shared fixture. That is a
-    cross-binding change to a numerical-conformance fixture (Julia and Rust
-    reproduce the same golden from it), so it is escalated rather than made
-    here; this suite pins the MATERIALIZATION semantics, not validation, and
-    bypasses the gate so it keeps doing so.
-    """
-    original = _parse._validate_structural
-    _parse._validate_structural = lambda *a, **k: None
-    try:
-        return _parse.load(path)
-    finally:
-        _parse._validate_structural = original
-
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "discrete_materialize"
 _FIXTURE = _ROOT / "fixtures" / "discrete_materialize_contraction.esm"

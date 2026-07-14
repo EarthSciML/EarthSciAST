@@ -120,7 +120,7 @@ def _convert_jsonschema_error(error: JsonSchemaValidationError) -> ValidationErr
     )
 
 
-def validate(esm_file) -> ValidationResult:
+def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
     """
     Validate an ESM file against schema, structural, and unit requirements.
 
@@ -132,6 +132,26 @@ def validate(esm_file) -> ValidationResult:
 
     Args:
         esm_file: The EsmFile object, JSON string, or dict to validate
+        base_path: Directory that relative ``{"ref": ...}`` subsystem/model mounts
+            (§4.7) and ``expression_template_imports`` (§9.7.2) resolve against.
+
+            Validating a document that mounts another file is only meaningful if
+            the mount target can be OPENED: whether a ref resolves — and whether
+            the index sets it merges in conflict — is not decidable from the
+            document's own bytes. When the caller passes the JSON *content* (as a
+            conformance harness does, holding the fixture text rather than its
+            path), there is nothing to anchor a relative ref to, and every
+            subsystem-ref and template-import fixture becomes unsatisfiable.
+            Passing the fixture's directory here makes those pins reachable: a
+            MISSING target yields ``unresolved_subsystem_ref`` (or the
+            template-import equivalent) at the mount's pointer, and a PRESENT one
+            validates through.
+
+            Omitted, behaviour is unchanged: relative refs are resolved against
+            the process CWD, so an unopenable target is still reported as an
+            unresolved ref — never silently accepted. Passing a *file path* as
+            ``esm_file`` needs no ``base_path``; the file's own directory anchors
+            it.
 
     Returns:
         ValidationResult containing schema_errors, structural_errors, unit_warnings, and is_valid flag
@@ -139,7 +159,7 @@ def validate(esm_file) -> ValidationResult:
     # Handle JSON string or dict input by parsing first
     if isinstance(esm_file, (str, dict)):
         try:
-            esm_file = load(esm_file)
+            esm_file = load(esm_file, base_path=base_path)
         except SchemaValidationError as e:
             # A STRUCTURAL failure (StructuralValidationError subclasses
             # SchemaValidationError) carries machine-readable records — a stable
@@ -275,12 +295,21 @@ def _validate_content_presence(esm_file: EsmFile, error_collector: ErrorCollecto
     being empty or containing only metadata. A loader-only file (sole component
     `data_loaders`) is valid — it is referenceable as a loader subsystem
     (RFC pure-io-data-loaders §4.4 / esm-spec §4.7).
+
+    A TEMPLATE-LIBRARY file (esm-spec §9.7.1) is likewise valid with no component
+    at all: it carries only `expression_templates` and exists to be IMPORTED. It
+    is empty by DESIGN, not by mistake. The registry is a top-level DECLARATION
+    that survives load (§9.6.4 rule 5), so it is checked directly; without it a
+    library validated standalone looked like an empty document and was rejected
+    (`template_import_lib.esm`, `template_import_rename_lib.esm` — both pinned
+    VALID).
     """
     has_models = bool(esm_file.models)
     has_reaction_systems = bool(esm_file.reaction_systems)
     has_data_loaders = bool(esm_file.data_loaders)
+    is_library = bool(getattr(esm_file, "expression_templates", None))
 
-    if not has_models and not has_reaction_systems and not has_data_loaders:
+    if not has_models and not has_reaction_systems and not has_data_loaders and not is_library:
         error = ESMError(
             code=ErrorCode.MISSING_REQUIRED_FIELD,
             message="ESM file must contain at least one model, reaction system, or data loader. Empty files are not valid.",

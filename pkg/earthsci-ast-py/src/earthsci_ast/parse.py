@@ -2155,6 +2155,40 @@ def load(
     if metaparameters:
         root_meta_env.update({str(k): v for k, v in metaparameters.items()})
 
+    # Top-level `expression_templates` / `metaparameters` are DECLARATIONS
+    # (esm-spec §9.7.1), peers of `index_sets` — not `apply_expression_template`
+    # call sites. Option A expands the call sites; it does NOT delete the
+    # declarations (§9.6.4 rule 5), and they survive `parse -> emit` VERBATIM.
+    # Both §9.7 resolution and template lowering consume them, so they must be
+    # captured HERE, on the raw document, while they are still visible.
+    _raw_expression_templates = copy.deepcopy(data.get("expression_templates") or {})
+    _raw_metaparameters = copy.deepcopy(data.get("metaparameters") or {})
+
+    # A PURE TEMPLATE LIBRARY — templates and no component — is generic: its
+    # metaparameters are bound per import EDGE, not here. Closing them against
+    # their defaults and folding the result into `index_sets` would emit
+    # `size: 8` where the author wrote `size: "N"`, hard-wiring the library to
+    # its default and silently destroying the genericity that makes it a library
+    # (re-importing the emitted form with `{"N": 16}` would no longer resize it).
+    # That is the same mistake as dropping the registry — a load-time transform
+    # applied to a DECLARATION that must survive (§9.6.4 rule 5: a library file
+    # MUST round-trip to itself) — so the authored registry is kept. Nothing in
+    # the document can consume these sizes: a library declares no model,
+    # reaction system or data loader.
+    #
+    # The exception is a caller who BINDS at the loader API (§9.7.6 site 4):
+    # `load(lib, metaparameters={"N": 12})` is a request to INSTANTIATE the
+    # library at that size, so the fold is what was asked for and the concrete
+    # sizes stand.
+    _is_pure_library = bool(_raw_expression_templates) and not (
+        data.get("models") or data.get("reaction_systems") or data.get("data_loaders")
+    )
+    _raw_index_sets = (
+        copy.deepcopy(data.get("index_sets") or {})
+        if (_is_pure_library and not metaparameters)
+        else None
+    )
+
     # Resolve esm-spec §9.7 machinery — template-library imports (depth-first
     # post-order, per-edge metaparameter instantiation), index_sets merge,
     # metaparameter close+fold — BEFORE any validator sees the tree (esm-spec
@@ -2176,6 +2210,11 @@ def load(
 
     # Parse into ESM objects
     esm_file = _parse_esm_data(data)
+
+    esm_file.expression_templates = _raw_expression_templates
+    esm_file.metaparameters = _raw_metaparameters
+    if _raw_index_sets is not None:
+        esm_file.index_sets = _raw_index_sets
 
     # Resolve top-level model references first so every entry in
     # esm_file.models is a concrete Model (rather than a `{ref: ...}` dict)

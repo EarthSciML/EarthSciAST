@@ -10,6 +10,7 @@ import json
 from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
 from earthsci_ast import load
+from earthsci_ast.serialize import save
 from earthsci_ast.validation import validate, SchemaValidationError
 
 
@@ -929,3 +930,122 @@ class TestReferenceIntegrityEveryExpressionBearingField:
         )
         assert matches[0].message == expected["message"]
         assert matches[0].details == expected["details"]
+
+
+class TestValidateBasePath:
+    """`validate(..., base_path=...)` — esm-spec §4.7 / §9.7.2.
+
+    Whether a `{"ref": ...}` mount or an `expression_template_imports` edge
+    resolves is NOT decidable from the document's own bytes: the target has to be
+    opened. A conformance harness holds the fixture TEXT, not its path, so
+    without an anchor every subsystem-ref and template-import fixture is
+    unsatisfiable. `base_path` supplies the anchor.
+    """
+
+    def test_present_ref_target_validates_through_with_base_path(self):
+        valid_dir = FIXTURES_ROOT / "valid"
+        for name in (
+            "subsystem_index_set_merge.esm",
+            "template_import_minimal.esm",
+            "lib_solar_subsystem_inclusion.esm",
+            "lib_calendar_subsystem_inclusion.esm",
+        ):
+            content = (valid_dir / name).read_text()
+            result = validate(content, base_path=str(valid_dir))
+            assert result.is_valid, (
+                f"{name} must validate clean when its refs can be resolved; got "
+                f"{[(e.code, e.path) for e in result.structural_errors + result.schema_errors]}"
+            )
+
+    def test_missing_ref_target_is_reported_not_silently_passed(self):
+        """A ref whose target does not exist yields the pinned error — with a
+        base_path (the target is genuinely absent) and without one (nothing to
+        resolve against). It must never silently validate."""
+        invalid_dir = FIXTURES_ROOT / "invalid"
+        content = (invalid_dir / "subsystem_ref_not_found.esm").read_text()
+        for kwargs in ({}, {"base_path": str(invalid_dir)}):
+            result = validate(content, **kwargs)
+            assert not result.is_valid, f"must be rejected (kwargs={kwargs})"
+            assert any(e.code == "unresolved_subsystem_ref" for e in result.structural_errors), [
+                (e.code, e.path) for e in result.structural_errors
+            ]
+
+    def test_without_base_path_unresolvable_ref_is_never_silently_accepted(self):
+        """Backward compatible: omitting `base_path` keeps today's behaviour, and
+        a relative ref that cannot be opened is REPORTED, not passed."""
+        valid_dir = FIXTURES_ROOT / "valid"
+        result = validate((valid_dir / "subsystem_index_set_merge.esm").read_text())
+        assert not result.is_valid
+        assert any(e.code == "unresolved_subsystem_ref" for e in result.structural_errors)
+
+    def test_template_library_file_is_valid_content(self):
+        """A template-LIBRARY file (§9.7.1) declares only `expression_templates`
+        and no model/reaction system/data loader. It is empty by DESIGN — it
+        exists to be imported — and must not trip the content-presence check."""
+        valid_dir = FIXTURES_ROOT / "valid"
+        for name in ("template_import_lib.esm", "template_import_rename_lib.esm"):
+            result = validate((valid_dir / name).read_text(), base_path=str(valid_dir))
+            assert result.is_valid, (
+                f"{name} is a template library and is valid; got "
+                f"{[(e.code, e.path) for e in result.structural_errors]}"
+            )
+
+    def test_coupling_entry_naming_a_nonexistent_system_is_caught(self):
+        """A coupling edge may only compose systems the document declares. A
+        dotted entry names a SUBSYSTEM at arbitrary depth (§4.6), so only the
+        head is decidable here."""
+        invalid_dir = FIXTURES_ROOT / "invalid"
+        result = validate((invalid_dir / "undefined_system.esm").read_text())
+        assert not result.is_valid
+        matches = [e for e in result.structural_errors if e.code == "undefined_system"]
+        assert len(matches) == 1
+        assert matches[0].path == "/coupling/0/systems"
+        assert matches[0].details == {"system": "NonExistentSystem"}
+
+
+class TestTemplateLibraryRoundTrip:
+    """esm-spec §9.6.4 rule 5 — Option A expands CALL SITES; it does NOT delete
+    DECLARATIONS.
+
+    A top-level `expression_templates` registry and `metaparameters` block
+    (§9.7.1) are declarations — peers of `index_sets` — not
+    `apply_expression_template` invocations. The emitter treated them as call
+    sites and consumed them, so a pure template-library file emitted as
+    `{esm, metadata, index_sets}`: none of the five top-level payload keys, which
+    the schema's top-level `anyOf` rejects. Since schema validation runs on the
+    post-expansion form (rule 4), a conforming library was UNREPRESENTABLE —
+    legal on disk, illegal the moment it was loaded and re-emitted.
+    """
+
+    @pytest.mark.parametrize("name", ["template_import_lib.esm", "template_import_rename_lib.esm"])
+    def test_pure_library_round_trips_to_itself(self, name):
+        valid_dir = FIXTURES_ROOT / "valid"
+        path = valid_dir / name
+        original = json.loads(path.read_text())
+
+        emitted = json.loads(save(load(str(path))))
+
+        # The two declarations survive VERBATIM...
+        assert emitted.get("expression_templates") == original["expression_templates"]
+        assert emitted.get("metaparameters") == original["metaparameters"]
+        # ...and the library is generic: its metaparameter-sized index set must
+        # NOT be folded to the default. Emitting `size: 8` where the author wrote
+        # `size: "N"` hard-wires the library to its default and silently destroys
+        # the genericity that makes it a library — re-importing the emitted form
+        # with `{"N": 16}` would no longer resize it.
+        assert emitted.get("index_sets") == original["index_sets"]
+        # A document kind that cannot round-trip to itself is not a document kind.
+        assert emitted == original, "a template library MUST round-trip to itself"
+
+    @pytest.mark.parametrize("name", ["template_import_lib.esm", "template_import_rename_lib.esm"])
+    def test_emitted_library_is_still_valid(self, name):
+        """Rule 4: schema validation runs on the post-expansion form. The emitted
+        library must therefore be valid, and re-emitting it must be a fixpoint."""
+        valid_dir = FIXTURES_ROOT / "valid"
+        emitted = save(load(str(valid_dir / name)))
+
+        result = validate(emitted, base_path=str(valid_dir))
+        assert result.is_valid, [
+            (e.code, e.path) for e in result.structural_errors + result.schema_errors
+        ]
+        assert json.loads(save(load(emitted))) == json.loads(emitted)

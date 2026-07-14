@@ -914,6 +914,37 @@ def _check_coupling_expressions(
             )
 
 
+def _check_coupling_systems(
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+) -> None:
+    """A coupling entry's ``systems`` list must name systems the document
+    declares. Nothing checked it, so a coupling edge could compose against a
+    system that exists nowhere and the document still validated
+    (``tests/invalid/undefined_system.esm``).
+    """
+    all_systems = tables["all_systems"]
+    for i, c in enumerate(data.get("coupling", []) or []):
+        if not isinstance(c, dict):
+            continue
+        for name in c.get("systems", []) or []:
+            if not isinstance(name, str):
+                continue
+            # A `systems` entry may be a DOTTED path naming a SUBSYSTEM at
+            # arbitrary depth (`EmissionSources.Biogenic.Forest`, §4.6). Only the
+            # HEAD is decidable from this document — a deeper mount's target may
+            # live in a referenced file — so resolve the head and defer the rest,
+            # the same posture the variable/scoped-ref checks take.
+            head = name.split(".")[0]
+            if head not in all_systems:
+                errors.append(
+                    (
+                        f"/coupling/{i}/systems",
+                        f'Coupling entry references nonexistent system "{name}"',
+                        {"system": name},
+                    )
+                )
+
+
 def _check_coupling_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
@@ -1993,6 +2024,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # `unit_conversion` and a coupling edge's connector/transform expressions.
     collect("undefined_variable", lambda sub: _check_data_loader_expressions(data, tables, sub))
     collect("unresolved_scoped_ref", lambda sub: _check_coupling_expressions(data, tables, sub))
+    collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
     collect("circular_reference", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_loader_config", lambda sub: _check_data_loader_variables(data, sub))
     collect("invalid_discrete_param", lambda sub: _check_discrete_parameters(data, sub))
