@@ -292,11 +292,77 @@ describe('Unit parsing and dimensional analysis', () => {
         })
       })
 
-      it('reports sqrt of an odd-exponent dimension as a mismatch', () => {
-        const bindings = createUnitBindings({ x: 'm' })
-        const result = checkDimensions({ op: 'sqrt', args: ['x'] }, bindings)
-        expect(result.dimensions).toBeNull()
-        expect(result.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(true)
+      // Dimension exponents are RATIONAL, not integral, so sqrt of an odd
+      // exponent is well-defined rather than a mismatch. `sqrt(k)` on a `1/s`
+      // rate constant is `1/s^0.5` — the declared unit of an SDE noise
+      // intensity in the corpus. The old contract (odd exponent ⇒ mismatch)
+      // rejected correct physics.
+      it('halves an odd exponent instead of reporting a mismatch (rational dimensions)', () => {
+        const bindings = createUnitBindings({ x: 'm', k: '1/s' })
+
+        const length = checkDimensions({ op: 'sqrt', args: ['x'] }, bindings)
+        expect(length.dimensions?.dims).toEqual({ m: 0.5 })
+        expect(length.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
+
+        // The SDE case: sqrt of a rate constant is a noise intensity, 1/s^0.5.
+        const noise = checkDimensions({ op: 'sqrt', args: ['k'] }, bindings)
+        expect(noise.dimensions?.dims).toEqual({ s: -0.5 })
+        expect(noise.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
+      })
+
+      // The dimension vector carries `rad` as an AXIS, so an angle is not
+      // dimensionless here. Trigonometry must still typecheck: `lib/solar.esm`
+      // (a SHIPPED standard-library file, pinned valid via
+      // lib_solar_subsystem_inclusion.esm) declares `solar_zenith_angle: "rad"`
+      // and computes it with `acos(...)`.
+      it('accepts an ANGLE argument to a circular function', () => {
+        const bindings = createUnitBindings({ theta: 'rad', mass: 'kg' })
+
+        const ok = checkDimensions({ op: 'sin', args: ['theta'] }, bindings)
+        expect(ok.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
+        expect(dimsOf(ok)).toEqual({})
+
+        // A genuinely dimensional argument is still a provable mismatch.
+        const bad = checkDimensions({ op: 'sin', args: ['mass'] }, bindings)
+        expect(bad.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(true)
+      })
+
+      it('leaves an inverse circular function INDETERMINATE, never fabricating an angle', () => {
+        const bindings = createUnitBindings({ ratio: '1' })
+        // The result is an angle, and `rad` vs dimensionless are both defensible
+        // spellings — so committing to either would falsely reject the models
+        // that use the other. Indeterminate is never a mismatch against either.
+        for (const op of ['acos', 'asin', 'atan']) {
+          const r = checkDimensions({ op, args: ['ratio'] }, bindings)
+          expect(r.dimensions, op).toBeNull()
+          expect(
+            r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+            op,
+          ).toBe(false)
+        }
+      })
+
+      it('does not report acos() against a rad-declared observed variable', () => {
+        // The lib/solar.esm shape, reduced: declared `rad`, computed by `acos`.
+        const file: EsmFile = {
+          esm: '0.1.0',
+          metadata: { name: 'solar' },
+          models: {
+            Solar: {
+              variables: {
+                cos_zenith: { type: 'parameter', units: '1', default: 0.5 },
+                solar_zenith_angle: {
+                  type: 'observed',
+                  units: 'rad',
+                  expression: { op: 'acos', args: ['cos_zenith'] },
+                },
+              },
+              equations: [],
+            },
+          },
+        }
+        const mismatches = validateUnits(file).filter((w) => w.code === 'dimensional_mismatch')
+        expect(mismatches).toEqual([])
       })
 
       it('rejects a dimensional exponent', () => {
@@ -568,7 +634,7 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(unparseable[0].message).toContain('notaunit')
       // The pointer is the offending DECLARATION, which is what validate() uses
       // verbatim as the structural error's path.
-      expect(unparseable[0].location).toBe('/models/TestModel/variables/x/units')
+      expect(unparseable[0].location).toBe('/models/TestModel/variables/x')
       // The one defect is reported ONCE, and nothing is INVENTED on top of it:
       // `x` is left unbound (dimension UNKNOWN, not dimensionless), so the
       // equation that uses it yields no dimensional mismatch.
@@ -612,7 +678,7 @@ describe('Unit parsing and dimensional analysis', () => {
       const unparseable = warnings.filter((w) => w.code === 'unparseable_unit')
       expect(unparseable).toHaveLength(1)
       expect(unparseable[0].message).toContain('notaunit')
-      expect(unparseable[0].location).toBe('/models/TestModel/variables/rate/units')
+      expect(unparseable[0].location).toBe('/models/TestModel/variables/rate')
       expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
     })
   })

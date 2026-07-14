@@ -276,6 +276,175 @@ describe('unit-conversion', () => {
     })
   })
 
+  // The units contract v2. Every case below is a unit string that appears in the
+  // shared corpus and that the v1 (ASCII, integer-exponent) grammar could not
+  // parse. Under the hard-error severity policy an unparseable unit is a
+  // `unit_parse_error`, so each of these was a FALSE REJECTION of a valid file.
+  describe('units contract v2', () => {
+    describe('rational exponents', () => {
+      it('parses a decimal exponent (SDE noise intensity 1/s^0.5)', () => {
+        expect(parseUnitForConversion('1/s^0.5').dims).toEqual({ s: -0.5 })
+      })
+
+      it('parses the parenthesised exact-ratio spelling m^(1/2)', () => {
+        expect(parseUnitForConversion('m^(1/2)').dims).toEqual({ m: 0.5 })
+        expect(parseUnitForConversion('s^(-1/2)').dims).toEqual({ s: -0.5 })
+      })
+
+      it('agrees that the decimal and ratio spellings denote the same dimension', () => {
+        expect(unitsCompatible('1/s^0.5', 's^(-1/2)')).toBe(true)
+      })
+
+      it('still parses ordinary integer exponents', () => {
+        expect(parseUnitForConversion('m^2').dims).toEqual({ m: 2 })
+        expect(parseUnitForConversion('s^-1').dims).toEqual({ s: -1 })
+      })
+
+      it('rejects a zero denominator rather than yielding Infinity', () => {
+        expect(() => parseUnitForConversion('m^(1/0)')).toThrow(UnitConversionError)
+      })
+    })
+
+    describe('unicode normalization', () => {
+      it('reads superscript exponents', () => {
+        expect(parseUnitForConversion('W/m²').dims).toEqual({ kg: 1, s: -3 })
+        expect(parseUnitForConversion('cm³').dims).toEqual({ m: 3 })
+        expect(parseUnitForConversion('m²/s').dims).toEqual({ m: 2, s: -1 })
+      })
+
+      it('reads a superscript minus as a negative exponent', () => {
+        expect(parseUnitForConversion('s⁻¹').dims).toEqual({ s: -1 })
+        expect(parseUnitForConversion('m⁻²').dims).toEqual({ m: -2 })
+      })
+
+      it('reads the middot AND the dot-operator as multiplication', () => {
+        // U+00B7 MIDDLE DOT and U+22C5 DOT OPERATOR.
+        expect(parseUnitForConversion('J/(kg·K)').dims).toEqual({ m: 2, s: -2, K: -1 })
+        expect(parseUnitForConversion('kg⋅m/s').dims).toEqual({ kg: 1, m: 1, s: -1 })
+        expect(parseUnitForConversion('Pa·s').dims).toEqual({ kg: 1, m: -1, s: -1 })
+      })
+
+      it('reads micro, degree-Celsius and ohm spellings', () => {
+        expect(parseUnitForConversion('μg/m^3').dims).toEqual({ kg: 1, m: -3 })
+        expect(parseUnitForConversion('°C').dims).toEqual({ K: 1 })
+        expect(parseUnitForConversion('Ω').dims).toEqual({ kg: 1, m: 2, s: -3, A: -2 })
+      })
+
+      it('parses the corpus unit strings that v1 rejected outright', () => {
+        for (const unit of [
+          'W/m²',
+          'W/m²/K',
+          'kg/m³',
+          'cm³/molecule/s',
+          'J/(kg·K)',
+          'kg/(m^2·day)',
+          'kg⋅m/s',
+          'Pa·s',
+          'μg/(m^3*s)',
+          '%',
+          '%/h',
+          'psu',
+          'uatm',
+          '1/s^0.5',
+        ]) {
+          expect(() => parseUnitForConversion(unit), unit).not.toThrow()
+        }
+      })
+    })
+
+    describe('registry additions', () => {
+      it('treats % as a dimensionless hundredth, the same unit as percent', () => {
+        expect(parseUnitForConversion('%').dims).toEqual({})
+        expect(convertUnits(1, '%', 'percent')).toBeCloseTo(1, 12)
+        expect(convertUnits(50, '%', 'dimensionless')).toBeCloseTo(0.5, 12)
+      })
+
+      it('treats psu (practical salinity) as dimensionless', () => {
+        expect(parseUnitForConversion('psu').dims).toEqual({})
+      })
+
+      it('treats uatm as a pressure', () => {
+        expect(unitsCompatible('uatm', 'Pa')).toBe(true)
+        expect(convertUnits(1, 'uatm', 'Pa')).toBeCloseTo(0.101325, 9)
+      })
+
+      it('treats molecule as the long-form molec (both dimensionless)', () => {
+        expect(parseUnitForConversion('molecule').dims).toEqual({})
+        expect(unitsCompatible('cm^3/(molecule*s)', 'cm^3/(molec*s)')).toBe(true)
+      })
+
+      it('accepts d, the SI-accepted symbol for the day (lib/calendar.esm uses it)', () => {
+        expect(parseUnitForConversion('d').dims).toEqual({ s: 1 })
+        expect(convertUnits(1, 'd', 'h')).toBeCloseTo(24, 9)
+        expect(unitsCompatible('d', 'day')).toBe(true)
+      })
+
+      it('keeps the adopted long-form aliases in the canonical set', () => {
+        for (const symbol of [
+          'meters',
+          'meter',
+          'Celsius',
+          'Kelvin',
+          'hour',
+          'minute',
+          'percent',
+        ]) {
+          expect(() => parseUnitForConversion(symbol), symbol).not.toThrow()
+        }
+      })
+
+      it('pins the Dobson scale at 2.6867e20 molec/m^2', () => {
+        expect(convertUnits(1, 'DU', 'molec/m^2')).toBeCloseTo(2.6867e20, -6)
+        expect(parseUnitForConversion('Dobson').scale).toBe(2.6867e20)
+      })
+    })
+
+    describe('* and / share ONE precedence level, left to right', () => {
+      it('leaves K POSITIVE in J/mol*K', () => {
+        // `J/mol*K` is `(J/mol)*K`, NOT `J/(mol*K)`. The two spellings denote
+        // DIFFERENT dimensions and the corpus's units_registry_grammar.esm
+        // discriminates them: `R_slash_star` divided by a temperature must land
+        // on J/mol, which only works if the K here is positive.
+        expect(parseUnitForConversion('J/mol*K').dims).toEqual({
+          kg: 1,
+          m: 2,
+          s: -2,
+          mol: -1,
+          K: 1,
+        })
+        expect(parseUnitForConversion('J/(mol*K)').dims).toEqual({
+          kg: 1,
+          m: 2,
+          s: -2,
+          mol: -1,
+          K: -1,
+        })
+        expect(unitsCompatible('J/mol*K', 'J/(mol*K)')).toBe(false)
+      })
+
+      it('reads a/b/c as a/(b*c)', () => {
+        expect(parseUnitForConversion('kg/m/s').dims).toEqual({ kg: 1, m: -1, s: -1 })
+        // ...and kg/m*s as (kg/m)*s.
+        expect(parseUnitForConversion('kg/m*s').dims).toEqual({ kg: 1, m: -1, s: 1 })
+      })
+    })
+
+    describe('whitespace is multiplication', () => {
+      it('reads juxtaposed terms as a product', () => {
+        // Unit strings carry DIMENSIONS ONLY, so `ppb^-1 s^-1` is a product of
+        // two inverse units, never a species tag.
+        expect(parseUnitForConversion('ppb^-1 s^-1').dims).toEqual({ s: -1 })
+        expect(parseUnitForConversion('kg m^2 s^-2').dims).toEqual({ kg: 1, m: 2, s: -2 })
+      })
+
+      it('reads C as the coulomb even when juxtaposed', () => {
+        // `kg C/m^2` is kilogram-coulomb per square metre — the species-tag
+        // reading is illegal.
+        expect(parseUnitForConversion('kg C/m^2').dims).toEqual({ kg: 1, A: 1, s: 1, m: -2 })
+      })
+    })
+  })
+
   describe('unitsCompatible', () => {
     it('returns true for compatible units', () => {
       expect(unitsCompatible('km', 'm')).toBe(true)

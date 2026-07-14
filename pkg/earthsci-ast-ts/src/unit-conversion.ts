@@ -87,14 +87,13 @@ interface UnitSpec {
  * A prefix parser would accept `kkg`, `mmol` as milli-mol *and* metre-mol, and
  * generally invent symbols no binding agrees on.
  *
- * TS-ONLY ALIASES. A handful of entries below (`meter(s)`, `sec`/`second(s)`,
- * `minute`, `hour`, `Kelvin`, `Celsius`, `liter`, `ratio`, `percent`, `kHz`,
- * `MHz`) are long-form spellings Go's table does not carry. They are kept
- * deliberately: each denotes a REAL unit, so rejecting it would be exactly the
- * false rejection described above (`tests/valid` uses `meters`), and being more
- * permissive than the contract can never fail a file the contract accepts. They
- * are TS's standing recommendation for the shared table, not a divergence in
- * what any shared symbol MEANS.
+ * LONG-FORM ALIASES ARE PART OF THE CONTRACT. The entries below (`meter(s)`,
+ * `sec`/`second(s)`, `minute`, `hour`, `Kelvin`, `Celsius`, `liter`, `ratio`,
+ * `percent`, `kHz`, `MHz`) began as TS-only spellings Go's table did not carry.
+ * Each denotes a REAL unit, so rejecting one is exactly the false rejection
+ * described above (`tests/valid` uses `meters`), and they have since been
+ * ADOPTED into the shared canonical table rather than deleted. They are kept
+ * here, and they are canonical.
  */
 const UNIT_TABLE: Record<string, UnitSpec> = {
   // ---- SI base ----
@@ -127,6 +126,10 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   min: { dims: { s: 1 }, scale: 60 },
   h: { dims: { s: 1 }, scale: 3600 },
   hr: { dims: { s: 1 }, scale: 3600 },
+  // `d` is the SI-accepted symbol for the day, and the standard library uses it:
+  // `lib/calendar.esm` declares `units: "d"`. Omitting it made that shipped
+  // library file an `unit_parse_error` — a registry gap IS a false rejection.
+  d: { dims: { s: 1 }, scale: 86400 },
   day: { dims: { s: 1 }, scale: 86400 },
   yr: { dims: { s: 1 }, scale: 365.25 * 86400 },
   year: { dims: { s: 1 }, scale: 365.25 * 86400 },
@@ -214,6 +217,10 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // string is now a hard error, so omitting them would falsely reject those
   // files.
   molec: { dims: {}, scale: 1 },
+  // `molecule` is the long-form spelling of `molec` — the corpus writes
+  // `cm³/molecule/s` for a bimolecular rate constant. Same dimension (none),
+  // same scale.
+  molecule: { dims: {}, scale: 1 },
   individuals: { dims: {}, scale: 1 },
   vehicles: { dims: {}, scale: 1 },
   units: { dims: {}, scale: 1 },
@@ -221,12 +228,22 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
 
   // ---- Earth science ----
   // 1 Dobson Unit = 2.6867e20 molec/m^2; `molec` is dimensionless, so a column
-  // amount is an inverse area.
+  // amount is an inverse area. The scale is PINNED at 2.6867e20 across the
+  // bindings (Go's 2.69e20 was a rounded, and wrong, value).
   Dobson: { dims: { m: -2 }, scale: 2.6867e20 },
   DU: { dims: { m: -2 }, scale: 2.6867e20 },
+  // Practical Salinity Unit — salinity on the PSS-78 scale is a pure ratio, so
+  // `psu` is dimensionless (ocean-model salinity fields declare it).
+  psu: { dims: {}, scale: 1 },
+  // Microatmosphere — the standard unit for seawater/air pCO2.
+  uatm: { dims: { kg: 1, m: -1, s: -2 }, scale: 101325e-6 },
 
   // ---- Dimensionless spellings ----
   dimensionless: { dims: {}, scale: 1 },
+  // `%` is a dimensionless ratio of 1/100 — the same unit as the long-form
+  // `percent` below. The scanner admits `%` as an identifier start, so `%/h`
+  // scans as the symbol `%` divided by `h`.
+  '%': { dims: {}, scale: 0.01 },
 
   // ---- TS-only long-form aliases (see the header note) ----
   meter: { dims: { m: 1 }, scale: 1 },
@@ -246,24 +263,57 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
 }
 
 /**
+ * Superscript digits, indexed by the ASCII digit they denote. NOT a contiguous
+ * Unicode range: `¹`, `²` and `³` are Latin-1 (U+00B9/B2/B3) while `⁰` and
+ * `⁴`–`⁹` live in the Superscripts block (U+2070, U+2074–2079). A `[⁰-⁹]` regex
+ * range is therefore WRONG — it silently omits `¹²³`, i.e. the three exponents
+ * that actually occur (`m²`, `cm³`, `s⁻¹`). Enumerate them.
+ */
+const SUPERSCRIPT_DIGITS = '⁰¹²³⁴⁵⁶⁷⁸⁹'
+/** Superscript minus (U+207B), the sign in `s⁻¹`. */
+const SUPERSCRIPT_MINUS = '⁻'
+/** Character class matching one superscript digit or the superscript minus. */
+const SUPERSCRIPT_CLASS = `[${SUPERSCRIPT_DIGITS}${SUPERSCRIPT_MINUS}]`
+
+/**
  * Fold the non-ASCII and alternate spellings the shared corpus uses into the
  * ASCII grammar the parser implements. A pure SPELLING normalization — every
  * target already exists in {@link UNIT_TABLE}, no unit is invented here:
  *
+ *   - SUPERSCRIPT EXPONENTS `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` become an
+ *     explicit `^` exponent: `W/m²` → `W/m^2`, `cm³` → `cm^3`, `s⁻¹` → `s^-1`.
+ *     A whole superscript RUN maps to one exponent, so `m⁻²` is `m^-2` and not
+ *     `m^-^2`.
+ *   - MIDDOT `·` (U+00B7) and DOT OPERATOR `⋅` (U+22C5) → `*`, the two spellings
+ *     of multiplication the corpus uses (`J/(kg·K)`, `kg⋅m/s`).
  *   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → `u` (`μg` → `ug`)
  *   - `°C` / `°F` / `°K` → `degC` / `degF` / `K`, and a bare `°` → `deg`
+ *   - `Ω` (U+03A9 / U+2126) → `Ohm`
  *
- * Mirrors Go's `normalizeUnitString`, and runs before the scanner, which only
- * recognizes ASCII identifier characters.
+ * Runs before the scanner, which only recognizes ASCII identifier characters —
+ * so without this pass every one of these spellings is an `unparseable_unit`
+ * HARD ERROR (units.ts), i.e. a false rejection of a legitimate file.
  */
 function normalizeUnitString(s: string): string {
-  if (!/[µμ°]/.test(s)) return s
+  // Ω GREEK CAPITAL OMEGA and Ω OHM SIGN are visually identical and
+  // both occur in the wild; fold each to the ASCII `Ohm` the table registers.
+  if (!new RegExp(`[µμ°·⋅ΩΩ]|${SUPERSCRIPT_CLASS}`, 'u').test(s)) return s
   return s
     .replace(/°C/g, 'degC')
     .replace(/°F/g, 'degF')
     .replace(/°K/g, 'K')
     .replace(/°/g, 'deg')
     .replace(/[µμ]/g, 'u')
+    .replace(/[ΩΩ]/g, 'Ohm')
+    .replace(/[·⋅]/g, '*')
+    .replace(new RegExp(`${SUPERSCRIPT_CLASS}+`, 'gu'), (run) => {
+      const sign = run.includes(SUPERSCRIPT_MINUS) ? '-' : ''
+      const digits = [...run]
+        .filter((c) => c !== SUPERSCRIPT_MINUS)
+        .map((c) => String(SUPERSCRIPT_DIGITS.indexOf(c)))
+        .join('')
+      return `^${sign}${digits}`
+    })
 }
 
 /**
@@ -274,10 +324,15 @@ function normalizeUnitString(s: string): string {
  * string associates:
  *
  * ```
- *   unit := term ( ('*' | '/')? term )*
- *   term := atom ( ('^' | '**') integer )?
- *   atom := number | symbol | '(' unit ')'
+ *   unit     := term ( ('*' | '/')? term )*
+ *   term     := atom ( ('^' | '**') exponent )?
+ *   exponent := integer | decimal | '(' integer '/' integer ')'
+ *   atom     := number | symbol | '(' unit ')'
  * ```
+ *
+ * EXPONENTS ARE RATIONAL, not integral: `1/s^0.5` (an SDE noise intensity) and
+ * `m^(1/2)` are legitimate corpus units, and a dimension vector may therefore
+ * carry fractional entries.
  *
  * `*` and `/` share one precedence level and associate LEFT — so `kg/m*s` is
  * `(kg/m)*s` = kg·s·m⁻¹, NOT kg·m⁻¹·s⁻¹, and `a/b/c` is `a/(b*c)`. Grouping with
@@ -419,7 +474,7 @@ class UnitParser {
   }
 
   /**
-   * term := atom ( ('^' | '**') integer )?
+   * term := atom ( ('^' | '**') exponent )?
    *
    * `**` is the Python/pint spelling of `^` (`Pa*m**3`). `peek()` skips
    * whitespace, so the second `*` is tested against the already-skipped position.
@@ -434,7 +489,7 @@ class UnitParser {
     } else {
       return atom
     }
-    return powerParsed(atom, this.parseInt())
+    return powerParsed(atom, this.parseExponent())
   }
 
   /** atom := number | symbol | '(' unit ')' */
@@ -494,21 +549,82 @@ class UnitParser {
     return parsed
   }
 
-  /** A signed integer exponent. Fractional exponents are not representable. */
-  private parseInt(): number {
+  /**
+   * exponent := integer | decimal | '(' integer '/' integer ')'
+   *
+   * A dimension exponent is RATIONAL, not integral. `1/s^0.5` is the ordinary
+   * spelling of an SDE noise intensity (`tests/fixtures/sde/*.esm`), and
+   * `m^(1/2)` is the same quantity written as a ratio. An integer-only grammar
+   * makes both an `unparseable_unit` — a HARD ERROR under the severity policy in
+   * units.ts — and therefore FALSELY REJECTS files that are correct physics.
+   *
+   * The parenthesised form is disambiguated from a parenthesised sub-unit by
+   * position: this production is only ever entered after `^` / `**`.
+   */
+  private parseExponent(): number {
+    this.skipSpace()
+    const start = this.pos
+
+    // '(' integer '/' integer ')' — the exact-ratio spelling, e.g. `m^(1/2)`.
+    if (this.peek() === '(') {
+      this.pos++
+      const numerator = this.parseSignedNumber()
+      if (this.peek() !== '/') {
+        throw new UnitConversionError(
+          `Cannot parse unit "${this.src}": expected "/" in rational exponent at position ${this.pos}`,
+        )
+      }
+      this.pos++
+      const denominator = this.parseSignedNumber()
+      if (this.peek() !== ')') {
+        throw new UnitConversionError(
+          `Cannot parse unit "${this.src}": missing ")" closing rational exponent`,
+        )
+      }
+      this.pos++
+      if (denominator === 0) {
+        throw new UnitConversionError(
+          `Cannot parse unit "${this.src}": zero denominator in rational exponent`,
+        )
+      }
+      return numerator / denominator
+    }
+
+    const value = this.parseSignedNumber()
+    if (!Number.isFinite(value)) {
+      throw new UnitConversionError(
+        `Cannot parse unit "${this.src}": expected a rational exponent at position ${start}`,
+      )
+    }
+    return value
+  }
+
+  /** A signed integer or decimal (`2`, `-1`, `0.5`, `+3`). */
+  private parseSignedNumber(): number {
     this.skipSpace()
     const start = this.pos
     if (this.pos < this.src.length && (this.src[this.pos] === '-' || this.src[this.pos] === '+')) {
       this.pos++
     }
     const digitsStart = this.pos
-    while (this.pos < this.src.length && isDigit(this.src[this.pos])) this.pos++
+    while (
+      this.pos < this.src.length &&
+      (isDigit(this.src[this.pos]) || this.src[this.pos] === '.')
+    ) {
+      this.pos++
+    }
     if (this.pos === digitsStart) {
       throw new UnitConversionError(
-        `Cannot parse unit "${this.src}": expected integer exponent at position ${start}`,
+        `Cannot parse unit "${this.src}": expected a numeric exponent at position ${start}`,
       )
     }
-    return parseInt(this.src.slice(start, this.pos), 10)
+    const value = Number(this.src.slice(start, this.pos))
+    if (!Number.isFinite(value)) {
+      throw new UnitConversionError(
+        `Cannot parse unit "${this.src}": invalid exponent "${this.src.slice(start, this.pos)}"`,
+      )
+    }
+    return value
   }
 }
 

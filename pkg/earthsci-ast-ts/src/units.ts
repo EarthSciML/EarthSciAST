@@ -99,6 +99,11 @@ export interface UnitWarning {
   code: 'dimensional_mismatch' | 'unparseable_unit' | 'analysis'
   location?: string
   equation?: string
+  /** For `unparseable_unit`: the declaration at fault. `validate()` promotes the
+   *  finding to a `unit_parse_error` structural error and reports these verbatim
+   *  as its `details`, which the shared corpus pins. */
+  variable?: string
+  units?: string
 }
 
 /**
@@ -197,20 +202,19 @@ function literalValue(expr: Expression): number | null {
  * Raise a dimension to a power (`m^2`, `s^-1`, and also `(m^2)^1.5 → m^3`). The
  * scale is raised alongside, so `km^2` stays 1e6 m².
  *
- * The exponent itself need NOT be an integer — only the RESULTING exponents
- * must be. `(d^2 + r^2)^1.5` with a length-squared base is the ordinary
- * spelling of a Mogi/Boussinesq kernel and yields a clean `m^3`; rejecting it
- * because `1.5` is fractional would reject correct physics. Returns `null` when
- * the result is not representable in an integer dimension vector (e.g.
- * `m^1.5`), which the caller reports as an inconsistency.
+ * DIMENSION EXPONENTS ARE RATIONAL, not integral, so this never fails. Neither
+ * the exponent nor the resulting exponents need be whole numbers: `(d^2+r^2)^1.5`
+ * (a Mogi/Boussinesq kernel) yields a clean `m^3`, while `sqrt(k)` on a `1/s`
+ * rate constant yields `1/s^0.5` — which is precisely the declared unit of an
+ * SDE noise intensity in the corpus (`tests/fixtures/sde/*.esm`). Rejecting a
+ * half-integer exponent as "not representable" therefore rejected correct
+ * physics; under the hard-error severity policy that is a false rejection.
  */
-function powerUnit(base: ParsedUnit, exp: number): ParsedUnit | null {
+function powerUnit(base: ParsedUnit, exp: number): ParsedUnit {
   const dims: CanonicalDims = {}
   for (const [k, v] of Object.entries(base.dims)) {
     if (v == null || v === 0) continue
-    const scaled = v * exp
-    if (!Number.isInteger(scaled)) return null
-    dims[k as keyof CanonicalDims] = scaled
+    dims[k as keyof CanonicalDims] = v * exp
   }
   pruneZeros(dims)
   return { dims, scale: Math.pow(base.scale, exp) }
@@ -401,15 +405,10 @@ export function checkDimensions(
         )
         return unknown()
       }
-      const raised = powerUnit(base, expValue)
-      if (raised === null) {
-        warn(
-          `Exponent ${expValue} applied to ${formatDims(base.dims)} yields a non-integer dimension`,
-          'dimensional_mismatch',
-        )
-        return unknown()
-      }
-      return finish(raised)
+      // Any literal exponent is rational, and a rational dimension exponent is
+      // legal (see powerUnit) — so there is no "non-integer dimension" failure
+      // mode left to report here.
+      return finish(powerUnit(base, expValue))
     }
 
     case 'D': {
@@ -439,41 +438,44 @@ export function checkDimensions(
     case 'div':
     case 'laplacian': {
       // Spatial derivative: operand dimensions divided by the spatial
-      // coordinate's declared units. The coordinate is identified by
-      // `node.dim` and resolved against the enclosing model's domain.
-      // When the coordinate is declared in the domain but carries no
-      // units, we cannot infer the result's dimension — flag as
-      // unit_inconsistency rather than silently assuming metres. When
-      // no coordinate table is available (0D model, or the coord is
-      // simply not present in the domain), fall back to the legacy
-      // metre denominator so pre-existing fixtures that rely on the
-      // old behaviour keep validating.
+      // coordinate's declared units. The coordinate is identified by `node.dim`
+      // and resolved against the enclosing model's coordinate table.
+      //
+      // NO METRE FALLBACK. When there is no coordinate table (a reaction
+      // system's constraint equations), or `dim` names nothing in it (an
+      // index-set axis rather than a declared coordinate variable), or `dim` is
+      // absent entirely, the coordinate's dimension is simply NOT KNOWN — and
+      // the honest answer is INDETERMINATE. The old code invented a metre
+      // denominator instead. That is a FABRICATION: it asserts a dimension the
+      // file never declared, and under the hard-error severity policy a
+      // fabricated dimension becomes a FALSE REJECTION the moment the model's
+      // coordinates are not metres (a lat/lon grid, a nondimensionalized
+      // channel, a pressure coordinate). Go returns indeterminate here; so do
+      // we.
       const operand = get(0)
       if (operand === null) return unknown()
-      // `laplacian` is the SECOND derivative (∂²u/∂x²), so it divides by the
-      // coordinate SQUARED; `grad` and `div` are first-order and divide once.
-      // Dividing only once for laplacian reported `nu*laplacian(u)` as m²/s²
-      // against an advection term of m/s² — a false mismatch in every
-      // Navier-Stokes fixture in the corpus.
-      const order = op === 'laplacian' ? 2 : 1
       const dimName = node.dim
-      const lengthDims: ParsedUnit = { dims: { m: 1 }, scale: 1 }
-      const denominator = (coord: ParsedUnit): ParsedUnit => powerUnit(coord, order) ?? coord
-      if (!dimName || !coordinateBindings) {
-        return finish(divideUnits(operand, denominator(lengthDims)))
-      }
+      if (!dimName || !coordinateBindings) return unknown()
       const coordDims = coordinateBindings.get(dimName)
-      if (!coordDims) {
-        return finish(divideUnits(operand, denominator(lengthDims)))
-      }
+      if (!coordDims) return unknown()
       if (isDimensionless(coordDims)) {
+        // The coordinate IS declared, and declared with no units. Dividing by a
+        // dimensionless coordinate would silently return the operand's own
+        // dimension, quietly claiming ∂u/∂x has the same units as u. That is a
+        // provable defect in the file, not a limit of the analysis.
         warn(
           `Gradient operator applied to variable with incompatible spatial units: coordinate '${dimName}' has no declared units (unit_inconsistency)`,
           'dimensional_mismatch',
         )
         return unknown()
       }
-      return finish(divideUnits(operand, denominator(coordDims)))
+      // `laplacian` is the SECOND derivative (∂²u/∂x²), so it divides by the
+      // coordinate SQUARED; `grad` and `div` are first-order and divide once.
+      // Dividing only once for laplacian reported `nu*laplacian(u)` as m²/s²
+      // against an advection term of m/s² — a false mismatch in every
+      // Navier-Stokes fixture in the corpus.
+      const order = op === 'laplacian' ? 2 : 1
+      return finish(divideUnits(operand, powerUnit(coordDims, order)))
     }
 
     case 'exp':
@@ -481,22 +483,11 @@ export function checkDimensions(
     case 'ln':
     case 'log10':
     case 'log2':
-    case 'sin':
-    case 'cos':
-    case 'tan':
-    case 'asin':
-    case 'acos':
-    case 'atan':
-    case 'sinh':
-    case 'cosh':
-    case 'tanh':
-    case 'asinh':
-    case 'acosh':
-    case 'atanh':
       // A transcendental function of a dimensional quantity is a provable
       // inconsistency (`log(kg)` has no meaning), not a soft remark — the
       // shared corpus pins units_invalid_logarithm.esm as invalid on exactly
-      // this rule.
+      // this rule. STRICTLY dimensionless: unlike the circular functions below,
+      // there is no angle reading of `exp`'s argument.
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
         if (arg !== null && !isDimensionless(arg)) {
@@ -508,11 +499,65 @@ export function checkDimensions(
       }
       return finish(dimensionless())
 
+    case 'sin':
+    case 'cos':
+    case 'tan':
+    case 'sinh':
+    case 'cosh':
+    case 'tanh':
+      // The argument of a circular function is an ANGLE — and this dimension
+      // vector carries `rad` as an AXIS (mirroring Go's `m kg s mol K A cd rad`),
+      // so `sin(theta)` with `theta` declared `"rad"` presents a `{rad: 1}`
+      // operand. Demanding a strictly dimensionless argument therefore reported
+      // the single most ordinary spelling of trigonometry as a hard dimensional
+      // error — `lib/solar.esm`, a SHIPPED standard-library file, is rejected by
+      // that rule. An angle is accepted; a genuinely dimensional argument
+      // (`sin(kg)`) is still a provable mismatch.
+      for (let i = 0; i < argDims.length; i++) {
+        const arg = get(i)
+        if (arg !== null && !isDimensionless(arg) && !isAngle(arg)) {
+          warn(
+            `${op}() requires a dimensionless or angle argument, got ${formatDims(arg.dims)}`,
+            'dimensional_mismatch',
+          )
+        }
+      }
+      return finish(dimensionless())
+
+    case 'asin':
+    case 'acos':
+    case 'atan':
+    case 'asinh':
+    case 'acosh':
+    case 'atanh': {
+      // The ARGUMENT of an inverse circular function is a pure ratio, so the
+      // dimensionless requirement is real and kept.
+      for (let i = 0; i < argDims.length; i++) {
+        const arg = get(i)
+        if (arg !== null && !isDimensionless(arg)) {
+          warn(
+            `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
+            'dimensional_mismatch',
+          )
+        }
+      }
+      // The RESULT is an ANGLE, and this vector cannot pin down which spelling
+      // of an angle it is: SI calls the radian dimensionless (m/m), while the
+      // table gives `rad` its own axis. BOTH readings are defensible, so
+      // asserting either one FABRICATES a dimension — and under the hard-error
+      // policy a fabrication is a false rejection. Claiming `dimensionless`
+      // rejected `lib/solar.esm`, whose `solar_zenith_angle` is declared `"rad"`
+      // and computed with `acos(...)`; claiming `rad` would symmetrically reject
+      // every model that declares the same angle `"1"`. INDETERMINATE is the
+      // honest answer, and it is never a mismatch against either.
+      return unknown()
+    }
+
     case 'atan2': {
       const arity = arityWarning('atan2', 'atan2()', argDims.length)
       if (arity) {
         warn(arity, 'analysis')
-        return finish(dimensionless())
+        return unknown()
       }
       const a = get(0)
       const b = get(1)
@@ -522,23 +567,21 @@ export function checkDimensions(
           'dimensional_mismatch',
         )
       }
-      return finish(dimensionless())
+      // Like the other inverse circular functions, the result is an ANGLE whose
+      // dimensional spelling this vector cannot pin down — see the `asin` arm.
+      return unknown()
     }
 
     case 'sqrt': {
       // sqrt is exactly `^0.5`: it HALVES the dimension. Returning the base
       // unchanged (as the old code did) reported sqrt(m^2) as m^2.
+      //
+      // An ODD exponent is NOT an error: `sqrt(k)` on a `1/s` rate constant is
+      // `1/s^0.5`, the declared unit of an SDE noise intensity. Dimension
+      // exponents are rational (see powerUnit), so every sqrt is well-defined.
       const base = get(0)
       if (base === null) return unknown()
-      const halved = powerUnit(base, 0.5)
-      if (halved === null) {
-        warn(
-          `sqrt() requires a dimension with even exponents, got ${formatDims(base.dims)}`,
-          'dimensional_mismatch',
-        )
-        return unknown()
-      }
-      return finish(halved)
+      return finish(powerUnit(base, 0.5))
     }
 
     case 'abs':
@@ -675,11 +718,15 @@ function addBinding(
   const parsed = tryParseUnit(units)
   if (parsed === null) {
     warnings.push({
-      message: `Unable to parse units '${units}' for ${scope}.${name}: not a known unit`,
+      message: `Unit string '${units}' is not a recognised unit`,
       code: 'unparseable_unit',
       // A JSON Pointer, because `validate()` promotes this finding to a
-      // structural error and uses `location` verbatim as its `path`.
+      // structural error and uses `location` verbatim as its `path`. It points
+      // at the VARIABLE (`/models/M/variables/v`), which is where the shared
+      // corpus pins `unit_parse_error`.
       location: pointer,
+      variable: name,
+      units,
     })
     return
   }
@@ -730,9 +777,9 @@ function checkAndReport(
  * variable declared WITHOUT units maps to a dimensionless entry. `checkDimensions`
  * then flags a grad whose `dim` names a dimensionless (no-units) coordinate,
  * resolves one naming a coordinate WITH units, and — for a `dim` that is NOT a
- * declared variable (an index-set axis) — finds no entry and falls back to the
- * metre denominator. Parameters live in `variables` (type `parameter`) so they
- * are covered by the same loop, matching Julia's `model.variables`.
+ * declared variable (an index-set axis) — finds no entry and leaves the gradient
+ * INDETERMINATE. Parameters live in `variables` (type `parameter`) so they are
+ * covered by the same loop, matching Julia's `model.variables`.
  */
 function buildCoordinateBindings(
   model: Model,
@@ -748,9 +795,9 @@ function buildCoordinateBindings(
     const parsed = tryParseUnit(variable.units)
     if (parsed === null) {
       // Unparseable coordinate unit: leave it OUT of the table so its dimension
-      // stays UNKNOWN. A grad/div/laplacian naming it then falls back to the
-      // metre denominator (the not-a-declared-coordinate path) instead of the
-      // dimensionless entry that would raise a false unit_inconsistency.
+      // stays UNKNOWN. A grad/div/laplacian naming it is then INDETERMINATE (the
+      // not-a-declared-coordinate path) instead of hitting the dimensionless
+      // entry that would raise a false unit_inconsistency.
       //
       // The declaration itself is still a defect in the file (`unparseable_unit`
       // — a HARD ERROR). This pass also sees INLINE SUBSYSTEM variables, which
@@ -759,9 +806,11 @@ function buildCoordinateBindings(
       // finding at the same pointer, and `validateUnits` collapses the pair —
       // one defect, one error.
       warnings.push({
-        message: `Unable to parse units '${variable.units}' for coordinate '${name}': not a known unit`,
+        message: `Unit string '${variable.units}' is not a recognised unit`,
         code: 'unparseable_unit',
-        location: `${location}/variables/${name}/units`,
+        location: `${location}/variables/${name}`,
+        variable: name,
+        units: variable.units,
       })
       continue
     }
@@ -798,8 +847,8 @@ function buildCoordinateBindings(
  * {@link buildCoordinateBindings}), so `grad`/`div`/`laplacian` resolve their
  * `dim` against the model's own declarations (mirroring Julia's
  * `validate_model_gradient_units`). Reaction-system constraint equations get no
- * coordinate table (gradient-unit resolution is model-only in Julia), so any
- * grad there keeps the metre-denominator fallback.
+ * coordinate table (gradient-unit resolution is model-only in Julia), so a grad
+ * there is INDETERMINATE — never silently divided by a fabricated metre.
  */
 export function validateUnits(file: EsmFile): UnitWarning[] {
   const warnings: UnitWarning[] = []
@@ -820,7 +869,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
             varName,
             variable.units,
             warnings,
-            `/models/${modelName}/variables/${varName}/units`,
+            `/models/${modelName}/variables/${varName}`,
           )
         }
       }
@@ -836,7 +885,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
             speciesName,
             species.units,
             warnings,
-            `/reaction_systems/${systemName}/species/${speciesName}/units`,
+            `/reaction_systems/${systemName}/species/${speciesName}`,
           )
         }
       }
@@ -848,7 +897,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
             paramName,
             param.units,
             warnings,
-            `/reaction_systems/${systemName}/parameters/${paramName}/units`,
+            `/reaction_systems/${systemName}/parameters/${paramName}`,
           )
         }
       }
@@ -1004,9 +1053,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
  * as two identical errors for one defect.
  *
  * Only `unparseable_unit` is deduped, and the key is the LOCATION alone - the
- * `/.../variables/<v>/units` pointer, which names the one declaration at fault.
- * (Keying on the message as well would collapse nothing: the two passes word the
- * finding differently, one naming the variable and one the coordinate.) Other
+ * `/.../variables/<v>` pointer, which names the one declaration at fault. Other
  * codes are left alone - the same dimensional mismatch can be independently
  * provable at more than one site, and each of those is a real report.
  */
@@ -1186,6 +1233,25 @@ function pruneZeros(dims: CanonicalDims): void {
 
 export function isDimensionless(unit: ParsedUnit): boolean {
   for (const v of Object.values(unit.dims)) {
+    if (v != null && v !== 0) return false
+  }
+  return true
+}
+
+/**
+ * Is this dimension a pure ANGLE — `rad` (or `deg`, which parses to it) and
+ * nothing else?
+ *
+ * The dimension vector carries `rad` as an axis (mirroring Go's
+ * `m kg s mol K A cd rad`), so an angle is NOT dimensionless here even though SI
+ * calls the radian a dimensionless derived unit. The circular functions accept
+ * such an operand: `sin(theta)` with `theta` in radians is trigonometry, not a
+ * dimensional error.
+ */
+function isAngle(unit: ParsedUnit): boolean {
+  const { rad, ...rest } = unit.dims
+  if (!rad) return false
+  for (const v of Object.values(rest)) {
     if (v != null && v !== 0) return false
   }
   return true
