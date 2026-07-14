@@ -537,7 +537,7 @@ The **last** segment is always the variable (or species/parameter) name. All pre
 | `"SuperFast.GasPhase.O3"` | Variable `O3` in subsystem `GasPhase` of model `SuperFast` |
 | `"Atmosphere.Chemistry.FastChem.NO2"` | Variable `NO2` in `Atmosphere` → `Chemistry` → `FastChem` |
 
-**Resolution algorithm:** Given a scoped reference string, split on `"."` to produce segments `[s₁, s₂, …, sₙ]`. The final segment `sₙ` is the variable name. The preceding segments `[s₁, …, sₙ₋₁]` form a path: `s₁` must match a key in the top-level `models`, `reaction_systems`, or `data_loaders` section, and each subsequent segment must match a key in the parent system's `subsystems` map.
+**Resolution algorithm:** Given a scoped reference string, split on `"."` to produce segments `[s₁, s₂, …, sₙ]`. The final segment `sₙ` is the variable name. The preceding segments `[s₁, …, sₙ₋₁]` form a path: `s₁` must match a key in the top-level `models`, `reaction_systems`, or `data_loaders` section, and each subsequent segment must match a key in the parent system's `subsystems` map. There is **no depth limit**, and a resolver MUST walk every segment — see §4.9.2 for the two-segment shortcut this rules out.
 
 **Bare references** (no dot) refer to a variable within the current system context. In coupling entries, all references must be fully qualified from the top-level system name.
 
@@ -597,7 +597,15 @@ Every `units` string in a document (variables, parameters, species, loader `prov
 
 #### 4.8.1 The unit registry
 
-The registry is a **flat table**: a symbol is either in it or the unit string does not resolve. There is deliberately **no SI-prefix mechanism** — `mm` is a table entry, not `m` composed with `milli-`. A prefix mechanism would silently accept nonsense (`kmolec`, `nppb`) and make the set of legal unit strings unbounded and un-pinnable across five languages. The cost is that a new prefixed unit must be added to the table; that is a one-line change and a deliberate one.
+**The eight canonical dimension axes.** A dimension is a vector of rational exponents over **exactly these eight axes and no others**:
+
+```
+m    kg    s    mol    K    A    cd    rad
+```
+
+A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol onto an axis the table below does not give it. This is pinned because it has been violated: one binding delegated the registry to a general-purpose units library, which typed the count noun `molec` as an *amount of substance* (`mol`) and the count noun `units` as **micro-nit — a luminance** — so a clinical concentration `units/L` resolved to `cd·m⁻⁵`. A general-purpose units library MAY be used as the arithmetic engine, but it MUST be constrained to this table and these axes.
+
+**The registry is a flat table**: a symbol is either in it, exactly as spelled, or the unit string does not resolve. There is deliberately **no SI-prefix mechanism** — `mm` is a table entry, not `m` composed with `milli-`. A prefix rule would silently accept nonsense (`kmolec`, `nppb`), make the set of legal unit strings unbounded and un-pinnable across five languages, and reintroduce the prefix collisions the flat table avoids (`T` = tesla or tera? `M` = molar or mega?). The cost is that a new prefixed unit must be added to the table; that is a one-line change and a deliberate one. A binding whose underlying units library *does* have a prefix mechanism (pint, uom, Unitful) MUST disable it or gate lookups on this table.
 
 | Group | Symbols |
 |---|---|
@@ -608,33 +616,63 @@ The registry is a **flat table**: a symbol is either in it or the unit string do
 | Volume | `L` `l` `mL` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
 | Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` |
-| Pressure | `atm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `psi` |
+| Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `psi` |
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
 | Temperature / angle | `degC` `degF` `deg` |
 | Mixing ratios (dimensionless) | `ppm` `ppb` `ppt` `ppmv` `ppbv` `pptv` |
-| Counts (dimensionless) | `molec` `individuals` `vehicles` `units` `count` |
-| Column amount (dimensionless) | `Dobson` `DU` |
+| Fractions (dimensionless) | `%` (scale 0.01) · `psu` (scale 1 — practical salinity is a pure number by definition) |
+| Counts (dimensionless) | `molec` `molecule` `individuals` `vehicles` `units` `count` |
+| Column amount | `Dobson` `DU` |
+| Long-form aliases | `meter` `meters` → `m` · `hour` → `h` · `Celsius` → `degC` · `percent` → `%` · `degree` `degrees` → `deg` |
 | Dimensionless spellings | `""` · `"1"` · `"dimensionless"` |
 
-**`C` is the COULOMB**, per SI — never Celsius. Celsius has its own unambiguous spellings (`degC`, `°C`); binding `C` to Celsius silently injects a temperature dimension into every electromagnetic expression, so that charge × field comes out as `kg*m*K/(s^3*A)` instead of a newton.
+**Unit strings carry DIMENSIONS ONLY — never species tags.** A trailing chemical species is NOT part of a unit. `"kg C/m^2"` for "kilograms of carbon per square metre" is ILLEGAL: whitespace is multiplication (§4.8.2), so it parses as kg·coulomb·m⁻², a *silently wrong dimension* rather than an error, and no checker can catch it. The same trap holds for `"kg N/ha"`, `"mg C/m^3/d"`, `"ug S/m^3"`. **The species belongs in the variable's name or `description`; the unit is `"kg/m^2"`.**
+
+```json
+{ "carbon_pool": { "type": "state", "units": "kg/m^2",
+                   "description": "Total soil carbon pool (kilograms of CARBON per m^2)" } }
+```
+
+**Counts are DIMENSIONLESS.** `molec`, `molecule`, `count`, `individuals`, `vehicles`, `units` carry NO dimension — not `mol`, not `cd`. A count is a pure number; `molec/cm^3` is a number density with dimension `m^-3`, and `cm^3/(molec*s)` is the second-order rate constant that pairs with it.
+
+**`C` is the COULOMB**, per SI — never Celsius. Celsius has its own unambiguous spellings (`degC`, `°C`, `Celsius`); binding `C` to Celsius silently injects a temperature dimension into every electromagnetic expression, so that charge × field comes out as `kg*m*K/(s^3*A)` instead of a newton.
+
+**The Dobson unit is `2.6867e20 molec/m^2`** — with counts dimensionless, `DU` has **dimension `m^-2`** and **scale exactly `2.6867e20`**. It is a column thickness of 10 µm of pure ozone at STP, so its magnitude is the Loschmidt constant (2.6867811e25 m⁻³ at 273.15 K, 101325 Pa) times 10⁻⁵ m. `Dobson` is a spelling of the same entry. The value is pinned to five significant figures because two bindings shipped *different* roundings (2.6867e20 and 2.69e20) and one of them then compared conversions to a 1e-9 tolerance — so the same file produced a unit error in one binding and not in the other. A binding MUST use `2.6867e20`.
 
 **Affine offsets are not modelled.** `degC` and `degF` carry the Kelvin *dimension* and their *scale* (1 and 5/9); their zero offset is irrelevant to dimensional analysis and is not represented. A unit conversion that needs the offset is a `unit_conversion` expression (§8), not a dimensional judgement.
 
-**Normalisation before parsing:** `µ`/`μ` → `u`, and `°C` → `degC`.
-
 #### 4.8.2 Unit-string grammar
 
+**Unicode normalisation is MANDATORY and happens BEFORE parsing.** These spellings are ordinary in the literature and in real model metadata (`W/m²`, `J/(kg·K)`, `µg/m^3`, `°C`), and they currently fail in every binding. A conforming parser rewrites the string first, then applies the grammar:
+
+| From | To | Example |
+|---|---|---|
+| Superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` | `^n` | `m²` → `m^2`, `cm³` → `cm^3` |
+| Superscript minus `⁻` | `^-` (with the following superscript digits) | `s⁻¹` → `s^-1` |
+| Middot `·` (U+00B7) and dot operator `⋅` (U+22C5) | `*` | `J/(kg·K)` → `J/(kg*K)`, `kg⋅m/s` → `kg*m/s` |
+| Micro sign `µ` (U+00B5) and Greek mu `μ` (U+03BC) | `u` | `µg/m^3` → `ug/m^3` |
+| `°C` | `degC` | `°C/min` → `degC/min` |
+| `°F` | `degF` | |
+| Ohm sign `Ω` (U+2126) and Greek omega `Ω` (U+03A9) | `Ohm` | `Ω*m` → `Ohm*m` |
+
+Superscripts normalise **positionally**: a run of `⁻`? followed by superscript digits becomes `^` + the ASCII transliteration of that run.
+
+**The grammar**, applied to the normalised string:
+
 ```
-unit := term (('*' | '/')? term)*
-term := atom (('^' | '**') integer)?
-atom := number | symbol | '(' unit ')'
+unit     := term (('*' | '/')? term)*
+term     := atom (('^' | '**') exponent)?
+exponent := integer | decimal | '(' integer '/' integer ')'
+atom     := number | symbol | '(' unit ')'
 ```
 
-- Whitespace between terms means **multiplication** — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`.
-- Division is **left-associative** — `"kg/m*s"` is `kg·m⁻¹·s⁻¹`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.
-- Grouping with parentheses is REQUIRED to express a compound denominator: `"J/(mol*K)"`, `"cm^3/(molec*s)"`. A parser that cannot handle parentheses will read `J/(mol*K)` as dimensionless and disable every check that depends on it.
-- An exponent MUST be an integer literal (positive or negative). A non-integer or symbolic exponent in a *unit string* is not admissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
+- **Exponents are RATIONAL, not integer.** `2`, `-1`, `0.5`, `1.5`, `(1/2)` are all admissible. An integer-only grammar cannot express `1/s^0.5` — the intensity of a Wiener noise term, which is the unit of every `brownian` variable in an SDE (`tests/fixtures/sde/*.esm`) — and under the §4.8.4 hard-error severity an integer-only parser would FALSELY REJECT every conforming SDE file in the corpus. A *symbolic* exponent in a unit string remains inadmissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
+- **Whitespace between terms means MULTIPLICATION**, as in pint and UDUNITS — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`. This is what makes a species tag (§4.8.1) illegal rather than merely discouraged.
+- **`*` and `/` are ONE precedence level, evaluated LEFT to RIGHT.** `"J/mol*K"` is `(J/mol)*K` = `J·mol⁻¹·K`, NOT `J/(mol·K)`. A parser that gives `*` a higher precedence than `/` silently negates the exponent of every symbol after the first `/` — it read `J/mol*K` as `J·mol⁻¹·K⁻¹` — and, because the result is a *plausible* dimension, nothing downstream can detect it. Likewise `"kg/m*s"` is `kg·m⁻¹·s`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.
+- **Parentheses are REQUIRED for a compound denominator**: `"J/(mol*K)"`, `"cm^3/(molec*s)"`. A parser that cannot handle parentheses reads `J/(mol*K)` as dimensionless and silently disables every check downstream of it.
+- A `symbol` is a maximal run of characters that is a §4.8.1 table key. Table keys are alphanumeric with two exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
+- A digit run that is NOT separated from a symbol by `^`/`**` is a *different symbol*, not an implicit exponent: `"cm3"` and `"m/s2"` do not resolve (`cm3` is not a table key). Write `"cm^3"`, `"m/s^2"`.
 
 #### 4.8.3 Dimensional rules for operators
 
@@ -643,11 +681,11 @@ atom := number | symbol | '(' unit ')'
 | `+` `-` (n-ary) | All operands MUST share a dimension; the result is that dimension. A bare numeric literal is dimension-neutral in this position. |
 | `*` `/` | Dimensions multiply / divide. |
 | `^` | The exponent MUST be dimensionless. With a **literal integer or rational** exponent the base dimension is raised to it (`L^2` with `L` in `m` is `m^2`). With a **symbolic** exponent the result is UNDETERMINABLE (§4.8.4) — not dimensionless. |
-| `sqrt` | Halves every exponent of the operand's dimension. |
+| `sqrt` | **HALVES** every exponent of the operand's dimension — `sqrt(x)` with `x` in `m^2/s^2` is `m/s`. `sqrt` is NOT a transcendental and MUST NOT be given the dimensionless-argument rule; a checker that lists it with `log`/`exp` rejects the ordinary spelling of a wave speed or an RMS. |
 | `D` (`wrt: t`) | `d(X)/dt` has dimension `[X]/[t]`. |
 | `min` `max` `abs` `ifelse` `Pre` | PRESERVE the operand dimension (all value operands must agree); they are not dimensionless. |
 | comparisons, `and` `or` `not` | Operands must be mutually commensurate; the result is dimensionless (a boolean). |
-| **Transcendentals** — `log` `ln` `log10` `exp` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `tanh`, and any other transcendental | The argument MUST be **dimensionless**, and the result is dimensionless. |
+| **Transcendentals** | The argument MUST be **dimensionless**, and the result is dimensionless. The set is EXACTLY: `ln` `log` `log10` `exp` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` — sixteen ops, and no others. It is a CLOSED list, not a category to be extended by intuition: `sqrt`, `abs`, `min`, `max` are not members and have their own rules above. |
 | any other op | No dimensional rule ⇒ the result is UNDETERMINABLE (§4.8.4). It is **not** dimensionless. |
 
 **Transcendentals require a dimensionless argument.** `log(V)` with `V` in `m³` is an ERROR, not a warning and not a silent pass: the Taylor series of a transcendental adds powers of its argument, so an argument with a dimension is dimensionally meaningless. The physics is always written against a reference: the ideal-gas entropy is `n*R*log(V/V0)`, and Arrhenius is `exp(-Ea/(R*T))` — never `exp(-1000/T)` with a bare literal standing in for an activation temperature. `tests/invalid/units_invalid_logarithm.esm` pins the error; `tests/valid/units_dimensional_analysis.esm` and `tests/valid/expr_graphs_variable_deps.esm` pin the well-formed spellings.
@@ -668,6 +706,40 @@ Two consequences follow, and both have been violated in this repository:
 2. **An incomplete registry MUST NOT be papered over by downgrading the severity.** If a binding cannot parse `J/(mol*K)` or does not know `V`, the fix is the parser and the registry — *not* re-classifying an unresolvable unit as a warning, and not coercing it to dimensionless. Both of those turn a missing feature into a silently-disabled check across every file in the corpus.
 
 An error is reported at the **JSON Pointer of the node that carries the defect** — `/models/<M>/equations/<i>` for an equation, `/models/<M>/variables/<v>` for an observed variable or a declaration, `/reaction_systems/<S>/reactions/<i>` for a rate.
+
+### 4.9 Name Resolution: what a checker MUST NOT call undefined
+
+`undefined_variable`, `undefined_parameter`, `event_var_undeclared` and `unresolved_scoped_ref` are hard errors, so every symbol this section declares to be **in scope** is a symbol a checker MUST resolve. Each rule below is pinned because a binding got it wrong and rejected a conforming file in the shared corpus.
+
+#### 4.9.1 Implicitly-declared symbols
+
+Three classes of symbol are in scope in a model's expressions **without appearing in its `variables` map**. None of them is an `undefined_variable`.
+
+| Symbol | Where it comes from | Pinned by |
+|---|---|---|
+| **The independent variable** — `domain.independent_variable`, default `"t"` | §11.3. Every time-dependent model may write `t` in an equation, a condition, or an event affect; an analytic forcing `A*sin(omega*t)` is the ordinary spelling. Its dimension is the time dimension (`s`). | `tests/valid/cadence/pure_pointwise.esm` |
+| **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the `dim` of a spatial differential operator (`grad`, `div`, `curl`, `laplacian`) anywhere in the document, or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
+| **`_var`** | §6.4. The operator-model placeholder, substituted with each matching state variable of the target system at `operator_compose` time. It is legal **wherever a state variable is legal** — including an equation LHS/RHS, a continuous-event `affects` / `affect_neg` LHS, and a `functional_affect`'s `read_vars`. A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target. | `tests/valid/full_coupled.esm` |
+
+#### 4.9.2 Scoped references are ARBITRARY DEPTH
+
+§4.6 defines a scoped reference as a dot path of unbounded length: `A.B.C.variable` walks `A` → `B` → `C`. A resolver MUST **walk** the path — take the last segment as the name and resolve the preceding segments one at a time against each parent's `subsystems` map.
+
+A resolver MUST NOT split on `"."` and treat segment `[0]` as the system and segment `[1]` as the variable. That two-segment shortcut turns every three-or-more-segment reference in the corpus into a spurious `unresolved_scoped_ref` (`"Meteorology.Temperature.surface_temp"` is reported as *variable `Temperature.surface_temp` not found in system `Meteorology`*), and it is the single defect behind the scoped-reference rejections in `tests/valid/scoped_refs_coupling.esm`, `tests/scoping/deep_nesting_scoped_references.esm`, `tests/scoping/hierarchical_scoped_references.esm` and `tests/scoping/scoped_reference_resolution.esm`.
+
+The same walk applies to the **system** position of a coupling entry (`systems`, `from`, `to`): `"EarthSystem.Atmosphere.Chemistry"` names a subsystem three levels down, not a nonexistent top-level system (`undefined_system`).
+
+#### 4.9.3 Where a scoped reference may appear
+
+Anywhere an expression may name a symbol. In particular a **reaction `rate` expression MAY contain scoped references** — a rate that depends on a coupled system's temperature or photolysis rate (`"MeteorologicalSystem.solar_intensity"`, `"AtmosphericChemistry.O3"`) is ordinary atmospheric chemistry, and is exactly what `tests/valid/events_cross_system.esm` exists to pin. A checker that resolves a rate's free symbols against the *local* reaction system's species and parameters only, and reports `undefined_parameter` for anything dotted, is wrong.
+
+#### 4.9.4 Equation balance (`equation_count_mismatch`)
+
+The check is **unknowns vs equations**, not *state variables vs time-derivative equations*.
+
+- An equation is **credited** whichever form its LHS takes: a derivative LHS (`D(x)/dt ~ …`), a bare-variable LHS (`x ~ …`, an observed/algebraic equation), or an **expression LHS** (`H*H*SO4 ~ Ksp`, an implicit algebraic constraint). A checker that credits only a *bare-variable derivative* LHS undercounts every algebraic equation in the system.
+- For `system_kind: "nonlinear"` (algebraic equilibrium — no time derivative at all) and for the algebraic block of a DAE, the balance is between the **unknowns** (the `state` variables) and the **equations**, of any form. `tests/valid/nonlinear_isorropia_shape.esm` declares two states (`H`, `SO4`) and two algebraic equations (`H ~ …` and `H*H*SO4 ~ Ksp`) and is BALANCED; a checker that reports "1 ODE equation, 2 state variables" has miscounted, not found a defect.
+- `initialization_equations` (§6.2) are a *separate* block with a separate balance and MUST NOT be counted into the main one.
 
 ## 5. Events
 
@@ -1074,7 +1146,7 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 | `continuous_events` | | Continuous events (see Section 5.2) |
 | `initialization_equations` | | Equations that hold only at t=0, solved before time-stepping begins. Typical uses: aerosol equilibrium / plume-rise style models (`system_kind='nonlinear'`) that need extra constraints for initialization, and ODE models whose initial state is determined by solving an auxiliary system. |
 | `guesses` | | Initial-guess seeds for nonlinear solvers during initialization, keyed by variable name. Values are `Expression` graphs (numbers, strings, or nodes). |
-| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — brownian variables present), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses this to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors. |
+| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — brownian variables present), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses this to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
 | `subsystems` | | Named child models (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | Model-level default numerical tolerance used by tests (see Section 6.6). Object with optional `abs` and/or `rel` fields. |
 | `tests` | | Inline validation tests that exercise this model in isolation (see Section 6.6). |
@@ -1133,6 +1205,8 @@ Advection is a model like any other — fully specified:
 ```
 
 The special variable `"_var"` is a placeholder used in operator-style models. When coupled via `operator_compose`, it is substituted with each matching state variable from the target system.
+
+`_var` is legal **wherever a state variable is legal** — not only on an equation LHS/RHS but also on the LHS of a continuous event's `affects` / `affect_neg`, and inside a `functional_affect`'s `read_vars` (a flux limiter that clamps whichever variable the operator is composed over is the ordinary use). It is implicitly declared (§4.9.1): a checker MUST NOT report it as `undefined_variable` or `event_var_undeclared`.
 
 ### 6.5 Dry Deposition Model Example
 
@@ -1721,7 +1795,7 @@ This section maps to Catalyst.jl's `ReactionSystem` but is fully self-contained.
 | `name` | | Human-readable name |
 | `substrates` | ✓ | Array of `{species, stoichiometry}` or `null` for source reactions (∅ → X) |
 | `products` | ✓ | Array of `{species, stoichiometry}` or `null` for sink reactions (X → ∅) |
-| `rate` | ✓ | Rate expression: a string (parameter ref), number, or expression AST |
+| `rate` | ✓ | Rate expression: a string (parameter ref), number, or expression AST. It MAY name **scoped references** into other systems (`"MeteorologicalSystem.solar_intensity"`) — see §4.9.3; resolving a rate's symbols against the local reaction system only is a checker defect, not a file defect. |
 | `reference` | | Per-reaction citation or notes |
 
 ### 7.3a Stoichiometric Coefficients
@@ -3265,7 +3339,7 @@ The `domain` supports the following fields:
 
 | Field | Required | Description |
 |---|---|---|
-| `independent_variable` | | Name of the time variable (default: `"t"`) |
+| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1). |
 | `temporal` | | Temporal extent: `start`, `end`, `reference_time` (ISO 8601) |
 | `element_type` | | Numeric element type (e.g., `"Float32"`, `"Float64"`) |
 | `array_type` | | Array implementation type (e.g., `"Array"`) |
@@ -3282,7 +3356,7 @@ An initial condition is an **equation** whose left-hand side is an `ic` op — `
 The RHS is an ordinary Expression:
 
 - **uniform value** → a constant: `ic(u) ~ 0.0`.
-- **closed-form field** → a coordinate expression whose free symbols are spatial index-set names: `ic(u) ~ 0.2 * x`, evaluated at every grid point.
+- **closed-form field** → a coordinate expression whose free symbols are **spatial coordinate names** (`x`, `y`, `z`, `lon`, `lat`, `lev` — not necessarily the index-set key, which may be a bare index like `i`): `ic(u) ~ 0.2 * x`, evaluated at every grid point. Those symbols are implicitly declared and MUST NOT be reported as `undefined_variable` (§4.9.1).
 - **externally-supplied field** → a reference to a loaded variable.
 
 A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate expression. Every state variable SHOULD have exactly one `ic` equation; a missing one defaults to the variable's declared `default`.

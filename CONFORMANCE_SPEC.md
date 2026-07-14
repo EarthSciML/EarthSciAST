@@ -1754,11 +1754,14 @@ Validation tests must use these standardized error codes:
 | `undefined_variable` | Structural | Equation references undeclared variable |
 | `undefined_species` | Structural | Reaction references undeclared species |
 | `undefined_parameter` | Structural | Rate expression references undeclared parameter |
-| `undefined_system` | Structural | Coupling references nonexistent system |
-| `unresolved_scoped_ref` | Structural | Invalid scoped reference path |
+| `undefined_system` | Structural | Coupling references nonexistent system. The system position of a coupling entry is itself a dot path of arbitrary depth (esm-spec §4.9.2) — walk it before reporting. |
+| `unresolved_scoped_ref` | Structural | Invalid scoped reference path. Scoped references are ARBITRARY DEPTH (esm-spec §4.6, §4.9.2); a resolver must walk every segment, not split on `.` and take `[0]`/`[1]`. |
+| `unresolved_subsystem_ref` | Structural | A §4.7 subsystem `ref` does not resolve — the target file does not exist, or is not reachable. **Canonical spelling.** (Formerly also spelled `ref_not_found`; see §7.1.3.) |
+| `ambiguous_subsystem_ref` | Structural | A §4.7 subsystem `ref` resolves to a file containing zero, or more than one, top-level model/reaction system, so the mount target is not unique. **Canonical spelling.** (Formerly `ref_ambiguous_system`; see §7.1.3.) |
 | `null_reaction` | Structural | Reaction with both null substrates and products |
 | `missing_observed_expr` | Structural | Observed variable missing expression |
-| `event_var_undeclared` | Structural | Event affects undeclared variable |
+| `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
+| `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 
@@ -1774,11 +1777,38 @@ shared corpus pins and the one the five bindings must not re-diverge on:
 | Genuinely undeterminable dimension (symbolic exponent, op with no dimensional rule, undeclared operand) | **warning** — report `unknown` and SKIP the enclosing check |
 
 A transcendental (`log`, `ln`, `exp`, `sin`, …) applied to a dimensional argument is a
-**provable mismatch**, not an undeterminable case (esm-spec §4.8.3).
+**provable mismatch**, not an undeterminable case (esm-spec §4.8.3). The transcendental set
+is CLOSED and `sqrt` is **not** in it — `sqrt` halves a dimension.
 
 An undeterminable dimension MUST NOT be reported as *dimensionless* — that manufactures
 false mismatches against well-formed files. An incomplete unit registry MUST NOT be
 worked around by downgrading a severity; extend the registry.
+
+Six further pins from esm-spec §4.8, each of which a binding has violated:
+
+| Pin | esm-spec | What went wrong |
+|---|---|---|
+| Exponents are **rational**, not integer | §4.8.2 | An integer-only grammar cannot parse `1/s^0.5` and — under hard-error severity — falsely rejects every SDE fixture in the corpus. |
+| `*` and `/` are **one precedence level, left to right** | §4.8.2 | One binding parsed `J/mol*K` as `J/(mol*K)`, silently negating K's exponent into a plausible-looking wrong dimension. |
+| **Unicode normalisation is mandatory pre-parse** (`²³`, `⁻`, `·`, `⋅`, `µ`/`μ`, `°C`, `Ω`) | §4.8.2 | `W/m²` and `J/(kg·K)` fail in every binding today. |
+| **Unit strings carry dimensions only** — no species tags | §4.8.1 | `kg C/m^2` parses (whitespace = multiplication) as kg·coulomb·m⁻², a silently WRONG dimension. The species goes in the name/description. |
+| **Counts are dimensionless**; the axes are exactly `m kg s mol K A cd rad` | §4.8.1 | A binding delegating to `pint` typed `molec` as substance and the unit `units` as micro-nit (a luminance), so `units/L` became `cd·m⁻⁵`. |
+| **`DU` = 2.6867e20 m⁻²**, exactly; **no SI-prefix mechanism** | §4.8.1 | Two bindings shipped different Dobson roundings (2.6867e20 vs 2.69e20) and one compared to 1e-9 tolerance, so the same file errored in one and not the other. |
+
+### 7.1.3 Checker semantics that MUST NOT re-diverge
+
+The corpus contains conforming files that individual bindings reject. In every case below the
+SPEC sanctions the file and the CHECKER is at fault; the normative rules are esm-spec §4.9.
+A binding MUST NOT "fix" a rejection by editing the fixture.
+
+| # | Rule | Normative | Fixture that pins it |
+|---|---|---|---|
+| a | The **independent variable** (`domain.independent_variable`, default `"t"`) and **spatial coordinate names** (`x`, `y`, `lon`, …) are IMPLICITLY DECLARED — never `undefined_variable`. | §4.9.1, §11.3, §11.4 | `tests/valid/cadence/pure_pointwise.esm`, `tests/valid/initial_conditions/expression_ignition_front_1d.esm` |
+| b | **`_var`** is legal wherever a state variable is legal, including a continuous event's `affects`/`affect_neg` LHS and a `functional_affect`'s `read_vars`, in any operator-composed or coupled model — never `event_var_undeclared`. | §4.9.1, §6.4 | `tests/valid/full_coupled.esm` |
+| c | **Scoped references are ARBITRARY DEPTH** (`A.B.c`, `A.B.C.d`). A resolver walks every segment; it MUST NOT split on `"."` and take `[0]` as the system and `[1]` as the variable. Applies to the `systems`/`from`/`to` of a coupling entry too. | §4.6, §4.9.2 | `tests/valid/scoped_refs_coupling.esm`, `tests/scoping/*.esm` |
+| d | A **reaction `rate` MAY contain scoped references** into other systems. | §4.9.3, §7.3 | `tests/valid/events_cross_system.esm` |
+| e | **`equation_count_mismatch` balances UNKNOWNS vs EQUATIONS.** A non-derivative (algebraic) LHS — bare-variable *or* expression — is a credited equation. For `system_kind: "nonlinear"` there are no derivative equations at all. | §4.9.4 | `tests/valid/nonlinear_isorropia_shape.esm` |
+| f | The canonical subsystem-ref codes are **`unresolved_subsystem_ref`** and **`ambiguous_subsystem_ref`**. The older `ref_not_found` / `ref_ambiguous_system` spellings are RETIRED. `ref_*` was ambiguous across three distinct reference mechanisms (§4.7 subsystem refs, §9.7 template imports, §10 coupling-library role edges); the chosen pair parallels the already-canonical `unresolved_scoped_ref`. | §4.7, §7.1 | `tests/invalid/subsystem_ref_not_found.esm`, `tests/invalid/subsystem_ref_ambiguous.esm` |
 
 ### 7.1.2 The `tests/invalid/expected_errors.json` pin contract
 
