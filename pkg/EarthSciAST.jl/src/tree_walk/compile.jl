@@ -69,14 +69,30 @@ end
 
 # Build-time side channel from `_resolve_indices` to `_compile` (ess-14f.3): a
 # RESOLVED live-forcing gather, carried in the `value` slot of a synthetic
-# argless `index` node. The `index` op is CSE-opaque and this node never reaches
-# serialization (it exists only between the resolve and compile passes of one
-# build), so the runtime payload is canonicalization-safe there. A dedicated
-# wrapper type (not a raw `(Vector{Float64}, Int)` tuple) makes the payload
-# type-checkable and greppable at both ends of the channel.
+# argless `index` node. It exists only between the resolve and compile passes of
+# one build and never reaches the SERIALIZER — but it does reach `canonical_json`,
+# which is a different thing and was the bug (ess-qic): the `index` op being
+# CSE-opaque only stops the gather from being hoisted ITSELF; `_cse_key` still
+# canonicalizes every hoistable ANCESTOR of it, and a canonical node emits its
+# `value` field. A raw `_PGatherRef` there is not a JSON type, so `canonical_json`
+# threw `E_CANONICAL_BAD_CONST`, `_cse_key` caught it and declined — silently
+# switching CSE off for every expression built over a live forcing buffer. The
+# gather therefore carries a CANONICALIZABLE identity (`name`, below) alongside its
+# runtime payload; `_cse_key` swaps the ref for a stand-in node built from it.
+#
+# A dedicated wrapper type (not a raw `(Vector{Float64}, Int)` tuple) makes the
+# payload type-checkable and greppable at both ends of the channel.
 struct _PGatherRef
     flat::Vector{Float64}   # aliased flat view of the caller's live buffer
     lin::Int                # pre-linearized column-major offset into `flat`
+    # The buffer's registry name — its key in the build's `pgather` dict, which is
+    # what makes it the gather's CSE identity (see `_pgather_key_expr`). Distinct
+    # buffers necessarily have distinct names (they are Dict KEYS), so two gathers
+    # collide on `(name, lin)` iff they read the same offset of the same buffer.
+    # That distinctness is a Dict invariant rather than a hand-maintained counter,
+    # which matters: a collision here would not lose sharing, it would MERGE two
+    # different reads and produce silently wrong numbers.
+    name::String
 end
 
 # ── Per-equation build memo (ess-perf: compile one representative per group) ──
@@ -347,7 +363,9 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # A forcing gather over a live `param_arrays` buffer (ess-14f.3): the
         # `index` branch of `_resolve_indices` already bounds-checked and
         # linearized it, stashing a `_PGatherRef` in `value` (the `index` op is
-        # CSE-opaque, so `value` is never canonicalized). Lower it to a
+        # CSE-opaque, so the gather is never HOISTED; `_cse_key` still keys its
+        # ancestors, and swaps the ref for a canonicalizable stand-in to do so —
+        # see `_PGatherRef`). Lower it to a
         # live-read `_NK_PARAM_GATHER` instead of the const-fold a frozen
         # `const_arrays` entry would get. This is the binding-time reroute of an
         # EXISTING gather by its cadence class — no new IR op (the wire op is still
@@ -510,13 +528,114 @@ const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 _cse_hoistable(e::OpExpr) = !(e.op in _CSE_OPAQUE_OPS)
 _cse_hoistable(::ASTExpr) = false
 
+# ---- Keying an expression built over a live forcing buffer (ess-qic) ----------
+#
+# A resolved `param_arrays` gather is an argless `index` node carrying a
+# `_PGatherRef` in `value` (see `_PGatherRef`). `_PGatherRef` is a runtime payload,
+# not a JSON type, so `canonical_json` throws on it — and since it is canonicalized
+# as a CHILD of every hoistable ancestor, that throw used to decline sharing for the
+# whole met→physics stack sitting above a forcing buffer. The fix is to key the
+# gather as a LEAF with a canonicalizable, DISTINGUISHABLE identity:
+#
+#     OpExpr("index", []; name="__pgather", value=[<buffer name>, <linear offset>])
+#
+# both of which `_emit_canonical_value` handles (AbstractString / Integer inside an
+# AbstractArray). The gather itself STAYS CSE-opaque — it is never hoisted into the
+# prelude (a live buffer read is one indexed load, cheaper than a cache slot); the
+# point is only that its ancestors can now be keyed.
+#
+# DISTINCTNESS is the whole safety argument, and it is the one way this can go
+# catastrophically wrong: if two gathers collide on a key, CSE MERGES them and the
+# model computes silently wrong numbers. `(buffer name, linear offset)` is
+# injective onto `(buffer, element)` because the buffer name is its KEY in the
+# build's `pgather` dict — distinct buffers cannot share a name — and every entry
+# (raw `param_arrays` buffers in `_build_pgather`, discrete-cadence caches in
+# `_build_discrete_materializer!`) is registered before any expression is resolved
+# against the dict, so a name resolves to one buffer for the whole resolve phase.
+# `_pgather_check_distinct!` re-verifies that at key time rather than assuming it.
+#
+# LIVENESS is unaffected. Hoisting an expression built OVER a gather caches the
+# expression's VALUE for one `f!` call only — the prelude is refilled at the top of
+# every call — and a forcing buffer cannot change mid-call (it is refreshed by a
+# discrete callback BETWEEN steps, and a discrete cache by `materialize!`). So the
+# cached value is exactly what the inline walk would have computed at that call.
+const _PGATHER_KEY_NAME = "__pgather"
+
+# Per-build context for the stand-in rewrite: an identity memo (each node rewritten
+# at most once, so the whole pass is O(nodes) across every `_cse_key` call) plus the
+# distinctness witness (`name` → the buffer it was seen bound to).
+struct _PGatherKeyCtx
+    memo::IdDict{OpExpr,ASTExpr}
+    seen::Dict{String,Vector{Float64}}
+end
+_PGatherKeyCtx() = _PGatherKeyCtx(IdDict{OpExpr,ASTExpr}(), Dict{String,Vector{Float64}}())
+
+# The key identity `(name, lin)` is only injective if `name` names ONE buffer. That
+# holds by construction today; check it anyway, because the failure mode of a broken
+# assumption here is wrong numbers, not lost sharing.
+function _pgather_check_distinct!(ctx::_PGatherKeyCtx, ref::_PGatherRef)
+    prev = get(ctx.seen, ref.name, nothing)
+    if prev === nothing
+        ctx.seen[ref.name] = ref.flat
+    elseif prev !== ref.flat
+        throw(TreeWalkError("E_TREEWALK_PGATHER_KEY_COLLISION",
+            "internal: forcing-buffer name '$(ref.name)' resolved to two different " *
+            "buffers within one build. The CSE key for a live gather is " *
+            "(buffer name, offset); a name bound to two buffers would let CSE merge " *
+            "two DIFFERENT reads into one cache slot. Registration of every `pgather` " *
+            "entry must precede expression resolution — that invariant is broken."))
+    end
+    return nothing
+end
+
+# Replace every resolved live-forcing gather in `e` with its canonicalizable
+# stand-in, leaving everything else alone. IDENTITY-PRESERVING in the style of
+# `_sub_preserving`: a subtree containing no `_PGatherRef` is returned as the SAME
+# object, so a model with no forcing buffers is untouched (and `_cse_key` skips this
+# pass entirely — `ctx === nothing`). Rewritten nodes are memoized by object
+# identity, so a subexpression shared across equations is rewritten once.
+_pgather_key_expr(e::ASTExpr, ::_PGatherKeyCtx) = e   # NumExpr / IntExpr / VarExpr
+function _pgather_key_expr(e::OpExpr, ctx::_PGatherKeyCtx)
+    r = get(ctx.memo, e, nothing)
+    r === nothing || return r
+    r = _pgather_key_expr_uncached(e, ctx)
+    ctx.memo[e] = r
+    return r
+end
+function _pgather_key_expr_uncached(e::OpExpr, ctx::_PGatherKeyCtx)
+    # The ref is keyed off the `value` field rather than off `op == "index"`, so any
+    # future node that carries one is keyed (never silently declined) too.
+    if e.value isa _PGatherRef
+        ref = e.value::_PGatherRef
+        _pgather_check_distinct!(ctx, ref)
+        return OpExpr(e.op, ASTExpr[]; name=_PGATHER_KEY_NAME,
+                      value=Any[ref.name, ref.lin])
+    end
+    # `map_children` (expression.jl) is the ONE field-preserving rewrite primitive —
+    # it visits every expression-bearing field, so a gather buried in an aggregate
+    # body / filter / range bound is rewritten too. Its rebuilt node is DISCARDED
+    # when no descendant changed, which is what keeps this identity-preserving.
+    changed = false
+    rebuilt = map_children(e) do c
+        r = _pgather_key_expr(c, ctx)
+        changed |= r !== c
+        return r
+    end
+    return changed ? rebuilt : e
+end
+
 # Canonical-form key for a subexpression, or `nothing` if it cannot be
 # canonicalized (e.g. a non-finite literal). A `nothing` key disables sharing
 # for that subtree — CSE is a pure optimization and silently declines anything
 # it cannot key safely.
-function _cse_key(e::ASTExpr)
+#
+# `pgctx` is the live-forcing stand-in context (above) when the build binds any
+# `param_arrays` buffer or discrete cache, and `nothing` otherwise — in which case
+# no `_PGatherRef` can exist and this is byte-for-byte the pre-ess-qic key.
+function _cse_key(e::ASTExpr, pgctx::Union{Nothing,_PGatherKeyCtx})
+    keyed = pgctx === nothing ? e : _pgather_key_expr(e, pgctx)
     try
-        return canonical_json(e)
+        return canonical_json(keyed)
     catch err
         err isa CanonicalizeError && return nothing
         rethrow()
@@ -544,15 +663,16 @@ end
 # the original walk evaluates it at that occurrence regardless, so the prelude's
 # unconditional evaluation introduces no throw or NaN the walk did not already have.
 function _cse_count!(e::ASTExpr, counts::Dict{String,Tuple{Int,Int}},
+                     pgctx::Union{Nothing,_PGatherKeyCtx},
                      conditional::Bool=false)
     (e isa OpExpr && _cse_hoistable(e)) || return
-    k = _cse_key(e)
+    k = _cse_key(e, pgctx)
     if k !== nothing
         total, uncond = get(counts, k, (0, 0))
         counts[k] = (total + 1, uncond + (conditional ? 0 : 1))
     end
     for (i, a) in enumerate(e.args)
-        _cse_count!(a, counts, conditional || _cse_arg_conditional(e.op, i))
+        _cse_count!(a, counts, pgctx, conditional || _cse_arg_conditional(e.op, i))
     end
     return
 end
@@ -632,13 +752,16 @@ end
 
 # Mutable CSE compile context: the set of cached keys, the slot assigned to each
 # (assigned lazily, in topological order, at first compile), the prelude
-# definitions (`defs[s]` computes `cache[s]`), and the shared scratch the
-# `_NK_CACHED` nodes read from.
+# definitions (`defs[s]` computes `cache[s]`), the shared scratch the
+# `_NK_CACHED` nodes read from, and the live-forcing stand-in context the keys were
+# COUNTED with (`nothing` on a build with no forcing buffers). The count pass and
+# the compile pass MUST key with the same `pgctx` or their keys would not match.
 mutable struct _CSEContext
     cached::Set{String}
     slot::Dict{String,Int}
     defs::Vector{_Node}
     cache::_CSECache
+    pgctx::Union{Nothing,_PGatherKeyCtx}
 end
 
 # Rebuild the `_Node` that plain `_compile` would emit for a hoistable `expr`,
@@ -666,7 +789,7 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
     (expr isa OpExpr && _cse_hoistable(expr)) ||
         return _compile(expr, var_map, param_syms, reg_funcs)
 
-    key = _cse_key(expr)
+    key = _cse_key(expr, ctx.pgctx)
     if key !== nothing && key in ctx.cached
         s = get(ctx.slot, key, 0)
         s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
@@ -689,11 +812,16 @@ end
 # prelude (slot-ordered def nodes), the shared cache vector, and a diagnostic
 # `(; n_slots, n_occurrences)` that witnesses the evaluate-once property
 # (criterion #2: distinct evaluations == distinct canonical subexpressions).
+# `has_pgather` is whether the build bound ANY live forcing buffer or discrete
+# cache (`!isempty(pgather)`). It is a required keyword, not a defaulted one: a
+# forgotten `false` would silently restore the ess-qic coverage hole rather than
+# fail, and a hole that fails closed is exactly the bug this argument exists to fix.
 function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
-                             var_map, param_syms, reg_funcs)
+                             var_map, param_syms, reg_funcs; has_pgather::Bool)
+    pgctx = has_pgather ? _PGatherKeyCtx() : nothing
     counts = Dict{String,Tuple{Int,Int}}()
     for (_, e) in entries
-        _cse_count!(e, counts)
+        _cse_count!(e, counts, pgctx)
     end
     cached = Set{String}()
     n_occ = 0
@@ -707,7 +835,7 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
         end
     end
     cache = _CSECache()
-    ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache)
+    ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache, pgctx)
     rhs_list = Tuple{Int,_Node}[]
     for (idx, e) in entries
         push!(rhs_list, (idx, _compile_cse(e, var_map, param_syms, reg_funcs, ctx)))

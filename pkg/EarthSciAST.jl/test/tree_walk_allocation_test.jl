@@ -118,6 +118,24 @@ _forcing_gather_model(N) = ESM.Model(
 # per-call, value-independent work — the fresh axis `Vector`, the monotonicity
 # re-walk, the `Vector{Any}` splice, the `_fn_const_arg_spec` scan, the boxed
 # `evaluate_closed_function` dispatch — to build time).
+# Scalar CSE over a LIVE forcing buffer (ess-qic): `F[1]*k` occurs three times
+# across two scalar equations, so it is now hoisted into the CSE prelude — whose
+# slot is filled by a live `_NK_PARAM_GATHER` read. Before ess-qic the gather's
+# un-canonicalizable payload made `_cse_key` decline, so this shape never reached
+# the prelude at all; pin that hoisting it keeps `f!` at 0 bytes (the prelude
+# scratch is preallocated at build; the gather is a bare indexed load into the
+# aliased flat buffer).
+#   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
+function _cse_forcing_scalar_model()
+    vars = Dict("x" => ModelVariable(StateVariable; default=1.0),
+                "y" => ModelVariable(StateVariable; default=1.0),
+                "k" => ModelVariable(ParameterVariable; default=2.0))
+    fk = _op("*", _idx("F", _i(1)), _v("k"))
+    ESM.Model(vars, [
+        ESM.Equation(_D("x"), _op("+", _op("sin", fk), _op("cos", fk))),
+        ESM.Equation(_D("y"), fk)])
+end
+
 function _scalar_interp_linear_model()
     axis = _const([0.0, 1.0, 2.0, 3.0]); tab = _const([10.0, 20.0, 30.0, 40.0])
     vars = Dict("x" => ModelVariable(StateVariable; default=1.5),
@@ -206,6 +224,14 @@ end
             @test built_rhs_alloc_bytes(_forcing_gather_model(N);
                 initial_conditions=ics, param_arrays=Dict("forcing" => forcing)) == 0
         end
+    end
+
+    @testset "CSE'd scalar forcing gather RHS: 0 bytes (ess-qic)" begin
+        # The CSE prelude now hoists expressions built over a live forcing buffer.
+        # The hoisted slot is filled from a `_NK_PARAM_GATHER` read every call, so the
+        # zero-allocation discipline has to hold through the prelude too.
+        @test built_rhs_alloc_bytes(_cse_forcing_scalar_model();
+            param_arrays=Dict("F" => [5.0, 6.0])) == 0
     end
 
     @testset "scalar contraction :+ fold is allocation-free (line fix)" begin
