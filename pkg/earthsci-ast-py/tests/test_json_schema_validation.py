@@ -110,26 +110,43 @@ class TestRequiredFieldValidation:
         _assert_rejected_with(schema, invalid_data, "'equations' is a required property")
 
     def test_missing_reaction_system_required_fields(self):
-        """Test validation when reaction system required fields are missing."""
+        """Test validation when reaction system required fields are missing.
+
+        Each case must violate EXACTLY the constraint it names. The `species`
+        case used to also pass ``"reactions": []``, which independently violates
+        ``minItems: 1``; jsonschema's ``best_match`` surfaced the ``minItems``
+        error instead, so ``match="'species' is a required property"`` never
+        matched and the assertion this test exists to make was never exercised.
+        A schema-valid, non-empty ``reactions`` array isolates the missing
+        required field.
+        """
         schema = _get_schema()
 
-        # Missing species
+        one_reaction = [
+            {
+                "id": "R1",
+                "substrates": [{"species": "A", "stoichiometry": 1}],
+                "products": [{"species": "B", "stoichiometry": 1}],
+                "rate": "k",
+            }
+        ]
+
+        # Missing species (reactions is non-empty, so minItems is satisfied and
+        # the ONLY violation is the missing 'species' property).
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "reaction_systems": {"test_rs": {"parameters": {}, "reactions": []}},
+            "reaction_systems": {"test_rs": {"parameters": {}, "reactions": one_reaction}},
         }
-        with pytest.raises(ValidationError, match="'species' is a required property"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "'species' is a required property")
 
         # Missing parameters
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "reaction_systems": {"test_rs": {"species": {}, "reactions": []}},
+            "reaction_systems": {"test_rs": {"species": {}, "reactions": one_reaction}},
         }
-        with pytest.raises(ValidationError, match="'parameters' is a required property"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "'parameters' is a required property")
 
         # Missing reactions
         invalid_data = {
@@ -137,8 +154,7 @@ class TestRequiredFieldValidation:
             "metadata": {"name": "Test"},
             "reaction_systems": {"test_rs": {"species": {}, "parameters": {}}},
         }
-        with pytest.raises(ValidationError, match="'reactions' is a required property"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "'reactions' is a required property")
 
     def test_missing_equation_required_fields(self):
         """Test validation when equation required fields are missing."""
@@ -395,54 +411,55 @@ class TestPatternValidation:
 class TestFormatValidation:
     """Test validation of format-constrained fields."""
 
-    def test_invalid_datetime_format(self):
-        """Test validation of invalid date-time format strings."""
+    def test_malformed_datetime_rejected_without_format_backend(self):
+        """A malformed timestamp is rejected by the schema's `pattern`, with NO
+        optional format backend installed.
+
+        JSON Schema `format` is an ANNOTATION, not an assertion: validators
+        ignore it unless separately configured with a format checker AND the
+        optional `rfc3339-validator` package. The schema therefore carries a
+        portable `pattern` alongside `format: date-time`, which makes this
+        assertion run everywhere instead of being skipped on a bare install.
+        """
+        schema = _get_schema()
+        # Deliberately NO format_checker: the pattern alone must reject this.
+        invalid_data = {
+            "esm": "0.1.0",
+            "metadata": {"name": "Test", "created": "invalid-datetime"},
+            "models": {"test": {"variables": {}, "equations": []}},
+        }
+        _assert_rejected_with(schema, invalid_data, "does not match")
+
+    def test_semantically_invalid_datetime_needs_format_backend(self):
+        """A well-SHAPED but semantically impossible timestamp (month 13, hour
+        25) satisfies the structural `pattern` and can only be caught by a real
+        RFC-3339 format backend."""
         schema = _get_schema()
         format_checker = jsonschema.FormatChecker()
-        # `date-time` format assertion needs an optional backend
-        # (e.g. rfc3339-validator); without it FormatChecker is a no-op and
-        # cannot reject bad timestamps. Skip rather than silently pass.
-        if format_checker.conforms("invalid-datetime", "date-time"):
+        if format_checker.conforms("2023-13-01T25:00:00Z", "date-time"):
             pytest.skip(
                 "jsonschema 'date-time' format assertion unavailable (install rfc3339-validator)"
             )
 
         invalid_data = {
             "esm": "0.1.0",
-            "metadata": {"name": "Test", "created": "invalid-datetime"},
+            "metadata": {"name": "Test", "modified": "2023-13-01T25:00:00Z"},
             "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="date-time|format"):
             jsonschema.validate(invalid_data, schema, format_checker=format_checker)
 
-        # Test modified field as well
-        invalid_data = {
-            "esm": "0.1.0",
-            "metadata": {
-                "name": "Test",
-                "modified": "2023-13-01T25:00:00Z",  # Invalid month and hour
-            },
-            "models": {"test": {"variables": {}, "equations": []}},
-        }
-        with pytest.raises(ValidationError, match="date-time|format"):
-            jsonschema.validate(invalid_data, schema, format_checker=format_checker)
-
-    def test_invalid_uri_format(self):
-        """Test validation of invalid URI format strings."""
+    def test_invalid_uri_rejected_without_format_backend(self):
+        """A malformed reference URL is rejected by the schema's `pattern`, with
+        NO optional `rfc3987` backend installed (see the date-time note above)."""
         schema = _get_schema()
-        format_checker = jsonschema.FormatChecker()
-        # `uri` format assertion needs an optional backend (e.g. rfc3987);
-        # without it FormatChecker is a no-op and cannot reject bad URIs.
-        if format_checker.conforms("not-a-valid-uri", "uri"):
-            pytest.skip("jsonschema 'uri' format assertion unavailable (install rfc3987)")
-
+        # Deliberately NO format_checker: the pattern alone must reject this.
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test", "references": [{"url": "not-a-valid-uri"}]},
             "models": {"test": {"variables": {}, "equations": []}},
         }
-        with pytest.raises(ValidationError, match="uri|format"):
-            jsonschema.validate(invalid_data, schema, format_checker=format_checker)
+        _assert_rejected_with(schema, invalid_data, "does not match")
 
 
 class TestConstraintValidation:

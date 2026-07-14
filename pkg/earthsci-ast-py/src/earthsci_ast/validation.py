@@ -29,6 +29,7 @@ Layer boundary (what lives where):
   semantic rule is owned here, the raw-dict twin over there carries a
   cross-reference back to this module.
 """
+
 from __future__ import annotations
 
 import math
@@ -48,7 +49,7 @@ from .error_handling import (
     Severity,
 )
 from .esm_types import EsmFile
-from .parse import SchemaValidationError, load
+from .parse import SchemaValidationError, SubsystemRefError, load
 
 
 @dataclass
@@ -119,7 +120,7 @@ def _convert_jsonschema_error(error: JsonSchemaValidationError) -> ValidationErr
     )
 
 
-def validate(esm_file) -> ValidationResult:
+def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
     """
     Validate an ESM file against schema, structural, and unit requirements.
 
@@ -131,6 +132,26 @@ def validate(esm_file) -> ValidationResult:
 
     Args:
         esm_file: The EsmFile object, JSON string, or dict to validate
+        base_path: Directory that relative ``{"ref": ...}`` subsystem/model mounts
+            (§4.7) and ``expression_template_imports`` (§9.7.2) resolve against.
+
+            Validating a document that mounts another file is only meaningful if
+            the mount target can be OPENED: whether a ref resolves — and whether
+            the index sets it merges in conflict — is not decidable from the
+            document's own bytes. When the caller passes the JSON *content* (as a
+            conformance harness does, holding the fixture text rather than its
+            path), there is nothing to anchor a relative ref to, and every
+            subsystem-ref and template-import fixture becomes unsatisfiable.
+            Passing the fixture's directory here makes those pins reachable: a
+            MISSING target yields ``unresolved_subsystem_ref`` (or the
+            template-import equivalent) at the mount's pointer, and a PRESENT one
+            validates through.
+
+            Omitted, behaviour is unchanged: relative refs are resolved against
+            the process CWD, so an unopenable target is still reported as an
+            unresolved ref — never silently accepted. Passing a *file path* as
+            ``esm_file`` needs no ``base_path``; the file's own directory anchors
+            it.
 
     Returns:
         ValidationResult containing schema_errors, structural_errors, unit_warnings, and is_valid flag
@@ -138,14 +159,56 @@ def validate(esm_file) -> ValidationResult:
     # Handle JSON string or dict input by parsing first
     if isinstance(esm_file, (str, dict)):
         try:
-            esm_file = load(esm_file)
+            esm_file = load(esm_file, base_path=base_path)
         except SchemaValidationError as e:
+            # A STRUCTURAL failure (StructuralValidationError subclasses
+            # SchemaValidationError) carries machine-readable records — a stable
+            # diagnostic `code` and a JSON-Pointer `path` each. Re-emit those as
+            # structured structural_errors instead of collapsing them into one
+            # opaque `$` prose blob filed under schema_errors: the shared
+            # contract in tests/invalid/expected_errors.json pins these fixtures
+            # as `"schema_errors": []` plus a coded structural error at a
+            # specific path (e.g. `unit_inconsistency` @
+            # `/models/BadUnitsModel/equations/0`).
+            records = getattr(e, "records", None)
+            if records:
+                return ValidationResult(
+                    is_valid=False,
+                    schema_errors=[],
+                    structural_errors=[
+                        ValidationError(
+                            path=r.get("path", "$"),
+                            message=r.get("message", ""),
+                            code=r.get("code", ""),
+                            details=r.get("details", {}),
+                        )
+                        for r in records
+                    ],
+                )
             return ValidationResult(
                 is_valid=False,
                 schema_errors=[
                     ValidationError(path="$", message=str(e), code=ErrorCode.SCHEMA.value)
                 ],
                 structural_errors=[],
+            )
+        except SubsystemRefError as e:
+            # A §4.7 mount that does not resolve is a STRUCTURAL defect at the
+            # pointer of the mount, not a parse failure of the document as a
+            # whole: `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
+            # `/models/<M>/subsystems/<name>` (tests/invalid/expected_errors.json
+            # pins these fixtures as `"schema_errors": []`).
+            return ValidationResult(
+                is_valid=False,
+                schema_errors=[],
+                structural_errors=[
+                    ValidationError(
+                        path=getattr(e, "path", "") or "$",
+                        message=str(e),
+                        code=getattr(e, "code", "") or ErrorCode.PARSE.value,
+                        details=getattr(e, "details", None) or {},
+                    )
+                ],
             )
         except Exception as e:
             return ValidationResult(
@@ -183,6 +246,10 @@ def validate(esm_file) -> ValidationResult:
 
         # 4. Event Consistency validation
         _validate_event_consistency(esm_file, structural_errors)
+
+        # 4b. An observed variable's DECLARED units must equal the dimension its
+        # expression computes (esm-spec §4.8.4) — a HARD error, not a warning.
+        _validate_observed_dimensions(esm_file, structural_errors)
 
         # 5. Unit validation (warnings only)
         _validate_units(esm_file, unit_warnings)
@@ -228,12 +295,21 @@ def _validate_content_presence(esm_file: EsmFile, error_collector: ErrorCollecto
     being empty or containing only metadata. A loader-only file (sole component
     `data_loaders`) is valid — it is referenceable as a loader subsystem
     (RFC pure-io-data-loaders §4.4 / esm-spec §4.7).
+
+    A TEMPLATE-LIBRARY file (esm-spec §9.7.1) is likewise valid with no component
+    at all: it carries only `expression_templates` and exists to be IMPORTED. It
+    is empty by DESIGN, not by mistake. The registry is a top-level DECLARATION
+    that survives load (§9.6.4 rule 5), so it is checked directly; without it a
+    library validated standalone looked like an empty document and was rejected
+    (`template_import_lib.esm`, `template_import_rename_lib.esm` — both pinned
+    VALID).
     """
     has_models = bool(esm_file.models)
     has_reaction_systems = bool(esm_file.reaction_systems)
     has_data_loaders = bool(esm_file.data_loaders)
+    is_library = bool(getattr(esm_file, "expression_templates", None))
 
-    if not has_models and not has_reaction_systems and not has_data_loaders:
+    if not has_models and not has_reaction_systems and not has_data_loaders and not is_library:
         error = ESMError(
             code=ErrorCode.MISSING_REQUIRED_FIELD,
             message="ESM file must contain at least one model, reaction system, or data loader. Empty files are not valid.",
@@ -277,9 +353,45 @@ def _is_initial_condition_equation(equation) -> bool:
     return getattr(lhs, "op", None) == "ic"
 
 
+def _is_operator_style(model) -> bool:
+    """True if the model is an OPERATOR (spec §6.4) — its equations are written
+    against the reserved ``_var`` placeholder rather than against locally
+    declared states.
+
+    An operator is a rewrite rule applied to *another* system's states, so it
+    balances no equations of its own: `Transport` carries one `D(_var) = ...`
+    equation and zero state variables. Counting its equations against its
+    (empty) state list is meaningless and reports a spurious imbalance.
+    """
+    from .expression import free_variables
+
+    for eq in model.equations:
+        for side in (getattr(eq, "lhs", None), getattr(eq, "rhs", None)):
+            if side is not None and "_var" in free_variables(side):
+                return True
+    return False
+
+
 def _validate_equation_balance_enhanced(esm_file: EsmFile, error_collector: ErrorCollector) -> None:
-    """Enhanced equation-unknown balance validation with detailed suggestions."""
+    """Enhanced equation-unknown balance validation with detailed suggestions.
+
+    Equation balance is a property of a system solved on its OWN. It is skipped
+    for two shapes that are balanced only after composition, matching the Go
+    reference (which reaches 82/82 on the valid corpus):
+
+    * a COUPLED document — a model's states may be driven by equations
+      contributed at the coupling edge, so the model's own equation count is not
+      the whole story;
+    * an OPERATOR-style model (§6.4) — see :func:`_is_operator_style`.
+
+    Counting either against its locally declared states produced a false
+    ``equation_count_mismatch`` on 8 valid fixtures.
+    """
+    is_coupled = bool(getattr(esm_file, "coupling", None))
     for _i, model in enumerate(esm_file.models.values()):
+        if is_coupled or _is_operator_style(model):
+            continue
+
         # Count state variables (unknowns)
         state_vars = [name for name, var in model.variables.items() if var.type == "state"]
         num_unknowns = len(state_vars)
@@ -500,7 +612,11 @@ def _validate_rate_expression(
     from .expression import free_variables
 
     if isinstance(rate_expr, str):
-        # Simple parameter reference
+        # Simple parameter reference. A SCOPED one (`Other.k`) names a symbol in
+        # another system and is resolved at coupling/flatten time — see the
+        # matching note in the expression branch below.
+        if "." in rate_expr:
+            return
         if rate_expr not in param_names:
             structural_errors.append(
                 ValidationError(
@@ -524,6 +640,17 @@ def _validate_rate_expression(
 
             # Check that all referenced variables are declared parameters or species
             for var in referenced_vars:
+                # A SCOPED reference (`Meteorology.temperature`) names a symbol in
+                # ANOTHER system, so it is not expected in this reaction system's
+                # own parameters/species — a rate expression MAY carry one
+                # (esm-spec §4.6; `tests/valid/events_cross_system.esm` drives an
+                # atmospheric rate from `MeteorologicalSystem.solar_intensity`).
+                # It is resolved by the coupling/flatten layer, exactly as a
+                # scoped ref in a model equation is deferred there; checking it
+                # against the LOCAL symbol table can only produce false
+                # `undeclared_rate_variable` findings.
+                if "." in var:
+                    continue
                 if var not in param_names and var not in species_names:
                     # Variable is not declared in this reaction system
                     structural_errors.append(
@@ -574,20 +701,32 @@ def _validate_reaction_rate_dimensions(
     contract in ``tests/invalid/expected_errors.json``.
     """
     try:
-        import pint
+        # The SHARED ESM registry, not a bare `pint.UnitRegistry()`. A vanilla
+        # pint registry does not define `ppb`/`ppbv`/`Dobson`/… and gives `molec`
+        # a [substance] dimension, so this check used to run against a registry
+        # that disagreed with every other unit check in the package — silently
+        # skipping (parse_dim -> None) exactly the atmospheric-chemistry rates it
+        # exists to verify.
+        from .units import PINT_AVAILABLE, unit_dimensionality
+
+        if not PINT_AVAILABLE:
+            return
     except ImportError:
         return
     from .structural_checks import _BUILTIN_SYMBOLS, _normalize_unit
 
-    ureg = pint.UnitRegistry()
-    time_dim = ureg("second").dimensionality
-    dimensionless_dim = ureg("").dimensionality
+    # Spell these with TABLE symbols. The ESM registry is the closed §4.8.1
+    # table, so pint's long-form names (`second`, `meter`, `celsius`, …) are no
+    # longer defined — `ureg("second")` used to work only because the registry
+    # was vanilla pint, and it now raises UndefinedUnitError.
+    time_dim = unit_dimensionality("s")
+    dimensionless_dim = unit_dimensionality("")
 
     def parse_dim(unit_str):
         if not unit_str:
             return None
         try:
-            return ureg(_normalize_unit(unit_str)).dimensionality
+            return unit_dimensionality(_normalize_unit(unit_str))
         except Exception:
             return None
 
@@ -628,7 +767,7 @@ def _validate_reaction_rate_dimensions(
                 # Julia parity: skip mole-fraction families.
                 continue
 
-            substrate_dim = ureg("").dimensionality
+            substrate_dim = dimensionless_dim
             total_order = 0
             resolvable = True
             for sp_name, stoich in reaction.reactants.items():
@@ -759,23 +898,17 @@ def _validate_functional_affect(
     ``affects`` vs ``"Affect_neg functional affect"`` for ``affect_neg``); the
     emitted errors are otherwise identical to the previously inlined checks.
     """
-    # Validate handler_id exists as an operator
-    if affect.handler_id not in all_operators:
-        structural_errors.append(
-            ValidationError(
-                path=f"{affect_path}/handler_id",
-                message=f"Operator '{affect.handler_id}' is not defined",
-                code=ErrorCode.UNDEFINED_OPERATOR.value,
-                details={
-                    "operator": affect.handler_id,
-                    "available_operators": sorted(all_operators),
-                },
-            )
-        )
+    # A `handler_id` is NOT required to name an entry in the document's
+    # `operators` block: a FunctionalAffect's handler may be supplied by the HOST
+    # (a `callback` handler registered by the runtime), and `full_coupled.esm`
+    # — a valid fixture — declares no `operators` block at all. Requiring
+    # `handler_id in operators` rejected it. The Go reference accepts it; a
+    # handler the host does not register is a run-time error, not a structural
+    # one, so nothing is checked here.
 
     # Validate read_vars exist
     for var_idx, read_var in enumerate(affect.read_vars):
-        if read_var not in all_variables:
+        if not _is_operator_placeholder(read_var) and read_var not in all_variables:
             structural_errors.append(
                 ValidationError(
                     path=f"{affect_path}/read_vars/{var_idx}",
@@ -819,6 +952,123 @@ def _validate_functional_affect(
             )
 
 
+def _validate_observed_dimensions(
+    esm_file: EsmFile, structural_errors: list[ValidationError]
+) -> None:
+    """esm-spec §4.8.4: an observed variable whose DECLARED units disagree with
+    the dimension its EXPRESSION computes is a *provable* dimensional mismatch,
+    and therefore a hard error (``unit_inconsistency``).
+
+    This is the check the whole §4.8 dimensional apparatus exists to make, and
+    it was missing: ``units.UnitValidator`` could type an expression (each op
+    carries a dimensional rule), and ``structural_checks`` could reject an
+    unreal unit STRING — but nothing ever compared the two, so
+    ``{"units": "N", "expression": charge * efield}`` was accepted no matter
+    what dimension the right-hand side actually had. Every discriminator in
+    ``tests/valid/units_registry_grammar.esm`` passed *vacuously* until this
+    landed.
+
+    The §4.8.4 severity contract is honoured exactly:
+
+    * an UNDETERMINABLE dimension (``None`` — a symbolic exponent, an op with no
+      dimensional rule, an undeclared operand) SKIPS the check; it is never
+      treated as dimensionless;
+    * an unparseable declared unit is skipped here — it is reported once, on its
+      own, by ``structural_checks._check_unparseable_units``;
+    * only a mismatch between two KNOWN dimensions is reported.
+    """
+    try:
+        from .units import (
+            PINT_AVAILABLE,
+            DimensionalMismatchError,
+            UnitValidator,
+            UnparseableUnitError,
+            parse_unit,
+        )
+
+        if not PINT_AVAILABLE:
+            return
+    except ImportError:
+        return
+
+    for model in esm_file.models.values():
+        # Seed the typer with every declared unit in THIS model, so bare-name
+        # operands resolve (and a name reused in another model cannot collide).
+        known = {}
+        for name, var in model.variables.items():
+            if not var.units:
+                continue
+            try:
+                known[name] = parse_unit(var.units)
+            except UnparseableUnitError:
+                continue  # reported by _check_unparseable_units; not our finding
+
+        validator = UnitValidator()
+        validator.known_units = known
+
+        for vname, var in model.variables.items():
+            if var.type != "observed" or var.expression is None or not var.units:
+                continue
+            if vname not in known:
+                continue  # its own declared unit is unparseable — already reported
+
+            declared = known[vname].dimensionality
+            path = f"/models/{model.name}/variables/{vname}"
+            try:
+                computed = validator._get_expression_dimension(var.expression)
+            except DimensionalMismatchError as exc:
+                # A provable inconsistency INSIDE the expression (adding metres
+                # to kilograms, a transcendental with a dimensional argument).
+                structural_errors.append(
+                    ValidationError(
+                        path=path,
+                        message=(
+                            f"Observed variable '{vname}' has a dimensionally "
+                            f"inconsistent expression: {exc}"
+                        ),
+                        code=ErrorCode.UNIT_INCONSISTENCY.value,
+                        details={"variable": vname, "declared_units": var.units},
+                    )
+                )
+                continue
+
+            if computed is None:
+                continue  # undeterminable (§4.8.4) — skip, never assume dimensionless
+            if computed == declared:
+                continue
+
+            structural_errors.append(
+                ValidationError(
+                    path=path,
+                    message=(
+                        f"Observed variable '{vname}' is declared as '{var.units}' "
+                        f"({declared}) but its expression has dimension {computed}"
+                    ),
+                    code=ErrorCode.UNIT_INCONSISTENCY.value,
+                    details={
+                        "variable": vname,
+                        "declared_units": var.units,
+                        "declared_dimension": str(declared),
+                        "expression_dimension": str(computed),
+                    },
+                )
+            )
+
+
+#: The reserved OPERATOR PLACEHOLDER (esm-spec §6.4). In an operator-style model
+#: `_var` stands for "each matching state variable of the target system", and is
+#: substituted at `operator_compose` time — so it is never a declared symbol, and
+#: an event affect that writes it (`_var ~ Pre(_var) * decay`) is legal in exactly
+#: the operator-composed / coupled models that `operator_compose` exists for.
+#: Reporting it as `event_var_undeclared` rejects `tests/valid/full_coupled.esm`,
+#: which the spec's own §6.4 example is written from.
+_OPERATOR_PLACEHOLDER = "_var"
+
+
+def _is_operator_placeholder(name: object) -> bool:
+    return name == _OPERATOR_PLACEHOLDER
+
+
 def _validate_event_consistency(
     esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
@@ -832,6 +1082,9 @@ def _validate_event_consistency(
     - Variables in affect_neg (direction-dependent affects) are declared
     - Functional affect references are valid (handler_id, read_vars, read_params, modified_params)
     - discrete_parameters in coupling entries are valid
+
+    The reserved `_var` placeholder is never an undeclared variable — see
+    :data:`_OPERATOR_PLACEHOLDER`.
     """
     # Build variable lookup for validation
     all_variables = set()
@@ -869,7 +1122,7 @@ def _validate_event_consistency(
             affect_path = f"{event_path}/affects/{affect_idx}"
 
             if hasattr(affect, "lhs"):  # AffectEquation
-                if affect.lhs not in all_variables:
+                if not _is_operator_placeholder(affect.lhs) and affect.lhs not in all_variables:
                     structural_errors.append(
                         ValidationError(
                             path=f"{affect_path}/lhs",
@@ -898,7 +1151,7 @@ def _validate_event_consistency(
                 affect_path = f"{event_path}/affect_neg/{affect_idx}"
 
                 if hasattr(affect, "lhs"):  # AffectEquation
-                    if affect.lhs not in all_variables:
+                    if not _is_operator_placeholder(affect.lhs) and affect.lhs not in all_variables:
                         structural_errors.append(
                             ValidationError(
                                 path=f"{affect_path}/lhs",

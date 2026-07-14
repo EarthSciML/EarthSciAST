@@ -38,6 +38,7 @@ and :func:`_structural_validation_error_cls` (for
 :class:`~earthsci_ast.parse.SchemaValidationError`), keeping the
 module-import graph acyclic.
 """
+
 from __future__ import annotations
 
 import re
@@ -71,11 +72,24 @@ def _structural_validation_error_cls() -> type:
             structural pass has always produced (so message-matching callers are
             unchanged); ``err.findings`` is the same set of problems as a list of
             ``(code, message)`` tuples, giving the stable diagnostic codes a
-            machine-readable home alongside the prose blob."""
+            machine-readable home alongside the prose blob.
 
-            def __init__(self, message: str, findings: list[tuple[str, str]] | None = None):
+            ``err.records`` carries the same findings with a JSON-Pointer
+            ``path`` and a ``details`` payload — the shape
+            ``tests/invalid/expected_errors.json`` pins for every binding.
+            ``validation.validate()`` re-emits these as structured
+            ``ValidationError``s so a caller sees ``code`` + ``path`` instead of
+            a single opaque prose blob."""
+
+            def __init__(
+                self,
+                message: str,
+                findings: list[tuple[str, str]] | None = None,
+                records: list[dict] | None = None,
+            ):
                 super().__init__(message)
                 self.findings: list[tuple[str, str]] = list(findings or [])
+                self.records: list[dict] = list(records or [])
 
         _STRUCTURAL_VALIDATION_ERROR_CLS = StructuralValidationError
     return _STRUCTURAL_VALIDATION_ERROR_CLS
@@ -87,34 +101,47 @@ def __getattr__(name: str):  # PEP 562: lazy module-level attribute.
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# Shared pint unit registry, constructed lazily on first use. Unit parsing is
-# hot (per-variable / per-equation checks) and ``pint.UnitRegistry()`` is
-# expensive, so the suite reuses one module-level registry instead of building
-# a fresh one per call. Callers keep the same try/except guards that
-# previously wrapped ``import pint``, so environments without pint behave
-# identically.
-_UREG = None
-
-
+# The ONE unit registry. It is built in ``earthsci_ast.units``, which layers the
+# shared ESM unit contract (docs/content/units-standard.md) on top of pint:
+# ppb/ppt and the *v aliases, the dimensionless count nouns
+# (molec/individuals/vehicles/units/count), Dobson/DU, Ohm, Torr — and, crucially,
+# the OVERRIDES where a vanilla pint registry silently disagrees with the
+# contract (`units` parses as MICRO-NIT, a luminance; `molec` as [substance]).
+#
+# This module used to build its own bare ``pint.UnitRegistry()``, which knew none
+# of that: `ppb`, `ppbv`, `individuals`, `vehicles`, `Dobson`, `Torr` were simply
+# UNDEFINED here, and `molec`/`units` carried the wrong dimension. Every unit
+# check below therefore ran against a registry that disagreed with the one
+# ``units.py`` uses — tolerable while the findings were advisory, a
+# false-rejection factory now that they are hard errors.
 def _get_unit_registry():
-    """Return the module-level pint ``UnitRegistry``, creating it on first use."""
-    global _UREG
-    if _UREG is None:
-        import pint
+    """Return the shared ESM pint ``UnitRegistry`` (see ``earthsci_ast.units``)."""
+    from .units import PINT_AVAILABLE, ureg
 
-        _UREG = pint.UnitRegistry()
-    return _UREG
+    if not PINT_AVAILABLE:
+        raise ImportError("pint library is required for unit validation")
+    return ureg
+
+
+def _unit_dimensionality(unit: str | None):
+    """Dimensionality of a declared unit string, via the shared ESM registry.
+
+    Raises ``UnparseableUnitError`` (a ``ValueError``) when the string does not
+    denote a unit, and ``ImportError`` when pint is absent.
+    """
+    from .units import unit_dimensionality
+
+    return unit_dimensionality(unit)
 
 
 # Exception types that mean "cannot verify these units", never "genuinely
-# inconsistent": either pint is unavailable (``ImportError`` from the lazy
-# ``import pint``) or pint could not parse/convert a unit string. The latter is
-# pint's own error hierarchy — ``UndefinedUnitError``, ``DimensionalityError``,
-# ``DefinitionSyntaxError``, ``OffsetUnitCalculusError``, … — all subclasses of
-# ``pint.errors.PintError``. Narrowing the unit-helper ``except`` clauses to
-# this tuple (instead of a blanket ``except Exception``) keeps the permissive
-# fallback for unparseable units while letting a genuine, unexpected bug
-# propagate instead of being silently swallowed as a spurious pass.
+# inconsistent": either pint is unavailable (``ImportError``) or the string does
+# not denote a unit (``UnparseableUnitError``). An unparseable unit is now
+# reported ONCE, as a hard error, by :func:`_check_unparseable_units`; the
+# helpers below therefore keep treating it as unverifiable so that a single
+# malformed unit string produces a single finding instead of an avalanche of
+# derived mismatches. Narrowing these ``except`` clauses to this tuple (instead
+# of a blanket ``except Exception``) lets a genuine, unexpected bug propagate.
 _PINT_UNVERIFIABLE_ERRORS = None
 
 
@@ -126,7 +153,13 @@ def _pint_unverifiable_errors():
         try:
             import pint
 
-            _PINT_UNVERIFIABLE_ERRORS = (ImportError, pint.errors.PintError)
+            from .units import UnparseableUnitError
+
+            _PINT_UNVERIFIABLE_ERRORS = (
+                ImportError,
+                UnparseableUnitError,
+                pint.errors.PintError,
+            )
         except ImportError:
             _PINT_UNVERIFIABLE_ERRORS = (ImportError,)
     return _PINT_UNVERIFIABLE_ERRORS
@@ -187,7 +220,15 @@ _OPERATOR_ARITY = {
     "const": (0, 0),
 }
 
-# Built-in symbols always available in expressions
+# Built-in symbols always available in expressions.
+#
+# The COORDINATE names here are the conventional spellings, kept as a fallback
+# for a document that declares no `index_sets`. The authoritative source is the
+# DOCUMENT — see :func:`_implicit_document_symbols`, which adds the domain's
+# `independent_variable` and every declared index-set name. A model is never
+# required to declare its independent variable or its spatial coordinates as
+# variables (esm-spec §5.3's own example writes `t` undeclared), so neither may
+# ever be reported as an `undefined_variable`.
 _BUILTIN_SYMBOLS = frozenset(
     {
         "t",
@@ -207,6 +248,38 @@ _BUILTIN_SYMBOLS = frozenset(
     }
 )
 
+
+def _implicit_document_symbols(data: dict[str, Any]) -> set[str]:
+    """Symbols a document declares IMPLICITLY, and which are therefore always in
+    scope in its expressions (esm-spec §5.3, §11.1).
+
+    Two sources:
+
+    * the domain's ``independent_variable`` (default ``"t"``) — the time symbol
+      an equation differentiates with respect to; and
+    * every ``index_sets`` key — the document-scoped registry of iteration
+      domains, i.e. the spatial/categorical AXES a model's variables are shaped
+      over (``lon``, ``lat``, ``lev``, …).
+
+    Neither is ever declared as a *variable*, so a checker that only consults
+    ``variables`` reports both as undefined. This function is why
+    ``_BUILTIN_SYMBOLS``' hard-coded coordinate list is a fallback rather than
+    the rule: a document is free to name its independent variable ``tau`` or its
+    axis ``depth``, and those are just as implicitly declared as ``t`` and
+    ``lon``.
+    """
+    symbols: set[str] = set()
+    domain = data.get("domain")
+    if isinstance(domain, dict):
+        symbols.add(str(domain.get("independent_variable") or "t"))
+    else:
+        symbols.add("t")
+    index_sets = data.get("index_sets")
+    if isinstance(index_sets, dict):
+        symbols.update(str(k) for k in index_sets)
+    return symbols
+
+
 # Pint-compatible unit aliases for normalizing
 _UNIT_ALIASES = {
     "1": "dimensionless",
@@ -221,6 +294,7 @@ _UNIT_ALIASES = {
 # ``{name: expr}`` MAP (the dataclass ``table_axes``; its raw JSON key is
 # ``axes``), so they are walked separately below.
 _EXPR_STRING_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
+
 
 # Fields that BIND index/integration symbols for a node's body (esm-spec §5;
 # expr_walk.py's module docstring). A symbol introduced here is a bound
@@ -298,6 +372,8 @@ def _expression_bound_symbols(expr) -> set[str]:
     if isinstance(bindings, dict):
         for child in bindings.values():
             bound |= _expression_bound_symbols(child)
+    for bound_pair in _iter_region_bounds(expr):
+        bound |= _expression_bound_symbols(bound_pair)
     return bound
 
 
@@ -343,7 +419,31 @@ def _walk_expression_strings(expr) -> list[str]:
     if isinstance(bindings, dict):
         for child in bindings.values():
             descend(child)
+    # `makearray` REGIONS are `[[lo, hi], ...]` bound pairs per axis, and each
+    # bound is an EXPRESSION — `[[2, {op:"-", args:["N", 1]}], [1, 3]]`. A
+    # reference hidden in a region bound (the metaparameter `N` above) is a
+    # reference like any other.
+    for bound_pair in _iter_region_bounds(expr):
+        descend(bound_pair)
     return result
+
+
+def _iter_region_bounds(expr):
+    """Yield every expression nested in a ``makearray``'s ``regions``.
+
+    ``regions`` is a list (per region) of lists (per axis) of ``[lo, hi]`` pairs,
+    each of which may be a literal, a name, or an op-node.
+    """
+    regions = expr.get("regions")
+    if not isinstance(regions, list):
+        return
+    stack = list(regions)
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, (str, dict)):
+            yield item
 
 
 def _check_expression_arity(expr, errors: list[str], path: str) -> None:
@@ -376,13 +476,11 @@ def _units_compatible(u1: str, u2: str) -> bool:
     if n1 == n2:
         return True
     try:
-        ureg = _get_unit_registry()
-        q1 = ureg(n1) if n1 != "dimensionless" else ureg("dimensionless")
-        q2 = ureg(n2) if n2 != "dimensionless" else ureg("dimensionless")
-        return q1.dimensionality == q2.dimensionality
+        return _unit_dimensionality(n1) == _unit_dimensionality(n2)
     except _pint_unverifiable_errors():
         # unparseable unit (or pint unavailable): cannot verify, fall back to
-        # a plain string comparison rather than blocking.
+        # a plain string comparison rather than blocking. The unparseable string
+        # is reported once, on its own, by _check_unparseable_units.
         return n1 == n2
 
 
@@ -422,14 +520,32 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
             loader_info[vname] = vdef
         data_loaders[dname] = loader_info
 
-    # Global symbol set: all variable/species/parameter names anywhere
-    global_symbols = set(_BUILTIN_SYMBOLS)
+    # Global symbol set: the UNION of every DECLARATION site. Reference integrity
+    # (§4.9.5) is only as good as this set — a name that is genuinely declared but
+    # missing here turns the false-negative fix into a FALSE-POSITIVE rejection,
+    # which is a net loss. The sites are: every model variable/parameter, every
+    # reaction species/parameter, every data-loader variable, the symbols the
+    # DOCUMENT declares implicitly (the domain's independent variable and every
+    # index-set / coordinate name — §5.3), and a coupling edge's
+    # `config.callback_variables`, which a callback INJECTS into the target
+    # system (§4.9.5 row (k); `tests/coupling/callback_examples.esm`).
+    global_symbols = set(_BUILTIN_SYMBOLS) | _implicit_document_symbols(data)
     for m in models.values():
         global_symbols.update(m.keys())
     for rs in reaction_systems.values():
         global_symbols.update(rs.keys())
     for d in data_loaders.values():
         global_symbols.update(d.keys())
+    for c in data.get("coupling", []) or []:
+        if not isinstance(c, dict):
+            continue
+        for cv in (c.get("config") or {}).get("callback_variables") or []:
+            name = cv.get("name") if isinstance(cv, dict) else None
+            if isinstance(name, str):
+                # A callback variable may be injected under a bare or a qualified
+                # name; register both spellings' tail so either resolves.
+                global_symbols.add(name)
+                global_symbols.add(name.split(".")[-1])
 
     return {
         "models": models,
@@ -443,12 +559,26 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
 
 def _resolve_scoped_ref(ref: str, tables: dict[str, Any]) -> tuple:
     """
-    Try to resolve a 'System.var' style reference.
-    Returns (system_name, var_name, status) where status is one of:
-    - 'ok': resolved successfully
-    - 'no_system': system not found
-    - 'no_var': system found but variable not in it
-    - 'not_scoped': ref doesn't have a dot
+    Resolve a scoped reference against the document's symbol tables.
+
+    Scoped references are ARBITRARY DEPTH (esm-spec §4.6): ``System.var``,
+    ``System.Sub.var``, ``A.B.C.d``. The path walks a chain of SUBSYSTEM mounts
+    and ends at a variable. Splitting on ``"."`` and taking ``[0]`` / ``[-1]``
+    is therefore only ever right for the two-part case: for ``A.B.c`` it asks
+    whether ``c`` is a variable of ``A``, when ``c`` actually lives in ``A``'s
+    subsystem ``B``.
+
+    Only the DEPTH-2 case can be decided here. A deeper reference walks into a
+    subsystem whose contents come from another FILE, which structural validation
+    has not loaded — so it is deferred (``ok``) once its head names a real
+    system, exactly as a ref-included model is. Resolution proper happens in
+    ``resolve_subsystem_refs`` / flatten, which do have the mounted document.
+
+    Returns ``(system_name, var_name, status)`` where status is one of:
+    - ``'ok'``: resolved, or deferred to a layer that can resolve it
+    - ``'no_system'``: the HEAD of the path is not a system in this document
+    - ``'no_var'``: a depth-2 ref whose variable is not in the named system
+    - ``'not_scoped'``: the ref has no dot
     """
     if "." not in ref:
         return (None, None, "not_scoped")
@@ -460,11 +590,15 @@ def _resolve_scoped_ref(ref: str, tables: dict[str, Any]) -> tuple:
     # A model included by reference has its variables in another file not
     # available during structural validation — accept any var against it
     # (deferred to resolve_model_refs, which schema-validates the referenced
-    # file, and to coupling/flatten resolution). Mirrors the leniency for
-    # subsystem-nested (3+ part) refs.
+    # file, and to coupling/flatten resolution).
     if system in tables.get("ref_systems", set()):
         return (system, var, "ok")
-    # Check if var exists in that system
+    # Depth 3+: the tail names a symbol inside a SUBSYSTEM of `system`, not a
+    # variable of `system` itself. The subsystem's contents live in another file,
+    # so defer rather than test the tail against the wrong table.
+    if len(parts) > 2:
+        return (system, var, "ok")
+    # Depth 2 — the only case this layer can actually decide.
     if system in tables["models"]:
         if var in tables["models"][system]:
             return (system, var, "ok")
@@ -481,85 +615,334 @@ def _check_variable_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """
-    Check variable references in equations.
+    Check variable references in every EXPRESSION-BEARING field of a model.
 
     Two flavors of check:
     1. Scoped refs (Model.var): system must exist; for 2-part refs the var must exist
-       in the named system.
-    2. Bare-string refs in the RHS of D() (derivative) equations: every ref must
-       resolve to a symbol declared somewhere in the file. Plain assignment-style
-       equations are not checked because they often use coupled-in vars.
+       in the named system. Deeper refs walk subsystem mounts and are deferred (§4.6).
+    2. Bare-string refs: every ref must resolve to a symbol declared somewhere in
+       the file (or implicitly by the document — see
+       :func:`_implicit_document_symbols`).
 
-    The walker (:func:`_walk_expression_strings`) now descends the full child
-    set, so refs hidden in aggregate bodies are visible here. Index/integration
-    symbols bound by the equation's own aggregate/makearray/integral nodes are
-    collected via :func:`_expression_bound_symbols` and skipped — they are bound
-    variables, not references to declared symbols.
+    Reference integrity applies to every field that CARRIES an expression, not
+    just ``equations``. An observed variable's ``expression`` is a governing
+    definition like any other, and an undefined name inside one used to be
+    invisible — a silent FALSE NEGATIVE that no fixture pinned. The
+    expression-bearing sites are enumerated by :func:`_model_expression_sites`.
+
+    Within an expression, the walker (:func:`_walk_expression_strings`) descends
+    the full child-field set — ``args``, ``expr``, ``axes``, ``lower``, ``upper``,
+    ``filter``, ``key``, ``values``, ``bindings``, ``regions`` — so a reference
+    hidden in an aggregate body, a filter predicate, an integral bound, a Skolem
+    key or a ``makearray`` region bound is visible here. Index symbols BOUND by
+    the expression's own aggregate/makearray/integral nodes are collected via
+    :func:`_expression_bound_symbols` and skipped: they are binders, not
+    references (esm-spec §5).
     """
     global_symbols = tables["global_symbols"]
     for mname, m in data.get("models", {}).items():
-        for i, eq in enumerate(m.get("equations", [])):
-            lhs_is_derivative = isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
-            bound_symbols = _expression_bound_symbols(eq.get("lhs")) | _expression_bound_symbols(
-                eq.get("rhs")
-            )
-            for side in ("lhs", "rhs"):
-                if side not in eq:
+        subsystems = m.get("subsystems") or {}
+        for location, expr, check_bare, phrase, extra in _model_expression_sites(m, mname):
+            bound_symbols = _expression_bound_symbols(expr)
+            for ref in _walk_expression_strings(expr):
+                # `_var` is the reserved operator placeholder (spec §6.4): in an
+                # operator-style model it is substituted with each matching state
+                # variable of the target system at operator_compose time. It is
+                # never a declared symbol, so it is a valid reference at ANY
+                # nesting depth — not merely in the top-level `D(_var)` position
+                # but also nested, as in the advection idiom `grad(_var, dim)`.
+                if ref == "_var":
                     continue
-                refs = _walk_expression_strings(eq[side])
-                for ref in refs:
-                    # `_var` is the reserved operator placeholder (spec §6.4):
-                    # in an operator-style model it is substituted with each
-                    # matching state variable of the target system at
-                    # operator_compose time. It is never a declared symbol, so
-                    # it is a valid reference at ANY nesting depth — not merely
-                    # in the top-level `D(_var)` derivative position, but also
-                    # when nested inside an operator, e.g. the canonical
-                    # advection idiom `grad(_var, dim)`. Skip it so it is not
-                    # flagged as an undefined variable reference.
-                    if ref == "_var":
+                # A symbol BOUND by an aggregate/makearray/integral in this
+                # expression (a contracted index like `i`/`j`/`e`, or an
+                # integration variable) is a binder, not a reference. It is in
+                # scope inside the construct that introduces it.
+                if ref in bound_symbols:
+                    continue
+                if "." in ref:
+                    # A ref whose HEAD is a SUBSYSTEM of the current model is
+                    # subsystem-LOCAL dot-notation, not a `System.var` reference.
+                    # A pure-I/O data-loader mounted as a subsystem (RFC
+                    # pure-io-data-loaders §4.3) is consumed by the owning model's
+                    # own equations this way — `raw.elevation` for
+                    # `models.<mname>.subsystems.raw` — and flatten lowers it to
+                    # the observed `<mname>.raw.elevation`. Its target lives in the
+                    # mounted file, so it is deferred to flatten. This holds at ANY
+                    # depth (`raw.grid.elevation`), so the HEAD — not a fixed part
+                    # count — is what decides it.
+                    if ref.split(".")[0] in subsystems:
                         continue
-                    # A symbol bound by an aggregate/makearray/integral in this
-                    # equation (a contracted index like `i`/`j`/`e`, or an
-                    # integration variable) is not a declared-symbol reference.
-                    if ref in bound_symbols:
-                        continue
-                    if "." in ref:
-                        # 3+ part refs may use subsystem nesting; only check top-level system
-                        if ref.count(".") > 1:
-                            top_system = ref.split(".")[0]
-                            if top_system not in tables["all_systems"]:
-                                errors.append(
-                                    f"models/{mname}/equations[{i}]: reference '{ref}' to undefined system '{top_system}'"
-                                )
-                            continue
-                        # A 2-part ref whose first component is a SUBSYSTEM of the
-                        # current model is subsystem-LOCAL dot-notation, not a
-                        # `System.var` reference. A pure-I/O data-loader mounted as
-                        # a subsystem (RFC pure-io-data-loaders §4.3) is consumed by
-                        # the owning model's own equations this way — `raw.elevation`
-                        # for `models.<mname>.subsystems.raw` — and flatten lowers it
-                        # to the observed `<mname>.raw.elevation`. Defer it exactly as
-                        # the 3+ part subsystem-nested refs are deferred (the
-                        # subsystem's variables are resolved at flatten time).
-                        if ref.split(".")[0] in (m.get("subsystems") or {}):
-                            continue
-                        system, var, status = _resolve_scoped_ref(ref, tables)
-                        if status == "no_system":
-                            errors.append(
-                                f"models/{mname}/equations[{i}]: reference '{ref}' to undefined system '{system}'"
+                    # Arbitrary depth (§4.6): _resolve_scoped_ref decides the
+                    # depth-2 case and defers deeper ones once their head names a
+                    # real system.
+                    system, var, status = _resolve_scoped_ref(ref, tables)
+                    if status == "no_system":
+                        errors.append(
+                            f"{location}: reference '{ref}' to undefined system '{system}'"
+                        )
+                    elif status == "no_var":
+                        errors.append(
+                            f"{location}: reference '{ref}' — variable '{var}' not found "
+                            f"in system '{system}'"
+                        )
+                elif check_bare and ref not in global_symbols:
+                    # Report against the field that actually CARRIES the defect, in
+                    # the corpus-pinned message/details shape. `details.variable` is
+                    # the settled key across bindings (CONFORMANCE_SPEC row (j)).
+                    if phrase is None:
+                        errors.append(
+                            (
+                                _pointer(location),
+                                f"Variable '{ref}' referenced in equation is not declared",
+                                {"variable": ref, **extra},
                             )
-                        elif status == "no_var":
-                            errors.append(
-                                f"models/{mname}/equations[{i}]: reference '{ref}' — variable '{var}' not found in system '{system}'"
-                            )
+                        )
                     else:
-                        # Bare-string refs only checked inside derivative equations
-                        if lhs_is_derivative and side == "rhs":
-                            if ref not in global_symbols:
-                                errors.append(
-                                    f"models/{mname}/equations[{i}]: undefined variable reference '{ref}'"
-                                )
+                        errors.append(
+                            (
+                                _pointer(location),
+                                f'Variable "{ref}" referenced in {phrase} but not declared',
+                                {"variable": ref},
+                            )
+                        )
+
+
+def _model_expression_sites(m: dict[str, Any], mname: str):
+    """Every EXPRESSION-BEARING field of a model, as
+    ``(location, expression, check_bare_names, phrase)``.
+
+    This is the ONE shared traversal esm-spec §4.9.5 prescribes. Reference
+    integrity applies to every field that CARRIES an expression, not just
+    ``equations``: the walkers descended ``equations`` (and reaction ``rate``)
+    and NOTHING else, so an undefined name in any of the other nine model sites
+    was invisible — a silent FALSE NEGATIVE in every binding, pinned now by
+    ``tests/invalid/undefined_variable_in_*.esm``.
+
+    ``location`` is the slash-delimited path that :func:`_json_pointer_from_message`
+    turns into the JSON Pointer reported with the finding, so an error names the
+    field that actually carries the defect.
+
+    ``phrase`` names the site in the emitted message (``None`` for an equation,
+    which keeps its established finding shape).
+
+    ``check_bare_names`` gates the BARE-name check (scoped refs are always
+    checked). An equation's RHS is checked only when the LHS is a derivative: a
+    plain assignment-style equation is the shape an operator-composed model uses
+    for values coupled in from another system, which are not declared locally.
+    Every other site is a closed definition — every name in it must resolve.
+    """
+    for i, eq in enumerate(m.get("equations", []) or []):
+        lhs_is_derivative = isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
+        for side in ("lhs", "rhs"):
+            if side in eq:
+                yield (
+                    f"models/{mname}/equations[{i}]/{side}",
+                    eq[side],
+                    lhs_is_derivative and side == "rhs",
+                    None,
+                    {"equation_index": i, "expected_in": "variables"},
+                )
+
+    for vname, vdef in (m.get("variables") or {}).items():
+        if isinstance(vdef, dict) and vdef.get("expression") is not None:
+            yield (
+                f"models/{mname}/variables/{vname}/expression",
+                vdef["expression"],
+                True,
+                "observed variable expression",
+                {},
+            )
+
+    for vname, expr in (m.get("guesses") or {}).items():
+        yield (f"models/{mname}/guesses/{vname}", expr, True, "guesses expression", {})
+
+    for i, eq in enumerate(m.get("initialization_equations", []) or []):
+        if not isinstance(eq, dict):
+            continue
+        for side in ("lhs", "rhs"):
+            if side in eq:
+                yield (
+                    f"models/{mname}/initialization_equations[{i}]/{side}",
+                    eq[side],
+                    True,
+                    "initialization equation",
+                    {},
+                )
+
+    for i, ev in enumerate(m.get("continuous_events", []) or []):
+        if not isinstance(ev, dict):
+            continue
+        for j, cond in enumerate(ev.get("conditions", []) or []):
+            yield (
+                f"models/{mname}/continuous_events[{i}]/conditions[{j}]",
+                cond,
+                True,
+                "continuous event condition",
+                {},
+            )
+        for key in ("affects", "affect_neg"):
+            for j, aff in enumerate(ev.get(key, []) or []):
+                # A FunctionalAffect (handler_id/read_vars) carries no `rhs`.
+                if isinstance(aff, dict) and "rhs" in aff:
+                    yield (
+                        f"models/{mname}/continuous_events[{i}]/{key}[{j}]/rhs",
+                        aff["rhs"],
+                        True,
+                        "continuous event affect RHS",
+                        {},
+                    )
+
+    for i, ev in enumerate(m.get("discrete_events", []) or []):
+        if not isinstance(ev, dict):
+            continue
+        trigger = ev.get("trigger")
+        if isinstance(trigger, dict) and trigger.get("expression") is not None:
+            yield (
+                f"models/{mname}/discrete_events[{i}]/trigger/expression",
+                trigger["expression"],
+                True,
+                "discrete event trigger expression",
+                {},
+            )
+        for j, aff in enumerate(ev.get("affects", []) or []):
+            if isinstance(aff, dict) and "rhs" in aff:
+                yield (
+                    f"models/{mname}/discrete_events[{i}]/affects[{j}]/rhs",
+                    aff["rhs"],
+                    True,
+                    "discrete event affect RHS",
+                    {},
+                )
+
+    for i, t in enumerate(m.get("tests", []) or []):
+        if not isinstance(t, dict):
+            continue
+        for j, a in enumerate(t.get("assertions", []) or []):
+            if isinstance(a, dict) and a.get("reference") is not None:
+                yield (
+                    f"models/{mname}/tests[{i}]/assertions[{j}]/reference",
+                    a["reference"],
+                    True,
+                    "assertion reference expression",
+                    {},
+                )
+
+
+def _pointer(location: str) -> str:
+    """Slash/bracket location (``models/M/equations[0]/rhs``) -> JSON Pointer."""
+    return "/" + location.replace("[", "/").replace("]", "").strip("/")
+
+
+def _check_data_loader_expressions(
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+) -> None:
+    """§4.9.5: a data loader's ``unit_conversion`` is an Expression, so its free
+    symbols must resolve like any other. It was never walked, so an undefined
+    name here was invisible."""
+    global_symbols = tables["global_symbols"]
+    for lname, loader in (data.get("data_loaders") or {}).items():
+        if not isinstance(loader, dict):
+            continue
+        for vname, vdef in (loader.get("variables") or {}).items():
+            if not isinstance(vdef, dict):
+                continue
+            expr = vdef.get("unit_conversion")
+            if expr is None:
+                continue
+            bound = _expression_bound_symbols(expr)
+            for ref in _walk_expression_strings(expr):
+                if ref == "_var" or ref in bound or "." in ref:
+                    continue
+                if ref not in global_symbols:
+                    errors.append(
+                        (
+                            f"/data_loaders/{lname}/variables/{vname}/unit_conversion",
+                            f'Variable "{ref}" referenced in unit_conversion expression '
+                            f"but not declared",
+                            {"variable": ref},
+                        )
+                    )
+
+
+def _check_coupling_expressions(
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+) -> None:
+    """§4.9.5: the two Expression-bearing fields of a coupling edge — a
+    connector equation's ``expression`` and a ``variable_map``'s Expression-form
+    ``transform``. Coupling refs are FULLY QUALIFIED (§4.6), so an unresolvable
+    name here is an ``unresolved_scoped_ref``, not an ``undefined_variable``.
+    Bare names are left alone: a coupling expression may legitimately name the
+    edge's own operands, which are not document symbols.
+    """
+
+    def check(expr, pointer: str, what: str) -> None:
+        bound = _expression_bound_symbols(expr)
+        for ref in _walk_expression_strings(expr):
+            if ref == "_var" or ref in bound or "." not in ref:
+                continue
+            _system, _var, status = _resolve_scoped_ref(ref, tables)
+            if status in ("no_system", "no_var"):
+                errors.append(
+                    (
+                        "unresolved_scoped_ref",
+                        pointer,
+                        f'Variable "{ref}" referenced in {what} does not resolve',
+                        {"variable": ref},
+                    )
+                )
+
+    for i, c in enumerate(data.get("coupling", []) or []):
+        if not isinstance(c, dict):
+            continue
+        connector = c.get("connector")
+        if isinstance(connector, dict):
+            for j, eq in enumerate(connector.get("equations", []) or []):
+                if isinstance(eq, dict) and eq.get("expression") is not None:
+                    check(
+                        eq["expression"],
+                        f"/coupling/{i}/connector/equations/{j}/expression",
+                        "connector equation expression",
+                    )
+        # `transform` is a string (a named transform like "additive") OR an
+        # Expression; only the Expression form carries references.
+        transform = c.get("transform")
+        if isinstance(transform, dict):
+            check(
+                transform,
+                f"/coupling/{i}/transform",
+                "variable_map Expression transform",
+            )
+
+
+def _check_coupling_systems(
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+) -> None:
+    """A coupling entry's ``systems`` list must name systems the document
+    declares. Nothing checked it, so a coupling edge could compose against a
+    system that exists nowhere and the document still validated
+    (``tests/invalid/undefined_system.esm``).
+    """
+    all_systems = tables["all_systems"]
+    for i, c in enumerate(data.get("coupling", []) or []):
+        if not isinstance(c, dict):
+            continue
+        for name in c.get("systems", []) or []:
+            if not isinstance(name, str):
+                continue
+            # A `systems` entry may be a DOTTED path naming a SUBSYSTEM at
+            # arbitrary depth (`EmissionSources.Biogenic.Forest`, §4.6). Only the
+            # HEAD is decidable from this document — a deeper mount's target may
+            # live in a referenced file — so resolve the head and defer the rest,
+            # the same posture the variable/scoped-ref checks take.
+            head = name.split(".")[0]
+            if head not in all_systems:
+                errors.append(
+                    (
+                        f"/coupling/{i}/systems",
+                        f'Coupling entry references nonexistent system "{name}"',
+                        {"system": name},
+                    )
+                )
 
 
 def _check_coupling_references(
@@ -571,14 +954,9 @@ def _check_coupling_references(
         ref = c.get("from")
         if not isinstance(ref, str) or "." not in ref:
             continue
-        # For 3+ part refs (subsystem nesting), only verify the top-level system exists
-        if ref.count(".") > 1:
-            top_system = ref.split(".")[0]
-            if top_system not in tables["all_systems"]:
-                errors.append(
-                    f"coupling[{i}]/from: reference '{ref}' to undefined system '{top_system}'"
-                )
-            continue
+        # Scoped refs are ARBITRARY DEPTH (§4.6). _resolve_scoped_ref decides the
+        # depth-2 case and defers deeper ones (their target lives in a mounted
+        # file) once their head names a real system.
         system, var, status = _resolve_scoped_ref(ref, tables)
         if status == "no_system":
             errors.append(f"coupling[{i}]/from: reference '{ref}' to undefined system '{system}'")
@@ -720,22 +1098,46 @@ def _collect_var_units(tables: dict[str, Any]) -> dict[str, str]:
     return var_units
 
 
-def _is_derivative_compatible(lhs_var_units: str, rhs_units: str) -> bool:
-    """
-    Check whether rhs_units could be the time derivative of lhs_var_units.
-    True if (rhs * second) is dimensionally equal to lhs_var.
-    Also accepts the case where both are dimensionless (decay-style equations).
+def _is_derivative_compatible(
+    lhs_var_units: str, rhs_units: str, wrt_units: str | None = None
+) -> bool:
+    """Can ``rhs_units`` be the derivative of ``lhs_var_units`` w.r.t. the
+    independent variable?
+
+    When the independent variable IS declared (``wrt_units``), the answer is
+    exact: ``dim(rhs) == dim(state)/dim(wrt)``.
+
+    When it is NOT declared — the ordinary case, since ``t`` is rarely given
+    units — its dimension is UNKNOWN, and assuming seconds is a fabrication.
+    This function used to do exactly that (``(rhs * second) / lhs`` must be
+    dimensionless), which rejects a perfectly ordinary acceleration equation
+    (``x`` in ``m``, RHS in ``m/s^2``: the ratio is ``s^2``, a pure power of
+    time, so *some* time unit reconciles them — and the fabricated one-second
+    denominator says otherwise). Under a hard-error policy that is a false
+    rejection.
+
+    The defensible test is the one Go uses (``derivativeTimeMismatch``): the
+    time exponent is free, but the NON-time dimensions cannot move. If
+    ``dim(state)/dim(rhs)`` has any nonzero exponent outside ``[time]``, no
+    choice of time unit reconciles the two sides and the equation is provably
+    wrong. That still rejects what the invalid corpus pins (an ``m`` state
+    assigned a ``kg`` expression) while accepting ``D(x) = -x`` and the
+    acceleration case above.
     """
     n_lhs = _normalize_unit(lhs_var_units)
     n_rhs = _normalize_unit(rhs_units)
-    if n_lhs == "dimensionless" and n_rhs == "dimensionless":
+    if n_lhs == n_rhs == "dimensionless":
         return True
     try:
-        ureg = _get_unit_registry()
-        lhs_q = ureg(n_lhs)
-        rhs_q = ureg(n_rhs)
-        ratio = (rhs_q * ureg("second")) / lhs_q
-        return ratio.dimensionless
+        lhs_dim = _unit_dimensionality(n_lhs)
+        rhs_dim = _unit_dimensionality(n_rhs)
+        if wrt_units:
+            return rhs_dim == lhs_dim / _unit_dimensionality(_normalize_unit(wrt_units))
+        # Undeclared independent variable: only the time exponent is free.
+        ratio = lhs_dim / rhs_dim
+        # A pint dimensionality container drops zero exponents, so any surviving
+        # key other than [time] is a dimension no time unit can cancel.
+        return set(ratio.keys()) <= {"[time]"}
     except _pint_unverifiable_errors():
         # unparseable unit (or pint unavailable): cannot verify, do not block.
         return True
@@ -749,21 +1151,45 @@ def _is_dimensionless_unit(unit: str | None) -> bool:
     if normalized in ("dimensionless", "1", ""):
         return True
     try:
-        ureg = _get_unit_registry()
-        return ureg(normalized).dimensionless
+        return not _unit_dimensionality(normalized)
     except _pint_unverifiable_errors():
         # unparseable unit (or pint unavailable): cannot verify, treat as
         # not-dimensionless (do not assert dimensionlessness we can't confirm).
+        # The unparseable string is reported separately by
+        # _check_unparseable_units, so nothing is lost by staying silent here.
+        return False
+
+
+def _is_angle_unit(unit: str | None) -> bool:
+    """Return True if a unit string denotes an ANGLE (the `rad` axis).
+
+    `rad` is one of the eight canonical dimension axes (esm-spec §4.8.1), so
+    `rad`/`deg` are NOT dimensionless — which is precisely why a circular
+    function's argument needs its own predicate rather than reusing
+    :func:`_is_dimensionless_unit`.
+    """
+    if unit is None:
+        return False
+    try:
+        return _unit_dimensionality(_normalize_unit(unit)) == _unit_dimensionality("rad")
+    except _pint_unverifiable_errors():
         return False
 
 
 def _walk_expression_for_exponent_checks(
     expr: Any,
     var_units: dict[str, str],
-    path: str,
-    errors: list[str],
+    node_path: str,
+    report_path: str,
+    variable: str | None,
+    errors: list,
 ) -> None:
-    """Walk an expression tree and flag any '^' whose exponent has dimensions."""
+    """Walk an expression tree and flag any '^' whose exponent has dimensions.
+
+    ``node_path`` locates the visited node (used only for recursion bookkeeping);
+    ``report_path`` is the JSON Pointer the finding is REPORTED at — the owning
+    variable or equation, which is what the shared corpus pins.
+    """
     if not isinstance(expr, dict):
         return
     op = expr.get("op")
@@ -775,14 +1201,27 @@ def _walk_expression_for_exponent_checks(
             if exp_units is not None and not _is_dimensionless_unit(exp_units):
                 base_units = var_units.get(base_arg) if isinstance(base_arg, str) else None
                 errors.append(
-                    f"{path}: exponent must be dimensionless, got '{exp_units}'"
-                    + (f" for base with units '{base_units}'" if base_units else "")
+                    (
+                        report_path,
+                        f"Exponent must be dimensionless, got '{exp_units}'"
+                        + (f" for base with units '{base_units}'" if base_units else ""),
+                        {
+                            "operation": "exponentiation",
+                            "base_units": base_units,
+                            "exponent_units": exp_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
                 )
     for i, arg in enumerate(args):
-        _walk_expression_for_exponent_checks(arg, var_units, f"{path}/args[{i}]", errors)
+        _walk_expression_for_exponent_checks(
+            arg, var_units, f"{node_path}/args[{i}]", report_path, variable, errors
+        )
     # Also walk arrayop sub-expressions that live outside args.
     if "expr" in expr:
-        _walk_expression_for_exponent_checks(expr["expr"], var_units, f"{path}/expr", errors)
+        _walk_expression_for_exponent_checks(
+            expr["expr"], var_units, f"{node_path}/expr", report_path, variable, errors
+        )
 
 
 def _check_default_units_consistency(data: dict[str, Any], errors: list[str]) -> None:
@@ -795,16 +1234,15 @@ def _check_default_units_consistency(data: dict[str, Any], errors: list[str]) ->
     no-op: a default value is presumed to share the declared units.
     """
     try:
-        ureg = _get_unit_registry()
+        _get_unit_registry()
+        from .units import parse_unit
     except ImportError:
         # pint not installed: cannot verify units, do not block.
         return
 
     def units_match(declared: str, provided: str) -> bool:
         try:
-            declared_u = ureg(_normalize_unit(declared)).units
-            provided_u = ureg(_normalize_unit(provided)).units
-            return declared_u == provided_u
+            return parse_unit(_normalize_unit(declared)) == parse_unit(_normalize_unit(provided))
         except _pint_unverifiable_errors():
             # unparseable unit: cannot verify, fall back to a string compare on
             # the normalized form rather than blocking.
@@ -868,7 +1306,18 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
         # pint not installed: cannot verify units, do not block.
         return
 
+    from .units import has_affine_unit
+
     def linear_factor(from_unit: str, to_unit: str):
+        # An affine conversion (degC -> K) has no single multiplicative factor.
+        # The ESM registry does not model the offset at all (esm-spec §4.8.1:
+        # degC carries the Kelvin dimension and its scale, never its zero
+        # point), so probing `Quantity(0, degC).to(K)` now returns 0.0 and can
+        # no longer detect affineness on its own — the unit names must be
+        # checked directly, or a `<factor> * T_degC` expression assigned to a
+        # kelvin variable would be "checked" against a fabricated factor of 1.
+        if has_affine_unit(from_unit) or has_affine_unit(to_unit):
+            return None
         try:
             q0 = ureg.Quantity(0.0, from_unit).to(to_unit).magnitude
             q1 = ureg.Quantity(1.0, from_unit).to(to_unit).magnitude
@@ -876,7 +1325,7 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
             # unparseable or inconvertible unit: cannot verify, skip.
             return None
         if abs(q0) > 1e-12:
-            return None  # affine (e.g., degC -> K)
+            return None  # affine
         return q1
 
     for mname, m in data.get("models", {}).items():
@@ -912,7 +1361,7 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
             if n_src == n_lhs:
                 continue  # identical — no conversion to check
             try:
-                if ureg(n_src).dimensionality != ureg(n_lhs).dimensionality:
+                if _unit_dimensionality(n_src) != _unit_dimensionality(n_lhs):
                     continue  # dimensional mismatch — handled by other checks
             except _pint_unverifiable_errors():
                 # unparseable unit: cannot verify, skip.
@@ -1002,9 +1451,224 @@ def _check_physical_constant_units(data: dict[str, Any], errors: list[str]) -> N
             )
 
 
-def _check_unit_consistency(
-    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
+#: Elementary functions whose dimensional ARGUMENT is a hard STRUCTURAL error
+#: (it fails the file), keyed op -> (operation label, human-readable subject) so
+#: the diagnostic names the operation the way the cross-language corpus does
+#: (``tests/invalid/expected_errors.json``: "Logarithm argument must be
+#: dimensionless…", "Exponential argument must be dimensionless…").
+#:
+#: This is the FULL mathematical rule: a transcendental function is defined by a
+#: power series, so every term of ``1 + x + x^2/2 + …`` must be addable, which
+#: forces ``x`` to be dimensionless. ``sqrt`` is deliberately absent — it halves
+#: a dimension rather than requiring none.
+#:
+#: The set was previously narrowed to ``{ln, exp}`` because the shared corpus
+#: contradicted itself — ``tests/invalid/units_invalid_logarithm.esm`` pinned
+#: ``ln(mass)`` as INVALID while ``tests/valid/units_dimensional_analysis.esm``
+#: pinned ``S = n*R*log(V)`` (V in m^3) as VALID. That contradiction is a defect
+#: in the VALID fixture (entropy is ``log(V/V0)``, a ratio) and is being repaired
+#: in the corpus, so the checker now states the rule it actually believes.
+#: Functions whose ARGUMENT must be strictly dimensionless.
+#:
+#: The CIRCULAR functions (`sin`/`cos`/`tan`) are deliberately ABSENT: `rad` is a
+#: canonical dimension axis (esm-spec §4.8.1), so their argument is an ANGLE, and
+#: requiring it to be dimensionless falsely rejects `cos(gamma)` with `gamma` in
+#: `rad` — i.e. every line of the shipped `lib/solar.esm`. Their (looser) rule
+#: lives in ``units.UnitValidator``, which can actually compute the dimension of
+#: a compound argument; this walker only inspects a BARE declared variable, so
+#: admitting angles here would be its whole contribution anyway.
+#:
+#: The INVERSE circular functions (`asin`/`acos`/`atan`) do take a dimensionless
+#: argument, so they stay.
+_DIMENSIONLESS_ARG_FUNCS: dict[str, tuple[str, str]] = {
+    "ln": ("logarithm", "Logarithm"),
+    "log": ("logarithm", "Logarithm"),
+    "log10": ("logarithm", "Logarithm"),
+    "exp": ("exponential", "Exponential"),
+    "asin": ("trigonometric", "Inverse trigonometric function"),
+    "acos": ("trigonometric", "Inverse trigonometric function"),
+    "atan": ("trigonometric", "Inverse trigonometric function"),
+    "sinh": ("hyperbolic", "Hyperbolic function"),
+    "cosh": ("hyperbolic", "Hyperbolic function"),
+    "tanh": ("hyperbolic", "Hyperbolic function"),
+    "asinh": ("hyperbolic", "Inverse hyperbolic function"),
+    "acosh": ("hyperbolic", "Inverse hyperbolic function"),
+    "atanh": ("hyperbolic", "Inverse hyperbolic function"),
+}
+
+#: Circular functions: the argument is an ANGLE or dimensionless. Flagged here
+#: only when a bare declared variable is provably NEITHER (e.g. `sin(mass)`).
+_CIRCULAR_ARG_FUNCS: dict[str, tuple[str, str]] = {
+    "sin": ("trigonometric", "Trigonometric function"),
+    "cos": ("trigonometric", "Trigonometric function"),
+    "tan": ("trigonometric", "Trigonometric function"),
+}
+
+
+#: JSON-Pointer templates for every place a DECLARED unit string can appear,
+#: as ``(container-key-path, pointer-prefix)``. Mirrors Go's BuildUnitEnv
+#: coverage (model variables + reaction-system species + parameters).
+_DECLARED_UNIT_SITES = (
+    ("models", "variables"),
+    ("reaction_systems", "species"),
+    ("reaction_systems", "parameters"),
+)
+
+
+def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
+    """Flag every DECLARED unit string that does not denote a real unit.
+
+    This is a HARD ERROR, not a warning. The severity follows from what the
+    finding means: ``"not_a_unit"`` or ``"1/time"`` in a ``units`` field is a
+    defect in the FILE — the declaration is simply false — whereas "I cannot
+    determine this dimension" (a symbolic exponent, an op with no dimensional
+    rule, an undeclared variable) is a statement about the CHECKER and stays a
+    warning. Downgrading the former to a warning means a document can name a
+    unit that does not exist and still be pronounced valid, which is exactly the
+    hole the 2026-07-14 audit found.
+
+    Carries its OWN code, ``unit_parse_error`` — NOT ``unit_inconsistency``. The
+    two are different findings and the contract keeps them apart (esm-spec §4.8.4):
+
+      * ``unit_parse_error``   — the unit STRING is unreadable or unreal.
+      * ``unit_inconsistency`` — the unit string is fine and the DIMENSIONS
+                                 provably disagree.
+
+    Collapsing them loses the distinction that tells an author whether to fix a
+    spelling or fix the physics.
+
+    Reported once per declaration site, at the pointer of the DECLARATION (not of
+    its ``units`` member — ``/models/M/variables/c``, as the corpus pins). The
+    dimensional helpers all treat an unparseable unit as "unverifiable" (see
+    ``_pint_unverifiable_errors``), so a single bad string yields exactly one
+    finding rather than an avalanche of derived mismatches.
+    """
+    try:
+        from .units import UnparseableUnitError, parse_unit
+    except ImportError:
+        # pint not installed: cannot verify units, do not block.
+        return
+
+    def check(pointer: str, name: str, units: Any) -> None:
+        if not isinstance(units, str) or not units.strip():
+            return
+        try:
+            parse_unit(units)
+        except UnparseableUnitError:
+            errors.append(
+                (
+                    pointer,
+                    f"Unit string '{units}' is not a recognised unit",
+                    {"variable": name, "units": units},
+                )
+            )
+        except ImportError:
+            return
+
+    for container, member in _DECLARED_UNIT_SITES:
+        for sys_name, system in (data.get(container) or {}).items():
+            if not isinstance(system, dict):
+                continue
+            for name, definition in (system.get(member) or {}).items():
+                if not isinstance(definition, dict):
+                    continue
+                base = f"/{container}/{sys_name}/{member}/{name}"
+                check(base, name, definition.get("units"))
+                check(base, name, definition.get("default_units"))
+
+
+def _json_pointer_from_message(msg: str) -> str:
+    """Recover a JSON-Pointer path from a legacy ``"a/b/c: message"`` finding.
+
+    The raw structural checks have always prefixed their prose with a
+    slash-delimited location (``models/M/variables/v: ...``,
+    ``models/M/equations[0]: ...``). This turns that prefix into the
+    JSON-Pointer form the shared corpus pins (``/models/M/equations/0``) so
+    every legacy check gets a usable path for free. Returns ``"$"`` when the
+    message carries no recognizable location.
+    """
+    head = msg.split(": ", 1)[0].strip()
+    if not head or "/" not in head or " " in head:
+        return "$"
+    # `equations[0]` -> `equations/0`
+    head = head.replace("[", "/").replace("]", "")
+    return "/" + head.strip("/")
+
+
+def _walk_expression_for_dimensionless_arg_checks(
+    expr: Any,
+    var_units: dict[str, str],
+    node_path: str,
+    report_path: str,
+    variable: str | None,
+    errors: list,
 ) -> None:
+    """Flag ``log``/``exp``/``sin``/… applied to a DIMENSIONAL argument.
+
+    Conservative by construction: only a bare declared-variable argument is
+    checked. A numeric literal is dimension-polymorphic in this format (the
+    valid corpus writes Arrhenius as ``exp(-1370 / T)``, where the literal
+    carries kelvin), and a compound subtree is left to the dimensional engine
+    in ``units.py``, so neither is flagged here.
+    """
+    if not isinstance(expr, dict):
+        return
+    op = expr.get("op")
+    args = expr.get("args", []) or []
+    if op in _DIMENSIONLESS_ARG_FUNCS and len(args) >= 1:
+        arg = args[0]
+        if isinstance(arg, str):
+            arg_units = var_units.get(arg)
+            if arg_units is not None and not _is_dimensionless_unit(arg_units):
+                operation, subject = _DIMENSIONLESS_ARG_FUNCS[op]
+                errors.append(
+                    (
+                        report_path,
+                        f"{subject} argument must be dimensionless, got units '{arg_units}'",
+                        {
+                            "operation": operation,
+                            "function": op,
+                            "argument_units": arg_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
+                )
+    elif op in _CIRCULAR_ARG_FUNCS and len(args) >= 1:
+        # sin/cos/tan accept an ANGLE (`rad`, `deg`) or a dimensionless number;
+        # anything else (`sin(mass)`) is a provable inconsistency.
+        arg = args[0]
+        if isinstance(arg, str):
+            arg_units = var_units.get(arg)
+            if (
+                arg_units is not None
+                and not _is_dimensionless_unit(arg_units)
+                and not _is_angle_unit(arg_units)
+            ):
+                operation, subject = _CIRCULAR_ARG_FUNCS[op]
+                errors.append(
+                    (
+                        report_path,
+                        f"{subject} argument must be an angle or dimensionless, "
+                        f"got units '{arg_units}'",
+                        {
+                            "operation": operation,
+                            "function": op,
+                            "argument_units": arg_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
+                )
+    for i, arg in enumerate(args):
+        _walk_expression_for_dimensionless_arg_checks(
+            arg, var_units, f"{node_path}/args[{i}]", report_path, variable, errors
+        )
+    if "expr" in expr:
+        _walk_expression_for_dimensionless_arg_checks(
+            expr["expr"], var_units, f"{node_path}/expr", report_path, variable, errors
+        )
+
+
+def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors: list) -> None:
     """
     Check unit compatibility in equations.
 
@@ -1013,8 +1677,13 @@ def _check_unit_consistency(
        clearly incompatible with x/time (e.g., velocity-rate set to mass).
     2. Observed variable expressions whose top-level + or - has incompatible operands.
     3. '^' operators whose right operand has non-dimensionless units.
+    4. log/exp/trig/hyperbolic applied to a dimensional bare variable.
 
-    (A former check #4 for grad/div/laplacian spatial-coordinate units was
+    Findings are emitted as ``(json_pointer, message, details)`` triples so the
+    ``unit_inconsistency`` code lands at the path
+    ``tests/invalid/expected_errors.json`` pins for it.
+
+    (A former check for grad/div/laplacian spatial-coordinate units was
     removed with the v0.8.0 geometry rewrite: it read the deleted
     ``Domain.spatial`` / per-model ``domain`` / top-level ``domains`` schema
     constructs and could never fire.)
@@ -1026,6 +1695,7 @@ def _check_unit_consistency(
         for vname, vdef in m.get("variables", {}).items():
             if vdef.get("type") == "observed" and "expression" in vdef:
                 expr = vdef["expression"]
+                var_pointer = f"/models/{mname}/variables/{vname}"
                 if isinstance(expr, dict) and expr.get("op") in ("+", "-"):
                     sub_units = []
                     for arg in expr.get("args", []):
@@ -1036,21 +1706,62 @@ def _check_unit_consistency(
                         ref = non_none[0]
                         for u in non_none[1:]:
                             if not _units_compatible(ref, u):
+                                op_name = "addition" if expr.get("op") == "+" else "subtraction"
+                                verb = "add" if expr.get("op") == "+" else "subtract"
                                 errors.append(
-                                    f"models/{mname}/variables/{vname}: expression has incompatible units in addition/subtraction"
+                                    (
+                                        var_pointer,
+                                        f"Cannot {verb} quantities with different units: "
+                                        f"'{ref}' {expr.get('op')} '{u}'",
+                                        {
+                                            "operation": op_name,
+                                            "left_units": ref,
+                                            "right_units": u,
+                                            "variable": vname,
+                                        },
+                                    )
                                 )
                                 break
                 # Check '^' exponents anywhere within the observed expression tree
                 _walk_expression_for_exponent_checks(
-                    expr, var_units, f"models/{mname}/variables/{vname}/expression", errors
+                    expr,
+                    var_units,
+                    f"models/{mname}/variables/{vname}/expression",
+                    var_pointer,
+                    vname,
+                    errors,
+                )
+                # log/exp/trig applied to a dimensional argument (esm-spec §4.2:
+                # the argument of a transcendental function is dimensionless).
+                _walk_expression_for_dimensionless_arg_checks(
+                    expr,
+                    var_units,
+                    f"models/{mname}/variables/{vname}/expression",
+                    var_pointer,
+                    vname,
+                    errors,
                 )
 
-        # Check '^' exponents in equation rhs/lhs expressions as well
+        # Check '^' exponents and transcendental arguments in equation sides too.
         for ei, eq in enumerate(m.get("equations", [])):
+            eq_pointer = f"/models/{mname}/equations/{ei}"
             for side in ("lhs", "rhs"):
                 if side in eq:
                     _walk_expression_for_exponent_checks(
-                        eq[side], var_units, f"models/{mname}/equations[{ei}]/{side}", errors
+                        eq[side],
+                        var_units,
+                        f"models/{mname}/equations[{ei}]/{side}",
+                        eq_pointer,
+                        None,
+                        errors,
+                    )
+                    _walk_expression_for_dimensionless_arg_checks(
+                        eq[side],
+                        var_units,
+                        f"models/{mname}/equations[{ei}]/{side}",
+                        eq_pointer,
+                        None,
+                        errors,
                     )
 
         # Equations: only check D(x)/dt = bare_var case
@@ -1070,9 +1781,23 @@ def _check_unit_consistency(
             rhs_units = var_units.get(rhs)
             if not rhs_units:
                 continue
-            if not _is_derivative_compatible(lhs_var_units, rhs_units):
+            wrt = lhs.get("wrt") or "t"
+            # `t` is almost never declared; when it IS, its units make the
+            # comparison exact instead of "only the time exponent is free".
+            if not _is_derivative_compatible(lhs_var_units, rhs_units, var_units.get(wrt)):
                 errors.append(
-                    f"models/{mname}/equations[{i}]: rhs '{rhs}' units '{rhs_units}' incompatible with time derivative of '{lhs_var_units}'"
+                    (
+                        f"/models/{mname}/equations/{i}",
+                        f"Derivative d({inner})/d{wrt} is incompatible with the units of "
+                        f"'{rhs}': '{rhs_units}' is not the time derivative of '{lhs_var_units}'",
+                        {
+                            "derivative_variable": inner,
+                            "derivative_variable_units": lhs_var_units,
+                            "wrt_variable": wrt,
+                            "actual_units": rhs_units,
+                            "equation_index": i,
+                        },
+                    )
                 )
 
 
@@ -1241,13 +1966,37 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     ``str()`` is the same collapsed prose blob as before.
     """
     findings: list[tuple[str, str]] = []
+    records: list[dict] = []
 
     def collect(code: str, run) -> None:
-        """Run ``run(sub)`` (a check that appends prose messages to ``sub``) and
-        tag every message it produces with ``code``, preserving order."""
-        sub: list[str] = []
+        """Run ``run(sub)`` and tag everything it produced with ``code``.
+
+        A check appends either a bare prose message (legacy form — the
+        JSON-Pointer path is then recovered from the conventional
+        ``"a/b/c: message"`` prefix), an explicit
+        ``(json_pointer, message, details)`` triple, or a
+        ``(code, json_pointer, message, details)`` 4-tuple that OVERRIDES the
+        collect-level code. The override exists because one pass may legitimately
+        emit findings under different codes: the §4.9.5 reference-integrity walk
+        reports a bare undefined name as ``undefined_variable`` but an
+        unresolvable *scoped* (``System.var``) ref in a coupling expression as
+        ``unresolved_scoped_ref``.
+        """
+        sub: list = []
         run(sub)
-        findings.extend((code, msg) for msg in sub)
+        for item in sub:
+            item_code = code
+            if isinstance(item, tuple):
+                if len(item) == 4:
+                    item_code, path, msg, details = item
+                else:
+                    path, msg, details = item
+            else:
+                msg = item
+                path = _json_pointer_from_message(msg)
+                details = {}
+            findings.append((item_code, msg))
+            records.append({"code": item_code, "path": path, "message": msg, "details": details})
 
     # Operator arity check (walk all expressions)
     def walk_for_arity(errors, obj, path):
@@ -1265,8 +2014,17 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
 
     tables = _build_symbol_tables(data)
 
-    collect("undefined_reference", lambda sub: _check_variable_references(data, tables, sub))
-    collect("undefined_reference", lambda sub: _check_coupling_references(data, tables, sub))
+    # `undefined_variable` (NOT `undefined_reference`): the corpus pins
+    # `undefined_variable` and Python was the only binding spelling it otherwise
+    # — a cross-language conformance gap, not a cosmetic one.
+    collect("undefined_variable", lambda sub: _check_variable_references(data, tables, sub))
+    collect("undefined_variable", lambda sub: _check_coupling_references(data, tables, sub))
+    # §4.9.5: reference integrity applies to EVERY expression-bearing field —
+    # including the two that live outside `models`: a data loader's
+    # `unit_conversion` and a coupling edge's connector/transform expressions.
+    collect("undefined_variable", lambda sub: _check_data_loader_expressions(data, tables, sub))
+    collect("unresolved_scoped_ref", lambda sub: _check_coupling_expressions(data, tables, sub))
+    collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
     collect("circular_reference", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_loader_config", lambda sub: _check_data_loader_variables(data, sub))
     collect("invalid_discrete_param", lambda sub: _check_discrete_parameters(data, sub))
@@ -1274,6 +2032,10 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
     # Subsystem ref existence/parse is checked by resolve_subsystem_refs after
     # structural validation, which raises SubsystemRefError with richer context.
+    # An unreal unit STRING and a provable dimensional MISMATCH are different
+    # findings with different codes (esm-spec §4.8.4) — the first tells the author
+    # to fix a spelling, the second to fix the physics.
+    collect("unit_parse_error", lambda sub: _check_unparseable_units(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))
@@ -1302,4 +2064,4 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
         blob = "Structural validation failed:\n" + "\n".join(
             f"  - {msg}" for _code, msg in findings
         )
-        raise _structural_validation_error_cls()(blob, findings=findings)
+        raise _structural_validation_error_cls()(blob, findings=findings, records=records)

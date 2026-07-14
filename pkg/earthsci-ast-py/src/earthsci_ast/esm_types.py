@@ -911,6 +911,16 @@ class EsmFile:
     # aggregate range specs of the form {"from": <name>} and from variable
     # ``shape`` lists. Moved here from ``Model`` in v0.8.0.
     index_sets: dict[str, Any] = field(default_factory=dict)
+    # Top-level DECLARATIONS (esm-spec §9.7.1), peers of `index_sets`. Option A
+    # expands `apply_expression_template` CALL SITES; it does NOT delete these
+    # declarations (§9.6.4 rule 5). They survive `parse -> emit` verbatim, which
+    # is what makes a pure TEMPLATE-LIBRARY file — one carrying only these — a
+    # representable document kind: dropping them emitted `{esm, metadata,
+    # index_sets}`, which carries none of the five top-level payload keys and so
+    # fails the schema's top-level `anyOf`. The file was legal on disk and
+    # illegal the moment it was loaded and re-emitted.
+    expression_templates: dict[str, Any] = field(default_factory=dict)
+    metaparameters: dict[str, Any] = field(default_factory=dict)
 
     @property
     def esm(self) -> str:

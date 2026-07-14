@@ -52,6 +52,7 @@ This module imports only the standard library, so it is a true leaf: any module
 through the :mod:`earthsci_ast.diagnostics` re-export shim) can import it
 without creating an import cycle.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -101,6 +102,11 @@ class ErrorCode(Enum):
     UNDECLARED_PARAMETER = "undeclared_parameter"
     UNDECLARED_RATE_VARIABLE = "undeclared_rate_variable"
     INVALID_RATE_EXPRESSION = "invalid_rate_expression"
+    # The two unit findings are DISTINCT (esm-spec §4.8.4): `unit_parse_error` is
+    # an unreadable/unreal unit STRING, `unit_inconsistency` is a provable
+    # DIMENSIONAL mismatch between strings that both parse. One tells the author
+    # to fix a spelling, the other to fix the physics.
+    UNIT_PARSE_ERROR = "unit_parse_error"
     UNIT_INCONSISTENCY = "unit_inconsistency"
     UNDECLARED_READ_PARAMETER = "undeclared_read_parameter"
     UNDECLARED_MODIFIED_PARAMETER = "undeclared_modified_parameter"

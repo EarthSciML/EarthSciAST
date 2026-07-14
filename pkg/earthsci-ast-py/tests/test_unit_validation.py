@@ -10,10 +10,13 @@ This module provides comprehensive tests for:
 - Coupling scenarios with dimensional consistency
 """
 
+import json
+
 import pytest
-from conftest import VALID_DIR
+from conftest import CORPUS_UNIT_DEFECTS, VALID_DIR
 from pint import UnitRegistry, DimensionalityError
 from earthsci_ast import load
+from earthsci_ast.validation import validate
 from earthsci_ast.esm_types import (
     ModelVariable,
     Parameter,
@@ -22,8 +25,13 @@ from earthsci_ast.esm_types import (
     ReactionSystem,
     Reaction,
     Equation,
+    ExprNode,
 )
-from earthsci_ast.units import UnitValidator, UnitValidationResult
+from earthsci_ast.units import (
+    UnitValidator,
+    UnitValidationResult,
+    DimensionalMismatchError,
+)
 
 
 # Initialize unit registry for testing
@@ -534,12 +542,16 @@ def units_fixtures_dir():
 @pytest.mark.parametrize("fixture_name", UNITS_FIXTURE_NAMES)
 class TestCrossBindingUnitsFixtures:
     def test_fixture_loads(self, units_fixtures_dir, fixture_name):
+        if fixture_name in CORPUS_UNIT_DEFECTS:
+            pytest.skip(f"{fixture_name}: {CORPUS_UNIT_DEFECTS[fixture_name]}")
         path = units_fixtures_dir / fixture_name
         assert path.is_file(), f"missing fixture {path}"
         esm = load(path.read_text())
         assert esm.models, f"{fixture_name}: no models loaded"
 
     def test_unit_validator_runs(self, units_fixtures_dir, fixture_name):
+        if fixture_name in CORPUS_UNIT_DEFECTS:
+            pytest.skip(f"{fixture_name}: {CORPUS_UNIT_DEFECTS[fixture_name]}")
         path = units_fixtures_dir / fixture_name
         esm = load(path.read_text())
         validator = UnitValidator()
@@ -591,65 +603,639 @@ class TestEsmSpecificUnitsStandard:
         assert self.ureg.Quantity(1.0, "pptv").to("ppt").magnitude == pytest.approx(1.0)
 
     def test_dobson_is_areal_number_density(self):
-        # Standard: 1 Dobson = 2.6867e20 molec/m^2 = 2.6867e16 molec/cm^2.
-        # NOT dimensionless — carries `molecule / length^2`.
+        # Standard: 1 Dobson = 2.6867e20 molec/m^2 = 2.6867e16 molec/cm^2, with
+        # dimension [length]^-2 — NOT dimensionless, and NOT [substance]/area:
+        # `molec` is a dimensionless COUNT atom, so an areal molecule density is
+        # a pure inverse area (units-standard.md §"Dobson unit").
         dobson = self.ureg.Quantity(1.0, "Dobson")
-        as_molec_cm2 = dobson.to("molecule / cm**2")
-        assert as_molec_cm2.magnitude == pytest.approx(2.6867e16, rel=1e-6)
+        assert dobson.dimensionality == self.ureg.Quantity(1.0, "1/m**2").dimensionality
+        assert dobson.to("1 / cm**2").magnitude == pytest.approx(2.6867e16, rel=1e-6)
+        assert self.ureg.Quantity(1.0, "DU").to("Dobson").magnitude == pytest.approx(1.0)
 
-    def test_molec_alias_matches_molecule(self):
-        # `molec` is the schema-doc spelling of pint's `molecule`. Identity
-        # must hold so `molec/cm^3` and `molecule/cm^3` parse identically.
-        a = self.ureg.Quantity(1.0, "molec / cm**3")
-        b = self.ureg.Quantity(1.0, "molecule / cm**3")
-        assert a.dimensionality == b.dimensionality
-        assert a.to(b.units).magnitude == pytest.approx(1.0)
+    def test_molec_is_a_dimensionless_count(self):
+        # `molec` is a dimensionless count atom, so `molec/cm^3` (number density)
+        # is [length]^-3 (units-standard.md §"Molecule count atom").
+        #
+        # Vanilla pint disagrees: it aliases `molec` to `particle` (= 1/N_A mol),
+        # giving `molec/cm^3` a [substance]/[length]^3 dimension. The ESM registry
+        # overrides that, otherwise Python alone would type every atmospheric
+        # number density differently from Go/TS/Rust/Julia.
+        dimensionless = self.ureg.dimensionless.dimensionality
+        assert self.ureg.Quantity(1.0, "molec").dimensionality == dimensionless
+        assert (
+            self.ureg.Quantity(1.0, "molec / cm**3").dimensionality
+            == self.ureg.Quantity(1.0, "1 / cm**3").dimensionality
+        )
+        assert (
+            self.ureg.Quantity(1.0, "cm**3 / molec / s").dimensionality
+            == self.ureg.Quantity(1.0, "cm**3 / s").dimensionality
+        )
+
+    def test_count_nouns_are_dimensionless(self):
+        # Counts of discrete things carry no physical dimension. `units` is the
+        # trap: pint has no unit by that name, so its SI-prefix mechanism reads it
+        # as `u` + `nit` = MICRO-NIT, a LUMINANCE — which silently gave the
+        # corpus's clinical `units/L` and `units/s` a [luminosity] dimension.
+        dimensionless = self.ureg.dimensionless.dimensionality
+        for name in ("molec", "individuals", "vehicles", "units", "count"):
+            assert self.ureg.Quantity(1.0, name).dimensionality == dimensionless, (
+                f"{name} must be a dimensionless count noun"
+            )
+        assert (
+            self.ureg.Quantity(1.0, "units / L").dimensionality
+            == self.ureg.Quantity(1.0, "1 / L").dimensionality
+        )
+
+    def test_contract_spellings_resolve(self):
+        # Symbols the shared contract requires (esm-spec §4.8.1).
+        assert self.ureg.Quantity(1.0, "Torr").to("Pa").magnitude == pytest.approx(
+            133.322, rel=1e-4
+        )
+        assert self.ureg.Quantity(1.0, "individuals / km**2").dimensionality == (
+            self.ureg.Quantity(1.0, "1 / km**2").dimensionality
+        )
+        assert self.ureg.Quantity(1.0, "Ohm").dimensionality == (
+            self.ureg.Quantity(1.0, "V / A").dimensionality
+        )
+
+    def test_registry_is_closed_and_has_no_prefix_mechanism(self):
+        """The registry is EXACTLY the §4.8.1 table — a flat, exact-match set.
+
+        This is the whole narrowing, and it is what the other assertions in this
+        class depend on. pint's default registry carries ~1050 names plus an
+        SI-prefix mechanism; under the §4.8.4 hard-error severity every one of
+        those extra names is a way for a typo (or a species tag) to acquire a
+        plausible-but-wrong dimension instead of being rejected.
+        """
+        from earthsci_ast.units import UnparseableUnitError, parse_unit
+
+        # pint's long-form / imperial / constant names are NOT in the contract.
+        for name in ("meter/second", "kelvin", "celsius", "inch", "pound", "liter", "joule", "nit"):
+            with pytest.raises(UnparseableUnitError):
+                parse_unit(name)
+
+        # The prefix mechanism is OFF: a prefix + a table entry is not a unit.
+        # `kmolec`/`nppb` are the nonsense it would otherwise manufacture, and
+        # `Tm`/`Mmol` are the collisions that make `T`=tesla and `M`=molar safe.
+        for name in ("kmolec", "nppb", "Tm", "Mmol", "dam"):
+            with pytest.raises(UnparseableUnitError):
+                parse_unit(name)
+
+        # A digit run not separated by `^` is a DIFFERENT symbol, not an
+        # exponent (§4.8.2), and a chained power is not in the grammar.
+        for name in ("cm3", "m/s2", "kg**2**3"):
+            with pytest.raises(UnparseableUnitError):
+                parse_unit(name)
+
+    def test_c_is_the_coulomb_and_t_is_the_tesla(self):
+        """§4.8.1: `C` is the COULOMB and `T` the TESLA — never Celsius, never
+        tera-. Binding `C` to Celsius makes charge x field come out as
+        `kg*m*K/(s^3*A)` instead of a newton, and nothing downstream can see it."""
+        assert self.ureg.Quantity(1.0, "C").dimensionality == (
+            self.ureg.Quantity(1.0, "A * s").dimensionality
+        )
+        # charge x electric field == force
+        assert self.ureg.Quantity(1.0, "C * V / m").dimensionality == (
+            self.ureg.Quantity(1.0, "N").dimensionality
+        )
+        assert self.ureg.Quantity(1.0, "T").dimensionality == (
+            self.ureg.Quantity(1.0, "kg / (A * s**2)").dimensionality
+        )
+
+    def test_dobson_is_a_column_number_density(self):
+        """§4.8.1: counts are dimensionless, so `DU` is `m^-2` with scale
+        exactly 2.6867e20 (pinned — two bindings shipped different roundings)."""
+        assert self.ureg.Quantity(1.0, "DU").dimensionality == (
+            self.ureg.Quantity(1.0, "1 / m**2").dimensionality
+        )
+        assert self.ureg.Quantity(1.0, "Dobson").to("1 / m**2").magnitude == pytest.approx(
+            2.6867e20, rel=1e-9
+        )
+
+    def test_unicode_normalisation_and_whitespace_multiplication(self):
+        """§4.8.2: superscripts, middot/dot-operator, micro sign, degree sign and
+        the ohm sign normalise BEFORE parsing; whitespace between terms is
+        multiplication; `*` and `/` are one precedence level, left to right."""
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        assert dim("W/m²") == dim("W/m^2")
+        assert dim("J/(kg·K)") == dim("J/(kg*K)")
+        assert dim("kg⋅m/s") == dim("kg*m/s")
+        assert dim("°C/min") == dim("degC/min")
+        assert dim("s⁻¹") == dim("1/s")
+        # whitespace IS multiplication
+        assert dim("ppb^-1 s^-1") == dim("ppb^-1 * s^-1")
+        # left-to-right: J/mol*K has a POSITIVE K exponent, J/(mol*K) a negative one
+        assert dim("J/mol*K") == dim("J*K/mol")
+        assert dim("J/mol*K") != dim("J/(mol*K)")
+        # rational exponents are admissible (the SDE noise intensity)
+        assert dim("1/s^0.5") == dim("1/s^(1/2)")
+
+    def test_unicode_twins_both_resolve(self):
+        """Several normalised characters have a visually IDENTICAL twin at another
+        codepoint. Both must resolve — a rewrite table written with literal glyphs
+        can silently collapse onto one of them and still *look* correct."""
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        # U+03A9 GREEK CAPITAL OMEGA vs U+2126 OHM SIGN
+        assert dim("Ω*m") == dim("Ohm*m")
+        assert dim("Ω*m") == dim("Ohm*m")
+        # U+00B5 MICRO SIGN vs U+03BC GREEK SMALL LETTER MU
+        assert dim("µg/m^3") == dim("ug/m^3")
+        assert dim("μg/m^3") == dim("ug/m^3")
+
+    def test_superscript_digits_are_not_a_contiguous_range(self):
+        """The superscript digits are NOT contiguous in Unicode: `¹` `²` `³` live
+        in Latin-1 Supplement (U+00B9/B2/B3), the rest at U+2070+. A `[⁰-⁹]`
+        character class silently drops exactly the three exponents that actually
+        occur in real unit strings (`m²`, `cm³`, `W/m²`)."""
+        from earthsci_ast.units import normalize_unit_string as norm
+
+        for glyph, digit in zip("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789"):
+            assert norm(f"m{glyph}") == f"m^{digit}", f"U+{ord(glyph):04X} not normalised"
+        assert norm("s⁻¹") == "s^-1"  # superscript minus + superscript one
+
+    def test_day_is_spelled_day_and_bare_d_is_rejected(self):
+        """The canonical spelling of a day is `day`. `d` is DELIBERATELY excluded
+        from the table (§4.8.1): a one-letter `d` reads as a deci- prefix or as a
+        differential. This is an over-permissiveness to SUPPRESS, not a gap —
+        a general-purpose units library will happily parse `d` as a day."""
+        from earthsci_ast.units import UnparseableUnitError, parse_unit
+
+        assert self.ureg.Quantity(1.0, "day").to("s").magnitude == pytest.approx(86400.0)
+        with pytest.raises(UnparseableUnitError):
+            parse_unit("d")
 
 
-class TestUnparseableUnitLeniency:
-    """An unparseable unit is a WARNING, not a hard error.
+class TestCircularTrigonometryAndTheAngleAxis:
+    """`rad` is a canonical AXIS (§4.8.1), so an angle is not "dimensionless".
 
-    Per esm-libraries-spec §3.3.3/§3.4 and the Julia reference, a unit string
-    that pint cannot parse must not fail validation: the variable is simply
-    omitted from the known-units registry (treated as unknown), so equations
-    referencing it are skipped rather than flagged as dimensional mismatches.
+    Folding the circular functions into the generic transcendental
+    dimensionless-argument set gets both directions wrong:
+
+    * requiring a dimensionless ARGUMENT rejects `cos(gamma)` with `gamma` in
+      `rad` — every line of the shipped `lib/solar.esm`;
+    * reporting a dimensionless RESULT for `acos` makes
+      `solar_zenith_angle: "rad" = acos(...)` a guaranteed mismatch.
     """
 
-    def test_variable_unparseable_unit_warns_and_stays_valid(self):
-        model = Model(name="LenientUnits")
-        # A syntactically valid identifier that pint does not know how to
-        # parse (UndefinedUnitError, a PintError subclass).
-        model.variables["bad"] = ModelVariable(
-            type="state", units="not_a_real_unit_zzz"
-        )
-        model.variables["good"] = ModelVariable(type="state", units="kelvin")
+    @staticmethod
+    def _validator():
+        from earthsci_ast.units import UnitValidator, parse_unit
+
+        v = UnitValidator()
+        v.known_units = {
+            "gamma": parse_unit("rad"),
+            "lat": parse_unit("deg"),
+            "ratio": parse_unit("1"),
+            "mass": parse_unit("kg"),
+        }
+        return v
+
+    def test_circular_functions_accept_an_angle(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        for op, arg in (("cos", "gamma"), ("sin", "lat"), ("tan", "gamma")):
+            assert v._get_expression_dimension(ExprNode(op=op, args=[arg])) == dim("1")
+
+    def test_circular_functions_accept_a_dimensionless_argument(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        assert v._get_expression_dimension(ExprNode(op="sin", args=["ratio"])) == dim("1")
+
+    def test_circular_function_of_a_dimensional_non_angle_is_an_error(self):
+        v = self._validator()
+        with pytest.raises(DimensionalMismatchError):
+            v._get_expression_dimension(ExprNode(op="sin", args=["mass"]))
+
+    def test_inverse_circular_functions_return_an_angle(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        for op in ("asin", "acos", "atan"):
+            assert v._get_expression_dimension(ExprNode(op=op, args=["ratio"])) == dim("rad")
+
+    def test_atan2_returns_an_angle(self):
+        from earthsci_ast.units import unit_dimensionality as dim
+
+        v = self._validator()
+        got = v._get_expression_dimension(ExprNode(op="atan2", args=["mass", "mass"]))
+        assert got == dim("rad")
+
+    def test_inverse_circular_of_a_dimensional_argument_is_an_error(self):
+        v = self._validator()
+        with pytest.raises(DimensionalMismatchError):
+            v._get_expression_dimension(ExprNode(op="acos", args=["mass"]))
+
+
+class TestUnparseableUnitIsAnError:
+    """An unparseable unit is a HARD ERROR, not a warning.
+
+    The severity follows from what the finding MEANS. A unit string that does
+    not denote a real unit ("not_a_unit", "1/time") is a defect in the FILE —
+    the declaration is simply false. That is categorically different from "I
+    cannot determine this dimension" (a symbolic exponent, an op with no
+    dimensional rule, an undeclared variable), which is a statement about the
+    CHECKER and stays a warning.
+
+    This suite previously asserted the opposite (``TestUnparseableUnitLeniency``:
+    "is_valid is True"), which let a document name a unit that does not exist
+    and still be pronounced valid.
+    """
+
+    def test_variable_unparseable_unit_is_an_error(self):
+        model = Model(name="BadUnits")
+        # A syntactically valid identifier that is not a unit.
+        model.variables["bad"] = ModelVariable(type="state", units="not_a_real_unit_zzz")
+        model.variables["good"] = ModelVariable(type="state", units="K")
 
         validator = UnitValidator()
         result = validator.validate_model(model)
 
-        # Unparseable unit => a warning, never an error.
-        assert result.is_valid is True
-        assert result.errors == []
-        assert any("Invalid unit" in w and "bad" in w for w in result.warnings)
+        assert result.is_valid is False
+        assert any("Invalid unit" in e and "bad" in e for e in result.errors)
 
-        # The bad variable is omitted from the known-units registry, so it is
-        # treated as unknown rather than assigned a bogus dimension.
+        # The bad variable is still omitted from the known-units registry, so it
+        # propagates as an UNKNOWN dimension and cannot also manufacture spurious
+        # downstream mismatches — one bad string, one finding.
         assert "bad" not in result.unit_registry
         assert "good" in result.unit_registry
 
-    def test_no_false_dimensional_mismatch_from_unparseable_unit(self):
-        model = Model(name="LenientUnitsEq")
-        model.variables["bad"] = ModelVariable(
-            type="state", units="not_a_real_unit_zzz"
-        )
-        model.variables["good"] = ModelVariable(type="observed", units="kelvin")
+    def test_unparseable_unit_does_not_also_manufacture_a_mismatch(self):
+        model = Model(name="BadUnitsEq")
+        model.variables["bad"] = ModelVariable(type="state", units="not_a_real_unit_zzz")
+        model.variables["good"] = ModelVariable(type="observed", units="K")
         # good = bad : `bad` resolves to an unknown dimension (omitted from
-        # known_units), so no dimensional-mismatch error may be produced.
+        # known_units), so the ONLY finding must be the unparseable unit itself.
         model.equations.append(Equation(lhs="good", rhs="bad"))
 
         validator = UnitValidator()
         result = validator.validate_model(model)
 
-        assert result.is_valid is True
-        assert result.errors == []
-        assert not any("mismatch" in w.lower() for w in result.warnings)
+        assert result.is_valid is False
+        assert len(result.errors) == 1
+        assert "Invalid unit" in result.errors[0]
+        assert not any("mismatch" in e.lower() for e in result.errors)
+
+    def test_unparseable_unit_fails_structural_validation(self):
+        """The hard error reaches `load()` / `validate()`, at a JSON-Pointer path."""
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "BadUnits"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "c": {"type": "state", "units": "not_a_unit", "default": 1.0},
+                        "k": {"type": "parameter", "units": "1/s", "default": 0.5},
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "c"]},
+                        }
+                    ],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is False
+        offenders = [
+            e
+            for e in result.structural_errors
+            if e.code == "unit_parse_error" and e.path == "/models/M/variables/c"
+        ]
+        assert offenders, f"expected an unparseable-unit error, got {result.structural_errors}"
+        assert "not_a_unit" in offenders[0].message
+
+    def test_real_units_still_validate(self):
+        """The count nouns and ESM units the contract defines must NOT be rejected."""
+        for unit in (
+            "molec/cm^3",
+            "ppb",
+            "ppb^-1 s^-1",
+            "individuals/km^2",
+            "vehicles/km^2",
+            "units/L",
+            "Dobson",
+            "Torr",
+            "degC/min",  # offset unit in a compound — pint's Quantity path rejects this
+            "μmol/(m^2*s)",
+            "cm^3/molec/s",
+        ):
+            model = Model(name="Ok")
+            model.variables["v"] = ModelVariable(type="state", units=unit)
+            result = UnitValidator().validate_model(model)
+            assert result.is_valid is True, f"{unit!r} must parse: {result.errors}"
+            assert "v" in result.unit_registry
+
+
+class TestDerivativeTimeUnitIsNotFabricated:
+    """``d(x)/dt`` with an UNDECLARED ``t`` has an UNKNOWN time unit.
+
+    The structural check used to assume seconds — ``(rhs * second) / lhs`` had to
+    be dimensionless — which rejects an ordinary acceleration equation (``x`` in
+    ``m``, RHS in ``m/s^2``). Under a hard-error policy that fabricated second is
+    a false-rejection factory.
+
+    The defensible rule (Go's ``derivativeTimeMismatch``): the time exponent is
+    free, the NON-time dimensions are not.
+    """
+
+    def test_undeclared_t_leaves_the_time_exponent_free(self):
+        from earthsci_ast.structural_checks import _is_derivative_compatible
+
+        # Accepted: some time unit reconciles these (the ratio is a power of time).
+        assert _is_derivative_compatible("m", "m/s") is True
+        assert _is_derivative_compatible("m", "m/s^2") is True  # was falsely rejected
+        assert _is_derivative_compatible("1", "1/s") is True
+
+    def test_non_time_dimensions_still_cannot_move(self):
+        from earthsci_ast.structural_checks import _is_derivative_compatible
+
+        # Rejected: no choice of time unit turns a length into a mass.
+        assert _is_derivative_compatible("m", "kg") is False
+        assert _is_derivative_compatible("m/s", "kg") is False
+
+    def test_declared_t_makes_the_comparison_exact(self):
+        from earthsci_ast.structural_checks import _is_derivative_compatible
+
+        assert _is_derivative_compatible("m", "m/s", "s") is True
+        # With t declared, the time exponent is pinned too.
+        assert _is_derivative_compatible("m", "m/s^2", "s") is False
+
+
+class TestTranscendentalArgumentMustBeDimensionless:
+    """The FULL mathematical rule, not just ``ln``/``exp``.
+
+    A transcendental is a power series, so every term of ``1 + x + x^2/2 + …``
+    must be addable — which forces ``x`` to be dimensionless. The structural
+    check was previously narrowed to ``{ln, exp}`` to accommodate a
+    self-contradictory corpus (see conftest.CORPUS_UNIT_DEFECTS).
+    """
+
+    @pytest.mark.parametrize(
+        "op", ["ln", "log", "log10", "exp", "sin", "cos", "tan", "tanh", "asin", "acosh"]
+    )
+    def test_dimensional_argument_is_a_hard_error(self, op):
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "T"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "L": {"type": "state", "units": "m", "default": 1.0},
+                        "bad": {
+                            "type": "observed",
+                            "units": "1",
+                            "expression": {"op": op, "args": ["L"]},
+                        },
+                    },
+                    "equations": [{"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is False, f"{op}(L) with L in metres must be rejected"
+        offenders = [
+            e
+            for e in result.structural_errors
+            if e.code == "unit_inconsistency" and e.path == "/models/M/variables/bad"
+        ]
+        assert offenders, f"{op}: expected a unit_inconsistency, got {result.structural_errors}"
+        assert "dimensionless" in offenders[0].message
+
+    def test_dimensionless_argument_is_accepted(self):
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "T"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "L": {"type": "state", "units": "m", "default": 1.0},
+                        "L0": {"type": "parameter", "units": "m", "default": 1.0},
+                        # log of a RATIO — the physically meaningful form.
+                        "ok": {
+                            "type": "observed",
+                            "units": "1",
+                            "expression": {"op": "log", "args": [{"op": "/", "args": ["L", "L0"]}]},
+                        },
+                    },
+                    "equations": [{"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is True, result.structural_errors
+
+    def test_sqrt_is_not_in_the_rule(self):
+        """`sqrt` halves a dimension; it does not require a dimensionless argument."""
+        doc = {
+            "esm": "0.8.0",
+            "metadata": {"name": "T"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "A": {"type": "state", "units": "m^2", "default": 1.0},
+                        "side": {
+                            "type": "observed",
+                            "units": "m",
+                            "expression": {"op": "sqrt", "args": ["A"]},
+                        },
+                    },
+                    "equations": [{"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": 0.0}],
+                }
+            },
+        }
+        result = validate(json.dumps(doc))
+        assert result.is_valid is True, result.structural_errors
+
+
+def _validator_with(**units: str) -> UnitValidator:
+    """A UnitValidator whose known_units are exactly ``units`` (name -> unit)."""
+    validator = UnitValidator()
+    validator.known_units = {name: validator.ureg.Unit(unit) for name, unit in units.items()}
+    return validator
+
+
+class TestDimensionalMismatchIsDetected:
+    """TRUE POSITIVES for the dimensional engine.
+
+    Every other unit test in this module asserts either that validation
+    "completes without raising" or that a *false* positive is absent. That is
+    precisely how the C5 keystone bug survived: ``_dimensions_compatible``
+    built ``ureg.Quantity(1.0, dim)`` from a *dimensionality* container, which
+    trips pint's ``assert len(names) == 1`` for every bracketed dimension; the
+    bare ``AssertionError`` was then swallowed by ``except (PintError,
+    AssertionError): return True``. The predicate therefore returned ``True``
+    for *every* input pair, making the entire dimensional engine — including
+    every ``raise`` in ``_get_expr_node_dimension`` — unreachable dead code.
+
+    These tests assert the engine can actually FAIL. Without at least one true
+    positive here, a regression to the always-``True`` predicate is invisible.
+    """
+
+    def test_dimensions_compatible_distinguishes_dimensions(self):
+        """The C5 keystone: the predicate must discriminate, not rubber-stamp."""
+        validator = UnitValidator()
+        length = validator.ureg.Unit("m").dimensionality
+        time = validator.ureg.Unit("s").dimensionality
+        dimensionless = validator.ureg.dimensionless.dimensionality
+
+        # Pre-fix this returned True — for these and for every other pair.
+        assert validator._dimensions_compatible(length, time) is False
+        assert validator._dimensions_compatible(length, dimensionless) is False
+        # Same dimension via different units still compatible.
+        assert (
+            validator._dimensions_compatible(length, validator.ureg.Unit("km").dimensionality)
+            is True
+        )
+
+    def test_adding_length_to_time_is_an_error(self):
+        """The audit's exact C5 repro: `x[m] = x[m] + tt[s]`.
+
+        Pre-fix this yielded ``is_valid=True, errors=[], warnings=[]`` — a
+        provable dimensional contradiction reported as a clean bill of health.
+        """
+        model = Model(name="BadAddition")
+        model.variables["x"] = ModelVariable(type="state", units="m")
+        model.variables["tt"] = ModelVariable(type="parameter", units="s")
+        model.equations.append(Equation(lhs="x", rhs=ExprNode(op="+", args=["x", "tt"])))
+
+        result = UnitValidator().validate_model(model)
+
+        assert result.is_valid is False
+        assert result.errors, "a provable [length] vs [time] mismatch must be an ERROR"
+        assert any("Incompatible dimensions" in e for e in result.errors)
+
+    def test_mismatch_is_an_error_not_a_warning(self):
+        """A PROVABLE inconsistency must not be filed as a 'could not validate'
+        warning — that downgrade is what made a detected mismatch unable to
+        fail validation."""
+        model = Model(name="ErrorNotWarning")
+        model.variables["L"] = ModelVariable(type="state", units="m")
+        model.variables["tt"] = ModelVariable(type="parameter", units="s")
+        model.equations.append(Equation(lhs="L", rhs=ExprNode(op="-", args=["L", "tt"])))
+
+        result = UnitValidator().validate_model(model)
+
+        assert len(result.errors) == 1
+        assert result.warnings == []
+
+    def test_transcendental_argument_must_be_dimensionless(self):
+        """`sin(L)` with L in metres is a hard dimensional error.
+
+        Pre-fix, the catch-all `return dimensionless` for every non-arithmetic
+        op meant nothing ever checked that a transcendental's *argument* is
+        dimensionless.
+        """
+        validator = _validator_with(L="m")
+        with pytest.raises(DimensionalMismatchError, match="dimensionless"):
+            validator._get_expression_dimension(ExprNode(op="sin", args=["L"]))
+
+    def test_exponent_must_be_dimensionless(self):
+        """`L^tt` (dimensional exponent) is a hard error; `L^2` is [length]**2."""
+        validator = _validator_with(L="m", tt="s")
+        with pytest.raises(DimensionalMismatchError, match="exponent"):
+            validator._get_expression_dimension(ExprNode(op="^", args=["L", "tt"]))
+
+        squared = validator._get_expression_dimension(ExprNode(op="^", args=["L", 2]))
+        assert squared == validator.ureg.Unit("m**2").dimensionality
+
+
+class TestOperatorDimensionRules:
+    """The op rules that the old catch-all `return dimensionless` destroyed.
+
+    These are the two bugs the audit predicted would surface the moment C5 was
+    fixed: they were unobservable while the compatibility predicate said
+    "everything matches everything".
+    """
+
+    def test_min_max_preserve_their_operands_dimension(self):
+        """`max(P1, P2)` with both in Pa is a PRESSURE, not dimensionless.
+
+        The old catch-all reported dimensionless, which (once C5 is fixed)
+        would manufacture a mismatch against any pressure it was compared to.
+        """
+        validator = _validator_with(P1="Pa", P2="Pa")
+        pressure = validator.ureg.Unit("Pa").dimensionality
+
+        for op in ("max", "min"):
+            dim = validator._get_expression_dimension(ExprNode(op=op, args=["P1", "P2"]))
+            assert dim == pressure, f"{op} must preserve its operands' dimension"
+
+    def test_min_max_operands_must_agree(self):
+        validator = _validator_with(P="Pa", L="m")
+        with pytest.raises(DimensionalMismatchError):
+            validator._get_expression_dimension(ExprNode(op="max", args=["P", "L"]))
+
+    def test_division_by_an_unknown_operand_is_indeterminate(self):
+        """`unknown_x / t` must be UNKNOWN (None), never [time].
+
+        The old code filtered `None` dimensions out of the operand list and
+        then indexed `/` positionally as though nothing had been removed, so
+        the numerator vanished and `t` became the numerator — reporting
+        [time], the exact *inverse* of the only defensible answer.
+        """
+        validator = _validator_with(t="s")
+        dim = validator._get_expression_dimension(ExprNode(op="/", args=["unknown_x", "t"]))
+        assert dim is None
+
+    def test_multiplication_by_an_unknown_operand_is_indeterminate(self):
+        validator = _validator_with(t="s")
+        dim = validator._get_expression_dimension(ExprNode(op="*", args=["unknown_x", "t"]))
+        assert dim is None
+
+    def test_known_division_still_divides(self):
+        """The indeterminacy rule must not cost us the ordinary case."""
+        validator = _validator_with(L="m", t="s")
+        dim = validator._get_expression_dimension(ExprNode(op="/", args=["L", "t"]))
+        assert dim == validator.ureg.Unit("m/s").dimensionality
+
+    def test_abs_preserves_dimension(self):
+        validator = _validator_with(L="m")
+        dim = validator._get_expression_dimension(ExprNode(op="abs", args=["L"]))
+        assert dim == validator.ureg.Unit("m").dimensionality
+
+    def test_structural_ops_are_unknown_not_dimensionless(self):
+        """An op with no dimensional rule reports UNKNOWN, so callers skip it.
+
+        Reporting `dimensionless` (the old behaviour) manufactures *false*
+        mismatches once the compatibility predicate actually discriminates.
+        """
+        validator = _validator_with(w="m")
+        dim = validator._get_expression_dimension(ExprNode(op="table_lookup", args=["w"]))
+        assert dim is None
+
+
+class TestNumericLiteralsArePolymorphic:
+    """A bare numeric literal must not constrain (nor contradict) its context.
+
+    This is the contract the *valid* corpus pins, and it is what keeps the C5
+    fix from rejecting pinned-VALID fixtures: `minimal_chemistry.esm` writes
+    Arrhenius as `exp(-1370 / T)` (the literal is an activation TEMPERATURE)
+    and `units_conversions.esm` writes `T_kelvin + (-273.15)`. Typing a literal
+    as dimensionless would report both as dimensionally inconsistent.
+    """
+
+    def test_literal_added_to_a_dimensional_quantity_is_not_a_mismatch(self):
+        validator = _validator_with(T_kelvin="K")
+        dim = validator._get_expression_dimension(ExprNode(op="+", args=["T_kelvin", -273.15]))
+        assert dim == validator.ureg.Unit("K").dimensionality
+
+    def test_literal_over_dimensional_quantity_does_not_break_exp(self):
+        """`exp(-1370 / T)` — the literal carries kelvin, so the quotient is
+        dimensionless and `exp` must not raise."""
+        validator = _validator_with(T="K")
+        dim = validator._get_expression_dimension(
+            ExprNode(op="exp", args=[ExprNode(op="/", args=[-1370.0, "T"])])
+        )
+        assert dim == validator.ureg.dimensionless.dimensionality
+
+    def test_a_boolean_is_genuinely_dimensionless(self):
+        """`bool` is an `int` subclass in Python, but a truth value is a real
+        dimensionless quantity, not a polymorphic numeric literal."""
+        validator = UnitValidator()
+        dim = validator._get_expression_dimension(True)
+        assert dim == validator.ureg.dimensionless.dimensionality
