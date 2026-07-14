@@ -146,16 +146,10 @@
             "op": "/",
             "args": [
               "DIC",
-              {
-                "op": "*",
-                "args": [
-                  "CO2_solubility",
-                  "mixed_layer_depth"
-                ]
-              }
+              "CO2_solubility"
             ]
           },
-          "description": "Ocean surface pCO2"
+          "description": "Ocean surface pCO2. Henry's law: DIC[mol/m^3] / CO2_solubility[mol/m^3/atm] = atm. The mixed_layer_depth factor previously in the denominator was DIMENSIONALLY WRONG -- it made the result atm/m -- and physically spurious: solubility already carries the per-volume normalisation."
         },
         "pH": {
           "type": "observed",
@@ -783,14 +777,6 @@
     }
   },
   "coupling": [
-    {
-      "type": "operator_compose",
-      "systems": [
-        "AtmosphericCarbon",
-        "AtmosphericCarbon_transport"
-      ],
-      "description": "Placeholder for atmospheric transport coupling if extended"
-    },
     {
       "type": "couple",
       "systems": [
