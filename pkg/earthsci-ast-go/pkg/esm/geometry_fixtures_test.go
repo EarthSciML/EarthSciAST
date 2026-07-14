@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -44,18 +45,25 @@ func TestGeometryValidFixtures(t *testing.T) {
 // node: a missing `manifold` (it is required, no default) and a third operand
 // (the clip is strictly binary) are pure schema violations rejected at
 // schema-validation time; a `manifold` outside the closed {planar, spherical,
-// geodesic} set is rejected by the POST-EXPANSION validator
-// (`geometry_manifold_invalid`, esm-spec §9.6.4) — the schema admits any
-// string there since the §9.6.1 scalar-field substitution-site widening. In
-// both cases Load returns a non-nil error. A resolver_only geometry fixture
-// (none today) would be schema-valid and accepted, mirroring
-// TestAggregateInvalidFixtures.
+// geodesic} set is SCHEMA-VALID on purpose — the §9.6.1 scalar-field
+// substitution-site widening lets the schema admit any string there, so a
+// template `body` may name a parameter in that slot — and is caught instead by
+// the POST-EXPANSION validator (`geometry_manifold_invalid`, esm-spec §9.6.4),
+// which the Go binding DOES implement.
+//
+// So every geometry fixture is rejected: Load returns a non-nil error in both
+// cases. This is where geometry parts company with TestAggregateInvalidFixtures
+// — a `resolver_only` pin means the defect survives JSON-Schema, not that Go
+// lets it through. Go runs the §9.6.4 validators, so a resolver_only geometry
+// fixture must be REJECTED carrying exactly the code the corpus pinned in
+// `resolver_error_code`; the aggregate fixtures pin resolver checks Go does not
+// run, and those it must accept.
 func TestGeometryInvalidFixtures(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	resolverOnly := resolverOnlyInvalidFixtures(t, repoRoot)
+	resolverPins := resolverOnlyPins(t, repoRoot)
 	pattern := filepath.Join(repoRoot, "tests", "invalid", "geometry", "*.esm")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
@@ -67,14 +75,26 @@ func TestGeometryInvalidFixtures(t *testing.T) {
 	for _, path := range files {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
-			if resolverOnly[name] {
-				if _, err := Load(path); err != nil {
-					t.Fatalf("resolver-only fixture %s must pass schema validation, got error: %v", name, err)
-				}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected %s to be rejected, but it validated", name)
+			}
+			want, isResolverOnly := resolverPins[name]
+			if !isResolverOnly {
 				return
 			}
-			if _, err := Load(path); err == nil {
-				t.Fatalf("expected %s to be rejected, but it validated", name)
+			if want == "" {
+				t.Fatalf("fixture %s is pinned resolver_only but names no resolver_error_code; "+
+					"the code Go must raise is unverifiable", name)
+			}
+			var de DiagnosticError
+			if !errors.As(err, &de) {
+				t.Fatalf("resolver-only fixture %s: Load error %v carries no diagnostic code, want %q",
+					name, err, want)
+			}
+			if got := de.DiagnosticCode(); got != want {
+				t.Fatalf("resolver-only fixture %s: Load raised code %q, want pinned %q",
+					name, got, want)
 			}
 		})
 	}

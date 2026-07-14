@@ -38,14 +38,23 @@ func TestAggregateValidFixtures(t *testing.T) {
 	}
 }
 
-// resolverOnlyInvalidFixtures reads tests/invalid/expected_errors.json and
-// returns the set of fixture basenames flagged `resolver_only: true`. Such
-// fixtures are SCHEMA-VALID but rejected only by an evaluator/resolver (e.g. an
-// `aggregate` `{from}` range naming an index set absent from the registry, RFC
-// semiring-faq-unified-ir §5.2). The schema-only Go binding does not run that
-// resolver, so it must ACCEPT them — the invalid-fixture loop asserts schema
-// acceptance for these rather than rejection. See bead ess-my4.1.6.
-func resolverOnlyInvalidFixtures(t *testing.T, repoRoot string) map[string]bool {
+// resolverOnlyPins reads tests/invalid/expected_errors.json and returns, for
+// every fixture basename flagged `resolver_only: true`, its pinned
+// `resolver_error_code` (the empty string when the pin names none). Such
+// fixtures are SCHEMA-VALID by construction and are rejected only by a
+// post-schema check — never by JSON-Schema validation.
+//
+// `resolver_only` says WHERE the defect is caught, not WHETHER Go catches it.
+// The two cases split on whether the Go binding implements the check:
+//
+//   - Checks Go does NOT run — an evaluator/resolver concern such as an
+//     `aggregate` `{from}` range naming an index set absent from the registry
+//     (RFC semiring-faq-unified-ir §5.2). Go must ACCEPT these (Load returns
+//     nil); see TestAggregateInvalidFixtures and bead ess-my4.1.6.
+//   - Checks Go DOES run — the §9.6.4 post-expansion validators, e.g. the
+//     closed-set `manifold` enum. Go must REJECT these, carrying exactly the
+//     pinned code; see TestGeometryInvalidFixtures.
+func resolverOnlyPins(t *testing.T, repoRoot string) map[string]string {
 	t.Helper()
 	path := filepath.Join(repoRoot, "tests", "invalid", "expected_errors.json")
 	data, err := os.ReadFile(path)
@@ -53,16 +62,27 @@ func resolverOnlyInvalidFixtures(t *testing.T, repoRoot string) map[string]bool 
 		t.Fatalf("read %s: %v", path, err)
 	}
 	var entries map[string]struct {
-		ResolverOnly bool `json:"resolver_only"`
+		ResolverOnly bool   `json:"resolver_only"`
+		ResolverCode string `json:"resolver_error_code"`
 	}
 	if err := json.Unmarshal(data, &entries); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
-	out := make(map[string]bool)
+	out := make(map[string]string)
 	for name, e := range entries {
 		if e.ResolverOnly {
-			out[name] = true
+			out[name] = e.ResolverCode
 		}
+	}
+	return out
+}
+
+// resolverOnlyInvalidFixtures is resolverOnlyPins reduced to a membership set.
+func resolverOnlyInvalidFixtures(t *testing.T, repoRoot string) map[string]bool {
+	t.Helper()
+	out := make(map[string]bool)
+	for name := range resolverOnlyPins(t, repoRoot) {
+		out[name] = true
 	}
 	return out
 }
