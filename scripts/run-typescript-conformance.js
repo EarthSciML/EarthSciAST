@@ -1,402 +1,270 @@
 #!/usr/bin/env node
 
 /**
- * TypeScript conformance test runner for ESM Format cross-language testing.
+ * TypeScript conformance producer for ESM Format cross-language testing.
  *
- * This script runs the TypeScript @earthsciml/ast implementation against test fixtures
- * and generates standardized outputs for comparison with other language implementations.
+ * Reads the shared CORPUS MANIFEST (`scripts/conformance_corpus.py`) and emits a
+ * record for every entry in it. The producer does NOT enumerate the corpus
+ * itself: each producer used to walk `tests/valid` / `tests/invalid`
+ * NON-recursively and all four skipped the same 69 fixtures — the entire
+ * `aggregate` and `template_imports` corpora — plus `lib/**`, which nothing
+ * swept at all (audit 2026-07-14, F5; CONFORMANCE_SPEC §2.2.1).
+ *
+ * Every validation entry runs the full **load → resolve → validate** pipeline.
+ * This producer used to call `load(fileContent)` on the file's TEXT, with no
+ * base path at all, so no `{ref}` could ever resolve; `validate()` does no file
+ * I/O in any binding, so `tests/valid/lib_*_subsystem_inclusion.esm` was
+ * structurally unsatisfiable here.
+ *
+ * See `scripts/run-python-conformance.py` for the emitted wire shape; every
+ * producer emits the same one.
  */
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-// Get the directory of this script
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
-// Project paths
-const projectRoot = path.dirname(__dirname);
-const typescriptPackage = path.join(projectRoot, 'pkg', 'earthsci-ast-ts');
-const testsDir = path.join(projectRoot, 'tests');
+const projectRoot = path.dirname(__dirname)
+const typescriptPackage = path.join(projectRoot, 'pkg', 'earthsci-ast-ts')
 
-// Import ESM format library (assuming it's built)
-let esmFormat;
+let esm
 try {
-    // Try to import from built distribution
-    esmFormat = await import(path.join(typescriptPackage, 'dist', 'esm', 'index.js'));
+    esm = await import(path.join(typescriptPackage, 'dist', 'esm', 'index.js'))
 } catch (error) {
-    console.error('Failed to import @earthsciml/ast TypeScript library:', error.message);
-    console.error('Make sure the library is built with: npm run build');
-    process.exit(1);
+    console.error('Failed to import @earthsciml/ast TypeScript library:', error.message)
+    console.error('Make sure the library is built with: npm run build')
+    process.exit(1)
 }
 
-class ConformanceResults {
-    constructor() {
-        this.language = 'typescript';
-        this.timestamp = new Date().toISOString();
-        this.validation_results = {};
-        this.display_results = {};
-        this.substitution_results = {};
-        this.graph_results = {};
-        this.errors = [];
+/** Normalise a binding error object to the shared wire shape. */
+function errorToRecord(err) {
+    return {
+        path: err?.path ?? '',
+        message: err?.message ?? String(err),
+        code: err?.code ?? '',
+        keyword: err?.keyword ?? err?.code ?? '',
+        details: (err?.details && typeof err.details === 'object') ? err.details : {},
     }
 }
 
-function writeResults(outputDir, results) {
-    if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-    }
+/**
+ * load → resolve → validate every manifest entry.
+ *
+ * When the load/resolve phase REJECTS a document, `validate()` is still called
+ * on the raw document, so a binding that throws early still gets to enumerate
+ * its structured `(code, path)` findings for the pin check instead of reporting
+ * an opaque exception string.
+ */
+async function runValidation(manifest) {
+    console.log('Running validation sweep...')
+    const results = {}
 
-    const resultsFile = path.join(outputDir, 'results.json');
-    fs.writeFileSync(resultsFile, JSON.stringify(results, null, 2));
+    for (const entry of manifest.validation_files) {
+        const filepath = path.join(projectRoot, entry.path)
+        const basePath = path.dirname(filepath)
+        const record = { schema_errors: [], structural_errors: [] }
 
-    console.log(`TypeScript conformance results written to: ${resultsFile}`);
-}
-
-async function runValidationTests(testsDir) {
-    console.log('Running validation tests...');
-    const validationResults = {};
-
-    // Test valid files
-    const validDir = path.join(testsDir, 'valid');
-    if (fs.existsSync(validDir) && fs.lstatSync(validDir).isDirectory()) {
-        const validResults = {};
-        const validFiles = fs.readdirSync(validDir).filter(f => f.endsWith('.esm'));
-
-        for (const filename of validFiles) {
-            const filepath = path.join(validDir, filename);
-            try {
-                const fileContent = fs.readFileSync(filepath, 'utf8');
-                const esmData = await esmFormat.load(fileContent);
-                const result = await esmFormat.validate(esmData);
-
-                validResults[filename] = {
-                    is_valid: result.is_valid,
-                    schema_errors: result.schema_errors || [],
-                    structural_errors: result.structural_errors || [],
-                    parsed_successfully: true
-                };
-            } catch (error) {
-                validResults[filename] = {
-                    parsed_successfully: false,
-                    error: error.message,
-                    error_type: error.constructor.name
-                };
-            }
+        // SCHEMA judges the document AS WRITTEN, so it runs on the raw JSON and
+        // runs even when the load phase rejects the file — otherwise a
+        // schema-invalid fixture could never have its pinned (keyword, path)
+        // findings checked, because the binding would have thrown before
+        // enumerating them.
+        let text = ''
+        try {
+            text = fs.readFileSync(filepath, 'utf8')
+            record.schema_errors = esm.validateSchema(JSON.parse(text)).map(errorToRecord)
+        } catch (error) {
+            record.error = error.message
+            record.error_type = error?.constructor?.name ?? 'Error'
         }
-        validationResults.valid = validResults;
-    }
 
-    // Test invalid files
-    const invalidDir = path.join(testsDir, 'invalid');
-    if (fs.existsSync(invalidDir) && fs.lstatSync(invalidDir).isDirectory()) {
-        const invalidResults = {};
-        const invalidFiles = fs.readdirSync(invalidDir).filter(f => f.endsWith('.esm'));
-
-        for (const filename of invalidFiles) {
-            const filepath = path.join(invalidDir, filename);
-            try {
-                const fileContent = fs.readFileSync(filepath, 'utf8');
-                const esmData = await esmFormat.load(fileContent);
-                const result = await esmFormat.validate(esmData);
-
-                invalidResults[filename] = {
-                    is_valid: result.is_valid,
-                    schema_errors: result.schema_errors || [],
-                    structural_errors: result.structural_errors || [],
-                    parsed_successfully: true
-                };
-            } catch (error) {
-                invalidResults[filename] = {
-                    parsed_successfully: false,
-                    error: error.message,
-                    error_type: error.constructor.name,
-                    is_expected_error: true  // Invalid files should error
-                };
+        // LOAD + RESOLVE: the only phase that does file I/O.
+        let esmData = null
+        try {
+            esmData = esm.load(text, { basePath })
+            // `load` is synchronous and cannot do the async file I/O a §4.7
+            // subsystem `ref` needs; this is the distinct RESOLVE phase.
+            await esm.resolveSubsystemRefs(esmData, basePath)
+            record.resolve_ok = true
+        } catch (error) {
+            record.resolve_ok = false
+            if (record.error === undefined) {
+                record.error = error.message
+                record.error_type = error?.constructor?.name ?? 'Error'
             }
+            esmData = null
         }
-        validationResults.invalid = invalidResults;
-    }
 
-    return validationResults;
-}
-
-async function runDisplayTests(testsDir) {
-    console.log('Running display tests...');
-    const displayResults = {};
-
-    const displayDir = path.join(testsDir, 'display');
-    if (fs.existsSync(displayDir) && fs.lstatSync(displayDir).isDirectory()) {
-        const displayFiles = fs.readdirSync(displayDir).filter(f => f.endsWith('.json'));
-
-        for (const filename of displayFiles) {
-            const filepath = path.join(displayDir, filename);
+        // STRUCTURAL judges the RESOLVED form (§4.7 refs spliced in).
+        if (esmData !== null) {
             try {
-                const testData = JSON.parse(fs.readFileSync(filepath, 'utf8'));
-                const testResults = {};
-
-                // Test chemical formula rendering
-                if (testData.chemical_formulas) {
-                    const formulaResults = [];
-                    for (const formulaTest of testData.chemical_formulas) {
-                        if (formulaTest.input) {
-                            const inputFormula = formulaTest.input;
-                            try {
-                                const unicodeResult = await esmFormat.renderChemicalFormula(inputFormula);
-
-                                formulaResults.push({
-                                    input: inputFormula,
-                                    output_unicode: unicodeResult,
-                                    output_latex: formulaTest.expected_latex || '',
-                                    output_ascii: inputFormula,  // Fallback
-                                    success: true
-                                });
-                            } catch (error) {
-                                formulaResults.push({
-                                    input: inputFormula,
-                                    error: error.message,
-                                    success: false
-                                });
-                            }
-                        }
-                    }
-                    testResults.chemical_formulas = formulaResults;
+                const result = esm.validate(esmData)
+                record.structural_errors = (result.structural_errors || []).map(errorToRecord)
+                record.phase = 'validate'
+            } catch (error) {
+                record.phase = 'validate'
+                if (record.error === undefined) {
+                    record.error = error.message
+                    record.error_type = error?.constructor?.name ?? 'Error'
                 }
-
-                // Test expression rendering
-                if (testData.expressions) {
-                    const expressionResults = [];
-                    for (const exprTest of testData.expressions) {
-                        if (exprTest.input) {
-                            const inputExpr = exprTest.input;
-                            try {
-                                const expr = await esmFormat.parseExpression(inputExpr);
-                                const unicodeResult = await esmFormat.prettyPrint(expr, { format: 'unicode' });
-                                const latexResult = await esmFormat.prettyPrint(expr, { format: 'latex' });
-                                const asciiResult = await esmFormat.prettyPrint(expr, { format: 'ascii' });
-
-                                expressionResults.push({
-                                    input: inputExpr,
-                                    output_unicode: unicodeResult,
-                                    output_latex: latexResult,
-                                    output_ascii: asciiResult,
-                                    success: true
-                                });
-                            } catch (error) {
-                                expressionResults.push({
-                                    input: inputExpr,
-                                    error: error.message,
-                                    success: false
-                                });
-                            }
-                        }
-                    }
-                    testResults.expressions = expressionResults;
-                }
-
-                displayResults[filename] = testResults;
-
-            } catch (error) {
-                displayResults[filename] = {
-                    error: error.message,
-                    success: false
-                };
             }
+        } else {
+            record.phase = 'load'
         }
+
+        // The verdict is "did this binding accept the document", regardless of
+        // WHICH phase answered. A rejection at resolve is still a rejection.
+        record.is_valid = record.resolve_ok === true
+            && record.schema_errors.length === 0
+            && record.structural_errors.length === 0
+        record.outcome = record.is_valid ? 'valid' : 'invalid'
+        results[entry.id] = record
     }
 
-    return displayResults;
+    return results
 }
 
-async function runSubstitutionTests(testsDir) {
-    console.log('Running substitution tests...');
-    const substitutionResults = {};
+/**
+ * Render every manifest display case in all three formats.
+ *
+ * This producer used to look for top-level `chemical_formulas` / `expressions`
+ * keys that NO fixture in `tests/display/` has, so it emitted nothing at all and
+ * the comparator scored the empty intersection as 100% consistent (audit C2).
+ * The manifest now hands over already-expanded, id'd cases.
+ */
+function runDisplay(manifest) {
+    console.log('Running display sweep...')
+    const results = {}
 
-    const substitutionDir = path.join(testsDir, 'substitution');
-    if (fs.existsSync(substitutionDir) && fs.lstatSync(substitutionDir).isDirectory()) {
-        const substitutionFiles = fs.readdirSync(substitutionDir).filter(f => f.endsWith('.json'));
-
-        for (const filename of substitutionFiles) {
-            const filepath = path.join(substitutionDir, filename);
+    for (const testCase of manifest.display_cases) {
+        const record = {}
+        const errors = {}
+        const renderers = {
+            unicode: esm.toUnicode,
+            latex: esm.toLatex,
+            ascii: esm.toAscii,
+        }
+        for (const [fmt, render] of Object.entries(renderers)) {
             try {
-                const testData = JSON.parse(fs.readFileSync(filepath, 'utf8'));
-                const testResults = [];
-
-                if (testData.tests) {
-                    for (const testCase of testData.tests) {
-                        if (testCase.expression && testCase.substitutions) {
-                            try {
-                                const expr = await esmFormat.parseExpression(testCase.expression);
-                                const substitutions = {};
-                                for (const [key, value] of Object.entries(testCase.substitutions)) {
-                                    substitutions[key] = await esmFormat.parseExpression(value);
-                                }
-
-                                const resultExpr = await esmFormat.substitute(expr, substitutions);
-                                const resultStr = await esmFormat.prettyPrint(resultExpr);
-
-                                testResults.push({
-                                    input: testCase.expression,
-                                    substitutions: testCase.substitutions,
-                                    result: resultStr,
-                                    success: true
-                                });
-                            } catch (error) {
-                                testResults.push({
-                                    input: testCase.expression || '',
-                                    error: error.message,
-                                    success: false
-                                });
-                            }
-                        }
-                    }
-                }
-
-                substitutionResults[filename] = testResults;
-
+                record[fmt] = render(testCase.input)
             } catch (error) {
-                substitutionResults[filename] = {
-                    error: error.message,
-                    success: false
-                };
+                record[fmt] = null
+                errors[fmt] = error.message
             }
         }
+        if (Object.keys(errors).length > 0) record.errors = errors
+        results[testCase.id] = record
     }
 
-    return substitutionResults;
+    return results
 }
 
-async function runGraphTests(testsDir) {
-    console.log('Running graph tests...');
-    const graphResults = {};
+/** Apply `substitute` to every manifest substitution case. */
+function runSubstitution(manifest) {
+    console.log('Running substitution sweep...')
+    const results = {}
 
-    const graphsDir = path.join(testsDir, 'graphs');
-    if (fs.existsSync(graphsDir) && fs.lstatSync(graphsDir).isDirectory()) {
-        const graphFiles = fs.readdirSync(graphsDir).filter(f => f.endsWith('.json'));
-
-        for (const filename of graphFiles) {
-            const filepath = path.join(graphsDir, filename);
-            try {
-                const testData = JSON.parse(fs.readFileSync(filepath, 'utf8'));
-
-                if (testData.esm_file) {
-                    const esmFilePath = path.join(path.dirname(filepath), testData.esm_file);
-                    if (fs.existsSync(esmFilePath)) {
-                        try {
-                            const esmData = await esmFormat.load(esmFilePath);
-
-                            // Generate system graph
-                            const systemGraph = await esmFormat.generateSystemGraph(esmData);
-
-                            // Export in different formats
-                            const dotOutput = await esmFormat.exportDot(systemGraph);
-                            const jsonOutput = await esmFormat.exportJson(systemGraph);
-
-                            graphResults[filename] = {
-                                esm_file: esmFilePath,
-                                system_graph: {
-                                    nodes: systemGraph.nodes.length,
-                                    edges: systemGraph.edges.length,
-                                    dot_format: dotOutput,
-                                    json_format: jsonOutput
-                                },
-                                success: true
-                            };
-                        } catch (error) {
-                            graphResults[filename] = {
-                                esm_file: esmFilePath,
-                                error: error.message,
-                                success: false
-                            };
-                        }
-                    } else {
-                        graphResults[filename] = {
-                            error: `ESM file not found: ${esmFilePath}`,
-                            success: false
-                        };
-                    }
-                }
-
-            } catch (error) {
-                graphResults[filename] = {
-                    error: error.message,
-                    success: false
-                };
+    for (const testCase of manifest.substitution_cases) {
+        try {
+            results[testCase.id] = {
+                result: esm.substitute(testCase.input, testCase.bindings),
             }
+        } catch (error) {
+            results[testCase.id] = { result: null, error: error.message }
         }
     }
 
-    return graphResults;
+    return results
+}
+
+/**
+ * The manifest path is passed by the harness; there is no fallback sweep. A
+ * producer that invents its own corpus when the manifest is missing is a
+ * producer that can silently under-report coverage. Fail instead.
+ */
+function loadManifest(outputDir) {
+    let manifestPath
+    if (process.argv.length >= 4) {
+        manifestPath = process.argv[3]
+    } else if (process.env.ESM_CONFORMANCE_MANIFEST) {
+        manifestPath = process.env.ESM_CONFORMANCE_MANIFEST
+    } else {
+        manifestPath = path.join(path.dirname(outputDir), 'corpus_manifest.json')
+    }
+
+    if (!fs.existsSync(manifestPath)) {
+        console.error(`Corpus manifest not found: ${manifestPath}`)
+        console.error('Generate it with: python3 scripts/conformance_corpus.py --output <path>')
+        process.exit(2)
+    }
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
 }
 
 async function main() {
-    if (process.argv.length !== 3) {
-        console.error('Usage: node run-typescript-conformance.js <output_dir>');
-        process.exit(1);
+    if (process.argv.length < 3) {
+        console.error('Usage: node run-typescript-conformance.js <output_dir> [<corpus_manifest.json>]')
+        process.exit(1)
     }
 
-    const outputDir = process.argv[2];
+    const outputDir = process.argv[2]
+    const manifest = loadManifest(outputDir)
 
-    console.log('Running TypeScript conformance tests...');
-    console.log(`Tests directory: ${testsDir}`);
-    console.log(`Output directory: ${outputDir}`);
+    console.log('Running TypeScript conformance producer...')
+    console.log(`Output directory: ${outputDir}`)
 
-    const results = new ConformanceResults();
-
-    // Run all test categories
-    try {
-        results.validation_results = await runValidationTests(testsDir);
-        console.log('✓ Validation tests completed');
-    } catch (error) {
-        results.validation_results = {};
-        results.errors.push(`Validation tests failed: ${error.message}`);
-        console.log(`✗ Validation tests failed: ${error.message}`);
-    }
+    const errors = []
+    let validationResults = {}
+    let displayResults = {}
+    let substitutionResults = {}
 
     try {
-        results.display_results = await runDisplayTests(testsDir);
-        console.log('✓ Display tests completed');
+        validationResults = await runValidation(manifest)
+        console.log(`✓ Validation sweep completed (${Object.keys(validationResults).length} files)`)
     } catch (error) {
-        results.display_results = {};
-        results.errors.push(`Display tests failed: ${error.message}`);
-        console.log(`✗ Display tests failed: ${error.message}`);
+        errors.push(`Validation sweep crashed: ${error.message}`)
+        console.log(`✗ Validation sweep crashed: ${error.message}`)
     }
 
     try {
-        results.substitution_results = await runSubstitutionTests(testsDir);
-        console.log('✓ Substitution tests completed');
+        displayResults = runDisplay(manifest)
+        console.log(`✓ Display sweep completed (${Object.keys(displayResults).length} cases)`)
     } catch (error) {
-        results.substitution_results = {};
-        results.errors.push(`Substitution tests failed: ${error.message}`);
-        console.log(`✗ Substitution tests failed: ${error.message}`);
+        errors.push(`Display sweep crashed: ${error.message}`)
+        console.log(`✗ Display sweep crashed: ${error.message}`)
     }
 
     try {
-        results.graph_results = await runGraphTests(testsDir);
-        console.log('✓ Graph tests completed');
+        substitutionResults = runSubstitution(manifest)
+        console.log(`✓ Substitution sweep completed (${Object.keys(substitutionResults).length} cases)`)
     } catch (error) {
-        results.graph_results = {};
-        results.errors.push(`Graph tests failed: ${error.message}`);
-        console.log(`✗ Graph tests failed: ${error.message}`);
+        errors.push(`Substitution sweep crashed: ${error.message}`)
+        console.log(`✗ Substitution sweep crashed: ${error.message}`)
     }
 
-    // Write results to file
-    writeResults(outputDir, results);
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true })
+    const resultsFile = path.join(outputDir, 'results.json')
+    fs.writeFileSync(resultsFile, JSON.stringify({
+        language: 'typescript',
+        timestamp: new Date().toISOString(),
+        validation_results: validationResults,
+        display_results: displayResults,
+        substitution_results: substitutionResults,
+        errors,
+    }, null, 2))
+    console.log(`TypeScript conformance results written to: ${resultsFile}`)
 
-    if (results.errors.length === 0) {
-        console.log('TypeScript conformance testing completed successfully!');
-        process.exit(0);
-    } else {
-        console.log(`TypeScript conformance testing completed with ${results.errors.length} errors`);
-        process.exit(1);
-    }
+    // A producer CRASH is fatal; a fixture-level divergence is not the
+    // producer's verdict to make — the comparator owns that judgement, and it
+    // needs every binding's results.json to make it.
+    process.exit(errors.length === 0 ? 0 : 1)
 }
 
-// Run main function if this script is executed directly
 if (import.meta.url === `file://${process.argv[1]}`) {
     main().catch(error => {
-        console.error('Unexpected error:', error);
-        process.exit(1);
-    });
+        console.error('Unexpected error:', error)
+        process.exit(1)
+    })
 }
