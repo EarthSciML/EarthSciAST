@@ -1840,7 +1840,22 @@ a claim about *why* the file is invalid, not merely *that* it is:
   `structural_errors: []`. A fixture that wants to pin a structural check must be
   schema-VALID.
 - `path` is the **JSON Pointer of the node that carries the defect** — `/models/M/equations/0/rhs`,
-  not `/models/M`; `/coupling/0/from`, not `/coupling/0`.
+  not `/models/M`; `/coupling/0/from`, not `/coupling/0`. Three corollaries, each of which
+  bit a real pin (audit 2026-07-14):
+  - **The pointer names where the defect IS, not where the old walkers happened to REACH.**
+    Now that observed `expression` is a first-class checked site (§4.9.5), a declared unit that
+    contradicts the dimension its own expression computes belongs at the **variable**
+    (`/models/M/variables/v`), not at some equation that merely mentions it.
+  - **A defect with no single carrier is pinned at the smallest node that CONTAINS it.** A
+    dependency cycle `A → B → A` is carried by no one model — naming either member is arbitrary
+    — so it pins at `/models`.
+  - **A pin is NEVER relaxed to accommodate a binding that lacks the check.** If a fixture pins
+    two findings and a binding emits one, the binding has a coverage GAP; the harness going red
+    is the pin doing its job. Deleting the pin to make it green is how a corpus stops meaning
+    anything. (`units_gradient_operator_mismatch.esm` pins BOTH a `grad`-over-unitless-coordinate
+    error at `/models/SpatialModel/equations/0` AND an addition mismatch at
+    `/models/SpatialModel/variables/bad_sum`; TS emits both, Go emits only the second because it
+    does not yet unit-check `grad`. The fix is Go's, not the pin's.)
 - `resolver_only: true` — the file is schema-valid and is rejected only by an
   evaluator/resolver that a schema-only binding does not run. Such a binding must assert
   `schema_errors == []` and nothing more.

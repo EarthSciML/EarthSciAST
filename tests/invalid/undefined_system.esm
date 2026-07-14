@@ -2,16 +2,26 @@
   "esm": "0.1.0",
   "metadata": {
     "name": "UndefinedSystemRef",
-    "description": "Coupling references nonexistent system"
+    "description": "Invalid: an `operator_compose` coupling entry whose `systems` array names a system that does not exist. `undefined_system` is the code for a DIRECT system reference (coupling[i].systems[j]); `unresolved_scoped_ref` is the code for a scoped `System.var` reference that does not resolve. This fixture previously used a `variable_map` with from: \"NonExistentSystem.temperature\" -- which carries a SCOPED REF, so every binding correctly reported unresolved_scoped_ref at /coupling/0/from and NOTHING ever emitted the `undefined_system` the pin demanded: the pin had been UNSATISFIABLE since it was written. The fixture now uses the construct its own name describes, and is the corpus's only coverage of `undefined_system`."
   },
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0 }
+        "x": {
+          "type": "state",
+          "units": "m",
+          "default": 0.0
+        }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
           "rhs": 1.0
         }
       ]
@@ -19,10 +29,12 @@
   },
   "coupling": [
     {
-      "type": "variable_map",
-      "from": "NonExistentSystem.temperature",
-      "to": "TestModel.T",
-      "transform": "identity"
+      "type": "operator_compose",
+      "systems": [
+        "TestModel",
+        "NonExistentSystem"
+      ],
+      "description": "Composes TestModel with a system declared nowhere in the document. operator_compose is binary and carries no connector, so the ONLY defect is the nonexistent system named in `systems`."
     }
   ]
 }
