@@ -347,8 +347,29 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, ')')
     else  # _NK_OP (including closed `fn`)
         print(io, "O:", n.op)
-        if n.payload isa Tuple && length(n.payload) >= 1
-            print(io, '@', n.payload[1])
+        pl = n.payload
+        if pl isa Tuple && length(pl) >= 2
+            # A closed `fn`: `payload === (fname, spec_or_nothing)`. The NAME alone
+            # is NOT a sufficient key. An `interp.*` node's const table/axis live in
+            # the typed spec, NOT in its children (`_compile_fn_node` pulls the const
+            # args out of the arg list), so two cells calling `interp.linear` against
+            # DIFFERENT tables have identical children and would otherwise share a
+            # signature — and `_merge_fn_node` puts ONE spec on the merged kernel, so
+            # every cell would silently compute against `nodes[1]`'s table. Reachable:
+            # a `makearray` whose regions each call `interp.*` with their own table,
+            # indexed inside an arrayop that takes the per-cell path (any contraction,
+            # i.e. an einsum/aggregate RHS). Keying the spec's CONTENT splits those
+            # into one kernel per distinct table.
+            #
+            # CONTENT, deliberately, not `objectid(spec)`: specs are rebuilt per
+            # `_compile_fn_node` call, so two cells with the SAME table routinely hold
+            # DIFFERENT spec objects. Identity keying would split groups that must
+            # merge and destroy the N-independence of the kernel count. Content keying
+            # keeps it: the number of DISTINCT tables is a property of the document,
+            # not of the grid.
+            print(io, '@', pl[1], '#', _fn_spec_hash(pl[2]))
+        elseif pl isa Tuple && length(pl) >= 1
+            print(io, '@', pl[1])
         end
         print(io, '(')
         _sig_children!(io, n.children)
@@ -366,6 +387,35 @@ function _sig_children!(io::IOBuffer, children)
     end
     return io
 end
+
+# Content hash / content equality for a closed function's build-time spec — the
+# matched (`hash`, `isequal`) pair the grouping and its guard need. `isequal`
+# (not `==`) so a table holding a NaN still compares equal to itself: two cells
+# genuinely sharing such a table must merge, not throw.
+#
+# `_fn_spec_hash` keys `_struct_sig!`'s grouping; `_fn_spec_content_equal` is the
+# exact check `_merge_fn_node` re-runs on the resulting group, so a hash COLLISION
+# degrades to a loud build error instead of back to silent wrong numbers.
+_fn_spec_hash(::Nothing) = UInt(0)                      # all-scalar `datetime.*`
+_fn_spec_hash(s::_InterpLinearSpec) = hash(s.axis, hash(s.table, UInt(0x11)))
+_fn_spec_hash(s::_InterpBilinearSpec) =
+    hash(s.axis_y, hash(s.axis_x, hash(s.table, UInt(0x22))))
+_fn_spec_hash(s::_InterpSearchsortedSpec) = hash(s.xs, UInt(0x33))
+# An unknown spec type cannot be content-hashed, so key it by IDENTITY: over-splitting
+# (a group per object) is safe — worst case an extra kernel — where under-splitting is
+# the silent wrong number this whole mechanism exists to prevent. No such spec exists
+# today (`_FN_CONST_ARG_SPECS` is the closed set); this is the fail-safe default for one
+# added without updating the three methods above.
+_fn_spec_hash(s) = objectid(s)
+
+_fn_spec_content_equal(a, b) = false                    # different spec types never match
+_fn_spec_content_equal(::Nothing, ::Nothing) = true
+_fn_spec_content_equal(a::_InterpLinearSpec, b::_InterpLinearSpec) =
+    isequal(a.table, b.table) && isequal(a.axis, b.axis)
+_fn_spec_content_equal(a::_InterpBilinearSpec, b::_InterpBilinearSpec) =
+    isequal(a.table, b.table) && isequal(a.axis_x, b.axis_x) && isequal(a.axis_y, b.axis_y)
+_fn_spec_content_equal(a::_InterpSearchsortedSpec, b::_InterpSearchsortedSpec) =
+    isequal(a.xs, b.xs)
 
 # Allocate the closed-function argument vector for a vectorized all-scalar `fn`
 # node (e.g. `datetime.*`): one `Any` slot per child, filled per lane in
@@ -419,7 +469,10 @@ function _merge_nodes(nodes::Vector{_Node}, len::Int)::_VecNode
         m = length(n1.children)
         ch = _VecNode[_merge_nodes(_Node[nd.children[c] for nd in nodes], len) for c in 1:m]
         if n1.op === :fn
-            return _merge_fn_node(n1.payload, ch, len, m)
+            # `nodes` (the whole group) is handed down so `_merge_fn_node` can VERIFY
+            # that the single spec it is about to put on the kernel really does speak
+            # for every cell — see `_check_fn_group_specs`.
+            return _merge_fn_node(n1.payload, ch, len, m, nodes)
         end
         # Lane-invariant subtree → one scalar eval per RHS call instead of one per lane.
         hoisted = _maybe_hoist_invariant(n1.op, n1.payload, ch, len)
@@ -427,6 +480,39 @@ function _merge_nodes(nodes::Vector{_Node}, len::Int)::_VecNode
         return _mkvnode(kind=_VK_OP, op=n1.op, payload=n1.payload, children=ch,
                         buf=Vector{Float64}(undef, len))
     end
+end
+
+# Every cell in a `fn` group must carry a CONTENT-equal spec, because the merged
+# kernel carries exactly one. Throws rather than merging cells whose const tables
+# differ — the hazard this guards is a SILENT one (identical shapes, different
+# numbers), so it must fail at build.
+#
+# The `===` fast path is what keeps this free in practice: the per-equation build
+# memo makes every cell of one source `fn` node share ONE spec object, so the loop is
+# N pointer compares and the content compare is reached only for genuinely distinct
+# objects (an unmemoized rebuild, or a hash collision).
+function _check_fn_group_specs(nodes::Vector{_Node})
+    length(nodes) <= 1 && return nothing
+    fname1, spec1 = (nodes[1].payload)::Tuple{String,Any}
+    @inbounds for k in 2:length(nodes)
+        fnamek, speck = (nodes[k].payload)::Tuple{String,Any}
+        speck === spec1 && fnamek == fname1 && continue
+        (fnamek == fname1 && _fn_spec_content_equal(speck, spec1)) && continue
+        throw(TreeWalkError("E_TREEWALK_FN_SPEC_MISMATCH",
+            "vectorized array kernel: cells grouped as structurally identical carry " *
+            "DIFFERENT closed-function specs for '$(fname1)' (cell 1 vs cell $(k)" *
+            (fnamek == fname1 ? ": same function, different const table/axis" :
+                                ": different functions '$(fname1)' vs '$(fnamek)'") *
+            "). A merged kernel carries ONE spec for all its lanes, so these cells " *
+            "cannot share a vectorized kernel — evaluating them together would " *
+            "silently compute every cell against the FIRST cell's table. Cells whose " *
+            "const tables differ (e.g. `makearray` regions each calling `interp.*` " *
+            "with their own table) must land in SEPARATE structural groups; " *
+            "`_struct_sig!` keys the spec's content precisely so they do, so reaching " *
+            "this is a grouping-invariant break (a hash collision, or a signature that " *
+            "stopped keying the spec), not a model error."))
+    end
+    return nothing
 end
 
 # Build the vectorized node for a closed-function (`fn`) leaf. `interp.*` ops
@@ -447,7 +533,19 @@ end
 # its ancestors hoist too (an unhoistable child used to bar every ancestor as well).
 # `payload` is the source scalar `(fname, spec)`, i.e. precisely what the scalar `:fn` arm
 # of `_eval_node_op` reads, so the hoisted node needs no reconstruction of the `fn` itself.
-function _merge_fn_node(payload, ch::Vector{_VecNode}, len::Int, m::Int)::_VecNode
+#
+# FAIL-LOUD PRECONDITION. Whichever of the three lowerings fires, the node carries
+# exactly ONE spec — `nodes[1]`'s — for the whole group; there is no per-lane spec.
+# So before choosing, `_check_fn_group_specs` verifies that every cell in the group
+# really does carry a content-equal spec. `_struct_sig!` now keys the spec's content,
+# so a conforming document cannot violate this; the check makes a hash collision (or a
+# future grouping/lowering change that drops the key) a build ERROR rather than a
+# silent wrong number. `group === nothing` is the symbolic-stencil caller
+# (stencil.jl's `_lower_template`), which lowers ONE template node — no group to
+# disagree, since region choice is already in its branch key.
+function _merge_fn_node(payload, ch::Vector{_VecNode}, len::Int, m::Int,
+                        group::Union{Vector{_Node},Nothing}=nothing)::_VecNode
+    group === nothing || _check_fn_group_specs(group)
     fname, spec = payload::Tuple{String,Any}
     typed = spec isa _InterpLinearSpec || spec isa _InterpBilinearSpec ||
             spec isa _InterpSearchsortedSpec
