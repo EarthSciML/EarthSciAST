@@ -301,9 +301,22 @@ fn propagate_power(
     if base_unit.is_dimensionless() {
         return Ok(Unit::dimensionless());
     }
-    if let Expr::Number(n) = &op.args[1] {
+    // A literal exponent may arrive as EITHER `Expr::Number` (JSON `2.0`) or
+    // `Expr::Integer` (JSON `2`). Matching only `Number` meant that `L^2` — the
+    // natural spelling, and the one every author writes — fell through to the
+    // "non-literal exponent" error below, so `area = L^2` raised a spurious
+    // dimension mismatch. Worse, because `structural.rs` abandons an equation's
+    // whole dimension check at the first error, that spurious finding
+    // SUPPRESSED any real mismatch elsewhere in the same equation. The only
+    // test covering this path used `Expr::Number(3.0)` and so never saw it.
+    let literal_exp = match &op.args[1] {
+        Expr::Integer(i) => Some(*i as f64),
+        Expr::Number(n) => Some(*n),
+        _ => None,
+    };
+    if let Some(n) = literal_exp {
         if n.fract() == 0.0 {
-            return Ok(base_unit.power(*n as i32));
+            return Ok(base_unit.power(n as i32));
         }
         return Err(UnitError::DimensionMismatch(format!(
             "Non-integer exponent {n} applied to dimensional quantity"
