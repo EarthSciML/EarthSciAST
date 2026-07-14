@@ -98,14 +98,6 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
     }
 }
 
-/// Rewrite-target spatial operators that MUST be lowered to stencils before
-/// reaching any binding's simulator (esm-spec §4.2 / §9.6.8).
-///
-/// Re-exported from [`crate::op_registry`] so the compile-time gate and the
-/// runtime backstop in `eval_op` cannot drift apart from the registry that now
-/// defines the two operator tiers.
-pub(super) use crate::op_registry::REWRITE_TARGET_SUGAR as UNLOWERED_SPATIAL_OPS;
-
 /// Walk an expression and reject every operator node that may not reach an
 /// evaluator (esm-spec §4.2 / §9.6.8).
 ///
@@ -1106,13 +1098,7 @@ pub(crate) fn eval_buildtime_field(
     crate::aggregate::resolve_expr_ranges(&mut resolved, index_sets)?;
     let param_names: Vec<String> = params.keys().cloned().collect();
     let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
-    Ok(eval_expression(
-        &resolved,
-        &HashMap::new(),
-        &param_vec,
-        &param_names,
-        0.0,
-    ))
+    eval_expression(&resolved, &HashMap::new(), &param_vec, &param_names, 0.0)
 }
 
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`

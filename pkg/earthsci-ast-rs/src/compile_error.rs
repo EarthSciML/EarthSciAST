@@ -99,6 +99,31 @@ pub enum CompileError {
         reason: String,
     },
 
+    /// An evaluable-core operator (esm-spec §4.2) that this interpreter has no
+    /// evaluation rule for reached the evaluator.
+    ///
+    /// These ops are legal in an AST but are *eliminated before* the per-cell
+    /// evaluator ever runs: the build-time query ops (`skolem`, `rank`,
+    /// `distinct`, `argmin`, `argmax`) are resolved by
+    /// [`crate::value_invention`], and the form/lowering ops (`ic`, `true`,
+    /// `enum`, `table_lookup`, `apply_expression_template`) are consumed by
+    /// their respective lowering passes. One arriving at the evaluator means the
+    /// pipeline is broken.
+    ///
+    /// It is reported rather than evaluated to a NaN sentinel: a silent NaN is
+    /// indistinguishable from a legitimate numerical result and would propagate
+    /// into the solution, whereas the pipeline stage that should have eliminated
+    /// the op is the actual defect.
+    #[error(
+        "unevaluable_operator: operator '{op}' is an evaluable-core op with no evaluation rule \
+         in the array interpreter — it must be eliminated by an earlier pipeline stage \
+         (value invention, or a lowering pass) before evaluation (esm-spec §4.2)"
+    )]
+    UnevaluableOperatorError {
+        /// The offending operator name (e.g. `"skolem"`).
+        op: String,
+    },
+
     /// The convenience constructors flattened the input first; that step
     /// failed.
     #[error("Flatten failed: {0}")]
