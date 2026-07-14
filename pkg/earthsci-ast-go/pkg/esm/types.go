@@ -664,14 +664,20 @@ type Reference struct {
 
 // Metadata represents file metadata
 type Metadata struct {
-	Name        string      `json:"name"`
-	Description *string     `json:"description,omitempty"`
-	Authors     []string    `json:"authors"`
-	License     *string     `json:"license,omitempty"`
-	Created     *string     `json:"created,omitempty"`
-	Modified    *string     `json:"modified,omitempty"`
-	Tags        []string    `json:"tags,omitempty"`
-	References  []Reference `json:"references,omitempty"`
+	Name        string  `json:"name"`
+	Description *string `json:"description,omitempty"`
+	// Authors is OPTIONAL (the schema requires only `name`), so it must be
+	// omitted when absent rather than emitted as `"authors": null` — a null fails
+	// the schema's `array` type, which made every author-less document
+	// UNSERIALIZABLE: it round-tripped into a form the schema rejects. Surfaced by
+	// the template-library round-trip (§9.6.4 rule 5), whose fixtures declare no
+	// authors.
+	Authors    []string    `json:"authors,omitempty"`
+	License    *string     `json:"license,omitempty"`
+	Created    *string     `json:"created,omitempty"`
+	Modified   *string     `json:"modified,omitempty"`
+	Tags       []string    `json:"tags,omitempty"`
+	References []Reference `json:"references,omitempty"`
 }
 
 // ========================================
@@ -737,6 +743,25 @@ type ESMFile struct {
 	// names from it. As of v0.8.0 this moved from a per-Model field to
 	// document scope: one registry, shared by every model.
 	IndexSets map[string]IndexSet `json:"index_sets,omitempty"`
+	// Metaparameters is the top-level §9.7.1 metaparameter declaration block, and
+	// ExpressionTemplates the top-level rewrite-rule registry — the payload of a
+	// template-library file (§9.7.1).
+	//
+	// Both are DECLARATIONS — peers of `index_sets` — not `apply_expression_template`
+	// CALL SITES, and esm-spec §9.6.4 rule 5 requires them to survive `parse → emit`
+	// VERBATIM: a template-library file MUST round-trip to itself. They are held as
+	// raw JSON precisely so that "verbatim" is literal — canonicalizeValue preserves
+	// a json.RawMessage as-authored rather than re-encoding it.
+	//
+	// Go used to model neither field, so `json.Unmarshal` silently DROPPED both keys
+	// at parse and the emitter could not emit what it had never kept. A pure library
+	// file re-emitted as `{esm, metadata, index_sets}` — carrying NONE of the five
+	// top-level payload keys the schema's `anyOf` requires — so a conforming library
+	// file was unrepresentable: legal on disk, illegal the moment it was loaded and
+	// re-emitted (tests/valid/template_import_lib.esm,
+	// tests/valid/template_import_rename_lib.esm).
+	Metaparameters      json.RawMessage `json:"metaparameters,omitempty"`
+	ExpressionTemplates json.RawMessage `json:"expression_templates,omitempty"`
 }
 
 // FunctionTableAxis is a single named axis inside a FunctionTable.
@@ -795,9 +820,15 @@ func (e *ESMFile) ValidateStruct() error {
 	// indistinguishable HERE from an empty document — the two are told apart from
 	// the RAW document, which is what ValidateFile does (see isLibraryDocumentJSON).
 	// Callers holding only a typed ESMFile keep the strict invariant.
+	// The five top-level PAYLOAD keys of the schema's `anyOf`: models,
+	// reaction_systems, data_loaders, expression_templates, coupling_roles. A
+	// template-library file's payload is its `expression_templates` registry
+	// (§9.7.1) — omitting it here rejected every library file at serialization,
+	// which is how the emitter came to drop the registry in the first place.
 	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 && len(e.DataLoaders) == 0 &&
-		len(e.CouplingRoles) == 0 {
-		return fmt.Errorf("at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
+		len(e.CouplingRoles) == 0 && len(e.ExpressionTemplates) == 0 {
+		return fmt.Errorf("at least one of 'models', 'reaction_systems', 'data_loaders', " +
+			"'expression_templates', or 'coupling_roles' must be present")
 	}
 
 	return nil

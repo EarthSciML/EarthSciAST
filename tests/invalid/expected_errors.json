@@ -170,14 +170,11 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/coupling/0",
+        "path": "/coupling/0/systems",
         "code": "undefined_system",
-        "message": "Coupling entry references nonexistent system 'NonExistentSystem'",
+        "message": "Coupling entry references nonexistent system \"NonExistentSystem\"",
         "details": {
-          "system": "NonExistentSystem",
-          "coupling_type": "variable_map",
-          "reference": "NonExistentSystem.temperature",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "system": "NonExistentSystem"
         }
       }
     ],
@@ -1129,7 +1126,7 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/ModelA",
+        "path": "/models",
         "code": "circular_dependency",
         "message": "Circular coupling detected: ModelA → ModelB → ModelA",
         "details": {

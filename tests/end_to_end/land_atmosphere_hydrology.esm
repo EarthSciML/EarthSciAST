@@ -251,6 +251,24 @@
           "default": 1e-06,
           "description": "Saturated hydraulic conductivity"
         },
+        "k_flux_12": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1e-07,
+          "description": "Layer1->2 moisture exchange coefficient. Was a BARE LITERAL 1e-7: a dimensionless number times a dimensionless moisture difference, divided by a thickness, gives 1/m where d(m^3/m^3)/dt needs 1/s. As a velocity (m/s) the term closes: (m/s)*(1)/m = 1/s."
+        },
+        "k_flux_23": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 5e-08,
+          "description": "Layer2->3 moisture exchange coefficient (was the bare literal 5e-8). Units m/s, as for k_flux_12."
+        },
+        "k_drain": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1e-08,
+          "description": "Bottom drainage coefficient (was the bare literal 1e-8). Units m/s, as for k_flux_12."
+        },
         "thermal_conductivity": {
           "type": "parameter",
           "units": "W/m/K",
@@ -398,7 +416,7 @@
                       {
                         "op": "-",
                         "args": [
-                          1e-07
+                          "k_flux_12"
                         ]
                       },
                       {
@@ -433,7 +451,7 @@
                   {
                     "op": "*",
                     "args": [
-                      1e-07,
+                      "k_flux_12",
                       {
                         "op": "-",
                         "args": [
@@ -449,7 +467,7 @@
                       {
                         "op": "-",
                         "args": [
-                          5e-08
+                          "k_flux_23"
                         ]
                       },
                       {
@@ -484,7 +502,7 @@
                   {
                     "op": "*",
                     "args": [
-                      5e-08,
+                      "k_flux_23",
                       {
                         "op": "-",
                         "args": [
@@ -500,7 +518,7 @@
                       {
                         "op": "-",
                         "args": [
-                          1e-08
+                          "k_drain"
                         ]
                       },
                       "soil_moisture_layer3"
@@ -542,7 +560,13 @@
                   }
                 ]
               },
-              "heat_capacity"
+              {
+                "op": "*",
+                "args": [
+                  "heat_capacity",
+                  "layer1_thickness"
+                ]
+              }
             ]
           }
         },
@@ -600,7 +624,13 @@
                   }
                 ]
               },
-              "heat_capacity"
+              {
+                "op": "*",
+                "args": [
+                  "heat_capacity",
+                  "layer2_thickness"
+                ]
+              }
             ]
           }
         },
@@ -658,7 +688,13 @@
                   }
                 ]
               },
-              "heat_capacity"
+              {
+                "op": "*",
+                "args": [
+                  "heat_capacity",
+                  "layer3_thickness"
+                ]
+              }
             ]
           }
         },

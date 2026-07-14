@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -208,6 +209,11 @@ func TestInvalidCorpusStructuralPins(t *testing.T) {
 		t.Fatalf("parse expected_errors.json: %v", err)
 	}
 
+	// RECURSIVE index of the invalid corpus: basename → full path. Globbing only
+	// `tests/invalid/*.esm` skipped the 35 fixtures that live in subdirectories —
+	// 24 of them pinned in expected_errors.json and therefore silently unswept.
+	corpusFixtures := indexCorpus(t, invalidDir)
+
 	names := make([]string, 0, len(expected))
 	for name := range expected {
 		names = append(names, name)
@@ -222,9 +228,10 @@ func TestInvalidCorpusStructuralPins(t *testing.T) {
 		if len(entry.StructuralErrors) == 0 || entry.ResolverOnly {
 			continue
 		}
-		path := filepath.Join(invalidDir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue // fixture lives in a subdirectory with its own harness
+		path, found := corpusFixtures[name]
+		if !found {
+			t.Errorf("expected_errors.json pins %q, but no such fixture exists under tests/invalid/**", name)
+			continue
 		}
 		swept++
 
@@ -271,9 +278,105 @@ func TestInvalidCorpusStructuralPins(t *testing.T) {
 
 	// A guard against the sweep silently becoming a no-op (the failure mode this
 	// whole test exists to prevent): the corpus pins dozens of structural fixtures.
-	if swept < 50 {
-		t.Fatalf("swept only %d structurally-pinned invalid fixtures; the corpus has far more — "+
-			"the sweep is not reaching the fixtures", swept)
+	if swept < invalidStructuralPinFloor {
+		t.Fatalf("swept only %d structurally-pinned invalid fixtures, want >= %d: the sweep is not "+
+			"reaching the fixtures (a shrunken or non-recursive glob is exactly the F5 defect this "+
+			"floor exists to catch)", swept, invalidStructuralPinFloor)
+	}
+}
+
+// Corpus floors. A sweep that silently stops reaching fixtures is the audit's F5
+// finding (non-recursive globs missing most of the corpus), and it is invisible
+// precisely BECAUSE the suite still passes. These floors make a shrunken glob or
+// an emptied directory fail LOUDLY. They are lower bounds, not exact counts, so
+// adding fixtures never breaks the build; they are raised when the corpus grows.
+const (
+	validCorpusFloor          = 80  // tests/valid/**   (82 at time of writing)
+	invalidCorpusFloor        = 140 // tests/invalid/** (144 at time of writing)
+	invalidStructuralPinFloor = 60  // entries of expected_errors.json pinning structural errors (68)
+)
+
+// indexCorpus walks `root` RECURSIVELY and returns basename → full path for every
+// .esm fixture beneath it, failing if two fixtures share a basename (which would
+// make a bare-name pin in expected_errors.json ambiguous).
+func indexCorpus(t *testing.T, root string) map[string]string {
+	t.Helper()
+	index := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".esm") {
+			return err
+		}
+		name := filepath.Base(path)
+		if prior, dup := index[name]; dup {
+			t.Fatalf("two fixtures share the basename %q (%s and %s); expected_errors.json keys "+
+				"are bare names and would be ambiguous", name, prior, path)
+		}
+		index[name] = path
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return index
+}
+
+// TestValidCorpusIsAccepted sweeps tests/valid RECURSIVELY and asserts the Go
+// binding accepts every fixture in it.
+//
+// No such sweep existed. Go's valid-corpus tests globbed four NAMED
+// subdirectories (aggregate, cadence, geometry, initial_conditions) plus a
+// handful of individually-named files — so `tests/valid/*.esm` AT THE TOP LEVEL,
+// where most of the corpus lives, was never swept at all, and neither was
+// tests/valid/scalar_leaves. That is the audit's own F5 finding (non-recursive
+// sweeps missing fixtures) reproduced INSIDE the test suite meant to catch it,
+// and it is what let two template-library fixtures sit permanently broken while
+// the suite stayed green.
+func TestValidCorpusIsAccepted(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	validDir := filepath.Join(repoRoot, "tests", "valid")
+
+	fixtures := indexCorpus(t, validDir)
+	if len(fixtures) < validCorpusFloor {
+		t.Fatalf("swept only %d valid fixtures, want >= %d: the sweep is not reaching the corpus",
+			len(fixtures), validCorpusFloor)
+	}
+
+	names := make([]string, 0, len(fixtures))
+	for name := range fixtures {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			file, err := Load(fixtures[name])
+			if err != nil {
+				t.Fatalf("a VALID fixture failed to load: %v", err)
+			}
+			res := ValidateStructuralWithCodes(file)
+			if !res.Valid {
+				for _, e := range res.StructuralErrors {
+					t.Errorf("a VALID fixture was REJECTED: [%s] %s at %s", e.Code, e.Message, e.Path)
+				}
+			}
+		})
+	}
+}
+
+// TestInvalidCorpusIsSwept guards the DENOMINATOR of the invalid corpus the same
+// way — a non-recursive glob here would silently stop pinning the 35 fixtures
+// that live in subdirectories.
+func TestInvalidCorpusIsSwept(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	fixtures := indexCorpus(t, filepath.Join(repoRoot, "tests", "invalid"))
+	if len(fixtures) < invalidCorpusFloor {
+		t.Fatalf("found only %d invalid fixtures, want >= %d", len(fixtures), invalidCorpusFloor)
 	}
 }
 
@@ -475,5 +578,94 @@ func TestCallbackVariablesAreADeclarationSite(t *testing.T) {
 	}
 	if bystanderErrs == 0 {
 		t.Error("a NON-target model silently gained the injected name; the credit must be target-scoped")
+	}
+}
+
+// TestTemplateLibraryRoundTripsToItself pins esm-spec §9.6.4 rule 5: Option A
+// expands CALL SITES; it does not delete DECLARATIONS.
+//
+// A top-level `expression_templates` registry and a `metaparameters` block are
+// DECLARATIONS — peers of `index_sets` — so they survive parse → emit VERBATIM,
+// and a template-library file round-trips to ITSELF.
+//
+// Go modelled neither field on ESMFile, so both keys were dropped at parse and a
+// library file re-emitted as `{esm, metadata, index_sets}` — carrying NONE of the
+// five top-level payload keys the schema's `anyOf` requires. Combined with §9.6.4
+// rule 4 (schema validation runs on the post-expansion form) that made a
+// conforming library file UNREPRESENTABLE: legal on disk, illegal the moment it
+// was loaded and re-emitted. A document kind that cannot round-trip to itself is
+// not a document kind.
+func TestTemplateLibraryRoundTripsToItself(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+
+	for _, name := range []string{"template_import_lib.esm", "template_import_rename_lib.esm"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(repoRoot, "tests", "valid", name)
+			authored, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+
+			file, err := Load(path)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+
+			// The registry IS the library's payload: without it the document has no
+			// top-level payload key at all and cannot serialize.
+			if len(file.ExpressionTemplates) == 0 {
+				t.Fatal("`expression_templates` was DROPPED at parse: the registry is a declaration, " +
+					"not a call site, and must survive verbatim (§9.6.4 rule 5)")
+			}
+
+			emitted, err := Serialize(file)
+			if err != nil {
+				t.Fatalf("a library file failed to serialize: %v", err)
+			}
+
+			// Semantic identity: every authored top-level key survives, with the two
+			// declaration blocks deep-equal to what was written on disk.
+			var before, after map[string]any
+			if err := json.Unmarshal(authored, &before); err != nil {
+				t.Fatalf("unmarshal authored: %v", err)
+			}
+			if err := json.Unmarshal([]byte(emitted), &after); err != nil {
+				t.Fatalf("unmarshal emitted: %v", err)
+			}
+			for key := range before {
+				if _, ok := after[key]; !ok {
+					t.Errorf("emitted document DROPPED the authored top-level key %q", key)
+				}
+			}
+			for _, key := range []string{"expression_templates", "metaparameters"} {
+				if !reflect.DeepEqual(before[key], after[key]) {
+					t.Errorf("%q did not survive parse → emit verbatim:\n authored: %v\n emitted:  %v",
+						key, before[key], after[key])
+				}
+			}
+
+			// A template BODY may legally contain an `apply_expression_template`: that
+			// is §9.7.3 template COMPOSITION, expanded at the INVOCATION site, not at
+			// the DECLARATION. It must survive in the registry and must NOT be
+			// mistaken for an unexpanded call site by a stray-apply scanner. (Go is
+			// guarded here by expressionTemplatesSkip in lower_expression_templates.go;
+			// template_import_lib.esm's `scale_by_n` body is the live case.)
+			if name == "template_import_lib.esm" &&
+				!strings.Contains(string(file.ExpressionTemplates), applyExpressionTemplateOp) {
+				t.Error("the composition `apply_expression_template` in a template BODY did not survive: " +
+					"a declaration is not a call site (§9.7.3)")
+			}
+
+			// And the emitted form must itself be loadable — rule 4 runs schema
+			// validation on the post-expansion form, which is what made the dropped
+			// registry fatal rather than merely lossy. Re-loading is also what would
+			// trip a stray-apply scanner on the composition body above.
+			if _, err := LoadString(emitted, WithBasePath(filepath.Dir(path))); err != nil {
+				t.Errorf("the EMITTED library file is not a legal document: %v", err)
+			}
+		})
 	}
 }

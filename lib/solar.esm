@@ -36,6 +36,42 @@
           "default": 0.0,
           "description": "Longitude, degrees east of the prime meridian. Range [-180, 180]."
         },
+        "rad_per_day": {
+          "type": "parameter",
+          "units": "rad",
+          "default": 0.01721420632103996,
+          "description": "The NOAA fractional-year rate, 2π/365 radians per day-of-year count. A DIMENSIONAL BRIDGE (esm-spec §4.8.3): `day_of_year`, `hour`, `minute` and `second` are dimensionless integer CLOCK FIELDS (0..366, 0..23, 0..59), not durations — so every conversion factor in this file is what carries the dimension. Giving the clock fields time units instead would be wrong: `gamma`'s bracket `(day_of_year - 1) + (hour - 12)/24` is a dimensionless day COUNT, and an `hour` in hours would make it add a time to a pure number."
+        },
+        "rad_per_deg": {
+          "type": "parameter",
+          "units": "rad/deg",
+          "default": 0.017453292519943295,
+          "description": "π/180 — the degree-to-radian conversion. Dimensionally rad/rad, i.e. a pure ratio; it is what turns `lat` (deg) into `lat_rad` (rad)."
+        },
+        "min_per_deg": {
+          "type": "parameter",
+          "units": "min/deg",
+          "default": 4.0,
+          "description": "Earth's rotation rate expressed as solar-time minutes per degree of longitude: 1440 min / 360°. This is the factor whose absence was a real defect — `4*lon` with a bare literal adds an ANGLE to a TIME in `true_solar_time`, and divides a TIME by a pure number in `hour_angle`."
+        },
+        "min_of_clock": {
+          "type": "parameter",
+          "units": "min",
+          "default": 1.0,
+          "description": "Solar-time minutes per unit of the dimensionless clock expression `hour*60 + minute + second/60` (§4.8.3 dimensional bridge). Numerically the identity — x*1.0 is exact in IEEE-754, so the bit-defined value of `true_solar_time` is unchanged — but it is what turns the integer clock count into a quantity of minutes."
+        },
+        "rad_of_series": {
+          "type": "parameter",
+          "units": "rad",
+          "default": 1.0,
+          "description": "Radians per unit of the dimensionless Spencer declination series (§4.8.3 dimensional bridge). The series' seven coefficients ARE radian magnitudes, but `cos`/`sin` return a pure ratio (§4.8.3), so the sum carries no dimension of its own. Numerically the identity (x*1.0 is exact), so `solar_declination` is bit-unchanged."
+        },
+        "eot_scale": {
+          "type": "parameter",
+          "units": "min",
+          "default": 229.18,
+          "description": "1440 min / 2π rad — the factor converting the NOAA equation-of-time Fourier series (an angle, carried dimensionlessly out of cos/sin) into minutes of solar time."
+        },
         "day_of_year": {
           "type": "observed",
           "units": "1",
@@ -63,11 +99,11 @@
         "gamma": {
           "type": "observed",
           "units": "rad",
-          "description": "NOAA fractional-year angle γ = (2π/365) · ((day_of_year - 1) + (hour - 12)/24). Always uses 365.0 (NOAA convention).",
+          "description": "NOAA fractional-year angle γ = rad_per_day · ((day_of_year - 1) + (hour - 12)/24), i.e. (2π/365) · (...). The bracket is a dimensionless day count; `rad_per_day` carries the angle (§4.8.3). Always uses 365.0 (NOAA convention).",
           "expression": {
             "op": "*",
             "args": [
-              0.01721420632103996,
+              "rad_per_day",
               {
                 "op": "+",
                 "args": [
@@ -81,28 +117,34 @@
         "solar_declination": {
           "type": "observed",
           "units": "rad",
-          "description": "Solar declination δ (radians) — the Spencer Fourier series in γ: δ = 0.006918 - 0.399912 cos γ + 0.070257 sin γ - 0.006758 cos 2γ + 0.000907 sin 2γ - 0.002697 cos 3γ + 0.00148 sin 3γ. Accurate to ~0.0006 rad (~2 arcmin); cross-binding tolerance ≤ 10 ulp.",
+          "description": "Solar declination δ (radians) — the Spencer Fourier series in γ: δ = rad_of_series · (0.006918 - 0.399912 cos γ + 0.070257 sin γ - 0.006758 cos 2γ + 0.000907 sin 2γ - 0.002697 cos 3γ + 0.00148 sin 3γ). The seven coefficients are radian magnitudes, but cos/sin return a pure ratio (§4.8.3), so `rad_of_series` (= 1 rad, exact under IEEE-754) is what makes the sum an angle. Accurate to ~0.0006 rad (~2 arcmin); cross-binding tolerance ≤ 10 ulp.",
           "expression": {
-            "op": "+",
+            "op": "*",
             "args": [
-              0.006918,
-              { "op": "*", "args": [-0.399912, { "op": "cos", "args": ["gamma"] }] },
-              { "op": "*", "args": [ 0.070257, { "op": "sin", "args": ["gamma"] }] },
-              { "op": "*", "args": [-0.006758, { "op": "cos", "args": [ { "op": "*", "args": [2.0, "gamma"] } ] }] },
-              { "op": "*", "args": [ 0.000907, { "op": "sin", "args": [ { "op": "*", "args": [2.0, "gamma"] } ] }] },
-              { "op": "*", "args": [-0.002697, { "op": "cos", "args": [ { "op": "*", "args": [3.0, "gamma"] } ] }] },
-              { "op": "*", "args": [ 0.00148,  { "op": "sin", "args": [ { "op": "*", "args": [3.0, "gamma"] } ] }] }
+              "rad_of_series",
+              {
+                "op": "+",
+                "args": [
+                  0.006918,
+                  { "op": "*", "args": [-0.399912, { "op": "cos", "args": ["gamma"] }] },
+                  { "op": "*", "args": [ 0.070257, { "op": "sin", "args": ["gamma"] }] },
+                  { "op": "*", "args": [-0.006758, { "op": "cos", "args": [ { "op": "*", "args": [2.0, "gamma"] } ] }] },
+                  { "op": "*", "args": [ 0.000907, { "op": "sin", "args": [ { "op": "*", "args": [2.0, "gamma"] } ] }] },
+                  { "op": "*", "args": [-0.002697, { "op": "cos", "args": [ { "op": "*", "args": [3.0, "gamma"] } ] }] },
+                  { "op": "*", "args": [ 0.00148,  { "op": "sin", "args": [ { "op": "*", "args": [3.0, "gamma"] } ] }] }
+                ]
+              }
             ]
           }
         },
         "equation_of_time": {
           "type": "observed",
           "units": "min",
-          "description": "Equation of time (apparent − mean solar time), in minutes, NOAA Spencer form: EoT = 229.18 · (0.000075 + 0.001868 cos γ - 0.032077 sin γ - 0.014615 cos 2γ - 0.040849 sin 2γ). Accurate to ~0.5 min.",
+          "description": "Equation of time (apparent − mean solar time), in minutes, NOAA Spencer form: EoT = eot_scale · (0.000075 + 0.001868 cos γ - 0.032077 sin γ - 0.014615 cos 2γ - 0.040849 sin 2γ), with eot_scale = 229.18 min. The Fourier bracket is the EoT as an angle, carried dimensionlessly out of cos/sin (§4.8.3); `eot_scale` is what makes the result minutes. Accurate to ~0.5 min.",
           "expression": {
             "op": "*",
             "args": [
-              229.18,
+              "eot_scale",
               {
                 "op": "+",
                 "args": [
@@ -119,30 +161,41 @@
         "true_solar_time": {
           "type": "observed",
           "units": "min",
-          "description": "True solar time at the longitude `lon`, expressed as minutes since UTC midnight: hour·60 + minute + second/60 + EoT + 4·lon. The 4 minutes per degree term is the rotation rate of the Earth (1440 min / 360°).",
+          "description": "True solar time at the longitude `lon`, expressed as minutes since UTC midnight: min_of_clock·(hour·60 + minute + second/60) + EoT + min_per_deg·lon. TWO dimensional defects are fixed here (§4.8.3): the clock group is a DIMENSIONLESS integer count, so `min_of_clock` (= 1 min, exact) is what makes it a time; and `4·lon` with a bare literal added an ANGLE (deg) to a TIME — the 4 is 4 minutes PER DEGREE, the rotation rate of the Earth (1440 min / 360°), and it is now `min_per_deg`. Bit-identical to the previous form.",
           "expression": {
             "op": "+",
             "args": [
-              { "op": "*", "args": ["hour", 60.0] },
-              "minute",
-              { "op": "/", "args": ["second", 60.0] },
+              {
+                "op": "*",
+                "args": [
+                  "min_of_clock",
+                  {
+                    "op": "+",
+                    "args": [
+                      { "op": "*", "args": ["hour", 60.0] },
+                      "minute",
+                      { "op": "/", "args": ["second", 60.0] }
+                    ]
+                  }
+                ]
+              },
               "equation_of_time",
-              { "op": "*", "args": [4.0, "lon"] }
+              { "op": "*", "args": ["min_per_deg", "lon"] }
             ]
           }
         },
         "hour_angle": {
           "type": "observed",
           "units": "rad",
-          "description": "Solar hour angle ω (radians): ω = (true_solar_time/4 − 180)·π/180. Zero at local solar noon, positive in the afternoon.",
+          "description": "Solar hour angle ω (radians): ω = rad_per_deg·(true_solar_time/min_per_deg − 180), i.e. (true_solar_time/4 − 180)·π/180. Dividing a TIME by the bare literal 4 left ω with the dimension of time, not an angle; `min_per_deg` (min/deg) turns the solar time into degrees of rotation, the bare 180 is a dimension-neutral literal in a subtraction (§4.8.3), and `rad_per_deg` converts to radians. Zero at local solar noon, positive in the afternoon. Bit-identical to the previous form.",
           "expression": {
             "op": "*",
             "args": [
-              0.017453292519943295,
+              "rad_per_deg",
               {
                 "op": "-",
                 "args": [
-                  { "op": "/", "args": ["true_solar_time", 4.0] },
+                  { "op": "/", "args": ["true_solar_time", "min_per_deg"] },
                   180.0
                 ]
               }
@@ -152,8 +205,8 @@
         "lat_rad": {
           "type": "observed",
           "units": "rad",
-          "description": "Latitude in radians: lat · π/180.",
-          "expression": { "op": "*", "args": [0.017453292519943295, "lat"] }
+          "description": "Latitude in radians: rad_per_deg · lat, i.e. lat · π/180. (This one was already dimensionally sound — `lat` carries `deg` — and is rewritten only to name the shared constant.)",
+          "expression": { "op": "*", "args": ["rad_per_deg", "lat"] }
         },
         "cos_zenith": {
           "type": "observed",

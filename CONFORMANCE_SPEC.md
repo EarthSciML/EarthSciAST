@@ -42,6 +42,11 @@ tests/
 **Structure:**
 - **`tests/valid/`**: ESM files that should parse successfully and pass all validation checks
 - **`tests/invalid/`**: ESM files that should fail validation with documented error codes
+- **`lib/*.esm`**: the SHIPPED standard subsystem library (`solar`, `calendar`, `interp`). These are **not** fixtures — they are real code that users mount via a §4.7 `ref` — but a conforming binding's validation sweep MUST include them and MUST hold them to exactly the `tests/valid/` standard.
+
+**`lib/*.esm` is part of the corpus, and this is a pin, not a nicety.** Nothing swept the standard library: the only fixtures that touched it (`tests/valid/lib_solar_subsystem_inclusion.esm`, `lib_calendar_subsystem_inclusion.esm`) mount it as a *subsystem*, and no binding dimension-checks an inlined subsystem body. So both files shipped to users with real defects that a direct validation would have caught immediately — `seconds_since_midnight` declared in seconds while its expression was a pure number, `true_solar_time` adding a dimensionless clock count to a time AND to an angle, and a `units: "d"` that is not in the §4.8.1 registry at all (audit 2026-07-14). A binding that validates `tests/valid/**` but not `lib/**` has a hole in exactly the place where a bug reaches users rather than a test report.
+
+The `lib/` files are mirrored to `docs/static/lib/` so the documentation site can serve them. That mirror is enforced by `scripts/sync-lib.sh --check` in CI, the same way `scripts/sync-schema.sh --check` enforces the schema copies; before it existed the docs could have shipped a stale or broken standard library indefinitely with nothing to notice.
 
 **File naming convention:**
 ```
@@ -1754,13 +1759,127 @@ Validation tests must use these standardized error codes:
 | `undefined_variable` | Structural | Equation references undeclared variable |
 | `undefined_species` | Structural | Reaction references undeclared species |
 | `undefined_parameter` | Structural | Rate expression references undeclared parameter |
-| `undefined_system` | Structural | Coupling references nonexistent system |
-| `unresolved_scoped_ref` | Structural | Invalid scoped reference path |
+| `undefined_system` | Structural | A **DIRECT system reference** names a system that does not exist — i.e. the bad name sits in a `coupling[i].systems[j]` slot (`couple`, `operator_compose`). Pointer: `/coupling/i/systems`. The system position is itself a dot path of arbitrary depth (esm-spec §4.9.2) — walk it before reporting. |
+| `unresolved_scoped_ref` | Structural | A **SCOPED `System.var` REFERENCE** does not resolve — the bad name sits inside a scoped reference (`variable_map`'s `from`/`to`, a connector `expression`, a `transform`). Pointer: the slot holding the reference, e.g. `/coupling/i/from`. Scoped references are ARBITRARY DEPTH (esm-spec §4.6, §4.9.2); a resolver must walk every segment, not split on `.` and take `[0]`/`[1]`. |
+
+**Choosing between the two (settled 2026-07-14 — the corpus previously contradicted itself).**
+The code is fixed by the **syntactic construct that carries the bad name**, NOT by the semantic
+fact that a system happens to be missing. A missing system reached through a `variable_map`'s
+`from: "NoSuchSystem.T"` is an `unresolved_scoped_ref` at `/coupling/i/from` — the slot holds a
+*scoped reference*, and the resolver fails walking its first segment. The same missing system
+named in an `operator_compose`'s `systems: ["M", "NoSuchSystem"]` is an `undefined_system` at
+`/coupling/i/systems`. This is decidable locally from the construct, which is what makes it
+implementable. Three fixtures pin the contract and now agree:
+`undefined_system.esm` (an `operator_compose` → `undefined_system` @ `/coupling/0/systems`),
+`unresolved_scoped_ref.esm` and `unresolved_scoped_ref_missing_system.esm` (both `variable_map`
+→ `unresolved_scoped_ref` @ `/coupling/0/from`). Previously `undefined_system.esm` was itself a
+`variable_map`, so its `undefined_system` pin was **unsatisfiable by construction** — no binding
+ever emitted it, and the code had zero real coverage.
+| `unresolved_subsystem_ref` | Structural | A §4.7 subsystem `ref` does not resolve — the target file does not exist, or is not reachable. **Canonical spelling.** (Formerly also spelled `ref_not_found`; see §7.1.3.) |
+| `ambiguous_subsystem_ref` | Structural | A §4.7 subsystem `ref` resolves to a file containing zero, or more than one, top-level model/reaction system, so the mount target is not unique. **Canonical spelling.** (Formerly `ref_ambiguous_system`; see §7.1.3.) |
 | `null_reaction` | Structural | Reaction with both null substrates and products |
 | `missing_observed_expr` | Structural | Observed variable missing expression |
-| `event_var_undeclared` | Structural | Event affects undeclared variable |
-| `unit_dimension_mismatch` | Units | Dimensional analysis failure |
-| `unit_parse_error` | Units | Unrecognized unit string |
+| `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
+| `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
+| `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
+| `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
+
+### 7.1.1 Units severity contract
+
+Normative definition: **esm-spec §4.8**. Restated here because it is the contract the
+shared corpus pins and the one the five bindings must not re-diverge on:
+
+| Situation | Severity |
+|---|---|
+| Provable dimensional mismatch (all operand dimensions known, a §4.8.3 rule violated) | **hard error** — `unit_dimension_mismatch` / `unit_inconsistency` |
+| Unresolvable or unreal unit string (`"not_a_unit"`, `"1/time"`) | **hard error** — `unit_parse_error` |
+| Genuinely undeterminable dimension (symbolic exponent, op with no dimensional rule, undeclared operand) | **warning** — report `unknown` and SKIP the enclosing check |
+
+A transcendental (`log`, `ln`, `exp`, `sinh`, …) applied to a dimensional argument is a
+**provable mismatch**, not an undeterminable case (esm-spec §4.8.3). The strict-transcendental
+set is CLOSED and `sqrt` is **not** in it — `sqrt` halves a dimension.
+
+ANGLES are the one exception, and they are not optional: `sin`/`cos`/`tan` accept an **angle**
+(`rad`/`deg`) as well as a dimensionless argument and return a dimensionless ratio, and
+`asin`/`acos`/`atan` take a dimensionless ratio and RETURN an angle. Because `rad` is one of the
+eight axes, a checker that demands a dimensionless argument for every transcendental rejects
+`cos(θ)` — and with it the shipped `lib/solar.esm` and `tests/valid/lib_solar_subsystem_inclusion.esm`.
+
+An undeterminable dimension MUST NOT be reported as *dimensionless* — that manufactures
+false mismatches against well-formed files. An incomplete unit registry MUST NOT be
+worked around by downgrading a severity; extend the registry.
+
+Six further pins from esm-spec §4.8, each of which a binding has violated:
+
+| Pin | esm-spec | What went wrong |
+|---|---|---|
+| Exponents are **rational**, not integer | §4.8.2 | An integer-only grammar cannot parse `1/s^0.5` and — under hard-error severity — falsely rejects every SDE fixture in the corpus. |
+| `*` and `/` are **one precedence level, left to right** | §4.8.2 | One binding parsed `J/mol*K` as `J/(mol*K)`, silently negating K's exponent into a plausible-looking wrong dimension. |
+| **Unicode normalisation is mandatory pre-parse** (`²³`, `⁻`, `·`, `⋅`, `µ`/`μ`, `°C`, `Ω`) | §4.8.2 | `W/m²` and `J/(kg·K)` fail in every binding today. |
+| **Unit strings carry dimensions only** — no species tags | §4.8.1 | `kg C/m^2` parses (whitespace = multiplication) as kg·coulomb·m⁻², a silently WRONG dimension. The species goes in the name/description. |
+| **Counts are dimensionless**; the axes are exactly `m kg s mol K A cd rad` | §4.8.1 | A binding delegating to `pint` typed `molec` as substance and the unit `units` as micro-nit (a luminance), so `units/L` became `cd·m⁻⁵`. |
+| **`DU` = 2.6867e20 m⁻²**, exactly; **no SI-prefix mechanism** | §4.8.1 | Two bindings shipped different Dobson roundings (2.6867e20 vs 2.69e20) and one compared to 1e-9 tolerance, so the same file errored in one and not the other. |
+
+### 7.1.3 Checker semantics that MUST NOT re-diverge
+
+The corpus contains conforming files that individual bindings reject. In every case below the
+SPEC sanctions the file and the CHECKER is at fault; the normative rules are esm-spec §4.9.
+A binding MUST NOT "fix" a rejection by editing the fixture.
+
+| # | Rule | Normative | Fixture that pins it |
+|---|---|---|---|
+| a | The **independent variable** (`domain.independent_variable`, default `"t"`) and **spatial coordinate names** (`x`, `y`, `lon`, …) are IMPLICITLY DECLARED — never `undefined_variable`. | §4.9.1, §11.3, §11.4 | `tests/valid/cadence/pure_pointwise.esm`, `tests/valid/initial_conditions/expression_ignition_front_1d.esm` |
+| b | **`_var`** is legal wherever a state variable is legal, including a continuous event's `affects`/`affect_neg` LHS and a `functional_affect`'s `read_vars`, in any operator-composed or coupled model — never `event_var_undeclared`. | §4.9.1, §6.4 | `tests/valid/full_coupled.esm` |
+| c | **Scoped references are ARBITRARY DEPTH** (`A.B.c`, `A.B.C.d`). A resolver walks every segment; it MUST NOT split on `"."` and take `[0]` as the system and `[1]` as the variable. Applies to the `systems`/`from`/`to` of a coupling entry too. | §4.6, §4.9.2 | `tests/valid/scoped_refs_coupling.esm`, `tests/scoping/*.esm` |
+| d | A **reaction `rate` MAY contain scoped references** into other systems. | §4.9.3, §7.3 | `tests/valid/events_cross_system.esm` |
+| e | **`equation_count_mismatch` balances UNKNOWNS vs EQUATIONS.** A non-derivative (algebraic) LHS — bare-variable *or* expression — is a credited equation. For `system_kind: "nonlinear"` there are no derivative equations at all. | §4.9.4 | `tests/valid/nonlinear_isorropia_shape.esm` |
+| f | The canonical subsystem-ref codes are **`unresolved_subsystem_ref`** and **`ambiguous_subsystem_ref`**. The older `ref_not_found` / `ref_ambiguous_system` spellings are RETIRED. `ref_*` was ambiguous across three distinct reference mechanisms (§4.7 subsystem refs, §9.7 template imports, §10 coupling-library role edges); the chosen pair parallels the already-canonical `unresolved_scoped_ref`. | §4.7, §7.1 | `tests/invalid/subsystem_ref_not_found.esm`, `tests/invalid/subsystem_ref_ambiguous.esm` |
+| i | **A VALID fixture MUST be asserted `is_valid == true`, not merely round-tripped — and a valid fixture can NEVER, on its own, prove a checker checks anything.** Mutation-testing `tests/valid/units_registry_grammar.esm` (corrupt each observed variable in turn; every corruption still passed) exposed two distinct vacuities. In **Python**, nothing compared a variable's DECLARED units against the dimension its EXPRESSION computes, so the assertion was empty. In **TypeScript**, the valid-corpus conformance test only calls `load`/`emit` — `it.each(validFiles)('should round-trip …')` — and **never calls `validate()`**, so "it validates clean" meant "it was never validated". A valid fixture can only ever prove a checker does not FALSELY REJECT; proving it actually CHECKS requires an INVALID fixture whose sole defect is a violation of the rule. Every discriminator rule therefore needs BOTH halves. This is §9 ("Tests that assert nothing") reappearing inside the conformance harness itself. | §4.8, §9 | `tests/valid/units_registry_grammar.esm` (positive half), `tests/invalid/units_discriminator_*.esm` (9, negative half) |
+| j | **`details.variable` is the ONE spelling** for the offending name in a structural error's `details` object — NOT `variable_name`. Two spellings for one thing is the drift this audit exists to kill. `variable` is the incumbent (34 pins) and is what TS already emits. | §7.1 | `tests/invalid/expected_errors.json` |
+| k | **Reference integrity needs the COMPLETE set of declaration sites, or (h) turns into false REJECTS.** Two sites are easy to miss, and the (h) sweep hit both. (1) **`coupling[i].config.callback_variables[j].name` IS a declaration site** — a callback injects those names into the target system, and `tests/coupling/callback_examples.esm` legitimately references them from `equations`; a checker that consults only `models[M].variables` falsely rejects it. (2) There are **NO bare/undeclared names**: a forcing delivered by the host at runtime MUST still be declared (`type: "discrete"` is the established spelling, §5.10.1). An undeclared forcing name is indistinguishable from a TYPO, which is precisely the false-negative (h) closes — so the escape hatch cannot survive (h) and had to go. `discrete_materialize_contraction.esm` used to carry `src` as a deliberately bare name; it now declares it, with no change to its cadence semantics. | §4.9.5, §5.10.1 | `tests/coupling/callback_examples.esm`, `tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm` |
+| h | **Reference integrity applies to EVERY expression-bearing field**, not only `equations`. THIRTEEN fields carry an Expression and ELEVEN were unchecked in every binding: an undefined name in an observed variable's `expression`, in `guesses`, in an `initialization_equations` RHS, in an event condition / trigger / affect RHS, in an assertion `reference`, in a loader's `unit_conversion`, or in a coupling connector `expression` / `transform` was INVISIBLE to all five. Within an Expression the walk must also descend `expr`/`filter`/`key`/`lower`/`upper`/`values`/`axes`/`bindings`, not just `args`. | §4.9.5 | `tests/invalid/undefined_variable_in_*.esm` (18), `tests/invalid/unresolved_scoped_ref_in_*.esm` (2) |
+
+### 7.1.2 The `tests/invalid/expected_errors.json` pin contract
+
+Every fixture under `tests/invalid/**` has an entry keyed by its **basename**. An entry is
+a claim about *why* the file is invalid, not merely *that* it is:
+
+- `schema_errors` — JSON-Schema violations the file MUST produce. Each pinned entry is a
+  `{path, message, keyword}` triple and is a **required subset** of what a binding emits
+  (a binding may emit additional, incidental schema errors; ajv-style validators enumerate
+  `oneOf`/`anyOf` branches differently).
+- `structural_errors` — post-schema findings the file MUST produce, each a `{path, code}`
+  pair, again a required subset. **A schema-invalid file never reaches structural
+  validation**, so a fixture with a non-empty `schema_errors` MUST have
+  `structural_errors: []`. A fixture that wants to pin a structural check must be
+  schema-VALID.
+- `path` is the **JSON Pointer of the node that carries the defect** — `/models/M/equations/0/rhs`,
+  not `/models/M`; `/coupling/0/from`, not `/coupling/0`. Three corollaries, each of which
+  bit a real pin (audit 2026-07-14):
+  - **The pointer names where the defect IS, not where the old walkers happened to REACH.**
+    Now that observed `expression` is a first-class checked site (§4.9.5), a declared unit that
+    contradicts the dimension its own expression computes belongs at the **variable**
+    (`/models/M/variables/v`), not at some equation that merely mentions it.
+  - **A defect with no single carrier is pinned at the smallest node that CONTAINS it.** A
+    dependency cycle `A → B → A` is carried by no one model — naming either member is arbitrary
+    — so it pins at `/models`.
+  - **A pin is NEVER relaxed to accommodate a binding that lacks the check.** If a fixture pins
+    two findings and a binding emits one, the binding has a coverage GAP; the harness going red
+    is the pin doing its job. Deleting the pin to make it green is how a corpus stops meaning
+    anything. (`units_gradient_operator_mismatch.esm` pins BOTH a `grad`-over-unitless-coordinate
+    error at `/models/SpatialModel/equations/0` AND an addition mismatch at
+    `/models/SpatialModel/variables/bad_sum`; TS emits both, Go emits only the second because it
+    does not yet unit-check `grad`. The fix is Go's, not the pin's.)
+- `resolver_only: true` — the file is schema-valid and is rejected only by an
+  evaluator/resolver that a schema-only binding does not run. Such a binding must assert
+  `schema_errors == []` and nothing more.
+- `structural_coverage_intended` — a fixture that has ROTTED: it was written to pin the
+  listed structural findings but is currently rejected earlier, at the schema layer (a
+  legacy shape, or a schema rule that has since absorbed the check). Restoring the coverage
+  means modernising the fixture, never relaxing a checker.
+
+A conforming harness MUST compare emitted `(code, path)` pairs against these pins. Asserting
+only "some error was produced" is what let 42 pins drift undetected (audit 2026-07-14, F4).
 | `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
 | `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 

@@ -23,7 +23,7 @@ func TestESMFileBasicStructure(t *testing.T) {
 	// Test validation - this should fail because no models, reaction systems, or data loaders
 	err := esmFile.ValidateStruct()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
+	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', 'data_loaders', 'expression_templates', or 'coupling_roles' must be present")
 }
 
 func TestESMFileWithDataLoaderOnly(t *testing.T) {
