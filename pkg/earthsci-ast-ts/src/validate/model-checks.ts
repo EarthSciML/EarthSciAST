@@ -18,6 +18,7 @@ import {
   expressionReferencesName,
 } from './expr-utils.js'
 import { isAffineTempUnit } from './unit-format.js'
+import { forEachExpressionScope } from '../traverse.js'
 
 /**
  * Check equation-unknown balance for a model.
@@ -144,7 +145,37 @@ function independentVariableName(esmFile: EsmFile): string {
 }
 
 /**
- * Check reference integrity for a model
+ * The names every component may reference WITHOUT declaring them: the domain's
+ * independent variable and the conventional spatial coordinates. Shared by the
+ * model and reaction-system reference-integrity passes so the two cannot drift.
+ */
+export function implicitNames(esmFile: EsmFile): Set<string> {
+  return new Set<string>([independentVariableName(esmFile), ...SPATIAL_COORDINATE_NAMES])
+}
+
+/**
+ * Check reference integrity for a model — across EVERY expression-bearing field,
+ * not just `equations`.
+ *
+ * This used to walk `model.equations` and nothing else, which made an undefined
+ * name anywhere ELSE in the document INVISIBLE: an observed variable's
+ * `expression`, a solver `guess`, an event condition, an affect's RHS. That is a
+ * false NEGATIVE — nothing caught it and no fixture pinned it, which is exactly
+ * why it survived (and is the same blind spot that let several `units_*` invalid
+ * fixtures hide their defect inside an observed expression).
+ *
+ * The fix is structural rather than a second hand-rolled walk. Two keystones
+ * compose, and every name in the document is the product of the two:
+ *
+ *   - {@link forEachExpressionScope} (traverse.ts) enumerates WHICH expressions
+ *     the component has and the JSON Pointer each one lives at;
+ *   - `extractVariableReferences` / `collectIndexSymbols` descend INSIDE one
+ *     expression through `forEachChild` (expression.ts), so every
+ *     expression-bearing sidecar — `expr`, `filter`, `key`, `lower`, `upper`,
+ *     `values`, `axes`, `bindings` — is visited, not just `args`.
+ *
+ * Adding a new expression position to the format now means teaching ONE
+ * enumerator, instead of silently under-checking until someone notices.
  */
 export function validateReferenceIntegrity(
   model: Model,
@@ -157,10 +188,7 @@ export function validateReferenceIntegrity(
   // declared (see the two helpers above): they are the model's INDEPENDENT
   // coordinates, not its unknowns, so they never appear in `variables` and must
   // never be reported as undefined.
-  const implicitNames = new Set<string>([
-    independentVariableName(esmFile),
-    ...SPATIAL_COORDINATE_NAMES,
-  ])
+  const implicit = implicitNames(esmFile)
   // Declared index sets are a legitimate, non-variable identifier namespace
   // (RFC semiring-faq-unified-ir §5.2). An `aggregate` may name an index set
   // as a positional operand — the value-invention form
@@ -174,52 +202,57 @@ export function validateReferenceIntegrity(
   // model (a sibling of `models` / `domain`), not a per-model field.
   const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
 
-  // Check equations
-  for (let i = 0; i < (model.equations || []).length; i++) {
-    const equation = model.equations![i]
-    const equationPath = `${modelPath}/equations/${i}`
-
-    // Binder-introduced index / contraction symbols (aggregate ranges and
-    // output indices, `index` element positions) are iteration positions,
-    // not declared variables — collect them so they are not flagged as
-    // undefined references below.
-    const boundSymbols = new Set<string>([
-      ...collectIndexSymbols(equation.lhs),
-      ...collectIndexSymbols(equation.rhs),
-    ])
-
-    const checkSide = (expr: Expression, sidePath: string): void => {
-      for (const varRef of extractVariableReferences(expr)) {
-        if (varRef.includes('.')) {
-          // Scoped reference
-          if (!resolveScopedReference(varRef, esmFile)) {
-            errors.push({
-              path: sidePath,
-              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
-              message: `Scoped reference "${varRef}" cannot be resolved`,
-              details: { reference: varRef },
-            })
-          }
-        } else if (
-          !declaredVariables.has(varRef) &&
-          !declaredIndexSets.has(varRef) &&
-          !boundSymbols.has(varRef) &&
-          !implicitNames.has(varRef)
-        ) {
-          // Local reference
+  const checkExpression = (expr: Expression, sitePath: string, boundSymbols: Set<string>): void => {
+    for (const varRef of extractVariableReferences(expr)) {
+      if (varRef.includes('.')) {
+        // Scoped reference
+        // `model` is the ENCLOSING scope: a reference to this model's own mounted
+        // subsystem (`Calendar.seconds_since_midnight`) resolves against it.
+        if (!resolveScopedReference(varRef, esmFile, model)) {
           errors.push({
-            path: sidePath,
-            code: ERROR_CODES.UNDEFINED_VARIABLE,
-            message: `Variable "${varRef}" referenced in equation is not declared`,
-            details: { variable: varRef },
+            path: sitePath,
+            code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+            message: `Scoped reference "${varRef}" cannot be resolved`,
+            details: { reference: varRef },
           })
         }
+      } else if (
+        !declaredVariables.has(varRef) &&
+        !declaredIndexSets.has(varRef) &&
+        !boundSymbols.has(varRef) &&
+        !implicit.has(varRef)
+      ) {
+        // Local reference
+        errors.push({
+          path: sitePath,
+          code: ERROR_CODES.UNDEFINED_VARIABLE,
+          message: `Variable "${varRef}" referenced in equation is not declared`,
+          details: { variable: varRef },
+        })
       }
     }
-
-    checkSide(equation.lhs, `${equationPath}/lhs`)
-    checkSide(equation.rhs, `${equationPath}/rhs`)
   }
+
+  // EVERY expression position the component carries — equations, observed
+  // expressions, initialization equations, solver guesses, event triggers,
+  // event conditions, and affect RHSs — each tagged with the JSON Pointer of
+  // the field it lives in, so the error names the SIDECAR at fault and not just
+  // the enclosing model.
+  forEachExpressionScope(model, modelPath, (scope) => {
+    // Binder-introduced index / contraction symbols (aggregate ranges and
+    // output indices, `index` element positions, template binding names) are
+    // iteration positions, not declared variables — collect them so they are not
+    // flagged as undefined references. The scope is the unit: an equation's two
+    // sides share one binder scope, so an `i` bound on the LHS is in scope on
+    // the RHS.
+    const boundSymbols = new Set<string>()
+    for (const site of scope) {
+      for (const symbol of collectIndexSymbols(site.expr)) boundSymbols.add(symbol)
+    }
+    for (const site of scope) {
+      checkExpression(site.expr, site.path, boundSymbols)
+    }
+  })
 
   // Check observed variables have expressions
   for (const [varName, variable] of Object.entries(model.variables || {})) {

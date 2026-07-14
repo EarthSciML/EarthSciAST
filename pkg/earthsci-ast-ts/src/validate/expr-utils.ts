@@ -119,6 +119,17 @@ export function collectIndexSymbols(expr: Expression): Set<string> {
       symbols.add(node.arg)
     }
 
+    // `integral` binds its INTEGRATION VARIABLE: schema `var` is "the name of the
+    // spatial dimension being integrated over". It is a bound symbol exactly like
+    // an aggregate's `output_idx`, and it is in scope inside the integrand AND
+    // the bounds — the partial/cumulative form writes `upper: "x"`, naming the
+    // integration variable itself (tests/valid/integral_operator_pide.esm).
+    // Without this, integrating over any axis not in the conventional x/y/z set
+    // would report the integration variable as an undefined variable.
+    if (node.op === 'integral' && typeof node.var === 'string') {
+      symbols.add(node.var)
+    }
+
     if (node.op === 'index') {
       // index(array, pos1, pos2, ...): positions after the array head are
       // index expressions; bare-name positions are bound index symbols.
@@ -210,9 +221,58 @@ export function countDerivatives(expr: Expression): { [variable: string]: number
 }
 
 /**
- * Resolve scoped variable reference like "Model.Subsystem.var"
+ * Does `component`, after navigating `pathParts` through its `subsystems` chain,
+ * declare `variableName`? Shared by the file-root and enclosing-scope lookups
+ * below, which differ only in WHERE the head segment is resolved.
+ *
+ * A model declares names in `variables`; a reaction system in `species` /
+ * `parameters`; a data loader in `variables`. Reference stubs and loaders carry
+ * no `subsystems`, so navigation through them simply fails.
  */
-export function resolveScopedReference(reference: string, esmFile: EsmFile): boolean {
+function declaresName(
+  component: Model | ReactionSystem | DataLoader | SubsystemRef,
+  pathParts: string[],
+  variableName: string,
+): boolean {
+  let current: Model | ReactionSystem | DataLoader | SubsystemRef = component
+  for (const pathPart of pathParts) {
+    const subsystems = 'subsystems' in current ? current.subsystems : undefined
+    if (!subsystems || !subsystems[pathPart]) return false
+    current = subsystems[pathPart] as Model | ReactionSystem | DataLoader | SubsystemRef
+  }
+  if ('variables' in current && !!current.variables && variableName in current.variables) {
+    return true
+  }
+  return (
+    ('species' in current && !!current.species && variableName in current.species) ||
+    ('parameters' in current && !!current.parameters && variableName in current.parameters)
+  )
+}
+
+/**
+ * Resolve a scoped variable reference like `"Model.Subsystem.var"` (spec §4.6).
+ *
+ * `enclosing`, when supplied, is the component the reference was WRITTEN IN, and
+ * it is tried FIRST. That is what lets a component name its OWN mounted
+ * subsystem: the model `Diurnal` mounts a subsystem `Calendar` and refers to
+ * `Calendar.seconds_since_midnight` — the entire point of subsystem inclusion,
+ * and the shape of `tests/valid/lib_calendar_subsystem_inclusion.esm` and
+ * `lib_solar_subsystem_inclusion.esm`. Resolving only from the FILE ROOT looked
+ * up a top-level system named `Calendar`, found none, and reported a valid,
+ * pinned fixture as an unresolved scoped reference.
+ *
+ * (This was invisible until reference integrity began checking observed
+ * `expression`s — both fixtures hide the reference in one. It is the same class
+ * of latent defect that fixing the false-negative hole is meant to surface.)
+ *
+ * Resolution order: the enclosing component's own subsystems, then the file root
+ * (`models` / `reaction_systems` / `data_loaders`).
+ */
+export function resolveScopedReference(
+  reference: string,
+  esmFile: EsmFile,
+  enclosing?: Model | ReactionSystem,
+): boolean {
   const parts = reference.split('.')
   if (parts.length < 2) {
     return false // Not a scoped reference
@@ -220,6 +280,14 @@ export function resolveScopedReference(reference: string, esmFile: EsmFile): boo
 
   const [systemName, ...pathParts] = parts
   const variableName = pathParts.pop()!
+
+  // The enclosing component's OWN subsystems take precedence: a name mounted
+  // into this component is in ITS scope, not the document's.
+  const ownSubsystem =
+    enclosing && 'subsystems' in enclosing ? enclosing.subsystems?.[systemName] : undefined
+  if (ownSubsystem && declaresName(ownSubsystem, pathParts, variableName)) {
+    return true
+  }
 
   // Try to find in models
   if (esmFile.models && esmFile.models[systemName]) {

@@ -16,7 +16,12 @@ import {
 } from '../units.js'
 import type { EsmFile, ReactionSystem, Expression } from '../types.js'
 import type { StructuralError } from './types.js'
-import { extractVariableReferences, resolveScopedReference } from './expr-utils.js'
+import {
+  collectIndexSymbols,
+  extractVariableReferences,
+  resolveScopedReference,
+} from './expr-utils.js'
+import { forEachExpressionScope } from '../traverse.js'
 import { formatExpectedRateUnits } from './unit-format.js'
 
 /**
@@ -299,6 +304,70 @@ export function validateReactionRateUnits(
       },
     })
   }
+
+  return errors
+}
+
+/**
+ * Reference integrity for a REACTION SYSTEM — the (h) coverage that models get
+ * from `validateReferenceIntegrity`.
+ *
+ * A reaction system carries expression positions beyond its `reactions[].rate`
+ * (which `validateReactionConsistency` already checks): `constraint_equations`,
+ * and — per the schema — its own `discrete_events` / `continuous_events`. None
+ * of those were reference-checked at all, so an undefined name in a constraint
+ * equation or an event condition was INVISIBLE, exactly as it was in a model's
+ * observed `expression`.
+ *
+ * A reaction system declares its names in `species` and `parameters` (there is no
+ * `variables` map). The independent variable and the spatial coordinates are
+ * implicitly declared, as they are for a model.
+ */
+export function validateReactionReferenceIntegrity(
+  reactionSystem: ReactionSystem,
+  systemPath: string,
+  esmFile: EsmFile,
+  implicitNames: ReadonlySet<string>,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const declared = new Set([
+    ...Object.keys(reactionSystem.species || {}),
+    ...Object.keys(reactionSystem.parameters || {}),
+  ])
+  const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
+
+  forEachExpressionScope(reactionSystem, systemPath, (scope) => {
+    const bound = new Set<string>()
+    for (const site of scope) {
+      for (const symbol of collectIndexSymbols(site.expr)) bound.add(symbol)
+    }
+    for (const site of scope) {
+      for (const varRef of extractVariableReferences(site.expr)) {
+        if (varRef.includes('.')) {
+          if (!resolveScopedReference(varRef, esmFile, reactionSystem)) {
+            errors.push({
+              path: site.path,
+              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+              message: `Scoped reference "${varRef}" cannot be resolved`,
+              details: { reference: varRef },
+            })
+          }
+        } else if (
+          !declared.has(varRef) &&
+          !declaredIndexSets.has(varRef) &&
+          !bound.has(varRef) &&
+          !implicitNames.has(varRef)
+        ) {
+          errors.push({
+            path: site.path,
+            code: ERROR_CODES.UNDEFINED_VARIABLE,
+            message: `Variable "${varRef}" referenced in equation is not declared`,
+            details: { variable: varRef },
+          })
+        }
+      }
+    }
+  })
 
   return errors
 }

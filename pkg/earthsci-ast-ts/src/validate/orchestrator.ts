@@ -29,6 +29,7 @@ import type { EsmFile } from '../types.js'
 import type { ValidationError, ValidationResult, StructuralError } from './types.js'
 import { isInlineModel } from './expr-utils.js'
 import {
+  implicitNames,
   validateEquationBalance,
   validateReferenceIntegrity,
   validateEventConsistency,
@@ -38,6 +39,7 @@ import {
 } from './model-checks.js'
 import {
   validateReactionConsistency,
+  validateReactionReferenceIntegrity,
   validateReactionRateUnits,
   validateReactionSystemICs,
 } from './reaction-checks.js'
@@ -46,6 +48,8 @@ import {
   validateCouplingIntegrity,
   validateCircularReferences,
   validateDataLoaderReferences,
+  validateDataLoaderExpressions,
+  validateCouplingExpressions,
   validateTemporalResolution,
 } from './coupling-checks.js'
 
@@ -182,6 +186,16 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // Arrhenius rate reading another model's temperature) resolve against the
       // whole document instead of being reported undefined.
       errors.push(...validateReactionConsistency(reactionSystem, systemPath, esmFile))
+      // (h) A reaction system's constraint_equations and events are expression
+      // positions too, and were never reference-checked.
+      errors.push(
+        ...validateReactionReferenceIntegrity(
+          reactionSystem,
+          systemPath,
+          esmFile,
+          implicitNames(esmFile),
+        ),
+      )
       errors.push(...validateReactionRateUnits(reactionSystem, systemPath))
       errors.push(...validateReactionSystemICs(reactionSystem, systemName, systemPath))
 
@@ -210,6 +224,11 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 
   // Validate data loader variable references in coupling
   errors.push(...validateDataLoaderReferences(esmFile))
+
+  // (h) sites 9-11: the expression positions outside any component — a data
+  // loader's `unit_conversion`, a coupling `transform`, a connector equation.
+  errors.push(...validateDataLoaderExpressions(esmFile))
+  errors.push(...validateCouplingExpressions(esmFile))
 
   // Validate temporal resolution in data loaders
   errors.push(...validateTemporalResolution(esmFile))

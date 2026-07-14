@@ -7,13 +7,20 @@
 import { ERROR_CODES } from '../errors.js'
 import type {
   EsmFile,
+  Expression,
   CouplingOperatorCompose,
   CouplingCouple,
   CouplingVariableMap,
   SubsystemRef,
 } from '../types.js'
 import type { StructuralError } from './types.js'
-import { extractVariableReferences, resolveScopedReference, splitScopedRef } from './expr-utils.js'
+import {
+  collectIndexSymbols,
+  extractVariableReferences,
+  resolveScopedReference,
+  splitScopedRef,
+} from './expr-utils.js'
+import { isExpressionLike } from '../traverse.js'
 
 /**
  * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
@@ -377,6 +384,143 @@ export function validateTemporalResolution(esmFile: EsmFile): StructuralError[] 
       }
     }
   }
+
+  return errors
+}
+
+/**
+ * Every name declared anywhere in the document: each model's `variables`, each
+ * reaction system's `species` / `parameters`, and each data loader's `variables`.
+ *
+ * This is the scope a DATA LOADER's `unit_conversion` resolves against. A loader
+ * is pure I/O with no equations of its own, and its conversion expression may
+ * scale a loaded field by a model's declared parameter — so the loader's own
+ * variable map is too narrow a scope. (`tests/invalid/undefined_variable_in_unit_conversion.esm`
+ * states this explicitly: "`y` and `k` are declared; the ONLY defect is the
+ * undefined name `undefined_xyz`", where `y`/`k` belong to a MODEL.)
+ */
+function documentDeclaredNames(esmFile: EsmFile): Set<string> {
+  const names = new Set<string>()
+  for (const model of Object.values(esmFile.models ?? {})) {
+    if ('ref' in model) continue
+    for (const name of Object.keys((model as { variables?: object }).variables ?? {})) {
+      names.add(name)
+    }
+  }
+  for (const system of Object.values(esmFile.reaction_systems ?? {})) {
+    for (const name of Object.keys((system as { species?: object }).species ?? {})) names.add(name)
+    for (const name of Object.keys((system as { parameters?: object }).parameters ?? {})) {
+      names.add(name)
+    }
+  }
+  for (const loader of Object.values(esmFile.data_loaders ?? {})) {
+    for (const name of Object.keys(loader.variables ?? {})) names.add(name)
+  }
+  return names
+}
+
+/**
+ * (h) site 9 — reference integrity for a data loader's `unit_conversion`
+ * expression (spec §8.5 / §4.9.5).
+ *
+ * `unit_conversion` is `oneOf` a plain numeric factor or a full Expression AST.
+ * The Expression form was never reference-checked, so an undefined name in it
+ * was invisible.
+ */
+export function validateDataLoaderExpressions(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!esmFile.data_loaders) return errors
+
+  const declared = documentDeclaredNames(esmFile)
+  const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
+
+  for (const [loaderName, loader] of Object.entries(esmFile.data_loaders)) {
+    for (const [varName, variable] of Object.entries(loader.variables ?? {})) {
+      const conversion = (variable as { unit_conversion?: unknown }).unit_conversion
+      // The numeric-factor alternative carries no references.
+      if (!isExpressionLike(conversion) || typeof conversion === 'number') continue
+      const path = `/data_loaders/${loaderName}/variables/${varName}/unit_conversion`
+      const bound = collectIndexSymbols(conversion as Expression)
+      for (const ref of extractVariableReferences(conversion as Expression)) {
+        if (ref.includes('.')) {
+          if (!resolveScopedReference(ref, esmFile)) {
+            errors.push({
+              path,
+              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+              message: `Variable "${ref}" referenced in unit_conversion expression does not resolve`,
+              details: { variable: ref, variable_name: ref },
+            })
+          }
+        } else if (!declared.has(ref) && !declaredIndexSets.has(ref) && !bound.has(ref)) {
+          errors.push({
+            path,
+            code: ERROR_CODES.UNDEFINED_VARIABLE,
+            message: `Variable "${ref}" referenced in unit_conversion expression but not declared`,
+            details: { variable: ref, variable_name: ref },
+          })
+        }
+      }
+    }
+  }
+  return errors
+}
+
+/**
+ * (h) sites 10 & 11 — reference integrity for the two EXPRESSION positions a
+ * coupling entry carries: a `variable_map`'s Expression `transform`, and a
+ * `couple`'s `connector.equations[j].expression`.
+ *
+ * In COUPLING context every reference is FULLY QUALIFIED (spec §4.6): a coupling
+ * entry sits outside any component, so there is no local scope for a bare name to
+ * mean anything in. A bare name is therefore unresolvable, and a dotted name that
+ * names nothing is too — both are `unresolved_scoped_ref` (the same code
+ * `bare_reference_errors.esm` already pins for bare refs in coupling).
+ *
+ * Neither position was reference-checked: an Expression transform and a connector
+ * equation could name any variable at all, in any system, and nothing looked.
+ */
+export function validateCouplingExpressions(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!esmFile.coupling) return errors
+
+  const check = (expr: unknown, path: string, context: string): void => {
+    if (!isExpressionLike(expr)) return
+    const bound = collectIndexSymbols(expr as Expression)
+    for (const ref of extractVariableReferences(expr as Expression)) {
+      if (bound.has(ref)) continue
+      // Fully-qualified or not, it must RESOLVE. A bare name never can.
+      if (!resolveScopedReference(ref, esmFile)) {
+        errors.push({
+          path,
+          code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+          message: `Variable "${ref}" referenced in ${context} does not resolve`,
+          details: { reference: ref, variable_name: ref },
+        })
+      }
+    }
+  }
+
+  esmFile.coupling.forEach((coupling, i) => {
+    const base = `/coupling/${i}`
+
+    // A `variable_map` transform is either a named string transform or an
+    // Expression; only the Expression form carries references.
+    const transform = (coupling as { transform?: unknown }).transform
+    if (typeof transform !== 'string') {
+      check(transform, `${base}/transform`, 'variable_map Expression transform')
+    }
+
+    // A `couple` connector's equations each carry an optional Expression.
+    const connector = (coupling as { connector?: { equations?: unknown[] } }).connector
+    ;(connector?.equations ?? []).forEach((equation, j) => {
+      const expression = (equation as { expression?: unknown })?.expression
+      check(
+        expression,
+        `${base}/connector/equations/${j}/expression`,
+        'connector equation expression',
+      )
+    })
+  })
 
   return errors
 }
