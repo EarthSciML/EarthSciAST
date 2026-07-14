@@ -1544,6 +1544,20 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
                             has_pgather = !isempty(pgather))
 
+    # ---- Lane-invariant sharing across kernels and with the prelude (ha2) ----
+    # The pass above sees SCALAR equations only — `_cse_count!` walks `ASTExpr`
+    # entries, and the array path never produces any — so a lane-invariant subtree
+    # living in two array kernels plus one scalar equation was evaluated three times
+    # per RHS call, and its scalar occurrence looked like a SINGLETON (suppressing the
+    # prelude slot it should have had). This post-pass runs over the COMPILED `_Node`
+    # IR, where the two paths finally share a representation: it value-numbers every
+    # prelude def and every `_VK_INVARIANT` payload, gives one cache slot to each value
+    # that occurs more than once (or that a prelude def already computes), and rewrites
+    # the payloads — and the scalar trees — to read it. Mutates `rhs_list`,
+    # `scalar_prelude`, `scalar_cache` and `vec_kernels` in place, which is why it must
+    # run before the closure captures them. A model with no array kernels is untouched.
+    inv_diag = _share_lane_invariants!(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
+
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
@@ -1565,12 +1579,26 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # across grid sizes; only the embedded slot/value vectors grow with N.
     # `n_cse_slots` / `n_cse_occurrences` witness the CSE evaluate-once property
     # (ess-r7h #2): distinct cached subexpressions vs total replaced occurrences.
+    #
+    # `n_cse_slots` stays the SCALAR pass's slot count — the `n_invariant_*` triple is
+    # reported separately so the two mechanisms remain separately observable. The
+    # PRELUDE's actual length is `n_cse_slots + n_invariant_slots`:
+    #   n_invariant_slots        — new prelude slots created for lane-invariant subtrees
+    #                              shared across ≥ 2 array kernels
+    #   n_invariant_shared       — `_VK_INVARIANT` payloads collapsed to a single cache
+    #                              read (the cross-kernel + kernel→prelude win)
+    #   n_invariant_scalar_shared — occurrences in SCALAR equations rewritten onto one of
+    #                              those slots (the kernel→scalar direction, which the
+    #                              AST-level count pass structurally cannot see)
     diag = (; n_vec_kernels = length(vec_kernels),
               n_scalar_entries = length(rhs_list),
               template_node_count =
                   sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
               n_cse_slots = cse_diag.n_slots,
-              n_cse_occurrences = cse_diag.n_occurrences)
+              n_cse_occurrences = cse_diag.n_occurrences,
+              n_invariant_slots = inv_diag.n_invariant_slots,
+              n_invariant_shared = inv_diag.n_invariant_shared,
+              n_invariant_scalar_shared = inv_diag.n_invariant_scalar_shared)
 
     return f!, u0, p, tspan_default, var_map, diag
 end

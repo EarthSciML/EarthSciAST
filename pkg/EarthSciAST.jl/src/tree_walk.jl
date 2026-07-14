@@ -58,6 +58,10 @@
 #                           alt-buffer (_vbuf)
 #   oop.jl             §4d  out-of-place emitter over the SAME IR: eltype-generic
 #                           f(u,p,t) → du, the AD / device path (`form = :oop`)
+#   invariant_share.jl §4e  post-pass over the compiled IR: routes lane-invariant
+#                           kernel subtrees into the shared CSE prelude, so one
+#                           subtree is evaluated once per RHS call across every
+#                           kernel AND the scalar equations (ha2)
 #   stencil.jl         §4c  symbolic stencil compiler (ess-perf)
 #   helpers.jl         §5-5b misc + array-variable helpers (_cell_key /
 #                           _parse_cell_key, field ICs, _eval_const_int)
@@ -73,6 +77,7 @@ include("tree_walk/build.jl")
 include("tree_walk/compile.jl")
 include("tree_walk/vectorize.jl")
 include("tree_walk/oop.jl")
+include("tree_walk/invariant_share.jl")
 include("tree_walk/stencil.jl")
 include("tree_walk/helpers.jl")
 include("tree_walk/semiring.jl")
