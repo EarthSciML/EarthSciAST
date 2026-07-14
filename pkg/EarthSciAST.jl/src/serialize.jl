@@ -221,6 +221,9 @@ function serialize_discrete_event(event::DiscreteEvent)::Dict{String,Any}
             "rhs" => serialize_expression(a.expression),
         ) for a in event.affects]
     end
+    if event.discrete_parameters !== nothing
+        result["discrete_parameters"] = event.discrete_parameters
+    end
     if event.description !== nothing
         result["description"] = event.description
     end

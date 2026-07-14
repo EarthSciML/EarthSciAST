@@ -57,9 +57,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
-            @test errors[1].path == "/models/test_model/equations"
-            @test occursin("State variable 'y' has no defining equation", errors[1].message)
-            @test errors[1].error_type == "missing_equation"
+            # The shared cross-binding contract (tests/invalid/expected_errors.json)
+            # pins BOTH balance directions — a state with no equation, and an
+            # equation with no state — under one code, `equation_count_mismatch`,
+            # reported at the MODEL's pointer (a balance is a property of the
+            # model, not of any single equation). Julia used to report a
+            # Julia-only `missing_equation` at `<model>/equations`; that
+            # divergence is what let the corpus's equation_count fixtures pass.
+            @test errors[1].path == "/models/test_model"
+            @test occursin("state variable 'y'", errors[1].message)
+            @test errors[1].error_type == "equation_count_mismatch"
         end
 
         @testset "Reaction system with undefined species" begin
@@ -67,7 +74,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             reactions = [
                 EarthSciAST.Reaction("rxn1", [EarthSciAST.StoichiometryEntry("A", 1)], [EarthSciAST.StoichiometryEntry("C", 1)], EarthSciAST.VarExpr("k1"))  # C not defined
             ]
-            rs = EarthSciAST.ReactionSystem(species, reactions)
+            # `k1` must be DECLARED, or the rate-reference check fires a second
+            # (correct) `undefined_parameter` error and this testset stops
+            # isolating the undefined-species rule it exists to test.
+            rs = EarthSciAST.ReactionSystem(species, reactions,
+                                            parameters=[EarthSciAST.Parameter("k1", 0.1)])
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, reaction_systems=Dict("test_reactions" => rs))
 
             errors = EarthSciAST.validate_structural(esm_file)
@@ -89,7 +100,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             reactions = [
                 EarthSciAST.Reaction("rxn1", nothing, nothing, EarthSciAST.VarExpr("k1"))  # No reactants or products
             ]
-            rs = EarthSciAST.ReactionSystem(species, reactions)
+            # As above: declare `k1` so only the null-null rule fires here.
+            rs = EarthSciAST.ReactionSystem(species, reactions,
+                                            parameters=[EarthSciAST.Parameter("k1", 0.1)])
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, reaction_systems=Dict("test_reactions" => rs))
 
             errors = EarthSciAST.validate_structural(esm_file)

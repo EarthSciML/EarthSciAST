@@ -149,8 +149,10 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
 
     # 1. Validate model equation-unknown balance
     if file.models !== nothing
+        composed = _operator_composed_systems(file)
         for (model_name, model) in file.models
-            append!(errors, validate_model_balance(model, "/models/$model_name"))
+            append!(errors, validate_model_balance(model, "/models/$model_name";
+                                                   check_excess = model_name ∉ composed))
         end
     end
 
@@ -172,11 +174,21 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             append!(errors, validate_model_gradient_units(file, model, "/models/$model_name"))
             append!(errors, validate_physical_constant_units(model, "/models/$model_name"))
             append!(errors, validate_conversion_factor_consistency(model, "/models/$model_name"))
+            # Dimensional analysis over equations and variable definitions. This
+            # is the ONLY caller of the units engine in the validation path; it
+            # was missing entirely until the 2026-07-14 audit (finding J1), which
+            # is why `validate()` accepted every dimensionally-inconsistent
+            # fixture in the shared corpus.
+            append!(errors, validate_model_unit_consistency(model, "/models/$model_name"))
         end
     end
 
     # 5. Validate multi-domain consistency
     append!(errors, validate_multi_domain(file))
+
+    # 5b. Coupling-cycle detection (§3.2). A dependency cycle among top-level
+    # systems means no evaluation order exists.
+    append!(errors, validate_coupling_cycles(file))
 
     # 6. Conflicting derivative detection (§4.7.5 item E). A species cannot
     # have both an explicit D(X, t) = ... equation and a reaction contribution.
@@ -236,52 +248,283 @@ model_subsystems(model::Model) =
     (pair for pair in model.subsystems if pair.second isa Model)
 
 """
-    validate_model_balance(model::Model, path::String) -> Vector{StructuralError}
+    _equation_lhs_names(lhs::ASTExpr) -> Set{String}
 
-Validate equation-unknown balance for a model.
-Each model should have equations for all state variables.
+The names an equation's LHS *solves for*. The LHS is not always a bare variable:
+the corpus spells the same "define `u`" in five shapes, and a balance check that
+only understands two of them manufactures false `missing_equation` errors on
+~20 valid fixtures (bug audit 2026-07-14).
+
+Recognised shapes, in the order they nest:
+
+| LHS | solves for |
+|---|---|
+| `"u"` (bare) | `u` |
+| `D(u, t)` | `u` |
+| `index(u, i)` / `index(D(u), i)` | `u` (an element assignment defines the array) |
+| `aggregate{output_idx: [i], expr: D(index(u,i))}` | `u` (a vectorised ODE) |
+| `H*H*SO4 = Ksp` (implicit/algebraic) | every bare variable on the LHS |
+
+`ic(u)` is deliberately NOT a defining equation — an initial condition
+constrains `u`'s value at t₀, it does not supply `u`'s dynamics — so it returns
+the empty set and cannot satisfy a state variable's balance obligation.
+
+Dotted (cross-system) names are excluded: they are the qualified-reference
+resolver's business, not this model's balance.
 """
-function validate_model_balance(model::Model, path::String)::Vector{StructuralError}
-    errors = StructuralError[]
+function _equation_lhs_names(lhs::ASTExpr)::Set{String}
+    names = Set{String}()
+    _collect_lhs_names!(names, lhs)
+    return names
+end
 
-    # Get all state variables
-    state_vars = Set{String}()
-    for (name, var) in model.variables
-        if var.type == StateVariable
-            push!(state_vars, name)
-        end
-    end
-
-    # Get variables that appear in LHS of equations
-    equation_vars = Set{String}()
-    for (i, eq) in enumerate(model.equations)
-        if isa(eq.lhs, VarExpr)
-            push!(equation_vars, eq.lhs.name)
-        elseif isa(eq.lhs, OpExpr) && eq.lhs.op == "D"
-            # Differential equation: D(x) = ...
-            if !isempty(eq.lhs.args) && isa(eq.lhs.args[1], VarExpr)
-                push!(equation_vars, eq.lhs.args[1].name)
+function _collect_lhs_names!(names::Set{String}, e::ASTExpr)
+    if e isa VarExpr
+        occursin('.', e.name) || push!(names, e.name)
+    elseif e isa OpExpr
+        if e.op == "ic"
+            # Initial condition: constrains a value, does not define dynamics.
+            return names
+        elseif e.op in ("D", "index", "arrayop") && !isempty(e.args)
+            # Structural wrappers: the solved-for name is the head operand.
+            _collect_lhs_names!(names, e.args[1])
+        elseif e.op == "aggregate" && e.expr_body !== nothing
+            # Vectorised equation: the body is the real LHS.
+            _collect_lhs_names!(names, e.expr_body)
+        else
+            # Implicit / algebraic LHS (`H*H*SO4 = Ksp`): any bare variable on
+            # the LHS is a candidate unknown this equation constrains.
+            for a in e.args
+                _collect_lhs_names!(names, a)
             end
         end
     end
+    return names
+end
 
-    # Check for missing equations
-    for var in state_vars
-        if var ∉ equation_vars
+"""
+    validate_model_balance(model::Model, path::String) -> Vector{StructuralError}
+
+Validate equation/unknown balance for a model, in BOTH directions (the docstring
+has always promised "equation-unknown balance"; only the first direction was
+ever implemented — bug audit 2026-07-14, finding J3):
+
+1. **A state variable with no defining equation.** Skipped when the model has
+   subsystems: its dynamics may live there (`tests/valid/scoped_refs_coupling.esm`
+   declares state variables and `equations: []` for exactly this reason).
+2. **An excess equation** — one that solves for a name the model does not
+   declare, e.g. a stray `D(y)` in a model whose only state is `x`.
+
+Both are reported under the code the shared corpus pins,
+`equation_count_mismatch`, at the MODEL's pointer (`/models/<M>`) — a balance is
+a property of the model, not of any one equation.
+
+`check_excess=false` disables direction 2 only. It is passed for a model that
+participates in an `operator_compose` coupling: such a model is an OPERATOR, and
+its equations act on the unknowns of the system it is composed onto, not on
+unknowns of its own. `tests/valid/minimal_chemistry.esm` is the canonical shape —
+`Advection` declares only the parameters `u_wind`/`v_wind` and writes
+`D(u) = -u_wind*grad(u,x) - …`, where `u` is the advected field supplied by the
+composition. Treating that `u` as an excess equation rejects a valid file.
+Direction 1 still applies: an operator that declares a state of its own must
+still define it.
+"""
+function validate_model_balance(model::Model, path::String;
+                                check_excess::Bool=true)::Vector{StructuralError}
+    errors = StructuralError[]
+
+    state_vars = Set{String}()
+    for (name, var) in model.variables
+        var.type == StateVariable && push!(state_vars, name)
+    end
+
+    # Names solved for by the model's own equations.
+    equation_vars = Set{String}()
+    for eq in model.equations
+        union!(equation_vars, _equation_lhs_names(eq.lhs))
+    end
+
+    has_subsystems = !isempty(model.subsystems)
+
+    # Direction 1: a declared state with nothing to define it. An observed-style
+    # `expression` on the variable counts as its definition. A model WITH
+    # subsystems is exempt — the defining equation may be down there.
+    if !has_subsystems
+        for var in sort!(collect(state_vars))
+            var ∈ equation_vars && continue
+            model.variables[var].expression === nothing || continue
             push!(errors, StructuralError(
-                "$path/equations",
-                "State variable '$var' has no defining equation",
-                "missing_equation"
+                path,
+                "Model declares state variable '$var' but has no defining equation for it",
+                "equation_count_mismatch"
             ))
         end
     end
 
-    # Recursively check subsystems
+    # Direction 2: an equation solving for a name the model never declares.
+    # `_equation_lhs_names` already dropped dotted cross-system targets, and the
+    # time variable is never an unknown.
+    if check_excess
+        for name in sort!(collect(equation_vars))
+            (name == "t" || haskey(model.variables, name)) && continue
+            push!(errors, StructuralError(
+                path,
+                "Equation solves for '$name', which is not a declared variable of this model " *
+                "(number of equations does not match the number of unknowns)",
+                "equation_count_mismatch"
+            ))
+        end
+    end
+
+    # Recursively check subsystems. The operator exemption is inherited: a
+    # subsystem of an operator is still acting on the composed system's state.
     for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_model_balance(subsys, "$path/subsystems/$subsys_name"))
+        append!(errors, validate_model_balance(subsys, "$path/subsystems/$subsys_name";
+                                               check_excess=check_excess))
     end
 
     return errors
+end
+
+"""
+    _operator_composed_systems(file::EsmFile) -> Set{String}
+
+Every system named in an `operator_compose` coupling entry. Their equations are
+operator contributions to a shared state, so the excess-equation direction of
+[`validate_model_balance`](@ref) does not apply to them.
+"""
+function _operator_composed_systems(file::EsmFile)::Set{String}
+    names = Set{String}()
+    for entry in file.coupling
+        entry isa CouplingOperatorCompose || continue
+        union!(names, entry.systems)
+    end
+    return names
+end
+
+"""
+    validate_model_unit_consistency(model::Model, path::String) -> Vector{StructuralError}
+
+Promote every PROVABLE dimensional inconsistency in `model` to a structural error
+with the corpus-pinned code `unit_inconsistency`. The findings (and the
+"provable vs unknown" discipline that makes them trustworthy) come from
+[`model_unit_findings`](@ref) in units.jl; this function only attaches the
+model's JSON pointer and recurses into subsystems.
+
+This is what wires the units engine into `validate()`. Before the 2026-07-14
+audit the engine had no caller outside its own test file.
+"""
+function validate_model_unit_consistency(model::Model, path::String)::Vector{StructuralError}
+    errors = StructuralError[]
+
+    for (subpath, message) in model_unit_findings(model)
+        push!(errors, StructuralError("$path/$subpath", message, "unit_inconsistency"))
+    end
+
+    for (subsys_name, subsys) in model_subsystems(model)
+        append!(errors, validate_model_unit_consistency(subsys, "$path/subsystems/$subsys_name"))
+    end
+
+    return errors
+end
+
+"""
+    validate_coupling_cycles(file::EsmFile) -> Vector{StructuralError}
+
+Detect a dependency cycle among the document's top-level systems.
+
+An edge `M → N` exists when a model `M`'s own equations name `N` directly, via a
+qualified reference `N.v` (searched over the full expression child set, sidecar
+fields included). A cycle in that graph means the systems' definitions are
+mutually recursive with no evaluation order — see
+`tests/invalid/circular_coupling.esm`, which validated clean because NO
+coupling-cycle check of any kind existed.
+
+**`coupling` entries are deliberately NOT edges.** A `variable_map` is a
+declared data flow that the flattener resolves by aliasing, and mutual physical
+coupling between systems is the whole point of the format: `tests/valid/`
+`wildfire_atmosphere_ocean.esm` couples wind → fire spread → heat release → wind,
+a legitimate three-system feedback loop. Treating those as dependency edges
+rejects it.
+
+Reported once per cycle, as `circular_dependency` at the pointer of the cycle's
+entry system, with the cycle rendered in the message (`ModelA → ModelB → ModelA`).
+
+The traversal is deterministic (systems and successors are visited in sorted
+order) so the reported cycle and its entry point do not depend on Dict hashing.
+"""
+function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
+    # System name → its kind's pointer prefix, for the error path.
+    prefix = Dict{String,String}()
+    file.models !== nothing && for name in keys(file.models)
+        prefix[name] = "/models/$name"
+    end
+    file.reaction_systems !== nothing && for name in keys(file.reaction_systems)
+        prefix[name] = "/reaction_systems/$name"
+    end
+    isempty(prefix) && return StructuralError[]
+
+    adj = Dict{String,Set{String}}(name => Set{String}() for name in keys(prefix))
+
+    # Edges from qualified references inside a model's equations.
+    if file.models !== nothing
+        for (model_name, model) in file.models
+            for eq in model.equations
+                for side in (eq.lhs, eq.rhs)
+                    for ref in _referenced_var_names(side)
+                        head = _qualified_head(ref)
+                        (head === nothing || head == model_name) && continue
+                        haskey(prefix, head) && push!(adj[model_name], head)
+                    end
+                end
+            end
+        end
+    end
+
+    # DFS with an explicit path stack; the first back-edge found in sorted order
+    # is reported.
+    WHITE, GREY, BLACK = 0, 1, 2
+    color = Dict{String,Int}(name => WHITE for name in keys(prefix))
+    path_stack = String[]
+    errors = StructuralError[]
+
+    function dfs(u::String)::Bool
+        color[u] = GREY
+        push!(path_stack, u)
+        for v in sort!(collect(adj[u]))
+            if color[v] == GREY
+                # Back edge: the cycle is path_stack[from v ..] + v.
+                start = findfirst(==(v), path_stack)
+                cycle = vcat(path_stack[start:end], v)
+                entry = cycle[1]
+                push!(errors, StructuralError(
+                    prefix[entry],
+                    "Circular coupling detected: " * join(cycle, " → "),
+                    "circular_dependency"
+                ))
+                return true
+            elseif color[v] == WHITE && dfs(v)
+                return true
+            end
+        end
+        pop!(path_stack)
+        color[u] = BLACK
+        return false
+    end
+
+    for u in sort!(collect(keys(prefix)))
+        color[u] == WHITE || continue
+        dfs(u) && break   # one cycle report is enough; the model is unorderable
+    end
+
+    return errors
+end
+
+# The system part of a qualified reference `System.var` (or `A.B.var`), or
+# `nothing` for a bare local name.
+function _qualified_head(ref::AbstractString)::Union{String,Nothing}
+    idx = findfirst('.', ref)
+    idx === nothing ? nothing : String(ref[1:prevind(ref, idx)])
 end
 
 """
@@ -725,8 +968,9 @@ no null-null reactions, rate references declared.
 function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
-    # Get set of declared species
+    # Get set of declared species / parameters
     species_names = Set(sp.name for sp in rs.species)
+    param_names = Set(p.name for p in rs.parameters)
 
     # Validate each reaction
     for (i, reaction) in enumerate(rs.reactions)
@@ -791,9 +1035,23 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
             ))
         end
 
-        # Rate expression references: a bare-variable rate not found in
-        # parameters or species may be a qualified cross-system reference,
-        # so it is intentionally not flagged here.
+        # Rate expression references. A DOTTED name (`Meteo.T`) is a qualified
+        # cross-system reference and belongs to the qualified-reference resolver,
+        # not here — but a BARE name that is neither a declared parameter, a
+        # declared species, the time variable, nor a builtin function can never
+        # resolve to anything, so it is flagged. (This was previously skipped
+        # wholesale, on the strength of the qualified-reference argument, which
+        # let `tests/invalid/undefined_parameter.esm` validate clean.)
+        for name in sort!(collect(_referenced_var_names(reaction.rate)))
+            occursin('.', name) && continue
+            (name == "t" || name in _BUILTIN_FUNCTION_NAMES) && continue
+            (name in species_names || name in param_names) && continue
+            push!(errors, StructuralError(
+                reaction_path,
+                "Parameter '$name' referenced in rate expression is not declared",
+                "undefined_parameter"
+            ))
+        end
     end
 
     # Recursively check subsystems
@@ -1089,9 +1347,42 @@ function validate_single_event_consistency(model::Model, event::EventType, event
                 ))
             end
         end
+
+        # `discrete_parameters` names what the event mutates as a PARAMETER
+        # (MTK's `discrete_parameters`). Naming a state variable there is a
+        # category error: the integrator owns that name, so the event's write is
+        # either ignored or fights the solver.
+        if event.discrete_parameters !== nothing
+            for name in event.discrete_parameters
+                var = get(model.variables, name, nothing)
+                if var === nothing
+                    push!(errors, StructuralError(
+                        event_path,
+                        "Discrete parameter '$name' is not declared in the model",
+                        "invalid_discrete_param"
+                    ))
+                elseif var.type != ParameterVariable
+                    push!(errors, StructuralError(
+                        event_path,
+                        "Discrete parameter '$name' is not declared as a parameter " *
+                        "(found as $(_variable_type_word(var.type)) variable)",
+                        "invalid_discrete_param"
+                    ))
+                end
+            end
+        end
     end
 
     return errors
+end
+
+# Lower-case spelling of a ModelVariableType for diagnostics ("state",
+# "parameter", "observed", "brownian").
+function _variable_type_word(t::ModelVariableType)::String
+    t == StateVariable && return "state"
+    t == ParameterVariable && return "parameter"
+    t == ObservedVariable && return "observed"
+    return "brownian"
 end
 
 # ============================================================================

@@ -151,6 +151,10 @@ export
     parse_units, get_expression_dimensions, validate_equation_dimensions,
     validate_model_dimensions, validate_reaction_system_dimensions, validate_file_dimensions,
     infer_variable_units,
+    # The error-collecting units engine: these distinguish a PROVABLE dimensional
+    # inconsistency from an indeterminate one, which the Bool/`nothing` API above
+    # cannot. `validate()` is built on these.
+    expression_unit_findings, equation_unit_findings, model_unit_findings,
     # Editing operations (Section 4). EsmFile merging extends `Base.merge`
     # (always in scope for consumers), so `merge` is not re-exported.
     EditError,

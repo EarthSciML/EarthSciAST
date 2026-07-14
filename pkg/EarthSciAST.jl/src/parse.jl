@@ -1092,8 +1092,16 @@ function coerce_discrete_event(data::Any)::DiscreteEvent
     functional_affect = _maybe(_to_native_json, _get_field(data, :functional_affect, nothing))
 
     description = _opt_string(data, :description)
+
+    # Discrete parameters (MTK `discrete_parameters`): names the event mutates
+    # as parameters rather than states. Kept on the event so `validate` can
+    # check each names a declared parameter, and so serialize round-trips it.
+    discrete_parameters = _maybe(Vector{String},
+                                 _get_field(data, :discrete_parameters, nothing))
+
     return DiscreteEvent(trigger, affects, description=description,
-                         functional_affect=functional_affect)
+                         functional_affect=functional_affect,
+                         discrete_parameters=discrete_parameters)
 end
 
 # Convert a schema AffectEquation JSON object ({lhs, rhs}) into the Julia

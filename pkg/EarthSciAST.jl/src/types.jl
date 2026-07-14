@@ -500,11 +500,18 @@ struct DiscreteEvent <: EventType
     affects::Vector{FunctionalAffect}
     description::Union{String,Nothing}
     functional_affect::Union{Dict{String,Any},Nothing}
+    # Names the event mutates as *discrete parameters* (MTK `discrete_parameters`).
+    # Every entry must name a declared PARAMETER of the enclosing model — see
+    # `validate_single_event_consistency`, which reports `invalid_discrete_param`
+    # otherwise. Previously parsed-and-dropped, which both lost the field on
+    # round-trip and made the check impossible.
+    discrete_parameters::Union{Vector{String},Nothing}
 
     # Constructor with optional description / handler descriptor
     DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{FunctionalAffect};
-                  description=nothing, functional_affect=nothing) =
-        new(trigger, affects, description, functional_affect)
+                  description=nothing, functional_affect=nothing,
+                  discrete_parameters=nothing) =
+        new(trigger, affects, description, functional_affect, discrete_parameters)
 end
 
 # ========================================
@@ -1568,8 +1575,14 @@ function variable_exists_in_system(system::ReactionSystem, variable_name::String
 end
 
 function variable_exists_in_system(system::DataLoader, variable_name::String)::Bool
-    # Data loaders are referenced by type/name, not variables
-    return false
+    # A DataLoader EXPOSES variables (`variables: {u: {file_variable: …}}`), and
+    # `coupling` entries name them (`from: "GEOSFP.u"`). This used to return a
+    # hardcoded `false` — "data loaders are referenced by type/name, not
+    # variables" — which was true before the pure-io-data-loaders RFC gave the
+    # loader a `variables` table, and afterwards made EVERY loader-sourced
+    # coupling reference in the corpus fail to resolve (7 of the 82 valid
+    # fixtures). Same defect as the Go binding's G7.
+    return haskey(system.variables, variable_name)
 end
 
 """
