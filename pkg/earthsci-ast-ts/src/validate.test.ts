@@ -534,3 +534,272 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
     expect(fromString.structural_errors).toEqual([])
   })
 })
+
+/**
+ * The six checker bugs where the SPEC sanctions what the checker rejected. Each
+ * was proved a CHECKER bug (not a fixture bug) against the shared corpus: the
+ * named valid fixture is pinned VALID and was being rejected.
+ */
+describe('spec-sanctioned constructs the checker used to reject', () => {
+  it('(a) treats the independent variable and spatial coordinates as implicitly declared', () => {
+    // Spec §5.3's own example writes `t` with no declaration; a spatial
+    // coordinate is referenced by name and declared nowhere (§11: a domain
+    // carries no grid). Fixtures: cadence/pure_pointwise.esm (t),
+    // initial_conditions/expression_ignition_front_1d.esm (x).
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'implicit-coords' },
+      models: {
+        M: {
+          variables: { u: { type: 'state', units: '1' }, A: { type: 'parameter', default: 1 } },
+          equations: [
+            {
+              lhs: { op: 'D', args: ['u'], wrt: 't' },
+              // `t` (independent variable) and `x` (spatial coordinate): neither
+              // is declared, and neither is an undefined variable.
+              rhs: { op: '*', args: ['A', { op: 'sin', args: [{ op: '+', args: ['t', 'x'] }] }] },
+            },
+          ],
+        },
+      },
+    })
+    expect(result.structural_errors.filter((e) => e.code === 'undefined_variable')).toEqual([])
+  })
+
+  it('(a) honours a domain that renames the independent variable', () => {
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'renamed-time' },
+      domain: { independent_variable: 'time' },
+      models: {
+        M: {
+          variables: { u: { type: 'state', units: '1' } },
+          equations: [
+            { lhs: { op: 'D', args: ['u'], wrt: 'time' }, rhs: { op: '*', args: [-1, 'time'] } },
+          ],
+        },
+      },
+    })
+    expect(result.structural_errors.filter((e) => e.code === 'undefined_variable')).toEqual([])
+  })
+
+  it('(b) accepts the _var placeholder in event affects of a coupled model', () => {
+    // Spec §6.4: "_var" is substituted with each matching state variable when
+    // coupled via operator_compose. Fixture: full_coupled.esm.
+    const file = {
+      esm: '0.1.0',
+      metadata: { name: 'op-style' },
+      models: {
+        Transport: {
+          variables: { u: { type: 'state', units: '1' } },
+          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+          continuous_events: [
+            {
+              name: 'clamp',
+              conditions: [{ op: '-', args: ['u', 0.001] }],
+              affects: [{ lhs: '_var', rhs: 0.001 }],
+              affect_neg: [{ lhs: '_var', rhs: 0 }],
+            },
+          ],
+        },
+        Chem: { variables: {}, equations: [] },
+      },
+      coupling: [{ type: 'operator_compose', systems: ['Chem', 'Transport'] }],
+    }
+    const result = validate(file)
+    expect(result.structural_errors.filter((e) => e.code === 'event_var_undeclared')).toEqual([])
+
+    // ...but a genuinely undeclared target is still flagged, coupled or not.
+    const bad = structuredClone(file)
+    bad.models.Transport.continuous_events[0].affects[0].lhs = 'nonexistent_var'
+    expect(validate(bad).structural_errors.some((e) => e.code === 'event_var_undeclared')).toBe(
+      true,
+    )
+  })
+
+  it('(c) resolves scoped references at ARBITRARY depth in coupling', () => {
+    // Spec §4.6. Fixture: scoped_refs_coupling.esm, whose variable_map reads
+    // `Meteorology.Temperature.surface_temp` (3 levels) and whose `couple`
+    // entry names the SUBSYSTEM `Meteorology.Temperature`.
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'deep-scope' },
+      models: {
+        Chem: { variables: { T: { type: 'parameter', units: 'K', default: 300 } }, equations: [] },
+        Meteorology: {
+          variables: {},
+          equations: [],
+          subsystems: {
+            Temperature: {
+              variables: { surface_temp: { type: 'state', units: 'K' } },
+              equations: [{ lhs: { op: 'D', args: ['surface_temp'], wrt: 't' }, rhs: 0 }],
+            },
+          },
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Meteorology.Temperature.surface_temp',
+          to: 'Chem.T',
+          transform: 'param_to_var',
+        },
+        { type: 'couple', systems: ['Chem', 'Meteorology.Temperature'] },
+      ],
+    })
+    expect(result.structural_errors).toEqual([])
+
+    // A deep path that does NOT exist is still unresolved.
+    const bad = validate({
+      esm: '0.1.0',
+      metadata: { name: 'deep-scope-bad' },
+      models: {
+        Chem: { variables: { T: { type: 'parameter', units: 'K', default: 300 } }, equations: [] },
+        Meteorology: { variables: {}, equations: [] },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Meteorology.Temperature.surface_temp',
+          to: 'Chem.T',
+          transform: 'param_to_var',
+        },
+      ],
+    })
+    expect(bad.structural_errors.some((e) => e.code === 'unresolved_scoped_ref')).toBe(true)
+  })
+
+  it('(d) allows a scoped reference in a reaction rate', () => {
+    // Fixture: events_cross_system.esm — an Arrhenius rate reading another
+    // system's temperature.
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'cross-system-rate' },
+      models: {
+        Met: { variables: { T: { type: 'state', units: 'K' } }, equations: [] },
+      },
+      reaction_systems: {
+        Chem: {
+          species: { A: { units: 'mol/m^3' }, B: { units: 'mol/m^3' } },
+          parameters: { k: { units: '1/s', default: 1 } },
+          reactions: [
+            {
+              id: 'r1',
+              substrates: [{ species: 'A', stoichiometry: 1 }],
+              products: [{ species: 'B', stoichiometry: 1 }],
+              // The rate reads Met.T — another system's variable.
+              rate: { op: '*', args: ['k', 'A', { op: '/', args: ['Met.T', 'Met.T'] }] },
+            },
+          ],
+        },
+      },
+    })
+    expect(result.structural_errors.filter((e) => e.code === 'undefined_parameter')).toEqual([])
+
+    // An unresolvable scoped rate reference is still reported.
+    const bad = validate({
+      esm: '0.1.0',
+      metadata: { name: 'cross-system-rate-bad' },
+      reaction_systems: {
+        Chem: {
+          species: { A: { units: 'mol/m^3' } },
+          parameters: { k: { units: '1/s', default: 1 } },
+          reactions: [
+            {
+              id: 'r1',
+              substrates: [{ species: 'A', stoichiometry: 1 }],
+              products: null,
+              rate: { op: '*', args: ['k', 'Nowhere.T'] },
+            },
+          ],
+        },
+      },
+    })
+    expect(bad.structural_errors.some((e) => e.code === 'unresolved_scoped_ref')).toBe(true)
+  })
+
+  it('(e) balances a nonlinear system by UNKNOWNS vs EQUATIONS', () => {
+    // Fixture: nonlinear_isorropia_shape.esm — 2 unknowns, 2 algebraic
+    // equations, the second of which has a PRODUCT LHS (`H*H*SO4 = Ksp`) that
+    // credits no variable under the ODE rule.
+    const balanced = validate({
+      esm: '0.1.0',
+      metadata: { name: 'equilibrium' },
+      models: {
+        Eq: {
+          system_kind: 'nonlinear',
+          variables: {
+            H: { type: 'state', units: 'mol/m^3' },
+            SO4: { type: 'state', units: 'mol/m^3' },
+            Ksp: { type: 'parameter', units: 'mol^3/m^9', default: 1 },
+          },
+          equations: [
+            { lhs: 'H', rhs: { op: '*', args: [2, 'SO4'] } },
+            { lhs: { op: '*', args: ['H', 'H', 'SO4'] }, rhs: 'Ksp' },
+          ],
+        },
+      },
+    })
+    expect(balanced.structural_errors.filter((e) => e.code === 'equation_count_mismatch')).toEqual(
+      [],
+    )
+
+    // An UNDER-determined algebraic system is still a mismatch: 2 unknowns, 1 eq.
+    const underdetermined = validate({
+      esm: '0.1.0',
+      metadata: { name: 'equilibrium-bad' },
+      models: {
+        Eq: {
+          system_kind: 'nonlinear',
+          variables: {
+            H: { type: 'state', units: 'mol/m^3' },
+            SO4: { type: 'state', units: 'mol/m^3' },
+          },
+          equations: [{ lhs: 'H', rhs: { op: '*', args: [2, 'SO4'] } }],
+        },
+      },
+    })
+    expect(
+      underdetermined.structural_errors.some((e) => e.code === 'equation_count_mismatch'),
+    ).toBe(true)
+  })
+
+  it('(f) emits the canonical subsystem-ref code', () => {
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'unresolved-ref' },
+      models: {
+        Atmosphere: {
+          variables: { temp: { type: 'parameter', units: 'K', default: 300 } },
+          equations: [],
+          subsystems: { Missing: { ref: './does_not_exist.esm' } },
+        },
+      },
+    })
+    const refErrors = result.structural_errors.filter((e) => e.code === 'unresolved_subsystem_ref')
+    expect(refErrors).toHaveLength(1)
+    expect(refErrors[0].path).toBe('/models/Atmosphere/subsystems/Missing')
+    expect(refErrors[0].details).toMatchObject({
+      ref: './does_not_exist.esm',
+      subsystem: 'Missing',
+      parent_model: 'Atmosphere',
+    })
+  })
+
+  it('promotes an unparseable unit to unit_parse_error at the variable', () => {
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'bad-unit' },
+      models: {
+        TestModel: {
+          variables: { c: { type: 'state', units: 'not_a_unit' } },
+          equations: [{ lhs: { op: 'D', args: ['c'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+    })
+    const parseErrors = result.structural_errors.filter((e) => e.code === 'unit_parse_error')
+    expect(parseErrors).toHaveLength(1)
+    expect(parseErrors[0].path).toBe('/models/TestModel/variables/c')
+    expect(parseErrors[0].details).toMatchObject({ variable: 'c', units: 'not_a_unit' })
+  })
+})

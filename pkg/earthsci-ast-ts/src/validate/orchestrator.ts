@@ -54,12 +54,17 @@ import {
  *
  * The classification is carried on the warning itself (UnitWarning.code, assigned
  * in units.ts beside the message definitions, where the policy is stated in
- * full). Two codes describe a defect in the FILE and are promoted:
+ * full). Two codes describe a defect in the FILE and are promoted — to two
+ * DIFFERENT structural codes, because they are different failures:
  *
- *   - `dimensional_mismatch` — a PROVABLE inconsistency (metres plus kilograms,
- *     `log()` of a dimensional quantity, two sides that cannot agree).
- *   - `unparseable_unit` — a declared unit string that names no real unit. The
- *     declaration is meaningless, so the file is malformed.
+ *   - `dimensional_mismatch` → `unit_inconsistency`. A PROVABLE inconsistency
+ *     (metres plus kilograms, `log()` of a dimensional quantity, two sides that
+ *     cannot agree). Something was proved wrong.
+ *   - `unparseable_unit` → `unit_parse_error`. A declared unit string that names
+ *     no real unit. NOTHING was proved inconsistent — the declaration is simply
+ *     meaningless. Reported at the VARIABLE pointer with the offending
+ *     declaration in `details`, exactly as the shared corpus pins
+ *     (`tests/invalid/unparseable_unit.esm`).
  *
  * `analysis` warnings stay warnings: a symbolic exponent, an op with no
  * dimensional rule, an unknown variable, a bad arity. Each reports what the
@@ -70,29 +75,34 @@ import {
  *
  * Promoting to a hard error is what the shared corpus requires:
  * `tests/invalid/expected_errors.json` pins every `units_*.esm` fixture as a
- * STRUCTURAL ERROR (`is_valid: false`), not a warning. The code is
- * `unit_inconsistency` and the path is the JSON Pointer the warning already
- * carries (`/models/<M>/equations/<i>`, `/models/<M>/variables/<v>`,
- * `/models/<M>/variables/<v>/units`) — exactly as pinned.
+ * STRUCTURAL ERROR (`is_valid: false`), not a warning, at the JSON Pointer the
+ * warning already carries.
  */
-const PROMOTED_UNIT_CODES: readonly UnitWarning['code'][] = [
-  ERROR_CODES.DIMENSIONAL_MISMATCH,
-  ERROR_CODES.UNPARSEABLE_UNIT,
-]
-
 function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[] {
-  return warnings
-    .filter((warning) => PROMOTED_UNIT_CODES.includes(warning.code))
-    .map((warning) => ({
-      // `location` is already a JSON Pointer (units.ts `componentPointer`), so
-      // it is used verbatim. Root token is the shared `ROOT_PATH` ('$'), used
-      // only when the warning carries no location (consistent with validate()'s
-      // catch blocks and parse.ts's schema-error root fallback).
-      path: warning.location ?? ROOT_PATH,
-      message: warning.message,
-      code: ERROR_CODES.UNIT_INCONSISTENCY,
-      details: { equation: warning.equation || '' },
-    }))
+  const errors: StructuralError[] = []
+  for (const warning of warnings) {
+    // `location` is already a JSON Pointer (units.ts `componentPointer`), so it
+    // is used verbatim. Root token is the shared `ROOT_PATH` ('$'), used only
+    // when the warning carries no location (consistent with validate()'s catch
+    // blocks and parse.ts's schema-error root fallback).
+    const path = warning.location ?? ROOT_PATH
+    if (warning.code === ERROR_CODES.UNPARSEABLE_UNIT) {
+      errors.push({
+        path,
+        message: warning.message,
+        code: ERROR_CODES.UNIT_PARSE_ERROR,
+        details: { variable: warning.variable ?? '', units: warning.units ?? '' },
+      })
+    } else if (warning.code === ERROR_CODES.DIMENSIONAL_MISMATCH) {
+      errors.push({
+        path,
+        message: warning.message,
+        code: ERROR_CODES.UNIT_INCONSISTENCY,
+        details: { equation: warning.equation || '' },
+      })
+    }
+  }
+  return errors
 }
 
 /**
@@ -138,7 +148,10 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
         errors.push(...validateEquationBalance(model, modelPath))
         errors.push(...validateReferenceIntegrity(model, modelPath, esmFile))
       }
-      errors.push(...validateEventConsistency(model, modelPath))
+      // `isCoupled` also admits the §6.4 `_var` placeholder as an event-affect
+      // target — the same premise (this model's names may be supplied by the
+      // composition) that skips the two checks above.
+      errors.push(...validateEventConsistency(model, modelPath, isCoupled))
       errors.push(...validatePhysicalConstantUnits(model, modelPath))
       errors.push(...validateConversionFactorConsistency(model, modelPath))
       errors.push(...validateDefaultUnits(model, modelPath))
@@ -152,7 +165,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
             errors.push(...validateEquationBalance(subsystem, subsystemPath))
             errors.push(...validateReferenceIntegrity(subsystem, subsystemPath, esmFile))
           }
-          errors.push(...validateEventConsistency(subsystem, subsystemPath))
+          errors.push(...validateEventConsistency(subsystem, subsystemPath, isCoupled))
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
           errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath))
         }
@@ -165,7 +178,10 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
     for (const [systemName, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
       const systemPath = `/reaction_systems/${systemName}`
 
-      errors.push(...validateReactionConsistency(reactionSystem, systemPath))
+      // `esmFile` lets a rate expression's SCOPED references (a cross-system
+      // Arrhenius rate reading another model's temperature) resolve against the
+      // whole document instead of being reported undefined.
+      errors.push(...validateReactionConsistency(reactionSystem, systemPath, esmFile))
       errors.push(...validateReactionRateUnits(reactionSystem, systemPath))
       errors.push(...validateReactionSystemICs(reactionSystem, systemName, systemPath))
 
@@ -176,7 +192,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
         for (const [subsystemName, subsystem] of Object.entries(reactionSystem.subsystems)) {
           if ('ref' in subsystem) continue
           const subsystemPath = `${systemPath}/subsystems/${subsystemName}`
-          errors.push(...validateReactionConsistency(subsystem, subsystemPath))
+          errors.push(...validateReactionConsistency(subsystem, subsystemPath, esmFile))
           errors.push(...validateReactionRateUnits(subsystem, subsystemPath))
         }
       }

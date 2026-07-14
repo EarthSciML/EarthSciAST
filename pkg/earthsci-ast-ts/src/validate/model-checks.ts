@@ -20,15 +20,55 @@ import {
 import { isAffineTempUnit } from './unit-format.js'
 
 /**
- * Check equation-unknown balance for a model
+ * Check equation-unknown balance for a model.
+ *
+ * The balance rule depends on the model's `system_kind` (spec §4, default
+ * `"ode"`), because the two kinds are well-posed in different ways:
+ *
+ *  - **ODE / SDE / PDE** — a TIME-STEPPING system. Each state variable needs a
+ *    defining time derivative, so the count is of DERIVATIVES (`D(v,t)`, or the
+ *    derivative carried inside an `aggregate` contracted body), plus the
+ *    element-defined relational form (`index(v,i) = aggregate(…)`) that credits
+ *    the state variable its LHS assigns to.
+ *
+ *  - **NONLINEAR (algebraic)** — a system with NO time derivative at all
+ *    (aerosol equilibrium, Mogi inversion). Well-posedness is simply UNKNOWNS vs
+ *    EQUATIONS: `n` state variables need `n` equations, and an equation is any
+ *    equation — its LHS need not be (and generally is not) a bare variable. In
+ *    `tests/valid/nonlinear_isorropia_shape.esm` the closing equation is
+ *    `H*H*SO4 = Ksp`, whose LHS is a PRODUCT. Counting only derivative or
+ *    bare-assignment LHSs credited it zero, so a perfectly balanced 2×2
+ *    equilibrium system was reported as `equation_count_mismatch` — a false
+ *    rejection of a valid file, and of the one system kind whose defining
+ *    feature is that it has no derivatives.
  */
 export function validateEquationBalance(model: Model, modelPath: string): StructuralError[] {
   const errors: StructuralError[] = []
 
-  // Count state variables
+  // Count state variables — the UNKNOWNS, under either rule.
   const stateVariables = Object.entries(model.variables || {})
     .filter(([_, variable]) => variable.type === 'state')
     .map(([name, _]) => name)
+
+  const equations = model.equations || []
+
+  // An algebraic (nonlinear) system balances unknowns against the equation
+  // COUNT: every equation constrains the system, whatever shape its LHS has.
+  if (model.system_kind === 'nonlinear') {
+    if (stateVariables.length !== equations.length) {
+      errors.push({
+        path: modelPath,
+        code: ERROR_CODES.EQUATION_COUNT_MISMATCH,
+        message: `Number of equations (${equations.length}) does not match number of unknowns (${stateVariables.length})`,
+        details: {
+          state_variables: stateVariables,
+          ode_equations: equations.length,
+          missing_equations_for: [],
+        },
+      })
+    }
+    return errors
+  }
 
   // Count equations driving each state variable. A normal ODE contributes a
   // D(var,t) derivative; an aggregate LHS contributes the derivative carried
@@ -38,7 +78,7 @@ export function validateEquationBalance(model: Model, modelPath: string): Struct
   // assigns to, so element-defined state still balances the unknown count.
   const derivativeCounts: { [variable: string]: number } = {}
 
-  for (const equation of model.equations || []) {
+  for (const equation of equations) {
     const lhsDerivatives = countDerivatives(equation.lhs)
     if (Object.keys(lhsDerivatives).length > 0) {
       for (const [variable, count] of Object.entries(lhsDerivatives)) {
@@ -73,6 +113,37 @@ export function validateEquationBalance(model: Model, modelPath: string): Struct
 }
 
 /**
+ * The Cartesian spatial-coordinate names that are IMPLICITLY declared — never
+ * `undefined_variable`.
+ *
+ * A spatial coordinate is not a declared variable. In v0.8.0 a domain carries no
+ * grid (spec §11: "A domain does not carry spatial-grid geometry"), so a
+ * coordinate is "ordinary data associated with the spatial index" and is
+ * referenced BY NAME from a coordinate expression — e.g. the expression initial
+ * condition `ic(u) ~ 0.5*(1 + tanh((x - 0.3)/0.15))` in
+ * `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, where `x`
+ * is the 1-D spatial coordinate and is declared nowhere. Flagging it as an
+ * undefined variable rejected that valid, pinned fixture.
+ *
+ * Named axes (`lon`, `lat`, `lev`) need no entry here: they are `index_sets`
+ * keys, which {@link validateReferenceIntegrity} already credits. This set is
+ * only the conventional SHORT axes, matching the Python binding's
+ * `_CLOSED_SHORT_AXES`.
+ */
+const SPATIAL_COORDINATE_NAMES: readonly string[] = ['x', 'y', 'z']
+
+/**
+ * The independent (time) variable's name: the domain's `independent_variable`,
+ * defaulting to `"t"` (spec §11.3). It is IMPLICITLY declared — spec §5.3's own
+ * event example writes `t` in an equation with no declaration anywhere, and
+ * `tests/valid/cadence/pure_pointwise.esm` writes the analytic forcing
+ * `A*sin(omega*t)` in a file with no `domain` block at all.
+ */
+function independentVariableName(esmFile: EsmFile): string {
+  return esmFile.domain?.independent_variable || 't'
+}
+
+/**
  * Check reference integrity for a model
  */
 export function validateReferenceIntegrity(
@@ -82,6 +153,14 @@ export function validateReferenceIntegrity(
 ): StructuralError[] {
   const errors: StructuralError[] = []
   const declaredVariables = new Set(Object.keys(model.variables || {}))
+  // The independent variable and the spatial coordinates are implicitly
+  // declared (see the two helpers above): they are the model's INDEPENDENT
+  // coordinates, not its unknowns, so they never appear in `variables` and must
+  // never be reported as undefined.
+  const implicitNames = new Set<string>([
+    independentVariableName(esmFile),
+    ...SPATIAL_COORDINATE_NAMES,
+  ])
   // Declared index sets are a legitimate, non-variable identifier namespace
   // (RFC semiring-faq-unified-ir §5.2). An `aggregate` may name an index set
   // as a positional operand — the value-invention form
@@ -124,7 +203,8 @@ export function validateReferenceIntegrity(
         } else if (
           !declaredVariables.has(varRef) &&
           !declaredIndexSets.has(varRef) &&
-          !boundSymbols.has(varRef)
+          !boundSymbols.has(varRef) &&
+          !implicitNames.has(varRef)
         ) {
           // Local reference
           errors.push({
@@ -191,9 +271,37 @@ function checkAffectTargets(
 }
 
 /**
- * Check discrete parameters in events
+ * The operator-style state-variable placeholder (spec §6.4): "The special
+ * variable `"_var"` is a placeholder used in operator-style models. When coupled
+ * via `operator_compose`, it is substituted with each matching state variable
+ * from the target system."
+ *
+ * It is therefore a legal event-affect target and `read_vars` entry in a coupled
+ * model, and is declared nowhere — substitution supplies its referent at
+ * composition time.
  */
-export function validateEventConsistency(model: Model, modelPath: string): StructuralError[] {
+const OPERATOR_VAR_PLACEHOLDER = '_var'
+
+/**
+ * Check discrete parameters in events.
+ *
+ * `isCoupled` marks a model that participates in a coupling entry
+ * (`operator_compose` / `couple` / `variable_map`). For such a model the
+ * `_var` placeholder is a legal affect target — see
+ * {@link OPERATOR_VAR_PLACEHOLDER}. This restores an internal consistency the
+ * checker had lost: the orchestrator ALREADY skips reference integrity for a
+ * coupled model precisely because its equations may name variables another
+ * system provides, yet event consistency went on demanding that every affect
+ * target be locally declared — so `tests/valid/full_coupled.esm`, whose
+ * operator-composed `Transport` model affects `_var` exactly as §6.4 prescribes,
+ * was rejected. Genuine undeclared targets are still flagged: only the one
+ * spec-defined placeholder is admitted, and only where composition can bind it.
+ */
+export function validateEventConsistency(
+  model: Model,
+  modelPath: string,
+  isCoupled = false,
+): StructuralError[] {
   const errors: StructuralError[] = []
   const declaredVariables = new Set(Object.keys(model.variables || {}))
   const declaredParameters = new Set(
@@ -201,6 +309,9 @@ export function validateEventConsistency(model: Model, modelPath: string): Struc
       .filter(([_, variable]) => variable.type === 'parameter')
       .map(([name, _]) => name),
   )
+  if (isCoupled) {
+    declaredVariables.add(OPERATOR_VAR_PLACEHOLDER)
+  }
 
   // Check discrete events
   for (let i = 0; i < (model.discrete_events || []).length; i++) {
