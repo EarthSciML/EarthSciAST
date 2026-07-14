@@ -110,6 +110,8 @@ pub enum StructuralErrorCode {
     CircularDependency,
     /// Reaction rate expression has incompatible units for reaction stoichiometry
     UnitInconsistency,
+    /// A declared `units` string denotes no real unit (esm-spec §4.8.4)
+    UnitParseError,
     /// An `ic`-op equation placed inside a reaction system's `constraint_equations`
     IcInReactionSystem,
     /// A `variable_map` expression transform carries a `factor` (esm-spec
@@ -135,6 +137,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::OperatorVariableMissing => "operator_variable_missing",
             Self::CircularDependency => "circular_dependency",
             Self::UnitInconsistency => "unit_inconsistency",
+            Self::UnitParseError => "unit_parse_error",
             Self::IcInReactionSystem => "ic_in_reaction_system",
             Self::FactorWithExpressionTransform => "factor_with_expression_transform",
         };

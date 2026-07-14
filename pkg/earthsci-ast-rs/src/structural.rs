@@ -78,14 +78,29 @@ pub(crate) fn validate_model(
         });
     }
 
-    // Build a unit environment once per model — expression-level
-    // dimensional propagation walks the Expr AST using this map. A variable
-    // whose declared unit is unparseable is omitted from the env (its dimension
-    // is unknown) and surfaced as a non-blocking warning, rather than being
-    // coerced to dimensionless; equations referencing it then propagate to
-    // `UnitError::UnknownUnit`, which the loop below records as a warning too.
-    let (unit_env, unit_warnings) = build_unit_env(&model.variables);
-    warnings.extend(unit_warnings);
+    // Build a unit environment once per model — expression-level dimensional
+    // propagation walks the Expr AST using this map. A variable with NO declared
+    // units is simply absent from the env (dimension unknown, not
+    // dimensionless), so expressions mentioning it are skipped rather than
+    // checked against a fabricated dimension.
+    //
+    // A variable whose declared unit string denotes no real unit is a different
+    // matter: it is a HARD `unit_parse_error` at the variable's own pointer
+    // (esm-spec §4.8.4). Coercing it to dimensionless would fabricate a
+    // dimension, and treating it as merely unknown would let a typo silently
+    // switch off every dimensional check that depends on it.
+    let (unit_env, unit_parse_failures) = build_unit_env(&model.variables);
+    for failure in unit_parse_failures {
+        errors.push(StructuralError {
+            path: format!("{model_path}/variables/{}", failure.name),
+            code: StructuralErrorCode::UnitParseError,
+            message: format!("Unit string '{}' is not a recognised unit", failure.units),
+            details: serde_json::json!({
+                "variable": failure.name,
+                "units": failure.units,
+            }),
+        });
+    }
 
     // Build the coordinate-units map for the model's referenced domain, if
     // any. Used by `grad`/`div`/`laplacian` propagation to divide by the
@@ -520,26 +535,48 @@ fn validate_reaction_rate_units(
     use crate::units::{Unit, parse_unit};
 
     // Build unit environment: species + parameters → Unit.
+    //
+    // A declared unit string that denotes no real unit is a hard
+    // `unit_parse_error` at the declaration's own pointer, exactly as for a
+    // model variable (esm-spec §4.8.4) — a species whose units are a typo would
+    // otherwise silently drop out of the env and disable the rate-dimension
+    // check below. A declaration with NO units simply stays out of the env.
     let mut env: HashMap<String, Unit> = HashMap::new();
+    let mut parse_failures: Vec<(String, String, String)> = Vec::new();
     for (name, species) in &rs.species {
-        let unit = match &species.units {
+        match &species.units {
             Some(s) => match parse_unit(s) {
-                Ok(u) => u,
-                Err(_) => continue,
+                Ok(u) => {
+                    env.insert(name.clone(), u);
+                }
+                Err(_) => parse_failures.push(("species".into(), name.clone(), s.clone())),
             },
             None => continue,
-        };
-        env.insert(name.clone(), unit);
+        }
     }
     for (name, param) in &rs.parameters {
-        let unit = match &param.units {
+        match &param.units {
             Some(s) => match parse_unit(s) {
-                Ok(u) => u,
-                Err(_) => continue,
+                Ok(u) => {
+                    env.insert(name.clone(), u);
+                }
+                Err(_) => parse_failures.push(("parameters".into(), name.clone(), s.clone())),
             },
             None => continue,
-        };
-        env.insert(name.clone(), unit);
+        }
+    }
+    // `species`/`parameters` are HashMaps — sort for a deterministic report.
+    parse_failures.sort();
+    for (kind, name, units) in parse_failures {
+        errors.push(StructuralError {
+            path: format!("/reaction_systems/{rs_name}/{kind}/{name}"),
+            code: StructuralErrorCode::UnitParseError,
+            message: format!("Unit string '{units}' is not a recognised unit"),
+            details: serde_json::json!({
+                "name": name,
+                "units": units,
+            }),
+        });
     }
 
     let time = Unit::base(crate::units::Dimension::Time, 1, 1.0);

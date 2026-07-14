@@ -1065,15 +1065,26 @@ fn coord_denominator(
 /// being treated as an all-dimensionless model in which `D(u)/dt = A*sin(w*t)`
 /// looks inconsistent.
 ///
-/// Only the unparseable case warns: a missing `units` field is a legitimate
-/// choice, whereas a unit string we cannot read is worth surfacing. The
-/// returned warnings must not affect validity — callers report them as
-/// non-blocking warnings only.
+/// The two cases are NOT alike, and only one of them is a defect:
+///
+/// * A MISSING `units` field is a legitimate choice — the variable is simply
+///   not dimension-checked.
+/// * An UNPARSEABLE `units` field is a HARD ERROR (`unit_parse_error`,
+///   esm-spec §4.8.4). A unit string either resolves against the shared
+///   registry or it is a defect in the file: silently treating a typo
+///   (`1/time`, `m/s2`) as "dimension unknown" disables every dimensional check
+///   downstream, which is precisely the class of bug the checker exists to
+///   catch. The failures are returned to the caller, which reports each one at
+///   the JSON-Pointer of the offending DECLARATION.
+///
+/// Note this is a *different* case from a genuinely UNDETERMINABLE dimension (a
+/// symbolic exponent), which stays a non-blocking warning: there the checker
+/// cannot conclude, whereas here the author wrote something that is not a unit.
 pub fn build_unit_env(
     variables: &HashMap<String, crate::ModelVariable>,
-) -> (HashMap<String, Unit>, Vec<String>) {
+) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let mut env = HashMap::new();
-    let mut warnings = Vec::new();
+    let mut failures = Vec::new();
     for (name, var) in variables {
         let Some(declared) = &var.units else {
             // No declared units — dimension unknown, not dimensionless.
@@ -1083,16 +1094,29 @@ pub fn build_unit_env(
             Ok(unit) => {
                 env.insert(name.clone(), unit);
             }
-            Err(_) => {
-                warnings.push(format!(
-                    "Variable \"{name}\" has an unparseable unit \"{declared}\"; \
-                     treating its dimension as unknown (expressions \
-                     referencing it are skipped for dimensional checking)"
-                ));
-            }
+            Err(_) => failures.push(UnitParseFailure {
+                name: name.clone(),
+                units: declared.clone(),
+            }),
         }
     }
-    (env, warnings)
+    // `variables` is a HashMap, so iteration order is nondeterministic; sort so
+    // a multi-failure file reports its errors in a stable order.
+    failures.sort_by(|a, b| a.name.cmp(&b.name));
+    (env, failures)
+}
+
+/// A declared unit string that denotes no real unit.
+///
+/// Carries the NAME of the declaration alongside the offending string so the
+/// caller can report `unit_parse_error` at the declaration's JSON-Pointer
+/// rather than at the model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitParseFailure {
+    /// The declaration's name (variable, species, or parameter).
+    pub name: String,
+    /// The unit string exactly as the author wrote it.
+    pub units: String,
 }
 
 /// Validate that an equation's LHS and RHS have matching dimensions.
@@ -1552,9 +1576,35 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Plane angle — a real axis (the eighth), not a synonym for dimensionless.
     // The trig functions accept it; see `propagate_transcendental_dim`.
     units.insert("rad".to_string(), Unit::base(Dimension::Angle, 1, 1.0));
+    // Degrees of arc — the same axis, scaled. (`deg` is the short spelling; the
+    // TEMPERATURE `degC`/`degF` are separate entries and are matched first, so
+    // there is no collision.)
+    let degree = Unit::base(Dimension::Angle, 1, std::f64::consts::PI / 180.0);
+    units.insert("degrees".to_string(), degree.clone());
+    units.insert("degree".to_string(), degree.clone());
+    units.insert("deg".to_string(), degree);
 
     // Volume (L = dm³ = 10⁻³ m³)
     units.insert("L".to_string(), Unit::base(Dimension::Length, 3, 0.001));
+
+    // Frequency: Hz = s⁻¹.
+    units.insert("Hz".to_string(), Unit::base(Dimension::Time, -1, 1.0));
+
+    // Fahrenheit shares the TEMPERATURE axis with kelvin, like `degC`: the
+    // three differ by affine offset/scale, which a multiplicative dimension
+    // algebra cannot express and dimensional analysis does not need.
+    units.insert(
+        "degF".to_string(),
+        Unit::base(Dimension::Temperature, 1, 1.0),
+    );
+
+    // Year — the Julian-ish 365-day year used by the corpus's ecological
+    // fixtures (`km^2/year`, `1/year`).
+    units.insert(
+        "year".to_string(),
+        Unit::base(Dimension::Time, 1, 3.153_6e7),
+    );
+    units.insert("yr".to_string(), Unit::base(Dimension::Time, 1, 3.153_6e7));
 
     // Derived units
     // Velocity: m/s
@@ -1602,12 +1652,49 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("kcal".to_string(), kcal);
 
     // Power: kg*m^2/s^3 (Watt)
+    let watt = Unit::base(Dimension::Mass, 1, 1.0)
+        .multiply(&Unit::base(Dimension::Length, 2, 1.0))
+        .divide(&Unit::base(Dimension::Time, 3, 1.0));
+    units.insert("W".to_string(), watt.clone());
+
+    // Electromagnetic family, all derived from the ampere.
+    //
+    // `C` is the COULOMB (A·s), NOT Celsius — degrees Celsius is spelled
+    // `degC`, and the `°C` form normalizes to it before parsing. A unit string
+    // carries DIMENSIONS ONLY, so a bare `C` can never mean a chemical species
+    // tag either.
+    let ampere = Unit::base(Dimension::Current, 1, 1.0);
+    let coulomb = ampere.multiply(&Unit::base(Dimension::Time, 1, 1.0));
+    units.insert("C".to_string(), coulomb.clone());
+
+    // Volt = W/A = kg*m^2/(s^3*A)
+    let volt = watt.divide(&ampere);
+    units.insert("V".to_string(), volt.clone());
+
+    // Ohm = V/A. Reached from the `Ω` spelling too, which normalizes to `Ohm`.
+    units.insert("Ohm".to_string(), volt.divide(&ampere));
+
+    // Farad = C/V (so `F/m`, the permittivity of the corpus, is F ÷ metre).
+    units.insert("F".to_string(), coulomb.divide(&volt));
+
+    // Tesla = kg/(s^2*A). The weber appears in the corpus as the composite
+    // `V*s`, which the parser builds from `V` and `s`, so it needs no entry.
     units.insert(
-        "W".to_string(),
+        "T".to_string(),
         Unit::base(Dimension::Mass, 1, 1.0)
-            .multiply(&Unit::base(Dimension::Length, 2, 1.0))
-            .divide(&Unit::base(Dimension::Time, 3, 1.0)),
+            .divide(&Unit::base(Dimension::Time, 2, 1.0))
+            .divide(&ampere),
     );
+
+    // Non-SI energies, as multiples of the joule.
+    let joule_scaled = |scale: f64| {
+        let mut u = joule.clone();
+        u.scale *= scale;
+        u
+    };
+    units.insert("erg".to_string(), joule_scaled(1e-7));
+    units.insert("BTU".to_string(), joule_scaled(1_055.055_852_62));
+    units.insert("kWh".to_string(), joule_scaled(3.6e6));
 
     // ESM-specific units standard (docs/units-standard.md).
     // Mole-fraction family: dimensionless with scale factors.
@@ -1648,6 +1735,11 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Pressure: atmosphere, and the micro-atmosphere used for seawater pCO2.
     units.insert("atm".to_string(), pascal_scaled(&units, 101_325.0));
     units.insert("uatm".to_string(), pascal_scaled(&units, 0.101_325));
+    // Non-SI pressures, as multiples of the pascal.
+    units.insert("bar".to_string(), pascal_scaled(&units, 1e5));
+    units.insert("Torr".to_string(), pascal_scaled(&units, 133.322_368_421));
+    units.insert("mmHg".to_string(), pascal_scaled(&units, 133.322_387_415));
+    units.insert("psi".to_string(), pascal_scaled(&units, 6_894.757_293_168));
 
     // Dobson unit: areal number density of ozone molecules.
     // Since `molec` is dimensionless, Dobson resolves to `[length]^-2` with
@@ -2677,7 +2769,7 @@ mod tests {
         variables.insert("x".to_string(), state_var_with_units(Some("not_a_unit")));
         variables.insert("y".to_string(), state_var_with_units(Some("m")));
 
-        let (env, warnings) = build_unit_env(&variables);
+        let (env, failures) = build_unit_env(&variables);
 
         // The unparseable variable is OMITTED (unknown), NOT coerced to a
         // dimensionless unit; the parseable one is present.
@@ -2687,10 +2779,15 @@ mod tests {
         );
         assert!(env.contains_key("y"));
 
-        // A warning is surfaced for the unparseable unit (behavior, not text).
-        assert!(
-            warnings.iter().any(|w| w.contains("x")),
-            "expected a warning mentioning the offending variable, got {warnings:?}"
+        // The failure is REPORTED, naming the offending variable and the string
+        // the author actually wrote, so the caller can raise a hard
+        // `unit_parse_error` at `/models/<M>/variables/x` (esm-spec §4.8.4).
+        assert_eq!(
+            failures,
+            vec![UnitParseFailure {
+                name: "x".to_string(),
+                units: "not_a_unit".to_string(),
+            }]
         );
 
         // An equation `y = x` referencing the unknown-unit variable propagates
