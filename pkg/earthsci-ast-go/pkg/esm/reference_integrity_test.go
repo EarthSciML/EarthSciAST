@@ -174,18 +174,6 @@ func TestExprRefChildrenTagsPointerPaths(t *testing.T) {
 // (h) Every reference-bearing ENTRY POINT is actually entered
 // ---------------------------------------------------------------------------
 
-// knownPathAttributionDivergences lists fixtures whose pinned error PATH does not
-// match where Go attributes the error, though the CODE matches. These are
-// pre-existing cross-language attribution differences, unrelated to reference
-// integrity; the code assertion below still holds for them.
-//
-//   - units_gradient_operator_mismatch: the corpus pins the dimension clash on
-//     the equation (/equations/0); Go attributes it to the observed variable whose
-//     expression is dimensionally inconsistent (/variables/bad_sum).
-var knownPathAttributionDivergences = map[string]bool{
-	"units_gradient_operator_mismatch.esm": true,
-}
-
 // TestInvalidCorpusStructuralPins sweeps EVERY fixture in tests/invalid that
 // pins structural errors and asserts the Go validator actually rejects it with
 // the pinned code, at the pinned path.
@@ -270,7 +258,7 @@ func TestInvalidCorpusStructuralPins(t *testing.T) {
 					t.Errorf("pinned code %q not produced; got %v", want.Code, sortedSet(gotCodes))
 					continue
 				}
-				if loadErr != nil || knownPathAttributionDivergences[name] {
+				if loadErr != nil {
 					continue
 				}
 				if !anyPathMatches(gotPaths, want.Path) {

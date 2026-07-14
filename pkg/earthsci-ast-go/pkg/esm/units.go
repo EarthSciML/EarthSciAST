@@ -1224,16 +1224,38 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
-	case "grad", "div", "laplacian":
-		// Spatial derivative: operand dimensions divided by the spatial
-		// coordinate's declared units. The coordinate is identified by
-		// node.Dim and resolved against the enclosing model's domain
-		// (coordEnv). When coordEnv is nil (no domain context) or the
-		// coordinate is missing / declared without units, we return the
-		// unpropagated operand dim — the structural check in
-		// checkSpatialOperatorCoordinateUnits emits the unit_inconsistency
-		// error separately, so we avoid hard-coding a metre denominator
-		// here.
+	case OpGrad, OpDivergence, OpLaplacian:
+		// SPATIAL DIFFERENTIAL OPERATORS (esm-spec §7.1.2). Each divides its
+		// operand's dimension by the dimension of the coordinate `node.Dim` names:
+		//
+		//   grad(u)      over x  →  dim(u) / dim(x)
+		//   div(F)       over x  →  dim(F) / dim(x)
+		//   laplacian(u) over x  →  dim(u) / dim(x)^2   (it is D(D(u,x),x))
+		//
+		// (`curl` is not an operator this format ships — §6.3 lists grad, div,
+		// laplacian and integral — so there is nothing to model here.)
+		//
+		// The coordinate is resolved against the model's DECLARED variables
+		// (coordEnv, three-state — see buildModelCoordEnv). Since the v0.8.0
+		// removal of Domain.spatial, a physical coordinate is an ordinary declared
+		// variable/parameter, so that table IS the coordinate table:
+		//
+		//   declared WITH units    → divide, exactly as above.
+		//   declared WITHOUT units → the operator's dimension is UNDECIDABLE, and
+		//                            the file is wrong to ask for it: report it.
+		//                            This is the defect
+		//                            tests/invalid/units_gradient_operator_mismatch.esm
+		//                            pins at /models/<M>/equations/0.
+		//   NOT declared at all    → INDETERMINATE (nil). The dim names an
+		//                            index-set axis lowered by a discretization
+		//                            rewrite rule (§9.6.8), not a physical
+		//                            coordinate; there is nothing to divide by and
+		//                            nothing to complain about.
+		//
+		// What we must NOT do in the last two cases is invent a metre denominator.
+		// A fabricated dimension under hard-error severity is a false-rejection
+		// factory — the same trap already documented for bare additive literals and
+		// for `D` with an undeclared `wrt`.
 		if len(node.Args) < 1 {
 			return nil, nil
 		}
@@ -1247,11 +1269,21 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if node.Dim == nil || coordEnv == nil {
 			return nil, nil
 		}
-		coord, present := coordEnv[*node.Dim]
-		if !present || coord == nil || coord.Dim.IsDimensionless() {
+		coord, declared := coordEnv[*node.Dim]
+		if !declared {
 			return nil, nil
 		}
+		if coord == nil {
+			return nil, mismatchErrf(
+				"%q over coordinate %q: the coordinate is declared without units, so the operator's "+
+					"dimension (%s per unit of %q) is undecidable — declare units on %q",
+				node.Op, *node.Dim, operand.Dim, *node.Dim, *node.Dim)
+		}
 		r := operand.Divide(*coord)
+		if node.Op == OpLaplacian {
+			// laplacian(u) = Σᵢ D(D(u,xᵢ),xᵢ): the coordinate divides TWICE.
+			r = r.Divide(*coord)
+		}
 		return &r, nil
 
 	case "min", "max":
@@ -1312,6 +1344,39 @@ func buildModelUnitEnv(model *Model) (map[string]Unit, map[string]error) {
 		}
 	}
 	return BuildUnitEnv(raw)
+}
+
+// buildModelCoordEnv builds the COORDINATE TABLE the spatial operators resolve
+// `node.Dim` against — a THREE-state map, which is the whole point of it:
+//
+//	key present, value non-nil → the coordinate is declared WITH units
+//	key present, value nil     → the coordinate is declared WITHOUT (or with
+//	                             unparseable) units — its dimension is unknown
+//	key ABSENT                 → the name is not a declared variable at all
+//
+// The distinction is what lets grad/div/laplacian tell a coordinate whose units
+// the author FORGOT (a defect: the operator's dimension is undecidable, and
+// tests/invalid/units_gradient_operator_mismatch.esm pins it) apart from a dim
+// that names an INDEX-SET AXIS lowered by a discretization rewrite rule (§9.6.8),
+// which is not a physical coordinate and must not be flagged. A two-state
+// map[string]Unit collapses those two cases into "missing" and cannot.
+//
+// Since v0.8.0 removed Domain.spatial, a physical coordinate has no separate
+// declaration site: it IS an ordinary declared variable/parameter, so the model's
+// variable table is the coordinate table.
+func buildModelCoordEnv(model *Model) map[string]*Unit {
+	env, _ := buildModelUnitEnv(model)
+	coords := make(map[string]*Unit, len(model.Variables))
+	for name := range model.Variables {
+		if u, ok := env[name]; ok {
+			u := u
+			coords[name] = &u
+			continue
+		}
+		// Declared, but with no parseable units: dimension unknown.
+		coords[name] = nil
+	}
+	return coords
 }
 
 // buildSystemUnitEnv builds the unit environment for a reaction system from the
@@ -1417,6 +1482,7 @@ func derivativeTimeMismatch(state, rhs *Unit) error {
 // promotes the promotable ones to structural errors.
 func validateModelUnits(modelName string, model *Model, basePath string, file *ESMFile, result *StructuralValidationResult) {
 	env, bad := buildModelUnitEnv(model)
+	coordEnv := buildModelCoordEnv(model)
 	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			Path:    fmt.Sprintf("%s/variables/%s/units", basePath, name),
@@ -1426,11 +1492,11 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 	}
 	for i, eq := range model.Equations {
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
-		if w := validateEquationDimensionsCoords(&eq, env, nil, eqPath); w != nil {
+		if w := validateEquationDimensionsCoords(&eq, env, coordEnv, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
-	validateObservedVariableUnits(model, env, basePath, result)
+	validateObservedVariableUnits(model, env, coordEnv, basePath, result)
 	checkConversionFactorConsistency(modelName, model, result)
 	checkPhysicalConstantUnits(modelName, model, result)
 	checkDefaultUnits(modelName, model, result)
@@ -1451,7 +1517,7 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 //
 // Findings are reported at `/models/<M>/variables/<v>`, the pointer
 // tests/invalid/expected_errors.json pins (and the one TypeScript emits).
-func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath string, result *StructuralValidationResult) {
+func validateObservedVariableUnits(model *Model, env map[string]Unit, coordEnv map[string]*Unit, basePath string, result *StructuralValidationResult) {
 	for _, name := range sortedKeys(model.Variables) {
 		v := model.Variables[name]
 		if v.Type != VarTypeObserved || v.Expression == nil {
@@ -1459,7 +1525,7 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath s
 		}
 		path := fmt.Sprintf("%s/variables/%s", basePath, name)
 
-		got, err := PropagateDimension(v.Expression, env)
+		got, err := propagateDimensionWithCoords(v.Expression, env, coordEnv)
 		if err != nil {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:     path,
