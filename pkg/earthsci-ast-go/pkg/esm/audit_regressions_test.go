@@ -1106,3 +1106,363 @@ func TestAuditSchemaMirrorEnforcesFormatPatterns(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// The 2026-07-14 CHECKER contract (Task B): six conditions the spec sanctions
+// that Go rejected. Each test below pins one, and each is implemented
+// identically across the five bindings.
+// ============================================================================
+
+// hasCode reports whether the result carries a hard (non-warning) error with the
+// given code, at any path.
+func hasCode(result *ValidationResult, code string) bool {
+	for _, e := range result.StructuralErrors {
+		if e.Code == code && e.Level == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateSrc loads a document from a JSON string and validates it.
+func validateSrc(t *testing.T, src string) *ValidationResult {
+	t.Helper()
+	file, err := LoadString(src)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return ValidateFile(file, src)
+}
+
+// loadInvalidFixtureByPath Loads a shared tests/invalid fixture through the REAL
+// entry point (Load resolves subsystem refs relative to the document) and
+// returns the load error, if any, along with the raw text.
+func loadInvalidFixtureByPath(t *testing.T, name string) (*ESMFile, string, error) {
+	t.Helper()
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	path := filepath.Join(repoRoot, "tests", "invalid", name)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	file, loadErr := Load(path)
+	return file, string(content), loadErr
+}
+
+// --- (a) the independent variable and the spatial coordinates are IMPLICIT ---
+
+// The domain's independent variable (`t` by default) and the spatial coordinate
+// names are declared by the DOMAIN, not by any `variables` block — v0.8.0
+// removed `Domain.spatial`, so a coordinate has no declaration site at all — yet
+// expressions name them directly. Reporting them as undefined variables rejects
+// valid files (cadence/pure_pointwise.esm names `t`;
+// initial_conditions/expression_ignition_front_1d.esm names `x` in an
+// expression initial condition).
+func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
+	src := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"implicit-names","authors":["t"]},
+	  "models":{"M":{
+	    "variables":{"u":{"type":"state","units":"1","default":0.0}},
+	    "equations":[
+	      {"lhs":{"op":"ic","args":["u"]},
+	       "rhs":{"op":"tanh","args":[{"op":"-","args":["x",0.3]}]}},
+	      {"lhs":{"op":"D","args":["u"],"wrt":"t"},
+	       "rhs":{"op":"*","args":[{"op":"sin","args":["t"]},0.0]}}
+	    ]}}}`
+	result := validateSrc(t, src)
+	if hasCode(result, ErrorUndefinedVariable) {
+		t.Errorf("`t` (the independent variable) and `x` (a spatial coordinate) are IMPLICITLY declared "+
+			"and must never be reported as undefined variables: %+v", result.StructuralErrors)
+	}
+	if !result.IsValid {
+		t.Errorf("document must be valid: %+v", result.StructuralErrors)
+	}
+	// A name that is neither is still undefined.
+	bad := validateSrc(t, strings.Replace(src, `"x",0.3`, `"not_a_coord",0.3`, 1))
+	if !hasCode(bad, ErrorUndefinedVariable) {
+		t.Error("an ordinary undeclared name must still be reported as undefined_variable")
+	}
+}
+
+// --- (b) `_var` is legal in an operator-composed / coupled model -------------
+
+// esm-spec §6.4: `_var` is the placeholder an operator-style model uses for the
+// state it operates on; `operator_compose` substitutes each matching state
+// variable of the target system. Go skipped reference integrity for coupled
+// models but NOT event consistency, so an event affect assigning to `_var` — the
+// documented spelling — was reported as an undeclared event variable, rejecting
+// the valid tests/valid/full_coupled.esm.
+func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
+	src := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"operator-placeholder","authors":["t"]},
+	  "models":{
+	    "Chem":{
+	      "variables":{"O3":{"type":"state","units":"ppb","default":30.0},
+	                   "k":{"type":"parameter","units":"1/s","default":0.1}},
+	      "equations":[{"lhs":{"op":"D","args":["O3"],"wrt":"t"},
+	                    "rhs":{"op":"*","args":[{"op":"-","args":["k"]},"O3"]}}]},
+	    "Transport":{
+	      "variables":{"u":{"type":"parameter","units":"m/s","default":1.0}},
+	      "equations":[{"lhs":{"op":"D","args":["_var"],"wrt":"t"},
+	                    "rhs":{"op":"*","args":[{"op":"-","args":["u"]},
+	                                            {"op":"grad","args":["_var"],"dim":"x"}]}}],
+	      "continuous_events":[{
+	        "name":"floor",
+	        "conditions":[{"op":"-","args":["u",0.001]}],
+	        "affects":[{"lhs":"_var","rhs":0.001}],
+	        "affect_neg":[{"lhs":"_var","rhs":0.0}],
+	        "root_find":"all"}]}},
+	  "coupling":[{"type":"operator_compose","systems":["Chem","Transport"]}]}`
+	result := validateSrc(t, src)
+	if hasCode(result, ErrorEventVarUndeclared) {
+		t.Errorf("`_var` in an event affect is LEGAL in an operator-composed model (esm-spec §6.4): %+v",
+			result.StructuralErrors)
+	}
+	if hasCode(result, ErrorEquationCountMismatch) {
+		t.Errorf("a coupled model's own equations need not balance its own unknowns: %+v",
+			result.StructuralErrors)
+	}
+	if !result.IsValid {
+		t.Errorf("document must be valid: %+v", result.StructuralErrors)
+	}
+
+	// The check is not simply disabled: an UNCOUPLED model with an undeclared
+	// event target is still rejected.
+	uncoupled := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"uncoupled","authors":["t"]},
+	  "models":{"M":{
+	    "variables":{"x":{"type":"state","units":"1","default":1.0}},
+	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":0.0}],
+	    "discrete_events":[{"trigger":{"type":"periodic","interval":1.0},
+	                        "affects":[{"lhs":"nonexistent_var","rhs":0.0}]}]}}}`
+	if !hasCode(validateSrc(t, uncoupled), ErrorEventVarUndeclared) {
+		t.Error("an undeclared event target in an UNCOUPLED model must still be event_var_undeclared")
+	}
+}
+
+// --- (c) scoped references are ARBITRARY DEPTH ------------------------------
+
+// esm-spec §4.6 defines a scoped reference as a dotted path of any depth
+// ("Meteorology.Temperature.surface_temp" names a variable inside a nested
+// subsystem). Splitting on '.' and reading [0] as the system and [1] as the
+// variable cannot see past the first level: it validated only that the root
+// exists and never checked that the rest of the path resolves.
+func TestCheckerB_C_ScopedRefsAreArbitraryDepth(t *testing.T) {
+	src := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"deep-scope","authors":["t"]},
+	  "models":{
+	    "Meteorology":{
+	      "variables":{"p":{"type":"parameter","units":"Pa","default":101325.0}},
+	      "equations":[],
+	      "subsystems":{"Temperature":{
+	        "variables":{"surface_temp":{"type":"state","units":"K","default":288.0}},
+	        "equations":[{"lhs":{"op":"D","args":["surface_temp"],"wrt":"t"},"rhs":0.0}]}}},
+	    "Chem":{
+	      "variables":{"T":{"type":"parameter","units":"K","default":298.0},
+	                   "O3":{"type":"state","units":"ppb","default":30.0}},
+	      "equations":[{"lhs":{"op":"D","args":["O3"],"wrt":"t"},"rhs":0.0}]}},
+	  "coupling":[{"type":"variable_map",
+	               "from":"Meteorology.Temperature.surface_temp",
+	               "to":"Chem.T","transform":"param_to_var"}]}`
+	result := validateSrc(t, src)
+	if hasCode(result, ErrorUnresolvedScopedRef) || hasCode(result, ErrorUndefinedSystem) {
+		t.Errorf("a 3-segment scoped reference into a nested subsystem is legal (esm-spec §4.6): %+v",
+			result.StructuralErrors)
+	}
+	if !result.IsValid {
+		t.Errorf("document must be valid: %+v", result.StructuralErrors)
+	}
+
+	// And the depth is really WALKED: a bad leaf at depth 3 is now caught, where
+	// reading only segments [0]/[1] saw nothing at all.
+	bad := strings.Replace(src, "Meteorology.Temperature.surface_temp", "Meteorology.Temperature.no_such_var", 1)
+	if !hasCode(validateSrc(t, bad), ErrorUnresolvedScopedRef) {
+		t.Error("an unresolvable leaf at depth 3 must be unresolved_scoped_ref")
+	}
+}
+
+// --- (d) a reaction RATE may hold a scoped reference ------------------------
+
+// A rate expression routinely reads another system's state (an Arrhenius rate
+// over a coupled model's temperature). Go's reaction-rate checker resolved no
+// scoped reference at all, so every such rate came back as an undefined
+// variable. An undeclared BARE name in a rate is `undefined_parameter`, the
+// code the shared corpus pins.
+func TestCheckerB_D_ReactionRateScopedRefsAndUndefinedParameter(t *testing.T) {
+	src := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"rate-scope","authors":["t"]},
+	  "models":{"Meteo":{
+	    "variables":{"T":{"type":"state","units":"K","default":298.0}},
+	    "equations":[{"lhs":{"op":"D","args":["T"],"wrt":"t"},"rhs":0.0}]}},
+	  "reaction_systems":{"Chem":{
+	    "species":{"A":{"units":"mol/m^3","default":1.0},"B":{"units":"mol/m^3","default":0.0}},
+	    "parameters":{"k":{"units":"1/s","default":0.1}},
+	    "reactions":[{"id":"R1",
+	      "substrates":[{"species":"A","stoichiometry":1.0}],
+	      "products":[{"species":"B","stoichiometry":1.0}],
+	      "rate":{"op":"*","args":["k",{"op":"exp","args":[{"op":"/","args":[-1.0,"Meteo.T"]}]}]}}]}}}`
+	result := validateSrc(t, src)
+	if hasCode(result, ErrorUnresolvedScopedRef) || hasCode(result, ErrorUndefinedVariable) ||
+		hasCode(result, ErrorUndefinedParameter) {
+		t.Errorf("a reaction rate may reference another system by scoped name: %+v", result.StructuralErrors)
+	}
+	if !result.IsValid {
+		t.Errorf("document must be valid: %+v", result.StructuralErrors)
+	}
+
+	// An undeclared BARE name in a rate is `undefined_parameter`.
+	bad := strings.Replace(src, `"rate":{"op":"*","args":["k",`, `"rate":{"op":"*","args":["undefined_k",`, 1)
+	badResult := validateSrc(t, bad)
+	if !hasCode(badResult, ErrorUndefinedParameter) {
+		t.Errorf("an undeclared name in a reaction rate must be undefined_parameter: %+v",
+			badResult.StructuralErrors)
+	}
+}
+
+// --- (e) equation_count_mismatch must handle an ALGEBRAIC system ------------
+
+// A `nonlinear` model has no derivatives: its unknowns are determined by
+// algebraic equations whose LHS may be an arbitrary EXPRESSION
+// (`H*H*SO4 ~ Ksp`), crediting no single variable. The balance is therefore
+// UNKNOWNS vs EQUATIONS. Counting derivatives and crediting only a bare-variable
+// LHS rejects a perfectly balanced 2×2 system
+// (tests/valid/nonlinear_isorropia_shape.esm).
+func TestCheckerB_E_NonlinearEquationBalance(t *testing.T) {
+	balanced := `{
+	  "esm":"0.8.0",
+	  "metadata":{"name":"isorropia-shape","authors":["t"]},
+	  "models":{"Eq":{
+	    "system_kind":"nonlinear",
+	    "variables":{
+	      "H":{"type":"state","units":"mol/m^3","default":1.0e-6},
+	      "SO4":{"type":"state","units":"mol/m^3","default":1.0e-6},
+	      "Ksp":{"type":"parameter","units":"mol^3/m^9","default":1.0e-12}},
+	    "equations":[
+	      {"lhs":"H","rhs":{"op":"*","args":[2,"SO4"]}},
+	      {"lhs":{"op":"*","args":["H","H","SO4"]},"rhs":"Ksp"}
+	    ]}}}`
+	result := validateSrc(t, balanced)
+	if hasCode(result, ErrorEquationCountMismatch) {
+		t.Errorf("2 algebraic equations determine 2 unknowns — an EXPRESSION LHS still counts: %+v",
+			result.StructuralErrors)
+	}
+	if !result.IsValid {
+		t.Errorf("document must be valid: %+v", result.StructuralErrors)
+	}
+
+	// The check is not disabled for nonlinear systems: an UNDER-determined one is
+	// still rejected (2 unknowns, 1 equation).
+	under := strings.Replace(balanced,
+		`{"lhs":"H","rhs":{"op":"*","args":[2,"SO4"]}},
+	      `, "", 1)
+	if !hasCode(validateSrc(t, under), ErrorEquationCountMismatch) {
+		t.Error("an under-determined nonlinear system (2 unknowns, 1 equation) must be equation_count_mismatch")
+	}
+}
+
+// --- (f) the four coupling / subsystem-ref pins -----------------------------
+
+// undefined_system.esm and circular_coupling.esm are validate-time pins;
+// subsystem_ref_not_found.esm and subsystem_ref_ambiguous.esm are resolved at
+// LOAD (Load walks the refs), and carry the settled §4.7 codes.
+func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
+	t.Run("undefined_system", func(t *testing.T) {
+		file, content := loadInvalidFixture(t, "undefined_system.esm")
+		result := ValidateFile(file, content)
+		if !hasCode(result, ErrorUndefinedSystem) {
+			t.Errorf("want undefined_system: %+v", result.StructuralErrors)
+		}
+		if result.IsValid {
+			t.Error("fixture is pinned invalid")
+		}
+	})
+
+	t.Run("circular_coupling", func(t *testing.T) {
+		file, content := loadInvalidFixture(t, "circular_coupling.esm")
+		result := ValidateFile(file, content)
+		if !hasCode(result, ErrorCircularDependency) {
+			t.Errorf("want circular_dependency: %+v", result.StructuralErrors)
+		}
+		if result.IsValid {
+			t.Error("fixture is pinned invalid")
+		}
+	})
+
+	t.Run("subsystem_ref_not_found", func(t *testing.T) {
+		_, _, err := loadInvalidFixtureByPath(t, "subsystem_ref_not_found.esm")
+		if err == nil {
+			t.Fatal("a subsystem ref naming a nonexistent file must be rejected")
+		}
+		if !strings.Contains(err.Error(), CodeUnresolvedSubsystemRef) {
+			t.Errorf("want the %s code; got: %v", CodeUnresolvedSubsystemRef, err)
+		}
+	})
+
+	t.Run("subsystem_ref_ambiguous", func(t *testing.T) {
+		_, _, err := loadInvalidFixtureByPath(t, "subsystem_ref_ambiguous.esm")
+		if err == nil {
+			t.Fatal("a subsystem ref resolving to multiple top-level systems must be rejected")
+		}
+		if !strings.Contains(err.Error(), CodeAmbiguousSubsystemRef) {
+			t.Errorf("want the %s code; got: %v", CodeAmbiguousSubsystemRef, err)
+		}
+	})
+
+	// An UNRESOLVED ref that reaches the validator (LoadString, no base path) is
+	// reported rather than silently accepted.
+	t.Run("unresolved_ref_at_validate_time", func(t *testing.T) {
+		src := `{
+		  "esm":"0.8.0",
+		  "metadata":{"name":"unresolved","authors":["t"]},
+		  "models":{"Host":{
+		    "variables":{"x":{"type":"state","units":"1","default":0.0}},
+		    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":0.0}],
+		    "subsystems":{"Sub":{"ref":"./nowhere.esm"}}}}}`
+		if !hasCode(validateSrc(t, src), CodeUnresolvedSubsystemRef) {
+			t.Error("a subsystem ref that survives to validation must be reported as unresolved")
+		}
+	})
+}
+
+// --- the two adjacent corpus pins Go also left unmet -------------------------
+
+// `discrete_parameters` names the parameters an event may write: a name that is
+// not declared, or that is declared as a STATE, is `invalid_discrete_param`.
+func TestCheckerB_InvalidDiscreteParam(t *testing.T) {
+	for _, name := range []string{"invalid_discrete_param.esm", "invalid_discrete_param_not_parameter.esm"} {
+		t.Run(name, func(t *testing.T) {
+			file, content := loadInvalidFixture(t, name)
+			result := ValidateFile(file, content)
+			if !hasCode(result, ErrorInvalidDiscreteParam) {
+				t.Errorf("want invalid_discrete_param: %+v", result.StructuralErrors)
+			}
+			if result.IsValid {
+				t.Error("fixture is pinned invalid")
+			}
+		})
+	}
+}
+
+// A `default_units` that needs an AFFINE conversion to the declared `units`
+// (25 degC is 298.15 K, not 25 K) cannot be applied to a scalar default.
+func TestCheckerB_DefaultUnitsAffineMismatch(t *testing.T) {
+	file, content := loadInvalidFixture(t, "units_parameter_default_mismatch.esm")
+	result := ValidateFile(file, content)
+	if !hasStructuralError(result, ErrorUnitInconsistency, "/models/BadUnitsModel/variables/temperature") {
+		t.Errorf("want unit_inconsistency @ /models/BadUnitsModel/variables/temperature: %+v",
+			result.StructuralErrors)
+	}
+	// `default_units` must also SURVIVE decoding — it used to be dropped on the
+	// way in, so nothing downstream could see it.
+	if v := file.Models["BadUnitsModel"].Variables["temperature"]; v.DefaultUnits == nil {
+		t.Error("default_units was dropped by the decoder")
+	}
+}

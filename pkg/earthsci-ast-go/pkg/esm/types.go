@@ -138,11 +138,16 @@ type AffectEquation struct {
 // system to an SDE system. NoiseKind and CorrelationGroup apply only to
 // brownian variables.
 type ModelVariable struct {
-	Type        string     `json:"type"` // "state", "parameter", "observed", or "brownian"
-	Units       *string    `json:"units,omitempty"`
-	Default     any        `json:"default,omitempty"`
-	Description *string    `json:"description,omitempty"`
-	Expression  Expression `json:"expression,omitempty"` // for observed variables
+	Type    string  `json:"type"` // "state", "parameter", "observed", or "brownian"
+	Units   *string `json:"units,omitempty"`
+	Default any     `json:"default,omitempty"`
+	// DefaultUnits declares the units the scalar `default` is expressed in when
+	// they differ from `units`. The value is converted at load. A conversion that
+	// is AFFINE (degC↔K) cannot be expressed as a scalar factor, so declaring one
+	// here is a `unit_inconsistency` — see checkDefaultUnits.
+	DefaultUnits *string    `json:"default_units,omitempty"`
+	Description  *string    `json:"description,omitempty"`
+	Expression   Expression `json:"expression,omitempty"` // for observed variables
 	// Shape lists index-set names for arrayed variables, drawn from the
 	// document-scoped `index_sets` registry (ESMFile.IndexSets). Nil means
 	// scalar. As of v0.8.0 the iteration domains named here live at document

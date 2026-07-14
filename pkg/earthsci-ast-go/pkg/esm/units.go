@@ -380,8 +380,10 @@ func buildUnitRegistry() map[string]Unit {
 	// deliberately not modeled (dimensional analysis only cares about the scale).
 	r["degF"] = Unit{Dim: r["K"].Dim, Scale: 5.0 / 9.0}
 
-	// Plane angle.
+	// Plane angle. "degrees" is the long-form alias the corpus uses for lon/lat
+	// coordinates and terrain aspect.
 	r["deg"] = Unit{Dim: r["rad"].Dim, Scale: math.Pi / 180}
+	r["degrees"] = r["deg"]
 
 	// Amount of substance, scaled ("μmol/(m^2*s)" — photosynthesis flux — is in
 	// the valid corpus; μ normalizes to u, see normalizeUnitString).
@@ -1357,6 +1359,7 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 	validateObservedVariableUnits(model, env, basePath, result)
 	checkConversionFactorConsistency(modelName, model, result)
 	checkPhysicalConstantUnits(modelName, model, result)
+	checkDefaultUnits(modelName, model, result)
 }
 
 // validateObservedVariableUnits dimension-checks each OBSERVED variable's
@@ -1694,19 +1697,54 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 }
 
 // isAffineTempUnit reports whether a unit string denotes a temperature scale
-// with an offset (Celsius). Go's unit registry represents Celsius as plain
-// Kelvin, so we use a conservative string match to skip it from scale-factor
-// comparisons. Only the Celsius spellings that ParseUnit accepts ("degC", "C")
-// are matched — Fahrenheit ("degF"/"F") is absent from unitRegistry, so it
-// never reaches this check (the caller's ParseUnit fails and short-circuits
-// first); add it here if and when the registry gains a Fahrenheit entry.
+// with an OFFSET (Celsius, Fahrenheit). The registry models both as a scaled
+// Kelvin — the offset is deliberately not carried — so a scale-factor comparison
+// against them is meaningless and is skipped.
+//
+// The bare "C" is NOT matched: it is the COULOMB (esm-spec §4.8.1). Celsius is
+// spelled "degC", "Celsius", or "°C" (which normalizeUnitString folds to degC).
 func isAffineTempUnit(s string) bool {
-	s = strings.TrimSpace(s)
-	switch s {
-	case "degC", "C":
+	switch strings.TrimSpace(normalizeUnitString(s)) {
+	case "degC", "degF", "Celsius":
 		return true
 	}
 	return false
+}
+
+// checkDefaultUnits flags a variable whose `default_units` require an AFFINE
+// conversion to its declared `units` (`units: "K"` with `default_units: "degC"`:
+// 25 degC is 298.15 K, not 25 K).
+//
+// A scalar `default` can only carry a multiplicative conversion; an offset
+// cannot be applied to it, so the declaration is unsatisfiable and the value it
+// would produce is silently wrong. Mirrors TS validate/model-checks.ts
+// `validateDefaultUnits` (tests/invalid/units_parameter_default_mismatch.esm).
+func checkDefaultUnits(modelName string, model *Model, result *StructuralValidationResult) {
+	for _, vname := range sortedKeys(model.Variables) {
+		v := model.Variables[vname]
+		if v.DefaultUnits == nil || v.Units == nil {
+			continue
+		}
+		declared, defaultUnits := *v.Units, *v.DefaultUnits
+		if declared == "" || defaultUnits == "" || declared == defaultUnits {
+			continue
+		}
+		if !isAffineTempUnit(declared) && !isAffineTempUnit(defaultUnits) {
+			continue
+		}
+		result.StructuralErrors = append(result.StructuralErrors, StructuralError{
+			Path: fmt.Sprintf("/models/%s/variables/%s", modelName, vname),
+			Code: ErrorUnitInconsistency,
+			Message: fmt.Sprintf(
+				"default_units '%s' requires an affine conversion to/from '%s'; a scalar default cannot carry an offset — use an expression instead",
+				defaultUnits, declared),
+			Details: map[string]any{
+				"variable":      vname,
+				"units":         declared,
+				"default_units": defaultUnits,
+			},
+		})
+	}
 }
 
 // validateReactionRateUnits enforces the mass-action dimensional constraint

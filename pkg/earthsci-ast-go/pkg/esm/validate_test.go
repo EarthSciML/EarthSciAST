@@ -802,14 +802,18 @@ func TestUnparseableUnitIsAHardError(t *testing.T) {
 	// ... the variable is treated as UNKNOWN, so no false mismatch is piled on ...
 	assert.False(t, sawMismatch, "unknown-unit variable must not manufacture a dimension mismatch: %+v", result.UnitWarnings)
 
-	// ... and it IS a hard error that invalidates the document.
+	// ... and it IS a hard error that invalidates the document. The code is
+	// `unit_parse_error` — a unit string that denotes NO real unit — which the
+	// shared corpus pins separately from `unit_inconsistency` (a provable
+	// mismatch between two units that DO resolve); see
+	// tests/invalid/unparseable_unit.esm.
 	var sawHardError bool
 	for _, se := range result.StructuralErrors {
-		if se.Code == ErrorUnitInconsistency {
+		if se.Code == ErrorUnitParseError {
 			sawHardError = true
 			assert.Empty(t, se.Level, "a provable unit defect must be error-level, not a warning")
 		}
 	}
-	assert.True(t, sawHardError, "unparseable unit must be a hard unit_inconsistency: %+v", result.StructuralErrors)
+	assert.True(t, sawHardError, "unparseable unit must be a hard unit_parse_error: %+v", result.StructuralErrors)
 	assert.False(t, result.Valid, "a file with an unreal unit is invalid")
 }
