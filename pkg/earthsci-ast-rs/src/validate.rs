@@ -224,6 +224,7 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         for (rs_name, rs) in reaction_systems {
             crate::structural::validate_reaction_system(
+                esm_file,
                 rs_name,
                 rs,
                 &system_refs,
@@ -231,6 +232,16 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
             );
         }
     }
+
+    // A data-loader variable's `unit_conversion` (§8.5) is an Expression, so
+    // reference integrity applies to it (§4.9.5). It is applied to the loaded
+    // value and may name any declared symbol in the document, so it resolves
+    // against the document-wide declared set.
+    crate::structural::validate_data_loader_unit_conversions(
+        esm_file,
+        &system_refs,
+        &mut structural_errors,
+    );
 
     // Validate coupling
     if let Some(ref coupling) = esm_file.coupling {

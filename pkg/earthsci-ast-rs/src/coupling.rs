@@ -107,6 +107,19 @@ pub(crate) fn validate_coupling(
                         }),
                     });
                 }
+
+                // The Expression form of a `transform` does real arithmetic over
+                // scoped references, and nothing checked its symbols (§4.9.5).
+                if let Some(node) = transform.as_expression() {
+                    validate_coupling_expression(
+                        &crate::Expr::Operator(node.clone()),
+                        &HashSet::new(),
+                        system_refs,
+                        &format!("{coupling_path}/transform"),
+                        "variable_map",
+                        errors,
+                    );
+                }
             }
             crate::CouplingEntry::OperatorApply { operator, .. } => {
                 if let Some(ref operators) = esm_file.operators {
@@ -162,7 +175,9 @@ pub(crate) fn validate_coupling(
                     });
                 }
             }
-            crate::CouplingEntry::Couple { systems, .. } => {
+            crate::CouplingEntry::Couple {
+                systems, connector, ..
+            } => {
                 validate_pairwise_systems(
                     systems,
                     "Couple",
@@ -171,6 +186,33 @@ pub(crate) fn validate_coupling(
                     system_refs,
                     errors,
                 );
+
+                // A connector equation's `expression` is the arithmetic the
+                // coupling performs; its symbols are scoped references and
+                // nothing checked them (§4.9.5). `connector` is raw JSON, so the
+                // expression is parsed out here.
+                for (eq_idx, eq) in connector
+                    .get("equations")
+                    .and_then(|e| e.as_array())
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let Some(raw) = eq.get("expression") else {
+                        continue;
+                    };
+                    let Ok(expr) = serde_json::from_value::<crate::Expr>(raw.clone()) else {
+                        continue;
+                    };
+                    validate_coupling_expression(
+                        &expr,
+                        &HashSet::new(),
+                        system_refs,
+                        &format!("{coupling_path}/connector/equations/{eq_idx}/expression"),
+                        "couple",
+                        errors,
+                    );
+                }
             }
             crate::CouplingEntry::OperatorCompose { systems, .. } => {
                 validate_pairwise_systems(
@@ -243,6 +285,60 @@ fn validate_pairwise_systems(
     }
 }
 
+/// Reference-check every symbol in a coupling Expression (esm-spec §4.9.5).
+///
+/// Coupling expressions live in the FLATTENED coupled system's scope, so their
+/// variable references are fully qualified §4.6 scoped references — an
+/// unresolvable one is an `unresolved_scoped_ref`. Descends via
+/// `for_each_child`, so a reference buried in a sidecar (an aggregate body, a
+/// filter predicate) is reached too, and credits the index symbols a node BINDS.
+///
+/// Nothing walked these fields at all: a `variable_map` `transform` and a
+/// connector equation's `expression` are the two places a coupling does real
+/// arithmetic, and a typo in either silently produced a wrong coupled system.
+fn validate_coupling_expression(
+    expr: &crate::Expr,
+    bound: &std::collections::HashSet<String>,
+    system_refs: &HashMap<String, SystemInfo>,
+    path: &str,
+    coupling_type: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    match expr {
+        crate::Expr::Variable(name) => {
+            // A bound index symbol is a loop position, not a reference.
+            if bound.contains(name) {
+                return;
+            }
+            // Only a SCOPED reference is resolvable here; a bare name in a
+            // coupling expression names nothing in the flattened scope, and
+            // `validate_scoped_reference` returns early on it rather than
+            // inventing a diagnostic the corpus does not pin.
+            validate_scoped_reference(name, system_refs, path, coupling_type, errors);
+        }
+        crate::Expr::Operator(node) => {
+            let mut scope = bound.clone();
+            if let Some(idx) = &node.output_idx {
+                scope.extend(idx.iter().cloned());
+            }
+            if let Some(ranges) = &node.ranges {
+                scope.extend(ranges.keys().cloned());
+            }
+            node.for_each_child(&mut |child| {
+                validate_coupling_expression(
+                    child,
+                    &scope,
+                    system_refs,
+                    path,
+                    coupling_type,
+                    errors,
+                );
+            });
+        }
+        crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
+    }
+}
+
 fn validate_scoped_reference(
     reference: &str,
     system_refs: &HashMap<String, SystemInfo>,
@@ -250,13 +346,16 @@ fn validate_scoped_reference(
     coupling_type: &str,
     errors: &mut Vec<StructuralError>,
 ) {
-    let parts: Vec<&str> = reference.split('.').collect();
-    if parts.len() < 2 {
+    // A scoped reference is a dot path of ARBITRARY DEPTH (esm-spec §4.9.2):
+    // `A.B.c` walks A → B and takes `c`. The NAME is the LAST segment and the
+    // SYSTEM is everything before it — taking segment [0] as the system reports
+    // `EarthSystem.Atmosphere.Chemistry.O3` against the top-level `EarthSystem`
+    // rather than the subsystem two levels down. `build_system_reference_map`
+    // registers each nested subsystem under its full dotted path, so the walk is
+    // a single prefix lookup.
+    let Some((system_name, var_name)) = reference.rsplit_once('.') else {
         return; // Not a scoped reference
-    }
-
-    let system_name = parts[0];
-    let var_name = parts[parts.len() - 1];
+    };
 
     // Check if system exists
     if let Some(system) = system_refs.get(system_name) {

@@ -499,9 +499,15 @@ fn trig_angle_rules() {
     }
 }
 
-/// `d` is the DAY (`lib/calendar.esm` declares `units: "d"`), not the deci
-/// prefix — the registry is consulted before prefix decomposition.
+/// A bare `d` is NOT a unit (esm-spec §4.8.1). The canonical spelling of the day
+/// is `day`; a one-letter `d` reads as the deci- prefix or as a differential, so
+/// admitting it would make the symbol ambiguous at every site. Pinned as an
+/// EXCLUSION so it cannot creep back into the registry.
 #[test]
-fn d_is_the_day() {
-    assert_eq!(parse_unit("d").unwrap(), parse_unit("day").unwrap());
+fn bare_d_is_not_a_unit() {
+    assert!(
+        parse_unit("d").is_err(),
+        "`d` must not resolve — the day is spelled `day`"
+    );
+    assert!(parse_unit("day").is_ok());
 }

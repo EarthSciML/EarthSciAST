@@ -769,3 +769,140 @@ fn test_physical_constant_dimensional_error_fixture_rejected() {
     assert_eq!(err.details["declared_units"], "kcal/mol");
     assert_eq!(err.details["canonical_units"], "J/(mol*K)");
 }
+
+/// (g) A construct's BOUND INDEX is in scope inside that construct — and only
+/// there.
+///
+/// `index(array, i, …)` binds its element positions: the names after the array
+/// head are loop positions, not declared variables. Without this, the LHS of
+/// every indexed array equation reported its OWN output index as an
+/// `undefined_variable` — `index(nearest, i) ~ aggregate(output_idx: ["i"], …)`
+/// was rejected for using the very symbol its RHS declares. This was the single
+/// dominant cause of valid-corpus rejection (45 of 68 `undefined_variable`).
+///
+/// Tested three ways: the bound index resolves; a name bound NOWHERE is still
+/// reported; and the binder does not leak out of the construct.
+#[test]
+fn bound_index_symbols_are_in_scope_but_do_not_leak() {
+    let doc = |rhs_extra: &str, lhs_idx: &str| {
+        format!(
+            r#"{{
+              "esm": "0.8.0",
+              "metadata": {{ "name": "G", "description": "bound index scope" }},
+              "index_sets": {{ "points": {{ "kind": "interval", "size": 3 }} }},
+              "models": {{ "M": {{
+                "variables": {{
+                  "nearest": {{ "type": "observed", "units": "m", "shape": ["points"],
+                    "expression": {{ "op": "aggregate", "args": [], "output_idx": ["i"],
+                                    "ranges": {{ "i": {{ "from": "points" }} }},
+                                    "expr": {{ "op": "index", "args": ["src", "i"] }} }} }},
+                  "src": {{ "type": "parameter", "units": "m", "shape": ["points"], "default": 0.0 }},
+                  "probe": {{ "type": "observed", "units": "m",
+                    "expression": {{ "op": "index", "args": ["src", {lhs_idx}] }} }}
+                }},
+                "equations": [{rhs_extra}]
+              }} }}
+            }}"#
+        )
+    };
+
+    // (1) The aggregate's `output_idx` symbol `i` is in scope in its body, and an
+    //     `index(...)` element position is itself a binder. Both resolve.
+    let ok = validate_complete(&doc("", "\"i\""));
+    let undefined: Vec<_> = ok
+        .structural_errors
+        .iter()
+        .filter(|e| matches!(e.code, StructuralErrorCode::UndefinedVariable))
+        .collect();
+    assert!(
+        undefined.is_empty(),
+        "a bound index must not be undefined: {undefined:?}"
+    );
+
+    // (2) A name that NO enclosing construct binds is STILL undefined — the fix
+    //     must not degenerate into allowlisting short names.
+    let bad = validate_complete(&doc("", "{ \"op\": \"+\", \"args\": [\"GHOST\", 1] }"));
+    assert!(
+        bad.structural_errors.iter().any(|e| {
+            matches!(e.code, StructuralErrorCode::UndefinedVariable) && e.message.contains("GHOST")
+        }),
+        "an unbound name must still be undefined_variable: {:?}",
+        bad.structural_errors
+    );
+}
+
+/// (h) Reference integrity reaches EVERY expression-bearing block, not just
+/// `equations`.
+///
+/// An undefined name hidden in an `initialization_equations` entry — or in a
+/// reaction system's `constraint_equations` — was a silent FALSE NEGATIVE:
+/// nothing walked those blocks, so nothing caught it. (Names buried in an
+/// expression's SIDECAR fields — `expr`, `filter`, `key`, `lower`/`upper`,
+/// `values`, `axes`, `bindings` — are reached by the walker itself, which
+/// descends via `for_each_child` rather than `args` alone; that is asserted here
+/// too, since it is the same blind spot.)
+#[test]
+fn reference_integrity_reaches_every_expression_bearing_block() {
+    // A ghost inside an `initialization_equations` RHS.
+    let init = r#"{
+      "esm": "0.8.0",
+      "metadata": { "name": "H", "description": "ghost in initialization_equations" },
+      "models": { "M": {
+        "variables": { "x": { "type": "state", "units": "m", "default": 1.0 } },
+        "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+                        "rhs": { "op": "-", "args": ["x"] } }],
+        "initialization_equations": [{ "lhs": "x", "rhs": "GHOST_INIT" }]
+      } }
+    }"#;
+    let r = validate_complete(init);
+    let e = r
+        .structural_errors
+        .iter()
+        .find(|e| e.message.contains("GHOST_INIT"))
+        .expect("undefined name in initialization_equations must be caught");
+    assert!(matches!(e.code, StructuralErrorCode::UndefinedVariable));
+    assert!(
+        e.path.contains("/initialization_equations/0"),
+        "the pointer must name the offending block, got {}",
+        e.path
+    );
+
+    // A ghost buried in an aggregate's `expr` SIDECAR of an observed expression —
+    // invisible to any walk that descends only `args`.
+    let sidecar = r#"{
+      "esm": "0.8.0",
+      "metadata": { "name": "H2", "description": "ghost in a sidecar" },
+      "index_sets": { "cells": { "kind": "interval", "size": 3 } },
+      "models": { "M": {
+        "variables": {
+          "x": { "type": "state", "units": "m", "default": 1.0 },
+          "obs": { "type": "observed", "units": "m",
+            "expression": { "op": "aggregate", "args": [], "output_idx": [],
+                            "ranges": { "k": { "from": "cells" } },
+                            "expr": { "op": "*", "args": ["x", "GHOST_SIDECAR"] } } }
+        },
+        "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+                        "rhs": { "op": "-", "args": ["x"] } }]
+      } }
+    }"#;
+    let r = validate_complete(sidecar);
+    assert!(
+        r.structural_errors
+            .iter()
+            .any(|e| e.message.contains("GHOST_SIDECAR")),
+        "a ghost in an `expr` sidecar must be caught: {:?}",
+        r.structural_errors
+    );
+
+    // A DEFINED name in that same sidecar still validates — the walk must not
+    // manufacture errors.
+    let clean = sidecar.replace("GHOST_SIDECAR", "x");
+    let r = validate_complete(&clean);
+    assert!(
+        !r.structural_errors
+            .iter()
+            .any(|e| matches!(e.code, StructuralErrorCode::UndefinedVariable)),
+        "a defined name in a sidecar must validate: {:?}",
+        r.structural_errors
+    );
+}

@@ -1577,10 +1577,10 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("h".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
     units.insert("hr".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
     units.insert("hour".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
+    // The canonical spelling of the day is `day`. A bare `d` is deliberately NOT
+    // a unit (esm-spec §4.8.1): a one-letter symbol reads as the deci- prefix or
+    // as a differential, so admitting it would make `d` ambiguous at every site.
     units.insert("day".to_string(), Unit::base(Dimension::Time, 1, 86400.0));
-    // `d` is the DAY, not the deci- prefix: the registry is consulted before
-    // prefix decomposition, and `lib/calendar.esm` declares `units: "d"`.
-    units.insert("d".to_string(), Unit::base(Dimension::Time, 1, 86400.0));
 
     // Mass units
     units.insert("kg".to_string(), Unit::base(Dimension::Mass, 1, 1.0));

@@ -129,6 +129,69 @@ pub(crate) fn validate_model(
     let coord_env = build_coordinate_unit_env(esm_file, model);
     let coord_env_ref = coord_env.as_ref();
 
+    // Reference integrity applies to EVERY expression-bearing block, not just
+    // `equations`. `initialization_equations` (§6.2) are a separate block with a
+    // separate balance — but they are still expressions over the model's
+    // symbols, and nothing checked them, so an undefined name in an initial
+    // condition was a silent FALSE NEGATIVE. (The sidecar fields *within* an
+    // expression — `expr`, `filter`, `key`, `lower`/`upper`, `values`, `axes`,
+    // `bindings` — are covered by the walker itself, which descends via
+    // `ExpressionNode::for_each_child` rather than `args` alone.)
+    for (eq_idx, equation) in model.initialization_equations.iter().flatten().enumerate() {
+        let eq_path = format!("{model_path}/initialization_equations/{eq_idx}");
+        for expr in [&equation.lhs, &equation.rhs] {
+            validate_expression_references_with_systems(
+                expr,
+                &defined_vars,
+                system_refs,
+                &local_scoped,
+                &eq_path,
+                eq_idx,
+                errors,
+            );
+        }
+    }
+
+    // `guesses` (§6.3) — an initial guess for a nonlinear solve is an Expression
+    // over the model's symbols. Stored as raw JSON, so it is parsed here.
+    for (var_name, guess) in model.guesses.iter().flatten() {
+        let Ok(expr) = serde_json::from_value::<crate::Expr>(guess.clone()) else {
+            continue; // not an expression (a bare number is fine)
+        };
+        validate_expression_references_with_systems(
+            &expr,
+            &defined_vars,
+            system_refs,
+            &local_scoped,
+            &format!("{model_path}/guesses/{var_name}"),
+            0,
+            errors,
+        );
+    }
+
+    // `tests[].assertions[].reference` (§6.6) — an analytic reference solution is
+    // an Expression over the model's symbols.
+    for (t_idx, test) in model.tests.iter().flatten().enumerate() {
+        for (a_idx, assertion) in test.assertions.iter().enumerate() {
+            // Only the inline analytic-Expression form names symbols; a
+            // `{type: "from_file"}` reference points at a snapshot.
+            let Some(crate::types::AssertionReference::Expression(reference)) =
+                &assertion.reference
+            else {
+                continue;
+            };
+            validate_expression_references_with_systems(
+                reference,
+                &defined_vars,
+                system_refs,
+                &local_scoped,
+                &format!("{model_path}/tests/{t_idx}/assertions/{a_idx}/reference"),
+                0,
+                errors,
+            );
+        }
+    }
+
     // Check that all equation references are defined and validate dimensional consistency
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         let eq_path = format!("{model_path}/equations/{eq_idx}");
@@ -167,7 +230,9 @@ pub(crate) fn validate_model(
                     "Observed variable \"{var_name}\" is missing its expression field"
                 ),
                 details: serde_json::json!({
-                    "variable_name": var_name,
+                    // The settled cross-binding key is `variable`
+                    // (CONFORMANCE_SPEC row (j)), not `variable_name`.
+                    "variable": var_name,
                     "field": "expression"
                 }),
             });
@@ -221,6 +286,55 @@ pub(crate) fn validate_model(
     }
 }
 
+/// Reference-check every data-loader variable's `unit_conversion` Expression
+/// (esm-spec §8.5, §4.9.5).
+///
+/// A `unit_conversion` is applied to the value coming off disk and may name any
+/// declared symbol in the document (a scale parameter typically lives in the
+/// consuming model), so it resolves against the DOCUMENT-WIDE declared set
+/// rather than the loader's own variables alone. Nothing checked this field at
+/// all, so a typo'd conversion factor silently produced a wrongly-scaled input.
+pub(crate) fn validate_data_loader_unit_conversions(
+    esm_file: &EsmFile,
+    system_refs: &HashMap<String, SystemInfo>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let Some(loaders) = &esm_file.data_loaders else {
+        return;
+    };
+
+    // Every name declared anywhere in the document, plus the implicit symbols.
+    let mut scope = implicitly_declared_symbols(esm_file);
+    for model in esm_file.models.iter().flatten().map(|(_, m)| m) {
+        scope.extend(model.variables.keys().cloned());
+    }
+    for rs in esm_file.reaction_systems.iter().flatten().map(|(_, r)| r) {
+        scope.extend(rs.species.keys().cloned());
+        scope.extend(rs.parameters.keys().cloned());
+    }
+    for loader in loaders.values() {
+        scope.extend(loader.variables.keys().cloned());
+    }
+
+    let empty = HashSet::new();
+    for (loader_name, loader) in loaders {
+        for (var_name, var) in &loader.variables {
+            let Some(crate::types::UnitConversion::Expression(expr)) = &var.unit_conversion else {
+                continue; // a bare multiplicative factor names nothing
+            };
+            validate_expression_references_with_systems(
+                expr,
+                &scope,
+                system_refs,
+                &empty,
+                &format!("/data_loaders/{loader_name}/variables/{var_name}/unit_conversion"),
+                0,
+                errors,
+            );
+        }
+    }
+}
+
 /// The symbols that are in scope in every model's expressions WITHOUT appearing
 /// in its `variables` map (esm-spec §4.9.1). None of these is an
 /// `undefined_variable`, and each rule here exists because rejecting one of them
@@ -254,6 +368,27 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     // (2i) Every declared index set names a coordinate axis.
     if let Some(index_sets) = &esm_file.index_sets {
         symbols.extend(index_sets.keys().cloned());
+    }
+
+    // A `callback` coupling DECLARES the variables it injects into its target
+    // system, in `config.callback_variables[].name` — they are ordinary
+    // declarations that simply live outside the model's own `variables` map
+    // (esm-spec §4.9.5 / CONFORMANCE_SPEC row (k)). Omitting them turns the
+    // reference-integrity fix into a FALSE REJECTION of every callback-coupled
+    // model, which is a strictly worse bug than the false negative it closes.
+    for entry in esm_file.coupling.iter().flatten() {
+        let crate::CouplingEntry::Callback { config, .. } = entry else {
+            continue;
+        };
+        let names = config
+            .as_ref()
+            .and_then(|c| c.get("callback_variables"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|cv| cv.get("name").and_then(|n| n.as_str()))
+            .map(str::to_string);
+        symbols.extend(names);
     }
 
     // (2ii) + (2iii): walk every expression in the document once, collecting the
@@ -559,6 +694,7 @@ fn analyze_equation_mismatch(
 }
 
 pub(crate) fn validate_reaction_system(
+    esm_file: &EsmFile,
     rs_name: &str,
     rs: &crate::ReactionSystem,
     system_refs: &HashMap<String, SystemInfo>,
@@ -672,6 +808,29 @@ pub(crate) fn validate_reaction_system(
                         "constraint_equation_index": ce_idx,
                     }),
                 });
+            }
+
+            // Reference integrity applies to a constraint equation too — it is an
+            // expression over the system's species and parameters, and nothing
+            // checked it, so an undefined name inside one was a silent FALSE
+            // NEGATIVE (the same blind spot as `initialization_equations`).
+            let mut scope: HashSet<String> = defined_species
+                .union(&defined_parameters)
+                .cloned()
+                .collect();
+            // The independent variable and `_var` are in scope here too (§4.9.1).
+            scope.extend(implicitly_declared_symbols(esm_file));
+            let ce_path = format!("{rs_path}/constraint_equations/{ce_idx}");
+            for expr in [&eq.lhs, &eq.rhs] {
+                validate_expression_references_with_systems(
+                    expr,
+                    &scope,
+                    system_refs,
+                    &HashSet::new(),
+                    &ce_path,
+                    ce_idx,
+                    errors,
+                );
             }
         }
     }
@@ -961,6 +1120,25 @@ fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
     }
     if let Some(a) = &node.arg {
         syms.push(a.clone());
+    }
+    // `index(array, i, j, …)` BINDS its element positions: the names after the
+    // array head are loop positions, not declared variables. This is the binder
+    // the doc above always claimed ("the `i` in `index(u, i)`") but that the
+    // code never actually credited — so the LHS of every indexed array equation
+    // (`index(nearest, i) ~ aggregate(output_idx: ["i"], …)`) reported its own
+    // output index as an `undefined_variable`. Only a BARE name is a binder; an
+    // index position that is an expression (`i + 1`) is a USE of a symbol bound
+    // further out, and is checked normally.
+    if node.op == "index" {
+        for arg in node.args.iter().skip(1) {
+            if let crate::Expr::Variable(name) = arg {
+                syms.push(name.clone());
+            }
+        }
+    }
+    // `apply_expression_template` binds its formal parameter names.
+    if let Some(bindings) = &node.bindings {
+        syms.extend(bindings.keys().cloned());
     }
     syms
 }
