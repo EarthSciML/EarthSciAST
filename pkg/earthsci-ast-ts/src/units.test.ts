@@ -4,6 +4,7 @@ import {
   tryParseUnit,
   checkDimensions,
   validateUnits,
+  dimsEqual,
   type ParsedUnit,
   type CanonicalDims,
 } from './units.js'
@@ -28,7 +29,8 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(parseUnit('m')).toEqual({ dims: { m: 1 }, scale: 1 })
       expect(parseUnit('s')).toEqual({ dims: { s: 1 }, scale: 1 })
       expect(parseUnit('mol')).toEqual({ dims: { mol: 1 }, scale: 1 })
-      expect(parseUnit('molec')).toEqual({ dims: { molec: 1 }, scale: 1 })
+      // A count of discrete things has no physical dimension.
+      expect(parseUnit('molec')).toEqual({ dims: {}, scale: 1 })
     })
 
     it('should parse compound units', () => {
@@ -46,7 +48,7 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(cm3.scale).toBeCloseTo(1e-6, 20)
 
       const reactionRate = parseUnit('cm^3/molec/s')
-      expect(reactionRate.dims).toEqual({ m: 3, molec: -1, s: -1 })
+      expect(reactionRate.dims).toEqual({ m: 3, s: -1 })
       expect(reactionRate.scale).toBeCloseTo(1e-6, 20)
     })
 
@@ -59,7 +61,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should handle multiplication', () => {
       const mcm3 = parseUnit('molec/cm^3')
-      expect(mcm3.dims).toEqual({ molec: 1, m: -3 })
+      expect(mcm3.dims).toEqual({ m: -3 })
       expect(mcm3.scale).toBeCloseTo(1e6, -2)
     })
 
@@ -83,15 +85,63 @@ describe('Unit parsing and dimensional analysis', () => {
       })
 
       it('molec is a dimensionless count atom usable in composites', () => {
-        expect(parseUnit('molec').dims).toEqual({ molec: 1 })
-        const numberDensity = parseUnit('molec/cm^3')
-        expect(numberDensity.dims).toEqual({ molec: 1, m: -3 })
+        // A COUNT of discrete things carries no physical dimension, which is
+        // what makes `molec/cm^3` the same quantity as `1/cm^3` — the reading
+        // every other binding has. Giving counts their own dimension axis (as
+        // this table once did) made TS the only binding that could report the
+        // two spellings of a number density as a mismatch.
+        expect(parseUnit('molec').dims).toEqual({})
+        expect(parseUnit('molec/cm^3').dims).toEqual({ m: -3 })
+        expect(dimsEqual(parseUnit('molec/cm^3').dims, parseUnit('1/cm^3').dims)).toBe(true)
+      })
+
+      it('the other count nouns are dimensionless too', () => {
+        // Real unit names in the shared corpus (`individuals/km^2`,
+        // `vehicles/km^2`, `units/L`). An unresolvable unit string is a hard
+        // error, so omitting them would falsely reject those files.
+        for (const count of ['individuals', 'vehicles', 'units', 'count']) {
+          expect(parseUnit(count)).toEqual({ dims: {}, scale: 1 })
+        }
+        expect(parseUnit('individuals/km^2').dims).toEqual({ m: -2 })
       })
 
       it('Dobson is an areal number density with scale 2.6867e20 molec/m^2', () => {
         const du = parseUnit('Dobson')
-        expect(du.dims).toEqual({ molec: 1, m: -2 })
+        // `molec` is dimensionless, so a column amount is an inverse area.
+        expect(du.dims).toEqual({ m: -2 })
         expect(du.scale).toBeCloseTo(2.6867e20, -15)
+      })
+    })
+
+    // The EM units are REAL SI units, and `tests/valid/units_dimensional_analysis.esm`
+    // — a fixture pinned VALID — declares `E: "V/m"`, `B: "T"`, `epsilon0: "F/m"`,
+    // `q: "C"`. They were once deleted from the registry to "match Go", whose table
+    // lacked them; that was Go's GAP, not TS's excess, and copying it turned a
+    // legitimate file into a rejected one now that an unparseable unit is a hard
+    // error. Go has since added them.
+    describe('electromagnetic units', () => {
+      it('parses V, T, F and Ohm as their SI-base decompositions', () => {
+        expect(parseUnit('V')).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -1 }, scale: 1 })
+        expect(parseUnit('T')).toEqual({ dims: { kg: 1, s: -2, A: -1 }, scale: 1 })
+        expect(parseUnit('F')).toEqual({ dims: { kg: -1, m: -2, s: 4, A: 2 }, scale: 1 })
+        expect(parseUnit('Ohm')).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -2 }, scale: 1 })
+        expect(parseUnit('V/m').dims).toEqual({ kg: 1, m: 1, s: -3, A: -1 })
+        expect(parseUnit('F/m').dims).toEqual({ kg: -1, m: -3, s: 4, A: 2 })
+      })
+
+      it('C is the COULOMB, so charge times field is a force', () => {
+        expect(parseUnit('C')).toEqual({ dims: { A: 1, s: 1 }, scale: 1 })
+        // q[C] * E[V/m] must be a newton. With `C` bound to Celsius it came out
+        // as kg*m*K/(s^3*A) — a temperature dimension smuggled into every
+        // electromagnetic expression.
+        const force = checkDimensions(
+          { op: '*', args: ['q', 'E'] },
+          new Map([
+            ['q', parseUnit('C')],
+            ['E', parseUnit('V/m')],
+          ]),
+        )
+        expect(dimsEqual(force.dimensions!.dims, parseUnit('N').dims)).toBe(true)
       })
     })
   })

@@ -69,15 +69,34 @@ describe('unit-conversion', () => {
       expect(convertUnits(25, 'Celsius', 'Celsius')).toBeCloseTo(25, 10)
     })
 
-    it('accepts the "C" and "degC" aliases', () => {
-      expect(convertUnits(0, 'C', 'K')).toBeCloseTo(273.15, 10)
+    it('spells Celsius "degC" — and NOT "C", which is the coulomb', () => {
       expect(convertUnits(100, 'degC', 'K')).toBeCloseTo(373.15, 10)
+      expect(convertUnits(0, '°C', 'K')).toBeCloseTo(273.15, 10)
+      // `C` is the COULOMB (A*s), per SI and per the Go reference registry.
+      // Binding it to Celsius put a temperature dimension into every
+      // electromagnetic expression: a charge `q: "C"` times a field `E: "V/m"`
+      // came out as kg*m*K/(s^3*A) instead of the newton it is.
+      expect(parseUnitForConversion('C')).toEqual({ dims: { A: 1, s: 1 }, scale: 1 })
+      expect(unitsCompatible('C', 'K')).toBe(false)
+      expect(unitsCompatible('C*V/m', 'N')).toBe(true)
     })
 
-    it('rejects Celsius in compound expressions', () => {
-      expect(() => parseUnitForConversion('Celsius*m')).toThrow(UnitConversionError)
-      expect(() => parseUnitForConversion('1/Celsius')).toThrow(UnitConversionError)
-      expect(() => parseUnitForConversion('Celsius^2')).toThrow(UnitConversionError)
+    it('reads an affine unit as an INTERVAL once it is composed', () => {
+      // A standalone `degC` is a POINT on an affine scale, so it carries the
+      // 273.15 offset. Composed, what is meant is the INTERVAL — `degC/min` is a
+      // warming RATE — and ΔdegC is exactly ΔK. Refusing to parse the
+      // composition (as this once did) would hard-fail `°C/min`, an ordinary
+      // declaration in the corpus, now that an unparseable unit is an error.
+      expect(parseUnitForConversion('degC').offset).toBeCloseTo(273.15, 10)
+      expect(parseUnitForConversion('degC/min')).toEqual({ dims: { K: 1, s: -1 }, scale: 1 / 60 })
+      expect(parseUnitForConversion('°C/min')).toEqual({ dims: { K: 1, s: -1 }, scale: 1 / 60 })
+      expect(parseUnitForConversion('J/degC')).toEqual({
+        dims: { kg: 1, m: 2, s: -2, K: -1 },
+        scale: 1,
+      })
+      // A 90 °C/hour warming rate is 0.025 K/s — an interval conversion, with
+      // no offset applied.
+      expect(convertUnits(90, 'degC/hour', 'K/s')).toBeCloseTo(0.025, 10)
     })
   })
 
@@ -175,6 +194,85 @@ describe('unit-conversion', () => {
       expect(parseUnitForConversion('Celsius').offset).toBeCloseTo(273.15, 10)
       expect(parseUnitForConversion('K').offset).toBeUndefined()
       expect(parseUnitForConversion('m').offset).toBeUndefined()
+    })
+
+    // The grammar is the Go reference's, so the bindings agree on how a unit
+    // string associates:
+    //   unit := term ( ('*'|'/')? term )*
+    //   term := atom ( ('^'|'**') int )?
+    //   atom := number | symbol | '(' unit ')'
+    describe('grammar', () => {
+      it('divides LEFT-associatively', () => {
+        // a/b/c == a/(b*c), NOT a/(b/c).
+        expect(parseUnitForConversion('L/mol/s').dims).toEqual({ m: 3, mol: -1, s: -1 })
+        expect(parseUnitForConversion('kg/m*s').dims).toEqual({ kg: 1, m: -1, s: 1 })
+        expect(parseUnitForConversion('W/m^2/K').dims).toEqual({ kg: 1, s: -3, K: -1 })
+      })
+
+      it('reads whitespace between terms as MULTIPLICATION', () => {
+        // The SI style `kg m^2 s^-2`, and the corpus's `ppb^-1 s^-1`.
+        expect(parseUnitForConversion('kg m^2 s^-2').dims).toEqual({ kg: 1, m: 2, s: -2 })
+        expect(parseUnitForConversion('ppb^-1 s^-1').dims).toEqual({ s: -1 })
+        // The scanner is greedy over identifier characters, so juxtaposition can
+        // only arise across a real token boundary: `ms` stays ONE symbol
+        // (millisecond) and never becomes m*s.
+        expect(parseUnitForConversion('ms')).toEqual({ dims: { s: 1 }, scale: 1e-3 })
+      })
+
+      it('accepts ** as a synonym for ^', () => {
+        // The Python/pint spelling, which the corpus uses (`Pa*m**3`).
+        expect(parseUnitForConversion('m**3')).toEqual(parseUnitForConversion('m^3'))
+        expect(parseUnitForConversion('Pa*m**3').dims).toEqual({ kg: 1, m: 2, s: -2 })
+      })
+
+      it('groups with parentheses', () => {
+        expect(parseUnitForConversion('J/(mol*K)').dims).toEqual({
+          kg: 1,
+          m: 2,
+          s: -2,
+          mol: -1,
+          K: -1,
+        })
+        expect(parseUnitForConversion('cm^3/(molec*s)').dims).toEqual({ m: 3, s: -1 })
+      })
+
+      it('normalizes the non-ASCII spellings the corpus uses', () => {
+        // µ (U+00B5) and μ (U+03BC) fold to `u`; `°C` folds to `degC`.
+        expect(parseUnitForConversion('μg/m^3')).toEqual(parseUnitForConversion('ug/m^3'))
+        expect(parseUnitForConversion('µg/m^3')).toEqual(parseUnitForConversion('ug/m^3'))
+        expect(parseUnitForConversion('μmol/(m^2*s)').dims).toEqual({ mol: 1, m: -2, s: -1 })
+        expect(parseUnitForConversion('°C').dims).toEqual({ K: 1 })
+      })
+
+      it('rejects a symbol that denotes no real unit', () => {
+        // Which is a HARD ERROR upstream (units.ts `unparseable_unit`) — the
+        // registry must therefore not be missing real units.
+        expect(() => parseUnitForConversion('not_a_unit')).toThrow(UnitConversionError)
+        expect(() => parseUnitForConversion('1/time')).toThrow(UnitConversionError)
+      })
+    })
+
+    it('carries every unit the shared registry contract lists', () => {
+      // The cross-binding contract (Go's `unitRegistry`). A symbol missing from
+      // this table is not "conservatively unknown" — it FAILS THE FILE.
+      const contract = `m kg s mol K A cd rad
+        g mg ug
+        dm cm mm um nm km
+        ms us ns min h hr day yr year
+        L l mL
+        kmol mmol umol nmol M
+        Hz N Pa J kJ cal kcal W kW MW
+        atm bar hPa kPa mbar Torr mmHg psi
+        erg BTU Wh kWh
+        C V Ohm F T
+        degC degF deg
+        ppm ppb ppt ppmv ppbv pptv
+        molec individuals vehicles units count
+        Dobson DU
+        dimensionless`.split(/\s+/)
+      for (const symbol of contract) {
+        expect(() => parseUnitForConversion(symbol)).not.toThrow()
+      }
     })
   })
 
