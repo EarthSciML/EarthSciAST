@@ -65,7 +65,7 @@
         },
         "julian_day": {
           "type": "observed",
-          "units": "day",
+          "units": "d",
           "description": "Continuous Julian Day Number including fractional time-of-day (JD 0 = noon UTC on 4713-01-01 BC, proleptic Julian calendar). Tolerance ≤ 1 ulp per esm-spec.md §9.2.",
           "expression": { "op": "fn", "name": "datetime.julian_day", "args": ["t_utc"] }
         },

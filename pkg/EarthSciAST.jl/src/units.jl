@@ -45,9 +45,13 @@ Unitful.@unit _u_mmHg "mmHg" MillimetreOfMercury 133.322387415 * Unitful.u"Pa" f
 # without an SI-prefix mechanism, so `uatm` must be spelled out.
 Unitful.@unit _u_uatm "uatm" MicroAtmosphere 1e-6 * Unitful.u"atm" false
 
-# `Dobson` / `DU`: areal number density of ozone. 1 DU = 2.6867e20 molec/m^2,
-# and `molec` is a dimensionless count atom, so the DIMENSION is [length]^-2.
-const _U_DOBSON = Unitful.unit(1.0 * Unitful.u"m"^-2)
+# `Dobson` / `DU`: the areal number density of ozone in a column. One DU is a
+# 10 µm-thick layer of pure O3 at STP — 2.6867e20 molec/m^2 (the Loschmidt
+# constant times 10 µm). `molec` is a dimensionless COUNT, so the DIMENSION is
+# [length]^-2 and the m^-2 is real, not an artefact: a Dobson unit is NOT
+# dimensionless. The scale is carried too, so `uconvert` between DU and
+# `molec/m^2` is exact.
+Unitful.@unit _u_dobson "DU" DobsonUnit 2.6867e20 * Unitful.u"m"^-2 false
 
 # The flat table, grouped exactly as esm-spec §4.8.1 lists it.
 const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
@@ -63,8 +67,13 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "nm" => u"nm", "km" => u"km",
 
     # Time. `h` is the HOUR here, not Unitful's Planck constant.
+    #
+    # `d` is deliberately NOT a registry symbol. The canonical spelling of the
+    # day is `day`: a bare `d` reads as a deci- prefix or as a differential, so
+    # §4.8.1 excludes it and the stdlib is spelled `day`.
     "ms" => u"ms", "us" => u"μs", "ns" => u"ns", "min" => u"minute",
-    "h" => u"hr", "hr" => u"hr", "day" => u"d", "yr" => u"yr", "year" => u"yr",
+    "h" => u"hr", "hr" => u"hr", "day" => u"d",
+    "yr" => u"yr", "year" => u"yr",
 
     # Volume.
     "L" => u"L", "l" => u"L", "mL" => u"mL",
@@ -108,8 +117,8 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "vehicles" => Unitful.NoUnits, "units" => Unitful.NoUnits,
     "count" => Unitful.NoUnits,
 
-    # Column amount.
-    "Dobson" => _U_DOBSON, "DU" => _U_DOBSON,
+    # Column amount — dimension m^-2, NOT dimensionless (see above).
+    "Dobson" => _u_dobson, "DU" => _u_dobson,
 
     # Ratios that are dimensionless BY DEFINITION. `psu` (practical salinity)
     # is a conductivity ratio; `percent` is 1/100. Both are real, both are in
@@ -126,6 +135,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "meter" => u"m", "meters" => u"m",
     "hour" => u"hr",
     "Celsius" => u"°C",
+    "degree" => u"°", "degrees" => u"°",
 )
 
 # ---------------------------------------------------------------------------
@@ -668,6 +678,58 @@ function _dimensionless_arg_rule(expr, var_units, findings)
     return Unitful.NoUnits
 end
 
+# "sin"/"cos"/"tan": the argument is an ANGLE — `rad`, `deg`, or a plain
+# dimensionless number. Anything with a real dimension (`sin(kg)`) is a provable
+# inconsistency. The result is a dimensionless ratio.
+#
+# `rad` is dimensionless in this engine (Unitful models it as `NoDims`), so the
+# angle case and the plain-number case coincide and the test below covers both.
+# It is written as its own rule anyway, because a binding whose dimension vector
+# carries `rad` as a BASE AXIS must accept `rad` here explicitly.
+function _circular_arg_rule(expr, var_units, findings)
+    if length(expr.args) != 1
+        @debug "Function $(expr.op) requires exactly 1 argument"
+        return nothing
+    end
+    arg_dim = _expr_dimensions!(findings, expr.args[1], var_units)
+    if arg_dim !== nothing && dimension(arg_dim) != dimension(Unitful.NoUnits) &&
+       dimension(arg_dim) != dimension(u"rad")
+        push!(findings, "Circular function argument must be an angle or " *
+                        "dimensionless, got units '$(_ustr(arg_dim))' " *
+                        "(function '$(expr.op)')")
+        return nothing
+    end
+    return Unitful.NoUnits
+end
+
+# "asin"/"acos"/"atan": the argument is a dimensionless ratio; the result is an
+# ANGLE. Returning "dimensionless" instead is what makes
+# `solar_zenith_angle: "rad"` — computed by `acos(cos_zenith)` in the shipped
+# `lib/solar.esm` — a guaranteed mismatch under any registry that treats `rad`
+# as a base axis.
+function _inverse_circular_rule(expr, var_units, findings)
+    if length(expr.args) == 2
+        # `atan2(y, x)`: the two operands need only be COMMENSURATE — their
+        # ratio is the dimensionless tangent — and the result is an angle.
+        _same_dimensions_over(expr.args, var_units, findings,
+            (a, b) -> "atan2 operands must have the same units, got " *
+                      "'$(_ustr(a))' and '$(_ustr(b))'")
+        return u"rad"
+    end
+    if length(expr.args) != 1
+        @debug "Function $(expr.op) requires exactly 1 argument"
+        return nothing
+    end
+    arg_dim = _expr_dimensions!(findings, expr.args[1], var_units)
+    if arg_dim !== nothing && dimension(arg_dim) != dimension(Unitful.NoUnits)
+        push!(findings, "Inverse circular function argument must be " *
+                        "dimensionless, got units '$(_ustr(arg_dim))' " *
+                        "(function '$(expr.op)')")
+        return nothing
+    end
+    return u"rad"
+end
+
 # Human-readable family name used in the dimensionless-argument message, chosen
 # to line up with the shared corpus's expected wording ("Logarithm argument must
 # be dimensionless…", "Exponential argument must be dimensionless…").
@@ -755,10 +817,23 @@ end
 #
 # `sqrt` is NOT here: it halves its argument's dimension (`_sqrt_rule`) rather
 # than requiring a dimensionless one.
-const _TRANSCENDENTAL_OPS = Set(["sin", "cos", "tan", "exp", "log", "ln",
-                                 "log10", "log2", "tanh", "sinh", "cosh",
-                                 "asin", "acos", "atan", "expm1",
+const _TRANSCENDENTAL_OPS = Set(["exp", "log", "ln", "log10", "log2", "expm1",
+                                 "tanh", "sinh", "cosh",
                                  "asinh", "acosh", "atanh"])
+
+# CIRCULAR functions take an ANGLE. An angle is dimensionless (a ratio of two
+# lengths) — Unitful models `rad` with `NoDims`, and this rule is written so it
+# stays correct under a registry that instead carries `rad` as its own axis:
+# `sin` accepts an angle OR a plain dimensionless number, and REJECTS anything
+# else (`sin(kg)` is still an error).
+const _CIRCULAR_OPS = Set(["sin", "cos", "tan"])
+
+# INVERSE circular functions RETURN an angle. Asserting they return
+# "dimensionless" is what breaks `solar_zenith_angle: "rad"` in the shipped
+# stdlib (`lib/solar.esm`), where it is computed by `acos(cos_zenith)`: under a
+# registry with `rad` as a base axis that is a GUARANTEED mismatch. Returning
+# `rad` is right under both conventions, since `rad` is dimensionless here.
+const _INVERSE_CIRCULAR_OPS = Set(["asin", "acos", "atan", "atan2"])
 
 # Comparisons and the boolean connectives. Their operands must be mutually
 # commensurate (esm-spec §4.8.3) and the RESULT is a dimensionless boolean.
@@ -787,6 +862,12 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
     )
     for op in _TRANSCENDENTAL_OPS
         rules[op] = _dimensionless_arg_rule
+    end
+    for op in _CIRCULAR_OPS
+        rules[op] = _circular_arg_rule
+    end
+    for op in _INVERSE_CIRCULAR_OPS
+        rules[op] = _inverse_circular_rule
     end
     for op in _COMPARISON_OPS
         rules[op] = _comparison_rule
@@ -1074,9 +1155,30 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
 
         # 3. observed-variable defining expression.
         if var.expression !== nothing
-            for msg in expression_unit_findings(var.expression, var_units)
+            internal = expression_unit_findings(var.expression, var_units)
+            for msg in internal
                 push!(out, UnitFinding("variables/$name", "$msg (variable '$name')",
                                        UNIT_DIMENSION_MISMATCH))
+            end
+
+            # 3b. DECLARED units vs the dimension its expression actually has.
+            # `{units: "m", expression: length + mass}` is exactly as wrong as
+            # the equation `x = length + mass`; it just lives in the variable
+            # table. Skipped unless BOTH sides are known — an undeclared unit is
+            # not an error, and an unresolvable one is already reported above.
+            # Only when the expression was internally clean, so one defect is
+            # not reported twice.
+            declared = get(var_units, name, nothing)
+            if isempty(internal) && declared !== nothing
+                got = _expr_dimensions!(String[], var.expression, var_units)
+                want = _absolute_unit(parse_units(declared))
+                if got !== nothing && want !== nothing &&
+                   dimension(got) != dimension(want)
+                    push!(out, UnitFinding("variables/$name",
+                        "Observed variable '$name' is declared '$declared' but its " *
+                        "expression has units '$(_ustr(got))'",
+                        UNIT_DIMENSION_MISMATCH))
+                end
             end
         end
     end

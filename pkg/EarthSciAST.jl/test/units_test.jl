@@ -188,6 +188,61 @@ using Unitful
         @test dimension(P("meter")) == Unitful.𝐋
         @test dimension(P("hour")) == Unitful.𝐓
         @test dimension(P("Celsius")) == Unitful.𝚯
+        @test dimension(P("degrees")) == dimension(P("deg"))
+
+        # `Dobson`/`DU` is NOT dimensionless: one DU is a 10 µm column of pure
+        # O3 at STP — 2.6867e20 molec/m^2 — and `molec` is a dimensionless
+        # count, so the m^-2 is real.
+        @test dimension(P("DU")) == Unitful.𝐋^-2
+        @test dimension(P("Dobson")) == Unitful.𝐋^-2
+
+        # `d` is deliberately NOT a symbol: a bare `d` reads as a deci- prefix
+        # or a differential. The day is spelled `day`.
+        @test P("d") === nothing
+        @test dimension(P("day")) == Unitful.𝐓
+    end
+
+    @testset "esm-spec §4.8.3 — the three-way trig rule" begin
+        E = EarthSciAST.ASTExpr
+        D = EarthSciAST.get_expression_dimensions
+        F = EarthSciAST.expression_unit_findings
+        vu = Dict("theta" => "rad", "ratio" => "1", "m" => "kg", "x" => "m", "y" => "m")
+
+        # CIRCULAR: accept an ANGLE or a dimensionless number, return
+        # dimensionless. A naive "transcendentals require a dimensionless
+        # argument" makes `cos(θ)` illegal under any registry that carries `rad`
+        # as an axis — and that rejects lib/solar.esm itself.
+        for op in ("sin", "cos", "tan")
+            @test isempty(F(OpExpr(op, E[VarExpr("theta")]), vu))       # angle OK
+            @test isempty(F(OpExpr(op, E[VarExpr("ratio")]), vu))       # plain number OK
+            @test !isempty(F(OpExpr(op, E[VarExpr("m")]), vu))          # sin(kg) still an ERROR
+            @test D(OpExpr(op, E[VarExpr("theta")]), vu) == Unitful.NoUnits
+        end
+
+        # INVERSE CIRCULAR: take a dimensionless ratio, RETURN an angle. This is
+        # what makes `solar_zenith_angle: "rad" = acos(cos_zenith)` check out.
+        for op in ("asin", "acos", "atan")
+            @test isempty(F(OpExpr(op, E[VarExpr("ratio")]), vu))
+            @test !isempty(F(OpExpr(op, E[VarExpr("m")]), vu))
+            @test dimension(D(OpExpr(op, E[VarExpr("ratio")]), vu)) == dimension(u"rad")
+        end
+        # atan2(y, x): operands commensurate, result an angle.
+        @test isempty(F(OpExpr("atan2", E[VarExpr("x"), VarExpr("y")]), vu))
+        @test !isempty(F(OpExpr("atan2", E[VarExpr("x"), VarExpr("m")]), vu))
+
+        # The STRICT dimensionless-argument set is the remaining transcendentals.
+        for op in ("ln", "log", "log10", "exp", "sinh", "cosh", "tanh",
+                   "asinh", "acosh", "atanh")
+            @test !isempty(F(OpExpr(op, E[VarExpr("m")]), vu))
+            @test isempty(F(OpExpr(op, E[VarExpr("ratio")]), vu))
+        end
+        # An ANGLE is not a licence for the strict set: rad is dimensionless
+        # here, so `exp(theta)` is fine, but `exp(kg)` is not — covered above.
+
+        # `sqrt` HALVES a dimension; it is NOT in the transcendental set.
+        sq = D(OpExpr("sqrt", E[OpExpr("^", E[VarExpr("x"), IntExpr(2)])]), vu)
+        @test sq !== nothing && dimension(sq) == Unitful.𝐋
+        @test isempty(F(OpExpr("sqrt", E[VarExpr("m")]), vu))
     end
 
     @testset "esm-spec §4.8.4 — severity: the four fabrications" begin
