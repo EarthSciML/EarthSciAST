@@ -222,6 +222,18 @@ func (d Dimension) String() string {
 	return sb.String()
 }
 
+// radDim is the dimension of a plane angle (the `rad` base axis) — what the
+// inverse circular functions return.
+func radDim() Dimension {
+	var d Dimension
+	d[dimAngle] = ratInt(1)
+	return d
+}
+
+// isAngleDim reports whether a dimension is exactly a plane angle (rad^1), the
+// argument the circular functions accept alongside a pure number.
+func isAngleDim(d Dimension) bool { return d.Equal(radDim()) }
+
 // dimFactor renders one base-unit factor with a POSITIVE exponent: "m",
 // "m^2", "m^(1/2)".
 func dimFactor(symbol string, e Rat) string {
@@ -309,6 +321,7 @@ func buildUnitRegistry() map[string]Unit {
 	r["hr"] = Unit{Dim: r["s"].Dim, Scale: 3600}
 	r["hour"] = r["h"]
 	r["day"] = Unit{Dim: r["s"].Dim, Scale: 86400}
+	r["d"] = r["day"] // the shipped stdlib declares a day as "d" (lib/calendar.esm)
 	r["yr"] = Unit{Dim: r["s"].Dim, Scale: 365.25 * 86400}
 	r["year"] = r["yr"]
 
@@ -910,9 +923,13 @@ func findingCode(err error) string {
 //     (dimensional analysis is best-effort when unit annotations are missing)
 //   - "+", "-" require all operands to share a dimension
 //   - "*" multiplies dimensions, "/" divides
-//   - "^" requires a dimensionless constant exponent
-//   - transcendental functions (sin/cos/tan/exp/log/ln/sqrt) require a
-//     dimensionless argument and return dimensionless
+//   - "^" requires a dimensionless constant exponent (which may be RATIONAL)
+//   - CIRCULAR functions (sin/cos/tan) take an ANGLE or a dimensionless number
+//     and return dimensionless; INVERSE circular functions (asin/acos/atan,
+//     atan2) take dimensionless arguments and RETURN AN ANGLE (rad)
+//   - the remaining transcendentals (exp/log/ln/log10, the hyperbolics) require
+//     a dimensionless argument and return dimensionless; sqrt halves the
+//     operand's dimension
 //   - "D" (derivative) divides by the wrt variable's unit (default "t")
 //
 // A non-nil error signals a dimensional inconsistency discovered during
@@ -1083,26 +1100,81 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		r := base.PowerRat(exp)
 		return &r, nil
 
-	case "sin", "cos", "tan", "asin", "acos", "atan",
-		"sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-		"exp", "log", "log10", "ln", "sqrt":
-		if node.Op == "sqrt" {
-			if len(node.Args) != 1 {
-				return nil, analysisErrf("sqrt requires 1 argument, got %d", len(node.Args))
-			}
-			base, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
-			if err != nil {
-				return nil, err
-			}
-			if base == nil {
-				return nil, nil
-			}
-			// sqrt halves every exponent. With RATIONAL exponents that is always
-			// defined — sqrt(m^3) is m^(3/2), a perfectly good dimension — so the
-			// old "non-square dimension" rejection was an artifact of the integer
-			// exponent vector, not a defect in the file.
-			return &Unit{Dim: base.Dim.PowerRat(newRat(1, 2)), Scale: math.Sqrt(base.Scale)}, nil
+	case "sqrt":
+		if len(node.Args) != 1 {
+			return nil, analysisErrf("sqrt requires 1 argument, got %d", len(node.Args))
 		}
+		base, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if base == nil {
+			return nil, nil
+		}
+		// sqrt HALVES every exponent — it is not a transcendental and does not
+		// require a dimensionless argument. With RATIONAL exponents that is always
+		// defined: sqrt(m^2/s^2) is m/s (the ordinary spelling of a wave speed or
+		// an RMS) and sqrt(m^3) is m^(3/2). The old "non-square dimension"
+		// rejection was an artifact of the integer exponent vector.
+		return &Unit{Dim: base.Dim.PowerRat(newRat(1, 2)), Scale: math.Sqrt(base.Scale)}, nil
+
+	case "sin", "cos", "tan":
+		// CIRCULAR functions take an ANGLE. With `rad` carried as a base axis, the
+		// argument is legitimately dimensioned — `sin(theta)` with theta declared
+		// "rad" (or "deg") — so the rule is: an angle OR a dimensionless number.
+		// `sin(kg)` is still rejected.
+		if len(node.Args) != 1 {
+			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
+		}
+		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if arg != nil && !arg.Dim.IsDimensionless() && !isAngleDim(arg.Dim) {
+			return nil, mismatchErrf("argument of '%s' must be an angle or dimensionless, got %s", node.Op, arg.Dim)
+		}
+		return &Unit{Scale: 1}, nil
+
+	case "asin", "acos", "atan":
+		// INVERSE CIRCULAR functions RETURN AN ANGLE. Asserting a dimensionless
+		// result while `rad` is a base axis makes every `theta: "rad"` computed by
+		// `acos(...)` a guaranteed mismatch — which is exactly what the shipped
+		// stdlib does (lib/solar.esm's solar zenith angle).
+		if len(node.Args) != 1 {
+			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
+		}
+		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if arg != nil && !arg.Dim.IsDimensionless() {
+			return nil, mismatchErrf("argument of '%s' must be dimensionless, got %s", node.Op, arg.Dim)
+		}
+		return &Unit{Dim: radDim(), Scale: 1}, nil
+
+	case "atan2":
+		// atan2(y, x) RETURNS AN ANGLE. Its two arguments are a ratio, so they need
+		// only share a dimension — any dimension.
+		if len(node.Args) != 2 {
+			return nil, analysisErrf("'atan2' requires 2 arguments, got %d", len(node.Args))
+		}
+		y, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		x, err := propagateDimensionWithCoords(node.Args[1], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if x != nil && y != nil && !x.Dim.Equal(y.Dim) {
+			return nil, mismatchErrf("atan2 arguments must share a dimension: %s vs %s", y.Dim, x.Dim)
+		}
+		return &Unit{Dim: radDim(), Scale: 1}, nil
+
+	case "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+		"exp", "log", "log10", "ln":
+		// The remaining transcendentals: a dimensionless argument, a dimensionless
+		// result. (A hyperbolic argument is a pure number, not an angle.)
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}

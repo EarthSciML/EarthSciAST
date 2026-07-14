@@ -2,6 +2,7 @@ package esm
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -1464,5 +1465,104 @@ func TestCheckerB_DefaultUnitsAffineMismatch(t *testing.T) {
 	// way in, so nothing downstream could see it.
 	if v := file.Models["BadUnitsModel"].Variables["temperature"]; v.DefaultUnits == nil {
 		t.Error("default_units was dropped by the decoder")
+	}
+}
+
+// TestUnitsV2_TrigReturnsAnAngle pins the §4.8.3 circular-function rules.
+//
+// With `rad` carried as a base axis, an inverse circular function CANNOT assert
+// a dimensionless result: `solar_zenith_angle: "rad"` computed by `acos(...)` is
+// then a guaranteed mismatch — a live bug in the shipped stdlib (lib/solar.esm),
+// not merely a fixture. The rule is:
+//
+//   - sin/cos/tan ACCEPT an angle (rad) or a dimensionless number → dimensionless
+//   - asin/acos/atan (and atan2) take a pure number → RETURN an angle (rad)
+//
+// `sin(kg)` must still be rejected.
+func TestUnitsV2_TrigReturnsAnAngle(t *testing.T) {
+	env := mkEnv(t, map[string]string{
+		"theta": "rad", "azimuth": "deg", "ratio": "1", "mass": "kg",
+		"dy": "m", "dx": "m",
+	})
+	rad, err := ParseUnit("rad")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Inverse circular functions RETURN an angle.
+	for _, op := range []string{"asin", "acos", "atan"} {
+		u, err := PropagateDimension(ExprNode{Op: op, Args: []any{"ratio"}}, env)
+		if err != nil || u == nil {
+			t.Fatalf("%s(ratio): %v (err %v)", op, u, err)
+		}
+		if !u.Dim.Equal(rad.Dim) {
+			t.Errorf("%s must RETURN an angle (rad), got %s — a `theta: \"rad\"` computed by %s "+
+				"is otherwise a guaranteed mismatch (lib/solar.esm)", op, u.Dim, op)
+		}
+	}
+	// atan2(y, x) likewise, over two same-dimension operands.
+	u, err := PropagateDimension(ExprNode{Op: "atan2", Args: []any{"dy", "dx"}}, env)
+	if err != nil || u == nil || !u.Dim.Equal(rad.Dim) {
+		t.Errorf("atan2 must return an angle, got %v (err %v)", u, err)
+	}
+
+	// Circular functions accept an ANGLE …
+	for _, arg := range []string{"theta", "azimuth", "ratio"} {
+		for _, op := range []string{"sin", "cos", "tan"} {
+			u, err := PropagateDimension(ExprNode{Op: op, Args: []any{arg}}, env)
+			if err != nil {
+				t.Errorf("%s(%s) must be accepted (an angle or a pure number): %v", op, arg, err)
+				continue
+			}
+			if u == nil || !u.Dim.IsDimensionless() {
+				t.Errorf("%s(%s) must be dimensionless, got %v", op, arg, u)
+			}
+		}
+	}
+	// … but NOT a mass.
+	if _, err := PropagateDimension(ExprNode{Op: "sin", Args: []any{"mass"}}, env); err == nil {
+		t.Error("sin(kg) must still be rejected")
+	}
+	// The zenith-angle shape from lib/solar.esm: acos of a clamped cosine,
+	// declared in radians, must type-check.
+	zenith := ExprNode{Op: "acos", Args: []any{
+		ExprNode{Op: "min", Args: []any{1.0, ExprNode{Op: "max", Args: []any{-1.0, "ratio"}}}},
+	}}
+	z, err := PropagateDimension(zenith, env)
+	if err != nil || z == nil || !z.Dim.Equal(rad.Dim) {
+		t.Errorf("acos(min(1, max(-1, x))) must be an angle in rad, got %v (err %v)", z, err)
+	}
+}
+
+// TestUnitsV2_SuperscriptDigitsAreNotAContiguousRange pins the normalization
+// trap: ¹ (U+00B9), ² (U+00B2) and ³ (U+00B3) live in Latin-1 Supplement, NOT in
+// the superscript block with ⁰⁴⁵⁶⁷⁸⁹ (U+2070…). A character-class range
+// [⁰-⁹] silently drops exactly the three exponents that actually occur (m², cm³,
+// W/m²), so every one of the ten must be enumerated. This asserts all ten, plus
+// the day symbol "d" the shipped stdlib uses (lib/calendar.esm).
+func TestUnitsV2_SuperscriptDigitsAreNotAContiguousRange(t *testing.T) {
+	for i, sup := range []string{"⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"} {
+		got, err := ParseUnit("m" + sup)
+		if err != nil {
+			t.Errorf("ParseUnit(%q) must resolve — superscript digits are NOT one contiguous "+
+				"Unicode range (¹²³ are Latin-1, the rest are U+2070…): %v", "m"+sup, err)
+			continue
+		}
+		want, err := ParseUnit(fmt.Sprintf("m^%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Dim.Equal(want.Dim) {
+			t.Errorf("ParseUnit(%q).Dim = %s, want %s", "m"+sup, got.Dim, want.Dim)
+		}
+	}
+	// The day symbol "d" (lib/calendar.esm declares `units: "d"`).
+	day, err := ParseUnit("d")
+	if err != nil {
+		t.Fatalf("ParseUnit(%q) must resolve — the stdlib declares a day as \"d\": %v", "d", err)
+	}
+	full, _ := ParseUnit("day")
+	if !day.Dim.Equal(full.Dim) || day.Scale != full.Scale {
+		t.Errorf("\"d\" must be the day: got dim %s scale %v", day.Dim, day.Scale)
 	}
 }
