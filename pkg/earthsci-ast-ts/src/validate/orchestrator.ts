@@ -50,20 +50,31 @@ import {
 } from './coupling-checks.js'
 
 /**
- * Promote dimensional-consistency warnings to structural errors for invalid
- * files. The classification is carried on the warning itself
- * (UnitWarning.code, assigned in units.ts beside the message definitions).
+ * Promote dimensional-consistency warnings to structural errors. The
+ * classification is carried on the warning itself (UnitWarning.code, assigned
+ * in units.ts beside the message definitions): only `dimensional_mismatch` — a
+ * PROVABLE inconsistency — is promoted. `analysis` warnings (unknown variable,
+ * unparseable declaration, arity) stay warnings, because they report what the
+ * checker could not determine, not a defect in the file.
+ *
+ * Promoting to a hard error is deliberate and is what the shared corpus
+ * requires: `tests/invalid/expected_errors.json` pins every `units_*.esm`
+ * fixture as a STRUCTURAL ERROR (`is_valid: false`), not a warning. The code is
+ * `unit_inconsistency` and the path is the pointer the warning already carries
+ * (`/models/<M>/equations/<i>`, `/models/<M>/variables/<v>`) — both exactly as
+ * pinned.
  */
 function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[] {
   return warnings
     .filter((warning) => warning.code === ERROR_CODES.DIMENSIONAL_MISMATCH)
     .map((warning) => ({
-      // Root token is the shared `ROOT_PATH` ('$'), used only when the warning
-      // carries no location (consistent with validate()'s catch blocks and
-      // parse.ts's schema-error root fallback).
-      path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : ROOT_PATH,
+      // `location` is already a JSON Pointer (units.ts `componentPointer`), so
+      // it is used verbatim. Root token is the shared `ROOT_PATH` ('$'), used
+      // only when the warning carries no location (consistent with validate()'s
+      // catch blocks and parse.ts's schema-error root fallback).
+      path: warning.location ?? ROOT_PATH,
       message: warning.message,
-      code: ERROR_CODES.UNIT_ERROR,
+      code: ERROR_CODES.UNIT_INCONSISTENCY,
       details: { equation: warning.equation || '' },
     }))
 }

@@ -8,7 +8,7 @@ import { isExprNode } from '../expression.js'
 import { ERROR_CODES } from '../errors.js'
 import {
   checkDimensions,
-  parseUnit,
+  tryParseUnit,
   isDimensionless,
   dimsEqual,
   type CanonicalDims,
@@ -61,15 +61,24 @@ export function validateReactionConsistency(
           })
         }
 
-        // Check stoichiometry is positive integer
+        // Stoichiometry must be POSITIVE and FINITE — not an integer. The
+        // schema is `{"type":"number","exclusiveMinimum":0}`, and fractional
+        // coefficients are ordinary in earth-science chemistry (aerosol yields,
+        // lumped mechanisms): `tests/valid/fractional_stoichiometry.esm` is a
+        // VALID fixture with 0.87. `expected_errors.json` pins
+        // `negative_stoichiometry.esm` as a schema `minimum` violation, which
+        // confirms the contract is positivity, not integrality. (Requiring
+        // Number.isInteger here rejected that valid fixture outright.)
         if (
           reactant &&
-          (!Number.isInteger(reactant.stoichiometry) || reactant.stoichiometry <= 0)
+          (typeof reactant.stoichiometry !== 'number' ||
+            !Number.isFinite(reactant.stoichiometry) ||
+            reactant.stoichiometry <= 0)
         ) {
           errors.push({
             path: `${reactionPath}/${role}/${j}/stoichiometry`,
             code: ERROR_CODES.INVALID_STOICHIOMETRY,
-            message: `Stoichiometry must be a positive integer, got ${reactant.stoichiometry}`,
+            message: `Stoichiometry must be a positive finite number, got ${reactant.stoichiometry}`,
             details: { stoichiometry: reactant.stoichiometry, reaction_id: reaction.id },
           })
         }
@@ -153,18 +162,21 @@ export function validateReactionSystemICs(
  */
 function buildReactionSystemUnitBindings(reactionSystem: ReactionSystem): Map<string, ParsedUnit> {
   const bindings = new Map<string, ParsedUnit>()
+  // An unparseable declaration leaves the symbol UNBOUND (dimension unknown)
+  // rather than bound to a fabricated dimensionless value — `checkDimensions`
+  // then reports it as indeterminate and skips comparisons involving it.
+  const bind = (name: string, units: string): void => {
+    const parsed = tryParseUnit(units)
+    if (parsed !== null) bindings.set(name, parsed)
+  }
   if ('species' in reactionSystem && reactionSystem.species) {
     for (const [name, species] of Object.entries(reactionSystem.species)) {
-      if (species && species.units) {
-        bindings.set(name, parseUnit(species.units))
-      }
+      if (species && species.units) bind(name, species.units)
     }
   }
   if ('parameters' in reactionSystem && reactionSystem.parameters) {
     for (const [name, param] of Object.entries(reactionSystem.parameters)) {
-      if (param && param.units) {
-        bindings.set(name, parseUnit(param.units))
-      }
+      if (param && param.units) bind(name, param.units)
     }
   }
   return bindings
@@ -215,8 +227,8 @@ export function validateReactionRateUnits(
     const firstSpecies = speciesMap[firstSubstrate.species]
     if (!firstSpecies || !firstSpecies.units) continue
 
-    const concUnit = parseUnit(firstSpecies.units)
-    if (isDimensionless(concUnit)) continue
+    const concUnit = tryParseUnit(firstSpecies.units)
+    if (concUnit === null || isDimensionless(concUnit)) continue
 
     let resolvable = true
     let totalOrder = 0
@@ -232,13 +244,12 @@ export function validateReactionRateUnits(
     if (!resolvable) continue
 
     const rateResult = checkDimensions(reaction.rate, bindings)
-    // COUPLING: this skip test string-matches the human-readable warning prose
-    // emitted by checkDimensions in units.ts. It is intentionally left as a
-    // substring match here — units.ts owns that wording and is off-limits to
-    // this module. A Wave-2 units effort is separately introducing structured
-    // warning codes; do NOT depend on those here until they land (changing this
-    // to a code check now would decouple from the current units.ts message).
-    if (rateResult.warnings.some((w) => w.includes('Unknown variable'))) continue
+    // An INDETERMINATE rate dimension (unknown variable, or an operator units.ts
+    // does not model) cannot prove anything, so there is nothing to check. This
+    // used to substring-match the "Unknown variable" warning PROSE; units.ts now
+    // models indeterminacy in the value itself (`dimensions === null`), so the
+    // coupling to that wording is gone.
+    if (rateResult.dimensions === null) continue
 
     const expectedPower = 1 - totalOrder
     const expectedDims: CanonicalDims = {}

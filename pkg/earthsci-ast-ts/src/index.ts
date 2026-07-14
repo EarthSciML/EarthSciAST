@@ -152,7 +152,7 @@ export { freeVariables, freeParameters, contains, simplify } from './expression.
 export { deriveODEs, stoichiometricMatrix, substrateMatrix, productMatrix } from './reactions.js'
 
 // Export unit parsing and dimensional analysis
-export { parseUnit, checkDimensions, validateUnits } from './units.js'
+export { parseUnit, tryParseUnit, checkDimensions, validateUnits } from './units.js'
 export type { UnitResult, UnitWarning } from './units.js'
 
 // Export runtime unit conversion

@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { parseUnit, checkDimensions, validateUnits, type ParsedUnit } from './units.js'
+import {
+  parseUnit,
+  tryParseUnit,
+  checkDimensions,
+  validateUnits,
+  type ParsedUnit,
+  type CanonicalDims,
+} from './units.js'
 import { load } from './parse.js'
+import { validate } from './validate.js'
 import { readFixture } from './test-helpers.js'
 import type { Expression, EsmFile } from './types.js'
 
@@ -97,20 +105,63 @@ describe('Unit parsing and dimensional analysis', () => {
       return map
     }
 
+    /** Assert a determinate dimension and return it (narrows away `null`). */
+    const dimsOf = (result: { dimensions: ParsedUnit | null }): CanonicalDims => {
+      expect(result.dimensions).not.toBeNull()
+      return result.dimensions!.dims
+    }
+
     it('should handle numbers and variables', () => {
       const bindings = createUnitBindings({ x: 'm', t: 's' })
 
+      // A bare literal carries no declared unit, so its dimension is
+      // INDETERMINATE — it may be a pure number or an implicit-unit constant
+      // (273.15 K, 0.0224 m^3/mol, ...). It raises no diagnostic: an
+      // un-annotated constant is not a defect.
       const numberResult = checkDimensions(42, bindings)
-      expect(numberResult.dimensions.dims).toEqual({})
+      expect(numberResult.dimensions).toBeNull()
       expect(numberResult.warnings).toEqual([])
 
       const varResult = checkDimensions('x', bindings)
-      expect(varResult.dimensions.dims).toEqual({ m: 1 })
+      expect(dimsOf(varResult)).toEqual({ m: 1 })
       expect(varResult.warnings).toEqual([])
 
+      // An unknown variable is INDETERMINATE, not dimensionless.
       const unknownVarResult = checkDimensions('unknown', bindings)
-      expect(unknownVarResult.dimensions.dims).toEqual({})
+      expect(unknownVarResult.dimensions).toBeNull()
       expect(unknownVarResult.warnings).toEqual(['Unknown variable: unknown'])
+    })
+
+    // The literal rules, stated as tests because they are the load-bearing part
+    // of "a literal is indeterminate".
+    describe('numeric literals', () => {
+      it('is neutral in additive position — it adopts its sibling dimension', () => {
+        const bindings = createUnitBindings({ T: 'K' })
+        // `T - 273.15` is Kelvin, not a K-vs-dimensionless mismatch.
+        const result = checkDimensions({ op: '-', args: ['T', 273.15] }, bindings)
+        expect(dimsOf(result)).toEqual({ K: 1 })
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+      })
+
+      it('makes an all-literal expression dimensionless', () => {
+        const bindings = createUnitBindings({})
+        expect(dimsOf(checkDimensions({ op: '+', args: [1, 2] }, bindings))).toEqual({})
+        expect(dimsOf(checkDimensions({ op: '-', args: [1] }, bindings))).toEqual({})
+      })
+
+      it('makes a product involving an un-annotated constant indeterminate', () => {
+        // `6.022e23 * conc` might be a mole→molecule conversion carrying
+        // implicit 1/mol. We cannot know, so we do not claim to.
+        const bindings = createUnitBindings({ conc: 'mol/m^3' })
+        const result = checkDimensions({ op: '*', args: [6.022e23, 'conc'] }, bindings)
+        expect(result.dimensions).toBeNull()
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+      })
+
+      it('is still read BY VALUE in exponent position', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        expect(dimsOf(checkDimensions({ op: '^', args: ['x', 2] }, bindings))).toEqual({ m: 2 })
+      })
     })
 
     it('should handle addition and subtraction', () => {
@@ -118,12 +169,13 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const addExpr: Expression = { op: '+', args: ['x', 'y'] }
       const addResult = checkDimensions(addExpr, bindings)
-      expect(addResult.dimensions.dims).toEqual({ m: 1 })
+      expect(dimsOf(addResult)).toEqual({ m: 1 })
       expect(addResult.warnings).toEqual([])
 
       const badAddExpr: Expression = { op: '+', args: ['x', 't'] }
       const badAddResult = checkDimensions(badAddExpr, bindings)
       expect(badAddResult.warnings[0]).toContain('Addition/subtraction requires same dimensions')
+      expect(badAddResult.diagnostics[0].code).toBe('dimensional_mismatch')
     })
 
     it('should treat cm and m as compatible in addition', () => {
@@ -134,7 +186,7 @@ describe('Unit parsing and dimensional analysis', () => {
       const expr: Expression = { op: '+', args: ['a', 'b'] }
       const result = checkDimensions(expr, bindings)
       expect(result.warnings).toEqual([])
-      expect(result.dimensions.dims).toEqual({ m: 1 })
+      expect(dimsOf(result)).toEqual({ m: 1 })
     })
 
     it('should handle multiplication', () => {
@@ -143,7 +195,7 @@ describe('Unit parsing and dimensional analysis', () => {
       const multExpr: Expression = { op: '*', args: ['m', 'a'] }
       const result = checkDimensions(multExpr, bindings)
       expect(result.warnings).toEqual([])
-      expect(result.dimensions.dims).toEqual({ kg: 1, m: 1, s: -2 })
+      expect(dimsOf(result)).toEqual({ kg: 1, m: 1, s: -2 })
     })
 
     it('should handle division', () => {
@@ -152,7 +204,75 @@ describe('Unit parsing and dimensional analysis', () => {
       const divExpr: Expression = { op: '/', args: ['v', 't'] }
       const result = checkDimensions(divExpr, bindings)
       expect(result.warnings).toEqual([])
-      expect(result.dimensions.dims).toEqual({ m: 1, s: -2 })
+      expect(dimsOf(result)).toEqual({ m: 1, s: -2 })
+    })
+
+    // C3: the `^` arm used to return the base dimension UNCHANGED, so `x^2`
+    // with x in metres reported `m` rather than `m^2`, and `sqrt(A)` with A in
+    // m^2 reported `m^2` rather than `m`.
+    describe('exponentiation and sqrt (C3)', () => {
+      it('raises the base dimension to an integer literal exponent', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        expect(dimsOf(checkDimensions({ op: '^', args: ['x', 2] }, bindings))).toEqual({ m: 2 })
+        expect(dimsOf(checkDimensions({ op: '^', args: ['x', 3] }, bindings))).toEqual({ m: 3 })
+        expect(dimsOf(checkDimensions({ op: '^', args: ['x', -1] }, bindings))).toEqual({ m: -1 })
+      })
+
+      it('accepts a float-valued integer exponent as well as an int literal', () => {
+        // JSON `2` and `2.0` must behave identically — matching only the float
+        // form is exactly the Rust binding's R6 bug.
+        const bindings = createUnitBindings({ x: 'm' })
+        expect(dimsOf(checkDimensions({ op: '^', args: ['x', 2.0] }, bindings))).toEqual({ m: 2 })
+      })
+
+      it('scales a compound base dimension by the exponent', () => {
+        const bindings = createUnitBindings({ v: 'm/s' })
+        expect(dimsOf(checkDimensions({ op: '^', args: ['v', 2] }, bindings))).toEqual({
+          m: 2,
+          s: -2,
+        })
+      })
+
+      it('halves the dimension under sqrt', () => {
+        const bindings = createUnitBindings({ A: 'm^2', vsq: 'm^2/s^2' })
+        expect(dimsOf(checkDimensions({ op: 'sqrt', args: ['A'] }, bindings))).toEqual({ m: 1 })
+        expect(dimsOf(checkDimensions({ op: 'sqrt', args: ['vsq'] }, bindings))).toEqual({
+          m: 1,
+          s: -1,
+        })
+      })
+
+      it('reports sqrt of an odd-exponent dimension as a mismatch', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        const result = checkDimensions({ op: 'sqrt', args: ['x'] }, bindings)
+        expect(result.dimensions).toBeNull()
+        expect(result.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(true)
+      })
+
+      it('rejects a dimensional exponent', () => {
+        const bindings = createUnitBindings({ x: 'm', w: 'kg' })
+        const result = checkDimensions({ op: '^', args: ['x', 'w'] }, bindings)
+        expect(result.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(true)
+      })
+
+      it('leaves a non-literal exponent on a dimensional base INDETERMINATE, not wrong', () => {
+        // `k * [X]^n` (a fitted reaction order) is ordinary chemistry. Its
+        // dimension cannot be computed, but the file is not defective, so this
+        // must NOT be a promotable mismatch.
+        const bindings = createUnitBindings({ x: 'm', n: 'dimensionless' })
+        const result = checkDimensions({ op: '^', args: ['x', 'n'] }, bindings)
+        expect(result.dimensions).toBeNull()
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+        expect(result.diagnostics.some((d) => d.code === 'analysis')).toBe(true)
+      })
+
+      it('allows a non-literal exponent on a DIMENSIONLESS base', () => {
+        // `ratio^n` is fine whatever n is — the result is dimensionless either way.
+        const bindings = createUnitBindings({ r: 'dimensionless', n: 'dimensionless' })
+        const result = checkDimensions({ op: '^', args: ['r', 'n'] }, bindings)
+        expect(dimsOf(result)).toEqual({})
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+      })
     })
 
     it('should handle derivative operator', () => {
@@ -160,7 +280,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const derivExpr: Expression = { op: 'D', args: ['x'], wrt: 't' }
       const result = checkDimensions(derivExpr, bindings)
-      expect(result.dimensions.dims).toEqual({ m: 1, s: -1 })
+      expect(dimsOf(result)).toEqual({ m: 1, s: -1 })
       expect(result.warnings).toEqual([])
     })
 
@@ -169,12 +289,15 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const expExpr: Expression = { op: 'exp', args: ['x'] }
       const expResult = checkDimensions(expExpr, bindings)
-      expect(expResult.dimensions.dims).toEqual({})
+      expect(dimsOf(expResult)).toEqual({})
       expect(expResult.warnings).toEqual([])
 
       const badExpExpr: Expression = { op: 'exp', args: ['y'] }
       const badExpResult = checkDimensions(badExpExpr, bindings)
       expect(badExpResult.warnings[0]).toContain('exp() requires dimensionless argument')
+      // A transcendental of a dimensional quantity is a PROVABLE inconsistency,
+      // so it is promotable — the corpus pins units_invalid_logarithm.esm on it.
+      expect(badExpResult.diagnostics[0].code).toBe('dimensional_mismatch')
     })
 
     it('should handle comparison operators', () => {
@@ -182,7 +305,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const compExpr: Expression = { op: '>', args: ['x', 'y'] }
       const compResult = checkDimensions(compExpr, bindings)
-      expect(compResult.dimensions.dims).toEqual({})
+      expect(dimsOf(compResult)).toEqual({})
       expect(compResult.warnings).toEqual([])
 
       const badCompExpr: Expression = { op: '>', args: ['x', 't'] }
@@ -195,8 +318,38 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const ifExpr: Expression = { op: 'ifelse', args: ['condition', 'x', 'y'] }
       const result = checkDimensions(ifExpr, bindings)
-      expect(result.dimensions.dims).toEqual({ m: 1 })
+      expect(dimsOf(result)).toEqual({ m: 1 })
       expect(result.warnings).toEqual([])
+    })
+
+    // T3: structural ops have NO modelled dimension. Reporting them as
+    // dimensionless manufactured false mismatches against dimensional operands
+    // all over the valid corpus.
+    describe('structural operators are indeterminate, not dimensionless (T3)', () => {
+      const structural: Expression[] = [
+        { op: 'index', args: ['u', 2] },
+        { op: 'fn', args: ['t'], name: 'datetime.year' } as unknown as Expression,
+        { op: 'aggregate', args: ['A'], expr: { op: '*', args: ['A', 'w'] } } as Expression,
+        { op: 'table_lookup', args: [], table: 'kT', axes: { temp: 'T_air' } } as Expression,
+        { op: 'makearray', args: [1, 2] } as unknown as Expression,
+      ]
+
+      it.each(structural)('reports %j as indeterminate', (expr) => {
+        const bindings = createUnitBindings({ u: 'm', w: 'm', A: 'm', T_air: 'K', t: 's' })
+        expect(checkDimensions(expr, bindings).dimensions).toBeNull()
+      })
+
+      it('does not manufacture a mismatch against a dimensional operand', () => {
+        // `m + index(u, 2)`: the old code called index() dimensionless and
+        // warned that metres and dimensionless differ. There is nothing to
+        // prove here — index's dimension is simply unknown.
+        const bindings = createUnitBindings({ x: 'm', u: 'm' })
+        const result = checkDimensions(
+          { op: '+', args: ['x', { op: 'index', args: ['u', 2] }] },
+          bindings,
+        )
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+      })
     })
   })
 
@@ -359,9 +512,9 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(warnings.length).toBeGreaterThan(0)
       // ...it is an `analysis` warning referencing the offending unit, NOT a
       // promoted error (do not match the exact prose, just the unit token).
-      expect(
-        warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit')),
-      ).toBe(true)
+      expect(warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit'))).toBe(
+        true,
+      )
       // ...and NONE is a dimensional mismatch, so `validate()` keeps it valid.
       expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
     })
@@ -410,19 +563,25 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(parseUnit('   ')).toEqual({ dims: {}, scale: 1 })
     })
 
-    it('should handle unknown unit tokens by falling back to dimensionless', () => {
-      // Matches the lenient behavior of the legacy parser, which silently
-      // ignored tokens it did not recognize.
-      expect(parseUnit('completelyMadeUpUnit')).toEqual({ dims: {}, scale: 1 })
+    it('should REJECT an unknown unit token rather than silently pass it', () => {
+      // C4: an unparseable unit must be an error. Collapsing it to
+      // dimensionless is a false claim about the quantity — it both hides real
+      // mismatches and manufactures fake ones.
+      expect(() => parseUnit('completelyMadeUpUnit')).toThrow(/Unknown unit/)
+      // `tryParseUnit` is the fallible form the validators use: null, not a
+      // fabricated dimensionless.
+      expect(tryParseUnit('completelyMadeUpUnit')).toBeNull()
     })
 
-    it('should handle unknown operators gracefully', () => {
+    it('should report an unknown operator as indeterminate, not dimensionless', () => {
       const bindings = new Map<string, ParsedUnit>()
       bindings.set('x', { dims: { m: 1 }, scale: 1 })
 
       const unknownOpExpr: Expression = { op: 'unknown_op' as any, args: ['x'] }
       const result = checkDimensions(unknownOpExpr, bindings)
-      expect(result.warnings).toContain('Unknown operator: unknown_op')
+      expect(result.dimensions).toBeNull()
+      // An unmodelled op is not a defect, so it raises no mismatch.
+      expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
     })
 
     it('should handle malformed expressions', () => {
@@ -440,26 +599,101 @@ describe('Unit parsing and dimensional analysis', () => {
   describe('Cross-binding units fixtures (gt-gtf)', () => {
     // The three units_*.esm files in tests/valid/ are shared across
     // Julia/Python/Rust/TypeScript/Go and exist specifically to drive
-    // cross-binding agreement on units handling. validateUnits is opt-in
-    // for TypeScript, so call it explicitly per-fixture. Each binding's
-    // unit registry covers a different subset, so this test asserts only
-    // that load and validateUnits complete successfully and emit warnings
-    // as a typed array.
-    const fixtures = [
-      'units_conversions.esm',
-      'units_dimensional_analysis.esm',
-      'units_propagation.esm',
-    ]
+    // cross-binding agreement on units handling.
+    //
+    // These are VALID fixtures, so the contract is sharp and worth stating as
+    // an assertion rather than the `expect(Array.isArray(warnings)).toBe(true)`
+    // that used to stand here (which no implementation could ever fail):
+    // dimensional analysis must find NO provable inconsistency in any of them,
+    // and `validate()` must accept them.
+    const fixtures = ['units_conversions.esm', 'units_propagation.esm']
+
+    // CORPUS CONTRADICTION — units_dimensional_analysis.esm is deliberately NOT
+    // in the list above, and this is not a gap in the checker.
+    //
+    // That fixture lives in tests/valid/ and declares
+    //     S (observed, J/K) = n * R * log(V),  with V: state, units "m^3"
+    // i.e. a transcendental function applied to a bare variable whose declared
+    // units are dimensional. `tests/invalid/units_invalid_logarithm.esm` is the
+    // SAME construct —
+    //     invalid_log (observed) = ln(mass),  with mass: parameter, units "kg"
+    // — and `tests/invalid/expected_errors.json` pins it as a structural
+    // `unit_inconsistency` error that this binding is required to emit.
+    //
+    // No dimensional checker can accept the first and reject the second: they
+    // are dimensionally identical. One of the two fixtures is wrong, and it is
+    // the VALID one — log of a dimensional quantity is meaningless physics (the
+    // author omitted a reference volume, cf. units_propagation.esm, which
+    // correctly writes `log(V / (n * 0.0224))`).
+    //
+    // Resolving this requires editing the shared corpus, which this binding does
+    // not own. Until then we honour the pinned *invalid* contract (the sharper
+    // one) and leave the valid fixture failing rather than silently downgrading
+    // the log-argument rule, which would let units_invalid_logarithm.esm pass.
+    // See `checkDimensions`' transcendental arm.
 
     for (const fname of fixtures) {
-      it(`loads ${fname} and runs validateUnits`, () => {
+      it(`finds no dimensional inconsistency in ${fname}`, () => {
         const content = readFixture('valid', fname)
         const file = load(content) as EsmFile
         expect(file.models).toBeDefined()
         expect(Object.keys(file.models ?? {}).length).toBeGreaterThan(0)
+
         const warnings = validateUnits(file)
-        expect(Array.isArray(warnings)).toBe(true)
+        const mismatches = warnings.filter((w) => w.code === 'dimensional_mismatch')
+        expect(mismatches.map((w) => `${w.code} @ ${w.location ?? '?'}: ${w.message}`)).toEqual([])
+      })
+
+      it(`validate() accepts ${fname}`, () => {
+        const result = validate(readFixture('valid', fname))
+        expect(result.structural_errors.map((e) => `[${e.code}] ${e.path}: ${e.message}`)).toEqual(
+          [],
+        )
+        expect(result.is_valid).toBe(true)
       })
     }
+  })
+
+  // T4: unit findings ARE hard errors in TS (the shared corpus pins every
+  // units_*.esm fixture as `is_valid: false`), but they must carry the pinned
+  // CODE and the pinned PATH — `unit_inconsistency` at the equation / variable,
+  // not `unit_error` at the enclosing model.
+  describe('unit errors use the corpus-pinned code and path (T4)', () => {
+    it('reports an inconsistent equation at /models/<M>/equations/<i>', () => {
+      const result = validate(readFixture('invalid', 'units_incompatible_assignment.esm'))
+      expect(result.is_valid).toBe(false)
+      expect(
+        result.structural_errors.some(
+          (e) => e.code === 'unit_inconsistency' && e.path === '/models/BadUnitsModel/equations/0',
+        ),
+      ).toBe(true)
+    })
+
+    it('reports an inconsistent observed variable at /models/<M>/variables/<v>', () => {
+      const result = validate(readFixture('invalid', 'units_inconsistent_addition.esm'))
+      expect(result.is_valid).toBe(false)
+      expect(
+        result.structural_errors.some(
+          (e) =>
+            e.code === 'unit_inconsistency' &&
+            e.path === '/models/BadUnitsModel/variables/invalid_sum',
+        ),
+      ).toBe(true)
+    })
+
+    it('rejects a dimensional logarithm argument', () => {
+      // Previously hard-quarantined in conformance.test.ts's
+      // PENDING_BINDING_PHASE: TS returned is_valid:true for a fixture the
+      // corpus pins invalid.
+      const result = validate(readFixture('invalid', 'units_invalid_logarithm.esm'))
+      expect(result.is_valid).toBe(false)
+      expect(
+        result.structural_errors.some(
+          (e) =>
+            e.code === 'unit_inconsistency' &&
+            e.path === '/models/BadUnitsModel/variables/invalid_log',
+        ),
+      ).toBe(true)
+    })
   })
 })

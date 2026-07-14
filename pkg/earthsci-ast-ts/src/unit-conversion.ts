@@ -105,6 +105,25 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   bar: { dims: { kg: 1, m: -1, s: -2 }, scale: 1e5 },
   atm: { dims: { kg: 1, m: -1, s: -2 }, scale: 101325 },
 
+  // Frequency (Go's registry has Hz; the two tables agree).
+  Hz: { dims: { s: -1 }, scale: 1 },
+  kHz: { dims: { s: -1 }, scale: 1e3 },
+  MHz: { dims: { s: -1 }, scale: 1e6 },
+
+  // NO ELECTROMAGNETIC UNITS (V, T, F, Ohm, coulomb). This is deliberate, and
+  // it is not an oversight to be "fixed" by adding them.
+  //
+  // `C` in this table is CELSIUS, not coulomb — a choice ESM shares with the Go
+  // reference registry, which spells it out (`r["C"] = r["K"] // coulomb
+  // disabled`). Charge is therefore not expressible, so an EM quantity can
+  // never be given a coherent dimension here: adding V/T/F/Ohm would make
+  // `q * E` *determinate and wrong* (Celsius × volt) instead of leaving it
+  // UNKNOWN, and a determinate-and-wrong dimension is exactly what manufactures
+  // the false mismatches this module was rewritten to stop emitting. Leaving
+  // them unknown makes the EM expressions indeterminate and skipped, matching
+  // Go. (`T` was the sharpest trap: as tesla it silently shadowed every model
+  // variable named `T` — temperature — in the shared binding table.)
+
   // Volume
   L: { dims: { m: 3 }, scale: 1e-3 },
   liter: { dims: { m: 3 }, scale: 1e-3 },
@@ -132,10 +151,28 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
 /**
  * Parse a unit string into canonical SI dimensions plus scale (and optional offset).
  *
- * Accepts compound expressions like `"kg*m/s^2"`, `"molec/cm^3"`, `"cm^3/molec/s"`.
- * Offset-based units (`C`, `Celsius`) may only appear as the sole term at power +1.
+ * Recursive-descent parser over the grammar (ported from the Go reference
+ * implementation, `pkg/earthsci-ast-go/pkg/esm/units.go`, so the five bindings
+ * agree on how a unit string associates):
  *
- * @throws {UnitConversionError} on unknown unit names, malformed tokens, or misused offset units.
+ * ```
+ *   unit := term ( ('*' | '/') term )*
+ *   term := atom ( '^' integer )?
+ *   atom := number | symbol | '(' unit ')'
+ * ```
+ *
+ * `*` and `/` share one precedence level and associate LEFT — so `kg/m*s` is
+ * `(kg/m)*s` = kg·s·m⁻¹, NOT kg·m⁻¹·s⁻¹. (The previous implementation split on
+ * `/` and treated *everything* after the first `/` as denominator, which
+ * silently disagreed with every other binding.) Grouping with parentheses is
+ * supported, so the ordinary earth-science spellings `J/(mol*K)` and
+ * `cm^3/(molec*s)` parse correctly instead of being rejected token-by-token.
+ *
+ * Whitespace is ignored. Offset-based units (`C`, `Celsius`) may only appear as
+ * the sole term at power +1; composing one with any other unit is an error.
+ *
+ * @throws {UnitConversionError} on unknown unit names, malformed tokens,
+ *   unbalanced parentheses, trailing input, or misused offset units.
  */
 export function parseUnitForConversion(unitStr: string): ParsedUnit {
   const trimmed = (unitStr ?? '').trim()
@@ -143,67 +180,184 @@ export function parseUnitForConversion(unitStr: string): ParsedUnit {
     return { dims: {}, scale: 1 }
   }
 
-  const result: ParsedUnit = { dims: {}, scale: 1 }
-  let termCount = 0
+  const parser = new UnitParser(trimmed)
+  const result = parser.parseUnit()
+  parser.expectEnd()
 
-  const parts = trimmed.split('/')
-  const numeratorStr = parts[0] || '1'
-
-  for (const factor of numeratorStr.split('*')) {
-    if (parseTerm(factor.trim(), result, +1)) termCount++
-  }
-  for (const denominatorStr of parts.slice(1)) {
-    for (const factor of denominatorStr.split('*')) {
-      if (parseTerm(factor.trim(), result, -1)) termCount++
-    }
-  }
-
-  if (result.offset !== undefined && termCount !== 1) {
-    throw new UnitConversionError(
-      `Offset-based unit in "${unitStr}" cannot be composed with other units`,
-    )
-  }
-
-  for (const key of Object.keys(result.dims) as (keyof CanonicalDims)[]) {
-    if (result.dims[key] === 0) delete result.dims[key]
-  }
-
+  pruneZeroDims(result.dims)
   return result
 }
 
-function parseTerm(token: string, result: ParsedUnit, sign: number): boolean {
-  if (!token || token === '1') return false
+function pruneZeroDims(dims: CanonicalDims): void {
+  for (const key of Object.keys(dims) as (keyof CanonicalDims)[]) {
+    if (dims[key] === 0) delete dims[key]
+  }
+}
 
-  const match = /^([A-Za-z%][A-Za-z0-9_]*)(?:\^(-?\d+))?$/.exec(token)
-  if (!match) {
-    throw new UnitConversionError(`Cannot parse unit token "${token}"`)
+/**
+ * An offset unit (degC) denotes an affine scale, so it has no meaning as a
+ * factor inside a product, a quotient, or a power: `degC*m` and `1/degC` are
+ * not units. Combining forms funnel through here so the rejection is stated
+ * once rather than re-derived at each call site.
+ */
+function assertNoOffset(u: ParsedUnit, context: string): void {
+  if (u.offset !== undefined && u.offset !== 0) {
+    throw new UnitConversionError(`Offset-based unit cannot be ${context}`)
+  }
+}
+
+function multiplyParsed(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
+  assertNoOffset(a, 'composed with other units')
+  assertNoOffset(b, 'composed with other units')
+  const dims: CanonicalDims = { ...a.dims }
+  for (const [dim, power] of Object.entries(b.dims)) {
+    const key = dim as keyof CanonicalDims
+    dims[key] = (dims[key] ?? 0) + (power as number)
+  }
+  return { dims, scale: a.scale * b.scale }
+}
+
+function divideParsed(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
+  assertNoOffset(a, 'composed with other units')
+  assertNoOffset(b, 'placed in a denominator')
+  const dims: CanonicalDims = { ...a.dims }
+  for (const [dim, power] of Object.entries(b.dims)) {
+    const key = dim as keyof CanonicalDims
+    dims[key] = (dims[key] ?? 0) - (power as number)
+  }
+  return { dims, scale: a.scale / b.scale }
+}
+
+function powerParsed(u: ParsedUnit, exp: number): ParsedUnit {
+  if (exp === 1) return u
+  assertNoOffset(u, 'raised to a power')
+  const dims: CanonicalDims = {}
+  for (const [dim, power] of Object.entries(u.dims)) {
+    dims[dim as keyof CanonicalDims] = (power as number) * exp
+  }
+  return { dims, scale: Math.pow(u.scale, exp) }
+}
+
+const isIdentStart = (c: string): boolean => /[A-Za-z_%]/.test(c)
+const isIdentCont = (c: string): boolean => /[A-Za-z0-9_]/.test(c)
+const isDigit = (c: string): boolean => c >= '0' && c <= '9'
+
+class UnitParser {
+  private pos = 0
+
+  constructor(private readonly src: string) {}
+
+  private skipSpace(): void {
+    while (this.pos < this.src.length && /\s/.test(this.src[this.pos])) this.pos++
   }
 
-  const name = match[1]
-  const exp = match[2] ? parseInt(match[2], 10) : 1
-  const signedExp = sign * exp
-
-  const spec = UNIT_TABLE[name]
-  if (!spec) {
-    throw new UnitConversionError(`Unknown unit "${name}"`)
+  private peek(): string {
+    this.skipSpace()
+    return this.pos < this.src.length ? this.src[this.pos] : ''
   }
 
-  if (spec.offset !== undefined && spec.offset !== 0) {
-    if (signedExp !== 1) {
+  expectEnd(): void {
+    if (this.peek() !== '') {
       throw new UnitConversionError(
-        `Offset-based unit "${name}" cannot be raised to a power or placed in denominator`,
+        `Cannot parse unit "${this.src}": unexpected "${this.src.slice(this.pos)}" at position ${this.pos}`,
       )
     }
-    result.offset = spec.offset
   }
 
-  for (const [dim, power] of Object.entries(spec.dims)) {
-    const key = dim as keyof CanonicalDims
-    result.dims[key] = (result.dims[key] || 0) + (power as number) * signedExp
+  /** unit := term ( ('*' | '/') term )* — left-associative. */
+  parseUnit(): ParsedUnit {
+    let result = this.parseTerm()
+    for (;;) {
+      const c = this.peek()
+      if (c !== '*' && c !== '/') break
+      this.pos++
+      const next = this.parseTerm()
+      result = c === '*' ? multiplyParsed(result, next) : divideParsed(result, next)
+    }
+    return result
   }
 
-  result.scale *= Math.pow(spec.scale, signedExp)
-  return true
+  /** term := atom ( '^' integer )? */
+  private parseTerm(): ParsedUnit {
+    const atom = this.parseAtom()
+    if (this.peek() !== '^') return atom
+    this.pos++
+    return powerParsed(atom, this.parseInt())
+  }
+
+  /** atom := number | symbol | '(' unit ')' */
+  private parseAtom(): ParsedUnit {
+    this.skipSpace()
+    if (this.pos >= this.src.length) {
+      throw new UnitConversionError(`Cannot parse unit "${this.src}": unexpected end of input`)
+    }
+
+    const c = this.src[this.pos]
+
+    if (c === '(') {
+      this.pos++
+      const inner = this.parseUnit()
+      if (this.peek() !== ')') {
+        throw new UnitConversionError(`Cannot parse unit "${this.src}": missing ")"`)
+      }
+      this.pos++
+      return inner
+    }
+
+    // A bare number is a dimensionless scalar factor ("1" → identity, and e.g.
+    // the leading "1" of "1/s").
+    if (isDigit(c)) {
+      const start = this.pos
+      while (
+        this.pos < this.src.length &&
+        (isDigit(this.src[this.pos]) || this.src[this.pos] === '.')
+      ) {
+        this.pos++
+      }
+      const text = this.src.slice(start, this.pos)
+      const value = Number(text)
+      if (!Number.isFinite(value)) {
+        throw new UnitConversionError(`Cannot parse unit "${this.src}": invalid number "${text}"`)
+      }
+      return { dims: {}, scale: value }
+    }
+
+    if (!isIdentStart(c)) {
+      throw new UnitConversionError(
+        `Cannot parse unit "${this.src}": unexpected "${c}" at position ${this.pos}`,
+      )
+    }
+
+    const start = this.pos
+    this.pos++
+    while (this.pos < this.src.length && isIdentCont(this.src[this.pos])) this.pos++
+    const name = this.src.slice(start, this.pos)
+
+    const spec = UNIT_TABLE[name]
+    if (!spec) {
+      throw new UnitConversionError(`Unknown unit "${name}"`)
+    }
+    const parsed: ParsedUnit = { dims: { ...spec.dims }, scale: spec.scale }
+    if (spec.offset !== undefined && spec.offset !== 0) parsed.offset = spec.offset
+    return parsed
+  }
+
+  /** A signed integer exponent. Fractional exponents are not representable. */
+  private parseInt(): number {
+    this.skipSpace()
+    const start = this.pos
+    if (this.pos < this.src.length && (this.src[this.pos] === '-' || this.src[this.pos] === '+')) {
+      this.pos++
+    }
+    const digitsStart = this.pos
+    while (this.pos < this.src.length && isDigit(this.src[this.pos])) this.pos++
+    if (this.pos === digitsStart) {
+      throw new UnitConversionError(
+        `Cannot parse unit "${this.src}": expected integer exponent at position ${start}`,
+      )
+    }
+    return parseInt(this.src.slice(start, this.pos), 10)
+  }
 }
 
 /**

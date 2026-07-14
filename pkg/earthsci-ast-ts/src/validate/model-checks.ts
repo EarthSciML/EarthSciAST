@@ -6,7 +6,7 @@
 
 import { isExprNode } from '../expression.js'
 import { ERROR_CODES } from '../errors.js'
-import { parseUnit, dimsEqual, type ParsedUnit } from '../units.js'
+import { parseUnit, tryParseUnit, dimsEqual, type ParsedUnit } from '../units.js'
 import type { EsmFile, Model, Expression, AffectEquation } from '../types.js'
 import type { StructuralError } from './types.js'
 import {
@@ -322,8 +322,13 @@ export function validatePhysicalConstantUnits(model: Model, modelPath: string): 
     const declared = declaration.units
     if (!declared) continue
 
-    const declaredUnit = parseUnit(declared)
-    const canonicalUnit = parseUnit(canonical)
+    // An unparseable declaration is INDETERMINATE, not "different from
+    // canonical" — we cannot prove a mismatch against a dimension we could not
+    // read, so skip rather than report. (`parseUnit` is strict and would throw;
+    // `tryParseUnit` is the fallible form.)
+    const declaredUnit = tryParseUnit(declared)
+    const canonicalUnit = tryParseUnit(canonical)
+    if (declaredUnit === null || canonicalUnit === null) continue
     if (dimsEqual(declaredUnit.dims, canonicalUnit.dims)) continue
 
     let usageName: string | undefined
