@@ -133,7 +133,7 @@
       "tests": [
         {
           "id": "elastic_bounce_sequence",
-          "description": "Drop a ball from h=10 m under g=9.81 m/s^2 with restitution=0.8 and watch the bounce sequence over 10 seconds. The ball's peak height decays as h_n = 10 * restitution^(2n), which is verified by sampling the trajectory around several bounces. Assertions use absolute tolerance on height (meters) because the event-driven dynamics make tight relative tolerance impractical near zero crossings.",
+          "description": "Drop a ball from h=10 m under g=9.81 m/s^2 with restitution=0.8 and check the FIRST bounce against the CLOSED FORM. Free fall gives h(t)=10-g t^2/2, so the ball first reaches the ground at t1=sqrt(2*10/g)=1.427843 s with impact speed sqrt(2*g*10)=14.007141 m/s. The event sets height:=0 and velocity:=-restitution*Pre(velocity)=+11.205713 m/s, after which h(t)=v1*(t-t1)-g*(t-t1)^2/2 with apex h0*e^2=6.4 m -- the h_n=10*e^(2n) decay law, verified analytically rather than sampled. The velocity assertions at t=0.998492 (pre-impact, -9.795204) and t=1.984081 (post-impact, +5.749019) are what actually pin that the event FIRED and applied the restitution: a binding that never builds the callback stays in free fall and misses both. ASSERTIONS STOP AFTER THE FIRST BOUNCE ON PURPOSE. Every value here is exact, but a SOLVER's realized trajectory drifts a little at each zero-crossing re-detection, and because height changes fast near a bounce a small event-time error becomes a large height error one arc later; assertions at the 2nd/3rd/7th bounce were tolerance-dependent, not physics. The previous golden pinned five post-bounce values that were simply WRONG -- 4.882389 at t=1.984081 where the closed form gives 4.715432, and errors up to 2.67 m further out; it also pinned h(10)=0 although the ball does not come to rest until t=t1+2*e*s0/(g*(1-e))=12.850588 s (h(10)=0.321011).",
           "initial_conditions": {
             "height": 10.0,
             "velocity": 0.0
@@ -160,7 +160,7 @@
             {
               "variable": "height",
               "time": 0.998492,
-              "expected": 5.109785,
+              "expected": 5.109782,
               "tolerance": {
                 "abs": 0.01
               }
@@ -168,7 +168,7 @@
             {
               "variable": "velocity",
               "time": 0.998492,
-              "expected": -9.795204,
+              "expected": -9.795207,
               "tolerance": {
                 "abs": 0.02
               }
@@ -176,41 +176,25 @@
             {
               "variable": "height",
               "time": 1.984081,
-              "expected": 4.882389,
+              "expected": 4.715432,
               "tolerance": {
-                "abs": 0.05
+                "abs": 0.01
+              }
+            },
+            {
+              "variable": "velocity",
+              "time": 1.984081,
+              "expected": 5.749019,
+              "tolerance": {
+                "abs": 0.02
               }
             },
             {
               "variable": "height",
               "time": 2.96743,
-              "expected": 3.321709,
+              "expected": 5.625711,
               "tolerance": {
-                "abs": 0.05
-              }
-            },
-            {
-              "variable": "height",
-              "time": 4.919295,
-              "expected": 1.003747,
-              "tolerance": {
-                "abs": 0.05
-              }
-            },
-            {
-              "variable": "height",
-              "time": 6.805605,
-              "expected": 0.013223,
-              "tolerance": {
-                "abs": 0.05
-              }
-            },
-            {
-              "variable": "height",
-              "time": 10.0,
-              "expected": 0.0,
-              "tolerance": {
-                "abs": 0.02
+                "abs": 0.01
               }
             }
           ]
