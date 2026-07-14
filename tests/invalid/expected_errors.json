@@ -1085,15 +1085,16 @@
   },
 
   "empty_required_arrays.esm": {
-    "schema_errors": [
+    "schema_errors": [],
+    "structural_errors": [
       {
-        "path": "/metadata/authors",
-        "message": "Array must contain at least 1 item(s)",
-        "keyword": "minItems"
+        "path": "/models/TestModel",
+        "code": "equation_count_mismatch",
+        "message": "Model declares state variable 'x' but has no defining equation for it"
       }
     ],
-    "structural_errors": [],
-    "is_valid": false
+    "is_valid": false,
+    "notes": "Not a schema error. An empty authors array is valid, and an empty equations array is valid for a model with no state variables or whose dynamics live in subsystems (see tests/valid/units_conversions.esm and tests/valid/scoped_refs_coupling.esm). The defect here is the equation/unknown balance: a state variable with no defining equation, in a model with no subsystems."
   },
 
   "circular_coupling.esm": {
