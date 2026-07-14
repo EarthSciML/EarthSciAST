@@ -694,23 +694,85 @@ end
 # the first Dual call and reused by every later one. Alternating between two
 # distinct Dual types would re-allocate `alt` each call — correct, just not free —
 # which is the same non-reentrancy bargain the `_VecNode` buffers already make.
+#
+# Each buffer carries its OWN const-tier validity stamp (`stamp64` / `stampalt`): the
+# `p` whose const slots that buffer currently holds, or `_CSE_INVALID`. The stamp is
+# PER BUFFER and not merely per `p`, and that is load-bearing — a freshly allocated
+# `alt` is `undef`, so "`p` has not changed, skip the const slots" would read GARBAGE
+# on the first `Dual` call if the two buffers shared one stamp. `_cse_buf` therefore
+# invalidates the stamp of any buffer it allocates. See const_tier.jl for the tier.
 mutable struct _CSECache
     f64::Vector{Float64}
     alt::Any
+    stamp64::Any
+    stampalt::Any
 end
-_CSECache() = _CSECache(Float64[], nothing)
+
+# "This buffer's const slots hold nothing valid." A private singleton, so it is `!==`
+# every possible `p` — including `nothing`, the parameter-free model's `p` sentinel.
+struct _CSEInvalid end
+const _CSE_INVALID = _CSEInvalid()
+
+_CSECache() = _CSECache(Float64[], nothing, _CSE_INVALID, _CSE_INVALID)
 
 # Fetch the prelude scratch for value type `T`. `T` is a compile-time constant at
 # every call site (it is derived from the argument TYPES — see `_rhs_value_type`),
 # so exactly one of these two methods is compiled into any given `f!`
 # specialization, and the `Float64` one is a field load.
+#
+# `f64` is allocated ONCE, at build time (`_cse_compile_scalar` sizes it, and
+# `_share_lane_invariants!` may grow it), and never replaced — so its stamp can only
+# be invalidated by a `p` change. `alt` is (re)allocated lazily here, and every fresh
+# `alt` is `undef` memory whose const slots have never been filled: allocating one
+# MUST invalidate its stamp.
 @inline _cse_buf(c::_CSECache, ::Type{Float64}) = c.f64
 @inline function _cse_buf(c::_CSECache, ::Type{T}) where {T}
     b = c.alt
     b isa Vector{T} && return b
     nb = Vector{T}(undef, length(c.f64))
     c.alt = nb
+    c.stampalt = _CSE_INVALID
     return nb
+end
+
+# ---- The const tier's validity check (EarthSciSerialization-4qf) --------------
+#
+# A CONST prelude slot (const_tier.jl) depends only on `p`, so the value in the buffer
+# stays good until `p` changes — or until the buffer itself is replaced. `f!` refills
+# the const slots iff `_cse_const_stale` says so, and stamps the buffer afterwards.
+#
+# `===` (EGAL), not `==`, is the comparison. For an immutable `NamedTuple` of scalars
+# that is a cheap bitwise compare, and it is exactly the right predicate: egal is
+# STRICTLY FINER than `==` (it separates `0.0` from `-0.0`, and it makes two identical
+# `NaN` bit patterns compare equal), so two `p`s that compare egal have bit-identical
+# parameter values and therefore produce bit-identical const slots. Two NamedTuples
+# with equal values are legitimately interchangeable; a `remake`d `p` with any
+# different value is not egal and refills.
+#
+# `isbits(p)` is the fail-closed gate, and it is free: `typeof(p)` is a compile-time
+# constant at every specialization, so this folds to a literal. A `p` carrying a
+# MUTABLE field would compare by OBJECT IDENTITY under `===`, so an in-place mutation
+# of that field would not move the stamp and the const slots would silently go stale.
+# `p` is a NamedTuple of scalars (array-valued parameters ride `param_arrays`, and
+# gather as `_NK_PARAM_GATHER`, which is never const), so this holds today — but the
+# failure mode of it not holding is wrong numbers, so it is checked rather than assumed.
+# `nothing` (the parameter-free sentinel) is `isbits`.
+@inline _cse_const_stale(c::_CSECache, ::Type{Float64}, p) =
+    !(isbits(p) && c.stamp64 === p)
+@inline _cse_const_stale(c::_CSECache, ::Type{T}, p) where {T} =
+    !(isbits(p) && c.stampalt === p)
+
+# Record which `p` this buffer's const slots now hold. Storing into an `Any` field
+# BOXES `p` — that is fine and deliberate: it happens only when `p` CHANGES, never on
+# the repeated same-`p` calls whose zero-allocation property `f!` must keep (pinned by
+# tree_walk_allocation_test.jl). A non-`isbits` `p` is never stored (see above).
+@inline function _cse_mark_const!(c::_CSECache, ::Type{Float64}, p)
+    c.stamp64 = isbits(p) ? p : _CSE_INVALID
+    return nothing
+end
+@inline function _cse_mark_const!(c::_CSECache, ::Type{T}, p) where {T}
+    c.stampalt = isbits(p) ? p : _CSE_INVALID
+    return nothing
 end
 
 # Read slot `i`. The `::Vector{T}` assert is what keeps the read monomorphic out

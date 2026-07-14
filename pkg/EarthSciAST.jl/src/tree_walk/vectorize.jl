@@ -1088,25 +1088,52 @@ end
 function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    cse_prelude::AbstractVector{_Node},
                    cse_cache::_CSECache,
-                   vec_kernels::AbstractVector{_VecKernel})
+                   vec_kernels::AbstractVector{_VecKernel},
+                   const_slots::AbstractVector{Int},
+                   dyn_slots::AbstractVector{Int})
     function f!(du, u, p, t)
         T = _rhs_value_type(u, p, t)
-        # CSE prelude (ess-r7h): evaluate each distinct shared subexpression
-        # exactly once per call into the scratch cache, in slot order. `defs[s]`
-        # references only slots < s (topological), so each read is already
-        # filled. Every slot is overwritten each call, so there is no staleness;
-        # the cache makes `f!` non-reentrant (one instance per integrator, which
-        # is how ODE RHS closures are used). Empty prelude ⇒ this loop is a no-op
-        # and f! is identical to the pre-CSE evaluator.
+        # CSE prelude (ess-r7h), in its TWO CADENCE TIERS (4qf, const_tier.jl):
+        # evaluate each distinct shared subexpression once into the scratch cache,
+        # in slot order. `defs[s]` references only slots < s (topological), so each
+        # read is already filled. The cache makes `f!` non-reentrant (one instance
+        # per integrator, which is how ODE RHS closures are used). Empty prelude ⇒
+        # both loops are no-ops and `f!` is identical to the pre-CSE evaluator.
         #
-        # This loop is UNCONDITIONAL — every slot is evaluated before any equation
+        # Both loops are UNCONDITIONAL — every slot is evaluated before any equation
         # runs, whether or not the guard above its occurrence would have fired. That
         # is safe only because `_cse_compile_scalar` refuses to hoist a key whose
         # every occurrence sits under a lazy `ifelse`/`and`/`or` arm (see the GUARDS
         # note in compile.jl); a slot that exists always has an occurrence the walk
         # would have evaluated anyway.
         cache = _cse_buf(cse_cache, T)
-        @inbounds for s in 1:length(cse_prelude)
+
+        # ---- Tier 1: CONST-cadence slots — refilled only when `p` moved ----
+        # These slots' defs read no state, no time and no live forcing buffer, and
+        # every cache ref in them lands on another CONST slot (the classification
+        # rule, const_tier.jl), so their values are a pure function of `p`. They stay
+        # good in THIS buffer until `p` changes or the buffer is replaced — which is
+        # exactly what `_cse_const_stale` tests. This is the whole point of the tier:
+        # a parameter-only Arrhenius chain `A*exp(-Ea/(R*Tref))` is evaluated once per
+        # parameter epoch instead of once per stage of every step, forever.
+        #
+        # NOT constant-folded at build time, deliberately: `p` legitimately changes
+        # (sweeps, `remake`) and under ForwardDiff-over-parameters its VALUES are
+        # `Dual`s. Freezing these slots would zero every parameter sensitivity.
+        if !isempty(const_slots) && _cse_const_stale(cse_cache, T, p)
+            @inbounds for i in eachindex(const_slots)
+                s = const_slots[i]
+                cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
+            end
+            _cse_mark_const!(cse_cache, T, p)
+        end
+
+        # ---- Tier 2: DYNAMIC slots — refilled every call ----
+        # A dynamic def may read const slots (all filled, above) and lower dynamic
+        # slots (filled by this loop, which is ascending) — so every read is already
+        # filled, exactly as in the single-loop prelude this replaces.
+        @inbounds for i in eachindex(dyn_slots)
+            s = dyn_slots[i]
             cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
         end
         @inbounds for k in 1:length(rhs_list)

@@ -570,6 +570,19 @@ end
 # `_oop_scatter` seams above, and the closure REBINDS `du` from each — so a backend
 # whose output is immutable (a traced value) is expressible here without a second
 # closure. At Float64 the seams are the inline code they replaced.
+#
+# NO CONST-CADENCE TIER HERE, AND THAT IS NOT AN OVERSIGHT (4qf). `f!` skips its
+# const prelude slots when `p` has not moved because it refills a buffer it OWNS
+# across calls — the values from the previous call are still sitting in it. This
+# emitter's cache is a `Vector{T}` allocated FRESH on every call, and it must be: a
+# captured host buffer is precisely what makes `f!` untraceable (see property 1 at the
+# top of this file), and under tracing `T` is the backend's traced scalar type, so a
+# cross-call buffer would be carrying traced values from one trace into the next. There
+# is nothing valid to skip TO. So every slot is refilled, in ascending slot order —
+# which is the const tier's two loops with the skip permanently disabled, hence
+# numerically identical to `f!` (the tests pin `:inplace` ≡ `:oop`) and never stale.
+# The build still REPORTS `n_const_slots` / `n_dynamic_slots` for an `:oop` build; the
+# classification is a property of the prelude, not of the emitter.
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        vec_kernels::AbstractVector{_VecKernel},
