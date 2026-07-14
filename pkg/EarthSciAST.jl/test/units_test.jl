@@ -133,14 +133,61 @@ using Unitful
         # `**` is the Python/pint spelling of `^`.
         @test dimension(P("Pa*m**3")) == dimension(u"Pa" * u"m"^3)
 
-        # µ/μ normalise to u; °C to degC.
+        # RATIONAL exponents. `1/s^0.5` is the noise intensity of an SDE and is
+        # already in the corpus — a grammar restricted to integer exponents
+        # cannot express it, and under a hard-error severity that is a FALSE
+        # REJECTION of a well-formed file.
+        @test dimension(P("1/s^0.5")) == Unitful.𝐓^(-1//2)
+        @test dimension(P("m^(1/2)")) == Unitful.𝐋^(1//2)
+        @test dimension(P("m^1.5")) == Unitful.𝐋^(3//2)
+
+        # µ/μ normalise to u; °C to degC; Ω to Ohm.
         @test dimension(P("μg/m^3")) == dimension(u"μg" / u"m"^3)
         @test P("μmol/(m^2*s)") !== nothing
+        @test dimension(P("Ω")) == dimension(P("Ohm"))
+
+        # SUPERSCRIPT digits and the superscript minus are ordinary
+        # earth-science spelling, not exotica: `W/m²`, `cm³`, `m⁻³`.
+        @test dimension(P("W/m²")) == dimension(u"W" / u"m"^2)
+        @test dimension(P("cm³/molecule/s")) == dimension(u"cm"^3 / u"s")
+        @test dimension(P("m²/s")) == dimension(u"m"^2 / u"s")
+        @test dimension(P("kg/m³")) == dimension(u"kg" / u"m"^3)
+
+        # MIDDOT (U+00B7) and DOT OPERATOR (U+22C5) are multiplication.
+        @test dimension(P("J/(kg·K)")) == dimension(u"J" / (u"kg" * u"K"))
+        @test dimension(P("kg⋅m/s")) == dimension(u"kg" * u"m" / u"s")
+
+        # An AFFINE unit composes as its absolute counterpart: `"°C/min"` is a
+        # rate, and Unitful refuses arithmetic on °C itself. The offset is
+        # deliberately not modelled (§4.8.1) — but a STANDALONE `degC` keeps its
+        # identity, which is what makes `units="K"` / `default_units="degC"`
+        # catchable.
+        @test dimension(P("°C/min")) == Unitful.𝚯 / Unitful.𝐓
+        @test dimension(P("K/h")) == Unitful.𝚯 / Unitful.𝐓
+        @test P("degC") != P("K")
 
         # Malformed strings do not parse.
-        for bad in ("m/", "m^", "(m", "m)", "m/s2", "not_a_unit", "1/time", "%")
+        for bad in ("m/", "m^", "(m", "m)", "m/s2", "not_a_unit", "1/time")
             @test P(bad) === nothing
         end
+    end
+
+    @testset "esm-spec §4.8.1 — registry rows the corpus actually uses" begin
+        P = EarthSciAST.parse_units
+        # Real units that a too-narrow registry would FALSELY REJECT. `psu` and
+        # `percent` are dimensionless by definition; `uatm` is the standard unit
+        # of seawater pCO2; `molecule` is the long form of `molec`.
+        @test dimension(P("%")) == Unitful.NoDims
+        @test dimension(P("percent")) == Unitful.NoDims
+        @test dimension(P("psu")) == Unitful.NoDims
+        @test dimension(P("uatm")) == dimension(u"atm")
+        @test dimension(P("molecule")) == Unitful.NoDims
+        @test dimension(P("cm^3/(molecule*s)")) == dimension(P("cm^3/(molec*s)"))
+        # Long-form aliases.
+        @test dimension(P("meters")) == Unitful.𝐋
+        @test dimension(P("meter")) == Unitful.𝐋
+        @test dimension(P("hour")) == Unitful.𝐓
+        @test dimension(P("Celsius")) == Unitful.𝚯
     end
 
     @testset "esm-spec §4.8.4 — severity: the four fabrications" begin

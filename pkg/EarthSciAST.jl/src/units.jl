@@ -41,6 +41,10 @@ using Unitful
 # `false` = do not auto-generate SI prefixes for this symbol.
 Unitful.@unit _u_mmHg "mmHg" MillimetreOfMercury 133.322387415 * Unitful.u"Pa" false
 
+# Microatmosphere — the standard unit of seawater pCO2. Unitful defines `atm`
+# without an SI-prefix mechanism, so `uatm` must be spelled out.
+Unitful.@unit _u_uatm "uatm" MicroAtmosphere 1e-6 * Unitful.u"atm" false
+
 # `Dobson` / `DU`: areal number density of ozone. 1 DU = 2.6867e20 molec/m^2,
 # and `molec` is a dimensionless count atom, so the DIMENSION is [length]^-2.
 const _U_DOBSON = Unitful.unit(1.0 * Unitful.u"m"^-2)
@@ -106,26 +110,76 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
 
     # Column amount.
     "Dobson" => _U_DOBSON, "DU" => _U_DOBSON,
+
+    # Ratios that are dimensionless BY DEFINITION. `psu` (practical salinity)
+    # is a conductivity ratio; `percent` is 1/100. Both are real, both are in
+    # the corpus, and under a hard-error severity a missing row is a FALSE
+    # REJECTION of a well-formed file.
+    "percent" => u"percent",
+    "psu" => Unitful.NoUnits,
+
+    # Microatmosphere — the standard unit of seawater pCO2.
+    "uatm" => _u_uatm,
+
+    # Long-form spellings that occur in the corpus. Aliases, not new units.
+    "molecule" => Unitful.NoUnits,   # = molec
+    "meter" => u"m", "meters" => u"m",
+    "hour" => u"hr",
+    "Celsius" => u"°C",
 )
 
-# Spelling normalisation applied BEFORE the scanner, which only recognises
-# ASCII identifier characters. Pure spelling: every target already exists in
-# the registry above; no unit is invented here.
+# ---------------------------------------------------------------------------
+# SPELLING NORMALISATION, applied BEFORE the scanner (which recognises only
+# ASCII). Pure spelling: every target already exists in the registry above; no
+# unit is invented here.
+#
+# These are ORDINARY earth-science spellings — `W/m²`, `J/(kg·K)`, `cm³`,
+# `μg/m^3` — not exotica. Since an unresolvable unit string is now a HARD ERROR
+# (esm-spec §4.8.4), a normaliser that does not know them does not merely warn:
+# it rejects a legitimate file.
+# ---------------------------------------------------------------------------
 const _UNIT_SPELLINGS = [
     "°C" => "degC",
     "°F" => "degF",
     "°K" => "K",
     "°"  => "deg",
-    "µ"  => "u",   # U+00B5 MICRO SIGN
-    "μ"  => "u",   # U+03BC GREEK SMALL LETTER MU
+    "µ"  => "u",      # U+00B5 MICRO SIGN
+    "μ"  => "u",      # U+03BC GREEK SMALL LETTER MU
+    "Ω"  => "Ohm",    # U+03A9 GREEK CAPITAL LETTER OMEGA
+    "·"  => "*",      # U+00B7 MIDDLE DOT — multiplication
+    "⋅"  => "*",      # U+22C5 DOT OPERATOR — multiplication
+    "%"  => "percent",
 ]
+
+# Superscript digits and the superscript minus. A RUN of these is an exponent:
+# `m²` is `m^2`, `m⁻³` is `m^-3`.
+const _SUPERSCRIPTS = Dict{Char,Char}(
+    '⁰' => '0', '¹' => '1', '²' => '2', '³' => '3', '⁴' => '4',
+    '⁵' => '5', '⁶' => '6', '⁷' => '7', '⁸' => '8', '⁹' => '9',
+    '⁻' => '-',
+)
 
 function _normalize_unit_string(s::AbstractString)::String
     out = String(s)
     for (from, to) in _UNIT_SPELLINGS
         occursin(from, out) && (out = replace(out, from => to))
     end
-    return out
+
+    any(c -> haskey(_SUPERSCRIPTS, c), out) || return out
+
+    # Rewrite each maximal run of superscript characters as `^<digits>`.
+    io = IOBuffer()
+    in_run = false
+    for c in out
+        if haskey(_SUPERSCRIPTS, c)
+            in_run || (print(io, '^'); in_run = true)
+            print(io, _SUPERSCRIPTS[c])
+        else
+            in_run = false
+            print(io, c)
+        end
+    end
+    return String(take!(io))
 end
 
 # Raised by the recursive-descent parser and caught by `parse_units`, which
@@ -140,6 +194,26 @@ mutable struct _UnitParser
     src::Vector{Char}
     pos::Int
 end
+
+# ---------------------------------------------------------------------------
+# AFFINE UNITS INSIDE A COMPOSITION.
+#
+# Unitful refuses unit ARITHMETIC on an affine unit — `u"°C" / u"minute"` throws
+# `Unitful.AffineError` — because °C's zero OFFSET makes the quotient
+# meaningless. But `"°C/min"` and `"K/h"` are ordinary corpus unit strings, and
+# esm-spec §4.8.1 says the offset is deliberately NOT modelled: `degC` carries
+# the Kelvin dimension and its scale, nothing more.
+#
+# So inside a composition an affine unit is replaced by its absolute counterpart
+# (°C → K). A STANDALONE affine atom keeps its identity, because
+# `model_unit_findings` needs `K != °C` to catch a parameter whose
+# `default_units` disagree with its declared `units`
+# (tests/invalid/units_parameter_default_mismatch.esm pins exactly that).
+# ---------------------------------------------------------------------------
+_linear(u) = Unitful.absoluteunit(u)
+_u_mul(a, b) = _linear(a) * _linear(b)
+_u_div(a, b) = _linear(a) / _linear(b)
+_u_pow(a, n) = _linear(a)^n
 
 _up_eof(p::_UnitParser) = p.pos > length(p.src)
 
@@ -172,19 +246,19 @@ function _up_unit!(p::_UnitParser)
         if c == '*' || c == '/'
             p.pos += 1
             rhs = _up_term!(p)
-            u = c == '*' ? u * rhs : u / rhs
+            u = c == '*' ? _u_mul(u, rhs) : _u_div(u, rhs)
         elseif _up_starts_atom(c)
             # Juxtaposition. The scanner is greedy over identifier characters,
             # so `ms` stays ONE symbol (millisecond) rather than m*s —
             # juxtaposition can only arise across a real token boundary.
-            u = u * _up_term!(p)
+            u = _u_mul(u, _up_term!(p))
         else
             return u
         end
     end
 end
 
-# term := atom (('^' | '**') integer)?
+# term := atom (('^' | '**') exponent)?
 function _up_term!(p::_UnitParser)
     u = _up_atom!(p)
     c = _up_peek(p)
@@ -197,7 +271,7 @@ function _up_term!(p::_UnitParser)
     else
         return u
     end
-    return u^_up_int!(p)
+    return _u_pow(u, _up_exponent!(p))
 end
 
 # atom := number | symbol | '(' unit ')'
@@ -243,8 +317,57 @@ function _up_atom!(p::_UnitParser)
     return u
 end
 
-# An exponent MUST be an integer literal (esm-spec §4.8.2).
-function _up_int!(p::_UnitParser)
+# exponent := integer | decimal | '(' integer '/' integer ')'
+#
+# RATIONAL exponents are legitimate, not a curiosity: `1/s^0.5` is the noise
+# intensity of an SDE and is already in the corpus. A grammar restricted to
+# integers cannot express it, and under a hard-error severity that is a FALSE
+# REJECTION of a well-formed file — so the exponent is a Rational and the
+# result is `Unitful`'s rational-power representation.
+function _up_exponent!(p::_UnitParser)
+    _up_skip_space!(p)
+    _up_eof(p) && throw(_UnitParseError("expected an exponent"))
+
+    # Parenthesised rational: `m^(1/2)`.
+    if p.src[p.pos] == '('
+        p.pos += 1
+        num = _up_signed_int!(p)
+        _up_peek(p) == '/' || throw(_UnitParseError("expected '/' in a rational exponent"))
+        p.pos += 1
+        den = _up_signed_int!(p)
+        den == 0 && throw(_UnitParseError("zero denominator in a rational exponent"))
+        _up_peek(p) == ')' || throw(_UnitParseError("missing ')' after a rational exponent"))
+        p.pos += 1
+        return num // den
+    end
+
+    start = p.pos
+    if p.src[p.pos] == '-' || p.src[p.pos] == '+'
+        p.pos += 1
+    end
+    digits = p.pos
+    while !_up_eof(p) && '0' <= p.src[p.pos] <= '9'
+        p.pos += 1
+    end
+    # Decimal: `s^0.5`. A fractional part must follow the dot.
+    if !_up_eof(p) && p.src[p.pos] == '.'
+        p.pos += 1
+        frac = p.pos
+        while !_up_eof(p) && '0' <= p.src[p.pos] <= '9'
+            p.pos += 1
+        end
+        (digits == p.pos || frac == p.pos) &&
+            throw(_UnitParseError("malformed decimal exponent at position $start"))
+        v = parse(Float64, String(p.src[start:(p.pos - 1)]))
+        # Unitful represents a non-integer power as a Rational, not a Float.
+        return rationalize(v)
+    end
+    digits == p.pos && throw(_UnitParseError("expected an exponent at position $start"))
+    return parse(Int, String(p.src[start:(p.pos - 1)]))
+end
+
+# A bare signed integer — the components of a parenthesised rational exponent.
+function _up_signed_int!(p::_UnitParser)
     _up_skip_space!(p)
     start = p.pos
     if !_up_eof(p) && (p.src[p.pos] == '-' || p.src[p.pos] == '+')
@@ -254,7 +377,7 @@ function _up_int!(p::_UnitParser)
     while !_up_eof(p) && '0' <= p.src[p.pos] <= '9'
         p.pos += 1
     end
-    digits == p.pos && throw(_UnitParseError("expected an integer exponent at position $start"))
+    digits == p.pos && throw(_UnitParseError("expected an integer at position $start"))
     return parse(Int, String(p.src[start:(p.pos - 1)]))
 end
 
@@ -264,14 +387,19 @@ end
 Resolve a unit string against the ESM registry (esm-spec §4.8.1) using the ESM
 grammar (§4.8.2):
 
-    unit := term (('*' | '/')? term)*
-    term := atom (('^' | '**') integer)?
-    atom := number | symbol | '(' unit ')'
+    unit     := term (('*' | '/')? term)*
+    term     := atom (('^' | '**') exponent)?
+    exponent := integer | decimal | '(' integer '/' integer ')'
+    atom     := number | symbol | '(' unit ')'
 
 Whitespace between terms is multiplication (`"ppb^-1 s^-1"`); division is
 LEFT-associative (`"L/mol/s"` is L·mol⁻¹·s⁻¹); parentheses group a compound
-denominator (`"J/(mol*K)"`). `µ`/`μ` normalise to `u` and `°C` to `degC` before
-parsing. `""`, `"1"` and `"dimensionless"` are the dimensionless unit.
+denominator (`"J/(mol*K)"`). An exponent may be RATIONAL — `"1/s^0.5"` is the
+noise intensity of an SDE and is in the corpus.
+
+Normalised before parsing: `µ`/`μ`→`u`, `°C`→`degC`, `Ω`→`Ohm`, `·`/`⋅`→`*`,
+`%`→`percent`, and superscript runs (`m²`, `cm³`, `m⁻³`) → `^n`. `""`, `"1"` and
+`"dimensionless"` are the dimensionless unit.
 
 Returns `nothing` when the string does not parse or names a symbol outside the
 registry. That is a DEFECT IN THE FILE, not a limit of the checker: the
