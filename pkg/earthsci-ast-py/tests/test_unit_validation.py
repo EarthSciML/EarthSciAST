@@ -22,8 +22,13 @@ from earthsci_ast.esm_types import (
     ReactionSystem,
     Reaction,
     Equation,
+    ExprNode,
 )
-from earthsci_ast.units import UnitValidator, UnitValidationResult
+from earthsci_ast.units import (
+    UnitValidator,
+    UnitValidationResult,
+    DimensionalMismatchError,
+)
 
 
 # Initialize unit registry for testing
@@ -653,3 +658,210 @@ class TestUnparseableUnitLeniency:
         assert result.is_valid is True
         assert result.errors == []
         assert not any("mismatch" in w.lower() for w in result.warnings)
+
+
+def _validator_with(**units: str) -> UnitValidator:
+    """A UnitValidator whose known_units are exactly ``units`` (name -> unit)."""
+    validator = UnitValidator()
+    validator.known_units = {
+        name: validator.ureg.Unit(unit) for name, unit in units.items()
+    }
+    return validator
+
+
+class TestDimensionalMismatchIsDetected:
+    """TRUE POSITIVES for the dimensional engine.
+
+    Every other unit test in this module asserts either that validation
+    "completes without raising" or that a *false* positive is absent. That is
+    precisely how the C5 keystone bug survived: ``_dimensions_compatible``
+    built ``ureg.Quantity(1.0, dim)`` from a *dimensionality* container, which
+    trips pint's ``assert len(names) == 1`` for every bracketed dimension; the
+    bare ``AssertionError`` was then swallowed by ``except (PintError,
+    AssertionError): return True``. The predicate therefore returned ``True``
+    for *every* input pair, making the entire dimensional engine — including
+    every ``raise`` in ``_get_expr_node_dimension`` — unreachable dead code.
+
+    These tests assert the engine can actually FAIL. Without at least one true
+    positive here, a regression to the always-``True`` predicate is invisible.
+    """
+
+    def test_dimensions_compatible_distinguishes_dimensions(self):
+        """The C5 keystone: the predicate must discriminate, not rubber-stamp."""
+        validator = UnitValidator()
+        length = validator.ureg.Unit("m").dimensionality
+        time = validator.ureg.Unit("s").dimensionality
+        dimensionless = validator.ureg.dimensionless.dimensionality
+
+        # Pre-fix this returned True — for these and for every other pair.
+        assert validator._dimensions_compatible(length, time) is False
+        assert validator._dimensions_compatible(length, dimensionless) is False
+        # Same dimension via different units still compatible.
+        assert (
+            validator._dimensions_compatible(
+                length, validator.ureg.Unit("km").dimensionality
+            )
+            is True
+        )
+
+    def test_adding_length_to_time_is_an_error(self):
+        """The audit's exact C5 repro: `x[m] = x[m] + tt[s]`.
+
+        Pre-fix this yielded ``is_valid=True, errors=[], warnings=[]`` — a
+        provable dimensional contradiction reported as a clean bill of health.
+        """
+        model = Model(name="BadAddition")
+        model.variables["x"] = ModelVariable(type="state", units="m")
+        model.variables["tt"] = ModelVariable(type="parameter", units="s")
+        model.equations.append(
+            Equation(lhs="x", rhs=ExprNode(op="+", args=["x", "tt"]))
+        )
+
+        result = UnitValidator().validate_model(model)
+
+        assert result.is_valid is False
+        assert result.errors, "a provable [length] vs [time] mismatch must be an ERROR"
+        assert any("Incompatible dimensions" in e for e in result.errors)
+
+    def test_mismatch_is_an_error_not_a_warning(self):
+        """A PROVABLE inconsistency must not be filed as a 'could not validate'
+        warning — that downgrade is what made a detected mismatch unable to
+        fail validation."""
+        model = Model(name="ErrorNotWarning")
+        model.variables["L"] = ModelVariable(type="state", units="m")
+        model.variables["tt"] = ModelVariable(type="parameter", units="s")
+        model.equations.append(
+            Equation(lhs="L", rhs=ExprNode(op="-", args=["L", "tt"]))
+        )
+
+        result = UnitValidator().validate_model(model)
+
+        assert len(result.errors) == 1
+        assert result.warnings == []
+
+    def test_transcendental_argument_must_be_dimensionless(self):
+        """`sin(L)` with L in metres is a hard dimensional error.
+
+        Pre-fix, the catch-all `return dimensionless` for every non-arithmetic
+        op meant nothing ever checked that a transcendental's *argument* is
+        dimensionless.
+        """
+        validator = _validator_with(L="m")
+        with pytest.raises(DimensionalMismatchError, match="dimensionless"):
+            validator._get_expression_dimension(ExprNode(op="sin", args=["L"]))
+
+    def test_exponent_must_be_dimensionless(self):
+        """`L^tt` (dimensional exponent) is a hard error; `L^2` is [length]**2."""
+        validator = _validator_with(L="m", tt="s")
+        with pytest.raises(DimensionalMismatchError, match="exponent"):
+            validator._get_expression_dimension(ExprNode(op="^", args=["L", "tt"]))
+
+        squared = validator._get_expression_dimension(ExprNode(op="^", args=["L", 2]))
+        assert squared == validator.ureg.Unit("m**2").dimensionality
+
+
+class TestOperatorDimensionRules:
+    """The op rules that the old catch-all `return dimensionless` destroyed.
+
+    These are the two bugs the audit predicted would surface the moment C5 was
+    fixed: they were unobservable while the compatibility predicate said
+    "everything matches everything".
+    """
+
+    def test_min_max_preserve_their_operands_dimension(self):
+        """`max(P1, P2)` with both in Pa is a PRESSURE, not dimensionless.
+
+        The old catch-all reported dimensionless, which (once C5 is fixed)
+        would manufacture a mismatch against any pressure it was compared to.
+        """
+        validator = _validator_with(P1="Pa", P2="Pa")
+        pressure = validator.ureg.Unit("Pa").dimensionality
+
+        for op in ("max", "min"):
+            dim = validator._get_expression_dimension(ExprNode(op=op, args=["P1", "P2"]))
+            assert dim == pressure, f"{op} must preserve its operands' dimension"
+
+    def test_min_max_operands_must_agree(self):
+        validator = _validator_with(P="Pa", L="m")
+        with pytest.raises(DimensionalMismatchError):
+            validator._get_expression_dimension(ExprNode(op="max", args=["P", "L"]))
+
+    def test_division_by_an_unknown_operand_is_indeterminate(self):
+        """`unknown_x / t` must be UNKNOWN (None), never [time].
+
+        The old code filtered `None` dimensions out of the operand list and
+        then indexed `/` positionally as though nothing had been removed, so
+        the numerator vanished and `t` became the numerator — reporting
+        [time], the exact *inverse* of the only defensible answer.
+        """
+        validator = _validator_with(t="s")
+        dim = validator._get_expression_dimension(
+            ExprNode(op="/", args=["unknown_x", "t"])
+        )
+        assert dim is None
+
+    def test_multiplication_by_an_unknown_operand_is_indeterminate(self):
+        validator = _validator_with(t="s")
+        dim = validator._get_expression_dimension(
+            ExprNode(op="*", args=["unknown_x", "t"])
+        )
+        assert dim is None
+
+    def test_known_division_still_divides(self):
+        """The indeterminacy rule must not cost us the ordinary case."""
+        validator = _validator_with(L="m", t="s")
+        dim = validator._get_expression_dimension(ExprNode(op="/", args=["L", "t"]))
+        assert dim == validator.ureg.Unit("m/s").dimensionality
+
+    def test_abs_preserves_dimension(self):
+        validator = _validator_with(L="m")
+        dim = validator._get_expression_dimension(ExprNode(op="abs", args=["L"]))
+        assert dim == validator.ureg.Unit("m").dimensionality
+
+    def test_structural_ops_are_unknown_not_dimensionless(self):
+        """An op with no dimensional rule reports UNKNOWN, so callers skip it.
+
+        Reporting `dimensionless` (the old behaviour) manufactures *false*
+        mismatches once the compatibility predicate actually discriminates.
+        """
+        validator = _validator_with(w="m")
+        dim = validator._get_expression_dimension(
+            ExprNode(op="table_lookup", args=["w"])
+        )
+        assert dim is None
+
+
+class TestNumericLiteralsArePolymorphic:
+    """A bare numeric literal must not constrain (nor contradict) its context.
+
+    This is the contract the *valid* corpus pins, and it is what keeps the C5
+    fix from rejecting pinned-VALID fixtures: `minimal_chemistry.esm` writes
+    Arrhenius as `exp(-1370 / T)` (the literal is an activation TEMPERATURE)
+    and `units_conversions.esm` writes `T_kelvin + (-273.15)`. Typing a literal
+    as dimensionless would report both as dimensionally inconsistent.
+    """
+
+    def test_literal_added_to_a_dimensional_quantity_is_not_a_mismatch(self):
+        validator = _validator_with(T_kelvin="kelvin")
+        dim = validator._get_expression_dimension(
+            ExprNode(op="+", args=["T_kelvin", -273.15])
+        )
+        assert dim == validator.ureg.Unit("kelvin").dimensionality
+
+    def test_literal_over_dimensional_quantity_does_not_break_exp(self):
+        """`exp(-1370 / T)` — the literal carries kelvin, so the quotient is
+        dimensionless and `exp` must not raise."""
+        validator = _validator_with(T="kelvin")
+        dim = validator._get_expression_dimension(
+            ExprNode(
+                op="exp", args=[ExprNode(op="/", args=[-1370.0, "T"])]
+            )
+        )
+        assert dim == validator.ureg.dimensionless.dimensionality
+
+    def test_a_boolean_is_genuinely_dimensionless(self):
+        """`bool` is an `int` subclass in Python, but a truth value is a real
+        dimensionless quantity, not a polymorphic numeric literal."""
+        validator = UnitValidator()
+        dim = validator._get_expression_dimension(True)
+        assert dim == validator.ureg.dimensionless.dimensionality

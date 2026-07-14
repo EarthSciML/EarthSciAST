@@ -43,6 +43,71 @@ except ImportError:
 from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
 
 
+class DimensionalMismatchError(ValueError):
+    """A PROVABLE dimensional inconsistency found while typing an expression.
+
+    Distinct from "could not determine the dimension" (which is signalled by
+    returning ``None``) and from "pint could not parse this unit" (a
+    ``pint.PintError``). Only this exception is promoted to a validation
+    ERROR; the other two remain warnings/skips.
+
+    It subclasses ``ValueError`` so that pre-existing
+    ``except ValueError`` callers keep catching it.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Operator dimension rules (esm-spec §4.2 evaluable core).
+#
+# The former catch-all `return dimensionless` for every non-arithmetic op was
+# wrong in BOTH directions: it reported `max(P1, P2)` (both in Pa) as
+# dimensionless, and it never checked that `sin`/`exp`/`log` arguments ARE
+# dimensionless. Each op now states its rule explicitly, and anything not
+# listed returns None ("unknown dimension") rather than manufacturing a false
+# `dimensionless` — an unknown dimension is skipped by the callers, a
+# dimensionless one would produce spurious mismatches.
+# ---------------------------------------------------------------------------
+
+#: n-ary ops whose operands must all share one dimension, which is also the
+#: dimension of the result.
+_DIM_PRESERVING_NARY = frozenset({"+", "-", "min", "max"})
+
+#: Ops that carry through the dimension of their FIRST operand unchanged.
+#: (`ic`/`Pre` are value-preserving form ops; `floor`/`ceil`/`abs` preserve
+#: magnitude and therefore units.)
+_DIM_PRESERVING_UNARY = frozenset({"abs", "floor", "ceil", "ic", "Pre"})
+
+#: Elementary functions whose ARGUMENT must be dimensionless and whose result
+#: is dimensionless. `sqrt` is deliberately NOT here — it halves the dimension.
+_DIMENSIONLESS_ARG_FUNCS = frozenset(
+    {
+        "exp",
+        "log",
+        "log10",
+        "sin",
+        "cos",
+        "tan",
+        "asin",
+        "acos",
+        "atan",
+        "sinh",
+        "cosh",
+        "tanh",
+        "asinh",
+        "acosh",
+        "atanh",
+    }
+)
+
+#: Comparisons: operands must share a dimension; the result is a dimensionless
+#: boolean.
+_COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
+
+#: Booleans (and `sign`, whose result is a dimensionless ±1) yield a
+#: dimensionless result regardless of operand dimensions.
+_DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true"})
+
+
 @dataclass
 class UnitValidationResult:
     """Result of unit validation check."""
@@ -248,9 +313,16 @@ class UnitValidator:
                         f"Equation {equation_id}: Dimensional mismatch - "
                         f"LHS has dimension {lhs_dim}, RHS has dimension {rhs_dim}"
                     )
-        # ValueError is the domain error _get_expr_node_dimension raises for
-        # incompatible +/- operands; PintError covers unit-arithmetic failures.
-        except (pint.PintError, ValueError) as e:
+        # A PROVABLE inconsistency inside the expression tree is an ERROR — it
+        # used to be filed as a "could not validate" warning, which meant a
+        # detected mismatch could never fail validation.
+        except DimensionalMismatchError as e:
+            result.errors.append(f"Equation {equation_id}: {e}")
+        # PintError means we could not PARSE/convert a unit — genuinely
+        # indeterminate, so a warning. Nothing broader is caught here: a bare
+        # ValueError/AssertionError is a bug and must propagate rather than be
+        # silently downgraded (this is exactly how C5 hid for so long).
+        except pint.PintError as e:
             result.warnings.append(f"Could not validate dimensions for equation {equation_id}: {e}")
 
         result.is_valid = len(result.errors) == 0
@@ -284,10 +356,13 @@ class UnitValidator:
             dimension = self._get_expression_dimension(expr)
             if dimension is not None:
                 result.dimensional_analysis[context] = str(dimension)
-        # ValueError is the domain error _get_expr_node_dimension raises for
-        # incompatible +/- operands; PintError covers unit-arithmetic failures.
-        except (pint.PintError, ValueError) as e:
+        # A provable inconsistency is an error; an unparseable unit is only a
+        # warning (see validate_equation). Nothing broader is caught, so a real
+        # bug propagates instead of masquerading as a unit finding.
+        except DimensionalMismatchError as e:
             result.errors.append(f"Expression validation failed for {context}: {e}")
+        except pint.PintError as e:
+            result.warnings.append(f"Could not validate dimensions for {context}: {e}")
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -317,15 +392,42 @@ class UnitValidator:
             return UnitConversionResult(success=False, error_message=str(e))
 
     def _get_expression_dimension(self, expr: Expr) -> UnitsContainer | None:
-        """Get the dimensional analysis of an expression."""
-        if isinstance(expr, (int, float)):
+        """Get the dimensional analysis of an expression.
+
+        ``None`` means "indeterminate" — it does NOT mean dimensionless.
+
+        A bare NUMERIC LITERAL is dimension-POLYMORPHIC: it adopts whatever
+        dimension its context requires, so it is reported as indeterminate and
+        never constrains (nor contradicts) its neighbours. This is the contract
+        the shared corpus pins, not a convenience:
+
+          * ``tests/valid/minimal_chemistry.esm`` writes the Arrhenius rate as
+            ``1.8e-12 * exp(-1370 / T) * M`` — the literal ``-1370`` is an
+            activation TEMPERATURE, so ``-1370 / T`` is dimensionless only if
+            the literal carries kelvin.
+          * ``tests/valid/units_conversions.esm`` writes ``T_kelvin + (-273.15)``
+            — the literal ``-273.15`` is a temperature.
+
+        Typing a literal as ``dimensionless`` would report both of those
+        (VALID) fixtures as dimensionally inconsistent. Treating it as
+        indeterminate keeps every pinned ``units_*`` INVALID fixture rejected,
+        because each of those states its inconsistency between two DECLARED
+        quantities, never against a literal.
+        """
+        if isinstance(expr, bool):
+            # A boolean is a genuine dimensionless truth value, not a
+            # polymorphic numeric literal (bool is an int subclass in Python).
             return self.ureg.dimensionless.dimensionality
+
+        if isinstance(expr, (int, float)):
+            return None
 
         if isinstance(expr, str):
             # Variable lookup
             if expr in self.known_units:
                 return self.known_units[expr].dimensionality
-            # Unknown variable - assume dimensionless for now
+            # Undeclared symbol: unknown dimension, so it is skipped rather
+            # than assumed dimensionless.
             return None
 
         if isinstance(expr, ExprNode):
@@ -333,73 +435,156 @@ class UnitValidator:
 
         return None
 
+    @property
+    def _dimensionless(self) -> UnitsContainer:
+        return self.ureg.dimensionless.dimensionality
+
+    def _agree(self, dims: list[UnitsContainer | None], op: str) -> UnitsContainer | None:
+        """Require every KNOWN dimension in ``dims`` to be the same, and return
+        it (or ``None`` if every operand's dimension is unknown).
+
+        Unknown (``None``) operands are skipped rather than treated as
+        dimensionless: an operand we cannot type must never manufacture a
+        mismatch. Two *known* operands that disagree are a provable
+        inconsistency.
+        """
+        known = [d for d in dims if d is not None]
+        if not known:
+            return None
+        first = known[0]
+        for dim in known[1:]:
+            if not self._dimensions_compatible(first, dim):
+                raise DimensionalMismatchError(
+                    f"Incompatible dimensions in {op}: {first} vs {dim}"
+                )
+        return first
+
+    def _require_dimensionless(self, dim: UnitsContainer | None, op: str, what: str) -> None:
+        """Raise if ``dim`` is known and is NOT dimensionless."""
+        if dim is not None and not self._dimensions_compatible(dim, self._dimensionless):
+            raise DimensionalMismatchError(f"{op} {what} must be dimensionless, got {dim}")
+
     def _get_expr_node_dimension(self, node: ExprNode) -> UnitsContainer | None:
-        """Get dimension of an expression node (operator with arguments)."""
+        """Get the dimension of an expression node (an operator with arguments).
+
+        Returns ``None`` for "indeterminate" — an unknown operand, or an
+        operator with no dimensional rule. ``None`` NEVER means dimensionless;
+        callers skip the check entirely when they see it.
+
+        Raises :class:`DimensionalMismatchError` on a provable inconsistency.
+        """
         if not node.args:
             return None
 
+        op = node.op
         arg_dims = [self._get_expression_dimension(arg) for arg in node.args]
 
-        # Filter out None dimensions
-        valid_dims = [d for d in arg_dims if d is not None]
+        # n-ary dimension-preserving ops: every operand must agree.
+        if op in _DIM_PRESERVING_NARY:
+            return self._agree(arg_dims, op)
 
-        if not valid_dims:
+        # Unary carry-through ops.
+        if op in _DIM_PRESERVING_UNARY:
+            return arg_dims[0]
+
+        if op in _DIMENSIONLESS_RESULT_OPS:
+            return self._dimensionless
+
+        if op in _COMPARISON_OPS:
+            # Operands must be comparable; the boolean result is dimensionless.
+            self._agree(arg_dims, op)
+            return self._dimensionless
+
+        if op in _DIMENSIONLESS_ARG_FUNCS:
+            self._require_dimensionless(arg_dims[0], op, "argument")
+            return self._dimensionless
+
+        if op == "atan2":
+            # atan2(y, x): both operands share a dimension; the angle is
+            # dimensionless.
+            self._agree(arg_dims, op)
+            return self._dimensionless
+
+        if op == "sqrt":
+            base = arg_dims[0]
+            return None if base is None else base ** 0.5
+
+        if op == "ifelse":
+            # ifelse(cond, then, else): the condition is a dimensionless
+            # boolean; the two branches must agree and give the result.
+            if len(arg_dims) < 3:
+                return None
+            return self._agree(arg_dims[1:3], op)
+
+        if op == "*":
+            # A single unknown operand makes the whole product unknown —
+            # folding only the KNOWN operands would report `unknown * t` as
+            # [time], which is not the dimension of anything.
+            if any(d is None for d in arg_dims):
+                return None
+            result = self._dimensionless
+            for dim in arg_dims:
+                result = result * dim
+            return result
+
+        if op == "/":
+            # POSITIONAL: numerator is args[0], every later operand divides it.
+            # (The former code filtered None out of the operand list and then
+            # indexed it positionally, so `unknown / t` reported [time] — the
+            # exact inverse of the right answer.)
+            if any(d is None for d in arg_dims):
+                return None
+            result = arg_dims[0]
+            for dim in arg_dims[1:]:
+                result = result / dim
+            return result
+
+        if op == "^":
+            base = arg_dims[0]
+            exp_dim = arg_dims[1] if len(arg_dims) > 1 else None
+            # An exponent must always be dimensionless, whatever the base is.
+            self._require_dimensionless(exp_dim, op, "exponent")
+            if base is None:
+                return None
+            if self._dimensions_compatible(base, self._dimensionless):
+                return self._dimensionless
+            # A dimensional base needs a literal exponent to give a dimension.
+            if len(node.args) > 1 and isinstance(node.args[1], (int, float)) and not isinstance(
+                node.args[1], bool
+            ):
+                return base ** node.args[1]
             return None
 
-        # Handle different operators
-        if node.op in ["+", "-"]:
-            # Addition/subtraction: all operands must have same dimension
-            first_dim = valid_dims[0]
-            for dim in valid_dims[1:]:
-                if not self._dimensions_compatible(first_dim, dim):
-                    raise ValueError(f"Incompatible dimensions in {node.op}: {first_dim} vs {dim}")
-            return first_dim
+        if op == "D":
+            # d(f)/d(wrt) has dimension dim(f) / dim(wrt). `wrt` is a sidecar
+            # field, not an arg, and is often an undeclared time symbol — in
+            # which case the dimension is indeterminate. Never assume seconds.
+            wrt = getattr(node, "wrt", None)
+            if arg_dims[0] is None or not wrt or wrt not in self.known_units:
+                return None
+            return arg_dims[0] / self.known_units[wrt].dimensionality
 
-        if node.op == "*":
-            # Multiplication: multiply dimensions
-            result_dim = self.ureg.dimensionless.dimensionality
-            for dim in valid_dims:
-                result_dim = result_dim * dim
-            return result_dim
-
-        if node.op == "/":
-            # Division: divide dimensions
-            if len(valid_dims) >= 2:
-                result_dim = valid_dims[0]
-                for dim in valid_dims[1:]:
-                    result_dim = result_dim / dim
-                return result_dim
-            return valid_dims[0] if valid_dims else None
-
-        if node.op == "^":
-            # Power: first argument's dimension raised to power
-            if len(valid_dims) >= 1:
-                base_dim = valid_dims[0]
-                if len(node.args) > 1 and isinstance(node.args[1], (int, float)):
-                    exponent = node.args[1]
-                    return base_dim**exponent
-                return base_dim
-            return None
-
-        # For other operators (sin, cos, exp, etc.), assume dimensionless result
-        return self.ureg.dimensionless.dimensionality
+        # Structural / array / query / rewrite-target ops (index, aggregate,
+        # fn, const, makearray, table_lookup, grad, ...) carry no dimensional
+        # rule here. Report UNKNOWN, not dimensionless.
+        return None
 
     def _dimensions_compatible(self, dim1: UnitsContainer, dim2: UnitsContainer) -> bool:
-        """Check if two dimensions are compatible (same or convertible)."""
-        try:
-            # Create dummy quantities and try to convert
-            q1 = self.ureg.Quantity(1.0, dim1)
-            q2 = self.ureg.Quantity(1.0, dim2)
-            q1.to(q2.units)
-            return True
-        except pint.DimensionalityError:
-            return False
-        except (pint.PintError, AssertionError):
-            # If we can't determine compatibility, assume they're compatible.
-            # pint leaks a bare AssertionError (not a PintError) when a
-            # dimensionality container carries an offset unit such as
-            # [temperature]; treat that as indeterminate, not a hard failure.
-            return True
+        """Check whether two DIMENSIONALITY containers denote the same dimension.
+
+        ``dim1``/``dim2`` are pint *dimensionality* containers (e.g.
+        ``[length]``), not units. The previous implementation built
+        ``ureg.Quantity(1.0, dim1)`` from one and called ``q1.to(q2.units)``,
+        which trips pint's ``assert len(names) == 1`` in ``_is_multiplicative``
+        and raises a bare ``AssertionError`` for EVERY bracketed dimension —
+        which the handler then swallowed, so the function returned ``True`` for
+        every input pair and the whole dimensional check was dead code.
+
+        Comparing the containers directly is both correct and total (it is the
+        same test ``structural_checks._units_compatible`` already uses), so
+        there is no exception path left to swallow a logic error.
+        """
+        return dim1 == dim2
 
     def _validate_reaction(self, reaction) -> UnitValidationResult:
         """Validate unit consistency in a single reaction."""
