@@ -2,7 +2,7 @@
   "esm": "0.1.0",
   "metadata": {
     "name": "ScopedReferencesNestedTest",
-    "description": "Test fixture for deeply nested scoped reference notation (A.B.C.D.variable)",
+    "description": "Test fixture for deeply nested scoped reference notation (A.B.C.D.variable). Every equation is dimensionally coherent: each coefficient is a NAMED PARAMETER carrying the units that make its term land on the left-hand side dimension, so a dimensional checker can prove the file sound rather than having to suppress it.",
     "authors": [
       "Claude Sonnet 4"
     ],
@@ -32,6 +32,18 @@
           "units": "J",
           "default": 0.0,
           "description": "Total system energy"
+        },
+        "earth_area": {
+          "type": "parameter",
+          "units": "m^2",
+          "default": 510000000000000.0,
+          "description": "Earth surface area — converts the W/m^2 forcing into a system-wide power (W)"
+        },
+        "stefan_boltzmann": {
+          "type": "parameter",
+          "units": "W/(m^2*K^4)",
+          "default": 5.67e-08,
+          "description": "Stefan-Boltzmann constant — carries the units that make sigma*T^4 a flux density"
         }
       },
       "subsystems": {
@@ -47,10 +59,28 @@
               "description": "Mean atmospheric temperature"
             },
             "atm_pressure": {
-              "type": "state",
+              "type": "parameter",
               "units": "Pa",
               "default": 101325.0,
-              "description": "Surface pressure"
+              "description": "Surface pressure — a parameter; the only integrated unknown in this subsystem is atm_temperature"
+            },
+            "atm_heat_capacity": {
+              "type": "parameter",
+              "units": "J/(m^2*K)",
+              "default": 1000000.0,
+              "description": "Column heat capacity — turns the W/m^2 forcing into a temperature tendency (K/s)"
+            },
+            "atm_ocean_exchange": {
+              "type": "parameter",
+              "units": "1/s",
+              "default": 0.0002,
+              "description": "Air-sea temperature relaxation rate"
+            },
+            "latent_heating_coeff": {
+              "type": "parameter",
+              "units": "K*m^3/(kg*s)",
+              "default": 0.1,
+              "description": "Latent-heating coefficient per unit water-vapour density"
             }
           },
           "subsystems": {
@@ -89,10 +119,23 @@
                       "units": "m/s",
                       "default": 0.1,
                       "description": "Surface friction velocity"
+                    },
+                    "entrainment_timescale": {
+                      "type": "parameter",
+                      "units": "s",
+                      "default": 0.1,
+                      "description": "Convective entrainment timescale — makes friction_velocity*timescale*convection_rate a velocity"
+                    },
+                    "bl_relax_rate": {
+                      "type": "parameter",
+                      "units": "1/s",
+                      "default": 0.001,
+                      "description": "Boundary-layer height relaxation rate toward the ocean mixed-layer depth"
                     }
                   },
                   "equations": [
                     {
+                      "_comment": "d(boundary_height)/dt [m/s] = u*·(tau·convection_rate) - relax*(h - mixing_depth). Both terms are m/s.",
                       "lhs": {
                         "op": "D",
                         "args": [
@@ -110,7 +153,7 @@
                               {
                                 "op": "*",
                                 "args": [
-                                  0.1,
+                                  "entrainment_timescale",
                                   "EarthSystem.Atmosphere.Troposphere.convection_rate"
                                 ]
                               }
@@ -119,7 +162,12 @@
                           {
                             "op": "*",
                             "args": [
-                              -0.001,
+                              {
+                                "op": "-",
+                                "args": [
+                                  "bl_relax_rate"
+                                ]
+                              },
                               {
                                 "op": "-",
                                 "args": [
@@ -137,6 +185,7 @@
               },
               "equations": [
                 {
+                  "_comment": "d(trop_water_vapor)/dt [kg/(m^3*s)] = evaporation_flux/boundary_height - convection_rate*q.",
                   "lhs": {
                     "op": "D",
                     "args": [
@@ -148,22 +197,21 @@
                     "op": "+",
                     "args": [
                       {
-                        "op": "*",
+                        "op": "/",
                         "args": [
                           "EarthSystem.Ocean.Surface.evaporation_rate",
-                          {
-                            "op": "/",
-                            "args": [
-                              "EarthSystem.Atmosphere.Troposphere.BoundaryLayer.boundary_height",
-                              1000.0
-                            ]
-                          }
+                          "EarthSystem.Atmosphere.Troposphere.BoundaryLayer.boundary_height"
                         ]
                       },
                       {
                         "op": "*",
                         "args": [
-                          -0.01,
+                          {
+                            "op": "-",
+                            "args": [
+                              "EarthSystem.Atmosphere.Troposphere.convection_rate"
+                            ]
+                          },
                           "trop_water_vapor"
                         ]
                       }
@@ -175,6 +223,7 @@
           },
           "equations": [
             {
+              "_comment": "d(atm_temperature)/dt [K/s] = forcing/heat_capacity - exchange*(T_atm - sst) + latent*q. Every term is K/s.",
               "lhs": {
                 "op": "D",
                 "args": [
@@ -186,16 +235,21 @@
                 "op": "+",
                 "args": [
                   {
-                    "op": "*",
+                    "op": "/",
                     "args": [
-                      1e-06,
-                      "EarthSystem.global_forcing"
+                      "EarthSystem.global_forcing",
+                      "atm_heat_capacity"
                     ]
                   },
                   {
                     "op": "*",
                     "args": [
-                      -0.0002,
+                      {
+                        "op": "-",
+                        "args": [
+                          "atm_ocean_exchange"
+                        ]
+                      },
                       {
                         "op": "-",
                         "args": [
@@ -208,7 +262,7 @@
                   {
                     "op": "*",
                     "args": [
-                      0.1,
+                      "latent_heating_coeff",
                       "EarthSystem.Atmosphere.Troposphere.trop_water_vapor"
                     ]
                   }
@@ -227,6 +281,18 @@
               "units": "J",
               "default": 1e+21,
               "description": "Ocean heat content"
+            },
+            "mixed_layer_heat_coeff": {
+              "type": "parameter",
+              "units": "J/(K*m*s)",
+              "default": 4180000.0,
+              "description": "Mixed-layer heat-content tendency coefficient (per unit temperature and depth)"
+            },
+            "deep_heat_coeff": {
+              "type": "parameter",
+              "units": "J/(K*m*s)",
+              "default": 1000000.0,
+              "description": "Deep-layer heat-content tendency coefficient (per unit temperature and depth)"
             }
           },
           "subsystems": {
@@ -246,10 +312,23 @@
                   "units": "kg/(m^2*s)",
                   "default": 1e-06,
                   "description": "Evaporation rate"
+                },
+                "ocean_heat_capacity": {
+                  "type": "parameter",
+                  "units": "J/(m^2*K)",
+                  "default": 2000000.0,
+                  "description": "Mixed-layer heat capacity — turns the W/m^2 forcing into a temperature tendency"
+                },
+                "air_sea_exchange": {
+                  "type": "parameter",
+                  "units": "1/s",
+                  "default": 0.0001,
+                  "description": "Air-sea temperature exchange rate"
                 }
               },
               "equations": [
                 {
+                  "_comment": "d(sst)/dt [K/s] = forcing/heat_capacity + exchange*(T_atm - sst) - w_up*stratification. w_up [m/s] * dT/dz [K/m] = K/s.",
                   "lhs": {
                     "op": "D",
                     "args": [
@@ -261,16 +340,16 @@
                     "op": "+",
                     "args": [
                       {
-                        "op": "*",
+                        "op": "/",
                         "args": [
-                          5e-07,
-                          "EarthSystem.global_forcing"
+                          "EarthSystem.global_forcing",
+                          "ocean_heat_capacity"
                         ]
                       },
                       {
                         "op": "*",
                         "args": [
-                          0.0001,
+                          "air_sea_exchange",
                           {
                             "op": "-",
                             "args": [
@@ -283,8 +362,13 @@
                       {
                         "op": "*",
                         "args": [
-                          -0.01,
-                          "EarthSystem.Ocean.MixedLayer.upwelling_velocity"
+                          {
+                            "op": "-",
+                            "args": [
+                              "EarthSystem.Ocean.MixedLayer.upwelling_velocity"
+                            ]
+                          },
+                          "EarthSystem.Ocean.MixedLayer.Thermocline.stratification"
                         ]
                       }
                     ]
@@ -308,6 +392,18 @@
                   "units": "m/s",
                   "default": 1e-05,
                   "description": "Upwelling velocity"
+                },
+                "mld_relax_rate": {
+                  "type": "parameter",
+                  "units": "1/s",
+                  "default": 0.001,
+                  "description": "Mixed-layer-depth relaxation rate toward its reference depth"
+                },
+                "mld_reference": {
+                  "type": "parameter",
+                  "units": "m",
+                  "default": 50.0,
+                  "description": "Reference mixed-layer depth"
                 }
               },
               "subsystems": {
@@ -327,10 +423,17 @@
                       "units": "1/s",
                       "default": 0.001,
                       "description": "Brunt-Väisälä frequency"
+                    },
+                    "stratification_decay": {
+                      "type": "parameter",
+                      "units": "1/s",
+                      "default": 0.001,
+                      "description": "Stratification decay rate"
                     }
                   },
                   "equations": [
                     {
+                      "_comment": "d(stratification)/dt [K/(m*s)] = N*(dT/h) - decay*stratification.",
                       "lhs": {
                         "op": "D",
                         "args": [
@@ -363,7 +466,12 @@
                           {
                             "op": "*",
                             "args": [
-                              -0.001,
+                              {
+                                "op": "-",
+                                "args": [
+                                  "stratification_decay"
+                                ]
+                              },
                               "stratification"
                             ]
                           }
@@ -375,6 +483,7 @@
               },
               "equations": [
                 {
+                  "_comment": "d(mixing_depth)/dt [m/s] = 0.01*sqrt(u*·N·h) - relax*(h - h_ref). sqrt((m/s)(1/s)(m)) = sqrt(m^2/s^2) = m/s.",
                   "lhs": {
                     "op": "D",
                     "args": [
@@ -396,7 +505,8 @@
                                 "op": "*",
                                 "args": [
                                   "EarthSystem.Atmosphere.Troposphere.BoundaryLayer.friction_velocity",
-                                  "EarthSystem.Ocean.MixedLayer.Thermocline.buoyancy_frequency"
+                                  "EarthSystem.Ocean.MixedLayer.Thermocline.buoyancy_frequency",
+                                  "mixing_depth"
                                 ]
                               }
                             ]
@@ -406,12 +516,17 @@
                       {
                         "op": "*",
                         "args": [
-                          -0.001,
+                          {
+                            "op": "-",
+                            "args": [
+                              "mld_relax_rate"
+                            ]
+                          },
                           {
                             "op": "-",
                             "args": [
                               "mixing_depth",
-                              50.0
+                              "mld_reference"
                             ]
                           }
                         ]
@@ -431,10 +546,23 @@
                   "units": "K",
                   "default": 278.0,
                   "description": "Deep ocean temperature"
+                },
+                "deep_heat_capacity": {
+                  "type": "parameter",
+                  "units": "J/(m^2*K)",
+                  "default": 100000000.0,
+                  "description": "Deep-ocean heat capacity"
+                },
+                "deep_layer_depth": {
+                  "type": "parameter",
+                  "units": "m",
+                  "default": 1000.0,
+                  "description": "Deep-layer thickness — the depth scale of the upwelling temperature gradient"
                 }
               },
               "equations": [
                 {
+                  "_comment": "d(deep_temperature)/dt [K/s] = forcing/heat_capacity + w_up*(dT/depth).",
                   "lhs": {
                     "op": "D",
                     "args": [
@@ -446,10 +574,10 @@
                     "op": "+",
                     "args": [
                       {
-                        "op": "*",
+                        "op": "/",
                         "args": [
-                          1e-08,
-                          "EarthSystem.global_forcing"
+                          "EarthSystem.global_forcing",
+                          "deep_heat_capacity"
                         ]
                       },
                       {
@@ -466,7 +594,7 @@
                                   "deep_temperature"
                                 ]
                               },
-                              1000.0
+                              "EarthSystem.Ocean.DeepOcean.deep_layer_depth"
                             ]
                           }
                         ]
@@ -479,6 +607,7 @@
           },
           "equations": [
             {
+              "_comment": "d(ocean_heat_content)/dt [J/s] = c_ml*(sst*h) + c_deep*(T_deep*depth). Both terms are watts.",
               "lhs": {
                 "op": "D",
                 "args": [
@@ -492,7 +621,7 @@
                   {
                     "op": "*",
                     "args": [
-                      4180000.0,
+                      "mixed_layer_heat_coeff",
                       {
                         "op": "*",
                         "args": [
@@ -505,12 +634,12 @@
                   {
                     "op": "*",
                     "args": [
-                      1000000.0,
+                      "deep_heat_coeff",
                       {
                         "op": "*",
                         "args": [
                           "EarthSystem.Ocean.DeepOcean.deep_temperature",
-                          1000.0
+                          "EarthSystem.Ocean.DeepOcean.deep_layer_depth"
                         ]
                       }
                     ]
@@ -523,6 +652,7 @@
       },
       "equations": [
         {
+          "_comment": "d(system_energy)/dt [W] = area*forcing - area*sigma*T^4 + 0.1*d(ocean_heat_content)/dt. Every term is a power.",
           "lhs": {
             "op": "D",
             "args": [
@@ -533,16 +663,33 @@
           "rhs": {
             "op": "+",
             "args": [
-              "EarthSystem.global_forcing",
               {
                 "op": "*",
                 "args": [
-                  -5.67e-08,
+                  "earth_area",
+                  "EarthSystem.global_forcing"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
                   {
-                    "op": "^",
+                    "op": "-",
                     "args": [
-                      "EarthSystem.Atmosphere.atm_temperature",
-                      4
+                      "earth_area"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      "stefan_boltzmann",
+                      {
+                        "op": "^",
+                        "args": [
+                          "EarthSystem.Atmosphere.atm_temperature",
+                          4
+                        ]
+                      }
                     ]
                   }
                 ]

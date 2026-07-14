@@ -1,5 +1,5 @@
 {
-  "description": "Expression tree analysis with detailed AST-based dependency extraction",
+  "description": "Expression tree analysis with detailed AST-based dependency extraction. Each `input_selector.expression` is a verbatim copy of the sub-expression it names in expr_graphs_variable_deps.esm; when that fixture changes, these must be updated with it.",
   "input_file": "expr_graphs_variable_deps.esm",
   "analysis_type": "ast_dependency_graph",
 
@@ -13,9 +13,10 @@
         "expression": {
           "op": "*",
           "args": [
-            { "op": "exp", "args": [{ "op": "/", "args": [-1000, "T"] }] },
+            { "op": "exp", "args": [{ "op": "/", "args": [{ "op": "-", "args": ["T_act"] }, "T"] }] },
             "P",
-            "z"
+            "z",
+            "k_p"
           ]
         }
       },
@@ -24,8 +25,8 @@
           "id": "root",
           "op": "*",
           "type": "operator",
-          "arity": 3,
-          "children": ["exp_node", "P_var", "z_var"]
+          "arity": 4,
+          "children": ["exp_node", "P_var", "z_var", "k_p_var"]
         },
         {
           "id": "exp_node",
@@ -39,12 +40,19 @@
           "op": "/",
           "type": "operator",
           "arity": 2,
-          "children": ["const_-1000", "T_var"]
+          "children": ["neg_node", "T_var"]
         },
         {
-          "id": "const_-1000",
-          "value": -1000,
-          "type": "constant",
+          "id": "neg_node",
+          "op": "-",
+          "type": "operator",
+          "arity": 1,
+          "children": ["T_act_var"]
+        },
+        {
+          "id": "T_act_var",
+          "name": "T_act",
+          "type": "variable",
           "arity": 0
         },
         {
@@ -64,15 +72,28 @@
           "name": "z",
           "type": "variable",
           "arity": 0
+        },
+        {
+          "id": "k_p_var",
+          "name": "k_p",
+          "type": "variable",
+          "arity": 0
         }
       ],
       "expected_variable_dependencies": [
+        {
+          "variable": "T_act",
+          "path_to_root": ["T_act_var", "neg_node", "div_node", "exp_node", "root"],
+          "dependency_type": "multiplicative",
+          "depth": 4,
+          "surrounding_context": "exp(-T_act/T)"
+        },
         {
           "variable": "T",
           "path_to_root": ["T_var", "div_node", "exp_node", "root"],
           "dependency_type": "multiplicative",
           "depth": 3,
-          "surrounding_context": "exp(-1000/T)"
+          "surrounding_context": "exp(-T_act/T)"
         },
         {
           "variable": "P",
@@ -87,6 +108,13 @@
           "dependency_type": "multiplicative",
           "depth": 1,
           "surrounding_context": "direct multiplicative factor"
+        },
+        {
+          "variable": "k_p",
+          "path_to_root": ["k_p_var", "root"],
+          "dependency_type": "multiplicative",
+          "depth": 1,
+          "surrounding_context": "rate coefficient factor"
         }
       ]
     },
@@ -180,23 +208,24 @@
             { "op": "sqrt", "args": [
               { "op": "+", "args": [
                 { "op": "*", "args": ["x", "y"] },
-                { "op": "^", "args": ["T", 2] }
+                { "op": "^", "args": [{ "op": "*", "args": ["kappa", "T"] }, 2] }
               ]}
             ]},
             { "op": "log", "args": [
               { "op": "+", "args": [
                 1.0,
-                { "op": "*", "args": ["P", "alpha", "beta"] }
+                { "op": "*", "args": [{ "op": "/", "args": ["P", "P_ref"] }, "alpha", "beta"] }
               ]}
-            ]}
+            ]},
+            "k_z"
           ]
         }
       },
       "expected_complexity_metrics": {
-        "max_depth": 4,
-        "total_nodes": 15,
-        "variable_nodes": 6,
-        "operator_nodes": 7,
+        "max_depth": 5,
+        "total_nodes": 21,
+        "variable_nodes": 9,
+        "operator_nodes": 8,
         "constant_nodes": 2,
         "function_nodes": 2
       },
@@ -206,42 +235,63 @@
           "path_to_root": ["x_var", "xy_mult", "sum1", "sqrt_node", "root"],
           "dependency_type": "multiplicative",
           "depth": 4,
-          "surrounding_context": "sqrt(x*y + T^2)"
+          "surrounding_context": "sqrt(x*y + (kappa*T)^2)"
         },
         {
           "variable": "y",
           "path_to_root": ["y_var", "xy_mult", "sum1", "sqrt_node", "root"],
           "dependency_type": "multiplicative",
           "depth": 4,
-          "surrounding_context": "sqrt(x*y + T^2)"
+          "surrounding_context": "sqrt(x*y + (kappa*T)^2)"
+        },
+        {
+          "variable": "kappa",
+          "path_to_root": ["kappa_var", "kT_mult", "kT_squared", "sum1", "sqrt_node", "root"],
+          "dependency_type": "multiplicative",
+          "depth": 5,
+          "surrounding_context": "sqrt(x*y + (kappa*T)^2)"
         },
         {
           "variable": "T",
-          "path_to_root": ["T_var", "T_squared", "sum1", "sqrt_node", "root"],
-          "dependency_type": "power_base",
-          "depth": 4,
-          "surrounding_context": "sqrt(x*y + T^2)"
+          "path_to_root": ["T_var", "kT_mult", "kT_squared", "sum1", "sqrt_node", "root"],
+          "dependency_type": "multiplicative",
+          "depth": 5,
+          "surrounding_context": "sqrt(x*y + (kappa*T)^2)"
         },
         {
           "variable": "P",
-          "path_to_root": ["P_var", "triple_mult", "sum2", "log_node", "root"],
+          "path_to_root": ["P_var", "P_ratio", "triple_mult", "sum2", "log_node", "root"],
           "dependency_type": "multiplicative",
-          "depth": 4,
-          "surrounding_context": "log(1 + P*alpha*beta)"
+          "depth": 5,
+          "surrounding_context": "log(1 + (P/P_ref)*alpha*beta)"
+        },
+        {
+          "variable": "P_ref",
+          "path_to_root": ["P_ref_var", "P_ratio", "triple_mult", "sum2", "log_node", "root"],
+          "dependency_type": "divisive",
+          "depth": 5,
+          "surrounding_context": "log(1 + (P/P_ref)*alpha*beta)"
         },
         {
           "variable": "alpha",
           "path_to_root": ["alpha_var", "triple_mult", "sum2", "log_node", "root"],
           "dependency_type": "multiplicative",
           "depth": 4,
-          "surrounding_context": "log(1 + P*alpha*beta)"
+          "surrounding_context": "log(1 + (P/P_ref)*alpha*beta)"
         },
         {
           "variable": "beta",
           "path_to_root": ["beta_var", "triple_mult", "sum2", "log_node", "root"],
           "dependency_type": "multiplicative",
           "depth": 4,
-          "surrounding_context": "log(1 + P*alpha*beta)"
+          "surrounding_context": "log(1 + (P/P_ref)*alpha*beta)"
+        },
+        {
+          "variable": "k_z",
+          "path_to_root": ["k_z_var", "root"],
+          "dependency_type": "multiplicative",
+          "depth": 1,
+          "surrounding_context": "direct multiplicative factor"
         }
       ]
     },
@@ -259,11 +309,9 @@
             { "op": "exp", "args": [
               { "op": "/", "args": [
                 { "op": "-", "args": ["activation_energy"] },
-                { "op": "*", "args": [8.314, "T_reaction"] }
+                { "op": "*", "args": ["R_gas", "T_reaction"] }
               ]}
-            ]},
-            "A",
-            "B"
+            ]}
           ]
         }
       },
@@ -278,30 +326,25 @@
           "variable": "activation_energy",
           "dependency_type": "additive",
           "depth": 4,
-          "surrounding_context": "exp(-activation_energy/(8.314*T_reaction))"
+          "surrounding_context": "exp(-activation_energy/(R_gas*T_reaction))"
+        },
+        {
+          "variable": "R_gas",
+          "dependency_type": "divisive",
+          "depth": 4,
+          "surrounding_context": "exp(-activation_energy/(R_gas*T_reaction))"
         },
         {
           "variable": "T_reaction",
-          "dependency_type": "multiplicative",
+          "dependency_type": "divisive",
           "depth": 4,
-          "surrounding_context": "exp(-activation_energy/(8.314*T_reaction))"
-        },
-        {
-          "variable": "A",
-          "dependency_type": "multiplicative",
-          "depth": 1,
-          "surrounding_context": "substrate concentration"
-        },
-        {
-          "variable": "B",
-          "dependency_type": "multiplicative",
-          "depth": 1,
-          "surrounding_context": "substrate concentration"
+          "surrounding_context": "exp(-activation_energy/(R_gas*T_reaction))"
         }
       ],
       "kinetics_analysis": {
         "type": "arrhenius",
         "temperature_dependent": true,
+        "note": "The `rate` field is the rate CONSTANT k (esm-spec §7.4: v = k * prod(S_i^n_i)); the substrate concentrations A and B are supplied by mass action, not by the rate expression. The reaction order below is read from `substrates`, not from the rate AST.",
         "order": {
           "A": 1,
           "B": 1,
@@ -312,19 +355,26 @@
   ],
 
   "graph_export_formats": {
-    "dot": "digraph AST_Dependencies {\n  node [shape=box];\n  subgraph cluster_variables {\n    label=\"Variables\";\n    style=filled;\n    color=lightgrey;\n    T P z x y alpha beta k2 k_forward activation_energy T_reaction A B [color=lightblue];\n  }\n  \n  subgraph cluster_operators {\n    label=\"Operators\";\n    style=filled;\n    color=lightyellow;\n    multiply [label=\"*\"];\n    exp [label=\"exp\"];\n    divide [label=\"/\"];\n    power [label=\"^\"];\n    sqrt [label=\"sqrt\"];\n    log [label=\"log\"];\n    add [label=\"+\"];\n  }\n  \n  # AST structure edges\n  T -> exp [label=\"argument\"];\n  exp -> multiply [label=\"factor\"];\n  P -> multiply [label=\"factor\"];\n  z -> multiply [label=\"factor\"];\n  \n  # Dependency strength indicators\n  T [penwidth=3]; # High impact through exponential\n  P [penwidth=2]; # Medium impact, direct multiplication\n  z [penwidth=2]; # Medium impact, direct multiplication\n}",
+    "dot": "digraph AST_Dependencies {\n  node [shape=box];\n  subgraph cluster_variables {\n    label=\"Variables\";\n    style=filled;\n    color=lightgrey;\n    T T_act P z k_p x y alpha beta k2 k_forward activation_energy R_gas T_reaction A B [color=lightblue];\n  }\n  \n  subgraph cluster_operators {\n    label=\"Operators\";\n    style=filled;\n    color=lightyellow;\n    multiply [label=\"*\"];\n    exp [label=\"exp\"];\n    divide [label=\"/\"];\n    negate [label=\"-\"];\n    power [label=\"^\"];\n    sqrt [label=\"sqrt\"];\n    log [label=\"log\"];\n    add [label=\"+\"];\n  }\n  \n  # AST structure edges\n  T_act -> negate [label=\"operand\"];\n  negate -> divide [label=\"numerator\"];\n  T -> divide [label=\"denominator\"];\n  divide -> exp [label=\"argument\"];\n  exp -> multiply [label=\"factor\"];\n  P -> multiply [label=\"factor\"];\n  z -> multiply [label=\"factor\"];\n  k_p -> multiply [label=\"factor\"];\n  \n  # Dependency strength indicators\n  T [penwidth=3]; # High impact through exponential\n  P [penwidth=2]; # Medium impact, direct multiplication\n  z [penwidth=2]; # Medium impact, direct multiplication\n}",
 
-    "mermaid": "graph TD\n  subgraph Variables\n    T[T - Temperature]\n    P[P - Pressure]\n    z[z - Concentration]\n    x[x - State]\n    y[y - State]\n  end\n  \n  subgraph Operators\n    exp[exp function]\n    mult[* operator]\n    div[/ operator]\n  end\n  \n  T -.-> div\n  div --> exp\n  exp --> mult\n  P --> mult\n  z --> mult\n  \n  classDef variable fill:#e1f5fe\n  classDef operator fill:#fff3e0\n  classDef highImpact stroke:#f44336,stroke-width:3px\n  \n  class T,P,z,x,y variable\n  class exp,mult,div operator\n  class T highImpact",
+    "mermaid": "graph TD\n  subgraph Variables\n    T[T - Temperature]\n    T_act[T_act - Activation temperature]\n    P[P - Pressure]\n    z[z - Concentration]\n    k_p[k_p - Rate coefficient]\n    x[x - State]\n    y[y - State]\n  end\n  \n  subgraph Operators\n    exp[exp function]\n    mult[* operator]\n    div[/ operator]\n    neg[- operator]\n  end\n  \n  T_act -.-> neg\n  neg --> div\n  T -.-> div\n  div --> exp\n  exp --> mult\n  P --> mult\n  z --> mult\n  k_p --> mult\n  \n  classDef variable fill:#e1f5fe\n  classDef operator fill:#fff3e0\n  classDef highImpact stroke:#f44336,stroke-width:3px\n  \n  class T,T_act,P,z,k_p,x,y variable\n  class exp,mult,div,neg operator\n  class T highImpact",
 
     "json_adjacency": {
-      "nodes": ["T", "P", "z", "x", "y", "alpha", "beta", "k2", "exp", "*", "/", "^", "sqrt", "log", "+"],
+      "nodes": ["T", "T_act", "P", "P_ref", "z", "x", "y", "alpha", "beta", "kappa", "k2", "k_p", "k_z", "exp", "*", "/", "^", "sqrt", "log", "+", "-"],
       "adjacency": {
         "T": [
-          {"neighbor": "exp", "edge": {"type": "function_argument", "depth": 3}},
-          {"neighbor": "^", "edge": {"type": "power_base", "depth": 2}}
+          {"neighbor": "/", "edge": {"type": "denominator", "depth": 3}},
+          {"neighbor": "*", "edge": {"type": "direct_factor", "depth": 5}}
+        ],
+        "T_act": [
+          {"neighbor": "-", "edge": {"type": "negation_operand", "depth": 4}}
         ],
         "P": [
-          {"neighbor": "*", "edge": {"type": "direct_factor", "depth": 1}}
+          {"neighbor": "*", "edge": {"type": "direct_factor", "depth": 1}},
+          {"neighbor": "/", "edge": {"type": "numerator", "depth": 5}}
+        ],
+        "P_ref": [
+          {"neighbor": "/", "edge": {"type": "denominator", "depth": 5}}
         ],
         "z": [
           {"neighbor": "*", "edge": {"type": "direct_factor", "depth": 1}},
@@ -342,6 +392,15 @@
         ],
         "beta": [
           {"neighbor": "^", "edge": {"type": "power_exponent", "depth": 2}}
+        ],
+        "kappa": [
+          {"neighbor": "*", "edge": {"type": "direct_factor", "depth": 5}}
+        ],
+        "k_p": [
+          {"neighbor": "*", "edge": {"type": "direct_factor", "depth": 1}}
+        ],
+        "k_z": [
+          {"neighbor": "*", "edge": {"type": "direct_factor", "depth": 1}}
         ]
       }
     }

@@ -25,9 +25,9 @@
         },
         "Ksp": {
           "type": "parameter",
-          "units": "mol^2/m^6",
+          "units": "mol^3/m^9",
           "default": 1.0e-12,
-          "description": "Solubility-product constant"
+          "description": "Solubility-product constant for the three-species product H*H*SO4, hence (mol/m^3)^3"
         },
         "T_SO4": {
           "type": "parameter",
