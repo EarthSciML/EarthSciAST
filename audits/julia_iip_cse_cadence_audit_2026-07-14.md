@@ -24,14 +24,19 @@ that is precisely what CSE hoists into the prelude. So the pass that identifies 
 and the lattice that knows which of them never change are both present, and they do not talk to each
 other: every parameter-only subexpression the CSE pass finds is recomputed on every RHS call, forever.
 
-| # | Finding | Severity |
-|---|---|---|
-| 1 | CSE hoists guarded subexpressions out of lazy `ifelse`/`and`/`or` → `DomainError` crash | **P1** |
-| 2 | "Bit-exact" is false: canonical keys collapse float association order | **P1** |
-| 6 | Array cadence classifier is blind to `filter`/`key` → state-dependent field silently frozen at `u=0` | **P1** |
-| 3 | CSE is silently disabled for *any* expression touching a live forcing buffer | **P2** |
-| 4 | No CSE on the array path at all — at any of four levels, incl. a `fn` hoist barrier | **P2** |
-| 5 | No const-cadence tier: parameter-only prelude slots recompute every step | **P2** |
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| 7 | `_struct_sig!` omits the `fn` const table → cells merge onto the wrong interpolant (**reachable, silently wrong numbers**) | **P1** | fixed |
+| 1 | CSE hoists guarded subexpressions out of lazy `ifelse`/`and`/`or` → `DomainError` crash | **P1** | fixed |
+| 2 | "Bit-exact" is false: canonical keys collapse float association order | **P1** | documented + pinned |
+| 6 | Array cadence classifier is blind to `filter`/`key` → state-dependent field silently frozen at `u=0` | **P1** | fixed + fail-loud guard |
+| 3 | CSE is silently disabled for *any* expression touching a live forcing buffer | **P2** | fixed |
+| 4 | No CSE on the array path — four levels, incl. a `fn` hoist barrier | **P2** | (b)(c)(d) fixed; (a) deferred |
+| 5 | No const-cadence tier: parameter-only prelude slots recompute every step | **P2** | fixed |
+
+Finding **#7 was not in the original audit** — it surfaced while fixing #4b, and it is the most serious
+defect here: reachable from a conforming document, producing silently wrong numbers in shipped code.
+That it was found only by pulling on an adjacent thread is itself worth noting.
 
 **Arrays specifically** (findings 4 and 6) are the weakest area, and the two failures are opposite in
 kind. On the CSE side the array path has *no value-numbering of any sort* — the two mechanisms that
@@ -369,6 +374,49 @@ Two fixes, and the second matters more than the first:
   arrayop/aggregate producer (`build.jl:991`) and every dim's range must be exactly `1..n`
   (`build.jl:999`). Both throw `E_TREEWALK_DISCRETE_MATERIALIZE` with a clear message. No action needed
   — noted only to contrast with the silent failure above.
+
+---
+
+## 7. `_struct_sig!` omits the `fn` const table — cells silently merge onto the wrong interpolant — **P1, REACHABLE**
+
+*Found while fixing #4b, not in the original audit pass. This is the most serious defect in this
+document: shipped code, silently wrong numbers, reachable from a conforming model.*
+
+`_compile_arrayop_equation!` groups per-cell `_Node`s by a structural signature (`_struct_sig!`,
+vectorize.jl) and merges each group into one vectorized template. The signature deliberately ignores
+leaf VALUES — literals, state slots, gather offsets — so that cells differing only in those merge into
+one template with per-lane vectors. That is correct and load-bearing.
+
+But the `_NK_OP` arm emitted only `payload[1]` — the function NAME — for an `fn` node. The typed
+`_Interp*Spec` in `payload[2]`, which carries the **const table and axis**, never entered the
+signature. Meanwhile `_merge_fn_node` applies `nodes[1]`'s spec to the whole group: a `_VK_FN` (and now
+a `_VK_INVARIANT`) carries ONE spec for all lanes. So two cells calling `interp.linear` with *different*
+tables shared a signature, merged, and every cell computed against the **first cell's table**.
+
+Reachable, and reproduced end-to-end: a `makearray` whose two regions each carry their own
+`interp.linear` table, indexed inside an `arrayop`, over 4 cells.
+
+| build path | before | after |
+|---|---|---|
+| symbolic stencil | `[15, 15, -150, -150]` ✅ (2 kernels) | ✅ |
+| per-cell, contracted index | `[15, 15, 15, 15]` ❌ **1 kernel** | ✅ (2 kernels) |
+| per-cell, stencil disabled | `[15, 15, 15, 15]` ❌ **1 kernel** | ✅ (2 kernels) |
+
+Cells 3–4 silently returned region 1's interpolant. The symbolic-stencil fast path was already safe
+(`_branch_key!` prints the region into its key); the **per-cell fallback** grouped on `_struct_sig!`
+alone, and that was the hole. It is entered by any contraction — an ordinary einsum/aggregate RHS whose
+`ranges` carry a key not in `output_idx` — i.e. a perfectly conforming document.
+
+Fixed in two layers: `_struct_sig!` now keys the spec's CONTENT (`_fn_spec_hash` over the table/axis
+values — *not* `objectid`, which would split groups that should merge, since a spec object is rebuilt
+per compile call and would destroy the N-independence property), and `_merge_fn_node` re-checks exact
+content-equality across the group, so even a hash collision degrades to a loud build error rather than
+back to silent wrong numbers. N-independence verified across N = 8/16/64 on both build paths.
+
+The general lesson, which is the same one as #6: **a signature that deliberately discards information
+is a correctness contract**, and every consumer that reconstitutes a single value from a merged group
+(one spec for all lanes) must be represented in that signature. Worth a sweep of the other `_struct_sig!`
+arms against what `_merge_nodes` collapses.
 
 ---
 
