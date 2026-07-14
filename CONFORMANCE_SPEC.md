@@ -1759,8 +1759,22 @@ Validation tests must use these standardized error codes:
 | `undefined_variable` | Structural | Equation references undeclared variable |
 | `undefined_species` | Structural | Reaction references undeclared species |
 | `undefined_parameter` | Structural | Rate expression references undeclared parameter |
-| `undefined_system` | Structural | Coupling references nonexistent system. The system position of a coupling entry is itself a dot path of arbitrary depth (esm-spec §4.9.2) — walk it before reporting. |
-| `unresolved_scoped_ref` | Structural | Invalid scoped reference path. Scoped references are ARBITRARY DEPTH (esm-spec §4.6, §4.9.2); a resolver must walk every segment, not split on `.` and take `[0]`/`[1]`. |
+| `undefined_system` | Structural | A **DIRECT system reference** names a system that does not exist — i.e. the bad name sits in a `coupling[i].systems[j]` slot (`couple`, `operator_compose`). Pointer: `/coupling/i/systems`. The system position is itself a dot path of arbitrary depth (esm-spec §4.9.2) — walk it before reporting. |
+| `unresolved_scoped_ref` | Structural | A **SCOPED `System.var` REFERENCE** does not resolve — the bad name sits inside a scoped reference (`variable_map`'s `from`/`to`, a connector `expression`, a `transform`). Pointer: the slot holding the reference, e.g. `/coupling/i/from`. Scoped references are ARBITRARY DEPTH (esm-spec §4.6, §4.9.2); a resolver must walk every segment, not split on `.` and take `[0]`/`[1]`. |
+
+**Choosing between the two (settled 2026-07-14 — the corpus previously contradicted itself).**
+The code is fixed by the **syntactic construct that carries the bad name**, NOT by the semantic
+fact that a system happens to be missing. A missing system reached through a `variable_map`'s
+`from: "NoSuchSystem.T"` is an `unresolved_scoped_ref` at `/coupling/i/from` — the slot holds a
+*scoped reference*, and the resolver fails walking its first segment. The same missing system
+named in an `operator_compose`'s `systems: ["M", "NoSuchSystem"]` is an `undefined_system` at
+`/coupling/i/systems`. This is decidable locally from the construct, which is what makes it
+implementable. Three fixtures pin the contract and now agree:
+`undefined_system.esm` (an `operator_compose` → `undefined_system` @ `/coupling/0/systems`),
+`unresolved_scoped_ref.esm` and `unresolved_scoped_ref_missing_system.esm` (both `variable_map`
+→ `unresolved_scoped_ref` @ `/coupling/0/from`). Previously `undefined_system.esm` was itself a
+`variable_map`, so its `undefined_system` pin was **unsatisfiable by construction** — no binding
+ever emitted it, and the code had zero real coverage.
 | `unresolved_subsystem_ref` | Structural | A §4.7 subsystem `ref` does not resolve — the target file does not exist, or is not reachable. **Canonical spelling.** (Formerly also spelled `ref_not_found`; see §7.1.3.) |
 | `ambiguous_subsystem_ref` | Structural | A §4.7 subsystem `ref` resolves to a file containing zero, or more than one, top-level model/reaction system, so the mount target is not unique. **Canonical spelling.** (Formerly `ref_ambiguous_system`; see §7.1.3.) |
 | `null_reaction` | Structural | Reaction with both null substrates and products |
@@ -1840,7 +1854,22 @@ a claim about *why* the file is invalid, not merely *that* it is:
   `structural_errors: []`. A fixture that wants to pin a structural check must be
   schema-VALID.
 - `path` is the **JSON Pointer of the node that carries the defect** — `/models/M/equations/0/rhs`,
-  not `/models/M`; `/coupling/0/from`, not `/coupling/0`.
+  not `/models/M`; `/coupling/0/from`, not `/coupling/0`. Three corollaries, each of which
+  bit a real pin (audit 2026-07-14):
+  - **The pointer names where the defect IS, not where the old walkers happened to REACH.**
+    Now that observed `expression` is a first-class checked site (§4.9.5), a declared unit that
+    contradicts the dimension its own expression computes belongs at the **variable**
+    (`/models/M/variables/v`), not at some equation that merely mentions it.
+  - **A defect with no single carrier is pinned at the smallest node that CONTAINS it.** A
+    dependency cycle `A → B → A` is carried by no one model — naming either member is arbitrary
+    — so it pins at `/models`.
+  - **A pin is NEVER relaxed to accommodate a binding that lacks the check.** If a fixture pins
+    two findings and a binding emits one, the binding has a coverage GAP; the harness going red
+    is the pin doing its job. Deleting the pin to make it green is how a corpus stops meaning
+    anything. (`units_gradient_operator_mismatch.esm` pins BOTH a `grad`-over-unitless-coordinate
+    error at `/models/SpatialModel/equations/0` AND an addition mismatch at
+    `/models/SpatialModel/variables/bad_sum`; TS emits both, Go emits only the second because it
+    does not yet unit-check `grad`. The fix is Go's, not the pin's.)
 - `resolver_only: true` — the file is schema-valid and is rejected only by an
   evaluator/resolver that a schema-only binding does not run. Such a binding must assert
   `schema_errors == []` and nothing more.

@@ -84,6 +84,12 @@
           "default": 1.8e-12,
           "description": "Rate constant NO + O3 → NO2"
         },
+        "M": {
+          "type": "parameter",
+          "units": "molec/cm^3",
+          "default": 2.5e+19,
+          "description": "Air number density. REQUIRED to close the dimensions: k_NO_O3 and k_HO2_NO are NUMBER-DENSITY bimolecular rate constants (cm^3/molec/s), but O3/NO/HO2 are MIXING RATIOS (mol/mol, dimensionless). k*chi*chi is cm^3/molec/s -- a volume per time -- where d(mol/mol)/dt needs 1/s. Multiplying by M converts the number-density rate to a mixing-ratio rate: k[cm^3/molec/s] * M[molec/cm^3] = 1/s."
+        },
         "jNO2": {
           "type": "parameter",
           "units": "1/s",
@@ -132,7 +138,8 @@
                 "args": [
                   "k_HO2_NO",
                   "HO2",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               }
             ]
@@ -162,7 +169,8 @@
                     ]
                   },
                   "O3",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               },
               {
@@ -177,7 +185,8 @@
                 "args": [
                   "k_HO2_NO",
                   "HO2",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               }
             ]
@@ -204,7 +213,8 @@
                     ]
                   },
                   "O3",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               },
               {
@@ -217,7 +227,8 @@
                     ]
                   },
                   "HO2",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               },
               {
@@ -246,7 +257,8 @@
                 "args": [
                   "k_NO_O3",
                   "O3",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               },
               {
@@ -254,7 +266,8 @@
                 "args": [
                   "k_HO2_NO",
                   "HO2",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               },
               {
@@ -327,7 +340,8 @@
                     ]
                   },
                   "HO2",
-                  "NO"
+                  "NO",
+                  "M"
                 ]
               },
               {
