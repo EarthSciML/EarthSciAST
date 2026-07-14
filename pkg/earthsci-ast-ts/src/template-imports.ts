@@ -1487,6 +1487,16 @@ export function resolveTemplateMachinery(
   const root = deepClone(rawData) as JsonObject
   const stack: string[] = []
 
+  // esm-spec §9.6.4 rule 5 — Option A expands CALL SITES; it does NOT delete
+  // DECLARATIONS. Snapshot the two top-level DECLARATION blocks now, PRISTINE,
+  // before the folding phases below mutate them in place: they are reattached
+  // verbatim by `finalizeDocument`, so a template-library file round-trips to
+  // ITSELF. (Taken here, at the one point the clone is still untouched — a
+  // snapshot after folding would preserve the folded form, not the authored one.)
+  const declaredTemplates =
+    'expression_templates' in root ? deepClone(root.expression_templates) : undefined
+  const declaredMetaparams = 'metaparameters' in root ? deepClone(root.metaparameters) : undefined
+
   // Phase 1 — collect this document's metaparameter + index-set registries.
   const docMeta = collectMetaparamDecls(root, DOCUMENT_ORIGIN)
   const docIsets = collectRootIndexSets(root)
@@ -1512,8 +1522,15 @@ export function resolveTemplateMachinery(
   // Phase 7 — fold structural sites on the closed document.
   foldClosedDocument(root, topTemplates, foldedIsets)
 
-  // Phase 8 — root library compose + strip every §9.7 construct (round-trip).
-  return finalizeDocument(root, topTemplates, foldedIsets, isLibrary)
+  // Phase 8 — root library compose + expand call sites, preserving declarations.
+  return finalizeDocument(
+    root,
+    topTemplates,
+    foldedIsets,
+    isLibrary,
+    declaredTemplates,
+    declaredMetaparams,
+  )
 }
 
 /** Phase 0 — validate + collect the loader-API metaparameter bindings (site 4). */
@@ -1778,22 +1795,55 @@ function foldClosedDocument(
 }
 
 /**
- * Phase 8 — for a root library file, compose bodies (validation) then strip
- * every §9.7 construct so none survives `parse → emit` (esm-spec §9.7.6
- * round-trip). Attaches the folded index-set registry. Returns the root tree.
+ * Phase 8 — compose library bodies (validation), expand the §9.7 CALL SITES, and
+ * put the §9.7 DECLARATIONS back exactly as authored.
+ *
+ * esm-spec §9.6.4 rule 5. This module used to strip every §9.7 construct on the
+ * way out, on the theory that Option A means "nothing §9.7 survives parse → emit".
+ * That conflated a DECLARATION with a CALL SITE. A top-level `expression_templates`
+ * registry and a top-level `metaparameters` block are declarations — peers of
+ * `index_sets` — not `apply_expression_template` invocations. Deleting them meant a
+ * pure template-library file emitted as `{esm, metadata, index_sets}`: a document
+ * carrying NONE of the five top-level payload keys, which the schema's top-level
+ * `anyOf` rejects. With §9.6.4 rule 4 (schema validation runs on the post-expansion
+ * form) that made a conforming library file UNREPRESENTABLE — legal on disk, illegal
+ * the instant it was loaded and re-emitted. A document kind that cannot round-trip to
+ * itself is not a document kind.
+ *
+ * So: `expression_template_imports` is a call site and IS expanded away; the
+ * registry and `metaparameters` are declarations and are restored VERBATIM from the
+ * pre-fold snapshots. The index-set registry is attached folded, as before — index
+ * sets are not §9.7 machinery and their sizes are genuinely resolved by it.
  */
 function finalizeDocument(
   root: JsonObject,
   topTemplates: JsonObject,
   docIsets: JsonObject,
   isLibrary: boolean,
+  declaredTemplates: unknown,
+  declaredMetaparams: unknown,
 ): JsonObject {
   if (isLibrary) {
+    // Composition here is a VALIDATION pass over the working copy; its folded
+    // output is deliberately not what we emit.
     composeTemplateBodies(topTemplates as TemplatesArg, DOCUMENT_ORIGIN)
+  }
+
+  // CALL SITE — Option A expands it, so it does not survive.
+  delete root.expression_template_imports
+
+  // DECLARATIONS — restored exactly as authored (§9.6.4 rule 5).
+  if (declaredTemplates !== undefined) {
+    root.expression_templates = declaredTemplates as JsonObject
+  } else {
     delete root.expression_templates
   }
-  delete root.expression_template_imports
-  delete root.metaparameters
+  if (declaredMetaparams !== undefined) {
+    root.metaparameters = declaredMetaparams as JsonObject
+  } else {
+    delete root.metaparameters
+  }
+
   if (Object.keys(docIsets).length > 0) root.index_sets = docIsets
   return root
 }

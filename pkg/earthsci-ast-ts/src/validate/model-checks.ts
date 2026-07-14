@@ -177,31 +177,86 @@ export function implicitNames(esmFile: EsmFile): Set<string> {
  * Adding a new expression position to the format now means teaching ONE
  * enumerator, instead of silently under-checking until someone notices.
  */
+/**
+ * (k) The COMPLETE set of sites at which a name may be DECLARED for a component
+ * — the union a reference must be checked against (esm-spec §4.9.5).
+ *
+ * Reference integrity is only ever as good as this set. Miss a site and the
+ * checker FALSELY REJECTS valid documents, which is the failure mode that made
+ * the previous design so tempting: the orchestrator simply SKIPPED reference
+ * integrity for any model appearing in a coupling entry, because such a model
+ * legitimately names things it does not declare locally. That bought
+ * false-positive safety at the cost of a total false NEGATIVE — an entire
+ * coupled model went unchecked, and any undefined variable in it was invisible.
+ *
+ * The sites, exhaustively:
+ *
+ *   1. `variables` — states, parameters and observed alike (one map, §4.2).
+ *   2. `index_sets` — the document-scoped registry; an `aggregate` may name a
+ *      set positionally, so the name is an identifier, not a variable.
+ *   3. BINDER symbols — `arrayop`/`aggregate` `output_idx`, `argmin`/`argmax`
+ *      witnesses, an `integral`'s integration `var`. Scope-local, so they are
+ *      supplied per-scope by the caller, not here.
+ *   4. IMPLICIT coordinates — the domain's `independent_variable` and the
+ *      spatial coordinate names. Independent coordinates are not unknowns and
+ *      never appear in `variables`.
+ *   5. `_var` — the §6.4 operator-model placeholder, legal WHEREVER A STATE
+ *      VARIABLE IS legal (equation LHS/RHS, event affects, `read_vars`) in a
+ *      model that is operator-composed or is a coupling target. Substitution
+ *      supplies its referent at composition time.
+ *   6. COUPLING-INJECTED names — `coupling[i].config.callback_variables[j].name`,
+ *      which a `callback` entry injects into `config.target_system`. These are
+ *      real declarations made from OUTSIDE the component, and missing them is
+ *      what falsely rejected `tests/coupling/callback_examples.esm`.
+ *   7. Names reachable by SCOPED reference (`Other.x`, `Calendar.y`) — resolved
+ *      separately by `resolveScopedReference`, against the file root AND the
+ *      enclosing component's own mounted subsystems.
+ *
+ * With the union complete, a coupled model no longer needs an exemption: it is
+ * checked like everything else, and the names coupling gives it are simply
+ * DECLARED.
+ */
+export function declaredNamesFor(
+  model: Model,
+  modelName: string,
+  esmFile: EsmFile,
+  isCoupled: boolean,
+): Set<string> {
+  const names = new Set<string>(Object.keys(model.variables || {}))
+
+  // (2) document-scoped index sets
+  for (const indexSet of Object.keys(esmFile.index_sets || {})) names.add(indexSet)
+
+  // (4) implicit independent coordinates
+  for (const implicit of implicitNames(esmFile)) names.add(implicit)
+
+  // (5) the operator-model placeholder, only where composition can bind it
+  if (isCoupled) names.add(OPERATOR_VAR_PLACEHOLDER)
+
+  // (6) names a `callback` coupling entry injects into this component
+  for (const entry of esmFile.coupling ?? []) {
+    const config = (
+      entry as { config?: { target_system?: string; callback_variables?: unknown[] } }
+    ).config
+    if (!config || config.target_system !== modelName) continue
+    for (const callbackVariable of config.callback_variables ?? []) {
+      const name = (callbackVariable as { name?: unknown }).name
+      if (typeof name === 'string') names.add(name)
+    }
+  }
+
+  return names
+}
+
 export function validateReferenceIntegrity(
   model: Model,
   modelPath: string,
   esmFile: EsmFile,
+  modelName = modelPath.split('/').pop() ?? '',
+  isCoupled = false,
 ): StructuralError[] {
   const errors: StructuralError[] = []
-  const declaredVariables = new Set(Object.keys(model.variables || {}))
-  // The independent variable and the spatial coordinates are implicitly
-  // declared (see the two helpers above): they are the model's INDEPENDENT
-  // coordinates, not its unknowns, so they never appear in `variables` and must
-  // never be reported as undefined.
-  const implicit = implicitNames(esmFile)
-  // Declared index sets are a legitimate, non-variable identifier namespace
-  // (RFC semiring-faq-unified-ir §5.2). An `aggregate` may name an index set
-  // as a positional operand — the value-invention form
-  // `aggregate(args:["faces"], ...)` enumerates over the `faces` set itself
-  // (the mesh-edge enumeration of ess-my4.3.10 / §7.3). Such a name is not a
-  // declared variable, so credit the document-scoped `index_sets` keys here,
-  // exactly as the binder symbols below credit aggregate range / `index`
-  // positions (the aggregate-aware fix of ess-my4.1.7). A genuinely-undefined
-  // reference still matches neither set and is flagged. As of v0.8.0 the
-  // `index_sets` registry is a single, document-level field shared by every
-  // model (a sibling of `models` / `domain`), not a per-model field.
-  const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
-
+  const declaredVariables = declaredNamesFor(model, modelName, esmFile, isCoupled)
   const checkExpression = (expr: Expression, sitePath: string, boundSymbols: Set<string>): void => {
     for (const varRef of extractVariableReferences(expr)) {
       if (varRef.includes('.')) {
@@ -216,12 +271,9 @@ export function validateReferenceIntegrity(
             details: { reference: varRef },
           })
         }
-      } else if (
-        !declaredVariables.has(varRef) &&
-        !declaredIndexSets.has(varRef) &&
-        !boundSymbols.has(varRef) &&
-        !implicit.has(varRef)
-      ) {
+        // `declaredVariables` is the COMPLETE declaration-site union (see
+        // `declaredNamesFor`); `boundSymbols` adds the binders in scope HERE.
+      } else if (!declaredVariables.has(varRef) && !boundSymbols.has(varRef)) {
         // Local reference
         errors.push({
           path: sitePath,
@@ -256,7 +308,12 @@ export function validateReferenceIntegrity(
 
   // Check observed variables have expressions
   for (const [varName, variable] of Object.entries(model.variables || {})) {
-    if (variable.type === 'observed' && !variable.expression) {
+    // `=== undefined`, NOT `!expression`. An Expression may be the NUMBER ZERO,
+    // and `!0` is `true` — so an observed variable defined as the perfectly legal
+    // constant `0.0` (e.g. `temperature_factor` in
+    // `tests/valid/events_cross_system.esm`) was reported as MISSING its
+    // expression. The same falsy trap would swallow a `0` guess or bound.
+    if (variable.type === 'observed' && variable.expression === undefined) {
       errors.push({
         path: `${modelPath}/variables/${varName}`,
         code: ERROR_CODES.MISSING_OBSERVED_EXPR,

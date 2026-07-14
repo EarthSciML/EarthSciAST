@@ -3,8 +3,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { validate } from './validate.js'
-import { readFixture } from './test-helpers.js'
+import { readFixture, REPO_ROOT } from './test-helpers.js'
 
 describe('Structural validation', () => {
   it('should detect equation count mismatch', () => {
@@ -1330,5 +1332,187 @@ describe('(h) reference integrity covers the non-model expression sites', () => 
     const c = scopedRefs(conn({ op: '*', args: ['TestModel.y', 'TestModel.undefined_xyz'] }))
     expect(c).toHaveLength(1)
     expect(c[0].path).toBe('/coupling/0/connector/equations/0/expression')
+  })
+})
+
+/**
+ * (k) The declaration-site set must be COMPLETE, or tightening a false NEGATIVE
+ * just trades it for a false POSITIVE.
+ */
+describe('(k) complete declaration-site set', () => {
+  it('credits names a `callback` coupling injects into its target_system', () => {
+    // `coupling[i].config.callback_variables[j].name` is a real declaration,
+    // made from OUTSIDE the component. Missing it falsely rejected
+    // `tests/coupling/callback_examples.esm`.
+    const file = (couplingVarName: string) => ({
+      esm: '0.1.0',
+      metadata: { name: 'callback-decl' },
+      models: {
+        WeatherModel: {
+          variables: { temp: { type: 'state', units: 'K' } },
+          equations: [
+            {
+              lhs: { op: 'D', args: ['temp'], wrt: 't' },
+              rhs: { op: '+', args: [0, 'external_temperature_forcing'] },
+            },
+          ],
+        },
+      },
+      coupling: [
+        {
+          type: 'callback',
+          callback_id: 'cb',
+          config: {
+            target_system: 'WeatherModel',
+            callback_variables: [{ name: couplingVarName, units: 'K/s' }],
+          },
+        },
+      ],
+    })
+
+    // The callback declares exactly the name the equation uses.
+    expect(
+      validate(file('external_temperature_forcing')).structural_errors.filter(
+        (e) => e.code === 'undefined_variable',
+      ),
+    ).toEqual([])
+
+    // ...and the check still BITES: a callback declaring some OTHER name leaves
+    // `external_temperature_forcing` genuinely undefined.
+    const errors = validate(file('something_else')).structural_errors.filter(
+      (e) => e.code === 'undefined_variable',
+    )
+    expect(errors).toHaveLength(1)
+    expect((errors[0].details as { variable: string }).variable).toBe(
+      'external_temperature_forcing',
+    )
+  })
+
+  it('emits `details.variable` — not `variable_name` — at the new (h) sites', () => {
+    // CONFORMANCE_SPEC row (j): the corpus settled on `variable`.
+    const result = validate({
+      esm: '0.1.0',
+      metadata: { name: 'details-key' },
+      models: {
+        M: {
+          variables: {
+            u: { type: 'state', units: '1' },
+            obs: { type: 'observed', units: '1', expression: { op: '*', args: [2, 'nope'] } },
+          },
+          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+    })
+    const error = result.structural_errors.find((e) => e.code === 'undefined_variable')!
+    expect(error.details).toHaveProperty('variable', 'nope')
+    expect(error.details).not.toHaveProperty('variable_name')
+  })
+})
+
+describe('an observed variable defined as the constant 0 is not "missing" its expression', () => {
+  // `!variable.expression` is true for the NUMBER ZERO. `0.0` is a perfectly
+  // legal Expression, so `tests/valid/events_cross_system.esm` — whose
+  // `temperature_factor` is exactly `0.0` — was reported as missing_observed_expr.
+  const withExpression = (expression: unknown) => ({
+    esm: '0.1.0',
+    metadata: { name: 'falsy-zero' },
+    models: {
+      M: {
+        variables: {
+          u: { type: 'state', units: '1' },
+          obs: { type: 'observed', units: '1', expression },
+        },
+        equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+      },
+    },
+  })
+  const missing = (file: object) =>
+    validate(file).structural_errors.filter((e) => e.code === 'missing_observed_expr')
+
+  it('accepts the constant 0', () => {
+    expect(missing(withExpression(0))).toEqual([])
+    expect(missing(withExpression(0.0))).toEqual([])
+  })
+
+  it('still rejects a genuinely absent expression', () => {
+    // An observed variable with NO `expression` is caught at the SCHEMA layer
+    // (which requires the field), and structural checks only run once the schema
+    // is clean — so assert the rejection, not the structural code specifically.
+    // The point is that the fix admits `0` without admitting "absent".
+    const file = withExpression(undefined)
+    delete (file.models.M.variables.obs as { expression?: unknown }).expression
+    expect(validate(file).is_valid).toBe(false)
+  })
+})
+
+/**
+ * F-2 — `validate(data, { basePath })`.
+ *
+ * `validate()` is contractually I/O-free, which means that WITHOUT a base
+ * directory it cannot open a `{ref}` target and therefore cannot tell a MISSING
+ * mount from a PRESENT one: both come back `unresolved_subsystem_ref`. Every
+ * subsystem-ref and template-import pin in the shared corpus is unsatisfiable
+ * under that signature — the harness asserts a `(code, path)` pair the binding
+ * has no way to compute.
+ *
+ * `basePath` closes that hole. It is OPTIONAL, so the old signature keeps its old
+ * behaviour exactly.
+ */
+describe('validate({ basePath }) resolves relative refs and template imports', () => {
+  const fixture = (rel: string) => join(REPO_ROOT, rel)
+  const codes = (r: ReturnType<typeof validate>) =>
+    [...r.schema_errors, ...r.structural_errors].map((e) => `${e.code}@${e.path}`)
+
+  it('validates a subsystem-ref fixture clean WITH a basePath, and reports it unresolved WITHOUT one', () => {
+    const path = fixture('tests/valid/lib_calendar_subsystem_inclusion.esm')
+    const content = readFileSync(path, 'utf-8')
+
+    // WITH: the `{ref}` mount is opened, the component is inlined, and the
+    // observed expression's `Calendar.seconds_since_midnight` now resolves.
+    expect(validate(content, { basePath: dirname(path) }).is_valid).toBe(true)
+
+    // WITHOUT: unchanged legacy behaviour — the mount is honestly reported as
+    // unresolved rather than silently passed over.
+    const without = validate(content)
+    expect(without.is_valid).toBe(false)
+    expect(codes(without)).toContain('unresolved_subsystem_ref@/models/Diurnal/subsystems/Calendar')
+  })
+
+  it('resolves the §4.7 index-set merge and §9.7 template imports through a basePath', () => {
+    for (const rel of [
+      'tests/valid/subsystem_index_set_merge.esm',
+      'tests/valid/template_import_minimal.esm',
+    ]) {
+      const path = fixture(rel)
+      const result = validate(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
+      expect(result.is_valid, `${rel}: ${codes(result).join(', ')}`).toBe(true)
+    }
+  })
+
+  it('still REJECTS a ref whose target does not exist, at the offending mount', () => {
+    // The point of `basePath` is that a present target and a missing one become
+    // distinguishable. This one is genuinely missing, and must stay rejected —
+    // with the pinned code, at the pinned path (the mount, not the document root).
+    const path = fixture('tests/invalid/subsystem_ref_not_found.esm')
+    const result = validate(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
+    expect(result.is_valid).toBe(false)
+    expect(codes(result)).toContain(
+      'unresolved_subsystem_ref@/models/Atmosphere/subsystems/Missing',
+    )
+  })
+
+  it('reports an AMBIGUOUS target — a verdict only reachable by opening the file', () => {
+    // §4.7 requires a referenced file to hold exactly one top-level component;
+    // this target holds three. No I/O-free checker can know that, so without a
+    // `basePath` the best available answer is the coarser "unresolved".
+    const path = fixture('tests/invalid/subsystem_ref_ambiguous.esm')
+    const content = readFileSync(path, 'utf-8')
+
+    expect(codes(validate(content, { basePath: dirname(path) }))).toContain(
+      'ambiguous_subsystem_ref@/models/ClimateModel/subsystems/Atm',
+    )
+    expect(codes(validate(content))).toContain(
+      'unresolved_subsystem_ref@/models/ClimateModel/subsystems/Atm',
+    )
   })
 })

@@ -182,6 +182,22 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
         if (typeof ref === 'string' && ref.includes('.')) {
           const [systemName, variablePath] = splitScopedRef(ref)
           if (!availableSystems.has(systemName)) {
+            // A `variable_map` whose `from`/`to` names a system that does not
+            // exist. NOTE — the shared corpus currently pins this ONE defect two
+            // incompatible ways, and no implementation can satisfy both:
+            //
+            //   undefined_system.esm                  from: "NonExistentSystem.temperature"
+            //     -> undefined_system      @ /coupling/0
+            //   unresolved_scoped_ref.esm             from: "NonExistentSystem.T"
+            //     -> unresolved_scoped_ref @ /coupling/0/from
+            //   unresolved_scoped_ref_missing_system.esm
+            //                       from: "NonExistentModel.MissingSubsystem.temperature"
+            //     -> unresolved_scoped_ref @ /coupling/0/from
+            //
+            // Same shape, same stated intent ("coupling references nonexistent
+            // system"), different pins. We emit the code that two of the three
+            // agree on and have reported the contradiction upstream; when the
+            // corpus settles on one spelling, this branch follows it.
             errors.push({
               path: `${couplingPath}/${field}`,
               code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
@@ -270,7 +286,12 @@ export function validateCircularReferences(esmFile: EsmFile): StructuralError[] 
       const cycleStart = path.indexOf(node)
       const cycle = path.slice(cycleStart).concat(node)
       errors.push({
-        path: '/models',
+        // Point at the model the cycle CLOSES ON, not at the `/models` container.
+        // The cycle is already computed here, so naming its entry point costs
+        // nothing and is what the shared corpus pins
+        // (`circular_coupling.esm` → `/models/ModelA`). A pointer to the whole
+        // container tells whoever has to fix this precisely nothing.
+        path: `/models/${cycle[0]}`,
         message: `Circular dependency detected: ${cycle.join(' → ')}`,
         code: ERROR_CODES.CIRCULAR_DEPENDENCY,
         details: { cycle },
@@ -448,7 +469,7 @@ export function validateDataLoaderExpressions(esmFile: EsmFile): StructuralError
               path,
               code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
               message: `Variable "${ref}" referenced in unit_conversion expression does not resolve`,
-              details: { variable: ref, variable_name: ref },
+              details: { variable: ref },
             })
           }
         } else if (!declared.has(ref) && !declaredIndexSets.has(ref) && !bound.has(ref)) {
@@ -456,7 +477,7 @@ export function validateDataLoaderExpressions(esmFile: EsmFile): StructuralError
             path,
             code: ERROR_CODES.UNDEFINED_VARIABLE,
             message: `Variable "${ref}" referenced in unit_conversion expression but not declared`,
-            details: { variable: ref, variable_name: ref },
+            details: { variable: ref },
           })
         }
       }
@@ -494,7 +515,7 @@ export function validateCouplingExpressions(esmFile: EsmFile): StructuralError[]
           path,
           code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
           message: `Variable "${ref}" referenced in ${context} does not resolve`,
-          details: { reference: ref, variable_name: ref },
+          details: { reference: ref },
         })
       }
     }

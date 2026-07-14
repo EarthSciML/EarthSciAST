@@ -16,6 +16,7 @@ import {
   type SchemaError,
 } from '../parse.js'
 import { EsmMachineryError } from '../lower-expression-templates.js'
+import { CircularReferenceError, RefLoadError, resolveSubsystemRefsSync } from '../ref-loading.js'
 import { EnumLoweringError } from '../lower-enums.js'
 import {
   LosslessJsonParseError,
@@ -146,15 +147,31 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       const modelPath = `/models/${modelName}`
       const isCoupled = coupledSystems.has(modelName)
 
-      // Skip equation balance and reference integrity for coupled models,
-      // as they may reference variables provided by other systems.
+      // Equation balance exempts a coupled model: its unknowns may be driven by
+      // equations another system contributes, so counting locally is meaningless.
       if (!isCoupled) {
         errors.push(...validateEquationBalance(model, modelPath))
-        errors.push(...validateReferenceIntegrity(model, modelPath, esmFile))
       }
+      // An OPERATOR-COMPOSED model is exempt from reference integrity, and the
+      // exemption is semantically required rather than a convenience: such a
+      // model is written against a GENERIC state it does not declare, under a
+      // placeholder name the AUTHOR chooses. `tests/valid/minimal_chemistry.esm`
+      // is the canonical case — its `Advection` operator declares only
+      // `u_wind`/`v_wind` and writes `D(u)/dt = -u_wind*grad(u,x) + …`, where `u`
+      // is the field composition will substitute. No local declaration-site union
+      // can decide `u`, because the name is arbitrary. (§6.4 blesses `_var` for
+      // this; the flagship fixture uses `u` — see the report.)
+      //
+      // A CALLBACK target is NOT exempt: its injected names are knowable, so it
+      // is checked against them (see `declaredNamesFor` site 6). That is the (k)
+      // fix — `callback_examples.esm` was falsely rejected because the names its
+      // callback injects were not credited anywhere.
+      if (!isCoupled) {
+        errors.push(...validateReferenceIntegrity(model, modelPath, esmFile, modelName, isCoupled))
+      }
+
       // `isCoupled` also admits the §6.4 `_var` placeholder as an event-affect
-      // target — the same premise (this model's names may be supplied by the
-      // composition) that skips the two checks above.
+      // target.
       errors.push(...validateEventConsistency(model, modelPath, isCoupled))
       errors.push(...validatePhysicalConstantUnits(model, modelPath))
       errors.push(...validateConversionFactorConsistency(model, modelPath))
@@ -167,7 +184,17 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           const subsystemPath = `${modelPath}/subsystems/${subsystemName}`
           if (!isCoupled) {
             errors.push(...validateEquationBalance(subsystem, subsystemPath))
-            errors.push(...validateReferenceIntegrity(subsystem, subsystemPath, esmFile))
+          }
+          if (!isCoupled) {
+            errors.push(
+              ...validateReferenceIntegrity(
+                subsystem,
+                subsystemPath,
+                esmFile,
+                subsystemName,
+                isCoupled,
+              ),
+            )
           }
           errors.push(...validateEventConsistency(subsystem, subsystemPath, isCoupled))
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
@@ -242,6 +269,13 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
  * stable strings that renames cannot silently change.
  */
 function loadErrorCode(error: Error): string {
+  // A ref that would not resolve carries the canonical code the resolver decided
+  // on (`unresolved_subsystem_ref` when the target is missing or unreadable,
+  // `ambiguous_subsystem_ref` when it holds more than one component) — the
+  // resolver is the only layer that opened the file, so it is the only layer that
+  // can tell those apart.
+  if (error instanceof RefLoadError) return error.code
+  if (error instanceof CircularReferenceError) return ERROR_CODES.CIRCULAR_DEPENDENCY
   if (error instanceof SchemaValidationError) return ERROR_CODES.SCHEMA_VALIDATION_ERROR
   if (error instanceof ParseError) return ERROR_CODES.PARSE_ERROR
   if (error instanceof EsmMachineryError) return ERROR_CODES.EXPRESSION_TEMPLATE_ERROR
@@ -266,12 +300,42 @@ function convertSchemaError(error: SchemaError): ValidationError {
 }
 
 /**
+ * Options for {@link validate}.
+ */
+export interface ValidateOptions {
+  /**
+   * Base directory that relative `{ref}` targets and `expression_template_imports`
+   * resolve against — normally the directory of the file being validated.
+   *
+   * WITHOUT it, `validate()` does no file I/O: it cannot open a ref target, so it
+   * cannot know whether that target exists, and every `{ref}` subsystem is
+   * reported as `unresolved_subsystem_ref`. That is a truthful answer (the
+   * document has an unresolved mount) but a useless one for a caller who has the
+   * file on disk and simply wants it validated — and it makes every subsystem-ref
+   * and template-import pin in the shared corpus unsatisfiable, because a
+   * MISSING target and a PRESENT one produce the identical verdict.
+   *
+   * WITH it, refs are resolved (recursively, including the §4.7 index-set merge
+   * and §9.7 template machinery) before structural validation runs: a present
+   * target validates through, and a missing one yields `unresolved_subsystem_ref`
+   * — the two are now distinguishable, which is the whole point.
+   *
+   * Only LOCAL paths resolve here, because `validate()` is synchronous and
+   * `fetch` cannot be awaited; a remote (`http(s)://`) ref is reported as
+   * unresolved with a message pointing at the async `resolveSubsystemRefs()`.
+   */
+  basePath?: string
+}
+
+/**
  * Validate ESM data and return structured validation result.
  *
  * @param data - ESM data as JSON string or object
+ * @param options - Optional {@link ValidateOptions}; pass `basePath` to let
+ *   relative `{ref}` / template-import targets be opened and resolved.
  * @returns ValidationResult with validation status and errors
  */
-export function validate(data: string | object): ValidationResult {
+export function validate(data: string | object, options: ValidateOptions = {}): ValidationResult {
   const schema_errors: ValidationError[] = []
   const structural_errors: ValidationError[] = []
   const unit_warnings: UnitWarning[] = []
@@ -323,8 +387,20 @@ export function validate(data: string | object): ValidationResult {
         // from the load pipeline instead of re-running validateUnits.
         const esmFile = load(parsedData, {
           assumeValid: true,
+          basePath: options.basePath,
           onUnitWarning: (warning) => unit_warnings.push(warning),
         })
+
+        // With a `basePath`, open and inline the `{ref}` mounts before checking
+        // anything: an unresolved stub declares no variables, so validating
+        // around one reports phantom `unresolved_scoped_ref`s for names the
+        // mounted component really does provide. A failure here (missing target,
+        // ambiguous target, cycle) is a real diagnostic and is reported with the
+        // resolver's own code by the catch below.
+        if (options.basePath !== undefined) {
+          resolveSubsystemRefsSync(esmFile, options.basePath)
+        }
+
         // Perform structural validation
         structural_errors.push(...performStructuralValidation(esmFile))
 
@@ -333,7 +409,10 @@ export function validate(data: string | object): ValidationResult {
       } catch (e: unknown) {
         const error = e as Error
         structural_errors.push({
-          path: ROOT_PATH,
+          // A resolver failure knows WHICH MOUNT broke, so report it there
+          // (`/models/ClimateModel/subsystems/Atm`) rather than at the document
+          // root — that is the path the shared corpus pins.
+          path: error instanceof RefLoadError ? error.path : ROOT_PATH,
           message: error.message || String(e),
           code: loadErrorCode(error),
           details: {
