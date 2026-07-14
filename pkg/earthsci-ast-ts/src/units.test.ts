@@ -558,22 +558,31 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const warnings = validateUnits(esmFile)
 
-      // A warning is surfaced for the unparseable unit...
-      expect(warnings.length).toBeGreaterThan(0)
-      // ...it is an `analysis` warning referencing the offending unit, NOT a
-      // promoted error (do not match the exact prose, just the unit token).
-      expect(warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit'))).toBe(
-        true,
-      )
-      // ...and NONE is a dimensional mismatch, so `validate()` keeps it valid.
+      // 'notaunit' denotes no real unit, so the DECLARATION is meaningless and
+      // the file is malformed: an `unparseable_unit` finding, which validate()
+      // promotes to a hard `unit_inconsistency` error. (This is a deliberate
+      // reversal of the old policy, which called it an `analysis` warning and
+      // let the file pass.)
+      const unparseable = warnings.filter((w) => w.code === 'unparseable_unit')
+      expect(unparseable).toHaveLength(1)
+      expect(unparseable[0].message).toContain('notaunit')
+      // The pointer is the offending DECLARATION, which is what validate() uses
+      // verbatim as the structural error's path.
+      expect(unparseable[0].location).toBe('/models/TestModel/variables/x/units')
+      // The one defect is reported ONCE, and nothing is INVENTED on top of it:
+      // `x` is left unbound (dimension UNKNOWN, not dimensionless), so the
+      // equation that uses it yields no dimensional mismatch.
       expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
     })
 
-    it('surfaces an unparseable observed-variable declared unit as a warning, not a mismatch', () => {
+    it('reports an unparseable observed-variable declared unit once, and invents no mismatch', () => {
       // `rate` declares an unparseable unit ('notaunit') while its expression
-      // (k*x) evaluates to m/s. Forcing the declared side to dimensionless
-      // would manufacture a false mismatch; instead the declaration is left
-      // UNKNOWN and only a warning is emitted.
+      // (k*x) evaluates to m/s. The declaration is the defect and is reported as
+      // such (`unparseable_unit` → hard error). Forcing the declared side to
+      // dimensionless would ALSO manufacture a false dimensional mismatch
+      // against the expression — two errors for one defect, one of them
+      // fictional — so the declared side is left UNKNOWN and the comparison is
+      // skipped.
       const esmFile: EsmFile = {
         esm: '0.1.0',
         metadata: {
@@ -600,9 +609,10 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const warnings = validateUnits(esmFile)
 
-      expect(warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit'))).toBe(
-        true,
-      )
+      const unparseable = warnings.filter((w) => w.code === 'unparseable_unit')
+      expect(unparseable).toHaveLength(1)
+      expect(unparseable[0].message).toContain('notaunit')
+      expect(unparseable[0].location).toBe('/models/TestModel/variables/rate/units')
       expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
     })
   })

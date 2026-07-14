@@ -66,13 +66,37 @@ export interface UnitResult {
 export interface UnitWarning {
   message: string
   /**
-   * Structured warning kind. `dimensional_mismatch` marks a
-   * dimensional-consistency violation (promoted to a structural error by
-   * `validate()`); `analysis` covers informational diagnostics (unknown
-   * variables, arity problems, internal errors). Assigned explicitly where the
-   * message is raised — never inferred from the message text.
+   * Structured finding kind, and the whole of the severity policy.
+   *
+   * A unit finding is either a DEFECT IN THE FILE — which invalidates the
+   * document — or a limit of the ANALYSIS, which does not. The classification is
+   * decided AT THE POINT the finding is raised (never recovered later from the
+   * prose, so rewording a message can never silently change its severity), and
+   * `validate()` promotes exactly the defect-bearing codes to
+   * `unit_inconsistency` structural errors.
+   *
+   * - `dimensional_mismatch` — a PROVABLE inconsistency: metres added to
+   *   kilograms, `log()` of a dimensional quantity, an equation whose sides
+   *   cannot agree. The file is wrong. → HARD ERROR.
+   * - `unparseable_unit` — a declared unit string that does not denote a real
+   *   unit (`"not_a_unit"`). A unit that names nothing is not an ambiguity to be
+   *   worked around; the declaration is meaningless, and that is a defect in the
+   *   FILE, not in the checker. → HARD ERROR. (Which is why the registry in
+   *   `unit-conversion.ts` must not be missing real units — under this policy a
+   *   registry gap is a false rejection.)
+   * - `analysis` — the checker cannot DETERMINE a dimension: a symbolic
+   *   exponent (`x^n`, whose dimension depends on `n`'s runtime value), an
+   *   operator with no dimensional rule (`aggregate`, `index`, `fn`,
+   *   `table_lookup`), a malformed arity, an unknown variable. Genuinely
+   *   undeterminable — a statement about the checker, not the file. → WARNING,
+   *   and the dimension is reported UNKNOWN and the check SKIPPED, never assumed
+   *   dimensionless.
+   *
+   * An unknown VARIABLE is an `analysis` finding here and nothing more: it is
+   * separately a hard `undefined_variable` error, so the units layer does not
+   * double-report it.
    */
-  code: 'dimensional_mismatch' | 'analysis'
+  code: 'dimensional_mismatch' | 'unparseable_unit' | 'analysis'
   location?: string
   equation?: string
 }
@@ -631,12 +655,13 @@ export function checkDimensions(
  * a later collision, matching the legacy resolution order where the
  * first-declared short name shadows later ones. No-op when `units` is absent.
  *
- * When `units` is present but UNPARSEABLE, the variable is deliberately left
- * UNBOUND (its dimension is UNKNOWN, not dimensionless) and an `analysis`
- * `unit_warning` is recorded on `warnings`. `checkDimensions` then treats the
- * name as an "Unknown variable", which `checkAndReport` uses to suppress
- * equation mismatches — so an unparseable unit surfaces as a warning without
- * hiding or manufacturing a dimensional mismatch.
+ * When `units` is present but UNPARSEABLE, the declaration names no real unit,
+ * which is a defect in the FILE: an `unparseable_unit` finding is recorded (a
+ * HARD ERROR — see {@link UnitWarning.code}). The variable is additionally left
+ * UNBOUND, so its dimension stays UNKNOWN rather than being forced to
+ * dimensionless; `checkDimensions` then treats the name as an unknown variable
+ * and skips comparisons against it, so the one real defect is reported once
+ * instead of cascading into a shower of invented mismatches.
  */
 function addBinding(
   bindings: Map<string, ParsedUnit>,
@@ -644,14 +669,17 @@ function addBinding(
   name: string,
   units: string | undefined,
   warnings: UnitWarning[],
+  pointer: string,
 ): void {
   if (!units) return
   const parsed = tryParseUnit(units)
   if (parsed === null) {
     warnings.push({
-      message: `Unable to parse units '${units}' for ${scope}.${name}; dimension left unknown`,
-      code: 'analysis',
-      location: `${scope}.${name}`,
+      message: `Unable to parse units '${units}' for ${scope}.${name}: not a known unit`,
+      code: 'unparseable_unit',
+      // A JSON Pointer, because `validate()` promotes this finding to a
+      // structural error and uses `location` verbatim as its `path`.
+      location: pointer,
     })
     return
   }
@@ -719,15 +747,21 @@ function buildCoordinateBindings(
     }
     const parsed = tryParseUnit(variable.units)
     if (parsed === null) {
-      // Unparseable coordinate unit: leave it OUT of the table so its
-      // dimension stays UNKNOWN. A grad/div/laplacian naming it then falls
-      // back to the metre denominator (the not-a-declared-coordinate path)
-      // instead of the dimensionless entry that would raise a false
-      // unit_inconsistency. Record it as an `analysis` warning.
+      // Unparseable coordinate unit: leave it OUT of the table so its dimension
+      // stays UNKNOWN. A grad/div/laplacian naming it then falls back to the
+      // metre denominator (the not-a-declared-coordinate path) instead of the
+      // dimensionless entry that would raise a false unit_inconsistency.
+      //
+      // The declaration itself is still a defect in the file (`unparseable_unit`
+      // — a HARD ERROR). This pass also sees INLINE SUBSYSTEM variables, which
+      // `addBinding` never visits, so it is the only place their unparseable
+      // declarations are caught. For a top-level model both passes raise the
+      // finding at the same pointer, and `validateUnits` collapses the pair —
+      // one defect, one error.
       warnings.push({
-        message: `Unable to parse units '${variable.units}' for coordinate '${name}'; dimension left unknown`,
-        code: 'analysis',
-        location,
+        message: `Unable to parse units '${variable.units}' for coordinate '${name}': not a known unit`,
+        code: 'unparseable_unit',
+        location: `${location}/variables/${name}/units`,
       })
       continue
     }
@@ -780,7 +814,14 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     for (const [modelName, model] of Object.entries(file.models)) {
       if ('variables' in model && model.variables) {
         for (const [varName, variable] of Object.entries(model.variables)) {
-          addBinding(unitBindings, modelName, varName, variable.units, warnings)
+          addBinding(
+            unitBindings,
+            modelName,
+            varName,
+            variable.units,
+            warnings,
+            `/models/${modelName}/variables/${varName}/units`,
+          )
         }
       }
     }
@@ -789,12 +830,26 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     for (const [systemName, system] of Object.entries(file.reaction_systems)) {
       if ('species' in system && system.species) {
         for (const [speciesName, species] of Object.entries(system.species)) {
-          addBinding(unitBindings, systemName, speciesName, species.units, warnings)
+          addBinding(
+            unitBindings,
+            systemName,
+            speciesName,
+            species.units,
+            warnings,
+            `/reaction_systems/${systemName}/species/${speciesName}/units`,
+          )
         }
       }
       if ('parameters' in system && system.parameters) {
         for (const [paramName, param] of Object.entries(system.parameters)) {
-          addBinding(unitBindings, systemName, paramName, param.units, warnings)
+          addBinding(
+            unitBindings,
+            systemName,
+            paramName,
+            param.units,
+            warnings,
+            `/reaction_systems/${systemName}/parameters/${paramName}/units`,
+          )
         }
       }
     }
@@ -896,22 +951,24 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               () => {
                 const exprResult = checkDimensions(expression, bindings, coordinateBindings)
                 const diagnostics = [...exprResult.diagnostics]
-                // Declared units are parsed leniently-but-fallibly. An
-                // unparseable declaration leaves the target dimension UNKNOWN,
-                // so we record an `analysis` warning and skip the mismatch
-                // comparison instead of forcing the declared side to
-                // dimensionless (which would manufacture a false mismatch
-                // against the expression).
-                let varDims: ParsedUnit | null = dimensionless()
-                if (variable.units) {
-                  varDims = tryParseUnit(variable.units)
-                  if (varDims === null) {
-                    diagnostics.push({
-                      message: `Unable to parse declared units '${variable.units}' for observed variable ${varName}; dimension left unknown`,
-                      code: 'analysis',
-                    })
-                  }
-                }
+                // Declared units are parsed fallibly. An unparseable declaration
+                // leaves the target dimension UNKNOWN, so the mismatch
+                // comparison below is SKIPPED rather than forcing the declared
+                // side to dimensionless (which would manufacture a second,
+                // invented mismatch against the expression on top of the real
+                // defect).
+                //
+                // The defect itself is NOT reported here. An observed variable is
+                // a `variables` entry, so its declaration has already been read —
+                // and its `unparseable_unit` finding already raised, at the
+                // precise `/variables/<v>/units` pointer — by `addBinding` and
+                // `buildCoordinateBindings`. Raising it a third time here (at the
+                // coarser `/variables/<v>` pointer, which the dedupe cannot match
+                // against the other two) would turn one bad declaration into
+                // multiple structural errors.
+                const varDims: ParsedUnit | null = variable.units
+                  ? tryParseUnit(variable.units)
+                  : dimensionless()
                 const exprDims = exprResult.dimensions
                 const mismatch: UnitWarning | null =
                   varDims !== null && exprDims !== null && !dimsEqual(exprDims.dims, varDims.dims)
@@ -931,7 +988,37 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     { recurse: true },
   )
 
-  return warnings
+  return dedupeUnparseable(warnings)
+}
+
+/**
+ * Collapse duplicate `unparseable_unit` findings.
+ *
+ * ONE unparseable declaration is ONE defect, but two passes can see it: the
+ * top-level binding pass ({@link addBinding}) and the per-model coordinate pass
+ * ({@link buildCoordinateBindings}) both read `model.variables`. Both are needed
+ * — the binding pass alone misses inline subsystems, the coordinate pass alone
+ * misses reaction-system species — so they overlap on top-level model variables
+ * and raise the finding at the same JSON Pointer. Since `validate()` now
+ * promotes this code to a structural error, an un-collapsed pair would surface
+ * as two identical errors for one defect.
+ *
+ * Only `unparseable_unit` is deduped, and the key is the LOCATION alone - the
+ * `/.../variables/<v>/units` pointer, which names the one declaration at fault.
+ * (Keying on the message as well would collapse nothing: the two passes word the
+ * finding differently, one naming the variable and one the coordinate.) Other
+ * codes are left alone - the same dimensional mismatch can be independently
+ * provable at more than one site, and each of those is a real report.
+ */
+function dedupeUnparseable(warnings: UnitWarning[]): UnitWarning[] {
+  const seen = new Set<string>()
+  return warnings.filter((w) => {
+    if (w.code !== 'unparseable_unit') return true
+    const key = w.location ?? w.message
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 /**

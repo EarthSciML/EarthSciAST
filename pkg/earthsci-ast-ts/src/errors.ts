@@ -35,6 +35,11 @@ export const ERROR_CODES = {
   UNDEFINED_VARIABLE: 'undefined_variable',
   UNIT_ERROR: 'unit_error',
   UNIT_INCONSISTENCY: 'unit_inconsistency',
+  // A declared unit string that names no real unit. A UnitWarning code (not a
+  // StructuralError code): validate() promotes it to UNIT_INCONSISTENCY, the
+  // same as DIMENSIONAL_MISMATCH. See UnitWarning.code in units.ts for the
+  // severity policy.
+  UNPARSEABLE_UNIT: 'unparseable_unit',
   UNRESOLVED_SCOPED_REF: 'unresolved_scoped_ref',
   UNRESOLVED_SUBSYSTEM_REF: 'unresolved_subsystem_ref',
 

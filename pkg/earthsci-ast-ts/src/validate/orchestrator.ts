@@ -50,23 +50,39 @@ import {
 } from './coupling-checks.js'
 
 /**
- * Promote dimensional-consistency warnings to structural errors. The
- * classification is carried on the warning itself (UnitWarning.code, assigned
- * in units.ts beside the message definitions): only `dimensional_mismatch` — a
- * PROVABLE inconsistency — is promoted. `analysis` warnings (unknown variable,
- * unparseable declaration, arity) stay warnings, because they report what the
- * checker could not determine, not a defect in the file.
+ * Promote the DEFECT-BEARING unit findings to structural errors.
  *
- * Promoting to a hard error is deliberate and is what the shared corpus
- * requires: `tests/invalid/expected_errors.json` pins every `units_*.esm`
- * fixture as a STRUCTURAL ERROR (`is_valid: false`), not a warning. The code is
- * `unit_inconsistency` and the path is the pointer the warning already carries
- * (`/models/<M>/equations/<i>`, `/models/<M>/variables/<v>`) — both exactly as
- * pinned.
+ * The classification is carried on the warning itself (UnitWarning.code, assigned
+ * in units.ts beside the message definitions, where the policy is stated in
+ * full). Two codes describe a defect in the FILE and are promoted:
+ *
+ *   - `dimensional_mismatch` — a PROVABLE inconsistency (metres plus kilograms,
+ *     `log()` of a dimensional quantity, two sides that cannot agree).
+ *   - `unparseable_unit` — a declared unit string that names no real unit. The
+ *     declaration is meaningless, so the file is malformed.
+ *
+ * `analysis` warnings stay warnings: a symbolic exponent, an op with no
+ * dimensional rule, an unknown variable, a bad arity. Each reports what the
+ * CHECKER could not determine — a limit of the analysis, not a defect in the
+ * file — and the dimension is left unknown and the check skipped rather than
+ * assumed. (An unknown variable is separately a hard `undefined_variable` error,
+ * so promoting it here would double-report it.)
+ *
+ * Promoting to a hard error is what the shared corpus requires:
+ * `tests/invalid/expected_errors.json` pins every `units_*.esm` fixture as a
+ * STRUCTURAL ERROR (`is_valid: false`), not a warning. The code is
+ * `unit_inconsistency` and the path is the JSON Pointer the warning already
+ * carries (`/models/<M>/equations/<i>`, `/models/<M>/variables/<v>`,
+ * `/models/<M>/variables/<v>/units`) — exactly as pinned.
  */
+const PROMOTED_UNIT_CODES: readonly UnitWarning['code'][] = [
+  ERROR_CODES.DIMENSIONAL_MISMATCH,
+  ERROR_CODES.UNPARSEABLE_UNIT,
+]
+
 function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[] {
   return warnings
-    .filter((warning) => warning.code === ERROR_CODES.DIMENSIONAL_MISMATCH)
+    .filter((warning) => PROMOTED_UNIT_CODES.includes(warning.code))
     .map((warning) => ({
       // `location` is already a JSON Pointer (units.ts `componentPointer`), so
       // it is used verbatim. Root token is the shared `ROOT_PATH` ('$'), used
