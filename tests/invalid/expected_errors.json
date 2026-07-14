@@ -10,12 +10,11 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "unknown_variable_ref.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_var' referenced in equation is not declared",
         "details": {
@@ -27,7 +26,6 @@
     ],
     "is_valid": false
   },
-
   "equation_count_mismatch.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -36,20 +34,24 @@
         "code": "equation_count_mismatch",
         "message": "Number of ODE equations (1) does not match number of state variables (2)",
         "details": {
-          "state_variables": ["x", "y"],
+          "state_variables": [
+            "x",
+            "y"
+          ],
           "ode_equations": 1,
-          "missing_equations_for": ["y"]
+          "missing_equations_for": [
+            "y"
+          ]
         }
       }
     ],
     "is_valid": false
   },
-
   "undefined_species.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/reaction_systems/TestReactions/reactions/0",
+        "path": "/reaction_systems/TestReactions/reactions/0/products/0/species",
         "code": "undefined_species",
         "message": "Species 'NO2' referenced in reaction is not declared",
         "details": {
@@ -61,12 +63,11 @@
     ],
     "is_valid": false
   },
-
   "undefined_parameter.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/reaction_systems/TestReactions/reactions/0",
+        "path": "/reaction_systems/TestReactions/reactions/0/rate",
         "code": "undefined_parameter",
         "message": "Parameter 'undefined_k' referenced in rate expression is not declared",
         "details": {
@@ -78,7 +79,6 @@
     ],
     "is_valid": false
   },
-
   "null_reaction.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -93,10 +93,17 @@
     ],
     "is_valid": false
   },
-
   "missing_observed_expr.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/models/TestModel/variables/total_rate",
+        "message": "must have required property 'expression'",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/models/TestModel/variables/total_rate",
         "code": "missing_observed_expr",
@@ -107,14 +114,13 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "unresolved_scoped_ref.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/coupling/0",
+        "path": "/coupling/0/from",
         "code": "unresolved_scoped_ref",
         "message": "Scoped reference 'NonExistentSystem.T' cannot be resolved",
         "details": {
@@ -126,12 +132,11 @@
     ],
     "is_valid": false
   },
-
   "event_var_undeclared.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/continuous_events/0",
+        "path": "/models/TestModel/continuous_events/0/affects/0/lhs",
         "code": "event_var_undeclared",
         "message": "Variable 'undefined_velocity' in event affects is not declared",
         "details": {
@@ -144,12 +149,11 @@
     ],
     "is_valid": false
   },
-
   "invalid_discrete_param.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/discrete_events/0",
+        "path": "/models/TestModel/discrete_events/0/discrete_parameters",
         "code": "invalid_discrete_param",
         "message": "Discrete parameter 'undefined_param' in event is not declared as a parameter",
         "details": {
@@ -162,7 +166,6 @@
     ],
     "is_valid": false
   },
-
   "undefined_system.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -180,7 +183,6 @@
     ],
     "is_valid": false
   },
-
   "equation_count_mismatch_too_many_vars.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -189,15 +191,21 @@
         "code": "equation_count_mismatch",
         "message": "Number of ODE equations (1) does not match number of state variables (3)",
         "details": {
-          "state_variables": ["x", "y", "z"],
+          "state_variables": [
+            "x",
+            "y",
+            "z"
+          ],
           "ode_equations": 1,
-          "missing_equations_for": ["y", "z"]
+          "missing_equations_for": [
+            "y",
+            "z"
+          ]
         }
       }
     ],
     "is_valid": false
   },
-
   "equation_count_mismatch_too_many_equations.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -206,20 +214,23 @@
         "code": "equation_count_mismatch",
         "message": "Number of ODE equations (2) does not match number of state variables (1)",
         "details": {
-          "state_variables": ["x"],
+          "state_variables": [
+            "x"
+          ],
           "ode_equations": 2,
-          "extra_equations_for": ["y"]
+          "extra_equations_for": [
+            "y"
+          ]
         }
       }
     ],
     "is_valid": false
   },
-
   "undefined_variable_in_rhs.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_concentration' referenced in equation is not declared",
         "details": {
@@ -231,12 +242,11 @@
     ],
     "is_valid": false
   },
-
   "undefined_variable_in_nested_expr.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_energy' referenced in equation is not declared",
         "details": {
@@ -248,12 +258,11 @@
     ],
     "is_valid": false
   },
-
   "undefined_variable_in_aggregate_expr.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_xyz' referenced in equation is not declared",
         "details": {
@@ -266,12 +275,11 @@
     "is_valid": false,
     "notes": "Undefined variable hidden in the aggregate `expr` body — a non-`args` expression child field. Exercises that the undefined-reference check descends every expression child field, not just `args` (loop index `g` is bound via `ranges`, `rate` is declared, so only `undefined_xyz` is undefined)."
   },
-
   "undefined_variable_in_filter.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_xyz' referenced in equation is not declared",
         "details": {
@@ -284,12 +292,11 @@
     "is_valid": false,
     "notes": "Undefined variable hidden in the aggregate `filter` predicate — a non-`args` expression child field."
   },
-
   "undefined_variable_in_aggregate_key.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_xyz' referenced in equation is not declared",
         "details": {
@@ -302,12 +309,11 @@
     "is_valid": false,
     "notes": "Undefined variable hidden in the aggregate `key` (Skolem-term) child field — a non-`args` expression child field. The key holds an `index` expression rather than a full `skolem` node so the single undefined reference is isolated (a skolem bare-string label would register as a second undefined reference)."
   },
-
   "undefined_variable_in_integral_bound.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_xyz' referenced in equation is not declared",
         "details": {
@@ -320,12 +326,11 @@
     "is_valid": false,
     "notes": "Undefined variable hidden in the integral `lower` bound — a non-`args` expression child field (the `upper` bound is the symmetric case; integration variable `s` is bound via `var`, `k` is declared)."
   },
-
   "undefined_variable_in_makearray_values.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_xyz' referenced in equation is not declared",
         "details": {
@@ -338,12 +343,11 @@
     "is_valid": false,
     "notes": "Undefined variable hidden in a makearray `values` entry — a non-`args` expression child field (makearray carries an empty `args`)."
   },
-
   "undefined_variable_in_table_lookup_axes.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_xyz' referenced in equation is not declared",
         "details": {
@@ -356,12 +360,11 @@
     "is_valid": false,
     "notes": "Undefined variable hidden in a table_lookup `axes` map value — a non-`args` expression child field (table_lookup carries an empty `args`; the table `tbl` and axis name `a` are declared)."
   },
-
   "undefined_variable_in_template_bindings.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel",
+        "path": "/models/TestModel/equations/0/rhs",
         "code": "undefined_variable",
         "message": "Variable 'undefined_xyz' referenced in equation is not declared",
         "details": {
@@ -374,12 +377,11 @@
     "is_valid": false,
     "notes": "Undefined variable hidden in an apply_expression_template `bindings` value — a non-`args` expression child field (the node carries an empty `args`; the template `negate` and its parameter `A_pre` are declared)."
   },
-
   "undefined_species_in_substrates.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/reaction_systems/ChemSystem/reactions/0",
+        "path": "/reaction_systems/ChemSystem/reactions/0/substrates/1/species",
         "code": "undefined_species",
         "message": "Species 'undefined_species' referenced in reaction substrates is not declared",
         "details": {
@@ -390,7 +392,7 @@
         }
       },
       {
-        "path": "/reaction_systems/ChemSystem/reactions/0",
+        "path": "/reaction_systems/ChemSystem/reactions/0/products/0/species",
         "code": "undefined_species",
         "message": "Species 'NO2' referenced in reaction products is not declared",
         "details": {
@@ -401,14 +403,14 @@
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": "The reaction fixture was modernised from the pre-0.2 dict spelling of substrates/products ({\"NO\": 1}) to the schema array-of-{species,stoichiometry}: in the old shape the file was rejected at the SCHEMA layer for a malformed type and never reached the structural check it exists to pin. Audit 2026-07-14, finding F4."
   },
-
   "undefined_species_in_products.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/reaction_systems/ChemSystem/reactions/0",
+        "path": "/reaction_systems/ChemSystem/reactions/0/products/1/species",
         "code": "undefined_species",
         "message": "Species 'undefined_radical' referenced in reaction products is not declared",
         "details": {
@@ -419,14 +421,14 @@
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": "The reaction fixture was modernised from the pre-0.2 dict spelling of substrates/products ({\"NO\": 1}) to the schema array-of-{species,stoichiometry}: in the old shape the file was rejected at the SCHEMA layer for a malformed type and never reached the structural check it exists to pin. Audit 2026-07-14, finding F4."
   },
-
   "undefined_parameter_simple_rate.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/reaction_systems/ChemSystem/reactions/0",
+        "path": "/reaction_systems/ChemSystem/reactions/0/rate",
         "code": "undefined_parameter",
         "message": "Parameter 'undefined_photolysis_rate' referenced in rate expression is not declared",
         "details": {
@@ -436,14 +438,14 @@
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": "The reaction fixture was modernised from the pre-0.2 dict spelling of substrates/products ({\"NO\": 1}) to the schema array-of-{species,stoichiometry}: in the old shape the file was rejected at the SCHEMA layer for a malformed type and never reached the structural check it exists to pin. Audit 2026-07-14, finding F4."
   },
-
   "undefined_parameter_complex_rate.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/reaction_systems/ChemSystem/reactions/0",
+        "path": "/reaction_systems/ChemSystem/reactions/0/rate",
         "code": "undefined_parameter",
         "message": "Parameter 'undefined_activation_energy' referenced in rate expression is not declared",
         "details": {
@@ -453,14 +455,14 @@
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": "The reaction fixture was modernised from the pre-0.2 dict spelling of substrates/products ({\"NO\": 1}) to the schema array-of-{species,stoichiometry}: in the old shape the file was rejected at the SCHEMA layer for a malformed type and never reached the structural check it exists to pin. Audit 2026-07-14, finding F4."
   },
-
   "unresolved_scoped_ref_missing_system.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/coupling/0",
+        "path": "/coupling/0/from",
         "code": "unresolved_scoped_ref",
         "message": "Scoped reference 'NonExistentModel.MissingSubsystem.temperature' cannot be resolved",
         "details": {
@@ -472,12 +474,11 @@
     ],
     "is_valid": false
   },
-
   "unresolved_scoped_ref_missing_variable.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/coupling/0",
+        "path": "/coupling/0/from",
         "code": "unresolved_scoped_ref",
         "message": "Scoped reference 'ModelB.nonexistent_variable' cannot be resolved",
         "details": {
@@ -489,7 +490,6 @@
     ],
     "is_valid": false
   },
-
   "null_reaction_explicit_nulls.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -504,10 +504,17 @@
     ],
     "is_valid": false
   },
-
   "missing_observed_expr_single.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/models/TestModel/variables/total",
+        "message": "must have required property 'expression'",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/models/TestModel/variables/total",
         "code": "missing_observed_expr",
@@ -518,12 +525,24 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "missing_observed_expr_multiple.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/models/TestModel/variables/total",
+        "message": "must have required property 'expression'",
+        "keyword": "required"
+      },
+      {
+        "path": "/models/TestModel/variables/ratio",
+        "message": "must have required property 'expression'",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/models/TestModel/variables/total",
         "code": "missing_observed_expr",
@@ -543,12 +562,19 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "event_var_undeclared_condition.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/models/BallModel/continuous_events/0",
+        "message": "must have required property 'conditions'",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/models/BallModel/continuous_events/0",
         "code": "event_var_undeclared",
@@ -562,14 +588,13 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "event_var_undeclared_affects.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/discrete_events/0",
+        "path": "/models/TestModel/discrete_events/0/affects/0/lhs",
         "code": "event_var_undeclared",
         "message": "Variable 'undefined_parameter' in event affects is not declared",
         "details": {
@@ -583,12 +608,11 @@
     ],
     "is_valid": false
   },
-
   "invalid_discrete_param_not_parameter.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/discrete_events/0",
+        "path": "/models/TestModel/discrete_events/0/discrete_parameters",
         "code": "invalid_discrete_param",
         "message": "Discrete parameter 'x' is not declared as a parameter (found as state variable)",
         "details": {
@@ -602,18 +626,35 @@
     ],
     "is_valid": false
   },
-
   "multiple_errors_combined.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/models/BadModel/variables/observed_without_expr",
+        "message": "must have required property 'expression'",
+        "keyword": "required"
+      },
+      {
+        "path": "/models/BadModel/continuous_events/0",
+        "message": "must have required property 'conditions'",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/models/BadModel",
         "code": "equation_count_mismatch",
         "message": "Number of ODE equations (1) does not match number of state variables (2)",
         "details": {
-          "state_variables": ["x", "y"],
+          "state_variables": [
+            "x",
+            "y"
+          ],
           "ode_equations": 1,
-          "missing_equations_for": ["y"]
+          "missing_equations_for": [
+            "y"
+          ]
         }
       },
       {
@@ -709,9 +750,8 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "missing_metadata.esm": {
     "schema_errors": [
       {
@@ -723,7 +763,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "missing_metadata_name.esm": {
     "schema_errors": [
       {
@@ -735,7 +774,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "invalid_date_format.esm": {
     "schema_errors": [
       {
@@ -752,7 +790,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "malformed_doi.esm": {
     "schema_errors": [
       {
@@ -770,7 +807,6 @@
     "is_valid": false,
     "notes": "Pinned by the schema `pattern` on Reference.doi (10.<registrant>/<suffix>). This entry previously pinned zero errors while asserting is_valid:false, so no binding could fail it."
   },
-
   "invalid_url_format.esm": {
     "schema_errors": [
       {
@@ -787,7 +823,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "extra_metadata_fields.esm": {
     "schema_errors": [
       {
@@ -819,7 +854,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "invalid_metadata_types.esm": {
     "schema_errors": [
       {
@@ -861,7 +895,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "empty_reference_fields.esm": {
     "schema_errors": [
       {
@@ -874,7 +907,6 @@
     "is_valid": false,
     "notes": "Empty string validation may be implementation-specific. Some validators may accept empty strings, others may reject them."
   },
-
   "data_loader_missing_type.esm": {
     "schema_errors": [
       {
@@ -887,7 +919,6 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: tests missing 'kind' (formerly 'type')."
   },
-
   "data_loader_missing_loader_id.esm": {
     "schema_errors": [
       {
@@ -900,7 +931,6 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: loader_id no longer exists; tests missing 'source'."
   },
-
   "data_loader_missing_provides.esm": {
     "schema_errors": [
       {
@@ -913,7 +943,6 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: 'provides' renamed to 'variables'."
   },
-
   "data_loader_invalid_type.esm": {
     "schema_errors": [
       {
@@ -926,10 +955,17 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: tests invalid 'kind' enum value."
   },
-
   "data_loader_undefined_reference.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/data_loaders/WeatherData",
+        "message": "must NOT have additional properties",
+        "keyword": "additionalProperties"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/coupling/0",
         "code": "data_loader_variable_missing",
@@ -938,13 +974,15 @@
           "variable": "undefined_variable",
           "data_loader": "WeatherData",
           "coupling_type": "variable_map",
-          "available_variables": ["T", "P"]
+          "available_variables": [
+            "T",
+            "P"
+          ]
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "interpolation_method_invalid.esm": {
     "schema_errors": [
       {
@@ -957,7 +995,6 @@
     "is_valid": false,
     "notes": "Legacy-shape rejection (RFC pure-io-data-loaders §4.1): the loader 'regridding' block was removed (regridding is now a per-variable model concern). A loader still carrying 'regridding' is rejected as an unknown property by DataLoader's additionalProperties:false."
   },
-
   "data_loader_legacy_spatial.esm": {
     "schema_errors": [
       {
@@ -970,7 +1007,6 @@
     "is_valid": false,
     "notes": "Legacy-shape rejection (RFC pure-io-data-loaders 4.1, bead ess-v9a.8): the loader 'spatial' block (former DataLoaderSpatial) was removed; the native grid is now a GDD Grid under 'grid' and regridding is a per-variable model concern. A loader still carrying 'spatial' is rejected as an unknown property by DataLoader's additionalProperties:false. Parallel to interpolation_method_invalid.esm (the 'regridding' rejection)."
   },
-
   "temporal_resolution_invalid.esm": {
     "schema_errors": [
       {
@@ -983,7 +1019,6 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: tests invalid temporal.records_per_file value."
   },
-
   "data_loader_config_schema_violation.esm": {
     "schema_errors": [
       {
@@ -996,7 +1031,6 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: 'config' field removed; tests invalid 'source' type (should be object)."
   },
-
   "data_loader_provides_missing_units.esm": {
     "schema_errors": [
       {
@@ -1009,7 +1043,6 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: 'provides' renamed to 'variables'."
   },
-
   "data_loader_provides_missing_description.esm": {
     "schema_errors": [
       {
@@ -1022,7 +1055,6 @@
     "is_valid": false,
     "notes": "Repurposed for new DataLoader shape: 'description' is still optional in new 'variables'; this fixture now tests missing 'file_variable' instead."
   },
-
   "missing_required_fields.esm": {
     "schema_errors": [
       {
@@ -1034,7 +1066,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "invalid_enum_values.esm": {
     "schema_errors": [
       {
@@ -1046,7 +1077,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "wrong_data_types.esm": {
     "schema_errors": [
       {
@@ -1083,7 +1113,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "empty_required_arrays.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1096,7 +1125,6 @@
     "is_valid": false,
     "notes": "Not a schema error. An empty authors array is valid, and an empty equations array is valid for a model with no state variables or whose dynamics live in subsystems (see tests/valid/units_conversions.esm and tests/valid/scoped_refs_coupling.esm). The defect here is the equation/unknown balance: a state variable with no defining equation, in a model with no subsystems."
   },
-
   "circular_coupling.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1105,28 +1133,55 @@
         "code": "circular_dependency",
         "message": "Circular coupling detected: ModelA → ModelB → ModelA",
         "details": {
-          "cycle": ["ModelA", "ModelB", "ModelA"],
+          "cycle": [
+            "ModelA",
+            "ModelB",
+            "ModelA"
+          ],
           "coupling_chain": [
-            {"from": "ModelA.x", "references": "ModelB.y"},
-            {"from": "ModelB.y", "references": "ModelA.x"}
+            {
+              "from": "ModelA.x",
+              "references": "ModelB.y"
+            },
+            {
+              "from": "ModelB.y",
+              "references": "ModelA.x"
+            }
           ]
         }
       }
     ],
     "is_valid": false
   },
-
   "complete_error_coverage.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/models/BadModel/variables/observed_without_expr",
+        "message": "must have required property 'expression'",
+        "keyword": "required"
+      },
+      {
+        "path": "/models/BadModel/equations/0",
+        "message": "must be object",
+        "keyword": "type"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/models/BadModel",
         "code": "equation_count_mismatch",
         "message": "Number of ODE equations (1) does not match number of state variables (2)",
         "details": {
-          "state_variables": ["x", "y"],
+          "state_variables": [
+            "x",
+            "y"
+          ],
           "ode_equations": 1,
-          "missing_equations_for": ["y"]
+          "missing_equations_for": [
+            "y"
+          ]
         }
       },
       {
@@ -1254,17 +1309,21 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "malformed_json.esm": {
     "parse_error": true,
-    "schema_errors": [],
+    "schema_errors": [
+      {
+        "path": "$",
+        "message": "Invalid JSON",
+        "keyword": "json_parse_error"
+      }
+    ],
     "structural_errors": [],
     "is_valid": false,
     "notes": "File contains invalid JSON (missing comma, JS-style comments, unclosed brace). Validators should reject at the parse stage before schema or structural validation."
   },
-
   "negative_stoichiometry.esm": {
     "schema_errors": [
       {
@@ -1281,7 +1340,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-
   "no_systems.esm": {
     "schema_errors": [
       {
@@ -1294,7 +1352,6 @@
     "is_valid": false,
     "notes": "Genuine no-subsystem negative (RFC pure-io-data-loaders 4.4, bead ess-v9a.8): a document declaring none of models / reaction_systems / data_loaders fails the top-level anyOf. Refreshed for ess-v9a.8 -- the prior fixture was a loader-only document kept invalid only incidentally by a stray top-level 'domain' key, and this entry listed pre-pure-IO 'type: netcdf' / 'path' / 'provides_vars' loader errors (from before the 4.1 pure-IO migration) that no longer apply."
   },
-
   "invalid_trigger_type.esm": {
     "schema_errors": [
       {
@@ -1307,12 +1364,11 @@
     "is_valid": false,
     "notes": "The 'events' key is not valid on Model; use 'discrete_events' or 'continuous_events' instead."
   },
-
   "reaction_undefined_species.esm": {
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/reaction_systems/TestRxns/reactions/0",
+        "path": "/reaction_systems/TestRxns/reactions/0/substrates/1/species",
         "code": "undefined_species",
         "message": "Species 'UndefinedSpecies' referenced in reaction substrates is not declared",
         "details": {
@@ -1323,7 +1379,7 @@
         }
       },
       {
-        "path": "/reaction_systems/TestRxns/reactions/0",
+        "path": "/reaction_systems/TestRxns/reactions/0/products/0/species",
         "code": "undefined_species",
         "message": "Species 'NO2' referenced in reaction products is not declared",
         "details": {
@@ -1336,7 +1392,6 @@
     ],
     "is_valid": false
   },
-
   "subsystem_ref_not_found.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1353,7 +1408,6 @@
     ],
     "is_valid": false
   },
-
   "subsystem_ref_ambiguous.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1370,10 +1424,22 @@
     ],
     "is_valid": false
   },
-
   "bare_reference_errors.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/coupling/0",
+        "message": "must have required property 'systems'",
+        "keyword": "required"
+      },
+      {
+        "path": "/coupling/0/type",
+        "message": "must be equal to constant",
+        "keyword": "const"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/coupling/0",
         "code": "unresolved_scoped_ref",
@@ -1437,12 +1503,24 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "coupling_resolution_errors.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/metadata",
+        "message": "must NOT have additional properties",
+        "keyword": "additionalProperties"
+      },
+      {
+        "path": "/coupling/0",
+        "message": "must have required property 'systems'",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/coupling/0",
         "code": "undefined_system",
@@ -1515,12 +1593,24 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "scoped_reference_resolution_errors.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/coupling/0",
+        "message": "must have required property 'systems'",
+        "keyword": "required"
+      },
+      {
+        "path": "/coupling/0/type",
+        "message": "must be equal to constant",
+        "keyword": "const"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/coupling/0",
         "code": "undefined_system",
@@ -1634,33 +1724,19 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "event_error_conditions.esm": {
     "schema_errors": [
       {
-        "path": "/models/ErrorTestModel/discrete_events/1/trigger/type",
-        "message": "Value 'invalid_trigger_type' is not one of the allowed trigger types",
-        "keyword": "enum"
-      },
-      {
-        "path": "/models/ErrorTestModel/discrete_events/2/trigger",
-        "message": "Periodic trigger is missing required field 'interval'",
+        "path": "/models/ErrorTestModel/discrete_events/1/trigger",
+        "message": "must have required property",
         "keyword": "required"
-      },
-      {
-        "path": "/models/ErrorTestModel/discrete_events/3/trigger/times",
-        "message": "Preset times array must contain at least one time value",
-        "keyword": "minItems"
-      },
-      {
-        "path": "/models/ErrorTestModel/discrete_events/5",
-        "message": "Event must have either 'affects' or 'functional_affect', but not both",
-        "keyword": "oneOf"
       }
     ],
-    "structural_errors": [
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/models/ErrorTestModel/continuous_events/0",
         "code": "event_var_undeclared",
@@ -1744,12 +1820,20 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "scoped_ref_errors.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/models/TestSystem/equations/0",
+        "message": "must NOT have additional properties",
+        "keyword": "additionalProperties"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "This file uses the non-standard 'scoped_ref' expression syntax. Whether that produces schema errors depends on how strict the Expression schema is. The coupling entries contain the canonical structural errors. SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4.",
+    "structural_coverage_intended": [
       {
         "path": "/coupling/0",
         "code": "unresolved_scoped_ref",
@@ -1771,14 +1855,20 @@
           "expected_in": "models, reaction_systems, data_loaders"
         }
       }
-    ],
-    "is_valid": false,
-    "notes": "This file uses the non-standard 'scoped_ref' expression syntax. Whether that produces schema errors depends on how strict the Expression schema is. The coupling entries contain the canonical structural errors."
+    ]
   },
-
   "comprehensive_coupling_resolution_errors.esm": {
-    "schema_errors": [],
-    "structural_errors": [
+    "schema_errors": [
+      {
+        "path": "/metadata",
+        "message": "must NOT have additional properties",
+        "keyword": "additionalProperties"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "This file contains annotated error cases. Some entries may also produce schema errors (e.g., invalid enum values for transform, invalid coupling types) depending on the validator. The structural errors listed here are the errors that survive schema-valid entries. SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4.",
+    "structural_coverage_intended": [
       {
         "path": "/coupling/0",
         "code": "undefined_system",
@@ -1849,20 +1939,19 @@
           "location": "connector"
         }
       }
-    ],
-    "is_valid": false,
-    "notes": "This file contains annotated error cases. Some entries may also produce schema errors (e.g., invalid enum values for transform, invalid coupling types) depending on the validator. The structural errors listed here are the errors that survive schema-valid entries."
+    ]
   },
-
   "units_coupling_mismatch.esm": {
     "schema_errors": [
       {
         "path": "/coupling/0/transform",
-        "message": "Value 'direct_map' not in enum: [param_to_var, identity, additive, multiplicative, conversion_factor]",
+        "message": "must be equal to one of the allowed values",
         "keyword": "enum"
       }
     ],
-    "structural_errors": [
+    "structural_errors": [],
+    "is_valid": false,
+    "structural_coverage_intended": [
       {
         "path": "/coupling/0",
         "code": "unit_inconsistency",
@@ -1877,9 +1966,8 @@
         }
       }
     ],
-    "is_valid": false
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
   },
-
   "domain_unit_mismatch_identity.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -1888,7 +1976,6 @@
     "resolver_error_code": "domain_unit_mismatch",
     "notes": "Flatten-level invalid (esm-spec §4.7.6). The document is SCHEMA-VALID (a variable_map identity coupling with declared units is legal schema) and validate()-clean — no binding's validate() checks cross-binding coupling units — so schema-only bindings (TypeScript, Go) accept it (is_valid: true) and their invalid-fixture loops read `resolver_only` and assert schema acceptance. Lives under tests/invalid/coupling/. A variable_map coupling entry with transform=='identity' between two variables whose DECLARED units are both present, non-empty, and DIFFERENT (SystemA.temperature='K' vs SystemB.temperature='degC') MUST be rejected at flatten() with the DomainUnitMismatch flatten error (Julia: DomainUnitMismatchError, raised by _check_variable_map_units in coupling_apply.jl; Rust: FlattenError::DomainUnitMismatch; Python: DomainUnitMismatchError). Matching or absent units are legal (see the positive control tests/valid/coupling_variable_map_identity_units_match.esm). `param_to_var` and `conversion_factor` transforms are exempt."
   },
-
   "units_incompatible_assignment.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1905,7 +1992,6 @@
     ],
     "is_valid": false
   },
-
   "units_inconsistent_addition.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1923,7 +2009,6 @@
     ],
     "is_valid": false
   },
-
   "units_invalid_logarithm.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1941,7 +2026,6 @@
     ],
     "is_valid": false
   },
-
   "units_inconsistent_subtraction.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1959,7 +2043,6 @@
     ],
     "is_valid": false
   },
-
   "units_invalid_exponent.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1977,7 +2060,6 @@
     ],
     "is_valid": false
   },
-
   "units_invalid_derivative.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -1998,7 +2080,6 @@
     ],
     "is_valid": false
   },
-
   "units_gradient_operator_mismatch.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2030,7 +2111,6 @@
     "is_valid": false,
     "notes": "Primary demonstration: grad applied over coordinate 'x' that the model declares WITHOUT units — validators that model grad/div/laplacian must not assume a hardcoded metre denominator. Since the v0.8.0 Domain.spatial removal, physical coordinates are ordinary declared variables/parameters, so the fixture declares 'x' as a units-less parameter; a grad dim naming NO declared variable (an index-set axis lowered by a discretization rewrite rule, spec §9.6.8) is instead left to the legacy metre fallback and never flagged. The companion bad_sum observed variable is a secondary demonstration included so bindings that do not yet validate grad/div/laplacian still surface this fixture as invalid. The Julia binding surfaces the grad-specific inconsistency by resolving the dim against declared model variables (validate.jl::validate_model_gradient_units); follow-up beads track the same declared-variable resolution in the TypeScript/Rust bindings (whose coordinate tables are currently never populated) and gradient support in Python/Go."
   },
-
   "units_mixed_dimensional_operations.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2060,7 +2140,6 @@
     "is_valid": false,
     "notes": "Demonstrates two independent unit inconsistencies (addition of incompatible units, and transcendental function on dimensional argument) in one fixture. Validators may surface one or both depending on coverage; Python's validator currently only surfaces the addition case, while Julia/Rust/TS/Go also surface the transcendental case."
   },
-
   "units_parameter_default_mismatch.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2079,7 +2158,6 @@
     "is_valid": false,
     "notes": "Parameter declares units='K' but supplies default_units='degC'. Python's validator flags any difference between the declared and default unit identities (including same-dimension mismatches like K vs degC and dimensionally incompatible pairs like K vs kg). Julia/Rust/TS/Go currently accept the default_units field in the schema but do not yet emit this check — follow-up beads required for full cross-language support."
   },
-
   "units_reaction_rate_mismatch.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2098,7 +2176,6 @@
     "is_valid": false,
     "notes": "2nd-order reaction A + B -> C whose rate parameter 'k' is declared with 1/s units (appropriate for a 1st-order rate constant) instead of 1/(M*s). Julia's validate_reaction_system_dimensions compares the observed rate dimension to concentration^(1-total_order)/time derived from the first substrate's units and fails with @warn on mismatch. Rust/Python/TS/Go currently ignore this check — follow-up beads required for full cross-language support."
   },
-
   "units_conversion_factor_error.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2118,7 +2195,6 @@
     "is_valid": false,
     "notes": "Observed variable declared in Pa is assigned '50000 * p_atm' where p_atm is in atm; dimensions match but the numeric scale factor should be 101325 Pa/atm. Python's validator (parse._check_conversion_factor_consistency) detects linear-scale conversion errors by comparing the numeric literal in a '*' expression against pint's computed conversion factor. Affine conversions (e.g., degC→K) are excluded. Julia/Rust/TS/Go currently accept the file without this error — follow-up beads required for full cross-language support."
   },
-
   "units_dimensional_constant_error.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2184,7 +2260,6 @@
       }
     ]
   },
-
   "import_cycle_a.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2193,7 +2268,6 @@
     "resolver_error_code": "template_import_cycle",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. import_cycle_a.esm imports import_cycle_b.esm which imports import_cycle_a.esm: an import-graph cycle over canonical paths (esm-spec §9.7.2). Loading EITHER file fails with template_import_cycle."
   },
-
   "import_cycle_b.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2202,7 +2276,6 @@
     "resolver_error_code": "template_import_cycle",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The other half of the import_cycle_a.esm cycle; loading either file reports template_import_cycle (esm-spec §9.7.2)."
   },
-
   "import_not_library.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2211,7 +2284,6 @@
     "resolver_error_code": "template_import_not_library",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The import ref targets ../../valid/model_only.esm, a component (model) file — not a pure template-library file (no top-level expression_templates; esm-spec §9.7.1)."
   },
-
   "subsystem_ref_is_library.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2220,7 +2292,6 @@
     "resolver_error_code": "subsystem_ref_is_template_library",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. A §4.7 subsystem ref targets ../../valid/template_import_lib.esm, a template-library file. The two reference mechanisms are disjoint (esm-spec §9.7.1): libraries are imported via expression_template_imports, never included as subsystems."
   },
-
   "import_name_conflict.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2229,7 +2300,6 @@
     "resolver_error_code": "template_import_name_conflict",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The model imports template_import_lib.esm (which declares n_cells with body \"N\") and locally declares n_cells with body 2 — a same-name, non-deep-equal import/local collision (esm-spec §9.7.4)."
   },
-
   "import_unknown_only.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2238,7 +2308,6 @@
     "resolver_error_code": "template_import_unknown_name",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The import's `only` array names does_not_exist, a template the target library does not declare (esm-spec §9.7.2)."
   },
-
   "index_set_conflict.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2247,25 +2316,22 @@
     "resolver_error_code": "template_import_index_set_conflict",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 4) collides with the imported library's cells (interval, size N) — non-deep-equal merge (esm-spec §9.7.5)."
   },
-
   "makearray_region_inverted.esm": {
     "schema_errors": [],
     "structural_errors": [],
     "is_valid": true,
     "resolver_only": true,
     "resolver_error_code": "makearray_region_inverted",
-    "notes": "Resolver-level invalid (esm-spec \u00a74.3.2 'Empty and inverted bounds' / \u00a79.6.4). The document is SCHEMA-VALID \u2014 metaparameter expressions are legal in makearray region bound positions \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The \u00a79.6.8-style interior region [2, N-1] is instantiated at N = 1 (the metaparameter default), folding to [2, 0] \u2014 INVERTED (stop < start - 1). The canonical EMPTY bound [start, start-1] (e.g. [2, 1] at N = 2, see tests/valid/makearray_empty_region_min_extent.esm) is legal and contributes no elements; anything further inverted is a load-time error on the expanded, metaparameter-folded form."
+    "notes": "Resolver-level invalid (esm-spec §4.3.2 'Empty and inverted bounds' / §9.6.4). The document is SCHEMA-VALID — metaparameter expressions are legal in makearray region bound positions — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The §9.6.8-style interior region [2, N-1] is instantiated at N = 1 (the metaparameter default), folding to [2, 0] — INVERTED (stop < start - 1). The canonical EMPTY bound [start, start-1] (e.g. [2, 1] at N = 2, see tests/valid/makearray_empty_region_min_extent.esm) is legal and contributes no elements; anything further inverted is a load-time error on the expanded, metaparameter-folded form."
   },
-
   "subsystem_index_set_conflict.esm": {
     "schema_errors": [],
     "structural_errors": [],
     "is_valid": true,
     "resolver_only": true,
     "resolver_error_code": "subsystem_index_set_conflict",
-    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge'). The document is SCHEMA-VALID \u2014 a subsystem ref and top-level index_sets are both legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with the mounted subsystem file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm: a referenced subsystem file's top-level index_sets merge into the importing document's registry (deep-equal idempotent, mirroring \u00a79.7.5), so the size disagreement is a load-time error instead of the importer's declaration silently winning."
+    "notes": "Resolver-level invalid (esm-spec §4.7 'Index-set merge'). The document is SCHEMA-VALID — a subsystem ref and top-level index_sets are both legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with the mounted subsystem file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm: a referenced subsystem file's top-level index_sets merge into the importing document's registry (deep-equal idempotent, mirroring §9.7.5), so the size disagreement is a load-time error instead of the importer's declaration silently winning."
   },
-
   "body_apply_cycle.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2274,7 +2340,6 @@
     "resolver_error_code": "apply_expression_template_recursive_body",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Templates t_a and t_b reference each other from their bodies: a cycle in the §9.7.3 registration-time body-composition DAG. (Redefined by the template-library RFC: acyclic body references are legal and inlined at load; only CYCLES are rejected.)"
   },
-
   "body_chain_too_deep.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2283,7 +2348,6 @@
     "resolver_error_code": "template_body_expansion_too_deep",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. GENERATED fixture: a 33-template body-reference chain c_01 -> ... -> c_33. The longest chain (counted in templates) exceeds MAX_TEMPLATE_EXPANSION_DEPTH = 32 (esm-spec §9.7.3); a 32-template chain is legal."
   },
-
   "metaparameter_unbound.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2292,7 +2356,6 @@
     "resolver_error_code": "metaparameter_unbound",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter NX declares no default and nothing binds it (no import edge, no subsystem edge, no loader-API binding): still open after all §9.7.6 binding sites."
   },
-
   "metaparameter_inexact_division.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2301,7 +2364,6 @@
     "resolver_error_code": "metaparameter_type_error",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. index_sets.half.size = NX / 2 with NX defaulting to 5: metaparameter folding is exact 64-bit integer arithmetic and `/` MUST divide exactly (esm-spec §9.7.6)."
   },
-
   "metaparameter_name_conflict.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2310,7 +2372,6 @@
     "resolver_error_code": "metaparameter_name_conflict",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter x collides with the model state variable x; a metaparameter name must not collide with any visible variable/parameter/species/index-set name — there is no shadowing (esm-spec §9.7.6)."
   },
-
   "import_version_too_old.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2319,7 +2380,6 @@
     "resolver_error_code": "template_import_version_too_old",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The file declares esm 0.7.0 but carries expression_template_imports; the §9.7 constructs arrive at esm 0.8.0 (esm-spec §9.6.5). The gate fires before the import ref is ever resolved."
   },
-
   "rename_unknown_name.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2328,7 +2388,6 @@
     "resolver_error_code": "template_import_rename_unknown_name",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `rename` map names 'nope', which the target does not export at this edge (surviving exports = templates after `only`, index sets, metaparameters left open by `bindings`): renames never invent names (esm-spec §9.7.7)."
   },
-
   "rebind_unknown_free_name.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2337,7 +2396,6 @@
     "resolver_error_code": "template_import_rebind_unknown_name",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `rebind` map names 'not_a_free_name', which does not occur free in the imported declarations: a rebind that binds nothing would silently leave the library's factor contract in force (esm-spec §9.7.7)."
   },
-
   "rename_collision.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2346,7 +2404,6 @@
     "resolver_error_code": "template_import_rename_collision",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Two exported template names (area, perim) both renamed to 'geom' at one edge: a rename-target collision within one namespace (esm-spec §9.7.7)."
   },
-
   "rename_invalid_identifier.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2354,5 +2411,21 @@
     "resolver_only": true,
     "resolver_error_code": "template_import_rename_invalid",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `prefix` '9 bad' is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots); the grammar is resolver-enforced so the diagnostic is cross-binding uniform (esm-spec §9.7.7)."
+  },
+  "unparseable_unit.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/variables/c",
+        "code": "unit_parse_error",
+        "message": "Unit string 'not_a_unit' is not a recognised unit",
+        "details": {
+          "variable": "c",
+          "units": "not_a_unit"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "POLICY REVERSAL. This fixture used to live in tests/valid pinning the OPPOSITE contract (\"an unparseable unit is a warning; is_valid stays true\"). The units severity contract is now: a PROVABLE dimensional mismatch is a hard error; an unresolvable/unreal unit string is a hard error (`unit_parse_error`); only a GENUINELY UNDETERMINABLE dimension (symbolic exponent, an op with no dimensional rule) is a warning, reported as \"unknown\" and skipped — never assumed dimensionless. See esm-spec §4.8. Bindings whose unit registry is incomplete must extend the registry, not downgrade the severity: TypeScript currently reports this as an `analysis` warning and accepts the file (quarantined in conformance.test.ts)."
   }
 }
