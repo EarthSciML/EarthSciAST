@@ -333,3 +333,192 @@ end
         @test a_fast < a_slow
     end
 end
+
+# ---------------------------------------------------------------------------
+# Per-cell `fn` specs must not be merged across DIFFERENT const tables
+# (EarthSciSerialization-2wg).
+#
+# `_struct_sig!` deliberately ignores leaf VALUES so that cells differing only in
+# a literal / state slot / gather offset collapse into ONE template with per-lane
+# vectors. But an `interp.*` node's const table and axis are NOT leaves: they live
+# in the typed `_Interp*Spec` on the node's `payload`, and `_compile_fn_node` keeps
+# them out of the children entirely. Two cells calling `interp.linear` against
+# different tables therefore had identical children AND identical signatures — they
+# merged into one group, and `_merge_fn_node` put `nodes[1]`'s spec on the single
+# merged kernel, so EVERY cell silently computed against the FIRST cell's table.
+#
+# REACHABLE, and these tests pin the reproduction: a `makearray` whose two regions
+# each call `interp.linear` with their own table, indexed inside an arrayop that
+# takes the PER-CELL path. (The symbolic-stencil fast path already keyed the region
+# choice into its branch key, so it was correct; the per-cell fallback — taken by
+# any contraction, and by `ESS_STENCIL_DISABLE=1` — was not.)
+#
+# Fix: `_struct_sig!` keys the spec's CONTENT (`_fn_spec_hash`), so differing tables
+# land in different groups and each gets its own kernel. Content, NOT `objectid`:
+# specs are rebuilt per `_compile_fn_node` call, so equal tables routinely live in
+# different objects, and identity keying would split groups that must merge and
+# destroy the N-independence of the kernel count. `_merge_fn_node` then re-checks the
+# group with the exact `isequal` twin of that hash, so a hash collision fails LOUD
+# instead of falling back to a silent wrong number.
+@testset "fn const-table specs are not merged across cells (EarthSciSerialization-2wg)" begin
+    AX = [0.0, 1.0, 2.0, 3.0]
+    TBL_A = [0.0, 10.0, 20.0, 30.0]
+    TBL_B = [0.0, -100.0, -200.0, -300.0]   # same shape, wildly different values
+    QUERY = 1.5                              # strictly between knots → a real blend
+    refA = Float64(ESM.evaluate_closed_function("interp.linear", Any[TBL_A, AX, QUERY]))
+    refB = Float64(ESM.evaluate_closed_function("interp.linear", Any[TBL_B, AX, QUERY]))
+    @test refA != refB   # the oracle must actually discriminate
+
+    _constarr(v) = OpExpr("const", ESM.ASTExpr[]; value=v)
+    # `fn interp.linear(table, axis, u[i])` — a RUNTIME (state) query, so it is not
+    # const-folded and really does reach the merged kernel.
+    _interp_u(tbl) = _op("fn", _constarr(tbl), _constarr(AX), _idx("u", _v("i"));
+                         name="interp.linear")
+    # Hand-built scalar `_Node`, exactly what `_compile_fn_node` emits: the const args
+    # are pulled into the typed spec and only the scalar query stays a child.
+    _fnnode(tbl, child) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
+        payload=("interp.linear", ESM._build_interp_spec("interp.linear", Any[tbl, AX])),
+        children=ESM._Node[child])
+
+    # -- (a) FAIL LOUD at the merge seam ------------------------------------
+    # `_struct_sig!` now separates these, so `_vectorize_cell_entries` can no longer
+    # hand `_merge_nodes` such a group. Construct it directly (white-box) to pin the
+    # guard itself: it is the backstop for a hash collision, or for a future grouping
+    # change that stops keying the spec.
+    @testset "(a) merging differing const tables throws, with a clear message" begin
+        gA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
+        gB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_STATE, idx=2))
+        err = try
+            ESM._merge_nodes(ESM._Node[gA, gB], 2); nothing
+        catch e
+            e
+        end
+        @test err isa ESM.TreeWalkError
+        @test err.code == "E_TREEWALK_FN_SPEC_MISMATCH"
+        @test occursin("interp.linear", err.detail)
+        @test occursin("const table", err.detail)
+
+        # It fires for the LANE-INVARIANT lowering too (a `fn` whose query children are
+        # all lane-invariant hoists to `_VK_INVARIANT` — one spec for the whole kernel,
+        # exactly the same hazard). A shared literal query would const-FOLD, so use a
+        # scalar state read (0-D inside an arrayop): lane-invariant, but not foldable.
+        hA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
+        hB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_STATE, idx=1))  # SAME slot → invariant
+        @test ESM._merge_nodes(ESM._Node[hA, hA], 2).kind === ESM._VK_INVARIANT  # would hoist
+        @test_throws ESM.TreeWalkError ESM._merge_nodes(ESM._Node[hA, hB], 2)
+
+        # …and for the const-FOLD lowering (all-literal query) — the guard runs before
+        # any of the three lowerings is chosen.
+        fA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_LITERAL, literal=QUERY))
+        fB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_LITERAL, literal=QUERY))
+        @test ESM._merge_nodes(ESM._Node[fA, fA], 2).kind === ESM._VK_LITERAL   # would fold
+        @test_throws ESM.TreeWalkError ESM._merge_nodes(ESM._Node[fA, fB], 2)
+    end
+
+    # -- (b) the normal case is untouched -----------------------------------
+    @testset "(b) one shared table still merges into ONE kernel node" begin
+        g1 = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
+        g2 = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=2))
+        merged = ESM._merge_nodes(ESM._Node[g1, g2], 2)
+        @test merged.kind === ESM._VK_FN                       # one per-lane kernel …
+        @test merged.payload isa ESM._InterpLinearSpec         # … carrying one spec
+        @test merged.children[1].kind === ESM._VK_GATHER       # … over a per-lane gather
+        @test ESM._count_vecnodes(merged) == 2                 # exactly 2 nodes, not 2N
+
+        # CONTENT, not `objectid`: two EQUAL tables built as DIFFERENT Julia objects
+        # (the ordinary case — `_compile_fn_node` rebuilds the spec per call) must
+        # still merge. Keying identity here would split them and break N-independence.
+        c1 = _fnnode(copy(TBL_A), ESM._mknode(kind=ESM._NK_STATE, idx=1))
+        c2 = _fnnode(copy(TBL_A), ESM._mknode(kind=ESM._NK_STATE, idx=2))
+        @test c1.payload[2] !== c2.payload[2]                  # genuinely distinct objects
+        merged_c = ESM._merge_nodes(ESM._Node[c1, c2], 2)
+        @test merged_c.kind === ESM._VK_FN                     # …still ONE kernel
+        @test ESM._count_vecnodes(merged_c) == ESM._count_vecnodes(merged)
+    end
+
+    # -- (d) end-to-end reproduction ----------------------------------------
+    # `makearray` regions 1-2 → TBL_A, 3-4 → TBL_B, over an arrayop. Three build
+    # paths: the symbolic stencil (was already correct), the per-cell fallback via a
+    # contracted index (was WRONG), and the per-cell fallback via ESS_STENCIL_DISABLE
+    # (was WRONG). All three must now agree with the scalar oracle.
+    N = 4
+    mk_two_tables(tbl1, tbl2) = OpExpr("makearray", ESM.ASTExpr[];
+        regions=[[[1, 2]], [[3, 4]]],
+        values=ESM.ASTExpr[_interp_u(tbl1), _interp_u(tbl2)])
+    lhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
+    # `ranges` carrying a key that is NOT in `output_idx` is a CONTRACTED index — an
+    # einsum/aggregate RHS — which is exactly what forces the per-cell path.
+    rhs_of(mk; contract::Bool) = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        expr_body=_op("index", mk, _v("i")),
+        ranges=contract ? Dict("i" => [1, N], "k" => [1, 1]) : Dict("i" => [1, N]))
+
+    function _build_du(rhs; disable_stencil::Bool)
+        model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+                          [ESM.Equation(lhs, rhs)])
+        ics = Dict("u[$k]" => QUERY for k in 1:N)
+        withenv("ESS_STENCIL_DISABLE" => (disable_stencil ? "1" : nothing)) do
+            f!, u0, p, _, vmap, d = ESM._build_evaluator_impl(model; initial_conditions=ics)
+            du = similar(u0); f!(du, u0, p, 0.0)
+            ([du[vmap["u[$k]"]] for k in 1:N], d)
+        end
+    end
+
+    @testset "(d) makearray regions with different tables — $label" for
+            (label, rhs, disable) in (
+                ("symbolic stencil",           rhs_of(mk_two_tables(TBL_A, TBL_B); contract=false), false),
+                ("per-cell (contracted index)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract=true),  false),
+                ("per-cell (stencil disabled)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract=false), true))
+        du, d = _build_du(rhs; disable_stencil=disable)
+        # Each cell against ITS OWN region's table — bit-identical to the scalar oracle.
+        @test _bitsame(du[1], refA)
+        @test _bitsame(du[2], refA)
+        @test _bitsame(du[3], refB)
+        @test _bitsame(du[4], refB)
+        # Two distinct tables ⇒ two kernels. (Before the fix the per-cell paths
+        # collapsed to ONE kernel and returned refA in all four cells.)
+        @test d.n_vec_kernels == 2
+    end
+
+    # The converse, and the reason the key must be CONTENT: two regions whose tables
+    # are EQUAL but are distinct Julia objects still collapse to ONE kernel.
+    @testset "(d') equal tables in both regions still collapse to one kernel" begin
+        for disable in (false, true)
+            du, d = _build_du(rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract=false);
+                              disable_stencil=disable)
+            @test all(_bitsame(x, refA) for x in du)
+            # The symbolic-stencil path splits by REGION regardless (its branch key
+            # names the region), so only assert the collapse on the per-cell path.
+            disable && @test d.n_vec_kernels == 1
+        end
+    end
+
+    # -- (c) N-independence survives ----------------------------------------
+    # Grouping by spec CONTENT is still N-independent: the number of DISTINCT tables
+    # is a property of the document, not of the grid. Pinned on the per-cell path,
+    # which is the one whose grouping changed.
+    @testset "(c) kernel count / template node count invariant across N" begin
+        function _diag(N, disable)
+            mk = OpExpr("makearray", ESM.ASTExpr[];
+                regions=[[[1, N ÷ 2]], [[N ÷ 2 + 1, N]]],
+                values=ESM.ASTExpr[_interp_u(TBL_A), _interp_u(TBL_B)])
+            l = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+                expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
+            r = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+                expr_body=_op("index", mk, _v("i")), ranges=Dict("i" => [1, N]))
+            model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+                              [ESM.Equation(l, r)])
+            ics = Dict("u[$k]" => QUERY for k in 1:N)
+            withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
+                ESM._build_evaluator_impl(model; initial_conditions=ics)[6]
+            end
+        end
+        @testset "$(disable ? "per-cell" : "symbolic stencil") path" for disable in (true, false)
+            ds = [_diag(N, disable) for N in (8, 16, 64)]
+            @test ds[1].n_vec_kernels == ds[2].n_vec_kernels == ds[3].n_vec_kernels
+            @test ds[1].template_node_count ==
+                  ds[2].template_node_count == ds[3].template_node_count
+            @test ds[1].n_vec_kernels == 2   # one kernel per distinct table, not per cell
+        end
+    end
+end
