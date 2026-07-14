@@ -23,12 +23,28 @@ end
     StructuralError
 
 Represents a structural validation error with detailed information.
-Contains path, message, and error type for structural issues.
+Contains path, message, error type, and machine-readable `details`.
+
+`details` is the MACHINE-READABLE half of the error, and Julia was the only
+binding without it (CONFORMANCE_SPEC row (j)). A conformance pin asserts code,
+path AND `details` under REQUIRED-SUBSET semantics (§7.1.2): every key the pin
+names must be present with the pinned value, and extra keys are fine. Without the
+field Julia cannot satisfy the 134 pins that carry one — it would be red in the
+harness for a structural reason rather than a real disagreement.
+
+It defaults to empty, so the three-positional-argument construction used
+throughout keeps working; sites that name a variable populate `details["variable"]`
+(the settled spelling), plus whatever else is locally meaningful.
 """
 struct StructuralError
     path::String
     message::String
     error_type::String
+    details::Dict{String,Any}
+
+    StructuralError(path::AbstractString, message::AbstractString, error_type::AbstractString,
+                    details::AbstractDict=Dict{String,Any}()) =
+        new(String(path), String(message), String(error_type), Dict{String,Any}(details))
 end
 
 """
@@ -147,10 +163,21 @@ Error paths use 0-based JSON-Pointer slash style (e.g.
 function validate_structural(file::EsmFile)::Vector{StructuralError}
     errors = StructuralError[]
 
-    # 1. Validate model equation-unknown balance
+    # 1. Validate model equation-unknown balance.
+    #
+    # (e) A COUPLED model is skipped ENTIRELY. Its states may be supplied from
+    # outside — by a `variable_map` (tests/valid/data_loaders_comprehensive.esm
+    # feeds `SimpleChemistry.wind_u` from a loader) or by the system it is
+    # composed onto — so its own equations need not balance its own unknowns.
+    # Demanding a defining equation for every declared state rejected three
+    # perfectly good fixtures. The narrower `check_excess=false` carve-out that
+    # used to stand in for this was only half the rule: it forgave the EXTRA
+    # equations and still demanded the MISSING ones.
     if file.models !== nothing
+        coupled = _coupled_system_names(file)
         composed = _operator_composed_systems(file)
         for (model_name, model) in file.models
+            model_name ∈ coupled && continue
             append!(errors, validate_model_balance(model, "/models/$model_name";
                                                    check_excess = model_name ∉ composed))
         end
@@ -162,7 +189,8 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 3. Validate reaction system consistency
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
-            append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$rs_name"))
+            append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$rs_name";
+                                                          indep=_indep_var(file)))
             append!(errors, validate_reaction_rate_units(rs, "/reaction_systems/$rs_name"))
         end
     end
@@ -185,10 +213,14 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         end
     end
 
-    # 4. Validate event consistency
+    # 4. Validate event consistency. Unlike balance and reference integrity, this
+    # still RUNS for a coupled model — it is where a genuinely undeclared event
+    # target is caught — but with the §6.4 `_var` placeholder credited (finding (b)).
     if file.models !== nothing
+        coupled_ev = _coupled_system_names(file)
         for (model_name, model) in file.models
-            append!(errors, validate_event_consistency(model, "/models/$model_name"))
+            append!(errors, validate_event_consistency(model, "/models/$model_name";
+                                                       is_coupled = model_name ∈ coupled_ev))
             append!(errors, validate_model_gradient_units(file, model, "/models/$model_name"))
             append!(errors, validate_physical_constant_units(model, "/models/$model_name"))
             append!(errors, validate_conversion_factor_consistency(model, "/models/$model_name"))
@@ -237,7 +269,17 @@ function validate(file::EsmFile)::ValidationResult
     # Schema validation requires the full serialized document: the schema's
     # top-level `anyOf` requires either `models` or `reaction_systems`, so a
     # stub dict with just `esm` and `metadata.name` would always fail.
-    data = serialize_esm_file(file)
+    #
+    # `_plain_json` is not cosmetic. Several fields are RAW passthrough
+    # (`coupling[*].connector`, `callback.config`, `translate`, `domain.temporal`,
+    # the template declarations), and they still hold the JSON3 values they were
+    # parsed from — `JSON3.Object`, `JSON3.Array`. JSONSchema.jl does not
+    # recognize those as JSON objects/arrays, so it failed `type: object` and
+    # reported a bogus `oneOf` failure on a document a compliant Draft 2020-12
+    # validator accepts with ZERO errors: tests/valid/scoped_refs_coupling.esm was
+    # rejected for a `couple` entry whose `connector.equations` were `JSON3.Object`
+    # rather than `Dict`. The error was in the validator's INPUT, not the document.
+    data = _plain_json(serialize_esm_file(file))
 
     schema_errors = validate_schema(data)
     structural_errors = validate_structural(file)
@@ -247,6 +289,42 @@ function validate(file::EsmFile)::ValidationResult
     unit_warnings = [e.message for e in structural_errors if e.error_type == "unit_inconsistency"]
 
     return ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
+end
+
+"""
+    validate(path::AbstractString) -> ValidationResult
+
+Validate the document at `path`, INCLUDING the failures that happen while
+loading it.
+
+An unresolvable or ambiguous subsystem ref is a validation FINDING — the corpus
+pins `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
+`/models/<M>/subsystems/<S>` with `details` — but Julia could only ever raise it
+as an exception out of `load`, so `validate(load(path))` never ran and the
+finding was unreportable in the shape everyone else reports it (finding (f)).
+
+`load` still throws: a document whose mount does not resolve genuinely cannot be
+built, and callers that want the exception keep it. This entry point is the one
+the conformance harness wants — it renders the throw as the structural error it
+always was.
+"""
+function validate(path::AbstractString)::ValidationResult
+    file = try
+        load(path)
+    catch e
+        e isa SubsystemRefError || rethrow()
+        err = StructuralError(
+            isempty(e.parent_model) ? "" :
+                "/models/$(e.parent_model)/subsystems/$(e.subsystem)",
+            e.message,
+            e.code,
+            Dict{String,Any}("ref" => e.ref,
+                             "subsystem" => e.subsystem,
+                             "parent_model" => e.parent_model)
+        )
+        return ValidationResult(SchemaError[], StructuralError[err])
+    end
+    return validate(file)
 end
 
 # ============================================================================
@@ -356,6 +434,31 @@ function validate_model_balance(model::Model, path::String;
         var.type == StateVariable && push!(state_vars, name)
     end
 
+    # An ALGEBRAIC model (`system_kind: "nonlinear"`) has NO derivatives, and its
+    # equations need not have an assignment target: ISORROPIA's charge balance is
+    # `H ~ 2*SO4` (a bare target) but its solubility product is `H*H*SO4 ~ Ksp` —
+    # an expression on the left, crediting no single variable. The balance is
+    # therefore a COUNT (square-ness), not a per-variable credit: 2 equations
+    # determine 2 unknowns. Running the per-variable rule there reports "no
+    # defining equation" for a perfectly balanced system.
+    #
+    # An `ic` equation prescribes an initial value, not a determining equation,
+    # so it does not count toward the square-ness.
+    if model.system_kind == "nonlinear"
+        n_eqs = count(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
+        n_states = length(state_vars)
+        if n_states != n_eqs
+            push!(errors, StructuralError(
+                path,
+                "Equation-unknown balance failed: found $n_states state variables " *
+                "but $n_eqs algebraic equations",
+                "equation_count_mismatch",
+                Dict{String,Any}("state_count" => n_states, "equation_count" => n_eqs)
+            ))
+        end
+        return errors
+    end
+
     # Names solved for by the model's own equations.
     equation_vars = Set{String}()
     for eq in model.equations
@@ -374,7 +477,8 @@ function validate_model_balance(model::Model, path::String;
             push!(errors, StructuralError(
                 path,
                 "Model declares state variable '$var' but has no defining equation for it",
-                "equation_count_mismatch"
+                "equation_count_mismatch",
+                Dict{String,Any}("variable" => var)
             ))
         end
     end
@@ -389,7 +493,8 @@ function validate_model_balance(model::Model, path::String;
                 path,
                 "Equation solves for '$name', which is not a declared variable of this model " *
                 "(number of equations does not match the number of unknowns)",
-                "equation_count_mismatch"
+                "equation_count_mismatch",
+                Dict{String,Any}("variable" => name)
             ))
         end
     end
@@ -555,10 +660,16 @@ Validate that all variable references can be resolved through the hierarchy.
 function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
     errors = StructuralError[]
 
-    # Validate model variable references
+    # Validate model variable references. A COUPLED model is skipped: it does not
+    # own every name it mentions (see `_coupled_system_names`). Its events are
+    # still checked below, with `_var` credited — that is where a genuinely
+    # undeclared event target is still caught.
     if file.models !== nothing
+        coupled = _coupled_system_names(file)
         for (model_name, model) in file.models
-            append!(errors, validate_model_references(file, model, "/models/$model_name"))
+            model_name ∈ coupled && continue
+            append!(errors, validate_model_references(file, model, "/models/$model_name";
+                                                      model_name=model_name))
         end
     end
 
@@ -585,6 +696,114 @@ function _equation_lhs_target(eq::Equation)::Union{String,Nothing}
         return occursin('.', name) ? nothing : name
     end
     return nothing
+end
+
+# Every expression-bearing child of an operator node, in one place: `args` plus
+# the sidecars (`lower`, `upper`, `expr`, `filter`, `values`, `axes`, `key`,
+# `bindings`). The set must stay identical to the one
+# `_check_expression_references!` descends — a walker that misses a sidecar is
+# exactly how a whole class of references went unchecked (finding (h)).
+function _expr_children(e::OpExpr)::Vector{ASTExpr}
+    out = ASTExpr[]
+    append!(out, e.args)
+    for f in (e.lower, e.upper, e.expr_body, e.filter, e.key)
+        f === nothing || push!(out, f)
+    end
+    e.values === nothing || append!(out, e.values)
+    e.table_axes === nothing || append!(out, values(e.table_axes))
+    e.bindings === nothing || append!(out, values(e.bindings))
+    return out
+end
+
+"""
+    _indep_var(file::EsmFile) -> String
+
+The document's independent (time) variable — `domain.independent_variable`, or
+`"t"` when the document does not say. Never hard-code `"t"`: a document may
+rename it (`tau`, `depth`), and the old literal check both accepted a bare `t`
+there and rejected the document's real name (finding (a)).
+"""
+_indep_var(file::EsmFile)::String =
+    file.domain === nothing ? "t" : file.domain.independent_variable
+
+# The spatial coordinate names every document may reference WITHOUT declaring
+# them. v0.8.0 removed `Domain.spatial`, so a coordinate has no declaration site
+# at all: it is named directly in an expression (the `x` of an expression initial
+# condition, `0.5*(1 + tanh((x - 0.3)/0.15))`) and as the `dim` of a
+# `grad`/`div`/`laplacian`. It belongs to the DOMAIN, not to any `variables`
+# block, so reporting it `undefined_variable` rejects a valid file.
+const _CONVENTIONAL_COORDINATE_NAMES = ("x", "y", "z", "lon", "lat", "lev")
+
+"""
+    _coordinate_names(file::EsmFile) -> Set{String}
+
+The implicitly-declared coordinate namespace: the conventional axis names plus
+every axis the DOCUMENT itself names — the `dim` of a spatial operator and the
+`wrt` of a SPATIAL derivative (a `wrt` naming the independent variable is time,
+credited separately). Mirrors Go `coordinateNames`.
+"""
+function _coordinate_names(file::EsmFile)::Set{String}
+    coords = Set{String}(_CONVENTIONAL_COORDINATE_NAMES)
+    indep = _indep_var(file)
+
+    walk(e) = nothing
+    function walk(e::OpExpr)
+        e.dim !== nothing && !isempty(e.dim) && push!(coords, e.dim)
+        e.wrt !== nothing && !isempty(e.wrt) && e.wrt != indep && push!(coords, e.wrt)
+        for c in _expr_children(e)
+            walk(c)
+        end
+        return nothing
+    end
+
+    file.models === nothing && return coords
+    for (_, model) in file.models
+        for eq in model.equations
+            walk(eq.lhs); walk(eq.rhs)
+        end
+        for (_, v) in model.variables
+            v.expression === nothing || walk(v.expression)
+        end
+    end
+    return coords
+end
+
+"""
+    _coupled_system_names(file::EsmFile) -> Set{String}
+
+Every system a coupling entry NAMES — as a `systems` member (including the ROOT
+of a dotted subsystem path) or as the system half of a `from`/`to` scoped
+reference.
+
+A COUPLED system does not own all the names its equations mention. An
+operator-style model spells its operand as the §6.4 placeholder `_var`; a
+`variable_map` supplies a value the target never declares; and its `equations`
+may drive a state that lives in the system it is composed with, so its own
+equation/unknown count need not balance. Equation balance and reference integrity
+are therefore SKIPPED for these systems — the settled cross-binding rule (Go
+`coupledSystemNames`, TS `coupledSystems`). Event consistency still runs, with
+`_var` credited, which is where a genuinely undeclared event target is caught.
+"""
+function _coupled_system_names(file::EsmFile)::Set{String}
+    coupled = Set{String}()
+    add!(name::AbstractString) = begin
+        isempty(name) && return
+        push!(coupled, String(name))
+        # A dotted endpoint ("Atmosphere.Chemistry.O3") couples the ROOT system
+        # too — that is the model whose checks must relax.
+        i = findfirst('.', name)
+        i === nothing || push!(coupled, String(name[1:prevind(name, i)]))
+    end
+    for entry in file.coupling
+        if entry isa CouplingOperatorCompose || entry isa CouplingCouple
+            for s in entry.systems
+                add!(s)
+            end
+        elseif entry isa CouplingVariableMap
+            add!(entry.from); add!(entry.to)
+        end
+    end
+    return coupled
 end
 
 """
@@ -622,7 +841,8 @@ end
 
 Validate variable references within a model.
 """
-function validate_model_references(file::EsmFile, model::Model, path::String)::Vector{StructuralError}
+function validate_model_references(file::EsmFile, model::Model, path::String;
+                                   model_name::AbstractString="")::Vector{StructuralError}
     errors = StructuralError[]
 
     # Names in scope for this model's equations: its declared variables (state,
@@ -630,15 +850,23 @@ function validate_model_references(file::EsmFile, model::Model, path::String)::V
     # legitimate non-variable identifier namespace an aggregate may name — RFC
     # semiring-faq-unified-ir §5.2), and each equation's LHS target (a
     # solved-for unknown, e.g. an ODE state referenced as `D(u)` that is not
-    # separately listed under `variables`). Bound loop indices and the time
-    # variable are added per-node during the descent (see
-    # `validate_expression_references`).
+    # separately listed under `variables`). Bound loop indices are added per-node
+    # during the descent (see `validate_expression_references`).
     scope = Set{String}(keys(model.variables))
     union!(scope, keys(file.index_sets))
     for eq in model.equations
         target = _equation_lhs_target(eq)
         target === nothing || push!(scope, target)
     end
+
+    # (a) The DOMAIN's names. Neither the independent variable nor a spatial
+    # coordinate is an entry of any `variables` block, yet both are perfectly
+    # legal references — a forcing spells `sin(t)`, an event trigger `t > 300`,
+    # an expression initial condition `tanh((x - 0.3)/0.15)`. Credit them from
+    # the document, so a document that renames the independent variable to `tau`
+    # gets `tau` and not `t`.
+    push!(scope, _indep_var(file))
+    union!(scope, _coordinate_names(file))
 
     # A model's variable table is NOT the complete set of declaration sites, and
     # widening reference integrity to every expression-bearing field (finding
@@ -924,18 +1152,26 @@ end
 
 # Flag a bare `VarExpr` name that is not in scope as `undefined_variable`.
 # No-op when `scope === nothing` (scoped resolution not requested), for a dotted
-# (qualified) reference (handled by the qualified-reference resolver), for the
-# time variable, for a derivative form, or for a builtin function name.
+# (qualified) reference (handled by the qualified-reference resolver), for a
+# derivative form, or for a builtin function name.
+#
+# The independent variable is NOT special-cased here any more. It used to be a
+# literal `name == "t"`, which is wrong twice over: a document may RENAME it
+# (`domain.independent_variable: "tau"`), and a document that renames it also
+# leaves a bare `t` looking legal. It is credited into `scope` instead, from the
+# document (see `_indep_var`), together with the coordinate namespace — both
+# belong to the DOMAIN, not to any `variables` block (finding (a)).
 function _check_bare_variable!(errors::Vector{StructuralError}, name::String,
                                path::String, scope::Union{Set{String},Nothing})
     scope === nothing && return errors
     occursin('.', name) && return errors
-    (name == "t" || startswith(name, "d(") || name in _BUILTIN_FUNCTION_NAMES) && return errors
+    (startswith(name, "d(") || name in _BUILTIN_FUNCTION_NAMES) && return errors
     if !(name in scope)
         push!(errors, StructuralError(
             path,
             "Variable '$name' referenced in equation is not declared",
-            "undefined_variable"
+            "undefined_variable",
+            Dict{String,Any}("variable" => name)
         ))
     end
     return errors
@@ -958,6 +1194,43 @@ function _check_resolvable!(errors::Vector{StructuralError}, file::EsmFile,
             ))
         else
             rethrow()
+        end
+    end
+    return errors
+end
+
+# Resolve every qualified name inside a `couple` connector's equation
+# `expression`s. The connector is raw JSON (`Dict{String,Any}` straight off the
+# parser), so this reads it defensively rather than through the typed AST.
+function _check_connector_expressions(file::EsmFile, entry::CouplingCouple,
+                                      path::String)::Vector{StructuralError}
+    errors = StructuralError[]
+    eqs = get(entry.connector, "equations", nothing)
+    eqs isa AbstractVector || return errors
+
+    for (i, eq) in enumerate(eqs)
+        eq isa AbstractDict || continue
+        raw = get(eq, "expression", nothing)
+        raw === nothing && continue
+        expr = try
+            parse_expression(raw)
+        catch
+            continue    # a malformed expression is the schema's business
+        end
+        epath = "$path/connector/equations/$(i-1)/expression"
+        for name in sort!(collect(_referenced_var_names(expr)))
+            occursin('.', name) || continue    # bare names are not cross-system refs
+            try
+                resolve_qualified_reference(file, name)
+            catch e
+                e isa QualifiedReferenceError || rethrow()
+                push!(errors, StructuralError(
+                    epath,
+                    "Variable \"$name\" referenced in connector equation expression does not resolve",
+                    "unresolved_scoped_ref",
+                    Dict{String,Any}("variable" => name)
+                ))
+            end
         end
     end
     return errors
@@ -995,6 +1268,14 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
                 ))
             end
         end
+
+        # A connector equation may carry an `expression` over FULLY-QUALIFIED
+        # cross-system names. It was never looked at — and the fixture that pins
+        # it (tests/invalid/unresolved_scoped_ref_in_connector_expression.esm) was
+        # only ever "rejected" by a bogus SchemaError from the JSON3-typed
+        # connector (see `validate`). Fixing that error unmasked this hole, which
+        # is exactly why an invalid fixture must be rejected for the RIGHT reason.
+        append!(errors, _check_connector_expressions(file, coupling_entry, path))
 
     elseif isa(coupling_entry, CouplingVariableMap)
         # Validate 'from' reference
@@ -1139,7 +1420,8 @@ end
 Validate reaction system consistency: species declared, positive stoichiometries,
 no null-null reactions, rate references declared.
 """
-function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector{StructuralError}
+function validate_reaction_consistency(rs::ReactionSystem, path::String;
+                                       indep::AbstractString="t")::Vector{StructuralError}
     errors = StructuralError[]
 
     # Get set of declared species / parameters
@@ -1217,20 +1499,25 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
         # wholesale, on the strength of the qualified-reference argument, which
         # let `tests/invalid/undefined_parameter.esm` validate clean.)
         for name in sort!(collect(_referenced_var_names(reaction.rate)))
+            # (d) A DOTTED name is a SCOPED reference (`Meteo.T`) — a rate may
+            # legitimately reach into another system, and it is the
+            # qualified-reference resolver's job, not this one's.
             occursin('.', name) && continue
-            (name == "t" || name in _BUILTIN_FUNCTION_NAMES) && continue
+            (name == indep || name in _BUILTIN_FUNCTION_NAMES) && continue
             (name in species_names || name in param_names) && continue
             push!(errors, StructuralError(
                 reaction_path,
                 "Parameter '$name' referenced in rate expression is not declared",
-                "undefined_parameter"
+                "undefined_parameter",
+                Dict{String,Any}("variable" => name)
             ))
         end
     end
 
     # Recursively check subsystems
     for (subsys_name, subsys) in rs.subsystems
-        append!(errors, validate_reaction_consistency(subsys, "$path/subsystems/$subsys_name"))
+        append!(errors, validate_reaction_consistency(subsys, "$path/subsystems/$subsys_name";
+                                                      indep=indep))
     end
 
     return errors
@@ -1445,10 +1732,42 @@ Check if a system (model, reaction_system, data_loader, or operator) exists in
 the ESM file. Delegates to [`find_top_level_system`](@ref) (types.jl) so the
 top-level lookup (models, reaction systems, data loaders) lives in exactly one
 place.
+
+A coupling endpoint may name a SUBSYSTEM by its dotted path
+(`AtmosphericChemistry.Aerosols`, `EmissionSources.Biogenic.Forest`), which is
+the whole point of scoped references (§4.6). Only ever consulting the top-level
+tables reported those as `undefined_system` and rejected the valid
+tests/valid/scoped_refs_coupling.esm, so the dotted tail is now walked down the
+subsystem tree.
 """
 function system_exists_in_file(file::EsmFile, system_name::String)::Bool
     system, _ = find_top_level_system(file, system_name)
-    return system !== nothing
+    system === nothing || return true
+
+    # Dotted path: resolve the head against the top level, then walk the tail
+    # through `subsystems`.
+    segments = split(system_name, '.')
+    length(segments) > 1 || return false
+    root, _ = find_top_level_system(file, String(segments[1]))
+    root isa Model || return false
+
+    # `model_subsystems` yields a lazy (name, value) generator, not a Dict.
+    current = root
+    for seg in segments[2:end]
+        next = nothing
+        for (sub_name, sub_value) in model_subsystems(current)
+            if sub_name == String(seg)
+                next = sub_value
+                break
+            end
+        end
+        next === nothing && return false
+        # A DataLoader leaf is a legal endpoint, but nothing can be nested under
+        # it, so any remaining segment cannot resolve.
+        next isa Model || return seg == segments[end]
+        current = next
+    end
+    return true
 end
 
 """
@@ -1458,35 +1777,54 @@ Validate event consistency: continuous conditions are expressions,
 discrete conditions produce booleans, affect variables declared,
 functional affect refs valid.
 """
-function validate_event_consistency(model::Model, path::String)::Vector{StructuralError}
+function validate_event_consistency(model::Model, path::String;
+                                    is_coupled::Bool=false)::Vector{StructuralError}
     errors = StructuralError[]
 
     # Validate discrete events
     for (i, event) in enumerate(model.discrete_events)
         event_path = "$path/discrete_events/$(i-1)"
-        append!(errors, validate_single_event_consistency(model, event, event_path))
+        append!(errors, validate_single_event_consistency(model, event, event_path;
+                                                          is_coupled=is_coupled))
     end
 
     # Validate continuous events
     for (i, event) in enumerate(model.continuous_events)
         event_path = "$path/continuous_events/$(i-1)"
-        append!(errors, validate_single_event_consistency(model, event, event_path))
+        append!(errors, validate_single_event_consistency(model, event, event_path;
+                                                          is_coupled=is_coupled))
     end
 
-    # Recursively check subsystems
+    # Recursively check subsystems. A subsystem of a coupled model is composed
+    # along with its parent, so it inherits the exemption.
     for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_event_consistency(subsys, "$path/subsystems/$subsys_name"))
+        append!(errors, validate_event_consistency(subsys, "$path/subsystems/$subsys_name";
+                                                   is_coupled=is_coupled))
     end
 
     return errors
 end
 
 """
-    validate_single_event_consistency(model::Model, event::EventType, event_path::String) -> Vector{StructuralError}
+    validate_single_event_consistency(model::Model, event::EventType, event_path::String;
+                                      is_coupled=false) -> Vector{StructuralError}
 
 Validate consistency of a single event.
 """
-function validate_single_event_consistency(model::Model, event::EventType, event_path::String)::Vector{StructuralError}
+# The §6.4 operator placeholder. In an operator-composed / coupled model `_var`
+# stands for each matching state variable of the system this one is composed
+# with, and it is substituted at composition — so an event affect that ASSIGNS to
+# it is legal, exactly as an equation that differentiates it is. Reporting `_var`
+# as an undeclared event target while the very same document's equations were
+# exempt from the reference check was internally inconsistent, and it rejected the
+# valid tests/valid/full_coupled.esm (finding (b)).
+const _OPERATOR_PLACEHOLDER_VAR = "_var"
+
+_is_declared_event_target(model::Model, name::AbstractString, is_coupled::Bool)::Bool =
+    haskey(model.variables, name) || (is_coupled && name == _OPERATOR_PLACEHOLDER_VAR)
+
+function validate_single_event_consistency(model::Model, event::EventType, event_path::String;
+                                           is_coupled::Bool=false)::Vector{StructuralError}
     errors = StructuralError[]
 
     if isa(event, ContinuousEvent)
@@ -1495,13 +1833,13 @@ function validate_single_event_consistency(model::Model, event::EventType, event
 
         # Validate affect variable declarations
         for (j, affect) in enumerate(event.affects)
-            if !haskey(model.variables, affect.lhs)
-                push!(errors, StructuralError(
-                    "$event_path/affects/$(j-1)",
-                    "Affect target variable '$(affect.lhs)' not declared in model",
-                    "undefined_affect_variable"
-                ))
-            end
+            _is_declared_event_target(model, affect.lhs, is_coupled) && continue
+            push!(errors, StructuralError(
+                "$event_path/affects/$(j-1)",
+                "Affect target variable '$(affect.lhs)' not declared in model",
+                "undefined_affect_variable",
+                Dict{String,Any}("variable" => affect.lhs)
+            ))
         end
 
     elseif isa(event, DiscreteEvent)
@@ -1513,13 +1851,13 @@ function validate_single_event_consistency(model::Model, event::EventType, event
 
         # Validate functional affect targets
         for (j, affect) in enumerate(event.affects)
-            if !haskey(model.variables, affect.target)
-                push!(errors, StructuralError(
-                    "$event_path/affects/$(j-1)",
-                    "Functional affect target '$(affect.target)' not declared in model",
-                    "undefined_affect_target"
-                ))
-            end
+            _is_declared_event_target(model, affect.target, is_coupled) && continue
+            push!(errors, StructuralError(
+                "$event_path/affects/$(j-1)",
+                "Functional affect target '$(affect.target)' not declared in model",
+                "undefined_affect_target",
+                Dict{String,Any}("variable" => affect.target)
+            ))
         end
 
         # `discrete_parameters` names what the event mutates as a PARAMETER
