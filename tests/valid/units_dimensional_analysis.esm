@@ -206,19 +206,25 @@
           "type": "state",
           "units": "K",
           "default": 298.15,
-          "description": "Temperature"
+          "description": "Temperature — the only integrated unknown; P and V are held fixed (constant-volume process, matching Cv)"
         },
         "P": {
-          "type": "state",
+          "type": "parameter",
           "units": "Pa",
           "default": 101325.0,
           "description": "Pressure"
         },
         "V": {
-          "type": "state",
+          "type": "parameter",
           "units": "m^3",
           "default": 0.0247,
           "description": "Volume"
+        },
+        "V0": {
+          "type": "parameter",
+          "units": "m^3",
+          "default": 0.0224,
+          "description": "Reference volume — the entropy/Gibbs logarithm takes the dimensionless ratio V/V0 (a logarithm of a dimensional quantity is ill-formed; the Sackur-Tetrode / ideal-gas entropy is properly written against a reference state)"
         },
         "Cv": {
           "type": "parameter",
@@ -277,7 +283,7 @@
         "S": {
           "type": "observed",
           "units": "J/K",
-          "description": "Entropy (simplified)",
+          "description": "Entropy (simplified): n*R*log(V/V0) — the logarithm takes the dimensionless volume ratio, not a bare volume",
           "expression": {
             "op": "*",
             "args": [
@@ -291,7 +297,13 @@
               {
                 "op": "log",
                 "args": [
-                  "V"
+                  {
+                    "op": "/",
+                    "args": [
+                      "V",
+                      "V0"
+                    ]
+                  }
                 ]
               }
             ]
@@ -300,7 +312,7 @@
         "G": {
           "type": "observed",
           "units": "J",
-          "description": "Gibbs free energy",
+          "description": "Gibbs free energy: U + P*V - T*S, with S = n*R*log(V/V0) taking the dimensionless volume ratio",
           "expression": {
             "op": "-",
             "args": [
@@ -346,7 +358,13 @@
                       {
                         "op": "log",
                         "args": [
-                          "V"
+                          {
+                            "op": "/",
+                            "args": [
+                              "V",
+                              "V0"
+                            ]
+                          }
                         ]
                       }
                     ]
@@ -405,16 +423,16 @@
       "tests": [
         {
           "id": "thermo_observed_at_t0",
-          "description": "At t=0 with n=1 mol, Cv=20.8 J/(mol*K), T=300 K, P=100000 Pa, V=0.025 m^3: U = n*Cv*T = 6240 J; H = U + P*V = 6240 + 2500 = 8740 J. Tests multiplication chains and addition with mixed-but-commensurate expression terms. S and G are excluded because log(V) is dimensionally ill-formed (separate dimensional bead).",
+          "description": "At t=0 with n=1 mol, Cv=20.8 J/(mol*K), T=300 K, P=100000 Pa, V=0.025 m^3: U = n*Cv*T = 6240 J; H = U + P*V = 6240 + 2500 = 8740 J. Tests multiplication chains and addition with mixed-but-commensurate expression terms. S and G are dimensionally well-formed (they take log(V/V0)) but are not asserted here — this test pins the arithmetic of the multiplication/addition chains only.",
           "initial_conditions": {
-            "T": 300.0,
-            "P": 100000.0,
-            "V": 0.025
+            "T": 300.0
           },
           "parameter_overrides": {
             "n": 1.0,
             "R": 8.314,
-            "Cv": 20.8
+            "Cv": 20.8,
+            "P": 100000.0,
+            "V": 0.025
           },
           "time_span": {
             "start": 0.0,
@@ -656,10 +674,10 @@
           "description": "Flow velocity"
         },
         "P": {
-          "type": "state",
+          "type": "parameter",
           "units": "Pa",
           "default": 101325.0,
-          "description": "Pressure"
+          "description": "Static pressure — a parameter; the only integrated unknown here is the flow velocity v"
         },
         "h": {
           "type": "parameter",
@@ -844,15 +862,15 @@
           "id": "fluids_observed_at_t0",
           "description": "At t=0 with rho=1000, v=2, P=100000, h=10, g=10, mu=0.001, L=1: nu = mu/rho = 1e-6 m^2/s; Re = v*L/nu = 2e6; dynamic_pressure = 0.5*rho*v^2 = 2000 Pa; hydrostatic_pressure = rho*g*h = 100000 Pa; total_pressure = P + dyn + hydro = 202000 Pa. Exercises division, v^2, and sum of three commensurate terms.",
           "initial_conditions": {
-            "v": 2.0,
-            "P": 100000.0
+            "v": 2.0
           },
           "parameter_overrides": {
             "rho": 1000.0,
             "h": 10.0,
             "g": 10.0,
             "mu": 0.001,
-            "L": 1.0
+            "L": 1.0,
+            "P": 100000.0
           },
           "time_span": {
             "start": 0.0,

@@ -1,0 +1,68 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnitsDiscriminatorCircularTrigArg",
+    "description": "Invalid: Circular trig requires an ANGLE or a DIMENSIONLESS argument (§4.8.3) -- `cos(depth)` with `depth` in METRES is an error. This pins the OTHER side of the cos(theta) rule: a binding that, to avoid falsely rejecting `cos(theta)`, relaxes circular trig to accept ANY argument has over-corrected, and ACCEPTS this. The admissible relaxation is angle-OR-dimensionless, not anything. This is the NEGATIVE half of the discriminator in tests/valid/units_registry_grammar.esm. A VALID fixture can only prove a binding does not FALSELY REJECT; it CANNOT prove the binding checks anything -- mutation testing showed every observed variable in the valid fixture could be corrupted and still pass, because no binding compared a declared unit against the dimension its expression computes. This file makes the same assertion in the contrapositive: a CORRECT binding REJECTS it, and a binding carrying the bug ACCEPTS it. Everything but the one observed variable is dimensionally clean.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State. Dimensionally clean; not part of the defect."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate. Dimensionally clean; not part of the defect."
+        },
+        "depth": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A LENGTH -- not an angle, not dimensionless."
+        },
+        "bad_cos": {
+          "type": "observed",
+          "units": "1",
+          "description": "THE ONLY DEFECT: declared units do not match the dimension its expression computes.",
+          "expression": {
+            "op": "cos",
+            "args": [
+              "depth"
+            ]
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -619,11 +619,11 @@
             "expression": {
               "op": "*",
               "args": [
-                "gas_exchange_velocity",
+                "OceanBiogeochemistry.gas_exchange_velocity",
                 {
                   "op": "-",
                   "args": [
-                    "O2",
+                    "OceanBiogeochemistry.O2",
                     250.0
                   ]
                 }
@@ -650,8 +650,8 @@
               "op": "*",
               "args": [
                 -1e-10,
-                "biomass",
-                "O3"
+                "LandVegetation.biomass",
+                "AtmosphereChemistry.O3"
               ]
             }
           },
@@ -666,7 +666,7 @@
                   "op": "*",
                   "args": [
                     -0.1,
-                    "O3"
+                    "AtmosphereChemistry.O3"
                   ]
                 }
               ]

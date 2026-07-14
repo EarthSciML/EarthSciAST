@@ -7,15 +7,26 @@
   "reaction_systems": {
     "ChemSystem": {
       "species": {
-        "NO2": { "units": "mol/mol", "default": 1e-9 }
+        "NO2": {
+          "units": "mol/mol",
+          "default": 1e-09
+        }
       },
       "parameters": {
-        "jNO2": { "units": "1/s", "default": 0.005 }
+        "jNO2": {
+          "units": "1/s",
+          "default": 0.005
+        }
       },
       "reactions": [
         {
           "id": "photolysis",
-          "substrates": { "NO2": 1 },
+          "substrates": [
+            {
+              "species": "NO2",
+              "stoichiometry": 1
+            }
+          ],
           "products": null,
           "rate": "undefined_photolysis_rate"
         }

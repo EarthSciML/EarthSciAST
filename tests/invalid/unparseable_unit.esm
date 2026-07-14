@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnparseableUnit",
+    "description": "A variable declared with a unit string that denotes no real unit ('not_a_unit') is a HARD ERROR (code `unit_parse_error`), not a warning. A unit string is either resolvable against the shared registry (esm-spec §4.8) or it is a defect in the file: silently coercing it to dimensionless would let a typo ('1/time', 'm/s2') disable every dimensional check downstream, and reporting it as a warning leaves is_valid true for a file no binding can dimensionally reason about. Contrast tests/valid/expr_graphs_variable_deps.esm, where a SYMBOLIC exponent makes a dimension genuinely UNDETERMINABLE — that is the case that stays a warning and reports 'unknown'. This file previously lived in tests/valid pinning the opposite contract; the severity policy was settled in favour of a hard error (esm-spec §4.8.4)."
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "c": { "type": "state", "units": "not_a_unit", "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": {
+            "op": "*",
+            "args": [
+              { "op": "-", "args": ["k"] },
+              "c"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UndefinedVariableInUnitConversion",
+    "description": "Invalid: an undefined variable inside a data loader variable's `unit_conversion` expression (\u00a78.5). Reference integrity must apply to EVERY expression-bearing field, not just `equations` (esm-spec \u00a74.9.5). `y` and `k` are declared; the ONLY defect is the undefined name `undefined_xyz`. The file is schema-valid, so it reaches structural validation (CONFORMANCE_SPEC \u00a77.1.2). Expected error: undefined_variable @ /data_loaders/L/variables/v/unit_conversion.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Declared parameter."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "data_loaders": {
+    "L": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.nc"
+      },
+      "variables": {
+        "v": {
+          "file_variable": "v",
+          "units": "1",
+          "description": "Loaded variable whose unit_conversion names `undefined_xyz`.",
+          "unit_conversion": {
+            "op": "*",
+            "args": [
+              "k",
+              "undefined_xyz"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -21,15 +21,15 @@
           "description": "Predator population"
         },
         "death_rate": {
-          "units": "1/time",
+          "units": "1/s",
           "default": 0.1,
-          "description": "Predator death rate",
+          "description": "Predator death rate. `time` is a DIMENSION name, not a registry unit (esm-spec §4.8.1); the reciprocal second is `1/s`.",
           "type": "parameter"
         },
         "hunting_efficiency": {
-          "units": "L/(ind·time)",
+          "units": "L/(individuals*s)",
           "default": 0.01,
-          "description": "Hunting efficiency",
+          "description": "Hunting efficiency — volume swept per predator per second. Neither `ind` nor `time` is a registry symbol (esm-spec §4.8.1); the count noun is `individuals` and the time unit is `s`.",
           "type": "parameter"
         }
       },
@@ -77,7 +77,7 @@
           "description": "Prey population"
         },
         "growth_rate": {
-          "units": "1/time",
+          "units": "1/s",
           "default": 0.5,
           "description": "Prey growth rate",
           "type": "parameter"
@@ -146,13 +146,13 @@
           "description": "Environmental resource level"
         },
         "resource_recovery": {
-          "units": "1/time",
+          "units": "1/s",
           "default": 0.2,
           "description": "Resource recovery rate",
           "type": "parameter"
         },
         "base_consumption": {
-          "units": "1/time",
+          "units": "1/s",
           "default": 0.05,
           "description": "Base resource consumption",
           "type": "parameter"

@@ -1,0 +1,72 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UndefinedVariableInDiscreteEventAffect",
+    "description": "Invalid: an undefined variable inside a discrete event's affect RHS (\u00a75.3). Reference integrity must apply to EVERY expression-bearing field, not just `equations` (esm-spec \u00a74.9.5). `y` and `k` are declared; the ONLY defect is the undefined name `undefined_xyz`. The file is schema-valid, so it reaches structural validation (CONFORMANCE_SPEC \u00a77.1.2). Expected error: undefined_variable @ /models/TestModel/discrete_events/0/affects/0/rhs.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Declared parameter."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "evt",
+          "trigger": {
+            "type": "periodic",
+            "interval": 1.0
+          },
+          "affects": [
+            {
+              "lhs": "y",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "k",
+                  "undefined_xyz"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

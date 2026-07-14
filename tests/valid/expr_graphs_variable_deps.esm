@@ -2,7 +2,7 @@
   "esm": "0.1.0",
   "metadata": {
     "name": "ExpressionGraphVariableDependencies",
-    "description": "Complex variable-level dependency graph test case",
+    "description": "Complex variable-level dependency graph test case. Every expression is dimensionally coherent: the coefficients that used to be bare literals (-1000, 298.15, 8.314) are now named parameters carrying the units they always implicitly had, so a dimensional checker can prove the file sound. The k2*x^alpha*z^beta term deliberately keeps SYMBOLIC exponents — its dimension is genuinely undeterminable and must be reported as unknown, never assumed dimensionless.",
     "created": "2026-02-16T00:00:00Z"
   },
   "models": {
@@ -55,6 +55,48 @@
           "type": "parameter",
           "units": "dimensionless",
           "default": 2.0
+        },
+        "T_act": {
+          "type": "parameter",
+          "units": "K",
+          "default": 1000.0,
+          "description": "Activation temperature — makes the Arrhenius exponent T_act/T dimensionless"
+        },
+        "k_p": {
+          "type": "parameter",
+          "units": "1/(atm*s)",
+          "default": 0.05,
+          "description": "Pressure-driven production coefficient — carries 1/(atm*s) so that k_p*P*z is a concentration rate"
+        },
+        "T_ref": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "Reference temperature — the T_ref/T ratio is dimensionless"
+        },
+        "k_y": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.02,
+          "description": "First-order loss rate constant for y"
+        },
+        "kappa": {
+          "type": "parameter",
+          "units": "mol/(L*K)",
+          "default": 0.001,
+          "description": "Concentration-per-kelvin scale — makes (kappa*T)^2 commensurate with x*y"
+        },
+        "P_ref": {
+          "type": "parameter",
+          "units": "atm",
+          "default": 1.0,
+          "description": "Reference pressure — the P/P_ref ratio is the dimensionless logarithm argument"
+        },
+        "k_z": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.05,
+          "description": "Rate constant for z"
         }
       },
       "equations": [
@@ -86,14 +128,20 @@
                       {
                         "op": "/",
                         "args": [
-                          -1000,
+                          {
+                            "op": "-",
+                            "args": [
+                              "T_act"
+                            ]
+                          },
                           "T"
                         ]
                       }
                     ]
                   },
                   "P",
-                  "z"
+                  "z",
+                  "k_p"
                 ]
               }
             ]
@@ -136,11 +184,12 @@
                   {
                     "op": "/",
                     "args": [
-                      298.15,
+                      "T_ref",
                       "T"
                     ]
                   },
-                  "y"
+                  "y",
+                  "k_y"
                 ]
               }
             ]
@@ -173,7 +222,13 @@
                       {
                         "op": "^",
                         "args": [
-                          "T",
+                          {
+                            "op": "*",
+                            "args": [
+                              "kappa",
+                              "T"
+                            ]
+                          },
                           2
                         ]
                       }
@@ -191,7 +246,13 @@
                       {
                         "op": "*",
                         "args": [
-                          "P",
+                          {
+                            "op": "/",
+                            "args": [
+                              "P",
+                              "P_ref"
+                            ]
+                          },
                           "alpha",
                           "beta"
                         ]
@@ -199,7 +260,8 @@
                     ]
                   }
                 ]
-              }
+              },
+              "k_z"
             ]
           }
         }
@@ -209,7 +271,7 @@
   "reaction_systems": {
     "ComplexKinetics": {
       "reference": {
-        "notes": "Reaction system with interdependent rate expressions"
+        "notes": "Reaction system with interdependent rate expressions. Per esm-spec §7.4 each `rate` is the rate CONSTANT k — mass action supplies the substrate product v = k*prod(S_i^n_i) — so an order-2 reaction's rate carries conc^-1/time (L/(mol*s)), not conc/time."
       },
       "species": {
         "A": {
@@ -231,8 +293,9 @@
           "default": 0.2
         },
         "k_reverse": {
-          "units": "L^2/mol^2/s",
-          "default": 0.05
+          "units": "L/(mol*s)",
+          "default": 0.05,
+          "description": "Second-order reverse rate constant for C + D -> A + B"
         },
         "T_reaction": {
           "units": "K",
@@ -241,6 +304,16 @@
         "activation_energy": {
           "units": "kJ/mol",
           "default": 50.0
+        },
+        "R_gas": {
+          "units": "kJ/(mol*K)",
+          "default": 0.008314,
+          "description": "Molar gas constant — makes the Arrhenius exponent Ea/(R*T) dimensionless"
+        },
+        "T_ref_reaction": {
+          "units": "K",
+          "default": 298.15,
+          "description": "Reference temperature — the T_reaction/T_ref_reaction ratio is dimensionless"
         }
       },
       "reactions": [
@@ -265,25 +338,35 @@
                       {
                         "op": "*",
                         "args": [
-                          8.314,
+                          "R_gas",
                           "T_reaction"
                         ]
                       }
                     ]
                   }
                 ]
-              },
-              "A",
-              "B"
+              }
             ]
           },
           "substrates": [
-            { "species": "A", "stoichiometry": 1 },
-            { "species": "B", "stoichiometry": 1 }
+            {
+              "species": "A",
+              "stoichiometry": 1
+            },
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
           ],
           "products": [
-            { "species": "C", "stoichiometry": 1 },
-            { "species": "D", "stoichiometry": 1 }
+            {
+              "species": "C",
+              "stoichiometry": 1
+            },
+            {
+              "species": "D",
+              "stoichiometry": 1
+            }
           ]
         },
         {
@@ -303,25 +386,35 @@
                         "op": "/",
                         "args": [
                           "T_reaction",
-                          298.15
+                          "T_ref_reaction"
                         ]
                       }
                     ]
                   },
                   2
                 ]
-              },
-              "C",
-              "D"
+              }
             ]
           },
           "substrates": [
-            { "species": "C", "stoichiometry": 1 },
-            { "species": "D", "stoichiometry": 1 }
+            {
+              "species": "C",
+              "stoichiometry": 1
+            },
+            {
+              "species": "D",
+              "stoichiometry": 1
+            }
           ],
           "products": [
-            { "species": "A", "stoichiometry": 1 },
-            { "species": "B", "stoichiometry": 1 }
+            {
+              "species": "A",
+              "stoichiometry": 1
+            },
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
           ]
         }
       ]
