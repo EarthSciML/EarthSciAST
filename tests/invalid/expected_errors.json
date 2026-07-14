@@ -1341,7 +1341,7 @@
     "schema_errors": [
       {
         "path": "",
-        "message": "Must satisfy at least one of: required property 'models', required property 'reaction_systems', required property 'data_loaders'",
+        "message": "Must satisfy at least one of: required property 'models', required property 'reaction_systems', required property 'data_loaders', required property 'expression_templates', required property 'coupling_roles'",
         "keyword": "anyOf"
       }
     ],

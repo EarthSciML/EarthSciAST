@@ -2,20 +2,48 @@
   "esm": "0.8.0",
   "metadata": {
     "name": "template_import_lib",
-    "description": "Minimal template-library file (esm-spec 9.7.1): a metaparameter-sized index set, a zero-parameter constant template, and one auto-applied match rule. Importable via expression_template_imports; also a valid standalone document (the valid suite tolerates a model-less library file)."
+    "description": "Minimal template-library file (esm-spec 9.7.1): a metaparameter-sized index set, a zero-parameter constant template, and one auto-applied match rule. Importable via expression_template_imports. Importable via expression_template_imports, and a FIRST-CLASS standalone document (esm-spec 9.7.1): a top-level `expression_templates` registry satisfies the schema's top-level anyOf on its own, so a model-less library file is ADMITTED, not merely tolerated. Per 9.6.4 rule 5 the registry and `metaparameters` are DECLARATIONS, not apply_expression_template call sites: they survive parse -> emit verbatim and this file MUST round-trip to ITSELF. The old wording ('the valid suite tolerates a model-less library file') framed it as an indulgence, which is exactly how the round-trip bug hid -- every binding dropped the registry on emit, producing {esm, metadata, index_sets}, a document carrying none of the five top-level payload keys."
   },
   "metaparameters": {
-    "N": { "type": "integer", "default": 8, "description": "cell count" }
+    "N": {
+      "type": "integer",
+      "default": 8,
+      "description": "cell count"
+    }
   },
   "index_sets": {
-    "cells": { "kind": "interval", "size": "N" }
+    "cells": {
+      "kind": "interval",
+      "size": "N"
+    }
   },
   "expression_templates": {
-    "n_cells": { "params": [], "body": "N" },
+    "n_cells": {
+      "params": [],
+      "body": "N"
+    },
     "scale_by_n": {
-      "params": ["f"],
-      "match": { "op": "scale_by_n", "args": ["f"] },
-      "body": { "op": "*", "args": ["f", { "op": "apply_expression_template", "args": [], "name": "n_cells", "bindings": {} }] }
+      "params": [
+        "f"
+      ],
+      "match": {
+        "op": "scale_by_n",
+        "args": [
+          "f"
+        ]
+      },
+      "body": {
+        "op": "*",
+        "args": [
+          "f",
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "n_cells",
+            "bindings": {}
+          }
+        ]
+      }
     }
   }
 }
