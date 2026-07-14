@@ -373,10 +373,13 @@ describe('unit-conversion', () => {
         expect(unitsCompatible('cm^3/(molecule*s)', 'cm^3/(molec*s)')).toBe(true)
       })
 
-      it('accepts d, the SI-accepted symbol for the day (lib/calendar.esm uses it)', () => {
-        expect(parseUnitForConversion('d').dims).toEqual({ s: 1 })
-        expect(convertUnits(1, 'd', 'h')).toBeCloseTo(24, 9)
-        expect(unitsCompatible('d', 'day')).toBe(true)
+      it('does NOT accept the one-letter `d` — the day is spelled `day`', () => {
+        // Deliberately excluded from the §4.8.1 registry: a bare `d` reads as a
+        // deci- prefix or a differential. Accepting it would be a permissive
+        // divergence from the shared table.
+        expect(() => parseUnitForConversion('d')).toThrow(UnitConversionError)
+        expect(parseUnitForConversion('day').dims).toEqual({ s: 1 })
+        expect(convertUnits(1, 'day', 'h')).toBeCloseTo(24, 9)
       })
 
       it('keeps the adopted long-form aliases in the canonical set', () => {

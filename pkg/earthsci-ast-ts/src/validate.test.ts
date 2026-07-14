@@ -764,6 +764,88 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     ).toBe(true)
   })
 
+  it('(g) treats a construct-BOUND loop index as in scope, without allowlisting letters', () => {
+    // An `aggregate` binds its `output_idx` / `ranges` names, and an `index`
+    // element position is a bound index. Those names are in scope inside the
+    // construct's body and are never `undefined_variable`. Critically, the scope
+    // is derived from the BINDERS actually present — not from a list of
+    // single-letter names — so an unbound name is still reported even when it
+    // sits in the very same body.
+    const boundIndex = validate({
+      esm: '0.1.0',
+      metadata: { name: 'bound-index' },
+      models: {
+        M: {
+          variables: {
+            u: { type: 'state', units: '1', shape: ['cells'] },
+            k: { type: 'parameter', units: '1/s', default: 1 },
+          },
+          equations: [
+            {
+              lhs: {
+                op: 'aggregate',
+                args: [],
+                output_idx: ['i'],
+                ranges: { i: [1, 3] },
+                expr: { op: 'D', args: [{ op: 'index', args: ['u', 'i'] }], wrt: 't' },
+              },
+              rhs: {
+                op: 'aggregate',
+                args: [],
+                output_idx: ['i'],
+                ranges: { i: [1, 3] },
+                // `i` is bound by the enclosing aggregate; `k` and `u` are declared.
+                expr: { op: '*', args: ['k', { op: 'index', args: ['u', 'i'] }] },
+              },
+            },
+          ],
+        },
+      },
+      index_sets: { cells: { kind: 'interval', size: 3 } },
+    })
+    expect(boundIndex.structural_errors.filter((e) => e.code === 'undefined_variable')).toEqual([])
+
+    // An UNBOUND name inside the same aggregate body is still undefined — the
+    // binder set is derived, not an allowlist. `j` is a single letter and is NOT
+    // excused.
+    const unbound = validate({
+      esm: '0.1.0',
+      metadata: { name: 'unbound-index' },
+      models: {
+        M: {
+          variables: {
+            u: { type: 'state', units: '1', shape: ['cells'] },
+          },
+          equations: [
+            {
+              lhs: {
+                op: 'aggregate',
+                args: [],
+                output_idx: ['i'],
+                ranges: { i: [1, 3] },
+                expr: { op: 'D', args: [{ op: 'index', args: ['u', 'i'] }], wrt: 't' },
+              },
+              rhs: {
+                op: 'aggregate',
+                args: [],
+                output_idx: ['i'],
+                ranges: { i: [1, 3] },
+                // `j` is bound by nothing, and `undefined_xyz` is not declared.
+                expr: { op: '*', args: ['j', 'undefined_xyz'] },
+              },
+            },
+          ],
+        },
+      },
+      index_sets: { cells: { kind: 'interval', size: 3 } },
+    })
+    const undefinedNames = unbound.structural_errors
+      .filter((e) => e.code === 'undefined_variable')
+      .map((e) => (e.details as { variable: string }).variable)
+      .sort()
+    expect(undefinedNames).toEqual(['j', 'undefined_xyz'])
+  })
+
   it('(f) emits the canonical subsystem-ref code', () => {
     const result = validate({
       esm: '0.1.0',

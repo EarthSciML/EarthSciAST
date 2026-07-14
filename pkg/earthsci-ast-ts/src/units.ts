@@ -130,6 +130,20 @@ function dimensionless(): ParsedUnit {
 }
 
 /**
+ * The ANGLE dimension — one radian.
+ *
+ * `rad` is an AXIS of this dimension vector (mirroring Go's
+ * `m kg s mol K A cd rad`), so an angle is a dimension in its own right and NOT
+ * dimensionless. This is the result type of the inverse circular functions
+ * (`asin`/`acos`/`atan`/`atan2`), and it is exactly what the corresponding
+ * `"rad"` declaration parses to — which is what makes
+ * `solar_zenith_angle: "rad" = acos(cos_zenith)` typecheck.
+ */
+function angle(): ParsedUnit {
+  return { dims: { rad: 1 }, scale: 1 }
+}
+
+/**
  * Parse a unit string into canonical SI dimensions plus scale factor, or return
  * `null` when the string cannot be parsed.
  *
@@ -478,41 +492,30 @@ export function checkDimensions(
       return finish(divideUnits(operand, powerUnit(coordDims, order)))
     }
 
-    case 'exp':
-    case 'log':
-    case 'ln':
-    case 'log10':
-    case 'log2':
-      // A transcendental function of a dimensional quantity is a provable
-      // inconsistency (`log(kg)` has no meaning), not a soft remark — the
-      // shared corpus pins units_invalid_logarithm.esm as invalid on exactly
-      // this rule. STRICTLY dimensionless: unlike the circular functions below,
-      // there is no angle reading of `exp`'s argument.
-      for (let i = 0; i < argDims.length; i++) {
-        const arg = get(i)
-        if (arg !== null && !isDimensionless(arg)) {
-          warn(
-            `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
-            'dimensional_mismatch',
-          )
-        }
-      }
-      return finish(dimensionless())
+    // ----------------------------------------------------------------------
+    // The transcendental functions split THREE ways (spec §4.8.3), not two.
+    //
+    // `rad` is one of the EIGHT AXES of this dimension vector (mirroring Go's
+    // `m kg s mol K A cd rad`), so an ANGLE IS NOT DIMENSIONLESS here. That one
+    // fact is what makes the naive rule — "a transcendental takes a
+    // dimensionless argument" — wrong: it makes `cos(theta)` ILLEGAL for a
+    // `theta` declared `"rad"`, which is how trigonometry is actually written.
+    // `lib/solar.esm` computes `cos_zenith = sin(phi)*sin(delta) +
+    // cos(phi)*cos(delta)*cos(omega)` over `rad`-declared angles, so the naive
+    // rule rejects the shipped standard library itself (and with it
+    // tests/valid/lib_solar_subsystem_inclusion.esm).
+    //
+    // The three rules below are exact inverses of each other, which is what
+    // makes `acos(cos(theta))` typecheck back to an angle.
+    // ----------------------------------------------------------------------
 
     case 'sin':
     case 'cos':
     case 'tan':
-    case 'sinh':
-    case 'cosh':
-    case 'tanh':
-      // The argument of a circular function is an ANGLE — and this dimension
-      // vector carries `rad` as an AXIS (mirroring Go's `m kg s mol K A cd rad`),
-      // so `sin(theta)` with `theta` declared `"rad"` presents a `{rad: 1}`
-      // operand. Demanding a strictly dimensionless argument therefore reported
-      // the single most ordinary spelling of trigonometry as a hard dimensional
-      // error — `lib/solar.esm`, a SHIPPED standard-library file, is rejected by
-      // that rule. An angle is accepted; a genuinely dimensional argument
-      // (`sin(kg)`) is still a provable mismatch.
+      // CIRCULAR: take an ANGLE (rad) *or* a dimensionless argument — a
+      // dimensionless argument is the nondimensionalized-phase spelling
+      // (`sin(omega*t)`) and is equally ordinary — and RETURN DIMENSIONLESS.
+      // `sin(kg)` is still a provable mismatch.
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
         if (arg !== null && !isDimensionless(arg) && !isAngle(arg)) {
@@ -527,11 +530,10 @@ export function checkDimensions(
     case 'asin':
     case 'acos':
     case 'atan':
-    case 'asinh':
-    case 'acosh':
-    case 'atanh': {
-      // The ARGUMENT of an inverse circular function is a pure ratio, so the
-      // dimensionless requirement is real and kept.
+      // INVERSE CIRCULAR: take a DIMENSIONLESS ratio and RETURN AN ANGLE (rad).
+      // Returning dimensionless here was the other half of the same bug: it
+      // reported `solar_zenith_angle`, declared `"rad"` and computed as
+      // `acos(cos_zenith)`, as a mismatch against its own declaration.
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
         if (arg !== null && !isDimensionless(arg)) {
@@ -541,17 +543,34 @@ export function checkDimensions(
           )
         }
       }
-      // The RESULT is an ANGLE, and this vector cannot pin down which spelling
-      // of an angle it is: SI calls the radian dimensionless (m/m), while the
-      // table gives `rad` its own axis. BOTH readings are defensible, so
-      // asserting either one FABRICATES a dimension — and under the hard-error
-      // policy a fabrication is a false rejection. Claiming `dimensionless`
-      // rejected `lib/solar.esm`, whose `solar_zenith_angle` is declared `"rad"`
-      // and computed with `acos(...)`; claiming `rad` would symmetrically reject
-      // every model that declares the same angle `"1"`. INDETERMINATE is the
-      // honest answer, and it is never a mismatch against either.
-      return unknown()
-    }
+      return finish(angle())
+
+    case 'exp':
+    case 'log':
+    case 'ln':
+    case 'log10':
+    case 'log2':
+    case 'sinh':
+    case 'cosh':
+    case 'tanh':
+    case 'asinh':
+    case 'acosh':
+    case 'atanh':
+      // STRICTLY DIMENSIONLESS argument, dimensionless result. There is no angle
+      // reading of `exp`'s or `log`'s argument, and the HYPERBOLIC functions take
+      // a hyperbolic angle — a pure number, not a circular `rad`. A dimensional
+      // argument is a provable inconsistency (`log(kg)` has no meaning); the
+      // shared corpus pins units_invalid_logarithm.esm on exactly this rule.
+      for (let i = 0; i < argDims.length; i++) {
+        const arg = get(i)
+        if (arg !== null && !isDimensionless(arg)) {
+          warn(
+            `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
+            'dimensional_mismatch',
+          )
+        }
+      }
+      return finish(dimensionless())
 
     case 'atan2': {
       const arity = arityWarning('atan2', 'atan2()', argDims.length)
@@ -561,15 +580,15 @@ export function checkDimensions(
       }
       const a = get(0)
       const b = get(1)
+      // atan2(y, x) is the two-argument `atan`: its operands need only AGREE
+      // (they are a ratio), and like `atan` it RETURNS AN ANGLE.
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `atan2() requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
           'dimensional_mismatch',
         )
       }
-      // Like the other inverse circular functions, the result is an ANGLE whose
-      // dimensional spelling this vector cannot pin down — see the `asin` arm.
-      return unknown()
+      return finish(angle())
     }
 
     case 'sqrt': {

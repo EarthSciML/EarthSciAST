@@ -126,10 +126,11 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   min: { dims: { s: 1 }, scale: 60 },
   h: { dims: { s: 1 }, scale: 3600 },
   hr: { dims: { s: 1 }, scale: 3600 },
-  // `d` is the SI-accepted symbol for the day, and the standard library uses it:
-  // `lib/calendar.esm` declares `units: "d"`. Omitting it made that shipped
-  // library file an `unit_parse_error` — a registry gap IS a false rejection.
-  d: { dims: { s: 1 }, scale: 86400 },
+  // The canonical spelling of the day is `day`. The one-letter `d` is
+  // DELIBERATELY EXCLUDED from the §4.8.1 registry: a bare `d` reads as a deci-
+  // prefix or as a differential, so accepting it would be a permissive
+  // divergence from the shared table — the very thing the hard-error policy is
+  // meant to eliminate. (`lib/calendar.esm` has been migrated to `day`.)
   day: { dims: { s: 1 }, scale: 86400 },
   yr: { dims: { s: 1 }, scale: 365.25 * 86400 },
   year: { dims: { s: 1 }, scale: 365.25 * 86400 },

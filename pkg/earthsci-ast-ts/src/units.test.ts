@@ -310,35 +310,83 @@ describe('Unit parsing and dimensional analysis', () => {
         expect(noise.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
       })
 
-      // The dimension vector carries `rad` as an AXIS, so an angle is not
-      // dimensionless here. Trigonometry must still typecheck: `lib/solar.esm`
-      // (a SHIPPED standard-library file, pinned valid via
-      // lib_solar_subsystem_inclusion.esm) declares `solar_zenith_angle: "rad"`
-      // and computes it with `acos(...)`.
-      it('accepts an ANGLE argument to a circular function', () => {
-        const bindings = createUnitBindings({ theta: 'rad', mass: 'kg' })
+      // The transcendentals split THREE ways (spec §4.8.3). `rad` is an AXIS of
+      // this dimension vector, so an angle is NOT dimensionless — which is why a
+      // naive "transcendentals take a dimensionless argument" rule makes
+      // `cos(theta)` illegal and rejects `lib/solar.esm` (a SHIPPED
+      // standard-library file, pinned valid via lib_solar_subsystem_inclusion.esm).
+      it('sin/cos/tan take an angle OR a dimensionless argument, and return dimensionless', () => {
+        const bindings = createUnitBindings({ theta: 'rad', phase: '1', mass: 'kg' })
 
-        const ok = checkDimensions({ op: 'sin', args: ['theta'] }, bindings)
-        expect(ok.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
-        expect(dimsOf(ok)).toEqual({})
-
-        // A genuinely dimensional argument is still a provable mismatch.
-        const bad = checkDimensions({ op: 'sin', args: ['mass'] }, bindings)
-        expect(bad.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(true)
+        for (const op of ['sin', 'cos', 'tan']) {
+          for (const arg of ['theta', 'phase']) {
+            const r = checkDimensions({ op, args: [arg] }, bindings)
+            expect(
+              r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+              `${op}(${arg})`,
+            ).toBe(false)
+            expect(dimsOf(r), `${op}(${arg})`).toEqual({})
+          }
+          // A genuinely dimensional argument is still a provable mismatch.
+          const bad = checkDimensions({ op, args: ['mass'] }, bindings)
+          expect(
+            bad.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+            op,
+          ).toBe(true)
+        }
       })
 
-      it('leaves an inverse circular function INDETERMINATE, never fabricating an angle', () => {
-        const bindings = createUnitBindings({ ratio: '1' })
-        // The result is an angle, and `rad` vs dimensionless are both defensible
-        // spellings — so committing to either would falsely reject the models
-        // that use the other. Indeterminate is never a mismatch against either.
+      it('asin/acos/atan take dimensionless and RETURN AN ANGLE (rad)', () => {
+        const bindings = createUnitBindings({ ratio: '1', mass: 'kg' })
         for (const op of ['acos', 'asin', 'atan']) {
           const r = checkDimensions({ op, args: ['ratio'] }, bindings)
-          expect(r.dimensions, op).toBeNull()
+          expect(dimsOf(r), op).toEqual({ rad: 1 })
           expect(
             r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
             op,
           ).toBe(false)
+
+          const bad = checkDimensions({ op, args: ['mass'] }, bindings)
+          expect(
+            bad.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+            op,
+          ).toBe(true)
+        }
+        // atan2 is the two-argument atan: it too returns an angle.
+        const r2 = checkDimensions({ op: 'atan2', args: ['ratio', 'ratio'] }, bindings)
+        expect(dimsOf(r2)).toEqual({ rad: 1 })
+      })
+
+      it('round-trips: acos(cos(theta)) is an angle again', () => {
+        const bindings = createUnitBindings({ theta: 'rad' })
+        const r = checkDimensions({ op: 'acos', args: [{ op: 'cos', args: ['theta'] }] }, bindings)
+        expect(dimsOf(r)).toEqual({ rad: 1 })
+        expect(r.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
+      })
+
+      it('keeps the STRICTLY dimensionless set strict (log, exp, hyperbolics)', () => {
+        const bindings = createUnitBindings({ theta: 'rad', mass: 'kg' })
+        // There is no angle reading of exp/log, and a hyperbolic angle is a pure
+        // number — so `rad` is NOT admitted here, and neither is any dimension.
+        for (const op of [
+          'ln',
+          'log',
+          'log10',
+          'exp',
+          'sinh',
+          'cosh',
+          'tanh',
+          'asinh',
+          'acosh',
+          'atanh',
+        ]) {
+          for (const arg of ['theta', 'mass']) {
+            const r = checkDimensions({ op, args: [arg] }, bindings)
+            expect(
+              r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+              `${op}(${arg})`,
+            ).toBe(true)
+          }
         }
       })
 
