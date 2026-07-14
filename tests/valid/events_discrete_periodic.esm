@@ -391,9 +391,9 @@
           "type": "parameter"
         },
         "nutrient_uptake_rate": {
-          "units": "g/(kg*day)",
+          "units": "m^2/(kg*day)",
           "default": 0.5,
-          "description": "Nutrient uptake per unit biomass",
+          "description": "Bilinear nutrient uptake coefficient: uptake is nutrient_uptake_rate*biomass*nutrients, so the coefficient carries m^2/(kg*day) for the product to land in g/(m^2*day) like the rest of the nutrient budget",
           "type": "parameter"
         },
         "nutrient_decay_rate": {

@@ -1,0 +1,92 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnresolvedScopedRefInVariableMapTransform",
+    "description": "Invalid: an unresolvable scoped reference inside a `variable_map`'s Expression `transform` (\u00a710.4). `TestModel` exists; `TestModel.undefined_xyz` does not. Reference integrity must apply to EVERY expression-bearing field, not just `equations` (esm-spec \u00a74.9.5). `y` and `k` are declared; the ONLY defect is the undefined name `undefined_xyz`. The file is schema-valid, so it reaches structural validation (CONFORMANCE_SPEC \u00a77.1.2). Expected error: unresolved_scoped_ref @ /coupling/0/transform.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Declared parameter."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    },
+    "Other": {
+      "variables": {
+        "w": {
+          "type": "state",
+          "units": "1",
+          "description": "State of the second system."
+        },
+        "p": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Declared parameter."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "w"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "TestModel.y",
+      "to": "Other.p",
+      "transform": {
+        "op": "*",
+        "args": [
+          "TestModel.y",
+          "TestModel.undefined_xyz"
+        ]
+      }
+    }
+  ]
+}

@@ -56,19 +56,67 @@ export class CircularReferenceError extends Error {
 }
 
 /**
- * Error thrown when a referenced file cannot be loaded or parsed.
+ * Error thrown when a referenced file cannot be loaded, parsed, or uniquely
+ * resolved to one system.
+ *
+ * Carries the CANONICAL cross-binding diagnostic code (see `ERROR_CODES`):
+ *
+ *  - `unresolved_subsystem_ref` (default) — the file does not exist, or could
+ *    not be read or parsed.
+ *  - `ambiguous_subsystem_ref` — the file WAS read, and holds more than one
+ *    top-level system; §4.7 requires exactly one.
+ *
+ * The resolver is the only layer that reads the referenced file, so it is the
+ * only layer that can tell those two apart — the synchronous `validate()` does
+ * no I/O and reports every unresolved `{ref}` as `unresolved_subsystem_ref`.
  */
 export class RefLoadError extends Error {
   /** The reference path or URL that failed to load */
   public readonly ref: string
+  /** Canonical code: `unresolved_subsystem_ref` or `ambiguous_subsystem_ref`. */
+  public readonly code: string
 
-  constructor(ref: string, cause?: Error) {
-    const message = cause
-      ? `Failed to load ref "${ref}": ${cause.message}`
-      : `Failed to load ref "${ref}"`
-    super(message)
+  constructor(
+    ref: string,
+    cause?: Error,
+    code: string = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
+    message?: string,
+  ) {
+    super(
+      message ??
+        (cause ? `Failed to load ref "${ref}": ${cause.message}` : `Failed to load ref "${ref}"`),
+    )
     this.name = 'RefLoadError'
     this.ref = ref
+    this.code = code
+  }
+}
+
+/**
+ * Enforce the §4.7 invariant that a referenced subsystem file holds EXACTLY ONE
+ * top-level system.
+ *
+ * A file with two models (or a model plus a loader) gives the mount no way to
+ * say WHICH one it means. The loader used to silently take the first entry —
+ * `Object.entries(parsed.models)[0]` — so a multi-system file resolved to
+ * whichever component happened to serialize first: a silent, order-dependent
+ * mis-mount. It is instead a hard `ambiguous_subsystem_ref`, the code the shared
+ * corpus pins for `subsystem_ref_ambiguous.esm`.
+ */
+function assertSingleTopLevelSystem(parsed: EsmFile, ref: string): void {
+  const systems = [
+    ...Object.keys(parsed.models ?? {}),
+    ...Object.keys(parsed.reaction_systems ?? {}),
+    ...Object.keys(parsed.data_loaders ?? {}),
+  ]
+  if (systems.length > 1) {
+    throw new RefLoadError(
+      ref,
+      undefined,
+      ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF,
+      `Subsystem reference '${ref}' resolves to a file containing multiple top-level systems; ` +
+        `exactly one is required (found ${systems.join(', ')})`,
+    )
   }
 }
 
@@ -387,11 +435,10 @@ async function resolveModelRefs(
       mergeSubsystemIndexSets(registry, parsed, ref)
 
       // esm-spec §4.7 invariant: a referenced subsystem file holds exactly ONE
-      // top-level component. Only the FIRST model is extracted; any additional
-      // top-level models in a malformed multi-component file are silently
-      // ignored (the schema/validator is the enforcement point, not this
-      // loader). A referenced file with no `models` and no `data_loaders`
-      // leaves the original `{ref}` stub in place — nothing is inlined here.
+      // top-level component — enforced, not assumed. A referenced file with no
+      // `models` and no `data_loaders` leaves the original `{ref}` stub in
+      // place; nothing is inlined here.
+      assertSingleTopLevelSystem(parsed, ref)
       if (parsed.models) {
         const firstEntry = Object.entries(parsed.models)[0]
         if (firstEntry) {
@@ -448,10 +495,11 @@ async function resolveReactionSystemRefs(
     basePath,
     resolving,
     refChain,
-    async (parsed, refBasePath, { subName }) => {
-      // esm-spec §4.7 invariant: exactly one top-level reaction system per
-      // referenced file; only the FIRST is extracted (extras ignored), and a
-      // file with no `reaction_systems` leaves the `{ref}` stub in place.
+    async (parsed, refBasePath, { subName, ref }) => {
+      // esm-spec §4.7 invariant: exactly one top-level system per referenced
+      // file — enforced, not assumed. A file with no `reaction_systems` leaves
+      // the `{ref}` stub in place.
+      assertSingleTopLevelSystem(parsed, ref)
       if (parsed.reaction_systems) {
         const firstEntry = Object.entries(parsed.reaction_systems)[0]
         if (firstEntry) {

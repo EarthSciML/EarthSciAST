@@ -2,7 +2,7 @@
   "esm": "0.1.0",
   "metadata": {
     "name": "StructuralIssuesTest",
-    "description": "Valid JSON and schema but with structural validation issues",
+    "description": "A schema-valid, structurally-valid two-state model kept deliberately small: it exercises the structural layer (equation/unknown balance, reference integrity, dimensional consistency) rather than any single feature. Both state variables x and y carry a defining ODE, so the equation-unknown balance holds; a file that violates that balance belongs in tests/invalid (see equation_count_mismatch.esm).",
     "authors": ["Test Author"],
     "created": "2026-02-19T00:00:00Z"
   },
@@ -32,6 +32,10 @@
         {
           "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
           "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "x"]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+          "rhs": {"op": "*", "args": ["k", "x"]}
         }
       ]
     }

@@ -210,16 +210,22 @@ describe('Conformance Test Suite', () => {
       join(testsDir, 'invalid/expected_errors.json'),
     )
 
-    // Pending cross-binding work (open-op-namespace-fixpoint-rewrite RFC §12,
-    // item 5): opening the `op` namespace (0.8.0) means the schema no longer
-    // rejects `ln` as an unknown op, so this fixture is now caught ONLY by the
-    // log-argument dimensionality unit-check — a hard structural error the
-    // reference bindings implement but the TS binding has not yet landed
-    // (`expected_errors.json` already expects `schema_errors: []` +
-    // `structural_errors: [{code: "unit_inconsistency", ...}]`). Quarantined
-    // here exactly as the Python suite's `pending_binding_phase` marker until
-    // that check ships; the shared fixture is unchanged.
-    const PENDING_BINDING_PHASE = new Set<string>(['units_invalid_logarithm.esm'])
+    // Pending BINDING work — a fixture the shared corpus pins invalid that THIS
+    // binding cannot yet reject. The quarantine is for a gap in the checker, never
+    // a licence to weaken the pin; each entry must name the missing check.
+    //
+    // `units_invalid_logarithm.esm` used to sit here (the log-argument
+    // dimensionality check had not landed). It HAS landed: TS now emits
+    // `unit_inconsistency @ /models/BadUnitsModel/variables/invalid_log`, exactly
+    // the pinned code and path, so the entry was stale and is removed.
+    //
+    // `unparseable_unit.esm` (esm-spec §4.8.4): the units severity contract makes an
+    // unresolvable unit string a HARD error (`unit_parse_error`). TS still classes it
+    // as an `analysis` warning and accepts the file — and cannot promote it until its
+    // unit registry is complete (it is currently missing V/T/F/Ohm and binds `C` to
+    // Celsius rather than the coulomb, so promoting today would reject legitimate
+    // fixtures). Fix the registry, then delete this entry.
+    const PENDING_BINDING_PHASE = new Set<string>(['unparseable_unit.esm'])
 
     it.each(invalidFiles)('should detect errors in %s', (filePath) => {
       const content = readFileSync(filePath, 'utf-8')

@@ -56,9 +56,21 @@ exposed as an observed variable so that consumers can scope-reference
 `Calendar.day_of_year`, `Calendar.hour`, etc. via §4.6 dot notation. Two
 helpers are defined as compositions:
 
-- `seconds_since_midnight = hour·3600 + minute·60 + second` (integer-exact).
+- `seconds_since_midnight = hour·s_per_hour + minute·s_per_minute + second·s_per_second`
+  (integer-exact; the factors are 3600, 60 and 1).
 - `fractional_year` — the NOAA solar-position γ angle (radians), defined in
   the file's docstring; reused inside `lib/solar.esm`.
+
+**Why the conversion factors are named parameters.** The clock fields (`hour`,
+`minute`, `second`, `day_of_year`, …) are *dimensionless integer calendar field
+values* — `hour` is the integer 14, not a duration of 14 hours — exactly as
+`month` and `day` are. The seconds and radians therefore have to be carried by
+the conversion constants (`s_per_hour`, `rad_per_day`, …), which is what makes
+`seconds_since_midnight` (s) and `fractional_year` (rad) dimensionally
+well-formed under esm-spec §4.8.3. Annotating the clock fields with time units
+instead would be *wrong*, not merely different: `fractional_year`'s bracket
+`(day_of_year - 1) + (hour - 12)/24` is a dimensionless day count, so an `hour`
+in hours would make it add a time to a pure number.
 
 ### `lib/solar.esm`
 

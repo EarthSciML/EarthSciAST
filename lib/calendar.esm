@@ -21,6 +21,30 @@
           "default": 0.0,
           "description": "UTC seconds since the Unix epoch (1970-01-01T00:00:00Z). IEEE-754 binary64; proleptic Gregorian; no leap-second consultation. Negative values denote pre-1970 instants."
         },
+        "s_per_hour": {
+          "type": "parameter",
+          "units": "s",
+          "default": 3600.0,
+          "description": "Seconds per unit of the `hour` field. A DIMENSIONAL BRIDGE (esm-spec §4.8.3): the clock fields below are dimensionless integer counts (0..23, 0..59) — like `month` and `day_of_year`, they are calendar field VALUES, not durations — so the conversion factors are what carry the time dimension. Without them `hour*3600 + minute*60 + second` is a pure number and declaring the result in seconds is the provable mismatch that `tests/invalid/units_inconsistent_addition.esm` is pinned to reject."
+        },
+        "s_per_minute": {
+          "type": "parameter",
+          "units": "s",
+          "default": 60.0,
+          "description": "Seconds per unit of the `minute` field (§4.8.3 dimensional bridge; see `s_per_hour`)."
+        },
+        "s_per_second": {
+          "type": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "description": "Seconds per unit of the `second` field (§4.8.3 dimensional bridge; see `s_per_hour`). Numerically the identity, but it is what turns the integer count `second` into a quantity of seconds."
+        },
+        "rad_per_day": {
+          "type": "parameter",
+          "units": "rad",
+          "default": 0.01721420632103996,
+          "description": "The NOAA fractional-year rate, 2π/365 radians per day-of-year count (§4.8.3 dimensional bridge). `day_of_year` and `hour` are dimensionless counts, so this constant is what makes `fractional_year` an angle."
+        },
         "year": {
           "type": "observed",
           "units": "1",
@@ -65,7 +89,7 @@
         },
         "julian_day": {
           "type": "observed",
-          "units": "d",
+          "units": "day",
           "description": "Continuous Julian Day Number including fractional time-of-day (JD 0 = noon UTC on 4713-01-01 BC, proleptic Julian calendar). Tolerance ≤ 1 ulp per esm-spec.md §9.2.",
           "expression": { "op": "fn", "name": "datetime.julian_day", "args": ["t_utc"] }
         },
@@ -78,24 +102,24 @@
         "seconds_since_midnight": {
           "type": "observed",
           "units": "s",
-          "description": "Seconds elapsed since the most recent UTC midnight, 0..86399. Built from the integer-exact `hour`, `minute`, `second` decompositions: `hour*3600 + minute*60 + second`. Integer-valued.",
+          "description": "Seconds elapsed since the most recent UTC midnight, 0..86399. Built from the integer-exact `hour`, `minute`, `second` decompositions: `hour*s_per_hour + minute*s_per_minute + second*s_per_second`, i.e. `hour*3600 + minute*60 + second`. The three conversion factors carry the seconds (§4.8.3); the clock fields themselves are dimensionless counts. Integer-valued, and numerically identical to the bare-literal form (x*1.0 == x exactly).",
           "expression": {
             "op": "+",
             "args": [
-              { "op": "*", "args": ["hour", 3600] },
-              { "op": "*", "args": ["minute", 60] },
-              "second"
+              { "op": "*", "args": ["hour", "s_per_hour"] },
+              { "op": "*", "args": ["minute", "s_per_minute"] },
+              { "op": "*", "args": ["second", "s_per_second"] }
             ]
           }
         },
         "fractional_year": {
           "type": "observed",
           "units": "rad",
-          "description": "NOAA solar-position fractional-year angle γ (radians): `(2π/365) * ((day_of_year - 1) + (hour - 12)/24)`. Always uses 365.0 (NOAA convention; the resulting ~1-minute leap-year drift is below the algorithm's intrinsic accuracy). Tolerance ~3 ulp per esm-spec.md §9.2 (one transcendental composition).",
+          "description": "NOAA solar-position fractional-year angle γ (radians): `rad_per_day * ((day_of_year - 1) + (hour - 12)/24)`, i.e. `(2π/365) * (...)`. The bracket is a dimensionless day count; `rad_per_day` is what makes the result an angle (§4.8.3). Always uses 365.0 (NOAA convention; the resulting ~1-minute leap-year drift is below the algorithm's intrinsic accuracy). Tolerance ~3 ulp per esm-spec.md §9.2 (one transcendental composition).",
           "expression": {
             "op": "*",
             "args": [
-              0.01721420632103996,
+              "rad_per_day",
               {
                 "op": "+",
                 "args": [

@@ -249,9 +249,9 @@
         },
         "wind_factor": {
           "type": "parameter",
-          "units": "1",
+          "units": "s/m",
           "default": 0.3,
-          "description": "Wind enhancement coefficient"
+          "description": "Wind enhancement coefficient: spread-rate response per unit wind speed, so that wind_factor*wind_speed is the dimensionless enhancement added to 1 in spread_rate = R_base*(1 + wind_factor*wind_speed)"
         },
         "wind_speed": {
           "type": "observed",

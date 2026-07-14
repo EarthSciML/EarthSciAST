@@ -234,8 +234,12 @@ describe('Parse and Serialize', () => {
 
         load(badDimensions)
 
+        // The location is now the JSON Pointer of the offending EQUATION, not
+        // the dotted name of the enclosing model — `validate()` uses it verbatim
+        // as the structural error's `path`, and the shared corpus pins unit
+        // errors at `/models/<M>/equations/<i>`.
         const messages = warnSpy.mock.calls.map((args) => String(args[0]))
-        expect(messages.some((m) => m.includes('[models.mech]'))).toBe(true)
+        expect(messages.some((m) => m.includes('[/models/mech/equations/0]'))).toBe(true)
       })
     })
 

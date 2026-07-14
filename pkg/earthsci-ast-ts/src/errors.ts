@@ -28,13 +28,34 @@ export const ERROR_CODES = {
   INVALID_TEMPORAL_DURATION: 'invalid_temporal_duration',
   MISSING_OBSERVED_EXPR: 'missing_observed_expr',
   NULL_REACTION: 'null_reaction',
+  // ---- subsystem-ref resolution (§4.7) ----
+  // The canonical, cross-binding names, pinned by
+  // `tests/invalid/expected_errors.json` (`subsystem_ref_not_found.esm`,
+  // `subsystem_ref_ambiguous.esm`).
+  //
+  // `unresolved_subsystem_ref` — the reference does not resolve. Raised by the
+  //   structural validator (which does no file I/O, so every `{ref}` reaching it
+  //   is unresolved) and by the resolver when the file is genuinely missing.
+  // `ambiguous_subsystem_ref` — the reference resolves to a file holding MORE
+  //   than one top-level system; §4.7 requires exactly one. Only the resolver
+  //   can raise this: it is the only layer that reads the referenced file.
+  AMBIGUOUS_SUBSYSTEM_REF: 'ambiguous_subsystem_ref',
   UNDEFINED_DATA_LOADER_VARIABLE: 'undefined_data_loader_variable',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
   UNDEFINED_VARIABLE: 'undefined_variable',
   UNIT_ERROR: 'unit_error',
+  // A PROVABLE dimensional inconsistency (metres plus kilograms, log of a
+  // dimensional quantity, an equation whose sides cannot agree).
   UNIT_INCONSISTENCY: 'unit_inconsistency',
+  // A declared unit string that names no real unit ("not_a_unit"). Distinct
+  // from UNIT_INCONSISTENCY: nothing was proved inconsistent — the declaration
+  // is simply meaningless. Pinned by tests/invalid/unparseable_unit.esm.
+  UNIT_PARSE_ERROR: 'unit_parse_error',
+  // The internal UnitWarning code that validate() promotes to UNIT_PARSE_ERROR.
+  // See UnitWarning.code in units.ts for the severity policy.
+  UNPARSEABLE_UNIT: 'unparseable_unit',
   UNRESOLVED_SCOPED_REF: 'unresolved_scoped_ref',
   UNRESOLVED_SUBSYSTEM_REF: 'unresolved_subsystem_ref',
 

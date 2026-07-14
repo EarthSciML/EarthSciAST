@@ -8,23 +8,40 @@ import { isExprNode } from '../expression.js'
 import { ERROR_CODES } from '../errors.js'
 import {
   checkDimensions,
-  parseUnit,
+  tryParseUnit,
   isDimensionless,
   dimsEqual,
   type CanonicalDims,
   type ParsedUnit,
 } from '../units.js'
-import type { ReactionSystem, Expression } from '../types.js'
+import type { EsmFile, ReactionSystem, Expression } from '../types.js'
 import type { StructuralError } from './types.js'
-import { extractVariableReferences } from './expr-utils.js'
+import {
+  collectIndexSymbols,
+  extractVariableReferences,
+  resolveScopedReference,
+} from './expr-utils.js'
+import { forEachExpressionScope } from '../traverse.js'
 import { formatExpectedRateUnits } from './unit-format.js'
 
 /**
- * Check reaction consistency for a reaction system
+ * Check reaction consistency for a reaction system.
+ *
+ * `esmFile` supplies the document a SCOPED reference in a rate expression is
+ * resolved against. A reaction rate may legitimately name a quantity in ANOTHER
+ * system — `MeteorologicalSystem.temperature` in a temperature-dependent
+ * Arrhenius rate is the canonical case (`tests/valid/events_cross_system.esm`) —
+ * and such a reference is resolved exactly like a scoped reference in a model
+ * equation, by navigating `models` / `reaction_systems` / `data_loaders`. The
+ * checker previously tested every rate reference against THIS system's species
+ * and parameters alone, so every cross-system rate was reported
+ * `undefined_parameter`. When `esmFile` is omitted the scoped reference is left
+ * unresolved rather than flagged (nothing to resolve against).
  */
 export function validateReactionConsistency(
   reactionSystem: ReactionSystem,
   systemPath: string,
+  esmFile?: EsmFile,
 ): StructuralError[] {
   const errors: StructuralError[] = []
   const declaredSpecies = new Set(Object.keys(reactionSystem.species || {}))
@@ -61,15 +78,24 @@ export function validateReactionConsistency(
           })
         }
 
-        // Check stoichiometry is positive integer
+        // Stoichiometry must be POSITIVE and FINITE — not an integer. The
+        // schema is `{"type":"number","exclusiveMinimum":0}`, and fractional
+        // coefficients are ordinary in earth-science chemistry (aerosol yields,
+        // lumped mechanisms): `tests/valid/fractional_stoichiometry.esm` is a
+        // VALID fixture with 0.87. `expected_errors.json` pins
+        // `negative_stoichiometry.esm` as a schema `minimum` violation, which
+        // confirms the contract is positivity, not integrality. (Requiring
+        // Number.isInteger here rejected that valid fixture outright.)
         if (
           reactant &&
-          (!Number.isInteger(reactant.stoichiometry) || reactant.stoichiometry <= 0)
+          (typeof reactant.stoichiometry !== 'number' ||
+            !Number.isFinite(reactant.stoichiometry) ||
+            reactant.stoichiometry <= 0)
         ) {
           errors.push({
             path: `${reactionPath}/${role}/${j}/stoichiometry`,
             code: ERROR_CODES.INVALID_STOICHIOMETRY,
-            message: `Stoichiometry must be a positive integer, got ${reactant.stoichiometry}`,
+            message: `Stoichiometry must be a positive finite number, got ${reactant.stoichiometry}`,
             details: { stoichiometry: reactant.stoichiometry, reaction_id: reaction.id },
           })
         }
@@ -82,6 +108,19 @@ export function validateReactionConsistency(
     // reference kind.
     const rateVars = extractVariableReferences(reaction.rate)
     for (const varRef of rateVars) {
+      // A SCOPED reference names another system's quantity and is resolved
+      // against the whole document, not this system's tables.
+      if (varRef.includes('.')) {
+        if (esmFile && !resolveScopedReference(varRef, esmFile)) {
+          errors.push({
+            path: `${reactionPath}/rate`,
+            code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+            message: `Scoped reference "${varRef}" in rate expression cannot be resolved`,
+            details: { reference: varRef, reaction_id: reaction.id },
+          })
+        }
+        continue
+      }
       if (!declaredSpecies.has(varRef) && !declaredParameters.has(varRef)) {
         errors.push({
           path: `${reactionPath}/rate`,
@@ -153,18 +192,21 @@ export function validateReactionSystemICs(
  */
 function buildReactionSystemUnitBindings(reactionSystem: ReactionSystem): Map<string, ParsedUnit> {
   const bindings = new Map<string, ParsedUnit>()
+  // An unparseable declaration leaves the symbol UNBOUND (dimension unknown)
+  // rather than bound to a fabricated dimensionless value — `checkDimensions`
+  // then reports it as indeterminate and skips comparisons involving it.
+  const bind = (name: string, units: string): void => {
+    const parsed = tryParseUnit(units)
+    if (parsed !== null) bindings.set(name, parsed)
+  }
   if ('species' in reactionSystem && reactionSystem.species) {
     for (const [name, species] of Object.entries(reactionSystem.species)) {
-      if (species && species.units) {
-        bindings.set(name, parseUnit(species.units))
-      }
+      if (species && species.units) bind(name, species.units)
     }
   }
   if ('parameters' in reactionSystem && reactionSystem.parameters) {
     for (const [name, param] of Object.entries(reactionSystem.parameters)) {
-      if (param && param.units) {
-        bindings.set(name, parseUnit(param.units))
-      }
+      if (param && param.units) bind(name, param.units)
     }
   }
   return bindings
@@ -215,8 +257,8 @@ export function validateReactionRateUnits(
     const firstSpecies = speciesMap[firstSubstrate.species]
     if (!firstSpecies || !firstSpecies.units) continue
 
-    const concUnit = parseUnit(firstSpecies.units)
-    if (isDimensionless(concUnit)) continue
+    const concUnit = tryParseUnit(firstSpecies.units)
+    if (concUnit === null || isDimensionless(concUnit)) continue
 
     let resolvable = true
     let totalOrder = 0
@@ -232,13 +274,12 @@ export function validateReactionRateUnits(
     if (!resolvable) continue
 
     const rateResult = checkDimensions(reaction.rate, bindings)
-    // COUPLING: this skip test string-matches the human-readable warning prose
-    // emitted by checkDimensions in units.ts. It is intentionally left as a
-    // substring match here — units.ts owns that wording and is off-limits to
-    // this module. A Wave-2 units effort is separately introducing structured
-    // warning codes; do NOT depend on those here until they land (changing this
-    // to a code check now would decouple from the current units.ts message).
-    if (rateResult.warnings.some((w) => w.includes('Unknown variable'))) continue
+    // An INDETERMINATE rate dimension (unknown variable, or an operator units.ts
+    // does not model) cannot prove anything, so there is nothing to check. This
+    // used to substring-match the "Unknown variable" warning PROSE; units.ts now
+    // models indeterminacy in the value itself (`dimensions === null`), so the
+    // coupling to that wording is gone.
+    if (rateResult.dimensions === null) continue
 
     const expectedPower = 1 - totalOrder
     const expectedDims: CanonicalDims = {}
@@ -263,6 +304,70 @@ export function validateReactionRateUnits(
       },
     })
   }
+
+  return errors
+}
+
+/**
+ * Reference integrity for a REACTION SYSTEM — the (h) coverage that models get
+ * from `validateReferenceIntegrity`.
+ *
+ * A reaction system carries expression positions beyond its `reactions[].rate`
+ * (which `validateReactionConsistency` already checks): `constraint_equations`,
+ * and — per the schema — its own `discrete_events` / `continuous_events`. None
+ * of those were reference-checked at all, so an undefined name in a constraint
+ * equation or an event condition was INVISIBLE, exactly as it was in a model's
+ * observed `expression`.
+ *
+ * A reaction system declares its names in `species` and `parameters` (there is no
+ * `variables` map). The independent variable and the spatial coordinates are
+ * implicitly declared, as they are for a model.
+ */
+export function validateReactionReferenceIntegrity(
+  reactionSystem: ReactionSystem,
+  systemPath: string,
+  esmFile: EsmFile,
+  implicitNames: ReadonlySet<string>,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const declared = new Set([
+    ...Object.keys(reactionSystem.species || {}),
+    ...Object.keys(reactionSystem.parameters || {}),
+  ])
+  const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
+
+  forEachExpressionScope(reactionSystem, systemPath, (scope) => {
+    const bound = new Set<string>()
+    for (const site of scope) {
+      for (const symbol of collectIndexSymbols(site.expr)) bound.add(symbol)
+    }
+    for (const site of scope) {
+      for (const varRef of extractVariableReferences(site.expr)) {
+        if (varRef.includes('.')) {
+          if (!resolveScopedReference(varRef, esmFile, reactionSystem)) {
+            errors.push({
+              path: site.path,
+              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+              message: `Scoped reference "${varRef}" cannot be resolved`,
+              details: { reference: varRef },
+            })
+          }
+        } else if (
+          !declared.has(varRef) &&
+          !declaredIndexSets.has(varRef) &&
+          !bound.has(varRef) &&
+          !implicitNames.has(varRef)
+        ) {
+          errors.push({
+            path: site.path,
+            code: ERROR_CODES.UNDEFINED_VARIABLE,
+            message: `Variable "${varRef}" referenced in equation is not declared`,
+            details: { variable: varRef },
+          })
+        }
+      }
+    }
+  })
 
   return errors
 }
