@@ -388,6 +388,142 @@ var arithOpTable = map[string]arithOp{
 	}},
 	"floor": unaryMath(math.Floor),
 	"ceil":  unaryMath(math.Ceil),
+
+	// ---- comparison / boolean tier (esm-spec §4.2 closed evaluable core) ----
+	//
+	// Booleans are encoded in the float domain the scalar evaluator speaks:
+	// TRUE is 1.0, FALSE is 0.0, and any non-zero input counts as true —
+	// the same encoding TS's op-registry uses, so a trigger condition
+	// evaluates identically across the two bindings.
+	//
+	// `and`, `or` and `ifelse` also appear here so they FOLD (all-literal
+	// arguments) and so their arity is declared in one place; the EVALUATOR
+	// intercepts them before argument evaluation to keep them lazy (see
+	// evaluateExprNode / evalLazyOp). Folding is unaffected by laziness: it
+	// only fires when every argument is already a literal.
+	">":  cmpOp(func(a, b float64) bool { return a > b }),
+	"<":  cmpOp(func(a, b float64) bool { return a < b }),
+	">=": cmpOp(func(a, b float64) bool { return a >= b }),
+	"<=": cmpOp(func(a, b float64) bool { return a <= b }),
+	"==": cmpOp(func(a, b float64) bool { return a == b }),
+	"!=": cmpOp(func(a, b float64) bool { return a != b }),
+	"not": {1, 1, func(a []float64) (float64, error) {
+		return boolValue(a[0] == 0), nil
+	}},
+	"and": {0, -1, func(a []float64) (float64, error) {
+		for _, x := range a {
+			if x == 0 {
+				return 0, nil
+			}
+		}
+		return 1, nil
+	}},
+	"or": {0, -1, func(a []float64) (float64, error) {
+		for _, x := range a {
+			if x != 0 {
+				return 1, nil
+			}
+		}
+		return 0, nil
+	}},
+	"ifelse": {3, 3, func(a []float64) (float64, error) {
+		if a[0] != 0 {
+			return a[1], nil
+		}
+		return a[2], nil
+	}},
+	"true":  {0, 0, func([]float64) (float64, error) { return 1, nil }},
+	"false": {0, 0, func([]float64) (float64, error) { return 0, nil }},
+
+	// Pre(x) — the pre-event value of x (esm-spec §4.2). The scalar evaluator
+	// carries a single bindings map with no event history, so it passes the
+	// argument through unchanged, matching the Rust interpreter
+	// (simulate.rs: `"Pre" => v(0)`). This keeps an event affect such as
+	// `max(0, Pre(u))` evaluable instead of erroring out.
+	"Pre": {1, 1, func(a []float64) (float64, error) { return a[0], nil }},
+}
+
+// boolValue is the float encoding of a boolean in the scalar evaluator: 1.0 for
+// true, 0.0 for false.
+func boolValue(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// cmpOp wraps a binary float comparison as a 2-ary arithOp returning 1.0/0.0.
+func cmpOp(fn func(a, b float64) bool) arithOp {
+	return arithOp{2, 2, func(a []float64) (float64, error) { return boolValue(fn(a[0], a[1])), nil }}
+}
+
+// lazyOps are the closed-core operators whose arguments MUST NOT all be
+// evaluated: evaluating the untaken branch of an `ifelse`, or the operand an
+// `and`/`or` already short-circuits past, would surface a domain error the
+// expression deliberately guards against — `ifelse(x > 0, log(x), 0)` at
+// x = -1 must return 0, not raise. evaluateExprNode dispatches these through
+// evalLazyOp BEFORE the eager argument loop. (Their entries in arithOpTable
+// still supply arity bounds and the folding body, which only ever sees literal
+// arguments and so cannot raise.)
+var lazyOps = map[string]struct{}{
+	"ifelse": {}, "and": {}, "or": {},
+}
+
+// evalLazyOp evaluates a short-circuiting operator, evaluating only the
+// arguments its semantics actually demand.
+func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
+	op := arithOpTable[node.Op]
+	if !op.arityOK(len(node.Args)) {
+		return 0, fmt.Errorf("%s: got %d argument(s), expected %s", node.Op, len(node.Args), arityDesc(op))
+	}
+	switch node.Op {
+	case "ifelse":
+		cond, err := Evaluate(node.Args[0], bindings)
+		if err != nil {
+			return 0, err
+		}
+		if cond != 0 {
+			return Evaluate(node.Args[1], bindings)
+		}
+		return Evaluate(node.Args[2], bindings)
+
+	case "and":
+		for _, arg := range node.Args {
+			v, err := Evaluate(arg, bindings)
+			if err != nil {
+				return 0, err
+			}
+			if v == 0 {
+				return 0, nil // short-circuit: later operands are never evaluated
+			}
+		}
+		return 1, nil
+
+	case "or":
+		for _, arg := range node.Args {
+			v, err := Evaluate(arg, bindings)
+			if err != nil {
+				return 0, err
+			}
+			if v != 0 {
+				return 1, nil // short-circuit
+			}
+		}
+		return 0, nil
+	}
+	return 0, fmt.Errorf("evalLazyOp: %s is not a lazy operator", node.Op)
+}
+
+// closedNonScalarOps are evaluable-core ops (esm-spec §4.2) that carry real
+// semantics but no SCALAR evaluator in this binding — the array/query tier.
+// They are distinguished from the OPEN rewrite-target tier so that reaching one
+// reports "no scalar evaluator" rather than the (wrong) `unlowered_operator`,
+// which would tell an author to write a rewrite rule for an op that needs none.
+var closedNonScalarOps = map[string]struct{}{
+	"aggregate": {}, "makearray": {}, "index": {}, "broadcast": {}, "reshape": {},
+	"transpose": {}, "concat": {}, "skolem": {}, "rank": {}, "argmin": {}, "argmax": {},
+	"intersect_polygon": {}, "polygon_intersection_area": {}, "table_lookup": {},
+	"apply_expression_template": {}, "ic": {},
 }
 
 // tryConstantFolding evaluates a node whose op is in arithOpTable and whose
@@ -416,7 +552,12 @@ func tryConstantFolding(node ExprNode) (Expression, bool) {
 	return result, true
 }
 
-// Evaluate numerically evaluates an expression with variable bindings
+// Evaluate numerically evaluates an expression with variable bindings.
+//
+// A boolean leaf reduces to the evaluator's float encoding (1.0 / 0.0), so a
+// literal predicate such as `and(true, false)` is evaluable. A typed-nil
+// *ExprNode is reported as an error rather than dereferenced (no audit ID; found
+// while fixing G3).
 func Evaluate(expr Expression, bindings map[string]float64) (float64, error) {
 	switch e := expr.(type) {
 	case float64:
@@ -425,19 +566,19 @@ func Evaluate(expr Expression, bindings map[string]float64) (float64, error) {
 		return float64(e), nil
 	case int64:
 		return float64(e), nil
+	case bool:
+		return boolValue(e), nil
 	case string:
 		// Variable lookup
 		if value, exists := bindings[e]; exists {
 			return value, nil
 		}
 		return 0, fmt.Errorf("unbound variable: %s", e)
-	case ExprNode:
-		return evaluateExprNode(e, bindings)
-	case *ExprNode:
-		return evaluateExprNode(*e, bindings)
-	default:
-		return 0, fmt.Errorf("unknown expression type: %T", expr)
 	}
+	if node, ok := asExprNode(expr); ok {
+		return evaluateExprNode(node, bindings)
+	}
+	return 0, fmt.Errorf("unknown expression type: %T", expr)
 }
 
 // evaluateExprNode evaluates an expression node
@@ -490,7 +631,23 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 				"EarthSciDiscretizations, not this format.", node.Op),
 		}
 	}
-	// Evaluate all arguments first
+
+	// Short-circuiting core ops are dispatched BEFORE the eager argument loop:
+	// evaluating the untaken branch would surface the very domain error the
+	// expression guards against (esm-spec §4.2; `ifelse(x>0, log(x), 0)` at
+	// x = -1 must return 0). Matches the Julia reference's lazy `_eval_node_op`.
+	if _, lazy := lazyOps[node.Op]; lazy {
+		return evalLazyOp(node, bindings)
+	}
+
+	op, ok := arithOpTable[node.Op]
+	if !ok {
+		return 0, unevaluableOpError(node)
+	}
+
+	// Evaluate all arguments, then apply the operation via the shared op-spec
+	// table (the same table that drives constant folding, so the two never
+	// diverge on op set / arity).
 	args := make([]float64, len(node.Args))
 	for i, arg := range node.Args {
 		val, err := Evaluate(arg, bindings)
@@ -499,17 +656,36 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 		}
 		args[i] = val
 	}
-
-	// Apply the operation via the shared op-spec table (the same table that
-	// drives constant folding, so the two never diverge on op set / arity).
-	op, ok := arithOpTable[node.Op]
-	if !ok {
-		return 0, fmt.Errorf("unknown operation: %s", node.Op)
-	}
 	if !op.arityOK(len(args)) {
 		return 0, fmt.Errorf("%s: got %d argument(s), expected %s", node.Op, len(args), arityDesc(op))
 	}
 	return op.apply(args)
+}
+
+// unevaluableOpError classifies an op that the scalar evaluator cannot reduce
+// (esm-spec §4.2's two tiers):
+//
+//   - a CLOSED-core array/query op (aggregate, makearray, index, …) has real
+//     semantics but no scalar evaluator in this binding;
+//   - ANY other identifier is OPEN-tier — a rewrite target (the `integral`
+//     sugar, a user op such as `godunov_hamiltonian`) that a rewrite rule was
+//     supposed to eliminate before evaluation. It gets the spec-pinned,
+//     cross-binding `unlowered_operator` code, exactly as D/grad/div/laplacian
+//     do above, instead of an untyped "unknown operation".
+func unevaluableOpError(node ExprNode) error {
+	if _, closed := closedNonScalarOps[node.Op]; closed {
+		return &EvaluationError{
+			Code: "unsupported_operator",
+			Message: fmt.Sprintf("operator '%s' is an evaluable-core array/query op with no scalar "+
+				"evaluator: it cannot be reduced to a single number (esm-spec §4.2).", node.Op),
+		}
+	}
+	return &EvaluationError{
+		Code: "unlowered_operator",
+		Message: fmt.Sprintf("unlowered rewrite-target operator '%s' reached evaluation: it is not in the "+
+			"closed evaluable core, so a rewrite rule must eliminate it before evaluation "+
+			"(esm-spec §4.2 / §9.6.8).", node.Op),
+	}
 }
 
 // Helper functions
