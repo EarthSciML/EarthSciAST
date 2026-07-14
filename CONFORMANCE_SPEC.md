@@ -42,6 +42,11 @@ tests/
 **Structure:**
 - **`tests/valid/`**: ESM files that should parse successfully and pass all validation checks
 - **`tests/invalid/`**: ESM files that should fail validation with documented error codes
+- **`lib/*.esm`**: the SHIPPED standard subsystem library (`solar`, `calendar`, `interp`). These are **not** fixtures — they are real code that users mount via a §4.7 `ref` — but a conforming binding's validation sweep MUST include them and MUST hold them to exactly the `tests/valid/` standard.
+
+**`lib/*.esm` is part of the corpus, and this is a pin, not a nicety.** Nothing swept the standard library: the only fixtures that touched it (`tests/valid/lib_solar_subsystem_inclusion.esm`, `lib_calendar_subsystem_inclusion.esm`) mount it as a *subsystem*, and no binding dimension-checks an inlined subsystem body. So both files shipped to users with real defects that a direct validation would have caught immediately — `seconds_since_midnight` declared in seconds while its expression was a pure number, `true_solar_time` adding a dimensionless clock count to a time AND to an angle, and a `units: "d"` that is not in the §4.8.1 registry at all (audit 2026-07-14). A binding that validates `tests/valid/**` but not `lib/**` has a hole in exactly the place where a bug reaches users rather than a test report.
+
+The `lib/` files are mirrored to `docs/static/lib/` so the documentation site can serve them. That mirror is enforced by `scripts/sync-lib.sh --check` in CI, the same way `scripts/sync-schema.sh --check` enforces the schema copies; before it existed the docs could have shipped a stale or broken standard library indefinitely with nothing to notice.
 
 **File naming convention:**
 ```
@@ -1776,9 +1781,15 @@ shared corpus pins and the one the five bindings must not re-diverge on:
 | Unresolvable or unreal unit string (`"not_a_unit"`, `"1/time"`) | **hard error** — `unit_parse_error` |
 | Genuinely undeterminable dimension (symbolic exponent, op with no dimensional rule, undeclared operand) | **warning** — report `unknown` and SKIP the enclosing check |
 
-A transcendental (`log`, `ln`, `exp`, `sin`, …) applied to a dimensional argument is a
-**provable mismatch**, not an undeterminable case (esm-spec §4.8.3). The transcendental set
-is CLOSED and `sqrt` is **not** in it — `sqrt` halves a dimension.
+A transcendental (`log`, `ln`, `exp`, `sinh`, …) applied to a dimensional argument is a
+**provable mismatch**, not an undeterminable case (esm-spec §4.8.3). The strict-transcendental
+set is CLOSED and `sqrt` is **not** in it — `sqrt` halves a dimension.
+
+ANGLES are the one exception, and they are not optional: `sin`/`cos`/`tan` accept an **angle**
+(`rad`/`deg`) as well as a dimensionless argument and return a dimensionless ratio, and
+`asin`/`acos`/`atan` take a dimensionless ratio and RETURN an angle. Because `rad` is one of the
+eight axes, a checker that demands a dimensionless argument for every transcendental rejects
+`cos(θ)` — and with it the shipped `lib/solar.esm` and `tests/valid/lib_solar_subsystem_inclusion.esm`.
 
 An undeterminable dimension MUST NOT be reported as *dimensionless* — that manufactures
 false mismatches against well-formed files. An incomplete unit registry MUST NOT be
