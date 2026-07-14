@@ -21,25 +21,144 @@ use crate::types::{Equation, Expr, ExpressionNode};
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// A dimension exponent.
+///
+/// Exponents are RATIONAL, not integer: `1/s^0.5` — the intensity of an SDE
+/// noise term — is a legitimate unit that appears in the shared corpus
+/// (`tests/fixtures/sde/*.esm`), and `sqrt` halves whatever it is given. An
+/// integer exponent could represent neither, so `sqrt(m^3)` used to be reported
+/// as "not representable" and `s^0.5` failed to parse outright — which, now that
+/// a dimensional mismatch is a HARD ERROR, would falsely reject legitimate
+/// files.
+///
+/// Always stored in lowest terms with a positive denominator, so `PartialEq`
+/// is exact dimensional equality (½ and 2/4 compare equal) and `HashMap` lookups
+/// are sound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Rational {
+    num: i32,
+    den: i32,
+}
+
+impl Rational {
+    /// A whole number exponent.
+    #[must_use]
+    pub fn int(n: i32) -> Self {
+        Rational { num: n, den: 1 }
+    }
+
+    /// `num/den`, reduced. A zero denominator is treated as `0/1`.
+    #[must_use]
+    pub fn new(num: i32, den: i32) -> Self {
+        if den == 0 {
+            return Rational { num: 0, den: 1 };
+        }
+        let sign = if den < 0 { -1 } else { 1 };
+        let (num, den) = (num * sign, den * sign);
+        let g = gcd(num.abs(), den);
+        if g == 0 {
+            return Rational { num: 0, den: 1 };
+        }
+        Rational {
+            num: num / g,
+            den: den / g,
+        }
+    }
+
+    /// Convert a decimal literal (`0.5`, `-1.5`, `2`) to an exact rational.
+    ///
+    /// Goes through the DECIMAL representation rather than the binary float, so
+    /// `0.5` is exactly ½ and `0.1` is exactly 1/10 — a continued-fraction
+    /// expansion of the `f64` would introduce a spurious huge denominator.
+    /// Returns `None` for a non-finite value or one needing more precision than
+    /// an `i32` numerator can hold.
+    #[must_use]
+    pub fn from_f64(x: f64) -> Option<Self> {
+        if !x.is_finite() {
+            return None;
+        }
+        if x.fract() == 0.0 && x.abs() < i32::MAX as f64 {
+            return Some(Rational::int(x as i32));
+        }
+        // Up to 6 decimal places is far more than any real unit exponent needs.
+        for places in 1..=6u32 {
+            let den = 10i32.checked_pow(places)?;
+            let scaled = x * f64::from(den);
+            if scaled.fract().abs() < 1e-9 && scaled.abs() < i32::MAX as f64 {
+                return Some(Rational::new(scaled.round() as i32, den));
+            }
+        }
+        None
+    }
+
+    fn add(self, other: Self) -> Self {
+        Rational::new(
+            self.num * other.den + other.num * self.den,
+            self.den * other.den,
+        )
+    }
+
+    fn sub(self, other: Self) -> Self {
+        Rational::new(
+            self.num * other.den - other.num * self.den,
+            self.den * other.den,
+        )
+    }
+
+    fn mul(self, other: Self) -> Self {
+        Rational::new(self.num * other.num, self.den * other.den)
+    }
+
+    fn is_zero(self) -> bool {
+        self.num == 0
+    }
+
+    /// As an `f64`, for scaling a unit's magnitude by this exponent.
+    fn as_f64(self) -> f64 {
+        f64::from(self.num) / f64::from(self.den)
+    }
+}
+
+impl std::fmt::Display for Rational {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.den == 1 {
+            write!(f, "{}", self.num)
+        } else {
+            write!(f, "{}/{}", self.num, self.den)
+        }
+    }
+}
+
+fn gcd(a: i32, b: i32) -> i32 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
 /// Represents a physical unit with dimensions
 #[derive(Debug, Clone, PartialEq)]
 pub struct Unit {
-    /// Base dimensions with their powers
-    dimensions: HashMap<Dimension, i32>,
+    /// Base dimensions with their (rational) powers
+    dimensions: HashMap<Dimension, Rational>,
     /// Scale factor for unit conversions
     scale: f64,
 }
 
-/// Base physical dimensions
+/// Base physical dimensions — the eight canonical axes shared across the
+/// bindings (`m kg s mol K A cd rad`).
+///
+/// `Angle` is a full axis rather than a synonym for dimensionless, matching the
+/// Go reference. The trigonometric functions therefore accept an angle OR a
+/// dimensionless argument (see `propagate_transcendental_dim`); `exp`/`log` still
+/// demand strict dimensionlessness.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Dimension {
-    Mass,        // M
-    Length,      // L
-    Time,        // T
-    Current,     // I (electric current)
-    Temperature, // Θ (thermodynamic temperature)
-    Amount,      // N (amount of substance)
-    Luminosity,  // J (luminous intensity)
+    Mass,        // M   — kg
+    Length,      // L   — m
+    Time,        // T   — s
+    Current,     // I   — A  (electric current)
+    Temperature, // Θ   — K  (thermodynamic temperature)
+    Amount,      // N   — mol (amount of substance)
+    Luminosity,  // J   — cd (luminous intensity)
+    Angle,       // rad (plane angle)
 }
 
 /// Error types for unit operations
@@ -151,10 +270,16 @@ impl Unit {
         }
     }
 
-    /// Create a unit with a single dimension
+    /// Create a unit with a single dimension raised to an integer power.
     pub fn base(dimension: Dimension, power: i32, scale: f64) -> Self {
+        Unit::base_rational(dimension, Rational::int(power), scale)
+    }
+
+    /// Create a unit with a single dimension raised to a RATIONAL power (e.g.
+    /// `s^-1/2`, the dimension of an SDE noise intensity).
+    pub fn base_rational(dimension: Dimension, power: Rational, scale: f64) -> Self {
         let mut dimensions = HashMap::new();
-        if power != 0 {
+        if !power.is_zero() {
             dimensions.insert(dimension, power);
         }
         Unit { dimensions, scale }
@@ -170,54 +295,59 @@ impl Unit {
         self.dimensions.is_empty()
     }
 
+    /// True when this unit is dimensionless OR a pure plane angle.
+    ///
+    /// `rad` is a full dimension axis here (matching the Go reference), but a
+    /// trigonometric function legitimately takes an ANGLE — `sin(theta)` with
+    /// `theta` in radians must not be reported as a dimensional error.
+    pub fn is_dimensionless_or_angle(&self) -> bool {
+        self.dimensions
+            .keys()
+            .all(|d| matches!(d, Dimension::Angle))
+    }
+
     /// Multiply two units
     pub fn multiply(&self, other: &Unit) -> Unit {
-        let mut dimensions = self.dimensions.clone();
-
-        for (dim, power) in &other.dimensions {
-            let entry = dimensions.entry(dim.clone()).or_insert(0);
-            *entry += power;
-            if *entry == 0 {
-                dimensions.remove(dim);
-            }
-        }
-
-        Unit {
-            dimensions,
-            scale: self.scale * other.scale,
-        }
+        self.combine(other, Rational::add, self.scale * other.scale)
     }
 
     /// Divide two units
     pub fn divide(&self, other: &Unit) -> Unit {
-        let mut dimensions = self.dimensions.clone();
+        self.combine(other, Rational::sub, self.scale / other.scale)
+    }
 
+    /// Merge `other`'s exponents into a copy of `self`'s with `op`, dropping any
+    /// axis whose exponent cancels to zero.
+    fn combine(&self, other: &Unit, op: fn(Rational, Rational) -> Rational, scale: f64) -> Unit {
+        let mut dimensions = self.dimensions.clone();
         for (dim, power) in &other.dimensions {
-            let entry = dimensions.entry(dim.clone()).or_insert(0);
-            *entry -= power;
-            if *entry == 0 {
+            let entry = dimensions.entry(dim.clone()).or_insert(Rational::int(0));
+            *entry = op(*entry, *power);
+            if entry.is_zero() {
                 dimensions.remove(dim);
             }
         }
-
-        Unit {
-            dimensions,
-            scale: self.scale / other.scale,
-        }
+        Unit { dimensions, scale }
     }
 
-    /// Raise unit to a power
+    /// Raise unit to an integer power.
     pub fn power(&self, exponent: i32) -> Unit {
+        self.power_rational(Rational::int(exponent))
+    }
+
+    /// Raise unit to a RATIONAL power. `sqrt` is `power_rational(1/2)`, and a
+    /// literal `^0.5` in an expression lands here too.
+    pub fn power_rational(&self, exponent: Rational) -> Unit {
         let dimensions = self
             .dimensions
             .iter()
-            .map(|(dim, power)| (dim.clone(), power * exponent))
-            .filter(|(_, power)| *power != 0)
+            .map(|(dim, power)| (dim.clone(), power.mul(exponent)))
+            .filter(|(_, power)| !power.is_zero())
             .collect();
 
         Unit {
             dimensions,
-            scale: self.scale.powi(exponent),
+            scale: self.scale.powf(exponent.as_f64()),
         }
     }
 
@@ -557,22 +687,23 @@ fn propagate_power_dim(
     // indeterminate, but its VALUE is exactly what a power needs. It may arrive
     // as EITHER `Expr::Number` (JSON `2.0`) or `Expr::Integer` (JSON `2`).
     let literal_exp = match &op.args[1] {
-        Expr::Integer(i) => Some(*i as f64),
+        Expr::Integer(i) => Some(f64::from(*i as i32)),
         Expr::Number(n) => Some(*n),
         _ => None,
     };
     match literal_exp {
-        Some(n) if n.fract() == 0.0 => Dim::Known(base_unit.power(n as i32)),
-        // A fractional power of a dimensional quantity (`m^0.5`) is real, but
-        // our integer-power `Unit` cannot represent it — a limitation of the
-        // checker, not a defect in the file.
-        Some(n) => {
-            findings.push(UnitFinding::analysis(format!(
-                "Non-integer exponent {n} on a dimensional quantity is not representable; \
-                 its dimension is unknown"
-            )));
-            Dim::Unknown
-        }
+        // Exponents are RATIONAL, so a fractional power of a dimensional
+        // quantity (`x^0.5`) is representable and propagates exactly.
+        Some(n) => match Rational::from_f64(n) {
+            Some(r) => Dim::Known(base_unit.power_rational(r)),
+            None => {
+                findings.push(UnitFinding::analysis(format!(
+                    "Exponent {n} is not a representable rational, so the dimension of a \
+                     dimensional base is unknown"
+                )));
+                Dim::Unknown
+            }
+        },
         // Symbolic exponent (`x^n` for a parameter `n`): the resulting
         // dimension depends on a value we do not have. Undeterminable, NOT a
         // mismatch.
@@ -647,7 +778,7 @@ fn derivative_time_mismatch(state: &Unit, rhs: &Unit) -> Option<String> {
     let unreconcilable = ratio
         .dimensions
         .iter()
-        .any(|(d, p)| *d != Dimension::Time && *p != 0);
+        .any(|(d, p)| *d != Dimension::Time && !p.is_zero());
     unreconcilable.then(|| {
         format!(
             "No time unit can reconcile d({})/dt with {} (their ratio {} is not a power of time)",
@@ -682,8 +813,15 @@ fn propagate_spatial_dim(
     Dim::Known(arg_unit.divide(&coord_denominator(op, coords, power)))
 }
 
-/// Transcendental and trigonometric functions: argument must be
-/// dimensionless, result is dimensionless.
+/// Transcendental and trigonometric functions: argument must be dimensionless,
+/// result is dimensionless.
+///
+/// `sqrt` is NOT in this family — it halves its argument's dimensions (see
+/// [`propagate_sqrt_dim`]).
+///
+/// The TRIGONOMETRIC members additionally accept a plane ANGLE: `rad` is a real
+/// dimension axis here, so `sin(theta)` with `theta` in radians is correct, not
+/// an error. `exp`/`log`/`log10`/`ln` still demand strict dimensionlessness.
 fn propagate_transcendental_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
@@ -694,21 +832,30 @@ fn propagate_transcendental_dim(
         // The result is dimensionless whatever the argument turns out to be.
         return Dim::Known(Unit::dimensionless());
     }
+    let angle_ok = !matches!(op.op.as_str(), "exp" | "log" | "log10" | "ln");
     let arg = propagate_dim(&op.args[0], env, coords, findings);
-    if let Some(u) = arg.known()
-        && !u.is_dimensionless()
-    {
-        findings.push(UnitFinding::error(format!(
-            "Argument to '{}' must be dimensionless, got {}",
-            op.op,
-            describe(u)
-        )));
+    if let Some(u) = arg.known() {
+        let acceptable = if angle_ok {
+            u.is_dimensionless_or_angle()
+        } else {
+            u.is_dimensionless()
+        };
+        if !acceptable {
+            findings.push(UnitFinding::error(format!(
+                "Argument to '{}' must be dimensionless{}, got {}",
+                op.op,
+                if angle_ok { " (or an angle)" } else { "" },
+                describe(u)
+            )));
+        }
     }
     // Dimensionless by definition, even when the argument was undeterminable.
     Dim::Known(Unit::dimensionless())
 }
 
-/// Square root: halve dimension powers when all even.
+/// Square root HALVES its argument's dimensions — it is not a transcendental
+/// function and does NOT require a dimensionless argument. Because exponents are
+/// rational, `sqrt(m^3)` is exactly `m^3/2` rather than "not representable".
 fn propagate_sqrt_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
@@ -719,30 +866,10 @@ fn propagate_sqrt_dim(
         return Dim::Unknown;
     }
     let arg = propagate_dim(&op.args[0], env, coords, findings);
-    let Some(unit) = arg.known() else {
-        return Dim::Unknown;
-    };
-    if unit.is_dimensionless() {
-        return Dim::Known(Unit::dimensionless());
+    match arg.known() {
+        Some(unit) => Dim::Known(unit.power_rational(Rational::new(1, 2))),
+        None => Dim::Unknown,
     }
-    let mut dims = HashMap::new();
-    for (d, p) in &unit.dimensions {
-        if p % 2 != 0 {
-            // sqrt(m^3) is meaningful (m^1.5); our integer-power `Unit` just
-            // cannot represent it. A checker limitation, not a file defect.
-            findings.push(UnitFinding::analysis(format!(
-                "sqrt of {} has half-integer dimensions, which are not representable; \
-                 its dimension is unknown",
-                describe(unit)
-            )));
-            return Dim::Unknown;
-        }
-        dims.insert(d.clone(), p / 2);
-    }
-    Dim::Known(Unit {
-        dimensions: dims,
-        scale: unit.scale.sqrt(),
-    })
 }
 
 /// `ifelse`: the two branches must share dimensions; the result carries them.
@@ -880,8 +1007,9 @@ fn describe(unit: &Unit) -> String {
                 Dimension::Temperature => "temperature",
                 Dimension::Amount => "amount",
                 Dimension::Luminosity => "luminosity",
+                Dimension::Angle => "angle",
             };
-            if *p == 1 {
+            if *p == Rational::int(1) {
                 name.to_string()
             } else {
                 format!("{name}^{p}")
@@ -1096,19 +1224,88 @@ pub fn check_expression_dimensions(
 /// - integer powers (`"m^2"`, `"s^-1"`)
 /// - dimensionless (`""`, `"1"`, `"dimensionless"`)
 pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
-    let s = unit_str.trim();
+    parse_normalized(&normalize_unit_str(unit_str), unit_str)
+}
+
+/// Rewrite the ordinary earth-science spellings of a unit into the ASCII
+/// grammar, BEFORE parsing.
+///
+/// These are not exotic: `W/m²`, `cm³`, `J/(kg·K)`, `kg⋅m/s`, `μg/m^3`, `°C` and
+/// `Pa*m**3` all appear in the shared corpus and all failed to parse, leaving
+/// their variables dimensionless-unknown and silently unchecked.
+///
+/// * superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` → `^n`
+/// * middot `·` (U+00B7) and dot-operator `⋅` (U+22C5) → `*`
+/// * `µ` (U+00B5) / `μ` (U+03BC) → `u`  (so `μg` is the `u` + `g` prefix form)
+/// * `°C` → `degC`, `Ω` → `Ohm`
+/// * `**` → `^`  (the Python spelling of a power)
+fn normalize_unit_str(s: &str) -> String {
+    // `°C` and `**` are two-character sequences, so handle them first.
+    let s = s.replace("°C", "degC").replace("**", "^");
+
+    let mut out = String::with_capacity(s.len());
+    let mut in_superscript = false;
+    for c in s.chars() {
+        let sup = match c {
+            '⁰' => Some('0'),
+            '¹' => Some('1'),
+            '²' => Some('2'),
+            '³' => Some('3'),
+            '⁴' => Some('4'),
+            '⁵' => Some('5'),
+            '⁶' => Some('6'),
+            '⁷' => Some('7'),
+            '⁸' => Some('8'),
+            '⁹' => Some('9'),
+            '⁻' => Some('-'),
+            _ => None,
+        };
+        match sup {
+            // A run of superscripts is one exponent: emit a single `^` before it.
+            Some(ascii) => {
+                if !in_superscript {
+                    out.push('^');
+                    in_superscript = true;
+                }
+                out.push(ascii);
+            }
+            None => {
+                in_superscript = false;
+                match c {
+                    '·' | '⋅' | '×' => out.push('*'),
+                    'µ' | 'μ' => out.push('u'),
+                    'Ω' => out.push_str("Ohm"),
+                    _ => out.push(c),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Parse an already-normalized unit string. `original` is carried only for
+/// error messages, so a diagnostic quotes what the author actually wrote.
+fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
+    let s = s.trim();
     if s.is_empty() || s == "1" || s == "dimensionless" {
         return Ok(Unit::dimensionless());
     }
 
     // Strip a single layer of surrounding parentheses when they balance.
     if s.starts_with('(') && s.ends_with(')') && parens_balance(&s[1..s.len() - 1]) {
-        return parse_unit(&s[1..s.len() - 1]);
+        return parse_normalized(&s[1..s.len() - 1], original);
     }
 
     let base_units = get_base_units();
     if let Some(unit) = base_units.get(s) {
         return Ok(unit.clone());
+    }
+    // An SI-PREFIXED symbol (`mg`, `um`, `nm`, `mL`, `umol`, `dm`). Tried only
+    // after the exact table, so a name that merely LOOKS prefixed (`min`, `mol`,
+    // `cd`, `day`) keeps its own meaning. This is what makes the `µ`/`μ` → `u`
+    // normalization above mean anything: `μg/m^3` reaches here as `ug/m^3`.
+    if let Some(unit) = parse_si_prefixed(s, base_units) {
+        return Ok(unit);
     }
 
     // Product / quotient. `*` and `/` share one precedence level and bind
@@ -1117,35 +1314,119 @@ pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
     // this parser used to) pulls every `*` factor appearing after the last `/`
     // into the DENOMINATOR: `J/mol*K` parsed as `J/(mol*K)`, silently negating
     // K's exponent, and `kg/m^3*s` came out as `kg/(m^3*s)`. Equal-precedence
-    // left association is the reading of the Go reference parser
-    // (`unit := term (('*'|'/') term)*`) and of pint/Unitful.
-    if let Some((idx, sym)) = find_last_top_level_operator(s) {
-        let (left, right) = (&s[..idx], &s[idx + 1..]);
+    // left association is the reading of the Go reference parser and of
+    // pint/Unitful.
+    //
+    // WHITESPACE between two terms is an implicit multiplication (`ppb^-1 s^-1`),
+    // so it is a top-level operator too.
+    if let Some((idx, len, sym)) = find_last_top_level_operator(s) {
+        let (left, right) = (&s[..idx], &s[idx + len..]);
         if left.trim().is_empty() || right.trim().is_empty() {
             return Err(UnitError::ParseError(format!(
-                "Dangling '{sym}' in unit \"{unit_str}\""
+                "Dangling '{sym}' in unit \"{original}\""
             )));
         }
-        let l = parse_unit(left)?;
-        let r = parse_unit(right)?;
+        let l = parse_normalized(left, original)?;
+        let r = parse_normalized(right, original)?;
         return Ok(match sym {
             '/' => l.divide(&r),
             _ => l.multiply(&r),
         });
     }
 
-    // Power: right-most '^'.
+    // Power: right-most '^'. The exponent is RATIONAL — `s^0.5` and `m^(1/2)`
+    // are legitimate (an SDE noise intensity carries `1/s^0.5`).
     if let Some(idx) = s.rfind('^') {
         let (base_s, pow_s) = (&s[..idx], &s[idx + 1..]);
-        let base_unit = parse_unit(base_s)?;
-        let power: i32 = pow_s
-            .trim()
-            .parse()
-            .map_err(|_| UnitError::ParseError(format!("Invalid power: {pow_s}")))?;
-        return Ok(base_unit.power(power));
+        let base_unit = parse_normalized(base_s, original)?;
+        let power = parse_exponent(pow_s).ok_or_else(|| {
+            UnitError::ParseError(format!(
+                "Invalid exponent \"{pow_s}\" in unit \"{original}\""
+            ))
+        })?;
+        return Ok(base_unit.power_rational(power));
     }
 
-    Err(UnitError::UnknownUnit(unit_str.to_string()))
+    // A bare numeric atom is a dimensionless scale factor (`1000`, `0.5`).
+    if let Ok(v) = s.parse::<f64>() {
+        return Ok(Unit {
+            dimensions: HashMap::new(),
+            scale: v,
+        });
+    }
+
+    Err(UnitError::UnknownUnit(original.to_string()))
+}
+
+/// Decompose an SI-prefixed symbol into prefix × base (`mg` → milli × gram).
+///
+/// Only the symbols in [`PREFIXABLE`] take a prefix, which keeps the
+/// decomposition from inventing units out of arbitrary identifiers — `not_a_unit`
+/// must still fail to parse, and a count like `units` must not be read as
+/// micro-something. Prefixes are tried LONGEST-first so `da` (deca) is not
+/// mistaken for `d` (deci).
+fn parse_si_prefixed(s: &str, base_units: &HashMap<String, Unit>) -> Option<Unit> {
+    /// (symbol, factor), longest symbol first.
+    const PREFIXES: [(&str, f64); 20] = [
+        ("da", 1e1),
+        ("Y", 1e24),
+        ("Z", 1e21),
+        ("E", 1e18),
+        ("P", 1e15),
+        ("T", 1e12),
+        ("G", 1e9),
+        ("M", 1e6),
+        ("k", 1e3),
+        ("h", 1e2),
+        ("d", 1e-1),
+        ("c", 1e-2),
+        ("m", 1e-3),
+        ("u", 1e-6),
+        ("n", 1e-9),
+        ("p", 1e-12),
+        ("f", 1e-15),
+        ("a", 1e-18),
+        ("z", 1e-21),
+        ("y", 1e-24),
+    ];
+    /// Symbols that admit an SI prefix.
+    const PREFIXABLE: [&str; 13] = [
+        "m", "g", "s", "mol", "K", "A", "cd", "L", "N", "Pa", "J", "W", "rad",
+    ];
+
+    for (prefix, factor) in PREFIXES {
+        let Some(base) = s.strip_prefix(prefix) else {
+            continue;
+        };
+        if !PREFIXABLE.contains(&base) {
+            continue;
+        }
+        let mut unit = base_units.get(base)?.clone();
+        unit.scale *= factor;
+        return Some(unit);
+    }
+    None
+}
+
+/// Parse a unit exponent: an integer (`2`, `-1`), a decimal (`0.5`, `-1.5`), or
+/// a parenthesised fraction (`(1/2)`).
+fn parse_exponent(s: &str) -> Option<Rational> {
+    let s = s.trim();
+    let inner = s
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or(s)
+        .trim();
+    if let Some((num, den)) = inner.split_once('/') {
+        return Some(Rational::new(
+            num.trim().parse().ok()?,
+            den.trim().parse().ok()?,
+        ));
+    }
+    if let Ok(n) = inner.parse::<i32>() {
+        return Some(Rational::int(n));
+    }
+    Rational::from_f64(inner.parse::<f64>().ok()?)
 }
 
 /// Find the *last* top-level (outside any parenthesised group) `*` or `/`,
@@ -1157,16 +1438,41 @@ pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
 /// gives the conventional reading of `W/m^2/K` as `W/(m^2*K)` while keeping
 /// `J/mol*K` as `(J/mol)*K`, and matches the sibling parsers (Go's recursive
 /// descent, Python/pint, Julia's Unitful `uparse`).
-fn find_last_top_level_operator(s: &str) -> Option<(usize, char)> {
+/// Returns `(byte index, byte length, operator)`. The length matters because an
+/// implicit multiplication is a RUN of whitespace, which the caller must skip
+/// whole.
+fn find_last_top_level_operator(s: &str) -> Option<(usize, usize, char)> {
+    let bytes = s.as_bytes();
     let mut depth = 0i32;
     let mut last = None;
-    for (i, c) in s.char_indices() {
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
         match c {
             '(' => depth += 1,
             ')' => depth -= 1,
-            '*' | '/' if depth == 0 => last = Some((i, c)),
+            '*' | '/' if depth == 0 => last = Some((i, 1, c)),
+            ' ' | '\t' if depth == 0 => {
+                // A run of whitespace BETWEEN two terms is an implicit `*`.
+                // Whitespace merely padding an explicit operator (`m / s`) is
+                // not: the operator arm above already claimed that position, and
+                // a run adjacent to one must not be treated as a second operator.
+                let start = i;
+                while i < bytes.len() && matches!(bytes[i] as char, ' ' | '\t') {
+                    i += 1;
+                }
+                let before = s[..start].trim_end().chars().last();
+                let after = s[i..].chars().next();
+                let padding = matches!(before, Some('*' | '/' | '^') | None)
+                    || matches!(after, Some('*' | '/' | '^') | None);
+                if !padding {
+                    last = Some((start, i - start, '*'));
+                }
+                continue;
+            }
             _ => {}
         }
+        i += 1;
     }
     last
 }
@@ -1207,12 +1513,15 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("cm".to_string(), Unit::base(Dimension::Length, 1, 0.01));
     units.insert("km".to_string(), Unit::base(Dimension::Length, 1, 1000.0));
     units.insert("mm".to_string(), Unit::base(Dimension::Length, 1, 0.001));
+    units.insert("meter".to_string(), Unit::base(Dimension::Length, 1, 1.0));
+    units.insert("meters".to_string(), Unit::base(Dimension::Length, 1, 1.0));
 
     // Time units
     units.insert("s".to_string(), Unit::base(Dimension::Time, 1, 1.0));
     units.insert("min".to_string(), Unit::base(Dimension::Time, 1, 60.0));
     units.insert("h".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
     units.insert("hr".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
+    units.insert("hour".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
     units.insert("day".to_string(), Unit::base(Dimension::Time, 1, 86400.0));
 
     // Mass units
@@ -1222,12 +1531,27 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Amount units
     units.insert("mol".to_string(), Unit::base(Dimension::Amount, 1, 1.0));
 
-    // Temperature units
+    // Temperature units. `degC` (and its `°C` spelling, normalized to `degC`
+    // before parsing) shares the TEMPERATURE dimension with kelvin: the two
+    // differ by an affine OFFSET, which a multiplicative dimension algebra
+    // cannot express, and dimensional analysis only cares about the axis.
     units.insert("K".to_string(), Unit::base(Dimension::Temperature, 1, 1.0));
+    units.insert(
+        "degC".to_string(),
+        Unit::base(Dimension::Temperature, 1, 1.0),
+    );
+    units.insert(
+        "Celsius".to_string(),
+        Unit::base(Dimension::Temperature, 1, 1.0),
+    );
 
     // Current / luminous intensity
     units.insert("A".to_string(), Unit::base(Dimension::Current, 1, 1.0));
     units.insert("cd".to_string(), Unit::base(Dimension::Luminosity, 1, 1.0));
+
+    // Plane angle — a real axis (the eighth), not a synonym for dimensionless.
+    // The trig functions accept it; see `propagate_transcendental_dim`.
+    units.insert("rad".to_string(), Unit::base(Dimension::Angle, 1, 1.0));
 
     // Volume (L = dm³ = 10⁻³ m³)
     units.insert("L".to_string(), Unit::base(Dimension::Length, 3, 0.001));
@@ -1299,9 +1623,32 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("ppbv".to_string(), dimensionless_scaled(1e-9));
     units.insert("ppt".to_string(), dimensionless_scaled(1e-12));
     units.insert("pptv".to_string(), dimensionless_scaled(1e-12));
-    // `molec` is a dimensionless count atom — composites like `molec/cm^3`
-    // fall out of the compound-unit parser as `[length]^-3`.
-    units.insert("molec".to_string(), Unit::dimensionless());
+    // Percent — dimensionless with a scale, like the mole-fraction family.
+    units.insert("%".to_string(), dimensionless_scaled(0.01));
+    units.insert("percent".to_string(), dimensionless_scaled(0.01));
+
+    // COUNTS carry no dimension axis: they count entities, they do not measure
+    // one. Composites therefore fall out of the parser with the right dimension
+    // on their own — `molec/cm^3` is `[length]^-3`, `individuals/km^2` is
+    // `[length]^-2`.
+    for count in [
+        "molec",
+        "molecule",
+        "count",
+        "individuals",
+        "vehicles",
+        "units",
+    ] {
+        units.insert(count.to_string(), Unit::dimensionless());
+    }
+
+    // Practical salinity — dimensionless by definition (PSS-78).
+    units.insert("psu".to_string(), Unit::dimensionless());
+
+    // Pressure: atmosphere, and the micro-atmosphere used for seawater pCO2.
+    units.insert("atm".to_string(), pascal_scaled(&units, 101_325.0));
+    units.insert("uatm".to_string(), pascal_scaled(&units, 0.101_325));
+
     // Dobson unit: areal number density of ozone molecules.
     // Since `molec` is dimensionless, Dobson resolves to `[length]^-2` with
     // scale 2.6867e20 molec/m^2.
@@ -1315,6 +1662,13 @@ fn build_base_units() -> HashMap<String, Unit> {
     );
 
     units
+}
+
+/// A pressure unit expressed as a multiple of the pascal already in `units`.
+fn pascal_scaled(units: &HashMap<String, Unit>, scale: f64) -> Unit {
+    let mut u = units["Pa"].clone();
+    u.scale *= scale;
+    u
 }
 
 /// Check dimensional consistency of an equation
@@ -1394,60 +1748,349 @@ mod tests {
         assert!(parse_unit("dimensionless").unwrap().is_dimensionless());
     }
 
+    /// Exponents are RATIONAL. `1/s^0.5` is the intensity of an SDE noise term
+    /// and appears in the shared corpus (`tests/fixtures/sde/*.esm`); an
+    /// integer-only grammar could not parse it at all.
+    #[test]
+    fn test_rational_exponents() {
+        let half = Rational::new(-1, 2);
+        assert_eq!(
+            parse_unit("1/s^0.5")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Time),
+            Some(&half)
+        );
+        // The fraction and decimal spellings agree.
+        assert_eq!(
+            parse_unit("s^(-1/2)")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Time),
+            Some(&half)
+        );
+        // `**` is the Python spelling of a power.
+        assert_eq!(
+            parse_unit("m**3")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(3))
+        );
+        // Reduced to lowest terms, so 2/4 IS 1/2.
+        assert_eq!(Rational::new(2, 4), Rational::new(1, 2));
+        assert_eq!(Rational::from_f64(0.5), Some(Rational::new(1, 2)));
+    }
+
+    /// Ordinary earth-science spellings must parse: superscripts, the middot and
+    /// dot-operator, micro, degree-Celsius and ohm.
+    #[test]
+    fn test_unicode_normalization() {
+        // W/m² — superscript exponent.
+        let u = parse_unit("W/m²").unwrap();
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-3)));
+        // Length cancels: W carries m^2, divided by m^2.
+        assert_eq!(u.dimensions.get(&Dimension::Length), None);
+
+        assert_eq!(
+            parse_unit("cm³")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(3))
+        );
+        // Superscript minus.
+        assert_eq!(
+            parse_unit("m⁻³")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
+        // Middot (U+00B7) and dot-operator (U+22C5) are multiplication.
+        assert_eq!(
+            parse_unit("J/(kg·K)").unwrap(),
+            parse_unit("J/(kg*K)").unwrap()
+        );
+        assert_eq!(parse_unit("kg⋅m/s").unwrap(), parse_unit("kg*m/s").unwrap());
+        // Micro, in both its spellings.
+        assert_eq!(parse_unit("μg/m^3").unwrap(), parse_unit("ug/m^3").unwrap());
+        assert_eq!(parse_unit("µg").unwrap(), parse_unit("ug").unwrap());
+        // °C shares the temperature axis with K (they differ by an affine
+        // offset, which dimensional analysis does not model).
+        assert!(
+            parse_unit("°C")
+                .unwrap()
+                .is_compatible(&parse_unit("K").unwrap())
+        );
+    }
+
+    /// Whitespace between two terms is an implicit multiplication.
+    #[test]
+    fn test_implicit_multiplication() {
+        assert_eq!(
+            parse_unit("ppb^-1 s^-1").unwrap(),
+            parse_unit("ppb^-1*s^-1").unwrap()
+        );
+        // But whitespace merely PADDING an explicit operator is not a second
+        // operator.
+        assert_eq!(parse_unit("m / s").unwrap(), parse_unit("m/s").unwrap());
+        assert_eq!(parse_unit("kg * m").unwrap(), parse_unit("kg*m").unwrap());
+    }
+
+    /// SI prefixes resolve against the prefixable symbols — which is what makes
+    /// the `µ` → `u` normalization useful — but must not invent units out of
+    /// arbitrary identifiers, nor shadow a name that merely looks prefixed.
+    #[test]
+    fn test_si_prefixes() {
+        assert_eq!(
+            parse_unit("mg").unwrap().dimensions.get(&Dimension::Mass),
+            Some(&Rational::int(1))
+        );
+        assert!((parse_unit("mg").unwrap().scale - 1e-6).abs() < 1e-18);
+        assert!((parse_unit("um").unwrap().scale - 1e-6).abs() < 1e-18);
+        assert!((parse_unit("nm").unwrap().scale - 1e-9).abs() < 1e-21);
+        assert_eq!(parse_unit("mL").unwrap(), {
+            let mut l = parse_unit("L").unwrap();
+            l.scale *= 1e-3;
+            l
+        });
+        assert_eq!(
+            parse_unit("umol")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        // Exact names win over a prefix reading: `min` is minutes, not milli-in.
+        assert!((parse_unit("min").unwrap().scale - 60.0).abs() < 1e-9);
+        assert_eq!(
+            parse_unit("mol")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        // A prefix on a non-prefixable identifier is NOT a unit.
+        assert!(parse_unit("not_a_unit").is_err());
+    }
+
+    /// Counts carry no dimension axis, so composites come out with the right
+    /// dimension on their own.
+    #[test]
+    fn test_counts_are_dimensionless() {
+        for c in [
+            "molec",
+            "molecule",
+            "count",
+            "individuals",
+            "vehicles",
+            "units",
+        ] {
+            assert!(
+                parse_unit(c).unwrap().is_dimensionless(),
+                "{c} must be dimensionless"
+            );
+        }
+        // individuals/km^2 is an inverse area.
+        assert_eq!(
+            parse_unit("individuals/km^2")
+                .unwrap()
+                .dimensions
+                .get(&Dimension::Length),
+            Some(&Rational::int(-2))
+        );
+        assert!(parse_unit("psu").unwrap().is_dimensionless());
+        assert!(parse_unit("%").unwrap().is_dimensionless());
+        assert!((parse_unit("%").unwrap().scale - 0.01).abs() < 1e-12);
+        // uatm is a pressure.
+        assert!(
+            parse_unit("uatm")
+                .unwrap()
+                .is_compatible(&parse_unit("Pa").unwrap())
+        );
+    }
+
+    /// `sqrt` HALVES a dimension — it is not a transcendental and does not
+    /// require a dimensionless argument. With rational exponents `sqrt(m^3)` is
+    /// exactly `m^3/2` rather than "not representable".
+    #[test]
+    fn test_sqrt_halves_dimensions() {
+        let env = env_of(&[("area", "m^2"), ("vol", "m^3")]);
+
+        let e = op("sqrt", vec![Expr::Variable("area".into())]);
+        let u = Unit::propagate(&e, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert!(check_expression_dimensions(&e, None, &env, None).is_empty());
+
+        let e = op("sqrt", vec![Expr::Variable("vol".into())]);
+        let u = Unit::propagate(&e, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::new(3, 2))
+        );
+        assert!(
+            !check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "sqrt of an odd power is representable, not an error"
+        );
+    }
+
+    /// `rad` is a real axis, so a trig function accepts an ANGLE — but `exp` and
+    /// `log` still demand strict dimensionlessness.
+    #[test]
+    fn test_trig_accepts_angle_but_exp_does_not() {
+        let env = env_of(&[("theta", "rad"), ("m", "m")]);
+
+        let e = op("sin", vec![Expr::Variable("theta".into())]);
+        assert!(
+            !check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "sin(theta) with theta in radians is correct"
+        );
+
+        // A LENGTH is still wrong for sin.
+        let e = op("sin", vec![Expr::Variable("m".into())]);
+        assert!(
+            check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error)
+        );
+
+        // exp of an angle is a dimensional argument.
+        let e = op("exp", vec![Expr::Variable("theta".into())]);
+        assert!(
+            check_expression_dimensions(&e, None, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "exp requires strict dimensionlessness"
+        );
+    }
+
+    /// The derivative rule leaves the TIME exponent free and requires only that
+    /// the non-time dimensions reconcile — so `x` in metres with an RHS in
+    /// `m/s^2` is accepted (some time unit reconciles it), while `m` against
+    /// `kg` never can be.
+    #[test]
+    fn test_derivative_time_exponent_is_free() {
+        let env = env_of(&[("x", "m"), ("accel", "m/s^2"), ("mass", "kg")]);
+
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
+            rhs: Expr::Variable("accel".into()),
+        };
+        assert!(
+            !check_equation_dimensions(&eq, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "ratio m/(m/s^2) = s^2 is a power of time ⇒ reconcilable"
+        );
+
+        let eq = Equation {
+            lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
+            rhs: Expr::Variable("mass".into()),
+        };
+        assert!(
+            check_equation_dimensions(&eq, &env, None)
+                .iter()
+                .any(UnitFinding::is_error),
+            "ratio m/kg is not a power of time ⇒ provable mismatch"
+        );
+    }
+
     #[test]
     fn test_parse_base_units() {
         assert_eq!(
             parse_unit("m").unwrap().dimensions.get(&Dimension::Length),
-            Some(&1)
+            Some(&Rational::int(1))
         );
         assert_eq!(
             parse_unit("s").unwrap().dimensions.get(&Dimension::Time),
-            Some(&1)
+            Some(&Rational::int(1))
         );
         assert_eq!(
             parse_unit("kg").unwrap().dimensions.get(&Dimension::Mass),
-            Some(&1)
+            Some(&Rational::int(1))
         );
     }
 
     #[test]
     fn test_parse_compound_units() {
         let u = parse_unit("m/s").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
 
         let u = parse_unit("mol/L").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Amount), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&-3));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
     }
 
     #[test]
     fn test_parse_parenthesised_units() {
         // J/(mol*K) == kg*m^2/(s^2*mol*K)
         let u = parse_unit("J/(mol*K)").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&2));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-2));
-        assert_eq!(u.dimensions.get(&Dimension::Amount), Some(&-1));
-        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&-1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(2))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-2)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(-1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(-1))
+        );
     }
 
     #[test]
     fn test_parse_pascal_and_kg_per_m3() {
         let pa = parse_unit("Pa").unwrap();
-        assert_eq!(pa.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(pa.dimensions.get(&Dimension::Length), Some(&-1));
-        assert_eq!(pa.dimensions.get(&Dimension::Time), Some(&-2));
+        assert_eq!(pa.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            pa.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-1))
+        );
+        assert_eq!(
+            pa.dimensions.get(&Dimension::Time),
+            Some(&Rational::int(-2))
+        );
 
         let rho = parse_unit("kg/m^3").unwrap();
-        assert_eq!(rho.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(rho.dimensions.get(&Dimension::Length), Some(&-3));
+        assert_eq!(
+            rho.dimensions.get(&Dimension::Mass),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            rho.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
     }
 
     #[test]
     fn test_parse_negative_power() {
         let inv_s = parse_unit("s^-1").unwrap();
-        assert_eq!(inv_s.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            inv_s.dimensions.get(&Dimension::Time),
+            Some(&Rational::int(-1))
+        );
     }
 
     #[test]
@@ -1457,9 +2100,12 @@ mod tests {
         // correct result is kg*s^-3*K^-1: Temperature power -1 (a +1 would
         // betray the old right-associative bug).
         let u = parse_unit("W/m^2/K").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-3));
-        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&-1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-3)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(-1))
+        );
         // Length cancels: m^2 (from W) divided by m^2 leaves power 0 (absent).
         assert_eq!(u.dimensions.get(&Dimension::Length), None);
     }
@@ -1468,13 +2114,13 @@ mod tests {
     fn test_find_last_top_level_operator() {
         // `a/b/c` splits at the *last* top-level operator so parse_unit recurses
         // on the left `a/b`, yielding left-associative `(a/b)/c`.
-        assert_eq!(find_last_top_level_operator("a/b/c"), Some((3, '/')));
-        assert_eq!(find_last_top_level_operator("a*b*c"), Some((3, '*')));
+        assert_eq!(find_last_top_level_operator("a/b/c"), Some((3, 1, '/')));
+        assert_eq!(find_last_top_level_operator("a*b*c"), Some((3, 1, '*')));
         // `*` and `/` share one precedence level, so the LAST of either wins:
         // `a/b*c` is `(a/b)*c`, not `a/(b*c)`.
-        assert_eq!(find_last_top_level_operator("a/b*c"), Some((3, '*')));
+        assert_eq!(find_last_top_level_operator("a/b*c"), Some((3, 1, '*')));
         // Separators inside parentheses are hidden from the top-level scan.
-        assert_eq!(find_last_top_level_operator("a/(b/c)"), Some((1, '/')));
+        assert_eq!(find_last_top_level_operator("a/(b/c)"), Some((1, 1, '/')));
         assert_eq!(find_last_top_level_operator("kg"), None);
     }
 
@@ -1486,22 +2132,40 @@ mod tests {
     fn test_mixed_product_quotient_is_left_associative() {
         let u = parse_unit("J/mol*K").unwrap();
         // (J/mol)*K ⇒ temperature appears with power +1, not -1.
-        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Amount), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(-1))
+        );
 
         let u = parse_unit("kg/m^3*s").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&-3));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
 
         // Repeated division stays left-associative: m/s/s == m/s^2.
         let u = parse_unit("m/s/s").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-2));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-2)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
 
         // Parenthesised denominators are unaffected.
         let u = parse_unit("J/(mol*K)").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&-1));
-        assert_eq!(u.dimensions.get(&Dimension::Amount), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(-1))
+        );
+        assert_eq!(
+            u.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(-1))
+        );
     }
 
     /// A dangling operator is malformed, not silently dimensionless. `"m/"` used
@@ -1517,9 +2181,12 @@ mod tests {
     fn test_parse_mixed_product_quotient() {
         // Mixed `kg*m/s^2` is the Newton: mass^1 length^1 time^-2.
         let u = parse_unit("kg*m/s^2").unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-2));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-2)));
     }
 
     #[test]
@@ -1536,9 +2203,15 @@ mod tests {
         let m = parse_unit("m").unwrap();
         let s = parse_unit("s").unwrap();
         let v = m.divide(&s);
-        assert_eq!(v.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(v.dimensions.get(&Dimension::Time), Some(&-1));
-        assert_eq!(m.power(2).dimensions.get(&Dimension::Length), Some(&2));
+        assert_eq!(
+            v.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(v.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
+        assert_eq!(
+            m.power(2).dimensions.get(&Dimension::Length),
+            Some(&Rational::int(2))
+        );
     }
 
     #[test]
@@ -1583,7 +2256,10 @@ mod tests {
         let env = env_of(&[("T", "K")]);
         let expr = op("-", vec![Expr::Variable("T".into()), Expr::Number(273.15)]);
         let u = Unit::propagate(&expr, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Temperature), Some(&1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Temperature),
+            Some(&Rational::int(1))
+        );
         assert!(check_expression_dimensions(&expr, None, &env, None).is_empty());
 
         // And an all-literal expression is dimensionless.
@@ -1602,22 +2278,28 @@ mod tests {
         let env = env_of(&[("L", "m")]);
         let expr = op("^", vec![Expr::Variable("L".into()), Expr::Integer(2)]);
         let u = Unit::propagate(&expr, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&2));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(2))
+        );
     }
 
     #[test]
     fn propagate_variable_lookup() {
         let env = env_of(&[("v", "m/s")]);
         let u = Unit::propagate(&Expr::Variable("v".into()), &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
     }
 
     #[test]
     fn propagate_time_variable_default() {
         let env = HashMap::new();
         let u = Unit::propagate(&Expr::Variable("t".into()), &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(1)));
     }
 
     #[test]
@@ -1635,7 +2317,10 @@ mod tests {
             vec![Expr::Variable("h1".into()), Expr::Variable("h2".into())],
         );
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
     }
 
     #[test]
@@ -1657,9 +2342,12 @@ mod tests {
             vec![Expr::Variable("rho".into()), Expr::Variable("v".into())],
         );
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&-2));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-2))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
     }
 
     #[test]
@@ -1670,8 +2358,11 @@ mod tests {
             vec![Expr::Variable("m1".into()), Expr::Variable("V".into())],
         );
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&-3));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-3))
+        );
     }
 
     #[test]
@@ -1679,7 +2370,10 @@ mod tests {
         let env = env_of(&[("s", "m")]);
         let e = op("^", vec![Expr::Variable("s".into()), Expr::Number(3.0)]);
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&3));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(3))
+        );
     }
 
     #[test]
@@ -1732,7 +2426,10 @@ mod tests {
         let env = env_of(&[("a", "m^2")]);
         let e = op("sqrt", vec![Expr::Variable("a".into())]);
         let u = Unit::propagate(&e, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
     }
 
     #[test]
@@ -1770,12 +2467,21 @@ mod tests {
         let env = env_of(&[("c", "mol/m^3")]);
         let g = op("grad", vec![Expr::Variable("c".into())]);
         let gu = Unit::propagate(&g, &env).unwrap();
-        assert_eq!(gu.dimensions.get(&Dimension::Amount), Some(&1));
-        assert_eq!(gu.dimensions.get(&Dimension::Length), Some(&-4));
+        assert_eq!(
+            gu.dimensions.get(&Dimension::Amount),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(
+            gu.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-4))
+        );
 
         let l = op("laplacian", vec![Expr::Variable("c".into())]);
         let lu = Unit::propagate(&l, &env).unwrap();
-        assert_eq!(lu.dimensions.get(&Dimension::Length), Some(&-5));
+        assert_eq!(
+            lu.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(-5))
+        );
     }
 
     #[test]
@@ -1796,8 +2502,11 @@ mod tests {
             ..ExpressionNode::default()
         });
         let u = Unit::propagate(&node, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
-        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&-1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        assert_eq!(u.dimensions.get(&Dimension::Time), Some(&Rational::int(-1)));
     }
 
     #[test]
@@ -1808,7 +2517,7 @@ mod tests {
             vec![Expr::Variable("arr".into()), Expr::Number(0.0)],
         );
         let u = Unit::propagate(&node, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&1));
+        assert_eq!(u.dimensions.get(&Dimension::Mass), Some(&Rational::int(1)));
     }
 
     #[test]
@@ -1822,7 +2531,10 @@ mod tests {
             ..ExpressionNode::default()
         });
         let u = Unit::propagate(&node, &env).unwrap();
-        assert_eq!(u.dimensions.get(&Dimension::Length), Some(&1));
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
     }
 
     #[test]
