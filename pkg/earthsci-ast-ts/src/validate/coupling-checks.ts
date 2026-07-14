@@ -7,27 +7,41 @@
 import { ERROR_CODES } from '../errors.js'
 import type {
   EsmFile,
+  Expression,
   CouplingOperatorCompose,
   CouplingCouple,
   CouplingVariableMap,
   SubsystemRef,
 } from '../types.js'
 import type { StructuralError } from './types.js'
-import { extractVariableReferences, splitScopedRef } from './expr-utils.js'
+import {
+  collectIndexSymbols,
+  extractVariableReferences,
+  resolveScopedReference,
+  splitScopedRef,
+} from './expr-utils.js'
+import { isExpressionLike } from '../traverse.js'
 
-/**
- * Flag subsystem entries that are unresolved SubsystemRef objects.
- * The synchronous validate() function cannot resolve external file references;
- * call resolveSubsystemRefs() before validate() to inline them first.
- */
 /**
  * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
  * `subsystems` map. Shared by the models and reaction-systems passes, which
- * differ only in the JSON path prefix.
+ * differ only in the JSON path prefix and the parent component's name.
+ *
+ * The code is `unresolved_subsystem_ref` — the canonical, cross-binding name for
+ * a subsystem reference that does not resolve (pinned by
+ * `tests/invalid/expected_errors.json` on `subsystem_ref_not_found.esm`). The
+ * synchronous `validate()` does NO file I/O, so a `{ref}` that reaches it is by
+ * construction unresolved; call `resolveSubsystemRefs()` first to inline it.
+ *
+ * The sibling code `ambiguous_subsystem_ref` (a ref that resolves to a file
+ * holding MORE than one top-level system) is raised by the resolver in
+ * `ref-loading.ts`, which is the only layer that reads the referenced file and
+ * can therefore tell the two apart.
  */
 function flagRefSubsystems(
   subsystems: Record<string, unknown>,
   pathPrefix: string,
+  parentName: string,
 ): StructuralError[] {
   const errors: StructuralError[] = []
   for (const [subsystemName, subsystem] of Object.entries(subsystems)) {
@@ -37,8 +51,8 @@ function flagRefSubsystems(
         errors.push({
           path: `${pathPrefix}/${subsystemName}`,
           code: ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
-          message: `Subsystem '${subsystemName}' is an unresolved file reference ('${ref}'). Call resolveSubsystemRefs() before validate().`,
-          details: { ref },
+          message: `Subsystem reference '${ref}' could not be resolved — file does not exist`,
+          details: { ref, subsystem: subsystemName, parent_model: parentName },
         })
       }
     }
@@ -51,18 +65,56 @@ export function validateSubsystemRefs(esmFile: EsmFile): StructuralError[] {
   if (esmFile.models) {
     for (const [modelName, model] of Object.entries(esmFile.models)) {
       if ('ref' in model || !model.subsystems) continue
-      errors.push(...flagRefSubsystems(model.subsystems, `/models/${modelName}/subsystems`))
+      errors.push(
+        ...flagRefSubsystems(model.subsystems, `/models/${modelName}/subsystems`, modelName),
+      )
     }
   }
   if (esmFile.reaction_systems) {
     for (const [systemName, system] of Object.entries(esmFile.reaction_systems)) {
       if (!system.subsystems) continue
       errors.push(
-        ...flagRefSubsystems(system.subsystems, `/reaction_systems/${systemName}/subsystems`),
+        ...flagRefSubsystems(
+          system.subsystems,
+          `/reaction_systems/${systemName}/subsystems`,
+          systemName,
+        ),
       )
     }
   }
   return errors
+}
+
+/**
+ * Does `ref` name a system — at ARBITRARY DEPTH?
+ *
+ * A coupling `systems` entry may name a top-level component (`Atmosphere`) or a
+ * SUBSYSTEM of one, by its dotted path (`AtmosphericChemistry.Aerosols`,
+ * `EmissionSources.Biogenic.Forest` — both from
+ * `tests/valid/scoped_refs_coupling.esm`). Scoped references are arbitrary-depth
+ * (spec §4.6), so membership is decided by NAVIGATING the `subsystems` chain,
+ * not by testing the whole dotted string against the top-level key set — which
+ * is what made every subsystem-scoped `couple` entry an `undefined_system`.
+ */
+function systemPathExists(ref: string, esmFile: EsmFile): boolean {
+  const [head, rest] = splitScopedRef(ref)
+  const root =
+    (esmFile.models || {})[head] ??
+    (esmFile.reaction_systems || {})[head] ??
+    (esmFile.data_loaders || {})[head]
+  if (!root) return false
+  if (rest === '') return true
+
+  let current: unknown = root
+  for (const segment of rest.split('.')) {
+    const subsystems =
+      current && typeof current === 'object'
+        ? (current as { subsystems?: Record<string, unknown> }).subsystems
+        : undefined
+    if (!subsystems || !(segment in subsystems)) return false
+    current = subsystems[segment]
+  }
+  return true
 }
 
 /**
@@ -87,9 +139,11 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
     if (coupling.type === 'operator_compose' || coupling.type === 'couple') {
       // operator_compose and couple both carry a `systems` list and their
       // existence checks were byte-identical, so the two branches are merged.
+      // An entry may name a subsystem at arbitrary depth — see
+      // {@link systemPathExists}.
       const systemsEntry = coupling as CouplingOperatorCompose | CouplingCouple
       for (const systemName of systemsEntry.systems) {
-        if (!availableSystems.has(systemName)) {
+        if (!systemPathExists(systemName, esmFile)) {
           errors.push({
             path: `${couplingPath}/systems`,
             code: ERROR_CODES.UNDEFINED_SYSTEM,
@@ -126,7 +180,7 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
       for (const field of ['from', 'to'] as const) {
         const ref = vmEntry[field]
         if (typeof ref === 'string' && ref.includes('.')) {
-          const [systemName, varName] = splitScopedRef(ref)
+          const [systemName, variablePath] = splitScopedRef(ref)
           if (!availableSystems.has(systemName)) {
             errors.push({
               path: `${couplingPath}/${field}`,
@@ -134,25 +188,35 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
               message: `Scoped reference "${ref}" references nonexistent system "${systemName}"`,
               details: { reference: ref, system: systemName },
             })
-          } else {
-            // Check the variable exists in the model / reaction_system. Whether
-            // a DATA LOADER exposes a variable is NOT resolved here — that is the
-            // sole responsibility of `validateDataLoaderReferences` (which covers
-            // both `from` and `to`). A loader-only head therefore leaves `system`
-            // undefined and this branch emits nothing, deferring to that pass.
-            const system =
-              (esmFile.models || {})[systemName] || (esmFile.reaction_systems || {})[systemName]
-            if (system) {
-              const vars = (system as any).variables || (system as any).species || {}
-              const params = (system as any).parameters || {}
-              if (!vars[varName] && !params[varName]) {
-                errors.push({
-                  path: `${couplingPath}/${field}`,
-                  code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
-                  message: `Variable "${varName}" not found in system "${systemName}"`,
-                  details: { reference: ref, system: systemName, variable: varName },
-                })
-              }
+          } else if (
+            (esmFile.models || {})[systemName] ||
+            (esmFile.reaction_systems || {})[systemName]
+          ) {
+            // Resolve the variable at ARBITRARY DEPTH (spec §4.6):
+            // `Meteorology.Temperature.surface_temp` names `surface_temp` inside
+            // the `Temperature` SUBSYSTEM of the `Meteorology` model. The old
+            // code took the whole remainder as a flat variable name and looked
+            // up `variables["Temperature.surface_temp"]`, which of course missed
+            // — reporting a valid, pinned fixture as an unresolved scoped ref.
+            // `resolveScopedReference` walks the `subsystems` chain and then
+            // checks `variables` / `species` / `parameters`.
+            //
+            // Whether a DATA LOADER exposes a variable is NOT resolved here —
+            // that is the sole responsibility of `validateDataLoaderReferences`
+            // (which covers both `from` and `to`), so a loader-only head falls
+            // through this branch entirely.
+            if (!resolveScopedReference(ref, esmFile)) {
+              const variableName = variablePath.split('.').pop() ?? variablePath
+              errors.push({
+                path: `${couplingPath}/${field}`,
+                code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+                message: `Variable "${variableName}" not found in system "${systemName}"`,
+                details: {
+                  reference: ref,
+                  system: systemName,
+                  variable: variableName,
+                },
+              })
             }
           }
         }
@@ -320,6 +384,143 @@ export function validateTemporalResolution(esmFile: EsmFile): StructuralError[] 
       }
     }
   }
+
+  return errors
+}
+
+/**
+ * Every name declared anywhere in the document: each model's `variables`, each
+ * reaction system's `species` / `parameters`, and each data loader's `variables`.
+ *
+ * This is the scope a DATA LOADER's `unit_conversion` resolves against. A loader
+ * is pure I/O with no equations of its own, and its conversion expression may
+ * scale a loaded field by a model's declared parameter — so the loader's own
+ * variable map is too narrow a scope. (`tests/invalid/undefined_variable_in_unit_conversion.esm`
+ * states this explicitly: "`y` and `k` are declared; the ONLY defect is the
+ * undefined name `undefined_xyz`", where `y`/`k` belong to a MODEL.)
+ */
+function documentDeclaredNames(esmFile: EsmFile): Set<string> {
+  const names = new Set<string>()
+  for (const model of Object.values(esmFile.models ?? {})) {
+    if ('ref' in model) continue
+    for (const name of Object.keys((model as { variables?: object }).variables ?? {})) {
+      names.add(name)
+    }
+  }
+  for (const system of Object.values(esmFile.reaction_systems ?? {})) {
+    for (const name of Object.keys((system as { species?: object }).species ?? {})) names.add(name)
+    for (const name of Object.keys((system as { parameters?: object }).parameters ?? {})) {
+      names.add(name)
+    }
+  }
+  for (const loader of Object.values(esmFile.data_loaders ?? {})) {
+    for (const name of Object.keys(loader.variables ?? {})) names.add(name)
+  }
+  return names
+}
+
+/**
+ * (h) site 9 — reference integrity for a data loader's `unit_conversion`
+ * expression (spec §8.5 / §4.9.5).
+ *
+ * `unit_conversion` is `oneOf` a plain numeric factor or a full Expression AST.
+ * The Expression form was never reference-checked, so an undefined name in it
+ * was invisible.
+ */
+export function validateDataLoaderExpressions(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!esmFile.data_loaders) return errors
+
+  const declared = documentDeclaredNames(esmFile)
+  const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
+
+  for (const [loaderName, loader] of Object.entries(esmFile.data_loaders)) {
+    for (const [varName, variable] of Object.entries(loader.variables ?? {})) {
+      const conversion = (variable as { unit_conversion?: unknown }).unit_conversion
+      // The numeric-factor alternative carries no references.
+      if (!isExpressionLike(conversion) || typeof conversion === 'number') continue
+      const path = `/data_loaders/${loaderName}/variables/${varName}/unit_conversion`
+      const bound = collectIndexSymbols(conversion as Expression)
+      for (const ref of extractVariableReferences(conversion as Expression)) {
+        if (ref.includes('.')) {
+          if (!resolveScopedReference(ref, esmFile)) {
+            errors.push({
+              path,
+              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+              message: `Variable "${ref}" referenced in unit_conversion expression does not resolve`,
+              details: { variable: ref, variable_name: ref },
+            })
+          }
+        } else if (!declared.has(ref) && !declaredIndexSets.has(ref) && !bound.has(ref)) {
+          errors.push({
+            path,
+            code: ERROR_CODES.UNDEFINED_VARIABLE,
+            message: `Variable "${ref}" referenced in unit_conversion expression but not declared`,
+            details: { variable: ref, variable_name: ref },
+          })
+        }
+      }
+    }
+  }
+  return errors
+}
+
+/**
+ * (h) sites 10 & 11 — reference integrity for the two EXPRESSION positions a
+ * coupling entry carries: a `variable_map`'s Expression `transform`, and a
+ * `couple`'s `connector.equations[j].expression`.
+ *
+ * In COUPLING context every reference is FULLY QUALIFIED (spec §4.6): a coupling
+ * entry sits outside any component, so there is no local scope for a bare name to
+ * mean anything in. A bare name is therefore unresolvable, and a dotted name that
+ * names nothing is too — both are `unresolved_scoped_ref` (the same code
+ * `bare_reference_errors.esm` already pins for bare refs in coupling).
+ *
+ * Neither position was reference-checked: an Expression transform and a connector
+ * equation could name any variable at all, in any system, and nothing looked.
+ */
+export function validateCouplingExpressions(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!esmFile.coupling) return errors
+
+  const check = (expr: unknown, path: string, context: string): void => {
+    if (!isExpressionLike(expr)) return
+    const bound = collectIndexSymbols(expr as Expression)
+    for (const ref of extractVariableReferences(expr as Expression)) {
+      if (bound.has(ref)) continue
+      // Fully-qualified or not, it must RESOLVE. A bare name never can.
+      if (!resolveScopedReference(ref, esmFile)) {
+        errors.push({
+          path,
+          code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+          message: `Variable "${ref}" referenced in ${context} does not resolve`,
+          details: { reference: ref, variable_name: ref },
+        })
+      }
+    }
+  }
+
+  esmFile.coupling.forEach((coupling, i) => {
+    const base = `/coupling/${i}`
+
+    // A `variable_map` transform is either a named string transform or an
+    // Expression; only the Expression form carries references.
+    const transform = (coupling as { transform?: unknown }).transform
+    if (typeof transform !== 'string') {
+      check(transform, `${base}/transform`, 'variable_map Expression transform')
+    }
+
+    // A `couple` connector's equations each carry an optional Expression.
+    const connector = (coupling as { connector?: { equations?: unknown[] } }).connector
+    ;(connector?.equations ?? []).forEach((equation, j) => {
+      const expression = (equation as { expression?: unknown })?.expression
+      check(
+        expression,
+        `${base}/connector/equations/${j}/expression`,
+        'connector equation expression',
+      )
+    })
+  })
 
   return errors
 }

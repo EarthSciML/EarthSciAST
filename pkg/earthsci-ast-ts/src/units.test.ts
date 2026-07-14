@@ -4,6 +4,7 @@ import {
   tryParseUnit,
   checkDimensions,
   validateUnits,
+  dimsEqual,
   type ParsedUnit,
   type CanonicalDims,
 } from './units.js'
@@ -28,7 +29,8 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(parseUnit('m')).toEqual({ dims: { m: 1 }, scale: 1 })
       expect(parseUnit('s')).toEqual({ dims: { s: 1 }, scale: 1 })
       expect(parseUnit('mol')).toEqual({ dims: { mol: 1 }, scale: 1 })
-      expect(parseUnit('molec')).toEqual({ dims: { molec: 1 }, scale: 1 })
+      // A count of discrete things has no physical dimension.
+      expect(parseUnit('molec')).toEqual({ dims: {}, scale: 1 })
     })
 
     it('should parse compound units', () => {
@@ -46,7 +48,7 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(cm3.scale).toBeCloseTo(1e-6, 20)
 
       const reactionRate = parseUnit('cm^3/molec/s')
-      expect(reactionRate.dims).toEqual({ m: 3, molec: -1, s: -1 })
+      expect(reactionRate.dims).toEqual({ m: 3, s: -1 })
       expect(reactionRate.scale).toBeCloseTo(1e-6, 20)
     })
 
@@ -59,7 +61,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should handle multiplication', () => {
       const mcm3 = parseUnit('molec/cm^3')
-      expect(mcm3.dims).toEqual({ molec: 1, m: -3 })
+      expect(mcm3.dims).toEqual({ m: -3 })
       expect(mcm3.scale).toBeCloseTo(1e6, -2)
     })
 
@@ -83,15 +85,63 @@ describe('Unit parsing and dimensional analysis', () => {
       })
 
       it('molec is a dimensionless count atom usable in composites', () => {
-        expect(parseUnit('molec').dims).toEqual({ molec: 1 })
-        const numberDensity = parseUnit('molec/cm^3')
-        expect(numberDensity.dims).toEqual({ molec: 1, m: -3 })
+        // A COUNT of discrete things carries no physical dimension, which is
+        // what makes `molec/cm^3` the same quantity as `1/cm^3` — the reading
+        // every other binding has. Giving counts their own dimension axis (as
+        // this table once did) made TS the only binding that could report the
+        // two spellings of a number density as a mismatch.
+        expect(parseUnit('molec').dims).toEqual({})
+        expect(parseUnit('molec/cm^3').dims).toEqual({ m: -3 })
+        expect(dimsEqual(parseUnit('molec/cm^3').dims, parseUnit('1/cm^3').dims)).toBe(true)
+      })
+
+      it('the other count nouns are dimensionless too', () => {
+        // Real unit names in the shared corpus (`individuals/km^2`,
+        // `vehicles/km^2`, `units/L`). An unresolvable unit string is a hard
+        // error, so omitting them would falsely reject those files.
+        for (const count of ['individuals', 'vehicles', 'units', 'count']) {
+          expect(parseUnit(count)).toEqual({ dims: {}, scale: 1 })
+        }
+        expect(parseUnit('individuals/km^2').dims).toEqual({ m: -2 })
       })
 
       it('Dobson is an areal number density with scale 2.6867e20 molec/m^2', () => {
         const du = parseUnit('Dobson')
-        expect(du.dims).toEqual({ molec: 1, m: -2 })
+        // `molec` is dimensionless, so a column amount is an inverse area.
+        expect(du.dims).toEqual({ m: -2 })
         expect(du.scale).toBeCloseTo(2.6867e20, -15)
+      })
+    })
+
+    // The EM units are REAL SI units, and `tests/valid/units_dimensional_analysis.esm`
+    // — a fixture pinned VALID — declares `E: "V/m"`, `B: "T"`, `epsilon0: "F/m"`,
+    // `q: "C"`. They were once deleted from the registry to "match Go", whose table
+    // lacked them; that was Go's GAP, not TS's excess, and copying it turned a
+    // legitimate file into a rejected one now that an unparseable unit is a hard
+    // error. Go has since added them.
+    describe('electromagnetic units', () => {
+      it('parses V, T, F and Ohm as their SI-base decompositions', () => {
+        expect(parseUnit('V')).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -1 }, scale: 1 })
+        expect(parseUnit('T')).toEqual({ dims: { kg: 1, s: -2, A: -1 }, scale: 1 })
+        expect(parseUnit('F')).toEqual({ dims: { kg: -1, m: -2, s: 4, A: 2 }, scale: 1 })
+        expect(parseUnit('Ohm')).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -2 }, scale: 1 })
+        expect(parseUnit('V/m').dims).toEqual({ kg: 1, m: 1, s: -3, A: -1 })
+        expect(parseUnit('F/m').dims).toEqual({ kg: -1, m: -3, s: 4, A: 2 })
+      })
+
+      it('C is the COULOMB, so charge times field is a force', () => {
+        expect(parseUnit('C')).toEqual({ dims: { A: 1, s: 1 }, scale: 1 })
+        // q[C] * E[V/m] must be a newton. With `C` bound to Celsius it came out
+        // as kg*m*K/(s^3*A) — a temperature dimension smuggled into every
+        // electromagnetic expression.
+        const force = checkDimensions(
+          { op: '*', args: ['q', 'E'] },
+          new Map([
+            ['q', parseUnit('C')],
+            ['E', parseUnit('V/m')],
+          ]),
+        )
+        expect(dimsEqual(force.dimensions!.dims, parseUnit('N').dims)).toBe(true)
       })
     })
   })
@@ -242,11 +292,125 @@ describe('Unit parsing and dimensional analysis', () => {
         })
       })
 
-      it('reports sqrt of an odd-exponent dimension as a mismatch', () => {
-        const bindings = createUnitBindings({ x: 'm' })
-        const result = checkDimensions({ op: 'sqrt', args: ['x'] }, bindings)
-        expect(result.dimensions).toBeNull()
-        expect(result.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(true)
+      // Dimension exponents are RATIONAL, not integral, so sqrt of an odd
+      // exponent is well-defined rather than a mismatch. `sqrt(k)` on a `1/s`
+      // rate constant is `1/s^0.5` — the declared unit of an SDE noise
+      // intensity in the corpus. The old contract (odd exponent ⇒ mismatch)
+      // rejected correct physics.
+      it('halves an odd exponent instead of reporting a mismatch (rational dimensions)', () => {
+        const bindings = createUnitBindings({ x: 'm', k: '1/s' })
+
+        const length = checkDimensions({ op: 'sqrt', args: ['x'] }, bindings)
+        expect(length.dimensions?.dims).toEqual({ m: 0.5 })
+        expect(length.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
+
+        // The SDE case: sqrt of a rate constant is a noise intensity, 1/s^0.5.
+        const noise = checkDimensions({ op: 'sqrt', args: ['k'] }, bindings)
+        expect(noise.dimensions?.dims).toEqual({ s: -0.5 })
+        expect(noise.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
+      })
+
+      // The transcendentals split THREE ways (spec §4.8.3). `rad` is an AXIS of
+      // this dimension vector, so an angle is NOT dimensionless — which is why a
+      // naive "transcendentals take a dimensionless argument" rule makes
+      // `cos(theta)` illegal and rejects `lib/solar.esm` (a SHIPPED
+      // standard-library file, pinned valid via lib_solar_subsystem_inclusion.esm).
+      it('sin/cos/tan take an angle OR a dimensionless argument, and return dimensionless', () => {
+        const bindings = createUnitBindings({ theta: 'rad', phase: '1', mass: 'kg' })
+
+        for (const op of ['sin', 'cos', 'tan']) {
+          for (const arg of ['theta', 'phase']) {
+            const r = checkDimensions({ op, args: [arg] }, bindings)
+            expect(
+              r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+              `${op}(${arg})`,
+            ).toBe(false)
+            expect(dimsOf(r), `${op}(${arg})`).toEqual({})
+          }
+          // A genuinely dimensional argument is still a provable mismatch.
+          const bad = checkDimensions({ op, args: ['mass'] }, bindings)
+          expect(
+            bad.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+            op,
+          ).toBe(true)
+        }
+      })
+
+      it('asin/acos/atan take dimensionless and RETURN AN ANGLE (rad)', () => {
+        const bindings = createUnitBindings({ ratio: '1', mass: 'kg' })
+        for (const op of ['acos', 'asin', 'atan']) {
+          const r = checkDimensions({ op, args: ['ratio'] }, bindings)
+          expect(dimsOf(r), op).toEqual({ rad: 1 })
+          expect(
+            r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+            op,
+          ).toBe(false)
+
+          const bad = checkDimensions({ op, args: ['mass'] }, bindings)
+          expect(
+            bad.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+            op,
+          ).toBe(true)
+        }
+        // atan2 is the two-argument atan: it too returns an angle.
+        const r2 = checkDimensions({ op: 'atan2', args: ['ratio', 'ratio'] }, bindings)
+        expect(dimsOf(r2)).toEqual({ rad: 1 })
+      })
+
+      it('round-trips: acos(cos(theta)) is an angle again', () => {
+        const bindings = createUnitBindings({ theta: 'rad' })
+        const r = checkDimensions({ op: 'acos', args: [{ op: 'cos', args: ['theta'] }] }, bindings)
+        expect(dimsOf(r)).toEqual({ rad: 1 })
+        expect(r.diagnostics.some((d) => d.code === 'dimensional_mismatch')).toBe(false)
+      })
+
+      it('keeps the STRICTLY dimensionless set strict (log, exp, hyperbolics)', () => {
+        const bindings = createUnitBindings({ theta: 'rad', mass: 'kg' })
+        // There is no angle reading of exp/log, and a hyperbolic angle is a pure
+        // number — so `rad` is NOT admitted here, and neither is any dimension.
+        for (const op of [
+          'ln',
+          'log',
+          'log10',
+          'exp',
+          'sinh',
+          'cosh',
+          'tanh',
+          'asinh',
+          'acosh',
+          'atanh',
+        ]) {
+          for (const arg of ['theta', 'mass']) {
+            const r = checkDimensions({ op, args: [arg] }, bindings)
+            expect(
+              r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+              `${op}(${arg})`,
+            ).toBe(true)
+          }
+        }
+      })
+
+      it('does not report acos() against a rad-declared observed variable', () => {
+        // The lib/solar.esm shape, reduced: declared `rad`, computed by `acos`.
+        const file: EsmFile = {
+          esm: '0.1.0',
+          metadata: { name: 'solar' },
+          models: {
+            Solar: {
+              variables: {
+                cos_zenith: { type: 'parameter', units: '1', default: 0.5 },
+                solar_zenith_angle: {
+                  type: 'observed',
+                  units: 'rad',
+                  expression: { op: 'acos', args: ['cos_zenith'] },
+                },
+              },
+              equations: [],
+            },
+          },
+        }
+        const mismatches = validateUnits(file).filter((w) => w.code === 'dimensional_mismatch')
+        expect(mismatches).toEqual([])
       })
 
       it('rejects a dimensional exponent', () => {
@@ -508,22 +672,31 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const warnings = validateUnits(esmFile)
 
-      // A warning is surfaced for the unparseable unit...
-      expect(warnings.length).toBeGreaterThan(0)
-      // ...it is an `analysis` warning referencing the offending unit, NOT a
-      // promoted error (do not match the exact prose, just the unit token).
-      expect(warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit'))).toBe(
-        true,
-      )
-      // ...and NONE is a dimensional mismatch, so `validate()` keeps it valid.
+      // 'notaunit' denotes no real unit, so the DECLARATION is meaningless and
+      // the file is malformed: an `unparseable_unit` finding, which validate()
+      // promotes to a hard `unit_inconsistency` error. (This is a deliberate
+      // reversal of the old policy, which called it an `analysis` warning and
+      // let the file pass.)
+      const unparseable = warnings.filter((w) => w.code === 'unparseable_unit')
+      expect(unparseable).toHaveLength(1)
+      expect(unparseable[0].message).toContain('notaunit')
+      // The pointer is the offending DECLARATION, which is what validate() uses
+      // verbatim as the structural error's path.
+      expect(unparseable[0].location).toBe('/models/TestModel/variables/x')
+      // The one defect is reported ONCE, and nothing is INVENTED on top of it:
+      // `x` is left unbound (dimension UNKNOWN, not dimensionless), so the
+      // equation that uses it yields no dimensional mismatch.
       expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
     })
 
-    it('surfaces an unparseable observed-variable declared unit as a warning, not a mismatch', () => {
+    it('reports an unparseable observed-variable declared unit once, and invents no mismatch', () => {
       // `rate` declares an unparseable unit ('notaunit') while its expression
-      // (k*x) evaluates to m/s. Forcing the declared side to dimensionless
-      // would manufacture a false mismatch; instead the declaration is left
-      // UNKNOWN and only a warning is emitted.
+      // (k*x) evaluates to m/s. The declaration is the defect and is reported as
+      // such (`unparseable_unit` → hard error). Forcing the declared side to
+      // dimensionless would ALSO manufacture a false dimensional mismatch
+      // against the expression — two errors for one defect, one of them
+      // fictional — so the declared side is left UNKNOWN and the comparison is
+      // skipped.
       const esmFile: EsmFile = {
         esm: '0.1.0',
         metadata: {
@@ -550,9 +723,10 @@ describe('Unit parsing and dimensional analysis', () => {
 
       const warnings = validateUnits(esmFile)
 
-      expect(warnings.some((w) => w.code === 'analysis' && w.message.includes('notaunit'))).toBe(
-        true,
-      )
+      const unparseable = warnings.filter((w) => w.code === 'unparseable_unit')
+      expect(unparseable).toHaveLength(1)
+      expect(unparseable[0].message).toContain('notaunit')
+      expect(unparseable[0].location).toBe('/models/TestModel/variables/rate')
       expect(warnings.some((w) => w.code === 'dimensional_mismatch')).toBe(false)
     })
   })
