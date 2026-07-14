@@ -455,6 +455,137 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	return s.errors
 }
 
+// validateEquationRefs checks reference integrity of BOTH sides of an equation.
+//
+// Binder-introduced symbols are collected across the WHOLE equation — both sides
+// — and are in scope on both, mirroring TS `validateReferenceIntegrity`. The
+// array-form IR routinely binds an index on one side and uses it on the other:
+// the LHS `aggregate(output_idx:["i"], expr: D(index(u,i)))` binds `i` for an RHS
+// that spells `index(u, i)` inside a makearray value. Scoping the binders
+// per-NODE could not see across that boundary and reported the loop index as an
+// undefined variable.
+func (s *structuralScan) validateEquationRefs(eq Equation, allVars map[string]bool, eqPath, currentSystem string) {
+	scope := allVars
+	if bound := equationBoundSymbols(eq); len(bound) > 0 {
+		scope = unionScope(allVars, bound)
+	}
+	s.validateExpressionVariables(eq.LHS, scope, eqPath+"/lhs", currentSystem)
+	s.validateExpressionVariables(eq.RHS, scope, eqPath+"/rhs", currentSystem)
+}
+
+// expressionBoundSymbols returns every binder-introduced symbol a single
+// expression tree scopes (the per-equation form is equationBoundSymbols).
+func expressionBoundSymbols(expr Expression) map[string]bool {
+	bound := map[string]bool{}
+	collectBoundSymbols(expr, bound)
+	return bound
+}
+
+// validateGuesses checks reference integrity of a model's `guesses` block: the
+// initial-guess seeds for a nonlinear solve, keyed by variable name.
+//
+// BOTH halves are reference sites. The KEY names the variable being seeded — a
+// guess for a variable that does not exist is dangling — and the VALUE, though
+// usually a numeric literal, may be an Expression naming other variables. Neither
+// was reached before: reference integrity only ever entered through `equations`.
+func (s *structuralScan) validateGuesses(guesses map[string]any, allVars map[string]bool, basePath, modelName string) {
+	for _, varName := range sortedKeys(guesses) {
+		guessPath := fmt.Sprintf("%s/guesses/%s", basePath, varName)
+		if !allVars[varName] {
+			s.addErr(StructuralError{
+				Path:    guessPath,
+				Code:    s.undefinedNameCode(),
+				Message: fmt.Sprintf("Guess for undefined variable '%s'", varName),
+				Details: map[string]any{
+					"variable":       varName,
+					"current_system": modelName,
+				},
+			})
+		}
+		// A numeric seed is the common case and lands on the numeric-literal arm of
+		// validateExpressionVariables; an Expression seed is descended normally.
+		s.validateExpressionVariables(guesses[varName], allVars, guessPath, modelName)
+	}
+}
+
+// validateTestRefs checks reference integrity of a component's inline tests
+// (esm-spec §6.6). The reference site is an assertion's `reference`: the
+// analytic/precomputed solution an error-norm reduction compares against
+// (§6.6.5), which may be an inline Expression naming the component's variables.
+//
+// A `reference` may instead be a `from_file` shape — an object carrying no `op`,
+// on which the descent bottoms out — so only genuine expressions are checked.
+func (s *structuralScan) validateTestRefs(tests []Test, allVars map[string]bool, basePath, componentName string) {
+	for i, test := range tests {
+		for j, assertion := range test.Assertions {
+			if assertion.Reference == nil {
+				continue
+			}
+			s.validateExpressionVariables(assertion.Reference, allVars,
+				fmt.Sprintf("%s/tests/%d/assertions/%d/reference", basePath, i, j), componentName)
+		}
+	}
+}
+
+// documentWideScope returns every declared name in the document: the variables of
+// every model and the species + parameters of every reaction system, plus the
+// index sets, the independent variable and the coordinate names.
+//
+// It is the scope for a DATA LOADER's `unit_conversion` (see
+// validateDataLoaderReferences). A loader is not owned by any one component, and
+// its conversion factor legitimately names a parameter declared in a MODEL
+// (tests/invalid/undefined_variable_in_unit_conversion.esm converts with the
+// model parameter `k`), so scoping it to any single component would reject valid
+// documents. Checking against the union still catches a name that exists NOWHERE,
+// which is the bug worth catching here.
+func (s *structuralScan) documentWideScope() map[string]bool {
+	scope := map[string]bool{}
+	if s.file != nil {
+		for _, model := range s.file.Models {
+			for name := range model.Variables {
+				scope[name] = true
+			}
+		}
+		for _, system := range s.file.ReactionSystems {
+			for name := range system.Species {
+				scope[name] = true
+			}
+			for name := range system.Parameters {
+				scope[name] = true
+			}
+		}
+	}
+	s.creditIndexSetNames(scope)
+	s.creditIndependentVariable(scope)
+	s.creditCoordinateNames(scope)
+	if s.file != nil {
+		for name := range s.file.Models {
+			s.creditCallbackVariables(scope, name)
+		}
+		for name := range s.file.ReactionSystems {
+			s.creditCallbackVariables(scope, name)
+		}
+	}
+	return scope
+}
+
+// couplingScope returns the scope a COUPLING expression is checked against: the
+// independent variable, the coordinates and the index sets — but NO variables.
+//
+// Per esm-spec §4.6 a coupling names its operands with FULLY QUALIFIED scoped
+// references (`Src.F`, `Meteorology.Temperature.surface_temp`); it sits above the
+// components and owns no bare variable namespace of its own. Leaving the variable
+// namespace empty is what makes a dangling `TestModel.undefined_xyz` surface as
+// an `unresolved_scoped_ref` (validateExpressionVariables routes any dotted name
+// through resolveScopedReference).
+func (s *structuralScan) couplingScope() map[string]bool {
+	scope := map[string]bool{}
+	s.creditIndexSetNames(scope)
+	s.creditIndependentVariable(scope)
+	s.creditCoordinateNames(scope)
+	return scope
+}
+
 // coupledSystemNames returns every system a coupling entry names — as a
 // `systems` member (including the root of a dotted subsystem path) or as the
 // system half of a `from`/`to` scoped reference.
@@ -570,6 +701,7 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	s.creditIndexSetNames(allVars)
 	s.creditIndependentVariable(allVars)
 	s.creditCoordinateNames(allVars)
+	s.creditCallbackVariables(allVars, modelName)
 
 	// A COUPLED model does not own every name it mentions, and its own equations
 	// need not balance its own unknowns (see coupledSystemNames). Reference
@@ -579,22 +711,36 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 
 	if !isCoupled {
 		for i, eq := range model.Equations {
-			eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
-			// Binder-introduced symbols are collected across the WHOLE equation —
-			// both sides — and are in scope on both, mirroring TS
-			// `validateReferenceIntegrity`. The array-form IR routinely binds an
-			// index on one side and uses it on the other: the LHS
-			// `aggregate(output_idx:["i"], expr: D(index(u,i)))` binds `i` for an RHS
-			// that spells `index(u, i)` inside a makearray value. Scoping the binders
-			// per-NODE (the previous behaviour) could not see across that boundary and
-			// reported the loop index as an undefined variable.
+			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/equations/%d", basePath, i), modelName)
+		}
+
+		// An OBSERVED variable's defining expression is a reference site like any
+		// other — `T_v ~ T*(1 + 0.61*q_typo)` names variables, and an undeclared one
+		// there is exactly as broken as in an equation. It went unchecked because
+		// reference integrity only ever entered through `equations`.
+		for _, varName := range sortedKeys(model.Variables) {
+			variable := model.Variables[varName]
+			if variable.Expression == nil {
+				continue
+			}
 			scope := allVars
-			if bound := equationBoundSymbols(eq); len(bound) > 0 {
+			if bound := expressionBoundSymbols(variable.Expression); len(bound) > 0 {
 				scope = unionScope(allVars, bound)
 			}
-			s.validateExpressionVariables(eq.LHS, scope, fmt.Sprintf("%s/lhs", eqPath), modelName)
-			s.validateExpressionVariables(eq.RHS, scope, fmt.Sprintf("%s/rhs", eqPath), modelName)
+			s.validateExpressionVariables(variable.Expression, scope,
+				fmt.Sprintf("%s/variables/%s/expression", basePath, varName), modelName)
 		}
+
+		// `initialization_equations` hold at t=0 but are ordinary equations, and
+		// `guesses` seed a nonlinear solve. Both name variables; neither was reached.
+		for i, eq := range model.InitializationEquations {
+			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), modelName)
+		}
+		s.validateGuesses(model.Guesses, allVars, basePath, modelName)
+
+		// An inline test's assertion `reference` (§6.6.5) is an expression over the
+		// model's own variables.
+		s.validateTestRefs(model.Tests, allVars, basePath, modelName)
 
 		// Equation-unknown balance validation (Section 3.2.1).
 		s.validateEquationUnknownBalance(modelName, model, basePath)
@@ -724,6 +870,57 @@ func (s *structuralScan) creditIndexSetNames(allVars map[string]bool) {
 	}
 }
 
+// creditCallbackVariables marks every name a CALLBACK coupling injects into
+// `system` as in-scope.
+//
+// `coupling[i].config.callback_variables[j].name` is a genuine DECLARATION SITE
+// (esm-spec §4.9.5, conformance row (k)): a callback injects the named forcing
+// into its `target_system`, which then references it from ordinary equations —
+// `external_temperature_forcing` in tests/coupling/callback_examples.esm is
+// declared nowhere else. A reference check that knows only about
+// `models[M].variables` reports every such forcing as an undefined variable and
+// rejects a valid document.
+//
+// Config is an untyped `map[string]any` (types.go), so the shape is read
+// defensively: a callback whose config omits `target_system`, or whose
+// `callback_variables` are malformed, simply credits nothing.
+func (s *structuralScan) creditCallbackVariables(allVars map[string]bool, system string) {
+	if s.file == nil {
+		return
+	}
+	for _, coupling := range s.file.Coupling {
+		callback, ok := coupling.(CallbackCoupling)
+		if !ok {
+			continue
+		}
+		target, _ := callback.Config["target_system"].(string)
+		if target == "" {
+			continue
+		}
+		// A dotted target ("Atmosphere.Chemistry") injects into the named subsystem;
+		// credit the ROOT system too, which is the one being validated here.
+		if root, _, found := strings.Cut(target, "."); found {
+			target = root
+		}
+		if target != system {
+			continue
+		}
+		vars, ok := callback.Config["callback_variables"].([]any)
+		if !ok {
+			continue
+		}
+		for _, entry := range vars {
+			cv, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, ok := cv["name"].(string); ok && name != "" {
+				allVars[name] = true
+			}
+		}
+	}
+}
+
 // creditIndependentVariable marks the document's independent variable — `t` by
 // default, or whatever `domain.independent_variable` names — as in-scope.
 //
@@ -788,22 +985,27 @@ func unionScope(base map[string]bool, extra map[string]bool) map[string]bool {
 	return out
 }
 
-// validateExprNodeChildren descends every canonical child-Expression field of an
-// operator node — args, lower, upper, expr, filter, values, axes, key, bindings,
-// in that order — mirroring Rust `ExpressionNode::for_each_child` (src/types.rs)
-// and TS `forEachChild` (expression.ts). Descending only `args` (the historical
-// behaviour) silently accepted an undefined variable hidden in an aggregate body
-// (`expr`), an aggregate `filter`/`key`, integral `lower`/`upper` bounds, a
-// `makearray` `values` list, `table_lookup` `axes`, or an
-// `apply_expression_template` `bindings` map. Index symbols the node BINDS (see
-// boundIndexSymbols) are added to the in-scope set for the descent so a bound
-// loop index is not mis-reported as undefined.
+// validateExprNodeChildren descends every reference-bearing child of an operator
+// node by walking exprRefChildren (expr_walk.go) — the reference-integrity view
+// of the mapExprChildren KEYSTONE, so this check covers the same field set the
+// rewriter does, minus the two payload slots (`attrs`, `output`) whose strings
+// are scheme/output NAMES rather than variable references.
 //
-// Non-child structural slots — `ranges`/`output_idx`/`arg`/`var` (binder
-// sources, credited via boundIndexSymbols instead), `join`, `regions`, `attrs`,
-// `output` — are intentionally NOT descended, matching for_each_child; join `on`
-// operands in particular bind their own symbols and must not surface as
-// references.
+// It used to be a hand-rolled descent listing fields by hand, which is precisely
+// how the sidecars went unchecked: descending only `args` silently accepted an
+// undefined variable hidden in an aggregate body (`expr`), an aggregate
+// `filter`/`key`, integral `lower`/`upper` bounds, a `makearray` `values` list,
+// `table_lookup` `axes`, an `apply_expression_template` `bindings` map, a
+// `ranges` loop bound, or a makearray `regions` bound. Routing through the
+// keystone makes that class of omission structurally impossible: a NEW
+// expression-bearing field on ExprNode is either a reference child or a declared
+// payload slot, and TestExprRefChildrenCoverTheKeystone fails the build if it is
+// neither.
+//
+// Index symbols the node BINDS (see boundIndexSymbols) are added to the in-scope
+// set for the descent so a bound loop index — the `i` of `index(u, i)`, an
+// aggregate's contraction variable, an integral's integration variable — is not
+// mis-reported as undefined.
 func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[string]bool, path, currentSystem string) {
 	scope := allVars
 	if bound := boundIndexSymbols(node); len(bound) > 0 {
@@ -816,32 +1018,18 @@ func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[str
 		}
 	}
 
-	for i, arg := range node.Args {
-		s.validateExpressionVariables(arg, scope, fmt.Sprintf("%s/args/%d", path, i), currentSystem)
+	// An `enum` node's args are STRING LITERALS, not sub-expressions: esm-spec
+	// §4.5 defines them as [enum_name, symbol], both resolved against the
+	// top-level `enums` registry — a different namespace from the variables, and
+	// one already validated at load (lowerExprNodeEnums, codes `unknown_enum` /
+	// `unknown_enum_symbol`). Reading them as variable references would report the
+	// enum `season` and the symbol `summer` as undefined variables.
+	if node.Op == OpEnum {
+		return
 	}
-	if node.Lower != nil {
-		s.validateExpressionVariables(node.Lower, scope, path+"/lower", currentSystem)
-	}
-	if node.Upper != nil {
-		s.validateExpressionVariables(node.Upper, scope, path+"/upper", currentSystem)
-	}
-	if node.Expr != nil {
-		s.validateExpressionVariables(node.Expr, scope, path+"/expr", currentSystem)
-	}
-	if node.Filter != nil {
-		s.validateExpressionVariables(node.Filter, scope, path+"/filter", currentSystem)
-	}
-	for i, v := range node.Values {
-		s.validateExpressionVariables(v, scope, fmt.Sprintf("%s/values/%d", path, i), currentSystem)
-	}
-	for _, k := range sortedKeys(node.TableAxes) {
-		s.validateExpressionVariables(node.TableAxes[k], scope, fmt.Sprintf("%s/axes/%s", path, k), currentSystem)
-	}
-	if node.Key != nil {
-		s.validateExpressionVariables(node.Key, scope, path+"/key", currentSystem)
-	}
-	for _, k := range sortedKeys(node.Bindings) {
-		s.validateExpressionVariables(node.Bindings[k], scope, fmt.Sprintf("%s/bindings/%s", path, k), currentSystem)
+
+	for _, child := range exprRefChildren(node) {
+		s.validateExpressionVariables(child.Child, scope, path+child.Path, currentSystem)
 	}
 }
 
@@ -1276,6 +1464,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	s.creditIndexSetNames(allVars)
 	s.creditIndependentVariable(allVars)
 	s.creditCoordinateNames(allVars)
+	s.creditCallbackVariables(allVars, systemName)
 
 	for i, reaction := range system.Reactions {
 		reactionPath := fmt.Sprintf("%s/reactions/%d", basePath, i)
@@ -1345,6 +1534,29 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 		})
 	}
 
+	// A reaction system's CONSTRAINT EQUATIONS, EVENTS and inline TESTS are
+	// reference sites over its species + parameters, and none of them was reached:
+	// reference integrity entered a reaction system through `reaction.rate` and
+	// nowhere else, so an undeclared species in a constraint equation, an event
+	// trigger/condition or an event affect was accepted silently. An undeclared
+	// BARE name anywhere in a reaction system is an `undefined_parameter` — the
+	// code the shared corpus pins for this component kind (see the rate check).
+	s.withUndefinedCode(ErrorUndefinedParameter, func() {
+		for i, eq := range system.ConstraintEquations {
+			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/constraint_equations/%d", basePath, i), systemName)
+		}
+		for i, event := range system.DiscreteEvents {
+			event := event
+			eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
+			s.validateDiscreteEvent(&event, allVars, eventPath, systemName)
+		}
+		for i, event := range system.ContinuousEvents {
+			event := event
+			s.validateContinuousEvent(&event, allVars, fmt.Sprintf("%s/continuous_events/%d", basePath, i), systemName)
+		}
+		s.validateTestRefs(system.Tests, allVars, basePath, systemName)
+	})
+
 	// v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction
 	// system's `constraint_equations`. A reaction system has no `equations`
 	// field and hosts no ICs — a species' initial value is its scalar
@@ -1408,11 +1620,29 @@ func (s *structuralScan) validateCouplingReferences() {
 			s.validateCouplingSystems(c.Systems[:], allSystems, basePath, "operator_compose", i)
 		case CouplingCouple:
 			s.validateCouplingSystems(c.Systems[:], allSystems, basePath, "couple", i)
+			// A CONNECTOR EQUATION's `expression` is the flux/transfer law of the
+			// couple — an expression over FULLY QUALIFIED references into the coupled
+			// systems (§4.6). It was never reference-checked, so a connector naming a
+			// variable that does not exist in either system was accepted.
+			for j, ceq := range c.Connector.Equations {
+				if ceq.Expression == nil {
+					continue
+				}
+				s.validateExpressionVariables(ceq.Expression, s.couplingScope(),
+					fmt.Sprintf("%s/connector/equations/%d/expression", basePath, j), "")
+			}
 		case VariableMapCoupling:
 			// from/to are scoped references ("System.var", or a deeper
 			// "Model.Subsystem.var") — see validateCouplingEndpoint.
 			s.validateCouplingEndpoint(c.From, allSystems, fmt.Sprintf("%s/from", basePath), "from", i)
 			s.validateCouplingEndpoint(c.To, allSystems, fmt.Sprintf("%s/to", basePath), "to", i)
+			// `transform` is a UNION: the legacy string KIND ("param_to_var") — which
+			// is a transform name, not a reference, and must not be read as one — or
+			// the widened Expression form, which names variables and must be checked.
+			if c.TransformIsExpression() {
+				s.validateExpressionVariables(c.Transform, s.couplingScope(),
+					fmt.Sprintf("%s/transform", basePath), "")
+			}
 		case OperatorApplyCoupling:
 			// `operator_apply` was removed in v0.3.0 along with the top-level
 			// `operators` block. Surface a structural error if a v0.2.x file
@@ -1729,6 +1959,19 @@ func (s *structuralScan) validateDataLoaderReferences() {
 				Details: map[string]any{"loader": loaderName},
 			})
 		}
+		// `unit_conversion` is a number OR an Expression (types.go). The expression
+		// form is a reference site — it scales a loaded field by, say, a model
+		// parameter — and it was never checked. See documentWideScope for why a
+		// loader's expression is resolved against the whole document.
+		for _, varName := range sortedKeys(loader.Variables) {
+			dv := loader.Variables[varName]
+			if dv.UnitConversion == nil {
+				continue
+			}
+			s.validateExpressionVariables(dv.UnitConversion, s.documentWideScope(),
+				fmt.Sprintf("%s/variables/%s/unit_conversion", basePath, varName), "")
+		}
+
 		for varName, dv := range loader.Variables {
 			if dv.FileVariable == "" {
 				s.addErr(StructuralError{

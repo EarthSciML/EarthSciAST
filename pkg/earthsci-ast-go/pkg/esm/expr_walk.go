@@ -1,6 +1,9 @@
 package esm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // expr_walk.go provides the single, field-preserving traversal primitive for
 // the ExprNode operator tree. It exists to end the "N hand-rolled walkers, each
@@ -230,4 +233,77 @@ func mapExprChildren(node ExprNode, f func(Expression) (Expression, error)) (Exp
 	}
 
 	return out, nil
+}
+
+// exprRefChild is one reference-bearing child of an operator node, paired with
+// the JSON-Pointer segment naming the field it came from.
+type exprRefChild struct {
+	// Path is the pointer segment relative to the node ("/args/0", "/filter",
+	// "/axes/lon", "/regions/0/1/0"), so a diagnostic names the SIDECAR the
+	// reference actually lives in rather than the node as a whole.
+	Path  string
+	Child Expression
+}
+
+// exprRefNonRefSlots names the expression-bearing fields mapExprChildren walks
+// that CANNOT hold a runtime variable reference, and are therefore excluded from
+// reference integrity. Descending into them would manufacture undefined-variable
+// errors out of perfectly good documents:
+//
+//   - "attrs"   — scheme parameters of a rewrite-target op ({"scheme": "upwind"}).
+//     The string is a scheme NAME, not a variable.
+//   - "output"  — a table_lookup's output selector: the NAME of one of the table's
+//     declared outputs.
+//   - "ranges"  — aggregate/argmin loop BOUNDS. Per esm-spec §9.7.6 these are
+//     LOAD-TIME index/metaparameter expressions ({"from": "faces"}, [2, N-1]),
+//     resolved against the index-set and metaparameter namespaces at load, not
+//     against the runtime variable namespace.
+//   - "join"    — {"on": [[…]]} clauses whose operands are key symbols bound by the
+//     enclosing aggregate, never free references (§9.7.6).
+//   - "regions" — makearray region bounds: load-time extents, same rule as ranges.
+//
+// This list is the sole justification for a field appearing in the keystone but
+// not in exprRefChildren, and TestExprRefChildrenCoverTheKeystone enforces
+// exactly that: refs + non-ref slots == every child the keystone walks. A NEW
+// expression-bearing field added to ExprNode therefore cannot be silently skipped
+// by reference integrity — it must be classified as one or the other.
+var exprRefNonRefSlots = []string{"attrs", "output", "ranges", "join", "regions"}
+
+// exprRefChildren enumerates every child Expression of an operator node that may
+// hold a VARIABLE REFERENCE, each tagged with its JSON-Pointer segment.
+//
+// It is the reference-integrity view of the mapExprChildren keystone: the same
+// field set, minus the non-reference slots above, plus the pointer information the
+// keystone (a rewriter) does not carry. Reference integrity walks THIS, so the
+// sidecars are covered structurally rather than by a hand-rolled descent that
+// happened to list some fields and forget others — which is exactly how an
+// undefined name inside an aggregate's `expr`, an integral bound, a makearray
+// `values`/`regions` entry or a `table_lookup` axis stayed invisible.
+func exprRefChildren(node ExprNode) []exprRefChild {
+	var out []exprRefChild
+	add := func(path string, child Expression) {
+		if child == nil {
+			return
+		}
+		out = append(out, exprRefChild{Path: path, Child: child})
+	}
+
+	for i, a := range node.Args {
+		add(fmt.Sprintf("/args/%d", i), a)
+	}
+	add("/lower", node.Lower)
+	add("/upper", node.Upper)
+	add("/expr", node.Expr)
+	add("/filter", node.Filter)
+	add("/key", node.Key)
+	for i, v := range node.Values {
+		add(fmt.Sprintf("/values/%d", i), v)
+	}
+	for _, k := range sortedKeys(node.TableAxes) {
+		add("/axes/"+k, node.TableAxes[k])
+	}
+	for _, k := range sortedKeys(node.Bindings) {
+		add("/bindings/"+k, node.Bindings[k])
+	}
+	return out
 }
