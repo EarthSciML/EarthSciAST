@@ -37,7 +37,7 @@
           ],
           "dim": "x"
         },
-        "unicode": "∂T/∂x",
+        "unicode": "grad(T)",
         "description": "Temperature gradient in x direction"
       },
       {
@@ -48,7 +48,7 @@
           ],
           "dim": "y"
         },
-        "unicode": "∂pressure/∂y",
+        "unicode": "grad(pressure)",
         "description": "Pressure gradient in y direction"
       }
     ]
@@ -137,7 +137,7 @@
             "velocity_field"
           ]
         },
-        "unicode": "∇·velocity_field",
+        "unicode": "div(velocity_field)",
         "description": "Divergence operator"
       },
       {
@@ -147,7 +147,7 @@
             "T"
           ]
         },
-        "unicode": "∇²T",
+        "unicode": "laplacian(T)",
         "description": "Laplacian operator"
       }
     ]

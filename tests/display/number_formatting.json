@@ -61,7 +61,7 @@
         "ascii": "1.8e-12"
       },
       {
-        "input": 2.46e19,
+        "input": 2.46e+19,
         "unicode": "2.46×10¹⁹",
         "latex": "2.46 \\times 10^{19}",
         "ascii": "2.46e19"
@@ -109,10 +109,11 @@
       },
       {
         "input": 0.009999,
-        "unicode": "1.0×10⁻²",
-        "latex": "1.0 \\times 10^{-2}",
-        "ascii": "1.0e-2",
-        "note": "Below threshold, use scientific"
+        "unicode": "9.999×10⁻³",
+        "latex": "9.999 \\times 10^{-3}",
+        "ascii": "9.999e-3",
+        "note": "Below threshold, use scientific",
+        "description": " [repinned 2026-07-15: the golden rounded 0.009999 to a 1.0 mantissa, LOSING PRECISION. RENDERING_CONTRACT.md 'Number formatting' now states the mantissa MUST round-trip the input at full precision.]"
       },
       {
         "input": 9999.99,

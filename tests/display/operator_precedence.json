@@ -116,9 +116,9 @@
               "b"
             ]
           },
-          "unicode": "−a·b",
-          "latex": "-a \\cdot b",
-          "ascii": "-a * b",
+          "unicode": "(−a)·b",
+          "latex": "(-a) \\cdot b",
+          "ascii": "(-a) * b",
           "note": "Same result: unary minus has high precedence"
         },
         {
@@ -273,9 +273,9 @@
             ],
             "dim": "x"
           },
-          "unicode": "∂(f·g)/∂x",
-          "latex": "\\frac{\\partial (f \\cdot g)}{\\partial x}",
-          "ascii": "grad(f * g, x)",
+          "unicode": "grad(f·g)",
+          "latex": "\\mathrm{grad}(f \\cdot g)",
+          "ascii": "grad(f * g)",
           "note": "Gradient of product"
         }
       ]
@@ -511,9 +511,9 @@
               }
             ]
           },
-          "unicode": "∂φ/∂x + ∇²ψ",
-          "latex": "\\frac{\\partial \\phi}{\\partial x} + \\nabla^2 \\psi",
-          "ascii": "grad(phi,x) + laplacian(psi)",
+          "unicode": "grad(φ) + laplacian(ψ)",
+          "latex": "\\mathrm{grad}(\\phi) + \\mathrm{laplacian}(\\psi)",
+          "ascii": "grad(phi) + laplacian(psi)",
           "note": "Spatial operators in atmospheric modeling"
         },
         {
@@ -529,8 +529,8 @@
               }
             ]
           },
-          "unicode": "∇·(u·tracer)",
-          "latex": "\\nabla \\cdot (u \\cdot \\mathrm{tracer})",
+          "unicode": "div(u·tracer)",
+          "latex": "\\mathrm{div}(u \\cdot \\mathrm{tracer})",
           "ascii": "div(u * tracer)",
           "note": "Divergence of flux"
         }
@@ -561,7 +561,7 @@
           },
           "unicode": "x > 0 ∧ x < 10",
           "latex": "x > 0 \\land x < 10",
-          "ascii": "(x > 0) and (x < 10)",
+          "ascii": "x > 0 and x < 10",
           "note": "Logical conjunction of comparisons"
         },
         {
@@ -586,7 +586,7 @@
           },
           "unicode": "t ≤ 0 ∨ t ≥ 86400",
           "latex": "t \\leq 0 \\lor t \\geq 86400",
-          "ascii": "(t <= 0) or (t >= 86400)",
+          "ascii": "t <= 0 or t >= 8.64e+4",
           "note": "Outside time window condition"
         }
       ]
@@ -635,9 +635,7 @@
       "superscripts": "⁰¹²³⁴⁵⁶⁷⁸⁹",
       "derivatives": "∂",
       "spatial_ops": {
-        "gradient": "∂/∂",
-        "divergence": "∇·",
-        "laplacian": "∇²"
+        "_retired": "grad/div/laplacian are OPEN-TIER REWRITE-TARGET SUGAR and render with the GENERIC FALLBACK -- grad(phi), div(v), laplacian(u); latex \\mathrm{grad}(phi). The `dim` field is NOT rendered. The lowering to partial-derivative / nabla forms is RETIRED (RENDERING_CONTRACT.md 'Guiding principle' + 'Generic fallback'). This block previously asserted gradient / divergence / laplacian glyphs -- a contract the spec no longer holds, and the seed that kept regenerating the stale goldens."
       },
       "logical_ops": {
         "and": "∧",
@@ -657,9 +655,7 @@
       "chemical_species": "\\mathrm{species_name}",
       "subscripts": "var_{subscript}",
       "spatial_ops": {
-        "gradient": "\\frac{\\partial}{\\partial dim}",
-        "divergence": "\\nabla \\cdot",
-        "laplacian": "\\nabla^2"
+        "_retired": "grad/div/laplacian are OPEN-TIER REWRITE-TARGET SUGAR and render with the GENERIC FALLBACK -- grad(phi), div(v), laplacian(u); latex \\mathrm{grad}(phi). The `dim` field is NOT rendered. The lowering to partial-derivative / nabla forms is RETIRED (RENDERING_CONTRACT.md 'Guiding principle' + 'Generic fallback'). This block previously asserted gradient / divergence / laplacian glyphs -- a contract the spec no longer holds, and the seed that kept regenerating the stale goldens."
       },
       "functions": {
         "sin": "\\sin",

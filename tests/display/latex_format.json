@@ -37,7 +37,7 @@
           ],
           "dim": "x"
         },
-        "latex": "\\frac{\\partial T}{\\partial x}",
+        "latex": "\\mathrm{grad}(T)",
         "description": "Temperature gradient - single letters don't need mathrm"
       },
       {
@@ -48,7 +48,7 @@
           ],
           "dim": "y"
         },
-        "latex": "\\frac{\\partial \\mathrm{pressure}}{\\partial y}",
+        "latex": "\\mathrm{grad}(\\mathrm{pressure})",
         "description": "Multi-letter variable needs mathrm"
       }
     ]
@@ -98,7 +98,7 @@
             }
           ]
         },
-        "latex": "\\frac{a}{b c}",
+        "latex": "\\frac{a}{b \\cdot c}",
         "description": "Complex denominator - multiplication uses space in LaTeX"
       }
     ]
@@ -139,7 +139,7 @@
             "b"
           ]
         },
-        "latex": "a b",
+        "latex": "a \\cdot b",
         "description": "Multiplication by juxtaposition"
       },
       {
@@ -223,7 +223,7 @@
             2
           ]
         },
-        "latex": "x^2",
+        "latex": "x^{2}",
         "description": "Simple squared"
       },
       {
@@ -255,7 +255,7 @@
             "\\mathbf{v}"
           ]
         },
-        "latex": "\\nabla \\cdot \\mathbf{v}",
+        "latex": "\\mathrm{div}(\\mathrm{\\mathbf{v}})",
         "description": "Divergence with vector notation"
       },
       {
@@ -265,7 +265,7 @@
             "T"
           ]
         },
-        "latex": "\\nabla^2 T",
+        "latex": "\\mathrm{laplacian}(T)",
         "description": "Laplacian operator"
       }
     ]
