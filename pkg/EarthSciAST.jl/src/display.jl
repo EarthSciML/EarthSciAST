@@ -1023,8 +1023,10 @@ function Base.show(io::IO, ::MIME"text/plain", model::Model)
     println(io, "Model:")
     println(io, "  Variables ($(length(model.variables))):")
     for (name, var) in model.variables
-        var_type_str = var.type == StateVariable ? "state" :
-                      var.type == ParameterVariable ? "parameter" : "observed"
+        # Total over the enum. The old three-way ternary fell through to
+        # "observed" for anything else, so a BROWNIAN printed as "observed" and a
+        # DISCRETE would too — a display that quietly lies about the kind.
+        var_type_str = _variable_type_word(var.type)
         default_str = isnothing(var.default) ? "unset" : string(var.default)
         units_str = isnothing(var.units) ? "dimensionless" : var.units
         print(io, "    $name: $var_type_str")

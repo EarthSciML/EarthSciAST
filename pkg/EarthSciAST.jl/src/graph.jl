@@ -412,6 +412,10 @@ function expression_graph(model::Model)::Graph{VariableNode, DependencyEdge}
             "parameter"
         elseif var.type == ObservedVariable
             "observed"
+        elseif var.type == BrownianVariable
+            "brownian"
+        elseif var.type == DiscreteVariable
+            "discrete"
         else
             "unknown"
         end

@@ -150,7 +150,16 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         end
         if v.type == StateVariable
             states[namespaced] = v
-        elseif v.type == ParameterVariable
+        elseif v.type == ParameterVariable || v.type == DiscreteVariable
+            # A DISCRETE variable is piecewise-constant between refreshes — the
+            # solver never differentiates it — so it partitions with the
+            # parameters (it is the loader/forcing buffer the refresh machinery
+            # writes; see `ModelVariableType`). The bucket is only a partition:
+            # `v` keeps `type == DiscreteVariable`, so `flattened_to_esm`
+            # re-emits it as `"discrete"` and the round-trip is lossless. Routing
+            # it nowhere (the pre-`DiscreteVariable` behaviour) silently DROPPED
+            # the declaration from the flattened model, degrading a declared
+            # forcing back into a bare undeclared name.
             params[namespaced] = v
         elseif v.type == ObservedVariable
             observeds[namespaced] = v

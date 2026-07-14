@@ -424,6 +424,8 @@ function coerce_model_variable_type(data::String)::ModelVariableType
         return ObservedVariable
     elseif data == "brownian" || data == "BrownianVariable"
         return BrownianVariable
+    elseif data == "discrete" || data == "DiscreteVariable"
+        return DiscreteVariable
     else
         throw(ParseError("Invalid ModelVariableType: $data"))
     end

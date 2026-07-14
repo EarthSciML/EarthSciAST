@@ -147,6 +147,8 @@ function serialize_model_variable_type(var_type::ModelVariableType)::String
         return "observed"
     elseif var_type == BrownianVariable
         return "brownian"
+    elseif var_type == DiscreteVariable
+        return "discrete"
     else
         throw(ArgumentError("Unknown ModelVariableType: $(var_type)"))
     end

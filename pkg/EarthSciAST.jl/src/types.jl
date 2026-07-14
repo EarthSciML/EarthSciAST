@@ -528,12 +528,27 @@ Type enumeration for model variables:
 - BrownianVariable: stochastic noise sources (Wiener processes). The presence
   of any brownian variable promotes the enclosing model from an ODE system to
   an SDE system. Maps to MTK `@brownians` and an `SDESystem`.
+- DiscreteVariable: piecewise-constant between refreshes rather than
+  continuously integrated — it holds its value until a `cadence` boundary, a
+  loader refresh, or an event assigns a new one, so the solver never
+  differentiates it. This is the fifth member of the schema's
+  `ModelVariable.type` enum (the spelling for a loader/forcing-fed field,
+  CONFORMANCE_SPEC §5.10.1). It lowers to a solver-side PARAMETER BUFFER: the
+  refresh machinery writes it (`build_evaluator(...; param_arrays = …)`), and
+  the cadence partition (§5.7) seeds it `discrete`, tainting every field that
+  reads it. Declaring it is what distinguishes a real forcing from a typo
+  (esm-spec §4.9.5); a bare undeclared forcing name is indistinguishable from
+  a misspelling.
+
+`discrete` is deliberately LAST so the existing members keep their integer
+values.
 """
 @enum ModelVariableType begin
     StateVariable
     ParameterVariable
     ObservedVariable
     BrownianVariable
+    DiscreteVariable
 end
 
 """

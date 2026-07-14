@@ -1889,12 +1889,14 @@ function validate_single_event_consistency(model::Model, event::EventType, event
 end
 
 # Lower-case spelling of a ModelVariableType for diagnostics ("state",
-# "parameter", "observed", "brownian").
+# "parameter", "observed", "brownian", "discrete"). Total over the enum: a
+# missing arm here silently MISLABELS a variable in the diagnostic it prints.
 function _variable_type_word(t::ModelVariableType)::String
     t == StateVariable && return "state"
     t == ParameterVariable && return "parameter"
     t == ObservedVariable && return "observed"
-    return "brownian"
+    t == BrownianVariable && return "brownian"
+    return "discrete"
 end
 
 # ============================================================================
