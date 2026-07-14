@@ -175,13 +175,20 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   })
 
   it('valid suite: library file + minimal consumer', () => {
-    // A model-less template-library document loads (esm-spec §9.7.1);
-    // round-trip strips every §9.7 construct, leaving the folded registry.
+    // A model-less template-library document loads (esm-spec §9.7.1).
+    //
+    // This test used to ASSERT THE BUG: that `expression_templates` and
+    // `metaparameters` came back `undefined`, i.e. that load had deleted the
+    // library's entire payload. esm-spec §9.6.4 rule 5 says the opposite —
+    // Option A expands CALL SITES, it does not delete DECLARATIONS — because a
+    // library stripped of its registry emits as `{esm, metadata, index_sets}`,
+    // which carries none of the five top-level payload keys and cannot be
+    // re-loaded. The declarations SURVIVE.
     const lib = loadPath(path.join(validDir, 'template_import_lib.esm')) as any
     expect(lib.models).toBeUndefined()
     expect(lib.index_sets.cells.size).toBe(8) // size "N" folded by default
-    expect(lib.expression_templates).toBeUndefined()
-    expect(lib.metaparameters).toBeUndefined()
+    expect(lib.expression_templates).toBeDefined()
+    expect(lib.metaparameters).toBeDefined()
     // Loader-API binding overrides the default on the library itself.
     const lib12 = loadPath(path.join(validDir, 'template_import_lib.esm'), { N: 12 }) as any
     expect(lib12.index_sets.cells.size).toBe(12)

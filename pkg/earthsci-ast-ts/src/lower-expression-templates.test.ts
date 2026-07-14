@@ -14,7 +14,9 @@ import {
 } from './lower-expression-templates.js'
 import { EsmDiagnosticError } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
-import { fixturesDir } from './test-helpers.js'
+import { fixturesDir, REPO_ROOT } from './test-helpers.js'
+import { save } from './serialize.js'
+import { validate } from './validate.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
 // `arrhenius` template and one inline rate, plus an arithmetic check.
@@ -1170,5 +1172,68 @@ describe('EsmMachineryError — extends EsmDiagnosticError, byte-compatible', ()
     const err = new EsmMachineryError('some_code', 'boom')
     expect(err).toBeInstanceOf(ExpressionTemplateError)
     expect(new ExpressionTemplateError('c', 'm')).toBeInstanceOf(EsmMachineryError)
+  })
+})
+
+/**
+ * esm-spec §9.6.4 rule 5 — Option A expands CALL SITES; it does NOT delete
+ * DECLARATIONS. A template-library file MUST round-trip to itself.
+ */
+describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
+  const libraries = [
+    'tests/valid/template_import_lib.esm',
+    'tests/valid/template_import_rename_lib.esm',
+  ]
+
+  it.each(libraries)('%s preserves its top-level declarations through parse -> emit', (rel) => {
+    const file = path.join(REPO_ROOT, rel)
+    const dir = path.dirname(file)
+    const onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>
+    const emitted = JSON.parse(
+      save(load(fs.readFileSync(file, 'utf-8'), { basePath: dir })),
+    ) as Record<string, unknown>
+
+    // The two DECLARATION blocks survive VERBATIM — not folded, not stripped.
+    // Dropping them emitted `{esm, metadata, index_sets}`: a document with NONE of
+    // the five top-level payload keys, which the schema's top-level `anyOf` rejects.
+    expect(emitted.expression_templates).toEqual(onDisk.expression_templates)
+    expect(emitted.metaparameters).toEqual(onDisk.metaparameters)
+
+    // ...and the emitted form is itself a legal, loadable document — the property
+    // that was actually broken. "Legal on disk, illegal once loaded and re-emitted"
+    // means the document kind does not exist.
+    expect(validate(JSON.stringify(emitted), { basePath: dir }).is_valid).toBe(true)
+  })
+
+  it.each(libraries)('%s is a fixed point of load -> save -> load', (rel) => {
+    const file = path.join(REPO_ROOT, rel)
+    const dir = path.dirname(file)
+    const once = load(fs.readFileSync(file, 'utf-8'), { basePath: dir })
+    const twice = load(save(once), { basePath: dir })
+    expect(twice).toEqual(once)
+  })
+
+  it('still rejects a genuinely unexpanded apply at a CALL SITE', () => {
+    // Skipping `expression_templates` blocks in the stray-apply scan must not
+    // blind it to a real unexpanded call: an `apply_expression_template` naming a
+    // template that does not exist, in an EQUATION (a call site, not a body).
+    expect(() =>
+      load({
+        esm: '0.1.0',
+        metadata: { name: 'stray' },
+        models: {
+          M: {
+            variables: { u: { type: 'state', units: '1' } },
+            expression_templates: { known: { params: ['x'], body: { op: '*', args: ['x', 2] } } },
+            equations: [
+              {
+                lhs: { op: 'D', args: ['u'], wrt: 't' },
+                rhs: { op: 'apply_expression_template', template: 'does_not_exist', args: ['u'] },
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow()
   })
 })

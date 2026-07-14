@@ -129,27 +129,14 @@ describe('Conformance Test Suite', () => {
     })
 
     it.each(validFiles)('should validate %s', (filePath) => {
-      const content = readFileSync(filePath, 'utf-8')
-      const raw = JSON.parse(content) as Record<string, unknown>
-
-      // A pure TEMPLATE-LIBRARY file (§9.7.1) is a registry document, not a
-      // component document, and its §9.7 payload deliberately does not survive
-      // parse → emit (§9.7.6, "Option A"). The schema admits the library shape
-      // directly (`anyOf` branch `required: [expression_templates]`), so it is
-      // asserted valid AS AUTHORED. Still asserted — not a quarantine.
-      const isTemplateLibrary =
-        'expression_templates' in raw &&
-        !('models' in raw) &&
-        !('reaction_systems' in raw) &&
-        !('data_loaders' in raw)
-
-      // `basePath` is the whole point: it lets `validate()` OPEN relative `{ref}`
-      // and `expression_template_imports` targets, exactly as a consumer holding
-      // the file on disk would. Without it a `{ref}` mount is merely "unresolved"
-      // and a present target is indistinguishable from a missing one.
-      const result = isTemplateLibrary
-        ? validate(content)
-        : validate(content, { basePath: dirname(filePath) })
+      // Every valid fixture, including a pure template-library file (§9.7.1), is
+      // validated the same way. The library used to need a carve-out because the
+      // emitter dropped its payload; §9.6.4 rule 5 fixed that, so the carve-out is
+      // gone too.
+      //
+      // `basePath` lets `validate()` OPEN relative `{ref}` and template-import
+      // targets, exactly as a consumer holding the file on disk would.
+      const result = validate(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
 
       if (!result.is_valid) {
         // Surface WHAT failed — a bare `false !== true` on a 200-line fixture is
@@ -173,17 +160,14 @@ describe('Conformance Test Suite', () => {
       const basePath = dirname(filePath)
       const original = load(originalContent, { basePath })
 
-      // A pure template-library file (top-level expression_templates,
-      // esm-spec §9.7.1) loads clean, but its §9.7 payload does not survive
-      // parse → emit (Option A round-trip, §9.7.6) — the emitted registry
-      // document carries no models/reaction_systems/data_loaders payload and
-      // is not a standalone loadable file, exactly as in the Julia reference.
-      // Assert load-clean only.
-      const rawView = JSON.parse(originalContent) as Record<string, unknown>
-      if ('expression_templates' in rawView) {
-        expect(original).toBeDefined()
-        return
-      }
+      // NO BAIL-OUT HERE. A template-library file used to be waved through with
+      // `expect(original).toBeDefined()` — an assertion that cannot fail, guarding
+      // the exact code path that was broken: the emitter DROPPED the top-level
+      // `expression_templates` registry and `metaparameters` block, so a library
+      // emitted as `{esm, metadata, index_sets}` and could not be re-loaded. Per
+      // esm-spec §9.6.4 rule 5 (Option A expands CALL SITES; it does not delete
+      // DECLARATIONS) a library file round-trips to ITSELF, so it is round-tripped
+      // exactly like every other fixture.
 
       // Save and reload
       const serialized = save(original)
