@@ -101,6 +101,14 @@ type ExprNode struct {
 	Label *string `json:"label,omitempty"`
 	// Arg is the witness index name of an `argmin` / `argmax` op.
 	Arg *string `json:"arg,omitempty"`
+	// ID is the schema-declared `id` of an ExpressionNode: the stable handle a
+	// derived index set names in `index_sets.<x>.from_faq`. Dropping it on a
+	// round-trip silently breaks that linkage, so it is modeled explicitly.
+	ID *string `json:"id,omitempty"`
+	// ExpectCadence is the schema-declared `expect_cadence` of an ExpressionNode
+	// ("const" / "temporal" / …): the author's assertion about how often the
+	// subtree's value may change. Carried so it round-trips.
+	ExpectCadence *string `json:"expect_cadence,omitempty"`
 }
 
 // Expression represents the union type: number | string | ExprNode
@@ -771,8 +779,19 @@ func (e *ESMFile) ValidateStruct() error {
 		return err
 	}
 
-	// At least one of models, reaction_systems, or data_loaders must be present
-	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 && len(e.DataLoaders) == 0 {
+	// At least one of models, reaction_systems, or data_loaders must be present.
+	//
+	// This is the invariant for an ASSEMBLY document — one that declares
+	// components. It is NOT universal: the schema's root `anyOf` also admits two
+	// LIBRARY file kinds (`expression_templates` per esm-spec §9.7,
+	// `coupling_roles` per §10.9) that carry no components at all. A library's
+	// §9.7 constructs are stripped during parse by design ("no §9.7 construct
+	// survives parse → emit", template_resolve.go), so a loaded library is
+	// indistinguishable HERE from an empty document — the two are told apart from
+	// the RAW document, which is what ValidateFile does (see isLibraryDocumentJSON).
+	// Callers holding only a typed ESMFile keep the strict invariant.
+	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 && len(e.DataLoaders) == 0 &&
+		len(e.CouplingRoles) == 0 {
 		return fmt.Errorf("at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
 	}
 

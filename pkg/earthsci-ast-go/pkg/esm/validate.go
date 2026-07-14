@@ -3,6 +3,7 @@ package esm
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -127,6 +128,18 @@ func ValidateFile(file *ESMFile, jsonStr string) *ValidationResult {
 		return result
 	}
 
+	// A LIBRARY document (expression-template library per esm-spec §9.7, or a
+	// coupling-role library per §10.9) declares no components, and its §9.7
+	// constructs are stripped during parse by design — so the loaded ESMFile is
+	// empty and every component-oriented structural check has nothing to say. The
+	// schema (root `anyOf`) has already confirmed it is a well-formed library.
+	// Without this, Go rejected every template library outright, because
+	// ValidateStruct's assembly-document invariant fired on the emptied struct.
+	if isLibraryDocumentJSON(jsonStr) && len(file.Models) == 0 &&
+		len(file.ReactionSystems) == 0 && len(file.DataLoaders) == 0 {
+		return result
+	}
+
 	// Perform structural validation with structured error codes
 	structuralResult := ValidateStructuralWithCodes(file)
 
@@ -134,10 +147,35 @@ func ValidateFile(file *ESMFile, jsonStr string) *ValidationResult {
 	result.StructuralErrors = structuralResult.StructuralErrors
 	result.UnitWarnings = structuralResult.UnitWarnings
 
-	// Update IsValid based on both schema and structural errors
-	result.IsValid = len(result.SchemaErrors) == 0 && len(result.StructuralErrors) == 0
+	// Update IsValid based on both schema and structural errors. Warning-level
+	// findings (StructuralError.Level == "warning", e.g. duplicate_reaction_species)
+	// are ADVISORY and do not invalidate the document — counting them made
+	// ValidateFile report IsValid=false on a file that ValidateStructural and
+	// ValidateStructuralWithCodes both call valid (audit G14).
+	result.IsValid = len(result.SchemaErrors) == 0 &&
+		countStructuralErrorLevel(result.StructuralErrors) == 0
 
 	return result
+}
+
+// isLibraryDocumentJSON reports whether the RAW document is a library file —
+// one whose payload is an `expression_templates` or `coupling_roles` block
+// rather than components. Both are admitted by the schema's root `anyOf`, and
+// both are legal with no models / reaction systems / data loaders at all.
+//
+// It is answered from the raw JSON because parse deliberately strips the §9.7
+// constructs, so by the time the typed ESMFile exists the evidence is gone.
+func isLibraryDocumentJSON(jsonStr string) bool {
+	var view map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &view); err != nil {
+		return false
+	}
+	for _, key := range []string{"expression_templates", "coupling_roles"} {
+		if raw, has := view[key]; has && rawIsPresent(raw) {
+			return true
+		}
+	}
+	return false
 }
 
 // Validate is the backward compatibility function that returns DetailedValidationResult
@@ -319,11 +357,24 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// those names so the full-child descent below does not mis-flag them as
 	// undefined, mirroring TS `validateReferenceIntegrity`'s `declaredIndexSets`.
 	s.creditIndexSetNames(allVars)
+	s.creditIndependentVariable(allVars)
 
 	for i, eq := range model.Equations {
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
-		s.validateExpressionVariables(eq.LHS, allVars, fmt.Sprintf("%s/lhs", eqPath), modelName)
-		s.validateExpressionVariables(eq.RHS, allVars, fmt.Sprintf("%s/rhs", eqPath), modelName)
+		// Binder-introduced symbols are collected across the WHOLE equation —
+		// both sides — and are in scope on both, mirroring TS
+		// `validateReferenceIntegrity`. The array-form IR routinely binds an
+		// index on one side and uses it on the other: the LHS
+		// `aggregate(output_idx:["i"], expr: D(index(u,i)))` binds `i` for an RHS
+		// that spells `index(u, i)` inside a makearray value. Scoping the binders
+		// per-NODE (the previous behaviour) could not see across that boundary and
+		// reported the loop index as an undefined variable.
+		scope := allVars
+		if bound := equationBoundSymbols(eq); len(bound) > 0 {
+			scope = unionScope(allVars, bound)
+		}
+		s.validateExpressionVariables(eq.LHS, scope, fmt.Sprintf("%s/lhs", eqPath), modelName)
+		s.validateExpressionVariables(eq.RHS, scope, fmt.Sprintf("%s/rhs", eqPath), modelName)
 	}
 
 	// Equation-unknown balance validation (Section 3.2.1).
@@ -434,6 +485,59 @@ func (s *structuralScan) creditIndexSetNames(allVars map[string]bool) {
 	for name := range s.file.IndexSets {
 		allVars[name] = true
 	}
+}
+
+// creditIndependentVariable marks the document's independent variable — `t` by
+// default, or whatever `domain.independent_variable` names — as in-scope.
+//
+// It is not an entry of any `variables` block, but it is a perfectly legal
+// reference: a time-dependent forcing or event trigger spells `sin(t)` /
+// `t > 300`, and every `D(v, t)` names it in `wrt`. Without crediting it the
+// reference check reported the independent variable itself as an undefined
+// variable (tests/valid/events_all_types.esm, cadence/pure_pointwise.esm, …).
+func (s *structuralScan) creditIndependentVariable(allVars map[string]bool) {
+	allVars[s.indep] = true
+}
+
+// equationBoundSymbols returns every binder-introduced symbol an equation
+// scopes, collected across BOTH sides (aggregate `output_idx` / `ranges` keys,
+// argmin/argmax witnesses, `index` element positions, integral integration
+// variables, apply_expression_template parameter names). Mirrors TS
+// `collectIndexSymbols` applied to lhs ∪ rhs.
+func equationBoundSymbols(eq Equation) map[string]bool {
+	bound := map[string]bool{}
+	collectBoundSymbols(eq.LHS, bound)
+	collectBoundSymbols(eq.RHS, bound)
+	return bound
+}
+
+// collectBoundSymbols accumulates the binder symbols of every operator node in
+// an expression tree, descending through every expression-bearing field.
+func collectBoundSymbols(expr Expression, bound map[string]bool) {
+	node, ok := asExprNode(expr)
+	if !ok {
+		return
+	}
+	for _, sym := range boundIndexSymbols(node) {
+		bound[sym] = true
+	}
+	_, _ = mapExprChildren(node, func(child Expression) (Expression, error) {
+		collectBoundSymbols(child, bound)
+		return child, nil
+	})
+}
+
+// unionScope returns a new scope holding every name of base plus every name of
+// extra. base is never mutated.
+func unionScope(base map[string]bool, extra map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k := range extra {
+		out[k] = true
+	}
+	return out
 }
 
 // validateExprNodeChildren descends every canonical child-Expression field of an
@@ -660,14 +764,42 @@ func (s *structuralScan) validateEquationUnknownBalance(modelName string, model 
 	})
 }
 
-// computeEquationBalance counts state variables and ODE equations for a model
-// and reports the balance outcome. An equation is an ODE when its LHS is a
-// derivative with respect to the document's independent variable (see
-// isDifferentialEquation), which also treats an implicit (nil) wrt as
-// differential — matching the DAE contract's classification. When unbalanced it
-// returns the state variables lacking ODEs (missing), the ODE targets that are
-// not state variables (extra), and the assembled diagnostic message.
+// computeEquationBalance counts state variables and defining equations for a
+// model and reports the balance outcome. It is BIDIRECTIONAL: it reports both
+// state variables that no equation defines (missing) and equations that define
+// something which is not a state variable (extra).
+//
+// What counts as "an equation that defines state variable v" (mirrors TS
+// validateEquationBalance / countDerivatives / lhsAssignmentTarget):
+//
+//   - a time derivative `D(v, t)` ANYWHERE in the LHS — including the
+//     ARRAY FORM, where the derivative is carried inside an aggregate's
+//     contracted body (`aggregate(output_idx:[i], expr: D(index(v, i)))`)
+//     rather than in `args`. Only looking for a top-level `D` LHS is what made
+//     Go reject two dozen perfectly good aggregate/geometry fixtures with
+//     "0 ODE equations";
+//   - failing that, an ALGEBRAIC/relational equation whose LHS assigns to a
+//     state variable (`v ~ f(...)`, `index(v, i) ~ aggregate(...)`), which
+//     credits that variable — element-defined and observed-style state still
+//     balances the unknown count.
+//
+// An `ic` equation defines an initial value, not the dynamics, so it never
+// credits a variable (its LHS op is neither D nor an assignment target).
+//
+// Two carve-outs skip the check entirely:
+//
+//   - a model with a non-ODE SystemKind (nonlinear / sde / pde) has no ODE
+//     balance to check — a `nonlinear` model legitimately has state variables
+//     and zero derivatives (see tests/valid/nonlinear_*_shape.esm);
+//   - a model with SUBSYSTEMS holds its dynamics in those subsystems, so its own
+//     `equations` list may legitimately be empty while it declares state
+//     variables (tests/valid/scoped_refs_coupling.esm). Only a subsystem-free
+//     model owes an equation for each of its state variables.
 func computeEquationBalance(model *Model, indep string) (nStates, nOdes int, missing, extra []string, message string, balanced bool) {
+	if !isDAETargetSystem(model) || len(model.Subsystems) > 0 {
+		return 0, 0, nil, nil, "", true
+	}
+
 	stateVars := make(map[string]bool)
 	for varName, variable := range model.Variables {
 		if variable.Type == VarTypeState {
@@ -676,34 +808,60 @@ func computeEquationBalance(model *Model, indep string) (nStates, nOdes int, mis
 	}
 	nStates = len(stateVars)
 
-	odeEquations := make(map[string]bool)
+	definedVars := make(map[string]bool)
+	extraSet := make(map[string]bool)
 	for _, eq := range model.Equations {
-		if !isDifferentialEquation(eq, indep) {
+		derivatives := countDerivatives(eq.LHS, indep)
+		if len(derivatives) > 0 {
+			for varName, count := range derivatives {
+				nOdes += count
+				// A SCOPED target (`D(Chemistry.O3, t)`) drives a variable owned by
+				// ANOTHER system; it is not this model's unknown and says nothing
+				// about this model's balance. The reference check already validates
+				// that the scoped name resolves.
+				if strings.Contains(varName, ".") {
+					continue
+				}
+				if stateVars[varName] {
+					definedVars[varName] = true
+				} else {
+					extraSet[varName] = true
+				}
+			}
 			continue
 		}
-		nOdes++
-		if node, ok := exprAsNode(eq.LHS); ok && len(node.Args) > 0 {
-			if varName, ok := node.Args[0].(string); ok {
-				odeEquations[varName] = true
+		// A non-differential equation credits the state variable its LHS assigns
+		// to: an algebraic/relational definition (`v ~ f(...)`,
+		// `index(v,i) ~ aggregate(...)`), or an `ic` prescription — a state variable
+		// with an initial condition and no dynamics is a PRESCRIBED field, held at
+		// its initial value and typically exported to other models through a
+		// coupling (tests/valid/wildfire_atmosphere_ocean.esm's wind_u/wind_v).
+		target := extractVariableFromLHS(eq.LHS)
+		if target == "" {
+			if node, ok := asExprNode(eq.LHS); ok && node.Op == OpIC && len(node.Args) > 0 {
+				target = extractVariableFromLHS(node.Args[0])
 			}
 		}
-	}
-
-	if nOdes == nStates {
-		return nStates, nOdes, nil, nil, "", true
+		if target != "" && stateVars[target] {
+			definedVars[target] = true
+		}
 	}
 
 	missing = []string{}
 	for varName := range stateVars {
-		if !odeEquations[varName] {
+		if !definedVars[varName] {
 			missing = append(missing, varName)
 		}
 	}
 	extra = []string{}
-	for varName := range odeEquations {
-		if !stateVars[varName] {
-			extra = append(extra, varName)
-		}
+	for varName := range extraSet {
+		extra = append(extra, varName)
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+
+	if len(missing) == 0 && len(extra) == 0 {
+		return nStates, nOdes, nil, nil, "", true
 	}
 
 	message = fmt.Sprintf("Equation-unknown balance failed: found %d state variables but %d ODE equations", nStates, nOdes)
@@ -714,6 +872,41 @@ func computeEquationBalance(model *Model, indep string) (nStates, nOdes int, mis
 		message += fmt.Sprintf("; ODE equations for non-state variables: %v", extra)
 	}
 	return nStates, nOdes, missing, extra, message, false
+}
+
+// countDerivatives returns, per variable, how many time derivatives of it an
+// expression carries. It walks EVERY expression-bearing field (the shared
+// field-preserving walk), so it finds the `D` an array-form equation hides in an
+// aggregate's `expr`, not just a `D` at the root of `args`. Mirrors TS
+// countDerivatives (validate/expr-utils.ts).
+//
+// Only derivatives with respect to the document's independent variable count; a
+// SPATIAL `D` (wrt a coordinate) is a rewrite target, not an ODE. A `D` with no
+// explicit `wrt` is treated as differential in the independent variable, the
+// same convention isDifferentialEquation uses.
+func countDerivatives(expr Expression, indep string) map[string]int {
+	derivatives := map[string]int{}
+
+	var walk func(Expression)
+	walk = func(e Expression) {
+		node, ok := asExprNode(e)
+		if !ok {
+			return
+		}
+		if node.Op == OpDerivative && len(node.Args) > 0 &&
+			(node.Wrt == nil || *node.Wrt == indep) {
+			if target := extractVariableFromLHS(node.Args[0]); target != "" {
+				derivatives[target]++
+			}
+		}
+		_, _ = mapExprChildren(node, func(child Expression) (Expression, error) {
+			walk(child)
+			return child, nil
+		})
+	}
+	walk(expr)
+
+	return derivatives
 }
 
 // validateReactionSystem checks reaction system-specific structural rules.
@@ -799,7 +992,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	// document is schema-valid (`constraint_equations` is an array of Equation
 	// and `ic` is a legal op) but is rejected here structurally.
 	for i, eq := range system.ConstraintEquations {
-		node, ok := exprAsNode(eq.LHS)
+		node, ok := asExprNode(eq.LHS)
 		if !ok || node.Op != OpIC {
 			continue
 		}
@@ -845,13 +1038,7 @@ func (s *structuralScan) reportDuplicateSpecies(entries []SubstrateProduct, side
 
 // validateCouplingReferences validates that coupling entries reference declared systems.
 func (s *structuralScan) validateCouplingReferences() {
-	allSystems := make(map[string]bool)
-	for name := range s.file.Models {
-		allSystems[name] = true
-	}
-	for name := range s.file.ReactionSystems {
-		allSystems[name] = true
-	}
+	allSystems := couplableSystemNames(s.file)
 
 	for i, coupling := range s.file.Coupling {
 		basePath := fmt.Sprintf("/coupling/%d", i)
@@ -915,11 +1102,43 @@ func (s *structuralScan) validateCouplingReferences() {
 	}
 }
 
+// couplableSystemNames returns every name a coupling entry may legally reference
+// as a "system": a model, a reaction system, OR A DATA LOADER.
+//
+// A data loader is a first-class coupling endpoint — `variable_map` exists
+// precisely to wire a loader's variables into a model
+// (`from: "GEOSFP_MeteoData.u"`, `to: "Transport.u"`). Omitting loaders from
+// this namespace made Go reject every document that does so, with a spurious
+// `undefined_system` on the loader and an `unresolved_scoped_ref` on each of its
+// variables (audit G7; tests/valid/data_loaders_comprehensive.esm,
+// full_coupled.esm, model_only.esm, reaction_system_only.esm). TS has always
+// included them (validate/coupling-checks.ts `availableSystems`).
+func couplableSystemNames(file *ESMFile) map[string]bool {
+	names := make(map[string]bool, len(file.Models)+len(file.ReactionSystems)+len(file.DataLoaders))
+	for name := range file.Models {
+		names[name] = true
+	}
+	for name := range file.ReactionSystems {
+		names[name] = true
+	}
+	for name := range file.DataLoaders {
+		names[name] = true
+	}
+	return names
+}
+
 // validateCouplingSystems reports undefined systems for the list-based coupling
 // kinds (operator_compose, couple).
+//
+// A `systems` entry may name a SUBSYSTEM by its dotted path
+// ("AtmosphericChemistry.Aerosols"), which is a legal coupling endpoint, so a
+// dotted name that resolves through the subsystem hierarchy is accepted too.
 func (s *structuralScan) validateCouplingSystems(systems []string, allSystems map[string]bool, basePath, couplingType string, couplingIndex int) {
 	for j, sysName := range systems {
 		if allSystems[sysName] {
+			continue
+		}
+		if s.file != nil && strings.Contains(sysName, ".") && subsystemPathExists(sysName, s.file) {
 			continue
 		}
 		s.addErr(StructuralError{
