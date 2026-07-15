@@ -449,6 +449,27 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # systems means no evaluation order exists.
     append!(errors, validate_coupling_cycles(file))
 
+    # 5c. Aggregate/relational semantic checks (F-6). Three defects that are
+    # statically decidable from the SINGLE document yet slip past both the schema
+    # and the reference-integrity pass, so `validate()` accepted them until now:
+    #   • `undefined_index_set`         — an aggregate `ranges` `{from: NAME}`
+    #                                     naming a set absent from the document
+    #                                     `index_sets` registry;
+    #   • `join_key_invalid_type`       — a value-equality `join` whose key column
+    #                                     ranges over a categorical set with a
+    #                                     float/null member (not portably equatable);
+    #   • `relational_node_in_continuous` — a `distinct` (value-invention) aggregate
+    #                                     whose key/body reads a STATE variable, so it
+    #                                     classifies CONTINUOUS (§5.7 guard 2).
+    # Each attaches at the containing expression FIELD, matching the corpus pins.
+    append!(errors, validate_aggregate_semantics(file))
+
+    # 5d. `variable_map` identity-coupling declared-unit mismatch (esm-spec §4.7.6).
+    # The flatten path already rejects this via `_check_variable_map_units`
+    # (`DomainUnitMismatchError`); mirror it as a `domain_unit_mismatch` structural
+    # finding at `/coupling/i` so `validate()` catches it without flattening.
+    append!(errors, validate_variable_map_units(file))
+
     # 6. Conflicting derivative detection (§4.7.5 item E). A species cannot
     # have both an explicit D(X, t) = ... equation and a reaction contribution.
     # `_find_conflicting_derivatives` is defined in flatten.jl. The conflict
@@ -761,6 +782,228 @@ function _operator_composed_systems(file::EsmFile)::Set{String}
         union!(names, entry.systems)
     end
     return names
+end
+
+"""
+    validate_variable_map_units(file::EsmFile) -> Vector{StructuralError}
+
+Mirror of the flatten-time [`_check_variable_map_units`](@ref) (coupling_apply.jl)
+as a `validate()` structural check (F-6, esm-spec §4.7.6). A `variable_map`
+coupling entry with `transform == "identity"` whose `from` and `to` variables
+carry DECLARED units that are both present, non-empty, and DIFFERENT is a
+domain-unit mismatch — the identity map asserts the two variables are the same
+quantity, and `K` is not `degC`. Matching or absent units are legal; the
+`param_to_var` and `conversion_factor` transforms are exempt (they are never
+`== "identity"`), and an expression transform is an `ASTExpr`, not the string.
+
+Reported as `domain_unit_mismatch` at the coupling ENTRY pointer `/coupling/i`
+(the corpus pin), not at `/coupling/i/from` — the defect is the pairing, carried
+by the whole entry.
+"""
+function validate_variable_map_units(file::EsmFile)::Vector{StructuralError}
+    errors = StructuralError[]
+    isempty(file.coupling) && return errors
+    for (i, entry) in enumerate(file.coupling)
+        entry isa CouplingVariableMap || continue
+        entry.transform == "identity" || continue
+        src_units = _lookup_variable_units(file, entry.from)
+        tgt_units = _lookup_variable_units(file, entry.to)
+        # Absent (`nothing`) or empty units are legal — the mismatch is only a
+        # defect when BOTH sides declare a real, non-empty unit and they differ.
+        (src_units === nothing || tgt_units === nothing) && continue
+        (isempty(src_units) || isempty(tgt_units)) && continue
+        src_units == tgt_units && continue
+        push!(errors, StructuralError(
+            "/coupling/$(i-1)",
+            "variable_map identity coupling from '$(entry.from)' ($src_units) to " *
+            "'$(entry.to)' ($tgt_units) connects variables with different declared units",
+            "domain_unit_mismatch",
+            Dict{String,Any}("from" => entry.from, "to" => entry.to,
+                             "from_units" => src_units, "to_units" => tgt_units)
+        ))
+    end
+    return errors
+end
+
+"""
+    validate_aggregate_semantics(file::EsmFile) -> Vector{StructuralError}
+
+The three static aggregate/relational checks of F-6. Walks every
+expression-bearing field of every model (and its subsystems) and, for each
+`aggregate` node it finds, applies:
+
+- [`_check_undefined_index_set!`](@ref-less) — a `ranges` `{from: NAME}` whose
+  NAME is not a key of the document `index_sets` registry;
+- [`_check_join_key_type!`] — a value-equality `join` key column resolving to a
+  categorical set with a float/null member;
+- [`_check_relational_in_continuous!`] — a `distinct` node whose key/body reads a
+  STATE variable of the model.
+
+Findings attach at the FIELD pointer (`/models/M/equations/i/rhs`, …), the same
+convention the reference-integrity pass uses.
+"""
+function validate_aggregate_semantics(file::EsmFile)::Vector{StructuralError}
+    errors = StructuralError[]
+    file.models === nothing && return errors
+    registry = Set{String}(keys(file.index_sets))
+    for model_name in sort!(collect(keys(file.models)))
+        _check_model_aggregates!(errors, file, file.models[model_name],
+                                 "/models/$model_name", registry)
+    end
+    return errors
+end
+
+# Per-model driver: compute the model's state-variable set (for the continuous
+# relational check) and walk each of its expression-bearing fields, then recurse
+# into Model subsystems. The `index_sets` registry is document-scoped, so it is
+# threaded down unchanged.
+function _check_model_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
+                                  model::Model, path::String, registry::Set{String})
+    state_vars = Set{String}()
+    for (name, var) in model.variables
+        var.type == StateVariable && push!(state_vars, name)
+    end
+
+    for (i, eq) in enumerate(model.equations)
+        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i-1)/lhs", state_vars, registry)
+        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i-1)/rhs", state_vars, registry)
+    end
+    for name in sort!(collect(keys(model.variables)))
+        expr = model.variables[name].expression
+        expr === nothing && continue
+        _walk_aggregates!(errors, file, expr, "$path/variables/$name/expression", state_vars, registry)
+    end
+    for (i, eq) in enumerate(model.initialization_equations)
+        _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i-1)/lhs", state_vars, registry)
+        _walk_aggregates!(errors, file, eq.rhs, "$path/initialization_equations/$(i-1)/rhs", state_vars, registry)
+    end
+    for name in sort!(collect(keys(model.guesses)))
+        g = model.guesses[name]
+        isa(g, ASTExpr) || continue
+        _walk_aggregates!(errors, file, g, "$path/guesses/$name", state_vars, registry)
+    end
+
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_model_aggregates!(errors, file, subsys, "$path/subsystems/$subsys_name", registry)
+    end
+    return errors
+end
+
+# Descend `expr`; at every `aggregate` node apply the three checks, then recurse
+# into the full expression-bearing child set (so a NESTED aggregate is checked
+# too). `anchor` is the field pointer and stays constant through the descent —
+# a finding attaches at the field, not the leaf.
+function _walk_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
+                           expr::ASTExpr, anchor::String, state_vars::Set{String},
+                           registry::Set{String})
+    isa(expr, OpExpr) || return errors
+    if expr.op == "aggregate"
+        _check_undefined_index_set!(errors, expr, anchor, registry)
+        _check_join_key_type!(errors, file, expr, anchor)
+        _check_relational_in_continuous!(errors, expr, anchor, state_vars)
+    end
+    for c in _expr_children(expr)
+        _walk_aggregates!(errors, file, c, anchor, state_vars, registry)
+    end
+    return errors
+end
+
+# F-6 check: every `{from: NAME}` range of an aggregate must name a declared
+# index set. One finding per DISTINCT undeclared name (a set referenced by two
+# range symbols is one defect).
+function _check_undefined_index_set!(errors::Vector{StructuralError}, agg::OpExpr,
+                                     anchor::String, registry::Set{String})
+    agg.ranges === nothing && return errors
+    reported = Set{String}()
+    for sym in sort!(collect(keys(agg.ranges)))
+        rv = agg.ranges[sym]
+        rv isa IndexSetRef || continue
+        from = rv.from
+        (from in registry || from in reported) && continue
+        push!(reported, from)
+        push!(errors, StructuralError(
+            anchor,
+            "aggregate range '$sym' references index set '$from', which is not " *
+            "declared in the document `index_sets` registry",
+            "undefined_index_set",
+            Dict{String,Any}("index_set" => from, "range" => sym)
+        ))
+    end
+    return errors
+end
+
+# F-6 check: a value-equality `join` may not key on a categorical index set with
+# a float or null member — a float repr is not portable across bindings and a
+# null key is unmatchable (RFC semiring-faq-unified-ir §5.3). One finding per
+# aggregate (the first offending key column).
+function _check_join_key_type!(errors::Vector{StructuralError}, file::EsmFile,
+                               agg::OpExpr, anchor::String)
+    (agg.join === nothing || agg.ranges === nothing) && return errors
+    cols = String[]
+    for clause in agg.join
+        clause isa AbstractVector || continue
+        for pair in clause
+            (pair isa Tuple && length(pair) == 2) || continue
+            push!(cols, String(pair[1]))
+            push!(cols, String(pair[2]))
+        end
+    end
+    for sym in cols
+        rv = get(agg.ranges, sym, nothing)
+        rv isa IndexSetRef || continue
+        iset = get(file.index_sets, rv.from, nothing)
+        iset === nothing && continue
+        _index_set_has_nonportable_key(iset) || continue
+        push!(errors, StructuralError(
+            anchor,
+            "aggregate join key column '$sym' ranges over categorical index set " *
+            "'$(rv.from)', whose members include a non-portable float/null key " *
+            "(value-equality join keys must be integers or strings)",
+            "join_key_invalid_type",
+            Dict{String,Any}("index_set" => rv.from, "column" => sym)
+        ))
+        return errors   # one finding per aggregate is enough
+    end
+    return errors
+end
+
+# A categorical index set whose ORIGINAL members include a float or a JSON null.
+# `members_raw` is populated by the parser ONLY when some member is non-string,
+# so a string-only (or int-only) set never trips this. Ints and strings are fine.
+function _index_set_has_nonportable_key(iset::IndexSet)::Bool
+    iset.kind == "categorical" || return false
+    iset.members_raw === nothing && return false
+    return any(m -> (m isa AbstractFloat) || (m === nothing) || (m === missing),
+               iset.members_raw)
+end
+
+# F-6 check: a `distinct` (value-invention / relational) aggregate whose
+# key / body / filter reads a declared STATE variable classifies CONTINUOUS
+# (class = max over inputs; a state input is continuous), and a relational engine
+# may not run on the per-step hot path (§5.7 guard 2). Mirrors the flatten-time
+# `Cadence.assert_no_continuous_relational` guard, restricted here to the
+# `key`/`expr`/`filter` subtrees (a state read there is the value-invention
+# input) so a `distinct` set former over CONST mesh/parameter literals — e.g.
+# tests/valid/cadence/pure_topology.esm — stays valid.
+function _check_relational_in_continuous!(errors::Vector{StructuralError}, agg::OpExpr,
+                                          anchor::String, state_vars::Set{String})
+    (agg.distinct === true && !isempty(state_vars)) || return errors
+    refs = Set{String}()
+    agg.key       === nothing || _referenced_var_names(agg.key, refs)
+    agg.expr_body === nothing || _referenced_var_names(agg.expr_body, refs)
+    agg.filter    === nothing || _referenced_var_names(agg.filter, refs)
+    hits = intersect(refs, state_vars)
+    isempty(hits) && return errors
+    hit = first(sort!(collect(hits)))
+    push!(errors, StructuralError(
+        anchor,
+        "distinct/value-invention aggregate reads state variable '$hit' in its " *
+        "key/body, classifying it CONTINUOUS — a relational node may not run on " *
+        "the per-step hot path (§5.7 guard 2)",
+        "relational_node_in_continuous",
+        Dict{String,Any}("variable" => hit)
+    ))
+    return errors
 end
 
 """

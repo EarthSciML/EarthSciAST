@@ -77,30 +77,28 @@ func resolverOnlyPins(t *testing.T, repoRoot string) map[string]string {
 	return out
 }
 
-// resolverOnlyInvalidFixtures is resolverOnlyPins reduced to a membership set.
-func resolverOnlyInvalidFixtures(t *testing.T, repoRoot string) map[string]bool {
-	t.Helper()
-	out := make(map[string]bool)
-	for name := range resolverOnlyPins(t, repoRoot) {
-		out[name] = true
-	}
-	return out
-}
-
 // TestAggregateInvalidFixtures asserts every tests/invalid/aggregate/*.esm
-// fixture is handled correctly. Pure schema violations (unregistered semiring,
-// ragged index set missing offsets/values, discrete variable missing shape,
-// join not an array, join `on` pair wrong arity, refresh on a non-discrete
-// variable) are REJECTED — Load returns a non-nil error at schema-validation
-// time. Fixtures flagged `resolver_only` in expected_errors.json are
-// SCHEMA-VALID and rejected only by an evaluating binding's resolver; the
-// schema-only Go binding must ACCEPT those (Load returns nil).
+// fixture is handled correctly, keyed off its pin in expected_errors.json. Three
+// contracts, per the promoted-pin split (Phase 3 F-6):
+//
+//   - Pure schema violations (unregistered semiring, ragged index set missing
+//     offsets/values, discrete variable missing shape, join not an array, join
+//     `on` pair wrong arity, refresh on a non-discrete variable) carry a
+//     `schema_errors` pin and are REJECTED at Load (schema validation fails).
+//   - STRUCTURAL fixtures carry a `structural_errors` pin and NO schema error:
+//     they are SCHEMA-VALID (Load succeeds) but validate() must reject them with
+//     the pinned (code, path). The two F-6 checks in this directory —
+//     undefined_index_set and relational_node_in_continuous — were promoted from
+//     `resolver_only` to structural pins here.
+//   - `resolver_only` fixtures (if any remain) are schema-valid and rejected
+//     only by an evaluating binding's resolver; the schema-only Go binding must
+//     ACCEPT them (Load returns nil, validate() stays clean).
 func TestAggregateInvalidFixtures(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	resolverOnly := resolverOnlyInvalidFixtures(t, repoRoot)
+	pins := loadExpectedPins(t, repoRoot)
 	pattern := filepath.Join(repoRoot, "tests", "invalid", "aggregate", "*.esm")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
@@ -112,19 +110,87 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 	for _, path := range files {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
-			if resolverOnly[name] {
+			pin := pins[name]
+			switch {
+			case pin.ResolverOnly:
 				// Schema-valid; rejected only by a resolver the schema-only Go
 				// binding does not run. Load must ACCEPT it.
 				if _, err := Load(path); err != nil {
 					t.Fatalf("resolver-only fixture %s must pass schema validation, got error: %v", name, err)
 				}
-				return
-			}
-			if _, err := Load(path); err == nil {
-				t.Fatalf("expected %s to be rejected, but it validated", name)
+			case len(pin.SchemaErrors) > 0:
+				// Schema violation: rejected at Load (schema validation).
+				if _, err := Load(path); err == nil {
+					t.Fatalf("expected %s to be rejected at schema validation, but it validated", name)
+				}
+			default:
+				// Schema-valid but structurally invalid: Load succeeds, validate()
+				// rejects with the pinned (code, path).
+				assertStructuralRejection(t, path, name, pin)
 			}
 		})
 	}
+}
+
+// assertStructuralRejection asserts a SCHEMA-VALID fixture loads cleanly yet
+// validate() rejects it (IsValid=false) with every pinned structural (code,
+// path) present in the emitted structural errors.
+func assertStructuralRejection(t *testing.T, path, name string, pin expectedPin) {
+	t.Helper()
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("structural fixture %s must pass schema validation, got error: %v", name, err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	result := ValidateFile(file, string(raw))
+	if result.IsValid {
+		t.Fatalf("expected %s to be rejected by validate(), but it was reported valid", name)
+	}
+	got := make(map[[2]string]bool)
+	for _, se := range result.StructuralErrors {
+		got[[2]string{se.Code, se.Path}] = true
+	}
+	for _, want := range pin.StructuralErrors {
+		if !got[[2]string{want.Code, want.Path}] {
+			t.Fatalf("expected %s to emit structural error (code=%q, path=%q); got %v",
+				name, want.Code, want.Path, result.StructuralErrors)
+		}
+	}
+}
+
+// expectedPin is the subset of an expected_errors.json entry the aggregate
+// fixture tests read: whether the fixture is resolver-only, and its pinned
+// schema / structural findings.
+type expectedPin struct {
+	ResolverOnly bool `json:"resolver_only"`
+	ParseError   bool `json:"parse_error"`
+	SchemaErrors []struct {
+		Path    string `json:"path"`
+		Keyword string `json:"keyword"`
+	} `json:"schema_errors"`
+	StructuralErrors []struct {
+		Path string `json:"path"`
+		Code string `json:"code"`
+	} `json:"structural_errors"`
+}
+
+// loadExpectedPins reads tests/invalid/expected_errors.json into the expectedPin
+// view keyed by fixture basename.
+func loadExpectedPins(t *testing.T, repoRoot string) map[string]expectedPin {
+	t.Helper()
+	path := filepath.Join(repoRoot, "tests", "invalid", "expected_errors.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var pins map[string]expectedPin
+	if err := json.Unmarshal(data, &pins); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return pins
 }
 
 // TestIndexSetsDocumentScopeRoundTrip pins the v0.8.0 relocation of the

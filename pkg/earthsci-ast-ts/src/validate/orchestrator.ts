@@ -37,6 +37,9 @@ import {
   validatePhysicalConstantUnits,
   validateConversionFactorConsistency,
   validateDefaultUnits,
+  validateAggregateJoinKeys,
+  validateAggregateIndexSets,
+  validateRelationalNodesInContinuous,
 } from './model-checks.js'
 import {
   validateReactionConsistency,
@@ -51,6 +54,7 @@ import {
   validateDataLoaderReferences,
   validateDataLoaderExpressions,
   validateCouplingExpressions,
+  validateCouplingDomainUnits,
   validateTemporalResolution,
 } from './coupling-checks.js'
 
@@ -178,6 +182,14 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateConversionFactorConsistency(model, modelPath))
       errors.push(...validateDefaultUnits(model, modelPath))
 
+      // (F-6) Static `aggregate` semantics decidable from this document alone:
+      // a value-equality join key of a non-comparable type, an index-set range
+      // naming an undeclared set, and a relational (value-invention) node that
+      // reads continuous state. Independent of coupling, so run on every model.
+      errors.push(...validateAggregateJoinKeys(model, modelPath, esmFile))
+      errors.push(...validateAggregateIndexSets(model, modelPath, esmFile))
+      errors.push(...validateRelationalNodesInContinuous(model, modelPath))
+
       // Recursively validate subsystems
       if (model.subsystems) {
         for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
@@ -200,6 +212,9 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateEventConsistency(subsystem, subsystemPath, isCoupled))
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
           errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath))
+          errors.push(...validateAggregateJoinKeys(subsystem, subsystemPath, esmFile))
+          errors.push(...validateAggregateIndexSets(subsystem, subsystemPath, esmFile))
+          errors.push(...validateRelationalNodesInContinuous(subsystem, subsystemPath))
         }
       }
     }
@@ -257,6 +272,10 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
   // loader's `unit_conversion`, a coupling `transform`, a connector equation.
   errors.push(...validateDataLoaderExpressions(esmFile))
   errors.push(...validateCouplingExpressions(esmFile))
+
+  // (F-6) Reject an identity variable_map coupling whose endpoints carry
+  // declared, different units (esm-spec §4.7.6).
+  errors.push(...validateCouplingDomainUnits(esmFile))
 
   // Validate temporal resolution in data loaders
   errors.push(...validateTemporalResolution(esmFile))

@@ -1967,10 +1967,13 @@
   },
   "domain_unit_mismatch_identity.esm": {
     "schema_errors": [],
-    "structural_errors": [],
-    "is_valid": true,
-    "resolver_only": true,
-    "resolver_error_code": "domain_unit_mismatch",
+    "structural_errors": [
+      {
+        "path": "/coupling/0",
+        "code": "domain_unit_mismatch"
+      }
+    ],
+    "is_valid": false,
     "notes": "Flatten-level invalid (esm-spec §4.7.6). The document is SCHEMA-VALID (a variable_map identity coupling with declared units is legal schema) and validate()-clean — no binding's validate() checks cross-binding coupling units — so schema-only bindings (TypeScript, Go) accept it (is_valid: true) and their invalid-fixture loops read `resolver_only` and assert schema acceptance. Lives under tests/invalid/coupling/. A variable_map coupling entry with transform=='identity' between two variables whose DECLARED units are both present, non-empty, and DIFFERENT (SystemA.temperature='K' vs SystemB.temperature='degC') MUST be rejected at flatten() with the DomainUnitMismatch flatten error (Julia: DomainUnitMismatchError, raised by _check_variable_map_units in coupling_apply.jl; Rust: FlattenError::DomainUnitMismatch; Python: DomainUnitMismatchError). Matching or absent units are legal (see the positive control tests/valid/coupling_variable_map_identity_units_match.esm). `param_to_var` and `conversion_factor` transforms are exempt. DECISION 2026-07-15: this is a REAL BINDING GAP, not a misfiled fixture. The defect is decidable STATICALLY from this one document -- no evaluation, no solver, no runtime data, no other file. `validate()` MUST catch it. Contrast the genuinely resolver-only pins (template_import_cycle, metaparameter_unbound), which need the IMPORT GRAPH: they must read other files to decide. Per CONFORMANCE_SPEC §7.1.2 `resolver_only` means 'rejected only by an evaluator/resolver a schema-only binding does not run' -- and a check that compares two declared literals is not an evaluator. Kept `resolver_only` ONLY until the five bindings implement the check; promote to a structural pin then. `units_coupling_mismatch.esm` already pins a coupling-unit defect structurally; this is the same class and belongs in the same place."
   },
   "units_incompatible_assignment.esm": {
@@ -2212,34 +2215,46 @@
   },
   "undeclared_from_name.esm": {
     "schema_errors": [],
-    "structural_errors": [],
-    "is_valid": true,
-    "resolver_only": true,
-    "resolver_error_code": "E_REF_UNDECLARED_INDEX_SET",
+    "structural_errors": [
+      {
+        "path": "/models/UndeclaredFrom/equations/0/lhs",
+        "code": "undefined_index_set"
+      }
+    ],
+    "is_valid": false,
     "notes": "Resolver-level invalid (bead ess-my4.1.6; RFC semiring-faq-unified-ir §5.2). The aggregate `ranges` entry references { \"from\": \"ghost_cells\" }, a name absent from the model `index_sets` registry (which declares only \"cells\"). The document is SCHEMA-VALID, so schema-only bindings (TypeScript, Go) accept it (is_valid: true) — their invalid-fixture loops read `resolver_only` and assert schema acceptance instead of rejection. The evaluating bindings reject the undeclared name: Julia build_evaluator -> TreeWalkError E_TREEWALK_UNDECLARED_INDEX_SET; Rust resolve_aggregate_ranges -> CompileError::InterpreterBuildError; Python build_reference_graph -> ReferenceResolutionError E_REF_UNDECLARED_INDEX_SET."
   },
   "continuous_relational_node.esm": {
     "schema_errors": [],
-    "structural_errors": [],
-    "is_valid": true,
-    "resolver_only": true,
-    "resolver_error_code": "CadenceError",
+    "structural_errors": [
+      {
+        "path": "/models/ContinuousRelationalNode/equations/0/rhs",
+        "code": "relational_node_in_continuous"
+      }
+    ],
+    "is_valid": false,
     "notes": "Cadence-partition-level invalid (bead ess-my4.3.11; RFC semiring-faq-unified-ir §6.1, CONFORMANCE_SPEC.md §5.7.6 guard 2). A relational/value-invention `aggregate` (`distinct: true` under `bool_and_or`) whose Skolem `key` reads the `state` variable `u`, so the partition pass classifies the node CONTINUOUS (class = max over inputs) and guard 2 — no relational engine on the hot path — rejects it. The document is SCHEMA-VALID (esm-schema.json does not encode cadence; a state-dependent distinct is well-formed), so schema-only bindings (TypeScript, Go) accept it (is_valid: true): the TS conformance.test.ts recursive invalid sweep reads `resolver_only` and asserts schema acceptance, and the Go aggregate glob (tests/invalid/aggregate/*.esm) loads it without error. The evaluating bindings reject it via the cadence guard: Julia Cadence.run_guards -> CadenceError; Rust cadence::partition_model -> Err(CadenceError); Python cadence.partition -> CadenceError (message contains 'CONTINUOUS'). Contrast tests/valid/cadence/pure_topology.esm, where the same primitives over CONST mesh literals fold into the artifact and are allowed."
   },
   "float_join_key.esm": {
     "schema_errors": [],
-    "structural_errors": [],
-    "is_valid": true,
-    "resolver_only": true,
-    "resolver_error_code": "join_key_invalid_type",
+    "structural_errors": [
+      {
+        "path": "/models/FloatJoinKey/equations/0/rhs",
+        "code": "join_key_invalid_type"
+      }
+    ],
+    "is_valid": false,
     "notes": "Resolver/build-time invalid (bead ess-my4.2.5; RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1). The categorical index set `keys` declares FLOAT members [1.5, 2.5] used as a value-equality join key column. Floating-point join keys are forbidden because equality on a float repr is not portable across bindings (CONFORMANCE_SPEC.md §5.5.1 rule 1). The document is SCHEMA-VALID — the schema's categorical `members` is an untyped array — so schema-only bindings (TypeScript, Go) accept it (is_valid: true): the TS conformance.test.ts recursive invalid sweep reads `resolver_only` and asserts schema acceptance, and the Go aggregate glob (tests/invalid/aggregate/*.esm) is non-recursive so it never descends into the build_time/ subdir. The evaluating bindings reject it at build: Rust Key::try_from_json -> FloatKeyError ('float … forbidden in a relational key'); Julia build_evaluator -> TreeWalkError (message names the float); Python simulate -> raises / success=False. Lives under tests/invalid/aggregate/build_time/. DECISION 2026-07-15: this is a REAL BINDING GAP, not a misfiled fixture. The defect is decidable STATICALLY from this one document -- no evaluation, no solver, no runtime data, no other file. `validate()` MUST catch it. Contrast the genuinely resolver-only pins (template_import_cycle, metaparameter_unbound), which need the IMPORT GRAPH: they must read other files to decide. Per CONFORMANCE_SPEC §7.1.2 `resolver_only` means 'rejected only by an evaluator/resolver a schema-only binding does not run' -- and a check that compares two declared literals is not an evaluator. Kept `resolver_only` ONLY until the five bindings implement the check; promote to a structural pin then. The old code `FloatKeyError` was not a real diagnostic: CamelCase, and absent from both specs, where every legitimate code is snake_case and listed."
   },
   "null_in_key_column.esm": {
     "schema_errors": [],
-    "structural_errors": [],
-    "is_valid": true,
-    "resolver_only": true,
-    "resolver_error_code": "join_key_invalid_type",
+    "structural_errors": [
+      {
+        "path": "/models/NullInKeyColumn/equations/0/rhs",
+        "code": "join_key_invalid_type"
+      }
+    ],
+    "is_valid": false,
     "notes": "Resolver/build-time invalid (bead ess-my4.2.5; RFC semiring-faq-unified-ir §5.3). The categorical index set `keys` declares members [\"x\", null]; emitting a NULL into a value-equality join key column is a front-end error surfaced at build time, never silently dropped (a null key is unmatchable and nulls never compare equal). The document is SCHEMA-VALID — the schema's categorical `members` is an untyped array — so schema-only bindings (TypeScript, Go) accept it (is_valid: true): the TS conformance.test.ts recursive invalid sweep reads `resolver_only` and asserts schema acceptance, and the Go aggregate glob (tests/invalid/aggregate/*.esm) is non-recursive so it never descends into the build_time/ subdir. The evaluating bindings reject it at build: Rust Key::try_from_json -> FloatKeyError ('unsupported relational key component null'); Julia build_evaluator -> TreeWalkError (message names null); Python simulate -> raises / success=False. Lives under tests/invalid/aggregate/build_time/. DECISION 2026-07-15: this is a REAL BINDING GAP, not a misfiled fixture. The defect is decidable STATICALLY from this one document -- no evaluation, no solver, no runtime data, no other file. `validate()` MUST catch it. Contrast the genuinely resolver-only pins (template_import_cycle, metaparameter_unbound), which need the IMPORT GRAPH: they must read other files to decide. Per CONFORMANCE_SPEC §7.1.2 `resolver_only` means 'rejected only by an evaluator/resolver a schema-only binding does not run' -- and a check that compares two declared literals is not an evaluator. Kept `resolver_only` ONLY until the five bindings implement the check; promote to a structural pin then. The old code was `FloatKeyError` -- WRONG: the offending member is NULL, not a float. Two different defects were pinned under one bogus code."
   },
   "ic_in_reaction_system.esm": {

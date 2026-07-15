@@ -36,6 +36,7 @@ from earthsci_ast.reference_resolution import (
     build_reference_graph,
 )
 from earthsci_ast.simulation import simulate
+from earthsci_ast.validation import validate
 
 
 _FIXTURES_DIR = VALID_DIR / "aggregate"
@@ -154,25 +155,38 @@ def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
 
 
 def test_undeclared_from_name_rejected_by_resolver() -> None:
-    """Resolver-level invalid fixture (bead ess-my4.1.6; RFC §5.2).
+    """Undeclared-index-set fixture (bead ess-my4.1.6; RFC §5.2).
 
-    An aggregate ``{from}`` range naming an index set absent from the model
-    ``index_sets`` registry is SCHEMA-VALID (so :func:`load` succeeds) but
-    rejected by the build-time index-set-registry resolver
-    (:func:`build_reference_graph`), which raises ``ReferenceResolutionError``
-    with code ``E_REF_UNDECLARED_INDEX_SET`` and names the offending set. No
-    implicit interval is inferred for an undeclared name. Schema-only bindings
-    (TypeScript/Go) accept it; see ``tests/invalid/expected_errors.json``.
+    An aggregate ``{from}`` range naming an index set absent from the document
+    ``index_sets`` registry.
+
+    F-6 (2026-07-15): this defect is decidable STATICALLY from the single
+    document, so it is now promoted from ``resolver_only`` to a structural pin
+    (``tests/invalid/expected_errors.json``: ``undefined_index_set`` @
+    ``/models/UndeclaredFrom/equations/0/lhs``). ``validate()`` therefore REJECTS
+    it — via the raw-dict structural check in ``structural_checks`` — instead of
+    accepting it and deferring to the resolver. The lower-level build-time
+    resolver rejection (:func:`build_reference_graph`) is retained below as a
+    second, independent line of defense.
     """
     path = _INVALID_FIXTURES_DIR / "undeclared_from_name.esm"
     assert path.is_file(), f"missing fixture: {path}"
 
-    # Schema-valid: the typed loader accepts it (the resolver is a separate pass).
-    load(path)
-
-    # The build-time resolver rejects the undeclared `{from}`, naming it.
-    # index_sets is document-scoped (v0.8.0): thread the top-level registry in.
     raw = json.loads(path.read_text())
+
+    # Statically rejected at validate() time with the pinned (code, path).
+    result = validate(raw, base_path=str(path.parent))
+    assert not result.is_valid
+    assert (
+        "undefined_index_set",
+        "/models/UndeclaredFrom/equations/0/lhs",
+    ) in {(e.code, e.path) for e in result.structural_errors}, [
+        (e.code, e.path) for e in result.structural_errors
+    ]
+
+    # The build-time index-set-registry resolver also rejects the undeclared
+    # `{from}`, naming it (a separate lower-level pass over the raw model dict).
+    # index_sets is document-scoped (v0.8.0): thread the top-level registry in.
     model_name, model = next(iter(raw["models"].items()))
     with pytest.raises(ReferenceResolutionError) as exc:
         build_reference_graph(model, model_name, index_sets=raw.get("index_sets"))
@@ -204,23 +218,26 @@ def test_build_time_invalid_fixtures_present() -> None:
 
 @pytest.mark.parametrize("fixture_path", _build_time_invalid_fixtures(), ids=lambda p: p.name)
 def test_build_time_invalid_join_key_rejected(fixture_path: Path) -> None:
-    """A float or null member in a join key column is schema-valid but a
-    build-time error (RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1): equality
-    on a float repr is not portable, and a null emitted into a key column is a
-    front-end error. These live under ``build_time/`` (skipped by the Go/TS
-    schema harness, which globs the parent directory non-recursively) and must
-    be rejected by the evaluating binding — ``simulate`` either raises or
-    reports ``success=False``, never silently bucketing on a non-portable key.
+    """A float or null member in a value-equality join key column (RFC
+    semiring-faq-unified-ir §5.3 / §5.7 rule 1): equality on a float repr is not
+    portable, and a null emitted into a key column is a front-end error.
+
+    F-6 (2026-07-15): this defect is decidable STATICALLY from the single
+    document, so it is now promoted from ``resolver_only`` to a structural pin
+    (``tests/invalid/expected_errors.json``: ``join_key_invalid_type`` @
+    ``/models/<M>/equations/0/rhs``). ``validate()`` REJECTS it — via the
+    raw-dict structural check in ``structural_checks`` — rather than accepting it
+    and deferring the rejection to ``simulate``. (Because the defect is now
+    caught at load/validate time, ``load`` itself raises, so the former
+    ``simulate``-based check is no longer reachable.)
     """
-    esm_file = load(fixture_path)
-    rejected = False
-    try:
-        result = simulate(esm_file, tspan=(0.0, 1.0), initial_conditions={"count": 0.0})
-        rejected = not result.success
-    except Exception:
-        # A raised interpreter/simulation error is an equally valid rejection.
-        rejected = True
-    assert rejected, (
-        f"{fixture_path.name}: expected a build-time rejection of the invalid "
-        "join key, but simulate succeeded"
-    )
+    raw = json.loads(fixture_path.read_text())
+    model_name = next(iter(raw["models"]))
+    result = validate(raw, base_path=str(fixture_path.parent))
+    assert not result.is_valid, f"{fixture_path.name}: expected a structural rejection"
+    assert (
+        "join_key_invalid_type",
+        f"/models/{model_name}/equations/0/rhs",
+    ) in {(e.code, e.path) for e in result.structural_errors}, [
+        (e.code, e.path) for e in result.structural_errors
+    ]

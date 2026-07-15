@@ -7,6 +7,8 @@
 import { ERROR_CODES } from '../errors.js'
 import type {
   EsmFile,
+  Model,
+  ReactionSystem,
   Expression,
   CouplingOperatorCompose,
   CouplingCouple,
@@ -372,6 +374,86 @@ export function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[
     }
   }
 
+  return errors
+}
+
+/**
+ * The declared units of a dot-qualified variable (`SystemA.temperature`,
+ * `Meteorology.Temperature.surface_temp`), or undefined when the variable is
+ * missing or carries no declared units. Navigates model subsystems and looks a
+ * reaction system's species / parameters up by key. Mirrors the Python /
+ * Julia `_lookup_variable_units` used by the flatten-time §4.7.6 preflight.
+ */
+function lookupVariableUnits(esmFile: EsmFile, qualified: string): string | undefined {
+  const parts = qualified.split('.')
+  if (parts.length < 2) return undefined
+  const [head, ...tail] = parts
+
+  const model = esmFile.models?.[head]
+  if (model && !('ref' in model) && !('kind' in model)) {
+    let current: Model = model as Model
+    for (const segment of tail.slice(0, -1)) {
+      const sub = current.subsystems?.[segment]
+      if (!sub || 'ref' in sub || 'kind' in sub) return undefined
+      current = sub as Model
+    }
+    return current.variables?.[tail[tail.length - 1]]?.units
+  }
+
+  const rs = esmFile.reaction_systems?.[head]
+  if (rs && !('ref' in rs)) {
+    let current: ReactionSystem = rs as ReactionSystem
+    for (const segment of tail.slice(0, -1)) {
+      const sub = current.subsystems?.[segment]
+      if (!sub || 'ref' in sub) return undefined
+      current = sub as ReactionSystem
+    }
+    const name = tail[tail.length - 1]
+    return current.species?.[name]?.units ?? current.parameters?.[name]?.units
+  }
+
+  return undefined
+}
+
+/**
+ * (F-6) `domain_unit_mismatch` — reject an `identity`-transform `variable_map`
+ * coupling whose `from` and `to` variables carry declared units that are both
+ * present, non-empty, and DIFFERENT (esm-spec §4.7.6). An identity map asserts
+ * the two domains are the same quantity in the same units; `K` on one side and
+ * `degC` on the other is a modelling error the flatten-time preflight in the
+ * evaluating bindings (Julia/Python/Rust `_check_variable_map_units`) already
+ * catches — this lifts that check into `validate()`.
+ *
+ * Comparison is by unit STRING, not dimension: `K` and `degC` share the
+ * temperature dimension yet are not interchangeable under identity. Matching or
+ * absent units are legal (positive control:
+ * `tests/valid/coupling_variable_map_identity_units_match.esm`). `param_to_var`
+ * and `conversion_factor` transforms are EXEMPT (an Expression transform is not
+ * `"identity"` either, so it is skipped).
+ */
+export function validateCouplingDomainUnits(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!esmFile.coupling) return errors
+
+  for (let i = 0; i < esmFile.coupling.length; i++) {
+    const entry = esmFile.coupling[i]
+    if (entry.type !== 'variable_map') continue
+    const vm = entry as CouplingVariableMap
+    if (vm.transform !== 'identity') continue
+    if (typeof vm.from !== 'string' || typeof vm.to !== 'string') continue
+
+    const fromUnits = lookupVariableUnits(esmFile, vm.from)
+    const toUnits = lookupVariableUnits(esmFile, vm.to)
+    // Absent or empty on either side ⇒ nothing to prove; equal ⇒ fine.
+    if (!fromUnits || !toUnits || fromUnits === toUnits) continue
+
+    errors.push({
+      path: `/coupling/${i}`,
+      code: ERROR_CODES.DOMAIN_UNIT_MISMATCH,
+      message: `identity variable_map couples "${vm.from}" (units "${fromUnits}") to "${vm.to}" (units "${toUnits}"); an identity mapping requires matching units`,
+      details: { from: vm.from, to: vm.to, from_units: fromUnits, to_units: toUnits },
+    })
+  }
   return errors
 }
 

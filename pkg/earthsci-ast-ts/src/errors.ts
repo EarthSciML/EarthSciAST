@@ -19,6 +19,29 @@ export const ERROR_CODES = {
   ANALYSIS: 'analysis',
   CIRCULAR_DEPENDENCY: 'circular_dependency',
   DIMENSIONAL_MISMATCH: 'dimensional_mismatch',
+  // ---- F-6 static aggregate / coupling semantics (model-checks.ts,
+  //      coupling-checks.ts). Statically decidable from the SINGLE document,
+  //      pinned as STRUCTURAL findings by tests/invalid/expected_errors.json.
+  //      Values coordinated across all bindings (Julia/Rust/Python/Go/TS). ----
+  //
+  // `join_key_invalid_type` — an `aggregate` value-equality `join` whose key
+  //   columns come from a categorical index set with a FLOAT or NULL member
+  //   (floats aren't portably equality-comparable; null is unmatchable).
+  //   RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1.
+  JOIN_KEY_INVALID_TYPE: 'join_key_invalid_type',
+  // `domain_unit_mismatch` — an `identity`-transform `variable_map` coupling
+  //   whose `from`/`to` variables carry declared, non-empty, DIFFERENT units
+  //   (esm-spec §4.7.6). `param_to_var` / `conversion_factor` are exempt.
+  DOMAIN_UNIT_MISMATCH: 'domain_unit_mismatch',
+  // `relational_node_in_continuous` — a relational / value-invention
+  //   `aggregate` (`distinct: true` under `bool_and_or`) whose `key`/`expr`
+  //   reads a declared STATE variable, so the cadence partition would class the
+  //   node CONTINUOUS — forbidden on the hot path (CONFORMANCE_SPEC §5.7 guard 2).
+  RELATIONAL_NODE_IN_CONTINUOUS: 'relational_node_in_continuous',
+  // `undefined_index_set` — an `aggregate` `ranges` entry `{ from: NAME }`
+  //   naming an index set absent from the document `index_sets` registry
+  //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
+  UNDEFINED_INDEX_SET: 'undefined_index_set',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   EVENT_VAR_UNDECLARED: 'event_var_undeclared',
   FACTOR_WITH_EXPRESSION_TRANSFORM: 'factor_with_expression_transform',

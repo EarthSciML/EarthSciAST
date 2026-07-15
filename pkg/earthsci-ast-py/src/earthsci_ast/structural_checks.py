@@ -446,6 +446,159 @@ def _iter_region_bounds(expr):
             yield item
 
 
+# The value-invention / index-set-producing semirings (RFC semiring-faq-unified-ir
+# §5.1). ``bool_and_or`` (⊕=or) is the only BOOLEAN/RELATIONAL semiring in the
+# closed registry; the numeric ones (sum_product / max_product / min_sum /
+# max_sum) are not value-inventing. Kept as a set so a future relational semiring
+# extends it in one place.
+_RELATIONAL_SEMIRINGS: frozenset[str] = frozenset({"bool_and_or"})
+
+
+def _iter_aggregate_nodes(expr):
+    """Yield every ``op:"aggregate"`` node reachable from ``expr`` (depth-first,
+    including aggregates nested inside another aggregate's child fields)."""
+    if isinstance(expr, dict):
+        if expr.get("op") == "aggregate":
+            yield expr
+        for value in expr.values():
+            yield from _iter_aggregate_nodes(value)
+    elif isinstance(expr, list):
+        for value in expr:
+            yield from _iter_aggregate_nodes(value)
+
+
+def _join_key_columns(agg: dict[str, Any]) -> set[str]:
+    """Range-variable names used as value-equality join key columns by any
+    ``join`` clause carrying ``on`` on this aggregate (RFC §5.3). A clause is
+    ``{"on": [[left, right], ...]}``; each column is a range-variable name."""
+    cols: set[str] = set()
+    for clause in agg.get("join") or []:
+        if not isinstance(clause, dict):
+            continue
+        for pair in clause.get("on") or []:
+            if isinstance(pair, list):
+                cols.update(c for c in pair if isinstance(c, str))
+            elif isinstance(pair, str):
+                cols.add(pair)
+    return cols
+
+
+def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
+    """Three statically-decidable ``aggregate`` defects that are SCHEMA-VALID (so
+    they slip past JSON Schema), each reported at the CONTAINING expression field
+    (equation side / observed expression — the Phase-2 pointer convention):
+
+    * ``join_key_invalid_type`` — a value-equality ``join`` (a clause carrying
+      ``on``) whose key column resolves through ``ranges[col].from`` to a
+      *categorical* index set whose ``members`` contain a FLOAT or NULL. Floats
+      are not portably equality-comparable and null is unmatchable as a key
+      (RFC §5.3 / §5.7 rule 1; CONFORMANCE_SPEC §5.5.1 rule 1). Ints/strings pass.
+    * ``relational_node_in_continuous`` — a value-invention aggregate
+      (``distinct: true`` under a relational/boolean semiring) whose ``key``/``expr``
+      reads a declared STATE variable, so the cadence partition classifies the
+      node CONTINUOUS and state-dependent topology would run on the per-step hot
+      path (RFC §6.1; CONFORMANCE_SPEC §5.7.6 guard 2). A ``distinct`` over CONST
+      mesh literals / parameters is allowed (positive control:
+      ``tests/valid/cadence/pure_topology.esm``).
+    * ``undefined_index_set`` — a ``ranges`` entry ``{"from": NAME}`` whose NAME
+      is not a key of the document ``index_sets`` registry (RFC §5.2).
+
+    Emitted as ``(code, json_pointer, message, details)`` 4-tuples so each finding
+    carries its own code (the collect-level code is a fallback only), deduped per
+    ``(code, pointer)``.
+    """
+    index_sets = data.get("index_sets") or {}
+    seen: set[tuple[str, str]] = set()
+
+    def emit(code: str, pointer: str, message: str, details: dict) -> None:
+        if (code, pointer) in seen:
+            return
+        seen.add((code, pointer))
+        errors.append((code, pointer, message, details))
+
+    for mname, m in (data.get("models") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        state_vars = {
+            n
+            for n, v in (m.get("variables") or {}).items()
+            if isinstance(v, dict) and v.get("type") == "state"
+        }
+        for site in _model_expression_sites(m, mname):
+            location, expr = site[0], site[1]
+            pointer = _pointer(location)
+            for agg in _iter_aggregate_nodes(expr):
+                ranges = agg.get("ranges") or {}
+
+                # --- undefined_index_set: a {"from": NAME} not in the registry.
+                for spec in ranges.values() if isinstance(ranges, dict) else []:
+                    if isinstance(spec, dict):
+                        name = spec.get("from")
+                        if isinstance(name, str) and name not in index_sets:
+                            emit(
+                                "undefined_index_set",
+                                pointer,
+                                f"aggregate range references undeclared index set "
+                                f"'{name}' (declared: {sorted(index_sets)})",
+                                {"index_set": name, "declared": sorted(index_sets)},
+                            )
+
+                # --- join_key_invalid_type: a value-equality join key column
+                # drawn from a categorical set with a float/null member.
+                if isinstance(ranges, dict):
+                    for col in _join_key_columns(agg):
+                        spec = ranges.get(col)
+                        if not isinstance(spec, dict):
+                            continue
+                        iset = index_sets.get(spec.get("from"))
+                        if not (isinstance(iset, dict) and iset.get("kind") == "categorical"):
+                            continue
+                        for mem in iset.get("members") or []:
+                            # bool is a subclass of int, not float, so booleans
+                            # pass; only genuine floats and null are rejected.
+                            if mem is None or isinstance(mem, float):
+                                kind = "null" if mem is None else "float"
+                                emit(
+                                    "join_key_invalid_type",
+                                    pointer,
+                                    f"join key column '{col}' draws from categorical "
+                                    f"index set '{spec.get('from')}' with a {kind} "
+                                    f"member ({mem!r}); floats and null are invalid "
+                                    f"join keys",
+                                    {
+                                        "column": col,
+                                        "index_set": spec.get("from"),
+                                        "member": mem,
+                                    },
+                                )
+                                break
+
+                # --- relational_node_in_continuous: a distinct value-invention
+                # node under a relational semiring that reads a STATE variable.
+                if (
+                    agg.get("distinct") is True
+                    and agg.get("semiring") in _RELATIONAL_SEMIRINGS
+                ):
+                    refs = _bare_string_leaves(agg.get("key")) | _bare_string_leaves(
+                        agg.get("expr")
+                    )
+                    hit = refs & state_vars
+                    if hit:
+                        emit(
+                            "relational_node_in_continuous",
+                            pointer,
+                            f"value-invention aggregate (distinct under "
+                            f"{agg.get('semiring')!r}) reads state variable(s) "
+                            f"{sorted(hit)} in its key/expr, classifying the node "
+                            f"CONTINUOUS; state-dependent relational topology may "
+                            f"not run on the per-step hot path",
+                            {
+                                "state_variables": sorted(hit),
+                                "semiring": agg.get("semiring"),
+                            },
+                        )
+
+
 def _check_expression_arity(expr, errors: list[str], path: str) -> None:
     """Walk an expression tree and check operator arity."""
     if isinstance(expr, dict) and "op" in expr and "args" in expr:
@@ -2135,6 +2288,11 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # `undefined_variable` and Python was the only binding spelling it otherwise
     # — a cross-language conformance gap, not a cosmetic one.
     collect("undefined_variable", lambda sub: _check_variable_references(data, tables, sub))
+    # Three statically-decidable aggregate defects (join_key_invalid_type,
+    # relational_node_in_continuous, undefined_index_set). Each finding carries
+    # its own explicit code via a 4-tuple, so the collect-level code is only a
+    # fallback label. F-6 (five static validate() checks).
+    collect("aggregate_semantics", lambda sub: _check_aggregate_semantics(data, sub))
     # A coupling edge's `from` is a FULLY-QUALIFIED scoped reference (§4.6), so an
     # unresolvable one is an `unresolved_scoped_ref`, not a bare
     # `undefined_variable` (CONFORMANCE_SPEC §7.1; TypeScript reference).

@@ -95,6 +95,41 @@ pub(crate) fn validate_coupling(
                     "variable_map",
                     errors,
                 );
+                // esm-spec §4.7.6: an `identity` variable_map asserts the two
+                // ends are the SAME quantity, so declared, non-empty, DIFFERING
+                // units on `from` vs `to` are a modeling error. This is the same
+                // check `crate::flatten::check_variable_map_units` runs at
+                // flatten time (raising `FlattenError::DomainUnitMismatch`),
+                // mirrored into `validate()` as a static structural finding at
+                // the coupling-entry pointer. `param_to_var` / `conversion_factor`
+                // / expression transforms are exempt (the conversion is declared,
+                // or the mapping does not imply unit equivalence at the site), and
+                // a missing/empty unit on either side is the valid unchecked case.
+                if transform.as_named() == Some("identity")
+                    && let (Some(source_units), Some(target_units)) = (
+                        crate::flatten::lookup_variable_units(esm_file, from),
+                        crate::flatten::lookup_variable_units(esm_file, to),
+                    )
+                    && !source_units.is_empty()
+                    && !target_units.is_empty()
+                    && source_units != target_units
+                {
+                    errors.push(StructuralError {
+                        path: coupling_path.clone(),
+                        code: StructuralErrorCode::DomainUnitMismatch,
+                        message: format!(
+                            "variable_map({from} -> {to}, identity): declared units '{source_units}' and '{target_units}' differ; an identity map requires matching units"
+                        ),
+                        details: serde_json::json!({
+                            "coupling_type": "variable_map",
+                            "from": from,
+                            "to": to,
+                            "source_units": source_units,
+                            "target_units": target_units,
+                        }),
+                    });
+                }
+
                 // An expression transform spells its own arithmetic, so a
                 // separate `factor` slot is a modeling error (esm-spec §10.4)
                 // — rejected rather than silently ignored, mirroring the

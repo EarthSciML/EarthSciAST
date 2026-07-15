@@ -786,6 +786,13 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 		event := event
 		s.validateContinuousEvent(&event, eventVars, fmt.Sprintf("%s/continuous_events/%d", basePath, i), modelName)
 	}
+
+	// F-6 static aggregate checks: join-key type, undeclared index set, and
+	// relational-node-in-continuous. These are decidable from this single
+	// document (they inspect the aggregate nodes against the model's own state
+	// variables and the document `index_sets` registry) and run regardless of
+	// whether the model is coupled. See validate_static_checks.go.
+	s.validateModelStaticAggregateChecks(modelName, model, basePath)
 }
 
 // validateExpressionVariables checks that every variable referenced in an
@@ -1655,6 +1662,10 @@ func (s *structuralScan) validateCouplingReferences() {
 				s.validateExpressionVariables(c.Transform, s.couplingScope(),
 					fmt.Sprintf("%s/transform", basePath), "")
 			}
+			// F-6 domain_unit_mismatch: an identity mapping between two variables
+			// whose declared units differ is invalid (esm-spec §4.7.6). See
+			// validate_static_checks.go.
+			s.checkVariableMapUnits(c, basePath, i)
 		case OperatorApplyCoupling:
 			// `operator_apply` was removed in v0.3.0 along with the top-level
 			// `operators` block. Surface a structural error if a v0.2.x file

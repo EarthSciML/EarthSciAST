@@ -1109,3 +1109,105 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
         "a plain coefficient over identical units must NOT be reported"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F-6: five statically-decidable checks promoted from resolver_only to
+// structural findings. Each fixture is SCHEMA-VALID (it `load`s cleanly) but
+// `validate()` must now reject it with the pinned (code, path). The pins live
+// in tests/invalid/expected_errors.json.
+// ---------------------------------------------------------------------------
+
+/// Assert `validate()` emits exactly the pinned (code, path) somewhere in its
+/// structural errors, and the document is invalid.
+fn assert_structural(fixture: &str, code: StructuralErrorCode, path: &str) {
+    let esm = load(fixture).expect("F-6 fixtures are schema-valid and must load");
+    let result = validate(&esm);
+    assert!(!result.is_valid, "expected rejection, got valid");
+    assert!(
+        result
+            .structural_errors
+            .iter()
+            .any(|e| std::mem::discriminant(&e.code) == std::mem::discriminant(&code)
+                && e.path == path),
+        "expected {code} @ {path}; got {:?}",
+        result
+            .structural_errors
+            .iter()
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A value-equality join over a categorical index set with FLOAT members is a
+/// forbidden join key (equality is not portable across bindings).
+#[test]
+fn test_f6_float_join_key() {
+    assert_structural(
+        include_str!("../../../tests/invalid/aggregate/build_time/float_join_key.esm"),
+        StructuralErrorCode::JoinKeyInvalidType,
+        "/models/FloatJoinKey/equations/0/rhs",
+    );
+}
+
+/// A value-equality join over a categorical index set with a NULL member is a
+/// forbidden join key (a null is unmatchable and never compares equal).
+#[test]
+fn test_f6_null_in_key_column() {
+    assert_structural(
+        include_str!("../../../tests/invalid/aggregate/build_time/null_in_key_column.esm"),
+        StructuralErrorCode::JoinKeyInvalidType,
+        "/models/NullInKeyColumn/equations/0/rhs",
+    );
+}
+
+/// A `distinct` value-invention aggregate whose Skolem key reads a state
+/// variable classifies CONTINUOUS and is rejected (no relational engine on the
+/// hot path).
+#[test]
+fn test_f6_continuous_relational_node() {
+    assert_structural(
+        include_str!("../../../tests/invalid/aggregate/continuous_relational_node.esm"),
+        StructuralErrorCode::RelationalNodeInContinuous,
+        "/models/ContinuousRelationalNode/equations/0/rhs",
+    );
+}
+
+/// An aggregate `ranges` entry `{from: NAME}` naming an index set absent from
+/// the document registry is rejected (no implicit interval inference).
+#[test]
+fn test_f6_undefined_index_set() {
+    assert_structural(
+        include_str!("../../../tests/invalid/aggregate/undeclared_from_name.esm"),
+        StructuralErrorCode::UndefinedIndexSet,
+        "/models/UndeclaredFrom/equations/0/lhs",
+    );
+}
+
+/// An `identity` variable_map bridging two variables with declared, non-empty,
+/// differing units (K vs degC) is rejected at the coupling entry.
+#[test]
+fn test_f6_domain_unit_mismatch_identity() {
+    assert_structural(
+        include_str!("../../../tests/invalid/coupling/domain_unit_mismatch_identity.esm"),
+        StructuralErrorCode::DomainUnitMismatch,
+        "/coupling/0",
+    );
+}
+
+/// Positive controls: the two valid fixtures that share these primitives must
+/// stay valid — the checks reject only their target, never a well-formed doc.
+#[test]
+fn test_f6_positive_controls_stay_valid() {
+    for fixture in [
+        include_str!("../../../tests/valid/coupling_variable_map_identity_units_match.esm"),
+        include_str!("../../../tests/valid/cadence/pure_topology.esm"),
+    ] {
+        let esm = load(fixture).expect("positive control loads");
+        let result = validate(&esm);
+        assert!(
+            result.is_valid,
+            "positive control must stay valid; got {:?}",
+            result.structural_errors
+        );
+    }
+}

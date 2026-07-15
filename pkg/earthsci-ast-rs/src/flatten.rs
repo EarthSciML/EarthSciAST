@@ -1653,7 +1653,7 @@ fn check_variable_map_units(file: &EsmFile) -> Result<(), FlattenError> {
 /// and reaction systems (species + parameters). Returns `None` when the
 /// variable is missing or carries no declared units. Mirrors Julia's
 /// `_lookup_variable_units` (coupling_apply.jl).
-fn lookup_variable_units(file: &EsmFile, qualified: &str) -> Option<String> {
+pub(crate) fn lookup_variable_units(file: &EsmFile, qualified: &str) -> Option<String> {
     let (root, tail) = qualified.split_once('.')?;
     if let Some(models) = &file.models
         && let Some(model) = models.get(root)

@@ -108,6 +108,10 @@ class ErrorCode(Enum):
     # to fix a spelling, the other to fix the physics.
     UNIT_PARSE_ERROR = "unit_parse_error"
     UNIT_INCONSISTENCY = "unit_inconsistency"
+    # §4.7.6: a variable_map identity coupling between two variables whose
+    # declared units are both present and DIFFERENT (statically decidable from a
+    # single document; mirrors flatten's DomainUnitMismatchError into validate()).
+    DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch"
     UNDECLARED_READ_PARAMETER = "undeclared_read_parameter"
     UNDECLARED_MODIFIED_PARAMETER = "undeclared_modified_parameter"
     # Phase markers used when load()/validate() fails wholesale.

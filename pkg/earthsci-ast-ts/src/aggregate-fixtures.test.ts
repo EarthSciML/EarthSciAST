@@ -59,38 +59,61 @@ describe('Aggregate / semiring fixtures', () => {
     const invalidFiles = esmFilesIn(join(testsDir, 'invalid', 'aggregate'))
 
     // Resolver-only invalid fixtures are SCHEMA-VALID but rejected only by an
-    // evaluator/resolver the schema-only TS binding does not run — e.g. an
-    // `aggregate` `{ from }` range naming an index set absent from the model
-    // registry (RFC semiring-faq-unified-ir §5.2). tests/invalid/
-    // expected_errors.json marks them `resolver_only: true`; for those the
-    // schema validator must ACCEPT the document, so this loop asserts schema
-    // acceptance instead of rejection (the rejection is asserted by the
-    // Julia/Rust/Python evaluator suites). Mirrors the resolver-aware handling
-    // in conformance.test.ts and the Go aggregate_fixtures_test.go. See bead
-    // ess-my4.1.6.
+    // evaluator/resolver the schema-only TS binding does not run (e.g. a genuine
+    // template-import cycle needing the import graph). tests/invalid/
+    // expected_errors.json marks those `resolver_only: true`; for them the schema
+    // validator must ACCEPT the document, so this loop asserts schema acceptance.
+    //
+    // The F-6 fixtures that USED to be `resolver_only` — `continuous_relational_node`
+    // (relational_node_in_continuous) and `undeclared_from_name` (undefined_index_set)
+    // — are now PROMOTED to STRUCTURAL pins (bead ess-my4; DECISION 2026-07-15:
+    // decidable from the single document, so validate() must reject them). They are
+    // still SCHEMA-valid, so schema alone does NOT reject them — the assertion below
+    // is against the full validate() pipeline (is_valid === false) and the pinned
+    // structural code, which is exactly what the promotion requires.
     const expectedErrors = JSON.parse(
       readFileSync(join(testsDir, 'invalid', 'expected_errors.json'), 'utf-8'),
-    ) as Record<string, { resolver_only?: boolean }>
+    ) as Record<
+      string,
+      { resolver_only?: boolean; structural_errors?: { code: string; path: string }[] }
+    >
 
     it('has fixtures to test', () => {
       expect(invalidFiles.length).toBeGreaterThan(0)
     })
 
     it.each(invalidFiles)('rejects %s', (filePath) => {
-      const parsed = JSON.parse(readFileSync(filePath, 'utf-8'))
+      const content = readFileSync(filePath, 'utf-8')
+      const parsed = JSON.parse(content)
+      const pin = expectedErrors[basename(filePath)]
 
-      if (expectedErrors[basename(filePath)]?.resolver_only) {
+      if (pin?.resolver_only) {
         // Schema-valid; the defect is caught only by a resolver the TS binding
         // does not run. The schema validator must ACCEPT it (no errors).
         expect(validateSchema(parsed)).toHaveLength(0)
         return
       }
 
-      // Pure schema violation (unregistered semiring, ragged missing
-      // offsets/values, discrete missing shape, join not an array / wrong `on`
-      // arity, refresh on a non-discrete variable), so the schema validator
-      // alone rejects them.
-      expect(validateSchema(parsed).length).toBeGreaterThan(0)
+      // Every other pinned-invalid aggregate fixture must be REJECTED by the full
+      // validate() pipeline — whether that rejection is a pure schema violation
+      // (unregistered semiring, join not an array / wrong `on` arity, discrete
+      // missing shape, ...) or a promoted STRUCTURAL F-6 finding (a relational
+      // node reading state, an undeclared index-set range).
+      const result = validate(content)
+      expect(result.is_valid, `${basename(filePath)} is pinned invalid but was accepted`).toBe(
+        false,
+      )
+
+      // Where the corpus pins a structural code, assert THAT code was emitted —
+      // "some error" is too weak a contract for the F-6 promotions.
+      const pinnedCode = pin?.structural_errors?.[0]?.code
+      if (pinnedCode) {
+        const codes = result.structural_errors.map((e) => e.code)
+        expect(
+          codes,
+          `${basename(filePath)}: corpus pins "${pinnedCode}", binding emitted: ${codes.join(', ') || '(none)'}`,
+        ).toContain(pinnedCode)
+      }
     })
   })
 })

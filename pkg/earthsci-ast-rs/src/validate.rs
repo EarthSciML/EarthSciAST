@@ -123,6 +123,24 @@ pub enum StructuralErrorCode {
     /// A subsystem `ref` that resolved to a file NOT containing exactly one
     /// top-level system (zero or several), so which system to mount is ambiguous.
     AmbiguousSubsystemRef,
+    /// A `variable_map` `identity` coupling whose `from`/`to` variables carry
+    /// declared, non-empty, and DIFFERING units (esm-spec §4.7.6). Static mirror
+    /// of the flatten-time [`crate::flatten::FlattenError::DomainUnitMismatch`].
+    DomainUnitMismatch,
+    /// An `aggregate` value-equality `join` whose key column ranges over a
+    /// categorical index set carrying a FLOAT or NULL member (RFC
+    /// semiring-faq-unified-ir §5.3 / §5.7 rule 1): floats are not portably
+    /// equality-comparable and a null key is unmatchable.
+    JoinKeyInvalidType,
+    /// A value-invention `aggregate` (`distinct: true`) whose `key`/`expr` reads
+    /// a model STATE variable, so the cadence partition classes it CONTINUOUS —
+    /// relational work is forbidden on the per-step hot path (RFC
+    /// semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7.6 guard 2).
+    RelationalNodeInContinuous,
+    /// An `aggregate` `ranges` entry `{ "from": NAME }` whose NAME is not a key
+    /// of the document `index_sets` registry (RFC semiring-faq-unified-ir §5.2):
+    /// no implicit interval is inferred for an undeclared name.
+    UndefinedIndexSet,
 }
 
 impl std::fmt::Display for StructuralErrorCode {
@@ -148,6 +166,10 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::FactorWithExpressionTransform => "factor_with_expression_transform",
             Self::UnresolvedSubsystemRef => "unresolved_subsystem_ref",
             Self::AmbiguousSubsystemRef => "ambiguous_subsystem_ref",
+            Self::DomainUnitMismatch => "domain_unit_mismatch",
+            Self::JoinKeyInvalidType => "join_key_invalid_type",
+            Self::RelationalNodeInContinuous => "relational_node_in_continuous",
+            Self::UndefinedIndexSet => "undefined_index_set",
         };
         write!(f, "{s}")
     }

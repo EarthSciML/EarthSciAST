@@ -4,10 +4,12 @@
  * (physical constants, conversion factors, default units).
  */
 
-import { isExprNode } from '../expression.js'
+import { isExprNode, forEachChild } from '../expression.js'
+import { isFloatLit, numericValue } from '../numeric-literal.js'
 import { ERROR_CODES } from '../errors.js'
 import { parseUnit, tryParseUnit, dimsEqual, type ParsedUnit } from '../units.js'
-import type { EsmFile, Model, Expression, AffectEquation } from '../types.js'
+import type { EsmFile, Model, Expression, ExpressionNode, AffectEquation } from '../types.js'
+import type { Expr } from '../expression.js'
 import type { StructuralError } from './types.js'
 import {
   extractVariableReferences,
@@ -654,5 +656,230 @@ export function validateDefaultUnits(model: Model, modelPath: string): Structura
       })
     }
   }
+  return errors
+}
+
+// ---------------------------------------------------------------------------
+// F-6 static `aggregate` semantics (RFC semiring-faq-unified-ir).
+//
+// Three checks decidable from the SINGLE document — no evaluation, solver, or
+// other file. Each descends every expression position of a model
+// (`forEachExpressionScope`), finds the `aggregate` nodes reachable inside, and
+// reports at the CONTAINING EXPRESSION FIELD's JSON Pointer (`.../equations/i/
+// lhs` or `/rhs`), the Phase-2 pointer convention, because that is where the
+// shared corpus pins the finding.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every `aggregate` node reachable from `expr`, including nested ones (an
+ * aggregate carried inside another aggregate's `expr`/`key` body). Descent is
+ * the shared `forEachChild` full-child walk, so aggregates hidden in any
+ * expression-bearing field are found; `ranges`/`join` are structural metadata,
+ * not expression children, so the walker never mistakes their contents for
+ * subexpressions.
+ */
+function collectAggregates(expr: Expression): ExpressionNode[] {
+  const found: ExpressionNode[] = []
+  const visit = (node: Expr): void => {
+    if (!isExprNode(node)) return
+    if (node.op === 'aggregate') found.push(node)
+    forEachChild(node, visit)
+  }
+  visit(expr)
+  return found
+}
+
+/**
+ * The join-key columns of an `aggregate` — the index symbols named on either
+ * side of every `join[k].on` pair. These are the columns whose VALUES must
+ * compare equal, so their member types must be exact-equality types.
+ */
+function joinKeyColumns(agg: ExpressionNode): Set<string> {
+  const cols = new Set<string>()
+  const joins = agg.join
+  if (!Array.isArray(joins)) return cols
+  for (const clause of joins) {
+    for (const pair of clause?.on ?? []) {
+      for (const col of pair) if (typeof col === 'string') cols.add(col)
+    }
+  }
+  return cols
+}
+
+/**
+ * The range an aggregate index symbol iterates, IF it is an index-set
+ * reference `{ from: NAME }` (as opposed to a dense integer tuple). Returns the
+ * referenced index-set NAME, else undefined.
+ */
+function rangeIndexSetName(range: unknown): string | undefined {
+  if (range && typeof range === 'object' && !Array.isArray(range) && 'from' in range) {
+    const from = (range as { from?: unknown }).from
+    if (typeof from === 'string') return from
+  }
+  return undefined
+}
+
+/**
+ * The first categorical `members` entry that cannot serve as a value-equality
+ * join key: a NULL (unmatchable — a null key joins to nothing and nulls never
+ * compare equal) or a FLOAT (a float repr is not portable across bindings, so
+ * equality on it is not defined). Integers and strings are fine. Returns the
+ * offending value and the reason, or undefined when every member is admissible.
+ *
+ * Handles both the plain-`number` and the tagged-`NumericLiteral` leaf shapes a
+ * loaded document can carry: a value declared with a decimal point is a float
+ * whatever its numeric value (`isFloatLit`), and a plain number that is not an
+ * integer is a float too (`!Number.isInteger`).
+ */
+function invalidJoinKeyMember(
+  members: readonly unknown[],
+): { value: unknown; reason: 'null' | 'float' } | undefined {
+  for (const member of members) {
+    if (member === null) return { value: member, reason: 'null' }
+    const value = numericValue(member)
+    if (value !== undefined && (isFloatLit(member) || !Number.isInteger(value))) {
+      return { value, reason: 'float' }
+    }
+  }
+  return undefined
+}
+
+/**
+ * F-6 check `join_key_invalid_type` (RFC §5.3 / §5.7 rule 1): an `aggregate`
+ * whose value-equality `join` keys on a column drawn from a categorical index
+ * set whose `members` contain a FLOAT or a NULL. Emitted once per offending
+ * aggregate at its containing equation field.
+ */
+export function validateAggregateJoinKeys(
+  model: Model,
+  modelPath: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const indexSets = esmFile.index_sets || {}
+  forEachExpressionScope(model, modelPath, (scope) => {
+    for (const site of scope) {
+      for (const agg of collectAggregates(site.expr)) {
+        const cols = joinKeyColumns(agg)
+        if (cols.size === 0) continue
+        const ranges = agg.ranges || {}
+        for (const col of cols) {
+          const setName = rangeIndexSetName(ranges[col])
+          if (setName === undefined) continue
+          const indexSet = indexSets[setName]
+          if (!indexSet || indexSet.kind !== 'categorical' || !Array.isArray(indexSet.members)) {
+            continue
+          }
+          const bad = invalidJoinKeyMember(indexSet.members)
+          if (bad) {
+            errors.push({
+              path: site.path,
+              code: ERROR_CODES.JOIN_KEY_INVALID_TYPE,
+              message: `aggregate join key column "${col}" draws from categorical index set "${setName}" whose members include a ${bad.reason} (${JSON.stringify(bad.value)}); a value-equality join key must be an integer or string`,
+              details: { column: col, index_set: setName, reason: bad.reason },
+            })
+            break // one finding per aggregate is enough
+          }
+        }
+      }
+    }
+  })
+  return errors
+}
+
+/**
+ * F-6 check `undefined_index_set` (RFC §5.2): an `aggregate` `ranges` entry
+ * `{ from: NAME }` whose NAME is not a key of the document-scoped `index_sets`
+ * registry. No implicit interval is inferred, so a typo cannot silently become
+ * an empty set. Emitted per offending aggregate field.
+ */
+export function validateAggregateIndexSets(
+  model: Model,
+  modelPath: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const declared = new Set(Object.keys(esmFile.index_sets || {}))
+  forEachExpressionScope(model, modelPath, (scope) => {
+    for (const site of scope) {
+      for (const agg of collectAggregates(site.expr)) {
+        const reported = new Set<string>() // one finding per (site, name)
+        for (const range of Object.values(agg.ranges || {})) {
+          const setName = rangeIndexSetName(range)
+          if (setName === undefined || declared.has(setName) || reported.has(setName)) continue
+          reported.add(setName)
+          errors.push({
+            path: site.path,
+            code: ERROR_CODES.UNDEFINED_INDEX_SET,
+            message: `aggregate range references index set "${setName}", which is not declared in the document index_sets registry`,
+            details: { index_set: setName, declared: [...declared] },
+          })
+        }
+      }
+    }
+  })
+  return errors
+}
+
+/**
+ * Semirings under which `distinct: true` is a RELATIONAL / value-invention
+ * aggregate (set semantics, index-set-producing). Only `bool_and_or` — the
+ * relational specialization (RFC §5.1) — qualifies today; the check is written
+ * against a set so a future boolean/relational semiring is covered without a
+ * second edit.
+ */
+const RELATIONAL_SEMIRINGS: ReadonlySet<string> = new Set(['bool_and_or'])
+
+/**
+ * F-6 check `relational_node_in_continuous` (CONFORMANCE_SPEC §5.7 guard 2):
+ * a relational / value-invention `aggregate` (`distinct: true` under a
+ * relational semiring) whose `key`/`expr` reads a declared STATE variable. Such
+ * a node's cadence class is CONTINUOUS (class = max over inputs; a state input
+ * is CONTINUOUS), and relational work may not run on the per-step hot path.
+ *
+ * The positive control is `tests/valid/cadence/pure_topology.esm`: the same
+ * `distinct` + `bool_and_or` primitives, but the `key` reads only CONST mesh
+ * PARAMETERS (`face_lo`/`face_hi`), so no state variable is read and the node
+ * folds at compile time — allowed.
+ */
+export function validateRelationalNodesInContinuous(
+  model: Model,
+  modelPath: string,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const stateVariables = new Set(
+    Object.entries(model.variables || {})
+      .filter(([, variable]) => variable.type === 'state')
+      .map(([name]) => name),
+  )
+  if (stateVariables.size === 0) return errors
+
+  forEachExpressionScope(model, modelPath, (scope) => {
+    for (const site of scope) {
+      for (const agg of collectAggregates(site.expr)) {
+        if (agg.distinct !== true) continue
+        const semiring = agg.semiring ?? 'sum_product'
+        if (!RELATIONAL_SEMIRINGS.has(semiring)) continue
+
+        // A state variable read in the `key` (the Skolem term whose distinct
+        // values are enumerated) or the `expr` body makes the invented set
+        // depend on the continuously-evolving state.
+        const referenced = new Set<string>()
+        for (const field of [agg.key, agg.expr]) {
+          if (field === undefined) continue
+          for (const ref of extractVariableReferences(field as Expression)) referenced.add(ref)
+        }
+        const stateRead = [...referenced].find((ref) => stateVariables.has(ref))
+        if (stateRead !== undefined) {
+          errors.push({
+            path: site.path,
+            code: ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS,
+            message: `relational aggregate (distinct under ${semiring}) reads state variable "${stateRead}", classing the value-invention node CONTINUOUS; relational work may not run on the per-step hot path`,
+            details: { semiring, state_variable: stateRead },
+          })
+        }
+      }
+    }
+  })
   return errors
 }

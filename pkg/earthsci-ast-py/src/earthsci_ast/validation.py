@@ -300,6 +300,11 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
         # 4. Event Consistency validation
         _validate_event_consistency(esm_file, structural_errors)
 
+        # 4a. Domain-unit mismatch on identity variable_map couplings (§4.7.6) —
+        # the same defect flatten's `_check_variable_map_units` raises, decided
+        # statically from this one document and mirrored into validate().
+        _validate_coupling_units(esm_file, structural_errors)
+
         # 4b. An observed variable's DECLARED units must equal the dimension its
         # expression computes (esm-spec §4.8.4) — a HARD error, not a warning.
         _validate_observed_dimensions(esm_file, structural_errors)
@@ -1262,6 +1267,56 @@ def _validate_event_consistency(
                             },
                         )
                     )
+
+
+def _validate_coupling_units(
+    esm_file: EsmFile, structural_errors: list[ValidationError]
+) -> None:
+    """esm-spec §4.7.6: a ``variable_map`` coupling with ``transform == "identity"``
+    whose ``from`` and ``to`` variables carry declared units that are both present,
+    non-empty, and DIFFERENT is a provable domain mismatch — decidable statically
+    from this single document, so it belongs in ``validate()``.
+
+    This mirrors :func:`earthsci_ast.flatten._check_variable_map_units` (which
+    raises :class:`~earthsci_ast.flatten.DomainUnitMismatchError` at flatten time)
+    into the coded validate() channel, emitting ``domain_unit_mismatch`` at the
+    coupling entry's pointer ``/coupling/{i}``. ``param_to_var`` and
+    ``conversion_factor`` transforms are EXEMPT (the former does not imply unit
+    equivalence at the mapping site, the latter declares the conversion
+    explicitly), an expression transform is not ``"identity"``, and matching or
+    absent units are legal.
+    """
+    from .esm_types import VariableMapCoupling
+    from .flatten import _lookup_variable_units
+
+    for i, entry in enumerate(esm_file.coupling):
+        if not isinstance(entry, VariableMapCoupling):
+            continue
+        if entry.transform != "identity":
+            continue
+        src_units = _lookup_variable_units(esm_file, entry.from_var or "")
+        tgt_units = _lookup_variable_units(esm_file, entry.to_var or "")
+        if not src_units or not tgt_units:
+            continue
+        if src_units != tgt_units:
+            structural_errors.append(
+                ValidationError(
+                    path=f"/coupling/{i}",
+                    message=(
+                        f"variable_map identity coupling maps {entry.from_var!r} "
+                        f"({src_units}) to {entry.to_var!r} ({tgt_units}); declared "
+                        f"units differ (esm-spec §4.7.6)"
+                    ),
+                    code=ErrorCode.DOMAIN_UNIT_MISMATCH.value,
+                    details={
+                        "from": entry.from_var,
+                        "to": entry.to_var,
+                        "from_units": src_units,
+                        "to_units": tgt_units,
+                        "transform": "identity",
+                    },
+                )
+            )
 
 
 def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None:

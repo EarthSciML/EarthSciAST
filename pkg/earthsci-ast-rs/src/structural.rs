@@ -234,6 +234,14 @@ pub(crate) fn validate_model(
         );
     }
 
+    // Static `aggregate`-node constraints (RFC semiring-faq-unified-ir): an
+    // undeclared `from` index set, a value-equality join over an unportable
+    // (float/null) categorical key, and a value-invention `distinct` node that
+    // reads a state variable (relational work on the continuous hot path). Each
+    // is decidable from this one document, so it belongs in `validate()`.
+    let state_var_set: HashSet<String> = state_vars.iter().cloned().collect();
+    validate_aggregate_constraints(esm_file, model_name, model, &state_var_set, errors);
+
     // A `default_units` that names a unit OTHER than the declared `units` means
     // the `default` NUMBER is expressed in the wrong unit — `units: "K"` with
     // `default: 25.0, default_units: "degC"` stores 25 for a variable that
@@ -657,6 +665,167 @@ fn collect_free_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
             op.for_each_child(&mut |child| collect_free_symbols(child, out));
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
+    }
+}
+
+/// Static `aggregate`-node constraints (RFC semiring-faq-unified-ir), decidable
+/// from this single document. Walk every `aggregate` node in the model's
+/// `equations` and emit, at the CONTAINING equation FIELD (`.../equations/<i>/lhs`
+/// or `/rhs`, the pointer convention shared with the reference checks):
+///
+/// - `undefined_index_set` — a `ranges` entry `{ "from": NAME }` whose NAME is
+///   not a key of the document `index_sets` registry (RFC §5.2: no implicit
+///   interval is inferred for an undeclared name).
+/// - `join_key_invalid_type` — a value-equality `join` whose key column ranges
+///   over a categorical index set carrying a FLOAT or NULL member (RFC §5.3 /
+///   §5.7 rule 1): a float is not portably equality-comparable, a null key is
+///   unmatchable. Mirrors [`crate::join::JoinKey::from_json`]'s build-time rule.
+/// - `relational_node_in_continuous` — a value-invention `distinct` aggregate
+///   whose `key`/`expr` reads a model STATE variable, so the cadence partition
+///   classes it CONTINUOUS and guard 2 forbids relational work on the per-step
+///   hot path (CONFORMANCE_SPEC.md §5.7.6).
+fn validate_aggregate_constraints(
+    esm_file: &EsmFile,
+    model_name: &str,
+    model: &crate::Model,
+    state_vars: &HashSet<String>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let model_path = format!("/models/{model_name}");
+    for (eq_idx, equation) in model.equations.iter().enumerate() {
+        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+            let field_path = format!("{model_path}/equations/{eq_idx}/{field}");
+            check_aggregates_in_expr(expr, &field_path, esm_file, state_vars, errors);
+        }
+    }
+}
+
+/// Recurse through `expr`, applying [`check_aggregate_node`] to every
+/// `aggregate` node reached (including nested ones), each reported at
+/// `field_path` — the top-level equation side that contains it.
+fn check_aggregates_in_expr(
+    expr: &crate::Expr,
+    field_path: &str,
+    esm_file: &EsmFile,
+    state_vars: &HashSet<String>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let crate::Expr::Operator(node) = expr else {
+        return;
+    };
+    if node.op == "aggregate" {
+        check_aggregate_node(node, field_path, esm_file, state_vars, errors);
+    }
+    node.for_each_child(&mut |child| {
+        check_aggregates_in_expr(child, field_path, esm_file, state_vars, errors);
+    });
+}
+
+/// Apply the three static aggregate checks to a single `aggregate` node.
+fn check_aggregate_node(
+    node: &crate::types::ExpressionNode,
+    field_path: &str,
+    esm_file: &EsmFile,
+    state_vars: &HashSet<String>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let index_sets = esm_file.index_sets.as_ref();
+
+    // (a) undefined_index_set: a `{from: NAME}` range absent from the registry.
+    if let Some(ranges) = &node.ranges {
+        let mut undeclared: Vec<String> = ranges
+            .values()
+            .filter_map(|r| match r {
+                crate::types::RangeSpec::IndexSetRef { from, .. } => Some(from.clone()),
+                _ => None,
+            })
+            .filter(|name| index_sets.is_none_or(|m| !m.contains_key(name)))
+            .collect();
+        undeclared.sort();
+        undeclared.dedup();
+        if let Some(first) = undeclared.first() {
+            errors.push(StructuralError {
+                path: field_path.to_string(),
+                code: StructuralErrorCode::UndefinedIndexSet,
+                message: format!("Aggregate range references undeclared index set '{first}'"),
+                details: serde_json::json!({ "undeclared_index_sets": undeclared }),
+            });
+        }
+    }
+
+    // (b) join_key_invalid_type: a value-equality join whose key column ranges
+    // over a categorical index set with a FLOAT or NULL member.
+    if let Some(joins) = &node.join
+        && !joins.is_empty()
+    {
+        // The key columns are the index symbols named in every `on` pair.
+        let cols: Vec<&str> = joins
+            .iter()
+            .flat_map(|jc| jc.on.iter())
+            .flat_map(|pair| [pair[0].as_str(), pair[1].as_str()])
+            .collect();
+        let ranges = node.ranges.as_ref();
+        'cols: for col in cols {
+            let Some(crate::types::RangeSpec::IndexSetRef { from, .. }) =
+                ranges.and_then(|r| r.get(col))
+            else {
+                continue;
+            };
+            let Some(iset) = index_sets.and_then(|m| m.get(from)) else {
+                continue;
+            };
+            if iset.kind != "categorical" {
+                continue;
+            }
+            let Some(members) = &iset.members else {
+                continue;
+            };
+            // A member that cannot project to a portable equality key (a float or
+            // a null) poisons the whole column. `JoinKey::from_json` is the exact
+            // build-time discipline (RFC §5.7 rule 1).
+            if members
+                .iter()
+                .any(|m| crate::join::JoinKey::from_json(m).is_err())
+            {
+                errors.push(StructuralError {
+                    path: field_path.to_string(),
+                    code: StructuralErrorCode::JoinKeyInvalidType,
+                    message: format!(
+                        "Aggregate join key column '{col}' ranges over categorical index set '{from}' whose members are not portable equality keys (a float or null member)"
+                    ),
+                    details: serde_json::json!({
+                        "join_key_column": col,
+                        "index_set": from,
+                    }),
+                });
+                break 'cols;
+            }
+        }
+    }
+
+    // (c) relational_node_in_continuous: a `distinct` value-invention node whose
+    // `key`/`expr` reads a STATE variable (⇒ CONTINUOUS class ⇒ guard 2 rejects).
+    if node.distinct == Some(true) {
+        let mut free = HashSet::new();
+        if let Some(key) = node.key.as_deref() {
+            collect_free_symbols(key, &mut free);
+        }
+        if let Some(body) = node.expr.as_deref() {
+            collect_free_symbols(body, &mut free);
+        }
+        let mut states_read: Vec<String> = free
+            .into_iter()
+            .filter(|name| state_vars.contains(name))
+            .collect();
+        if !states_read.is_empty() {
+            states_read.sort();
+            errors.push(StructuralError {
+                path: field_path.to_string(),
+                code: StructuralErrorCode::RelationalNodeInContinuous,
+                message: "Value-invention aggregate (distinct) reads a state variable, so it classes continuous; relational work is not permitted on the per-step hot path".to_string(),
+                details: serde_json::json!({ "state_variables_read": states_read }),
+            });
+        }
     }
 }
 
