@@ -308,12 +308,17 @@ proptest! {
         .. ProptestConfig::default()
     })]
 
-    /// `from_value(to_value(e)) == e` for any generated expression.
+    /// Round-tripping through `Value` preserves the expression's CANONICAL form.
+    /// Under §5.5.3.1 an integral float operand (`Number(9.0)`) serializes as an
+    /// integer literal, so `Number(9.0)` and `Integer(9)` are indistinguishable
+    /// after a trip — the AST node kind is NOT preserved, but the serialized
+    /// (canonical) value is, which is the property the cross-binding contract
+    /// actually requires (and matches the JS/Julia/Python bindings).
     #[test]
     fn parse_serialize_round_trip_in_memory(expr in expr_strategy()) {
         let value = serde_json::to_value(&expr).expect("serialize to Value");
-        let parsed: Expr = serde_json::from_value(value).expect("deserialize from Value");
-        prop_assert_eq!(expr, parsed);
+        let parsed: Expr = serde_json::from_value(value.clone()).expect("deserialize from Value");
+        prop_assert_eq!(serde_json::to_value(&parsed).expect("re-serialize"), value);
     }
 
     /// Serializing twice yields the same JSON value (content-equal).
@@ -348,23 +353,31 @@ proptest! {
 // Targeted regressions — mirror the Python file's edge-case tests.
 // ---------------------------------------------------------------------------
 
+/// Under the ESM canonical-number rule (§5.5.3.1) a value that is integral —
+/// signed zero included — serializes as an integer literal, exactly as the
+/// JS/Julia/Python bindings do (`JSON.stringify(-0) === "0"`). So `-0.0` and
+/// `0.0` both canonicalize to the integer `0`. (The pre-canonical binding
+/// preserved the `-0.0` sign as a float; that diverged from every other
+/// binding, so this now asserts the collapse instead.)
 #[test]
-fn round_trip_preserves_negative_zero_sign() {
+fn negative_zero_canonicalizes_to_integer_zero() {
     let expr = Expr::Operator(ExpressionNode {
         op: "+".into(),
         args: vec![Expr::Number(-0.0), Expr::Number(0.0)],
         ..Default::default()
     });
     let s = serde_json::to_string(&expr).unwrap();
+    assert!(!s.contains("0.0"), "integral zero must not serialize with a fraction: {s}");
+    assert!(!s.contains("-0"), "signed zero must collapse to `0`: {s}");
     let parsed: Expr = serde_json::from_str(&s).unwrap();
     match parsed {
-        Expr::Operator(node) => match (&node.args[0], &node.args[1]) {
-            (Expr::Number(a), Expr::Number(b)) => {
-                assert_eq!(a.signum(), (-0.0_f64).signum(), "lost sign of -0.0");
-                assert_eq!(b.signum(), (0.0_f64).signum(), "corrupted sign of +0.0");
-            }
-            _ => panic!("args not numbers after round trip"),
-        },
+        Expr::Operator(node) => {
+            assert_eq!(
+                node.args,
+                vec![Expr::Integer(0), Expr::Integer(0)],
+                "both operands must canonicalize to the integer 0"
+            );
+        }
         _ => panic!("not an operator after round trip"),
     }
 }

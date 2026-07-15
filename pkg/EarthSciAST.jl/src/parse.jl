@@ -1788,9 +1788,9 @@ end
 
 Render the schema-validation error list as the multi-line diagnostic message
 used by [`SchemaValidationError`](@ref) (one `  - path: message (keyword)`
-line per error). In practice `validate_schema` returns at most ONE error
-(JSONSchema.jl stops at the first failing issue), so the singular form is the
-norm; the count is kept in the message for the day that changes.
+line per error). `validate_schema` enumerates EVERY leaf schema violation
+(AJV-parity, including the keywords inside a failed `oneOf`/`anyOf` branch), so
+this routinely renders several lines; the header count reflects that.
 """
 function _format_schema_errors(schema_errors)::String
     n = length(schema_errors)

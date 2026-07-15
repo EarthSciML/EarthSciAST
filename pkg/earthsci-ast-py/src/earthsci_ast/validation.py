@@ -95,20 +95,46 @@ class ValidationResult:
             self.unit_warnings = []
 
 
+def _json_pointer(parts) -> str:
+    """Build an RFC-6901 JSON Pointer from a sequence of object keys / array
+    indices. The document root is the empty string ``""`` (NOT ``$``), and each
+    reference token escapes ``~`` -> ``~0`` and ``/`` -> ``~1`` per the RFC. This
+    is the cross-language wire form the conformance comparator matches on
+    (CONFORMANCE_SPEC §7.1.2)."""
+    tokens = [str(p).replace("~", "~0").replace("/", "~1") for p in parts]
+    return "/" + "/".join(tokens) if tokens else ""
+
+
+def _flatten_schema_errors(errors):
+    """Yield every violation in an ``iter_errors`` tree, descending into the
+    ``.context`` of combinator errors (``oneOf`` / ``anyOf`` / ``not``).
+
+    A schema that discriminates a node's shape with ``oneOf``/``anyOf`` reports,
+    at the top level, only the combinator failure at the PARENT node — the leaf
+    keyword that actually failed (``required``/``type``/``enum``/``minItems`` at
+    its own deep JSON Pointer) is stashed in ``.context``. AJV — the
+    cross-language reference — surfaces those leaves directly, so we descend and
+    emit them too. jsonschema gives each context sub-error a fully-qualified
+    ``absolute_path``, so no path stitching is needed. Both the combinator node
+    and its descendants are yielded; the required-subset contract permits the
+    extra records (CONFORMANCE_SPEC §7.1.2)."""
+    for err in errors:
+        yield err
+        if err.context:
+            yield from _flatten_schema_errors(err.context)
+
+
 def _convert_jsonschema_error(error: JsonSchemaValidationError) -> ValidationError:
-    """Convert a jsonschema ValidationError to our ValidationError format."""
-    # Convert the path to a string representation
-    path_parts = []
-    for part in error.absolute_path:
-        if isinstance(part, int):
-            path_parts.append(f"[{part}]")
-        else:
-            path_parts.append(f".{part}" if path_parts else str(part))
+    """Convert a jsonschema ValidationError to our ValidationError format.
 
-    path = "".join(path_parts) if path_parts else "$"
-
+    ``path`` is an RFC-6901 JSON Pointer to the offending node with the document
+    root spelled as ``""`` (see :func:`_json_pointer`). ``code`` carries the
+    failing JSON-Schema keyword (``error.validator`` — ``required``, ``type``,
+    ``enum``, ``pattern``, ``additionalProperties``, …), which the conformance
+    producer reads through verbatim as the ``keyword`` field.
+    """
     return ValidationError(
-        path=path,
+        path=_json_pointer(error.absolute_path),
         message=error.message,
         code=error.validator or "",
         details={
@@ -177,7 +203,7 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
                     schema_errors=[],
                     structural_errors=[
                         ValidationError(
-                            path=r.get("path", "$"),
+                            path=r.get("path", ""),
                             message=r.get("message", ""),
                             code=r.get("code", ""),
                             details=r.get("details", {}),
@@ -185,10 +211,37 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
                         for r in records
                     ],
                 )
+            # A jsonschema failure now arrives with the FULL list of per-node
+            # violations attached (parse.load collects them via iter_errors).
+            # Emit one structured schema_error each — a JSON-Pointer path + the
+            # failing keyword — instead of collapsing them into a single opaque
+            # blob at the document root (CONFORMANCE_SPEC §7.1.2).
+            js_errors = getattr(e, "schema_errors", None)
+            if js_errors:
+                seen: set[tuple[str, str]] = set()
+                converted: list[ValidationError] = []
+                for je in _flatten_schema_errors(js_errors):
+                    ve = _convert_jsonschema_error(je)
+                    # Dedup on the exact (keyword, path) the comparator matches
+                    # on, so a combinator that fans out to the same leaf across
+                    # branches contributes one record, not many.
+                    key = (ve.code, ve.path)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    converted.append(ve)
+                # Stable output: `iter_errors` order is not guaranteed, so sort
+                # by the (path, keyword) the comparator matches on.
+                converted.sort(key=lambda ve: (ve.path, ve.code))
+                return ValidationResult(
+                    is_valid=False,
+                    schema_errors=converted,
+                    structural_errors=[],
+                )
             return ValidationResult(
                 is_valid=False,
                 schema_errors=[
-                    ValidationError(path="$", message=str(e), code=ErrorCode.SCHEMA.value)
+                    ValidationError(path="", message=str(e), code=ErrorCode.SCHEMA.value)
                 ],
                 structural_errors=[],
             )
@@ -203,7 +256,7 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
                 schema_errors=[],
                 structural_errors=[
                     ValidationError(
-                        path=getattr(e, "path", "") or "$",
+                        path=getattr(e, "path", "") or "",
                         message=str(e),
                         code=getattr(e, "code", "") or ErrorCode.PARSE.value,
                         details=getattr(e, "details", None) or {},
@@ -214,7 +267,7 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
             return ValidationResult(
                 is_valid=False,
                 schema_errors=[
-                    ValidationError(path="$", message=str(e), code=ErrorCode.PARSE.value)
+                    ValidationError(path="", message=str(e), code=ErrorCode.PARSE.value)
                 ],
                 structural_errors=[],
             )
@@ -258,7 +311,7 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
         for error in error_collector.errors:
             structural_errors.append(
                 ValidationError(
-                    path=error.context.path if error.context else "$",
+                    path=error.context.path if error.context else "",
                     message=error.message,
                     code=error.code.value,
                     details=error.context.details if error.context else {},
@@ -269,7 +322,7 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
         # Catch-all for unexpected errors
         structural_errors.append(
             ValidationError(
-                path="$",
+                path="",
                 message=f"Validation failed with unexpected error: {str(e)}",
                 code=ErrorCode.VALIDATION_ERROR.value,
                 details={"exception_type": type(e).__name__, "traceback": traceback.format_exc()},
@@ -315,7 +368,7 @@ def _validate_content_presence(esm_file: EsmFile, error_collector: ErrorCollecto
             message="ESM file must contain at least one model, reaction system, or data loader. Empty files are not valid.",
             severity=Severity.ERROR,
             context=ErrorContext(
-                path="$",
+                path="",
                 details={
                     "models_count": len(esm_file.models) if esm_file.models else 0,
                     "reaction_systems_count": len(esm_file.reaction_systems)

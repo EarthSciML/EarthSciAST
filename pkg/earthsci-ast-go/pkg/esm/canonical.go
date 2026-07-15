@@ -3,23 +3,35 @@ package esm
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
-// canonicalFloat64String returns the discretization RFC §5.4.6 on-wire text
-// form of f. Integer-valued floats in the plain-decimal range receive a
-// trailing ".0" so that a JSON integer token and a JSON float token are
-// never spelled the same way, preserving the round-trip int/float node
-// distinction required by §5.4.1. Magnitudes outside [1e-6, 1e21) use
-// exponent notation with lowercase 'e', no leading '+', and no leading
-// zeros on the exponent. NaN and ±Inf are rejected with an error wrapping
-// ErrCanonicalNonFinite (so errors.Is matches on the Save/ToJSON path too).
+// canonicalFloat64String returns the DOCUMENT-serialization on-wire text form
+// of f (CONFORMANCE_SPEC.md §5.5.3.1), used by canonicalizeForJSON for .esm
+// serialization and the property-corpus round-trip driver.
 //
-// This is a thin alias for the single shared §5.4.6 renderer
-// (formatCanonicalFloatShared in floatfmt.go); the previous byte-identical
-// re-implementation (and its normalizeExponentForm helper) has been removed.
+// It applies §5.5.3.1 rule 1 (integral-float normalization): a float whose
+// value is integral and fits int64 serializes as an INTEGER literal — no
+// trailing ".0" — regardless of how it was spelled (0.0→"0", 9.0→"9",
+// -696723.0→"-696723", 2.5e1→"25", ±0.0→"0"). The int64 round-trip test
+// (int64(f) back to float64) is exact and also screens values outside int64
+// range: a huge integral magnitude like 1e20 fails it and falls through to
+// float rendering. All other values delegate to the shared §5.4.6 renderer
+// (formatCanonicalFloatShared), so non-integral floats keep shortest-round-trip
+// form and NaN/±Inf are rejected with an error wrapping ErrCanonicalNonFinite.
+//
+// This differs deliberately from the CanonicalJSON expression-equivalence form
+// (formatCanonicalFloat / §5.4.6), which KEEPS the ".0" so 1.0 and 1 stay
+// distinguishable for algebraic canonicalization (tests/conformance/canonical).
 func canonicalFloat64String(f float64) (string, error) {
+	if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) {
+		if i := int64(f); float64(i) == f {
+			return strconv.FormatInt(i, 10), nil
+		}
+	}
 	return formatCanonicalFloatShared(f)
 }
 

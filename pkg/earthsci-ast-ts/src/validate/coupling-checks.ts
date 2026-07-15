@@ -286,12 +286,13 @@ export function validateCircularReferences(esmFile: EsmFile): StructuralError[] 
       const cycleStart = path.indexOf(node)
       const cycle = path.slice(cycleStart).concat(node)
       errors.push({
-        // Point at the model the cycle CLOSES ON, not at the `/models` container.
-        // The cycle is already computed here, so naming its entry point costs
-        // nothing and is what the shared corpus pins
-        // (`circular_coupling.esm` → `/models/ModelA`). A pointer to the whole
-        // container tells whoever has to fix this precisely nothing.
-        path: `/models/${cycle[0]}`,
+        // A dependency cycle is carried by no single model, so it is pinned at
+        // the smallest node that CONTAINS the whole cycle — the `/models`
+        // container — rather than at any one member model
+        // (CONFORMANCE_SPEC §7.1.2; `circular_coupling.esm` → `/models`). The
+        // concrete cycle is still surfaced in the message and `details.cycle`
+        // for whoever has to fix it.
+        path: '/models',
         message: `Circular dependency detected: ${cycle.join(' → ')}`,
         code: ERROR_CODES.CIRCULAR_DEPENDENCY,
         details: { cycle },

@@ -254,7 +254,7 @@ pub struct DaeInfo {
 /// [`Expr::Integer`]. `#[serde(untagged)]` tries variants in order; `Integer`
 /// appears before `Number` so that the strict integer JSON tokens bind to
 /// `Integer` and float tokens fall through to `Number`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 // Boxing the large variant would change the wire-facing construction/match
 // ergonomics on one of the crate's most-touched types for a size win that
@@ -275,6 +275,42 @@ pub enum Expr {
     Operator(ExpressionNode),
 }
 
+// `Expr` derives `Deserialize` (untagged) but serializes by hand so that the
+// `Number` variant obeys the ESM canonical-number rule (§5.5.3.1): an integral
+// float value re-serializes as an INTEGER literal (`0.0` → `0`, `9.0` → `9`),
+// exactly as the JS / Julia / Python bindings do. A derived untagged
+// `Serialize` would instead emit `0.0`, diverging on every integral-valued
+// float operand.
+impl Serialize for Expr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Expr::Integer(i) => serializer.serialize_i64(*i),
+            Expr::Number(n) => serialize_canonical_f64(*n, serializer),
+            Expr::Variable(v) => serializer.serialize_str(v),
+            Expr::Operator(node) => node.serialize(serializer),
+        }
+    }
+}
+
+/// Serialize an `f64` in ESM canonical form (§5.5.3.1): a finite value whose
+/// magnitude is integral and fits `i64` is emitted as an INTEGER literal (no
+/// trailing `.0`), matching the JS / Julia / Python bindings; every other
+/// finite value keeps serde_json's shortest round-trip float form. Non-finite
+/// values fall through to `serialize_f64` (serde_json emits `null`), preserving
+/// the pre-existing behavior for a rule the canonical writer otherwise rejects.
+pub(crate) fn serialize_canonical_f64<S: serde::Serializer>(
+    n: f64,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // 2^63; an integral f64 strictly below this in magnitude round-trips
+    // losslessly through `i64`.
+    if n.is_finite() && n.fract() == 0.0 && n.abs() < 9_223_372_036_854_775_808.0 {
+        serializer.serialize_i64(n as i64)
+    } else {
+        serializer.serialize_f64(n)
+    }
+}
+
 /// A single `arrayop`/`aggregate` index range (RFC semiring-faq-unified-ir
 /// §5.2). Either a dense inclusive integer interval `[lo, hi]` (the original,
 /// and still the most common form) or a reference to a declared index set.
@@ -288,6 +324,14 @@ pub enum Expr {
 pub enum RangeSpec {
     /// Dense inclusive integer interval `[lo, hi]`.
     Interval([i64; 2]),
+    /// Dense inclusive integer interval with an explicit stride `[lo, hi, step]`
+    /// (the strided authored form the semiring index-range grammar also admits;
+    /// property-corpus fixtures exercise it). The evaluator treats it as the
+    /// `[lo, hi]` interval for bound purposes — `step` is carried verbatim so it
+    /// round-trips. Placed right after [`RangeSpec::Interval`] in this untagged
+    /// enum: a 2-element array binds to `Interval`, a 3-element array to this,
+    /// and neither collides with the object-shaped variants below.
+    Strided([i64; 3]),
     /// Reference to a declared index set by name, optionally ragged/dependent
     /// (`of` names the parent index variables, e.g. the edges *of* cell `i`).
     IndexSetRef {
@@ -337,6 +381,7 @@ impl RangeSpec {
     pub fn bounds(&self) -> Option<[i64; 2]> {
         match self {
             RangeSpec::Interval(iv) => Some(*iv),
+            RangeSpec::Strided(iv) => Some([iv[0], iv[1]]),
             RangeSpec::IndexSetRef { .. }
             | RangeSpec::RaggedDyn { .. }
             | RangeSpec::DerivedDyn { .. } => None,
@@ -377,6 +422,64 @@ pub struct JoinClause {
     pub on: Vec<[String; 2]>,
 }
 
+/// (De)serialize [`ExpressionNode::output_idx`] as a heterogeneous list of
+/// index names and integer literals while storing each entry as a `String`.
+///
+/// On the wire an entry is either a string (`"i"`) or an integer (`1`, a
+/// singleton-dimension marker). On deserialize an integer entry is stored as
+/// its canonical decimal string; on serialize a stored string that is exactly a
+/// canonical `i64` literal is emitted as a JSON integer, everything else as a
+/// JSON string. Because symbolic index names are identifiers (never bare
+/// decimal integers), this preserves both `["i"] ↔ ["i"]` and `[1] ↔ [1]`
+/// byte-for-byte.
+mod output_idx_serde {
+    use serde::de::Error as _;
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use serde_json::Value;
+
+    pub(super) fn serialize<S: Serializer>(
+        value: &Option<Vec<String>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        // `skip_serializing_if = "Option::is_none"` guarantees `Some` here.
+        let items = value
+            .as_ref()
+            .expect("serialize_with is only reached when the field is Some");
+        let mut seq = serializer.serialize_seq(Some(items.len()))?;
+        for item in items {
+            // A canonical `i64` literal round-trips as an integer; any other
+            // string (every real index name) stays a string.
+            match item.parse::<i64>() {
+                Ok(n) if n.to_string() == *item => seq.serialize_element(&n)?,
+                _ => seq.serialize_element(item)?,
+            }
+        }
+        seq.end()
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vec<String>>, D::Error> {
+        let Some(items) = Option::<Vec<Value>>::deserialize(deserializer)? else {
+            return Ok(None);
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for v in items {
+            match v {
+                Value::String(s) => out.push(s),
+                Value::Number(n) if n.is_i64() || n.is_u64() => out.push(n.to_string()),
+                other => {
+                    return Err(D::Error::custom(format!(
+                        "output_idx entries must be an index name (string) or an integer, got {other}"
+                    )));
+                }
+            }
+        }
+        Ok(Some(out))
+    }
+}
+
 /// Expression node representing an operator with operands.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExpressionNode {
@@ -415,8 +518,18 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<Box<Expr>>,
 
-    /// Output index names for `arrayop` (e.g. `["i", "j"]`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Output index names for `arrayop`/`aggregate` (e.g. `["i", "j"]`).
+    ///
+    /// Each entry is normally a symbolic index name (string), but the schema
+    /// (and the semiring IR) also admits a bare integer literal for a singleton
+    /// dimension — property-corpus fixtures carry `output_idx: [1]`. Stored as
+    /// `String` so the ~15 evaluator/scope call sites keep their `&[String]`
+    /// ergonomics; the [`output_idx_serde`] adaptor round-trips an integer entry
+    /// back to a JSON integer (never a stringified `"1"`), so byte identity with
+    /// the JS/Julia/Python bindings holds. Symbolic index names are always
+    /// identifiers, never bare decimal integers, so the "looks like an integer ⇒
+    /// emit as integer" rule cannot misfire on a real name.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "output_idx_serde")]
     pub output_idx: Option<Vec<String>>,
 
     /// Per-index ranges for `arrayop`/`aggregate`. Each entry is either a dense

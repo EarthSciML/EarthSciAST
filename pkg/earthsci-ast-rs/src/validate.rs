@@ -14,7 +14,7 @@
 //! shared input both submodules consume.
 
 use crate::EsmFile;
-use crate::parse::{load, validate_schema};
+use crate::parse::load;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -283,13 +283,33 @@ pub fn validate_complete(json_str: &str) -> ValidationResult {
             validate_with_schema(json_str, &esm_file)
         }
         Err(e) => {
-            // If parsing failed, return the error as a schema error
-            ValidationResult {
-                schema_errors: vec![SchemaError {
+            // Load failed — but a load failure is usually a SCHEMA violation, and
+            // the wire contract (CONFORMANCE_SPEC.md §7.1.2) wants ONE record per
+            // violation, not a single collapsed blob. Re-parse the raw JSON and
+            // enumerate the individual schema errors so each pinned `(keyword,
+            // path)` surfaces. Only if the JSON itself is unparseable, or the
+            // document is schema-valid but failed a LATER load stage (structural /
+            // ref resolution), do we fall back to a single diagnostic record.
+            let schema_errors = match serde_json::from_str::<Value>(json_str) {
+                Ok(json_value) => {
+                    let mut errs = crate::parse::collect_schema_errors(&json_value);
+                    if errs.is_empty() {
+                        errs.push(SchemaError {
+                            path: "".to_string(),
+                            message: format!("Failed to load ESM file: {e}"),
+                            keyword: "parse".to_string(),
+                        });
+                    }
+                    errs
+                }
+                Err(je) => vec![SchemaError {
                     path: "".to_string(),
-                    message: format!("Failed to load ESM file: {e}"),
-                    keyword: "parse".to_string(),
+                    message: format!("Invalid JSON: {je}"),
+                    keyword: "format".to_string(),
                 }],
+            };
+            ValidationResult {
+                schema_errors,
                 structural_errors: vec![],
                 unit_warnings: vec![],
                 is_valid: false,
@@ -317,13 +337,9 @@ pub fn validate_with_schema(json_str: &str, esm_file: &EsmFile) -> ValidationRes
             });
         }
         Ok(json_value) => {
-            if let Err(e) = validate_schema(&json_value) {
-                schema_errors.push(SchemaError {
-                    path: "".to_string(),
-                    message: e.to_string(),
-                    keyword: "schema".to_string(),
-                });
-            }
+            // One record PER schema violation (RFC-6901 pointer + standard
+            // keyword), not a single collapsed blob (CONFORMANCE_SPEC.md §7.1.2).
+            schema_errors.extend(crate::parse::collect_schema_errors(&json_value));
         }
     }
 
@@ -1697,13 +1713,22 @@ mod tests {
             "validate_complete should find schema errors"
         );
 
-        // Schema error should mention the validation failure
+        // Per CONFORMANCE_SPEC.md §7.1.2 the wire format is one record PER schema
+        // violation — a standard JSON-Schema keyword plus the RFC-6901 pointer of
+        // the offending node — not a single collapsed "Failed to load" blob. The
+        // invalid `type` enum value must surface as an `enum` error at the
+        // variable's `type` pointer.
         assert!(
-            result.schema_errors[0]
-                .message
-                .contains("Failed to load ESM file"),
-            "Should report load failure: {}",
-            result.schema_errors[0].message
+            result.schema_errors.iter().any(|e| e.keyword == "enum"
+                && e.path == "/models/test_model/variables/x/type"),
+            "expected a per-error `enum` schema violation at the variable's type pointer; got {:?}",
+            result.schema_errors
+        );
+        // No record should be the old collapsed placeholder.
+        assert!(
+            result.schema_errors.iter().all(|e| e.keyword != "parse"),
+            "schema errors must be enumerated per-violation, not a single `parse` blob: {:?}",
+            result.schema_errors
         );
     }
 

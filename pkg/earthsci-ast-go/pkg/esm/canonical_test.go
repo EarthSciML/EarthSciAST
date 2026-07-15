@@ -21,18 +21,21 @@ func TestCanonicalFloat64String(t *testing.T) {
 		in   float64
 		want string
 	}{
-		{1.0, "1.0"},
-		{-3.0, "-3.0"},
-		{0.0, "0.0"},
-		{math.Copysign(0, -1), "-0.0"},
+		// §5.5.3.1 rule 1: integral floats that fit int64 serialize as integer
+		// literals (no ".0"), regardless of spelling — this is the document
+		// serialization form, distinct from the CanonicalJSON ".0" form.
+		{1.0, "1"},
+		{-3.0, "-3"},
+		{0.0, "0"},
+		{math.Copysign(0, -1), "0"}, // -0.0 normalizes to integer 0
 		{2.5, "2.5"},
 		{imprecise, "0.30000000000000004"},
 		{1e-7, "1e-7"},
-		{1e25, "1e25"},
-		{-5e300, "-5e300"},
+		{1e25, "1e25"},     // integral but exceeds int64 → exponent form
+		{-5e300, "-5e300"}, // integral but exceeds int64 → exponent form
 		{3.14e25, "3.14e25"},
 		{5e-324, "5e-324"}, // smallest positive subnormal
-		{1e21, "1e21"},     // breakpoint — exponent form
+		{1e21, "1e21"},     // integral but exceeds int64 → exponent form
 		{1e-6, "0.000001"}, // breakpoint — plain decimal
 	}
 	for _, tc := range cases {
@@ -56,10 +59,13 @@ func TestCanonicalFloat64NonFinite(t *testing.T) {
 	assert.Contains(t, err.Error(), "E_CANONICAL_NONFINITE")
 }
 
-// TestSaveEmitsTrailingDotZeroForIntegerFloat verifies RFC §5.4.6 emission:
-// an integer-valued float64 literal in an Expression slot must serialize as
-// "1.0" (not "1") so that the parse-back rule recovers a float node.
-func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
+// TestSaveEmitsIntegerFormForIntegralFloat verifies CONFORMANCE_SPEC.md
+// §5.5.3.1 rule 1 (document serialization): an integer-valued float64 literal
+// in an Expression slot serializes as an integer literal ("1", not "1.0"),
+// regardless of how it was spelled. Non-integral floats keep their fraction.
+// (This deliberately does NOT preserve the int/float node distinction on the
+// wire for integral values — that is the cross-language canonical contract.)
+func TestSaveEmitsIntegerFormForIntegralFloat(t *testing.T) {
 	file := &ESMFile{
 		ESM: "0.1.0",
 		Metadata: Metadata{
@@ -72,10 +78,10 @@ func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
 					"x": {Type: "state"},
 				},
 				Equations: []Equation{
-					{LHS: "x", RHS: float64(1.0)}, // float node → "1.0"
+					{LHS: "x", RHS: float64(1.0)}, // integral float → "1"
 					{LHS: "y", RHS: int64(1)},     // integer node → "1"
 					{LHS: "z", RHS: float64(2.5)}, // non-integer float → "2.5"
-					{LHS: "w", RHS: float64(0.0)}, // integer-valued float zero → "0.0"
+					{LHS: "w", RHS: float64(0.0)}, // integral float zero → "0"
 					{LHS: "v", RHS: ExprNode{Op: "+", Args: []any{float64(1.0), int64(2)}}},
 				},
 			},
@@ -94,9 +100,9 @@ func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
 
 	equations := tree["models"].(map[string]any)["m"].(map[string]any)["equations"].([]any)
 
-	// equations[0].rhs: float64(1.0) → "1.0"
+	// equations[0].rhs: float64(1.0) → "1"
 	rhs0 := equations[0].(map[string]any)["rhs"].(json.Number)
-	assert.Equal(t, "1.0", string(rhs0))
+	assert.Equal(t, "1", string(rhs0))
 
 	// equations[1].rhs: int64(1) → "1"
 	rhs1 := equations[1].(map[string]any)["rhs"].(json.Number)
@@ -106,21 +112,23 @@ func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
 	rhs2 := equations[2].(map[string]any)["rhs"].(json.Number)
 	assert.Equal(t, "2.5", string(rhs2))
 
-	// equations[3].rhs: float64(0.0) → "0.0"
+	// equations[3].rhs: float64(0.0) → "0"
 	rhs3 := equations[3].(map[string]any)["rhs"].(json.Number)
-	assert.Equal(t, "0.0", string(rhs3))
+	assert.Equal(t, "0", string(rhs3))
 
-	// equations[4].rhs.args: mixed — [float64(1.0), int64(2)] → ["1.0", "2"]
+	// equations[4].rhs.args: mixed — [float64(1.0), int64(2)] → ["1", "2"]
 	rhs4 := equations[4].(map[string]any)["rhs"].(map[string]any)
 	args := rhs4["args"].([]any)
-	assert.Equal(t, "1.0", string(args[0].(json.Number)))
+	assert.Equal(t, "1", string(args[0].(json.Number)))
 	assert.Equal(t, "2", string(args[1].(json.Number)))
 }
 
-// TestRoundTripPreservesIntFloatDistinction exercises the canonical
-// invariant: canonicalize(parse(emit(A))) == A. A float node parsed in,
-// emitted, and re-parsed must remain a float node; likewise for int.
-func TestRoundTripPreservesIntFloatDistinction(t *testing.T) {
+// TestRoundTripNormalizesIntegralFloats exercises the §5.5.3.1 serialization
+// contract: an integral float (1.0, -0.0) serializes as an integer literal and
+// therefore re-parses as an int64 — the int/float wire distinction is NOT
+// preserved for integral values. Only NON-integral floats (2.5) round-trip as
+// float64.
+func TestRoundTripNormalizesIntegralFloats(t *testing.T) {
 	input := `{
   "esm": "0.1.0",
   "metadata": {"name": "roundtrip", "authors": ["Test"]},
@@ -147,22 +155,23 @@ func TestRoundTripPreservesIntFloatDistinction(t *testing.T) {
 
 	m := reparsed.Models["m"]
 
-	// rhs was 1.0 on the wire → float64 after parse
-	_, ok := m.Equations[0].RHS.(float64)
-	assert.True(t, ok, "equations[0].rhs should round-trip as float64, got %T", m.Equations[0].RHS)
+	// rhs was 1.0 on the wire → serialized as "1" → int64 after re-parse
+	_, ok := m.Equations[0].RHS.(int64)
+	assert.True(t, ok, "equations[0].rhs (1.0) should normalize to int64, got %T", m.Equations[0].RHS)
 
 	// rhs was 1 on the wire → int64 after parse
 	_, ok = m.Equations[1].RHS.(int64)
 	assert.True(t, ok, "equations[1].rhs should round-trip as int64, got %T", m.Equations[1].RHS)
 
-	// Nested op node args: int, float, negative-zero-float
+	// Nested op node args: int, non-integral float, negative-zero-float.
+	// The integral values (1, -0.0) both normalize to int64; only 2.5 stays float64.
 	node := m.Equations[2].RHS.(ExprNode)
 	_, ok = node.Args[0].(int64)
 	assert.True(t, ok, "args[0] int64, got %T", node.Args[0])
 	_, ok = node.Args[1].(float64)
 	assert.True(t, ok, "args[1] float64, got %T", node.Args[1])
-	_, ok = node.Args[2].(float64)
-	assert.True(t, ok, "args[2] float64, got %T", node.Args[2])
+	_, ok = node.Args[2].(int64)
+	assert.True(t, ok, "args[2] (-0.0) should normalize to int64, got %T", node.Args[2])
 }
 
 // TestSaveTypedFloatFields verifies that typed float64 fields (not just
@@ -190,8 +199,10 @@ func TestSaveTypedFloatFields(t *testing.T) {
 	jsonStr, err := Serialize(file)
 	require.NoError(t, err)
 
-	// *float64 factor emits with trailing .0
-	assert.Contains(t, jsonStr, `"factor": 2.0`)
+	// *float64 factor of 2.0 is an integral value → serializes as "2" per
+	// §5.5.3.1 rule 1 (no trailing ".0").
+	assert.Contains(t, jsonStr, `"factor": 2`)
+	assert.NotContains(t, jsonStr, `"factor": 2.0`)
 }
 
 // TestSaveRejectsNonFiniteFloat verifies that NaN/Inf are rejected with

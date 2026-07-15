@@ -255,12 +255,15 @@ def test_roundtrip_index_outside_arrayop():
     assert composite_idx["op"] == "+"
 
 
-def test_roundtrip_preserves_int_float_distinction():
-    """Integer and float literals must round-trip as distinct kinds.
+def test_roundtrip_normalizes_integral_floats_keeps_fractional():
+    """Canonical number contract (CONFORMANCE_SPEC §5.5.3.1).
 
-    Per discretization RFC §5.4.1, an integer literal and a float literal
-    are distinct AST nodes. Python natively preserves this through `int`
-    vs `float` union members; this test pins the invariant.
+    An INTEGRAL value serializes as an integer literal regardless of how it was
+    spelled — ``1.0`` -> ``1``, no trailing ``.0`` — so all bindings round-trip a
+    number byte-identically (JS/TS have no int/float distinction and always emit
+    ``1``; Go/Rust/Julia narrow integral floats to match). A genuinely
+    NON-integral float (``2.5``) is preserved as a float. A binding that carried a
+    ``1.0`` spelling through serialization was the divergence the F-5 gate caught.
     """
     original_json = {
         "esm": "0.1.0",
@@ -273,7 +276,7 @@ def test_roundtrip_preserves_int_float_distinction():
                 },
                 "equations": [
                     {"lhs": "x", "rhs": 1},  # integer literal
-                    {"lhs": "y", "rhs": 1.0},  # float literal
+                    {"lhs": "y", "rhs": 1.0},  # integral float literal -> narrows to int
                     {"lhs": "x", "rhs": {"op": "+", "args": [1, 2.5]}},
                     {"lhs": "y", "rhs": {"op": "+", "args": [1.0, 2.5]}},
                 ],
@@ -288,20 +291,22 @@ def test_roundtrip_preserves_int_float_distinction():
 
     eqs = data["models"]["m"]["equations"]
 
-    # Integer literal survives as JSON integer (type(int), not type(float)).
+    # Integer literal stays an integer.
     assert type(eqs[0]["rhs"]) is int
     assert eqs[0]["rhs"] == 1
 
-    # Float literal survives as JSON float. `1.0` serializes as "1.0".
-    assert type(eqs[1]["rhs"]) is float
-    assert eqs[1]["rhs"] == 1.0
-    assert "1.0" in json_str2  # ensures trailing .0 is emitted for integer-valued float
+    # Integral float literal `1.0` narrows to the integer `1` — no trailing `.0`.
+    assert type(eqs[1]["rhs"]) is int
+    assert eqs[1]["rhs"] == 1
+    assert json.dumps(eqs[1]["rhs"]) == "1"
 
-    # Inside an operator node: mixed int/float preserves each arg's kind.
-    assert type(eqs[2]["rhs"]["args"][0]) is int
-    assert type(eqs[2]["rhs"]["args"][1]) is float
-    assert type(eqs[3]["rhs"]["args"][0]) is float
-    assert type(eqs[3]["rhs"]["args"][1]) is float
+    # Inside an operator node: an integral operand narrows, a fractional one stays.
+    assert type(eqs[2]["rhs"]["args"][0]) is int  # 1
+    assert type(eqs[2]["rhs"]["args"][1]) is float  # 2.5
+    assert eqs[2]["rhs"]["args"][1] == 2.5
+    assert type(eqs[3]["rhs"]["args"][0]) is int  # 1.0 -> 1
+    assert type(eqs[3]["rhs"]["args"][1]) is float  # 2.5 stays float
+    assert eqs[3]["rhs"]["args"] == [1, 2.5]
 
 
 def test_roundtrip_tests_and_examples_fixture():

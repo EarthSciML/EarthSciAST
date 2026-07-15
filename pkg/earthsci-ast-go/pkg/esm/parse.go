@@ -539,15 +539,98 @@ func validateJSONSchema(jsonStr string) (*ValidationResult, error) {
 	if !result.Valid() {
 		for _, desc := range result.Errors() {
 			schemaError := SchemaError{
-				Path:    desc.Context().String(),
+				Path:    jsonPointerFromContext(desc.Context()),
 				Message: desc.Description(),
-				Keyword: desc.Type(),
+				Keyword: schemaKeyword(desc.Type()),
 			}
 			validationResult.SchemaErrors = append(validationResult.SchemaErrors, schemaError)
 		}
 	}
 
 	return validationResult, nil
+}
+
+// gojsonschemaKeywordMap translates gojsonschema's library-specific error
+// "type" strings (errors.go) into the standard JSON-Schema keyword vocabulary
+// the cross-language conformance harness pins on (CONFORMANCE_SPEC.md §7.1.2).
+// gojsonschema names, e.g., a failed `type` check `invalid_type` and a failed
+// `minItems` check `array_min_items`; the harness (and AJV, the reference
+// producer) speak the schema keywords themselves. Any type absent from this map
+// passes through unchanged, so genuine keywords gojsonschema already names
+// correctly (`pattern`, `enum`, `const`, `format`, `required`, `not`) still
+// emit, and a future gojsonschema type never silently becomes empty.
+var gojsonschemaKeywordMap = map[string]string{
+	"additional_property_not_allowed": "additionalProperties",
+	"array_max_items":                 "maxItems",
+	"array_max_properties":            "maxProperties",
+	"array_min_items":                 "minItems",
+	"array_min_properties":            "minProperties",
+	"array_no_additional_items":       "additionalItems",
+	"condition_else":                  "else",
+	"condition_then":                  "then",
+	"invalid_property_name":           "propertyNames",
+	"invalid_property_pattern":        "patternProperties",
+	"invalid_type":                    "type",
+	"missing_dependency":              "dependencies",
+	"multiple_of":                     "multipleOf",
+	"number_all_of":                   "allOf",
+	"number_any_of":                   "anyOf",
+	"number_gt":                       "exclusiveMinimum",
+	"number_gte":                      "minimum",
+	"number_lt":                       "exclusiveMaximum",
+	"number_lte":                      "maximum",
+	"number_not":                      "not",
+	"number_one_of":                   "oneOf",
+	"string_gte":                      "minLength",
+	"string_lte":                      "maxLength",
+	"unique":                          "uniqueItems",
+}
+
+// schemaKeyword maps a gojsonschema error type to the standard JSON-Schema
+// keyword, falling back to the raw type for keywords gojsonschema already names
+// canonically (or any type not yet mapped).
+func schemaKeyword(t string) string {
+	if k, ok := gojsonschemaKeywordMap[t]; ok {
+		return k
+	}
+	return t
+}
+
+// jsonPointerFromContext converts a gojsonschema validation context
+// ("(root).models.BadDiscrete.variables.wind", array indices as ".0") into an
+// RFC-6901 JSON Pointer with the document root as the empty string ""
+// ("/models/BadDiscrete/variables/wind"). A context of just "(root)" yields "".
+//
+// The context is split on a NUL delimiter rather than "." so a property name
+// that itself contains "." is not mis-segmented, and each segment is
+// JSON-Pointer escaped (~ → ~0, / → ~1).
+func jsonPointerFromContext(ctx *gojsonschema.JsonContext) string {
+	if ctx == nil {
+		return ""
+	}
+	segments := strings.Split(ctx.String("\x00"), "\x00")
+	// segments[0] is the root sentinel "(root)"; drop it.
+	if len(segments) > 0 {
+		segments = segments[1:]
+	}
+	var b strings.Builder
+	for _, seg := range segments {
+		b.WriteByte('/')
+		b.WriteString(escapeJSONPointerSegment(seg))
+	}
+	return b.String()
+}
+
+// escapeJSONPointerSegment applies RFC-6901 reference-token escaping: "~" must
+// be encoded before "/" so a literal "/" does not become "~1" and then get
+// re-read as an escape.
+func escapeJSONPointerSegment(s string) string {
+	if !strings.ContainsAny(s, "~/") {
+		return s
+	}
+	s = strings.ReplaceAll(s, "~", "~0")
+	s = strings.ReplaceAll(s, "/", "~1")
+	return s
 }
 
 // authoredDeclarationBlocks extracts the top-level `expression_templates` and

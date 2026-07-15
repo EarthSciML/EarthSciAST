@@ -242,6 +242,7 @@ pub(crate) fn resolve_expr_ranges(
             let resolved = match spec {
                 // Already-concrete and already-resolved forms are idempotent.
                 RangeSpec::Interval(_)
+                | RangeSpec::Strided(_)
                 | RangeSpec::RaggedDyn { .. }
                 | RangeSpec::DerivedDyn { .. } => continue,
                 RangeSpec::IndexSetRef { from, of } => {

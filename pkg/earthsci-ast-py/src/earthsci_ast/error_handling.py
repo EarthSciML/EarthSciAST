@@ -268,6 +268,10 @@ class ESMErrorFactory:
             severity=Severity.ERROR,
             context=ErrorContext(
                 component=model_name,
+                # A JSON Pointer to the offending model (root ""), not a bare
+                # None — the structural_errors wire contract requires a pointer
+                # (CONFORMANCE_SPEC §7.1.2; pinned as `/models/<name>`).
+                path=f"/models/{model_name}",
                 details={
                     "model_name": model_name,
                     "num_equations": num_equations,

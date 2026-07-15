@@ -568,7 +568,10 @@ fn key_column(
                 }),
             }
         }
-        Some(RangeSpec::Interval([lo, hi])) => {
+        Some(RangeSpec::Interval([lo, hi])) | Some(RangeSpec::Strided([lo, hi, _])) => {
+            // A strided range's stride is irrelevant to the enumerable key set —
+            // the dense `[lo, hi]` integer IDs are the join keys, same as a plain
+            // interval.
             let positions: Vec<i64> = (*lo..=*hi).collect();
             let vals = positions.iter().map(|p| JoinKey::Int(*p)).collect();
             Ok((positions, vals))

@@ -311,12 +311,16 @@ def test_round_trip_through_json(expr):
 # ---------------------------------------------------------------------------
 
 
-def test_round_trip_preserves_negative_zero():
-    """Hypothesis surfaces -0.0; ensure it survives the JSON round-trip."""
+def test_round_trip_serializes_negative_zero_as_integer_zero():
+    """Canonical number contract (CONFORMANCE_SPEC §5.5.3.1): ``-0.0`` is an
+    integral value, so it normalizes to the integer literal ``0`` on serialize —
+    sign and float-ness are both dropped (`-0.0` -> `0.0` -> `0`). This matches
+    the other bindings byte-for-byte; a binding that preserved the negative-zero
+    sign was the divergence."""
     expr = ExprNode(op="+", args=[-0.0, 0.0])
-    payload = json.dumps(_serialize_expression(expr))
-    reparsed = _parse_expression(json.loads(payload))
-    assert math.copysign(1.0, reparsed.args[0]) == math.copysign(1.0, expr.args[0])
+    serialized = _serialize_expression(expr)
+    assert serialized["args"] == [0, 0]
+    assert all(type(a) is int for a in serialized["args"])
 
 
 def test_round_trip_preserves_unary_minus():

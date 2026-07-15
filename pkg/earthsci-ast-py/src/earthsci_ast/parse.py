@@ -2140,12 +2140,25 @@ def load(
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(data)
 
-    # Load and validate against schema
+    # Load and validate against schema. Collect EVERY schema violation (not just
+    # the first) and carry them on the raised error, so `validation.validate` can
+    # surface one structured `schema_error` per offending node — a JSON-Pointer
+    # path + the failing JSON-Schema keyword — instead of collapsing them into a
+    # single opaque blob at the document root (CONFORMANCE_SPEC §7.1.2). The
+    # schema declares Draft 2020-12 (`esm-schema.json`'s `$schema`), so the
+    # validator is pinned to that draft rather than left to auto-detection.
     schema = _get_schema()
-    try:
-        validate(data, schema)
-    except jsonschema.ValidationError as e:
-        raise SchemaValidationError(str(e)) from e
+    _schema_errors = list(jsonschema.Draft202012Validator(schema).iter_errors(data))
+    if _schema_errors:
+        # The human-readable message keeps the original `jsonschema.validate`
+        # behaviour: `best_match` descends combinator (`anyOf`/`oneOf`) context to
+        # surface the most relevant LEAF error (so the message still names the
+        # failing keyword). The full un-collapsed list is carried on the error for
+        # `validation.validate` to fan out into per-node structured records.
+        primary = jsonschema.exceptions.best_match(_schema_errors)
+        exc = SchemaValidationError(str(primary if primary is not None else _schema_errors[0]))
+        exc.schema_errors = _schema_errors
+        raise exc
 
     # Check version compatibility
     _check_version_compatibility(data.get("esm", ""))

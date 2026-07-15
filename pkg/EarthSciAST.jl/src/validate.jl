@@ -107,46 +107,247 @@ else
 end
 
 # JSONSchema.jl formats issue paths as "[a][b][3]"; convert to a
-# JSON-Pointer-style "/a/b/3" (root → "/").
+# JSON-Pointer-style "/a/b/3". The DOCUMENT ROOT is the empty string "" (the
+# cross-language wire contract — NOT "/", "$", or "(root)" — CONFORMANCE_SPEC
+# §7.1.2). Retained for any caller still speaking the bracket form.
 function _issue_pointer(path::AbstractString)::String
-    isempty(path) && return "/"
+    isempty(path) && return ""
     segments = [String(m.captures[1]) for m in eachmatch(r"\[([^\]]*)\]", path)]
-    isempty(segments) && return "/"
+    isempty(segments) && return ""
     return "/" * join(segments, "/")
+end
+
+# ── Schema-error collection (AJV-parity leaf enumeration) ───────────────────
+#
+# JSONSchema.jl's `validate` short-circuits at the FIRST failing keyword and, at
+# a `oneOf`/`anyOf`/`allOf` node, reports ONLY the enclosing combinator — never
+# the underlying keyword (e.g. the missing `required` inside the intended
+# branch). It also reports the whole document at path "" but everything else at
+# a 1-based Julia bracket path. The cross-language conformance contract
+# (CONFORMANCE_SPEC §7.1.2) instead wants ONE record per schema violation, each
+# carrying the standard JSON-Schema keyword that failed and the RFC-6901 JSON
+# Pointer of the offending node (0-based array indices, root ""), matching
+# TypeScript's AJV `allErrors` output.
+#
+# `_collect_schema_errors!` re-walks the (ref-resolved) schema alongside the
+# instance and accumulates every leaf failure. It REUSES JSONSchema.jl's own
+# `_validate`: as a whole-subschema pass/fail ORACLE at combinator decision
+# points (so the verdict on which branch matched is byte-for-byte the library's)
+# and to evaluate the leaf assertion keywords (`type`, `required`, `enum`, …)
+# exactly as the library does. Only the applicator keywords
+# (`properties`/`items`/`oneOf`/`if`…) are descended here, so a VALID document —
+# every combinator satisfied — yields ZERO errors, identical to the library.
+
+# RFC-6901 JSON Pointer builder. Each segment is prefixed with "/"; the special
+# characters `~` and `/` are escaped per §4 of the RFC.
+_ptr_escape(seg::AbstractString) = replace(replace(seg, "~" => "~0"), "/" => "~1")
+_ptr_child(path::AbstractString, seg) = string(path, "/", _ptr_escape(string(seg)))
+
+# Schema keywords that carry no assertion of their own (identifiers, metadata,
+# and the `$defs`/`definitions` stores), skipped during the walk.
+const _SCHEMA_ANNOTATION_KEYS = Set{String}([
+    "\$schema", "\$id", "\$ref", "\$anchor", "\$dynamicAnchor", "\$dynamicRef",
+    "\$vocabulary", "\$comment", "\$defs", "definitions",
+    "title", "description", "examples", "default", "deprecated",
+    "readOnly", "writeOnly", "contentEncoding", "contentMediaType",
+])
+
+# Does instance `x` satisfy `subschema` in full? Delegated to JSONSchema.jl so
+# the branch-selection verdict is identical to the library's.
+_schema_matches(x, subschema) = JSONSchema._validate(x, subschema, "") === nothing
+
+function _schema_error_message(keyword::AbstractString)::String
+    keyword == "required"             && return "missing required property"
+    keyword == "additionalProperties" && return "unexpected additional property"
+    keyword == "type"                 && return "value has the wrong type"
+    keyword == "enum"                 && return "value is not one of the permitted values"
+    keyword == "const"                && return "value does not equal the required constant"
+    keyword == "oneOf"                && return "must match exactly one schema in oneOf"
+    keyword == "anyOf"                && return "must match at least one schema in anyOf"
+    keyword == "not"                  && return "must not match the schema"
+    return "schema validation failed: $keyword"
+end
+
+_push_schema_error!(errors::Vector{SchemaError}, path::AbstractString, keyword::AbstractString) =
+    push!(errors, SchemaError(String(path), _schema_error_message(keyword), String(keyword)))
+
+function _collect_schema_errors!(errors::Vector{SchemaError}, x, schema, path::String)
+    schema = JSONSchema._resolve_refs(schema)
+    if schema isa Bool
+        schema || _push_schema_error!(errors, path, "schema")
+        return errors
+    end
+    schema isa AbstractDict || return errors
+    for (k, v) in schema
+        _collect_schema_keyword!(errors, x, schema, String(k), v, path)
+    end
+    return errors
+end
+
+function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::String, v, path::String)
+    if k in _SCHEMA_ANNOTATION_KEYS || k == "then" || k == "else"
+        # `then`/`else` are evaluated together with `if` (below).
+        return errors
+
+    elseif k == "properties"
+        if x isa AbstractDict && v isa AbstractDict
+            for (pk, sub) in v
+                skey = String(pk)
+                haskey(x, skey) || continue
+                _collect_schema_errors!(errors, x[skey], sub, _ptr_child(path, skey))
+            end
+        end
+
+    elseif k == "patternProperties"
+        if x isa AbstractDict && v isa AbstractDict
+            for (pat, sub) in v
+                r = Regex(String(pat))
+                for (xk, xv) in x
+                    occursin(r, String(xk)) &&
+                        _collect_schema_errors!(errors, xv, sub, _ptr_child(path, xk))
+                end
+            end
+        end
+
+    elseif k == "additionalProperties"
+        if x isa AbstractDict
+            props = get(schema, "properties", nothing)
+            patterns = get(schema, "patternProperties", nothing)
+            _covered(key) =
+                (props isa AbstractDict && haskey(props, String(key))) ||
+                (patterns isa AbstractDict &&
+                 any(p -> occursin(Regex(String(p)), String(key)), keys(patterns)))
+            if v isa Bool
+                v || for (xk, _) in x
+                    _covered(xk) || _push_schema_error!(errors, path, "additionalProperties")
+                end
+            else
+                for (xk, xv) in x
+                    _covered(xk) ||
+                        _collect_schema_errors!(errors, xv, v, _ptr_child(path, xk))
+                end
+            end
+        end
+
+    elseif k == "items"
+        if x isa AbstractVector
+            if v isa AbstractVector
+                # Tuple validation: element i against subschema i (1-based Julia).
+                for (i, xi) in enumerate(x)
+                    i <= length(v) || break
+                    _collect_schema_errors!(errors, xi, v[i], _ptr_child(path, i - 1))
+                end
+            else
+                for (i, xi) in enumerate(x)
+                    _collect_schema_errors!(errors, xi, v, _ptr_child(path, i - 1))
+                end
+            end
+        end
+
+    elseif k == "allOf"
+        v isa AbstractVector && for sub in v
+            _collect_schema_errors!(errors, x, sub, path)
+        end
+
+    elseif k == "anyOf"
+        if v isa AbstractVector && !any(sub -> _schema_matches(x, sub), v)
+            _push_schema_error!(errors, path, "anyOf")
+            for sub in v
+                _collect_schema_errors!(errors, x, sub, path)
+            end
+        end
+
+    elseif k == "oneOf"
+        if v isa AbstractVector
+            nmatch = count(sub -> _schema_matches(x, sub), v)
+            if nmatch != 1
+                _push_schema_error!(errors, path, "oneOf")
+                # ZERO matches ⇒ every branch failed, so descend them all for the
+                # underlying leaf errors. ≥2 matches ⇒ the branches PASS (no leaf
+                # error to find); the `oneOf` itself is the finding.
+                nmatch == 0 && for sub in v
+                    _collect_schema_errors!(errors, x, sub, path)
+                end
+            end
+        end
+
+    elseif k == "not"
+        _schema_matches(x, v) && _push_schema_error!(errors, path, "not")
+
+    elseif k == "if"
+        if haskey(schema, "then") || haskey(schema, "else")
+            if _schema_matches(x, v)
+                haskey(schema, "then") &&
+                    _collect_schema_errors!(errors, x, schema["then"], path)
+            elseif haskey(schema, "else")
+                _collect_schema_errors!(errors, x, schema["else"], path)
+            end
+        end
+
+    else
+        # Leaf assertion keyword (`type`, `required`, `enum`, `minItems`,
+        # `pattern`, `exclusiveMinimum`, …): evaluated by JSONSchema.jl exactly
+        # as in a normal validation. A non-`nothing` return means it failed at
+        # THIS node; the standard keyword name is `k`.
+        JSONSchema._validate(x, schema, Val{Symbol(k)}(), v, path) === nothing ||
+            _push_schema_error!(errors, path, k)
+    end
+    return errors
+end
+
+# Collapse identical (path, keyword) findings (a `oneOf` branch descent or a
+# per-extra-key `additionalProperties` scan can raise the same finding twice).
+# The comparator matches on (keyword, path) sets, so this is loss-free.
+function _dedup_schema_errors(errors::Vector{SchemaError})::Vector{SchemaError}
+    seen = Set{Tuple{String,String}}()
+    out = SchemaError[]
+    for e in errors
+        key = (e.path, e.keyword)
+        key in seen && continue
+        push!(seen, key)
+        push!(out, e)
+    end
+    return out
 end
 
 """
     validate_schema(data::Any) -> Vector{SchemaError}
 
-Validate data against the ESM schema.
-Returns an empty vector if valid; otherwise a vector holding AT MOST ONE
-`SchemaError` — JSONSchema.jl reports only the *first* failing issue it
-encounters, so the result is never longer than one entry today. The `Vector`
-return type is kept (it is the public contract, and leaves room for a
-multi-error validator later); callers must not assume an exhaustive error
-list. Each error carries the path (JSON-Pointer style), message, and keyword
-extracted from that issue.
+Validate `data` (a native JSON tree of `Dict`/`Vector`/scalars) against the ESM
+schema. Returns an empty vector when valid; otherwise ONE `SchemaError` per
+schema violation (CONFORMANCE_SPEC §7.1.2), each carrying:
+
+- `path` — the RFC-6901 JSON Pointer of the offending node (document root `""`,
+  0-based array indices);
+- `keyword` — the JSON-Schema keyword that failed (`required`, `type`, `enum`,
+  `minItems`, `oneOf`, `additionalProperties`, …);
+- `message` — free human-readable text (not part of the conformance contract).
+
+Unlike JSONSchema.jl's single-issue `validate`, this enumerates leaf failures
+INSIDE failed `oneOf`/`anyOf`/`allOf`/`if` branches (see
+`_collect_schema_errors!`), matching TypeScript's AJV `allErrors` output.
 """
 function validate_schema(data::Any)::Vector{SchemaError}
     if ESM_SCHEMA === nothing
         @warn "Schema validation skipped - schema not loaded"
         return SchemaError[]
     end
-
+    errors = SchemaError[]
     try
-        result = JSONSchema.validate(ESM_SCHEMA, data)
-        if result === nothing
-            return SchemaError[]
-        elseif result isa JSONSchema.SingleIssue
-            # Extract the issue's location and failing keyword instead of
-            # collapsing everything to "/" / "unknown".
-            return [SchemaError(_issue_pointer(result.path), string(result), result.reason)]
-        else
-            return [SchemaError("/", string(result), "unknown")]
-        end
+        # Normalise to NATIVE JSON containers first. The two callers hand this
+        # function different carriers — the conformance producer a native
+        # `Dict{String,Any}` tree, but `load` the raw `JSON3.Object` straight off
+        # the parser — and JSON3's `JSON3.Array` is not a `Base.Array`, so
+        # JSONSchema.jl's `type: array` check (and every `oneOf` branch that
+        # depends on it) misfires on the JSON3 carrier. Coercing to native
+        # containers makes the walk carrier-independent (the same reason
+        # `validate()` funnels its input through `_plain_json`).
+        native = _to_native_json(data)
+        _collect_schema_errors!(errors, native, ESM_SCHEMA.data, "")
     catch e
-        return [SchemaError("/", "Schema validation error: $(e)", "error")]
+        return [SchemaError("", "Schema validation error: $(e)", "error")]
     end
+    return _dedup_schema_errors(errors)
 end
 
 """

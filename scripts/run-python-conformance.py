@@ -159,6 +159,22 @@ def run_display(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return results
 
 
+def _canonicalize_numbers(obj: Any) -> Any:
+    """Apply the §5.5.3.1 integral-float→int rule to every scalar in a dict-form
+    AST. ``substitute`` preserves numbers verbatim (an in-memory ``2.0`` stays a
+    float), but the cross-binding comparison is over the *serialized* form, where
+    an integral float is an integer literal (`2.0`→`2`) — which is what the other
+    four bindings emit. Without this the substitution output diverges only in the
+    int/float spelling of a float-valued binding (e.g. `coefficient` → 2.0)."""
+    from earthsci_ast.serialize import _canonical_number
+
+    if isinstance(obj, dict):
+        return {k: _canonicalize_numbers(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_canonicalize_numbers(v) for v in obj]
+    return _canonical_number(obj)
+
+
 def run_substitution(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Apply `substitute` to every manifest substitution case."""
     print("Running substitution sweep...")
@@ -166,7 +182,8 @@ def run_substitution(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     for case in manifest["substitution_cases"]:
         try:
-            results[case["id"]] = {"result": earthsci_ast.substitute(case["input"], case["bindings"])}
+            result = earthsci_ast.substitute(case["input"], case["bindings"])
+            results[case["id"]] = {"result": _canonicalize_numbers(result)}
         except Exception as exc:
             results[case["id"]] = {"result": None, "error": str(exc)}
 

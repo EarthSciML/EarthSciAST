@@ -25,13 +25,16 @@ import { schema } from './embedded-schema.js'
 
 /**
  * The single root-path token used when a validation diagnostic has no more
- * specific location. `'$'` is chosen (over a bare `'/'`) so every root-level
- * `path` this library emits — structural errors/warnings and catch-paths in
- * validate.ts as well as this module's schema-error root fallback — is uniform,
- * matching the Python and Go bindings. Exported so validate.ts consumes the
- * same constant (validate imports parse, so there is no import cycle).
+ * specific location. The empty string `''` is the RFC-6901 JSON Pointer for the
+ * document root (CONFORMANCE_SPEC §7.1.2), so every root-level `path` this
+ * library emits — this module's schema-error root fallback, structural
+ * errors/warnings, and the catch-paths in validate/orchestrator.ts — points at
+ * the document root with the same canonical token the cross-language
+ * conformance harness expects (not `$`, `/`, or `(root)`). Exported so
+ * validate.ts consumes the same constant (validate imports parse, so there is
+ * no import cycle).
  */
-export const ROOT_PATH = '$'
+export const ROOT_PATH = ''
 
 /**
  * Schema validation error with JSON Pointer path
@@ -133,7 +136,7 @@ export function validateSchema(data: unknown): SchemaError[] {
   }
 
   return validator.errors.map((error: ErrorObject): SchemaError => ({
-    path: error.instancePath || ROOT_PATH,
+    path: error.instancePath ?? ROOT_PATH,
     message: error.message || 'Unknown validation error',
     keyword: error.keyword,
   }))

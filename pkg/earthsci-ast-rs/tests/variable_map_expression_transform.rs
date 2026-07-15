@@ -206,9 +206,18 @@ fn variable_map_expression_transform_serde_round_trip() {
         _ => panic!("Expected VariableMap variant"),
     }
 
-    // Lossless round-trip: re-serialization is Value-equal to the input.
+    // Canonical round-trip: the transform structure round-trips, and the
+    // integral float coefficient `2.0` canonicalizes to the integer `2`
+    // (§5.5.3.1), matching the JS/Julia/Python bindings. Compare against the
+    // canonical expected value rather than the raw `2.0` input.
+    let expected_canonical = json!({
+        "type": "variable_map",
+        "from": "Src.F",
+        "to": "Sink.F_in",
+        "transform": {"op": "+", "args": [{"op": "*", "args": [2, "Src.F"]}, "Sink.offset"]}
+    });
     let back = serde_json::to_value(&entry).unwrap();
-    assert_eq!(back, entry_json);
+    assert_eq!(back, expected_canonical);
 }
 
 #[test]

@@ -87,7 +87,8 @@ function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[]
   const errors: StructuralError[] = []
   for (const warning of warnings) {
     // `location` is already a JSON Pointer (units.ts `componentPointer`), so it
-    // is used verbatim. Root token is the shared `ROOT_PATH` ('$'), used only
+    // is used verbatim. Root token is the shared `ROOT_PATH` (the empty-string
+    // document-root JSON Pointer), used only
     // when the warning carries no location (consistent with validate()'s catch
     // blocks and parse.ts's schema-error root fallback).
     const path = warning.location ?? ROOT_PATH

@@ -486,8 +486,9 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
   // validate() parses string input through the same `losslessJsonParse`
   // machinery `load()` uses (tagged leaves stripped back to plain numbers),
   // rather than a divergent bare `JSON.parse`. A malformed string is still
-  // reported in the historical `json_parse_error` envelope — same code, `$`
-  // path, `details.error` shape, and `Invalid JSON: ` message prefix.
+  // reported in the historical `json_parse_error` envelope — same code,
+  // empty-string document-root path, `details.error` shape, and `Invalid JSON: `
+  // message prefix.
   it('reports malformed JSON in the json_parse_error envelope', () => {
     const result = validate('{ "esm": "0.1.0", ')
 
@@ -497,7 +498,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
     expect(result.schema_errors).toHaveLength(1)
     const err = result.schema_errors[0]
     expect(err.code).toBe('json_parse_error')
-    expect(err.path).toBe('$')
+    expect(err.path).toBe('')
     expect(err.message.startsWith('Invalid JSON: ')).toBe(true)
     expect(typeof err.details.error).toBe('string')
     expect(err.message).toBe(`Invalid JSON: ${err.details.error}`)

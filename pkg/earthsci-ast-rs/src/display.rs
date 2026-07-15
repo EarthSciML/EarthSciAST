@@ -554,6 +554,7 @@ fn aggregate_symbol(semiring: Option<&str>, reduce: &str, fmt: Fmt) -> &'static 
 fn format_range_spec(rng: &RangeSpec) -> String {
     match rng {
         RangeSpec::Interval(iv) => format!("{}:{}", iv[0], iv[1]),
+        RangeSpec::Strided(iv) => format!("{}:{}:{}", iv[0], iv[1], iv[2]),
         RangeSpec::IndexSetRef { from, of } => match of {
             Some(of) if !of.is_empty() => format!("{}({})", from, of.join(", ")),
             _ => from.clone(),

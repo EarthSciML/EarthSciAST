@@ -135,7 +135,7 @@ func ValidateFile(file *ESMFile, jsonStr string) *ValidationResult {
 		// If schema validation fails, return with error
 		return &ValidationResult{
 			IsValid:          false,
-			SchemaErrors:     []SchemaError{{Path: "$", Message: fmt.Sprintf("Schema validation failed: %v", err), Keyword: "error"}},
+			SchemaErrors:     []SchemaError{{Path: "", Message: fmt.Sprintf("Schema validation failed: %v", err), Keyword: "error"}},
 			StructuralErrors: []StructuralError{},
 			UnitWarnings:     []UnitWarning{},
 		}

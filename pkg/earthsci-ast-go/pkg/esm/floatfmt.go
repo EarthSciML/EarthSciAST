@@ -37,11 +37,18 @@ const (
 //   - |f| in [1e-6, 1e21) renders as shortest-round-trip plain decimal, with a
 //     trailing ".0" appended to integer-valued magnitudes so a JSON integer
 //     token and a JSON float token are never spelled the same way (preserving
-//     the §5.4.1 int/float round-trip distinction).
+//     the §5.4.1 int/float round-trip distinction the CanonicalJSON equivalence
+//     form relies on).
 //   - |f| outside that window renders in exponent form with lowercase 'e', no
 //     leading '+', and no leading zeros on the exponent magnitude.
 //   - NaN and ±Inf return an error wrapping ErrCanonicalNonFinite; the message
 //     text matches the existing canonicalFloat64String messages verbatim.
+//
+// This helper preserves the §5.4.6 int/float distinction and backs the
+// CanonicalJSON expression-equivalence form (formatCanonicalFloat). The
+// document-serialization form (§5.5.3.1) additionally collapses integral floats
+// to integer literals; that extra rule lives in canonicalFloat64String, NOT
+// here, so the two contracts stay separable.
 func formatCanonicalFloatShared(f float64) (string, error) {
 	if math.IsNaN(f) {
 		return "", fmt.Errorf("%w: NaN not representable in canonical JSON", ErrCanonicalNonFinite)

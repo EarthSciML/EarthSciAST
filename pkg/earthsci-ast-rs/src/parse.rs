@@ -1,6 +1,7 @@
 //! JSON parsing and schema validation for ESM files
 
 use crate::{EsmFile, error::EsmError};
+use jsonschema::error::ValidationErrorKind;
 use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -28,13 +29,23 @@ const ESM_SCHEMA_JSON: &str = include_str!("esm-schema.json");
 fn get_schema() -> &'static JSONSchema {
     static SCHEMA: OnceLock<JSONSchema> = OnceLock::new();
     SCHEMA.get_or_init(|| {
-        let schema_value: Value =
-            serde_json::from_str(ESM_SCHEMA_JSON).expect("Bundled schema should be valid JSON");
         JSONSchema::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&schema_value)
+            .compile(get_schema_value())
             .expect("Bundled schema should compile successfully")
+    })
+}
+
+/// The parsed (but uncompiled) schema `Value`, cached. Needed by
+/// [`collect_schema_errors`] to navigate `oneOf`/`anyOf` branch sub-schemas and
+/// resolve `$ref`s when descending past the shallow composition error the
+/// `jsonschema` crate reports (it does not surface a failed branch's own
+/// sub-errors).
+fn get_schema_value() -> &'static Value {
+    static SCHEMA_VALUE: OnceLock<Value> = OnceLock::new();
+    SCHEMA_VALUE.get_or_init(|| {
+        serde_json::from_str(ESM_SCHEMA_JSON).expect("Bundled schema should be valid JSON")
     })
 }
 
@@ -241,6 +252,302 @@ pub fn validate_schema(json_value: &Value) -> Result<(), EsmError> {
             Err(EsmError::SchemaValidation(error_messages.join("; ")))
         }
     }
+}
+
+/// Map a `jsonschema` [`ValidationErrorKind`] to the STANDARD JSON-Schema
+/// keyword that failed, so the cross-language conformance wire format uses the
+/// same vocabulary as AJV / Python `jsonschema` (CONFORMANCE_SPEC.md §7.1.2)
+/// rather than a library-specific spelling.
+fn schema_keyword_for_kind(kind: &ValidationErrorKind) -> &'static str {
+    use ValidationErrorKind as K;
+    match kind {
+        K::AdditionalItems { .. } => "additionalItems",
+        K::AdditionalProperties { .. } => "additionalProperties",
+        K::AnyOf => "anyOf",
+        // A regex that blew its backtrack budget failed the `pattern` keyword.
+        K::BacktrackLimitExceeded { .. } => "pattern",
+        K::Constant { .. } => "const",
+        K::Contains => "contains",
+        K::ContentEncoding { .. } => "contentEncoding",
+        K::ContentMediaType { .. } => "contentMediaType",
+        K::Custom { .. } => "custom",
+        K::Enum { .. } => "enum",
+        K::ExclusiveMaximum { .. } => "exclusiveMaximum",
+        K::ExclusiveMinimum { .. } => "exclusiveMinimum",
+        K::FalseSchema => "false",
+        K::FileNotFound { .. } => "$ref",
+        K::Format { .. } => "format",
+        K::FromUtf8 { .. } => "contentEncoding",
+        K::Utf8 { .. } => "format",
+        K::JSONParse { .. } => "$ref",
+        K::InvalidReference { .. } => "$ref",
+        K::InvalidURL { .. } => "format",
+        K::MaxItems { .. } => "maxItems",
+        K::Maximum { .. } => "maximum",
+        K::MaxLength { .. } => "maxLength",
+        K::MaxProperties { .. } => "maxProperties",
+        K::MinItems { .. } => "minItems",
+        K::Minimum { .. } => "minimum",
+        K::MinLength { .. } => "minLength",
+        K::MinProperties { .. } => "minProperties",
+        K::MultipleOf { .. } => "multipleOf",
+        K::Not { .. } => "not",
+        K::OneOfMultipleValid | K::OneOfNotValid => "oneOf",
+        K::Pattern { .. } => "pattern",
+        K::PropertyNames { .. } => "propertyNames",
+        K::Required { .. } => "required",
+        K::Schema => "schema",
+        K::Type { .. } => "type",
+        K::UnevaluatedProperties { .. } => "unevaluatedProperties",
+        K::UniqueItems => "uniqueItems",
+        K::UnknownReferenceScheme { .. } => "$ref",
+        K::Resolver { .. } => "$ref",
+    }
+}
+
+/// Maximum `oneOf`/`anyOf` branch-descent depth. Deep enough for the ESM
+/// schema's real nesting (document → model → variable/equation → expression),
+/// bounded so a self-referential `$ref` (e.g. `Expression`) cannot recurse
+/// without end.
+const SCHEMA_DESCENT_CAP: usize = 16;
+
+/// Validate `json_value` against the ESM schema and return **one
+/// [`SchemaError`] per violation** (CONFORMANCE_SPEC.md §7.1.2), instead of the
+/// single `"; "`-joined blob [`validate_schema`] produces for the load path.
+///
+/// Each record carries the RFC-6901 JSON Pointer of the offending node (the
+/// document root is the empty string `""`) and the standard JSON-Schema
+/// keyword that failed, so the cross-language comparator can match pinned
+/// `(keyword, path)` tuples. An empty vec means the document is schema-valid.
+///
+/// The `jsonschema` crate reports a failed `oneOf`/`anyOf`/`$ref` only as a
+/// SHALLOW composition error at the branch point — it does not surface the
+/// sub-schema errors that explain WHY the branch failed (AJV, the reference,
+/// does). Since the ESM schema wraps every component in
+/// `additionalProperties: { oneOf: [{$ref: …}, {$ref: SubsystemRef}] }` and
+/// nests further `oneOf`s inside, that would hide almost every pinned error
+/// behind a `oneOf` at `/models/X`. To recover them, each composition error is
+/// descended: every branch sub-schema is compiled standalone and re-validated
+/// against the offending instance subtree, and its (recursively descended)
+/// errors are emitted with absolute instance paths. Extra errors are harmless
+/// (the comparator is a required-subset), so all branches are explored.
+pub fn collect_schema_errors(json_value: &Value) -> Vec<crate::validate::SchemaError> {
+    let root = get_schema_value();
+    let defs = root.get("$defs");
+    let mut out = Vec::new();
+    let mut cache: std::collections::HashMap<String, Option<JSONSchema>> =
+        std::collections::HashMap::new();
+    // The top level reuses the pre-compiled full schema; branches below compile
+    // on demand.
+    let summaries = match get_schema().validate(json_value) {
+        Ok(()) => Vec::new(),
+        Err(errors) => summarize_errors(errors),
+    };
+    handle_schema_errors(
+        root, defs, &mut cache, root, json_value, "", &summaries, 0, &mut out,
+    );
+    // Dedup identical (path, keyword, message) records the branch sweep can
+    // produce when several branches fail the same way.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|e| seen.insert((e.path.clone(), e.keyword.clone(), e.message.clone())));
+    out
+}
+
+/// Owned summary of a single `jsonschema` error, so the compiled sub-schema (and
+/// its `cache` borrow) can be dropped before the branch descent recurses.
+struct ErrSummary {
+    instance_path: String,
+    schema_path: String,
+    keyword: String,
+    message: String,
+    is_composition: bool,
+}
+
+/// Project a validation-error iterator to owned [`ErrSummary`]s.
+fn summarize_errors<'a>(
+    errors: impl Iterator<Item = jsonschema::ValidationError<'a>>,
+) -> Vec<ErrSummary> {
+    errors
+        .map(|error| ErrSummary {
+            instance_path: error.instance_path.to_string(),
+            schema_path: error.schema_path.to_string(),
+            keyword: schema_keyword_for_kind(&error.kind).to_string(),
+            message: error.to_string(),
+            is_composition: matches!(
+                error.kind,
+                ValidationErrorKind::OneOfNotValid
+                    | ValidationErrorKind::OneOfMultipleValid
+                    | ValidationErrorKind::AnyOf
+            ),
+        })
+        .collect()
+}
+
+/// Emit each summarized error, or — for a `oneOf`/`anyOf` composition failure —
+/// descend every branch sub-schema and emit its own (recursively descended)
+/// errors instead. `nav_schema` is the concrete schema fragment the errors'
+/// `schema_path`s are relative to; `instance` is the value validated against it
+/// and `base` the absolute instance-pointer prefix of that value.
+#[allow(clippy::too_many_arguments)]
+fn handle_schema_errors(
+    root: &Value,
+    defs: Option<&Value>,
+    cache: &mut std::collections::HashMap<String, Option<JSONSchema>>,
+    nav_schema: &Value,
+    instance: &Value,
+    base: &str,
+    summaries: &[ErrSummary],
+    depth: usize,
+    out: &mut Vec<crate::validate::SchemaError>,
+) {
+    for s in summaries {
+        let abs_path = format!("{base}{}", s.instance_path);
+
+        // Always emit the error itself. For a composition failure this is the
+        // shallow `oneOf`/`anyOf` record — some pins want exactly that (e.g. the
+        // root `anyOf` when a document declares no systems), and the comparator
+        // is a required-subset so the deeper branch errors added below only help.
+        out.push(crate::validate::SchemaError {
+            path: abs_path.clone(),
+            message: s.message.clone(),
+            keyword: s.keyword.clone(),
+        });
+
+        // Then descend a composition failure so the sub-schema errors that
+        // explain WHY every branch failed surface too (the crate reports only
+        // the shallow composition error; AJV — the reference — reports these).
+        if s.is_composition && depth < SCHEMA_DESCENT_CAP {
+            let segments = schema_path_segments(&s.schema_path);
+            if let Some(branches) =
+                resolve_schema_at(root, nav_schema, &segments).and_then(|c| c.as_array())
+            {
+                let sub_instance = if s.instance_path.is_empty() {
+                    instance
+                } else {
+                    instance.pointer(&s.instance_path).unwrap_or(instance)
+                };
+                for branch in branches {
+                    let branch_schema = follow_refs(root, branch);
+                    // Validate the offending subtree against this branch and
+                    // summarize its errors; the `cache` borrow ends here so the
+                    // recursion below is free to re-borrow it.
+                    let sub_summaries =
+                        validate_and_summarize(cache, defs, branch_schema, sub_instance);
+                    handle_schema_errors(
+                        root,
+                        defs,
+                        cache,
+                        branch_schema,
+                        sub_instance,
+                        &abs_path,
+                        &sub_summaries,
+                        depth + 1,
+                        out,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Compile `branch_schema` standalone (via [`compile_branch`]) and summarize its
+/// errors against `instance`. The compiled schema — and thus the `cache` borrow
+/// — is released on return, freeing the caller to recurse.
+fn validate_and_summarize(
+    cache: &mut std::collections::HashMap<String, Option<JSONSchema>>,
+    defs: Option<&Value>,
+    branch_schema: &Value,
+    instance: &Value,
+) -> Vec<ErrSummary> {
+    match compile_branch(cache, defs, branch_schema) {
+        Some(compiled) => match compiled.validate(instance) {
+            Ok(()) => Vec::new(),
+            Err(errors) => summarize_errors(errors),
+        },
+        None => Vec::new(),
+    }
+}
+
+/// Split a schema-path JSON Pointer (`/properties/models/.../oneOf`) into its
+/// unescaped chunks for [`resolve_schema_at`].
+fn schema_path_segments(pointer: &str) -> Vec<String> {
+    pointer
+        .split('/')
+        .skip(1) // leading empty chunk before the first '/'
+        .map(|c| c.replace("~1", "/").replace("~0", "~"))
+        .collect()
+}
+
+/// Resolve `$ref`s until `value` is a concrete (non-`$ref`) schema node.
+fn follow_refs<'a>(root: &'a Value, mut value: &'a Value) -> &'a Value {
+    let mut guard = 0;
+    while let Some(reference) = value.get("$ref").and_then(|r| r.as_str()) {
+        guard += 1;
+        if guard > SCHEMA_DESCENT_CAP {
+            break;
+        }
+        match resolve_local_ref(root, reference) {
+            Some(target) => value = target,
+            None => break,
+        }
+    }
+    value
+}
+
+/// Resolve a local `#/…` JSON-Pointer `$ref` against the schema document.
+fn resolve_local_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
+    let pointer = reference.strip_prefix('#')?;
+    if pointer.is_empty() {
+        Some(root)
+    } else {
+        root.pointer(pointer)
+    }
+}
+
+/// Navigate `schema_path` segments into `start`, transparently resolving any
+/// `$ref` crossed along the way (mirroring how the crate's resolved
+/// `schema_path` traverses `$ref` boundaries), returning the node the pointer
+/// addresses (e.g. the `oneOf` array).
+fn resolve_schema_at<'a>(
+    root: &'a Value,
+    start: &'a Value,
+    segments: &[String],
+) -> Option<&'a Value> {
+    let mut cur = follow_refs(root, start);
+    for seg in segments {
+        cur = follow_refs(root, cur);
+        cur = match cur {
+            Value::Object(_) => cur.get(seg)?,
+            Value::Array(arr) => arr.get(seg.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(follow_refs(root, cur))
+}
+
+/// Compile a branch sub-schema standalone (with the document `$defs` injected so
+/// its internal `$ref`s resolve), memoized by the branch's JSON text. `None` if
+/// the fragment cannot be compiled.
+fn compile_branch<'c>(
+    cache: &'c mut std::collections::HashMap<String, Option<JSONSchema>>,
+    defs: Option<&Value>,
+    branch_schema: &Value,
+) -> Option<&'c JSONSchema> {
+    let key = branch_schema.to_string();
+    cache
+        .entry(key)
+        .or_insert_with(|| {
+            let mut wrapper = branch_schema.clone();
+            if let (Some(obj), Some(defs)) = (wrapper.as_object_mut(), defs) {
+                obj.entry("$defs").or_insert_with(|| defs.clone());
+            }
+            JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .should_validate_formats(true)
+                .compile(&wrapper)
+                .ok()
+        })
+        .as_ref()
 }
 
 // ============================================================================

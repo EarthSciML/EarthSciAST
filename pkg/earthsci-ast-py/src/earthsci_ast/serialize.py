@@ -74,10 +74,45 @@ def _emit_stoich(coeff: int | float) -> int | float:
     return float(coeff)
 
 
+#: JSON canonical-number contract (CONFORMANCE_SPEC §5.5.3.1): an integral value
+#: is emitted as an integer literal only when it fits a signed 64-bit integer.
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+
+
+def _canonical_number(value: Any) -> Any:
+    """Canonicalize a JSON scalar per CONFORMANCE_SPEC §5.5.3.1.
+
+    A number whose value is integral and fits Int64 serializes as an INTEGER
+    literal — no trailing ``.0`` — regardless of how it was spelled (``0.0`` ->
+    ``0``, ``-696723.0`` -> ``-696723``), so every binding re-serializes it
+    byte-identically. Non-integral floats, out-of-range magnitudes, non-finite
+    values, strings and ``bool`` pass through unchanged (a ``bool`` is not a JSON
+    number here).
+    """
+    if isinstance(value, bool) or not isinstance(value, float):
+        return value
+    if math.isfinite(value) and value.is_integer() and _INT64_MIN <= value <= _INT64_MAX:
+        return int(value)
+    return value
+
+
+def _canonical_nested(value: Any) -> Any:
+    """Apply :func:`_canonical_number` to every scalar in a (possibly nested)
+    list — the integer descriptor arrays of array ops (``shape`` / ``regions`` /
+    ``ranges`` / ``perm``), i.e. the reshape / makearray / aggregate bodies the
+    §5.5.3.1 rule applies inside. Strings (e.g. a metaparameter symbol in an
+    unresolved library range) are left untouched.
+    """
+    if isinstance(value, list):
+        return [_canonical_nested(v) for v in value]
+    return _canonical_number(value)
+
+
 def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
     """Serialize an expression to JSON-compatible format."""
     if isinstance(expr, (int, float, str)):
-        return expr
+        return _canonical_number(expr)
     if isinstance(expr, ExprNode):
         result = {"op": expr.op, "args": [_serialize_expression(arg) for arg in expr.args]}
         if expr.wrt is not None:
@@ -103,7 +138,7 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
         if getattr(expr, "semiring", None) is not None:
             result["semiring"] = expr.semiring
         if expr.ranges is not None:
-            result["ranges"] = expr.ranges
+            result["ranges"] = _canonical_nested(expr.ranges)
         # M2 value-equality join + filter predicate (RFC §5.3) and the §5.5
         # index-set-producing fields. Mirrors _parse_expression: ``join``/
         # ``distinct`` are plain data; ``filter``/``key`` are nested Expressions.
@@ -116,13 +151,13 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
         if expr.key is not None:
             result["key"] = _serialize_expression(expr.key)
         if expr.regions is not None:
-            result["regions"] = expr.regions
+            result["regions"] = _canonical_nested(expr.regions)
         if expr.values is not None:
             result["values"] = [_serialize_expression(v) for v in expr.values]
         if expr.shape is not None:
-            result["shape"] = expr.shape
+            result["shape"] = _canonical_nested(expr.shape)
         if expr.perm is not None:
-            result["perm"] = expr.perm
+            result["perm"] = _canonical_nested(expr.perm)
         if expr.axis is not None:
             result["axis"] = expr.axis
         if expr.fn is not None:

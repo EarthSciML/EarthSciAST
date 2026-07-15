@@ -10,7 +10,6 @@ package esm
 
 import (
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -69,27 +68,31 @@ func TestVariableMapTransform_ExpressionRoundTrip(t *testing.T) {
 	if !ok || inner.Op != "*" {
 		t.Fatalf("Transform.Args[0] = %#v; want ExprNode op '*'", node.Args[0])
 	}
-	// The 2.0 literal must survive as a float64 (RFC §5.4.6 int/float
-	// distinction), so canonical re-marshal spells it "2.0".
+	// The 2.0 literal parses as a float64 (the wire token carried a fraction).
 	if f, ok := inner.Args[0].(float64); !ok || f != 2.0 {
 		t.Fatalf("inner literal = %#v (%T); want float64 2.0", inner.Args[0], inner.Args[0])
 	}
 
-	// Lossless round-trip via the package's canonical serialization: the
-	// re-marshal is byte-stable, and unmarshal-again yields a deep-equal value.
+	// Canonical serialization normalizes the integral float 2.0 to the integer
+	// literal "2" per §5.5.3.1 rule 1, so re-marshal spells it "2" (not "2.0")
+	// and the re-marshal is idempotent from that normalized form onward.
 	b1, err := marshalCanonical(vm, false)
 	if err != nil {
 		t.Fatalf("marshalCanonical: %v", err)
 	}
-	if !strings.Contains(string(b1), "2.0") {
-		t.Errorf("canonical re-marshal lost the float spelling: %s", b1)
+	if strings.Contains(string(b1), "2.0") {
+		t.Errorf("canonical re-marshal should normalize 2.0 to integer form: %s", b1)
 	}
 	entry2, err := UnmarshalCouplingEntry(b1)
 	if err != nil {
 		t.Fatalf("UnmarshalCouplingEntry (round 2): %v", err)
 	}
-	if !reflect.DeepEqual(entry, entry2) {
-		t.Errorf("round-trip not lossless:\n first = %#v\nsecond = %#v", entry, entry2)
+	// The normalized literal re-parses as int64(2); the expression structure is
+	// otherwise preserved and re-serialization is byte-stable (checked below).
+	vm2 := entry2.(VariableMapCoupling)
+	inner2 := vm2.Transform.(ExprNode).Args[0].(ExprNode)
+	if i, ok := inner2.Args[0].(int64); !ok || i != 2 {
+		t.Errorf("round 2 inner literal = %#v (%T); want int64 2 after normalization", inner2.Args[0], inner2.Args[0])
 	}
 	b2, err := marshalCanonical(entry2, false)
 	if err != nil {
