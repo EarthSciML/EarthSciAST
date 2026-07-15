@@ -30,6 +30,7 @@
 //! run after schema validation but before deserializing into typed structs.
 
 use serde_json::{Map, Value};
+use std::rc::Rc;
 
 const APPLY_OP: &str = "apply_expression_template";
 
@@ -38,6 +39,164 @@ const APPLY_OP: &str = "apply_expression_template";
 pub type ExpressionTemplateError = crate::diagnostic::DiagnosticError;
 
 use crate::diagnostic::err;
+
+// ---------------------------------------------------------------------------
+// Shared-value mirror (structural sharing for the expansion pipeline)
+// ---------------------------------------------------------------------------
+//
+// `serde_json::Value` is an OWNED tree: a substitution that copies a template
+// body multiplies memory by the number of call sites. A chain of templates
+// T0..Tn whose bodies each reference T_{i-1} TWICE therefore expands to 2^n
+// copies of the leaf — a ~4KB file with a depth-19 chain produced a
+// multi-million-node AST and an OOM, while respecting every documented limit
+// (chain depth <= MAX_TEMPLATE_EXPANSION_DEPTH = 32).
+//
+// The fix mirrors the Julia reference implementation (its "shared DAGs, not
+// exponential trees" change): the expansion pipeline works on an `Rc`-shared
+// mirror of `Value` (`SNode`), so substitution splices template bodies and
+// bindings BY REFERENCE (an `Rc` bump) instead of copying, and the
+// composition / rewrite walks are identity-preserving and pointer-memoized —
+// a subtree shared under many parents is processed once and the shared
+// result respliced. This is a REPRESENTATION-ONLY change: identical subtrees
+// are observationally indistinguishable, selection and traversal stay fully
+// deterministic, and expansion semantics, diagnostics, and serialized bytes
+// are unchanged.
+//
+// The document itself remains an owned `serde_json::Value`: each rewritten
+// field's expanded DAG is materialized back into it ONCE, at the end of the
+// fixpoint (`to_value`). That single materialization is inherently
+// proportional to the EXPANDED size — an owned `Value` cannot alias
+// subtrees — but it is no longer preceded by exponentially many intermediate
+// copies (composed bodies, per-pass tree rebuilds, registry clones), which
+// is where the blow-up lived.
+
+/// Shared mirror of `serde_json::Value`. Object fields preserve insertion
+/// order (matching serde_json's `preserve_order` feature); expression-node
+/// objects are small, so field lookups are linear scans.
+#[derive(Debug)]
+enum SNode {
+    Null,
+    Bool(bool),
+    Num(serde_json::Number),
+    Str(String),
+    Arr(Vec<Sv>),
+    Obj(Vec<(String, Sv)>),
+}
+
+/// A shared (reference-counted) expression node.
+type Sv = Rc<SNode>;
+
+/// Convert an owned JSON tree into the shared mirror. The input is a tree
+/// (parsed JSON has no aliasing), so no memoization is needed: O(input).
+fn to_shared(v: &Value) -> Sv {
+    Rc::new(match v {
+        Value::Null => SNode::Null,
+        Value::Bool(b) => SNode::Bool(*b),
+        Value::Number(n) => SNode::Num(n.clone()),
+        Value::String(s) => SNode::Str(s.clone()),
+        Value::Array(arr) => SNode::Arr(arr.iter().map(to_shared).collect()),
+        Value::Object(obj) => SNode::Obj(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), to_shared(v)))
+                .collect(),
+        ),
+    })
+}
+
+/// Materialize a shared DAG back into an owned `serde_json::Value` tree.
+/// This is the ONE inherently size-proportional step: an owned `Value`
+/// cannot alias subtrees, so a DAG whose logical expansion has 2^n leaves
+/// materializes 2^n owned copies. It runs once per rewritten field, at the
+/// boundary where the expanded form is spliced back into the owned document.
+fn to_value(s: &SNode) -> Value {
+    match s {
+        SNode::Null => Value::Null,
+        SNode::Bool(b) => Value::Bool(*b),
+        SNode::Num(n) => Value::Number(n.clone()),
+        SNode::Str(st) => Value::String(st.clone()),
+        SNode::Arr(items) => Value::Array(items.iter().map(|c| to_value(c)).collect()),
+        SNode::Obj(fields) => {
+            let mut out = Map::new();
+            for (k, v) in fields {
+                out.insert(k.clone(), to_value(v));
+            }
+            Value::Object(out)
+        }
+    }
+}
+
+/// Field lookup on a shared object node (insertion-ordered small vec).
+fn obj_get<'a>(fields: &'a [(String, Sv)], key: &str) -> Option<&'a Sv> {
+    fields.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+}
+
+/// The `op` string of a shared object node, if any.
+fn obj_op(fields: &[(String, Sv)]) -> Option<&str> {
+    match obj_get(fields, "op").map(|v| &**v) {
+        Some(SNode::Str(s)) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+/// Structural equality between shared nodes, with a pointer fast path so
+/// comparing two handles onto the same shared subtree is O(1). Object
+/// equality is key-set based (order-insensitive), mirroring
+/// `serde_json::Value`'s `PartialEq`.
+fn sv_eq(a: &Sv, b: &Sv) -> bool {
+    if Rc::ptr_eq(a, b) {
+        return true;
+    }
+    match (&**a, &**b) {
+        (SNode::Null, SNode::Null) => true,
+        (SNode::Bool(x), SNode::Bool(y)) => x == y,
+        (SNode::Num(x), SNode::Num(y)) => x == y,
+        (SNode::Str(x), SNode::Str(y)) => x == y,
+        (SNode::Arr(x), SNode::Arr(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(cx, cy)| sv_eq(cx, cy))
+        }
+        (SNode::Obj(x), SNode::Obj(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, vx)| obj_get(y, k).is_some_and(|vy| sv_eq(vx, vy)))
+        }
+        _ => false,
+    }
+}
+
+/// Structural equality between an owned pattern literal and a shared node,
+/// mirroring `serde_json::Value`'s `PartialEq` semantics (numbers compare
+/// via `serde_json::Number` equality, objects are order-insensitive).
+fn value_eq_sv(p: &Value, t: &SNode) -> bool {
+    match (p, t) {
+        (Value::Null, SNode::Null) => true,
+        (Value::Bool(x), SNode::Bool(y)) => x == y,
+        (Value::Number(x), SNode::Num(y)) => x == y,
+        (Value::String(x), SNode::Str(y)) => x == y,
+        (Value::Array(x), SNode::Arr(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(px, ty)| value_eq_sv(px, ty))
+        }
+        (Value::Object(x), SNode::Obj(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, pv)| obj_get(y, k).is_some_and(|tv| value_eq_sv(pv, tv)))
+        }
+        _ => false,
+    }
+}
+
+/// Ordered template-invocation / match bindings (param -> shared sub-AST).
+/// Binding sets are small (a template's params), so lookups are linear.
+type Binds = Vec<(String, Sv)>;
+
+fn binds_get<'a>(binds: &'a Binds, key: &str) -> Option<&'a Sv> {
+    binds.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+}
+
+/// Pointer-keyed memo table for identity-memoized walks over shared DAGs.
+/// Keys are `Rc::as_ptr` addresses of nodes reachable from a root that is
+/// borrowed alive for the duration of the walk, so no keyed allocation can
+/// be freed (and its address reused) mid-walk.
+type PtrMemo<T> = std::collections::HashMap<*const SNode, T>;
 
 /// Reject `apply_expression_template` nodes inside a `match` pattern
 /// (esm-spec §9.7.3: match patterns MUST NOT reference templates).
@@ -256,36 +415,77 @@ fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// Inline every `apply_expression_template` node in `node` against
-/// `templates`, post-order (so the bindings' own sub-ASTs are inlined
+/// Inline every `apply_expression_template` node in `node` against the
+/// composed `bodies`, post-order (so the bindings' own sub-ASTs are inlined
 /// first). Referenced bodies are already closed when this runs in
 /// topological order, so a single `expand_apply` produces an apply-free
-/// subtree.
+/// subtree. Identity-memoized and sharing-preserving: a subtree shared
+/// under many parents is inlined once and the shared result respliced, so
+/// composed bodies stay DAGs instead of exploding into trees.
 fn inline_applies(
-    node: &Value,
-    templates: &Map<String, Value>,
+    node: &Sv,
+    decls: &Map<String, Value>,
+    bodies: &std::collections::HashMap<String, Sv>,
     scope: &str,
-) -> Result<Value, ExpressionTemplateError> {
-    match node {
-        Value::Array(arr) => {
-            let mut out = Vec::with_capacity(arr.len());
-            for c in arr {
-                out.push(inline_applies(c, templates, scope)?);
+    memo: &mut PtrMemo<Sv>,
+) -> Result<Sv, ExpressionTemplateError> {
+    match &**node {
+        SNode::Arr(items) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return Ok(hit.clone());
             }
-            Ok(Value::Array(out))
+            let mut changed = false;
+            let mut out = Vec::with_capacity(items.len());
+            for c in items {
+                let nc = inline_applies(c, decls, bodies, scope, memo)?;
+                changed |= !Rc::ptr_eq(&nc, c);
+                out.push(nc);
+            }
+            let res = if changed {
+                Rc::new(SNode::Arr(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(key, res.clone());
+            Ok(res)
         }
-        Value::Object(obj) => {
-            let mut out = Map::new();
-            for (k, v) in obj {
-                out.insert(k.clone(), inline_applies(v, templates, scope)?);
+        SNode::Obj(fields) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return Ok(hit.clone());
             }
-            if out.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP) {
-                return expand_apply(&out, templates, scope);
+            let mut changed = false;
+            let mut out: Vec<(String, Sv)> = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                let nv = inline_applies(v, decls, bodies, scope, memo)?;
+                changed |= !Rc::ptr_eq(&nv, v);
+                out.push((k.clone(), nv));
             }
-            Ok(Value::Object(out))
+            let res = if obj_op(&out) == Some(APPLY_OP) {
+                expand_apply(&out, decls, bodies, scope)?
+            } else if changed {
+                Rc::new(SNode::Obj(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(key, res.clone());
+            Ok(res)
         }
         _ => Ok(node.clone()),
     }
+}
+
+/// The result of §9.7.3 registration-time body composition in the shared
+/// representation: every template's closed (apply-free) body as a shared
+/// DAG, plus the body-reference graph (used by the owned wrapper to decide
+/// which decls to materialize back).
+struct ComposedBodies {
+    /// name -> closed body as a shared DAG (ALL templates, including those
+    /// that referenced nothing).
+    bodies: std::collections::HashMap<String, Sv>,
+    /// name -> referenced template names (empty = body was already closed).
+    refs: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Registration-time body composition (esm-spec §9.7.3): template bodies MAY
@@ -295,30 +495,41 @@ fn inline_applies(
 /// deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
 /// (`template_body_expansion_too_deep`), then inlines dependencies-first by
 /// pure substitution — confluent, so topological order cannot affect the
-/// result. Afterwards every `body` is a closed Expression AST with zero
-/// `apply_expression_template` nodes; runs BEFORE the §9.6.3 fixpoint ever
-/// consults a `match` rule. Mutates the decl objects in `templates` in
-/// place.
-pub(crate) fn compose_template_bodies(
-    templates: &mut Map<String, Value>,
+/// result. Afterwards every returned `body` is a closed Expression AST with
+/// zero `apply_expression_template` nodes; runs BEFORE the §9.6.3 fixpoint
+/// ever consults a `match` rule.
+///
+/// Bodies are composed as shared DAGs (`Sv`): a referenced body is spliced
+/// in BY REFERENCE, so a chain of templates that each reference their
+/// predecessor k times costs O(chain) memory here instead of O(k^chain).
+/// `templates` itself is not mutated.
+fn compose_template_bodies_shared(
+    templates: &Map<String, Value>,
     scope: &str,
-) -> Result<(), ExpressionTemplateError> {
-    if templates.is_empty() {
-        return Ok(());
-    }
+) -> Result<ComposedBodies, ExpressionTemplateError> {
+    let mut bodies: std::collections::HashMap<String, Sv> = std::collections::HashMap::new();
     let mut refs: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
+    if templates.is_empty() {
+        return Ok(ComposedBodies { bodies, refs });
+    }
     let mut any_refs = false;
     for (name, decl) in templates.iter() {
         let mut names = Vec::new();
-        if let Some(body) = decl.get("body") {
-            collect_apply_names(body, &mut names);
+        match decl.get("body") {
+            Some(body) => {
+                collect_apply_names(body, &mut names);
+                bodies.insert(name.clone(), to_shared(body));
+            }
+            None => {
+                bodies.insert(name.clone(), Rc::new(SNode::Null));
+            }
         }
         any_refs = any_refs || !names.is_empty();
         refs.insert(name.clone(), names);
     }
     if !any_refs {
-        return Ok(());
+        return Ok(ComposedBodies { bodies, refs });
     }
 
     for (name, rs) in &refs {
@@ -416,41 +627,118 @@ pub(crate) fn compose_template_bodies(
         if rs.is_empty() {
             continue;
         }
-        let body = templates
+        let body = bodies
             .get(&name)
-            .and_then(|d| d.get("body"))
             .cloned()
-            .unwrap_or(Value::Null);
+            .unwrap_or_else(|| Rc::new(SNode::Null));
+        let mut memo = PtrMemo::default();
         let inlined = inline_applies(
             &body,
             templates,
+            &bodies,
             &format!("{scope}.expression_templates.{name}"),
+            &mut memo,
         )?;
-        if let Some(Value::Object(decl)) = templates.get_mut(&name) {
+        bodies.insert(name.clone(), inlined);
+    }
+    Ok(ComposedBodies { bodies, refs })
+}
+
+/// Owned-view wrapper over [`compose_template_bodies_shared`] for callers
+/// that keep templates as `serde_json::Value` decls (the §9.7 import
+/// machinery): composes with structural sharing, then materializes the
+/// closed bodies back into the decl objects in place — only for templates
+/// that actually referenced others, exactly as before. NOTE: this owned
+/// materialization is inherently proportional to the COMPOSED size (an
+/// owned `Value` cannot alias subtrees), so a deep multi-reference chain in
+/// an imported library still materializes exponentially here; the load-time
+/// component fixpoint itself uses the shared form and does not pay this.
+pub(crate) fn compose_template_bodies(
+    templates: &mut Map<String, Value>,
+    scope: &str,
+) -> Result<(), ExpressionTemplateError> {
+    if templates.is_empty() {
+        return Ok(());
+    }
+    let composed = compose_template_bodies_shared(templates, scope)?;
+    for (name, rs) in &composed.refs {
+        if rs.is_empty() {
+            continue;
+        }
+        let inlined = composed
+            .bodies
+            .get(name)
+            .map(|b| to_value(b))
+            .unwrap_or(Value::Null);
+        if let Some(Value::Object(decl)) = templates.get_mut(name) {
             decl.insert("body".to_string(), inlined);
         }
     }
     Ok(())
 }
 
-fn substitute(body: &Value, bindings: &Map<String, Value>) -> Value {
-    match body {
-        Value::String(s) => {
-            if let Some(v) = bindings.get(s) {
-                v.clone()
+/// Splice `bindings` into `body` with structural sharing (esm-spec §9.6.3):
+/// a bound metavariable is replaced by a REFERENCE to the binding's sub-AST,
+/// an untouched subtree is returned by identity, and the walk is
+/// identity-memoized so a subtree shared under many parents is substituted
+/// once. With no bindings the body itself is spliced in unchanged (an `Rc`
+/// bump). Pure and deterministic, so aliased results are observationally
+/// identical to the old deep-copy substitution.
+fn substitute(body: &Sv, bindings: &Binds) -> Sv {
+    if bindings.is_empty() {
+        return body.clone();
+    }
+    let mut memo: PtrMemo<Sv> = PtrMemo::default();
+    subst_shared(body, bindings, &mut memo)
+}
+
+fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
+    match &**node {
+        SNode::Str(s) => match binds_get(bindings, s) {
+            Some(v) => v.clone(),
+            None => node.clone(),
+        },
+        SNode::Arr(items) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return hit.clone();
+            }
+            let mut changed = false;
+            let mut out = Vec::with_capacity(items.len());
+            for c in items {
+                let nc = subst_shared(c, bindings, memo);
+                changed |= !Rc::ptr_eq(&nc, c);
+                out.push(nc);
+            }
+            let res = if changed {
+                Rc::new(SNode::Arr(out))
             } else {
-                body.clone()
-            }
+                node.clone()
+            };
+            memo.insert(key, res.clone());
+            res
         }
-        Value::Array(arr) => Value::Array(arr.iter().map(|c| substitute(c, bindings)).collect()),
-        Value::Object(obj) => {
-            let mut out = Map::new();
-            for (k, v) in obj {
-                out.insert(k.clone(), substitute(v, bindings));
+        SNode::Obj(fields) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return hit.clone();
             }
-            Value::Object(out)
+            let mut changed = false;
+            let mut out = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                let nv = subst_shared(v, bindings, memo);
+                changed |= !Rc::ptr_eq(&nv, v);
+                out.push((k.clone(), nv));
+            }
+            let res = if changed {
+                Rc::new(SNode::Obj(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(key, res.clone());
+            res
         }
-        _ => body.clone(),
+        _ => node.clone(),
     }
 }
 
@@ -472,10 +760,12 @@ struct MatchRule {
     /// set for O(1) membership checks in `try_match` — precomputed once at
     /// registration ([`collect_match_rules`]) instead of per rule per node.
     param_set: std::collections::HashSet<String>,
-    /// The pattern Expression a node is matched against.
+    /// The pattern Expression a node is matched against. Patterns are small
+    /// and never composed, so the owned view is kept.
     pattern: Value,
-    /// The replacement Expression instantiated with the bound metavariables.
-    body: Value,
+    /// The replacement Expression instantiated with the bound metavariables
+    /// — the §9.7.3-composed body as a shared DAG.
+    body: Sv,
     /// Selection precedence (esm-spec §9.6.3): higher fires first; ties break by
     /// declaration order. Absent ⇒ `0`.
     priority: i64,
@@ -487,8 +777,12 @@ struct MatchRule {
 
 /// Bundles the per-component rewrite inputs threaded through each pass.
 struct RewriteCtx<'a> {
-    /// All templates declared in the component (named-expansion lookup table).
-    templates: &'a Map<String, Value>,
+    /// All template declarations in the component (params / bindings
+    /// validation for named expansion; bodies live in `bodies`).
+    decls: &'a Map<String, Value>,
+    /// The §9.7.3-composed closed bodies as shared DAGs, keyed by template
+    /// name (named-expansion lookup table).
+    bodies: &'a std::collections::HashMap<String, Sv>,
     /// Auto-applied `match` rules, **pre-sorted** highest-`priority`-first with
     /// ties broken by declaration order (esm-spec §9.6.3). `rewrite_pass` fires
     /// the first rule in this order whose pattern matches a node.
@@ -557,14 +851,17 @@ fn component_shape_env(
 /// conservative. Mirrors the Julia reference `_where_satisfied`.
 fn where_satisfied(
     where_c: &Option<std::collections::BTreeMap<String, Vec<String>>>,
-    bindings: &Map<String, Value>,
+    bindings: &Binds,
     shape_env: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> bool {
     let Some(where_c) = where_c else {
         return true;
     };
     for (p, req) in where_c {
-        let Some(Value::String(b)) = bindings.get(p) else {
+        let Some(bound) = binds_get(bindings, p) else {
+            return false;
+        };
+        let SNode::Str(b) = &**bound else {
             return false;
         };
         let Some(shp) = shape_env.get(b) else {
@@ -634,6 +931,7 @@ fn registered_where(
 /// sole termination guard (esm-spec §9.6.3).
 fn collect_match_rules(
     templates: &Map<String, Value>,
+    bodies: &std::collections::HashMap<String, Sv>,
     iset_names: &std::collections::HashSet<String>,
     scope: &str,
 ) -> Result<Vec<MatchRule>, ExpressionTemplateError> {
@@ -654,7 +952,12 @@ fn collect_match_rules(
                     .collect()
             })
             .unwrap_or_default();
-        let body = obj.get("body").cloned().unwrap_or(Value::Null);
+        // The §9.7.3-composed closed body (shared DAG); `bodies` covers every
+        // declared template, so a miss only happens for a body-less decl.
+        let body = bodies
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| Rc::new(SNode::Null));
         let where_c = registered_where(obj, iset_names, scope, name)?;
         rules.push(MatchRule {
             name: name.clone(),
@@ -679,49 +982,60 @@ fn collect_match_rules(
 /// are matched as a subset: `target` MAY carry extra keys.
 fn try_match(
     pattern: &Value,
-    target: &Value,
+    target: &Sv,
     params: &std::collections::HashSet<String>,
-    binds: &mut Map<String, Value>,
+    binds: &mut Binds,
 ) -> bool {
     match pattern {
         Value::String(s) => {
             if params.contains(s.as_str()) {
-                match binds.get(s) {
-                    Some(prev) => prev == target,
+                // A repeated metavariable must bind consistently; the
+                // pointer fast path in `sv_eq` makes re-binding a shared
+                // subtree O(1) instead of a deep compare.
+                match binds.iter().position(|(k, _)| k == s) {
+                    Some(i) => {
+                        let prev = binds[i].1.clone();
+                        sv_eq(&prev, target)
+                    }
                     None => {
-                        binds.insert(s.clone(), target.clone());
+                        binds.push((s.clone(), target.clone()));
                         true
                     }
                 }
             } else {
-                pattern == target
+                value_eq_sv(pattern, target)
             }
         }
-        Value::Array(parr) => match target {
-            Value::Array(tarr) if parr.len() == tarr.len() => parr
+        Value::Array(parr) => match &**target {
+            SNode::Arr(tarr) if parr.len() == tarr.len() => parr
                 .iter()
                 .zip(tarr.iter())
                 .all(|(p, t)| try_match(p, t, params, binds)),
             _ => false,
         },
-        Value::Object(pobj) => match target {
-            Value::Object(tobj) => pobj.iter().all(|(k, pv)| match tobj.get(k) {
+        Value::Object(pobj) => match &**target {
+            SNode::Obj(tfields) => pobj.iter().all(|(k, pv)| match obj_get(tfields, k) {
                 Some(tv) => try_match(pv, tv, params, binds),
                 None => false,
             }),
             _ => false,
         },
         // numbers / bools / null: exact equality.
-        _ => pattern == target,
+        _ => value_eq_sv(pattern, target),
     }
 }
 
 fn expand_apply(
-    node: &Map<String, Value>,
-    templates: &Map<String, Value>,
+    node: &[(String, Sv)],
+    decls: &Map<String, Value>,
+    bodies: &std::collections::HashMap<String, Sv>,
     scope: &str,
-) -> Result<Value, ExpressionTemplateError> {
-    let name = node.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+) -> Result<Sv, ExpressionTemplateError> {
+    let name = match obj_get(node, "name").map(|v| &**v) {
+        Some(SNode::Str(s)) => Some(s.as_str()),
+        _ => None,
+    }
+    .ok_or_else(|| {
         err(
             "apply_expression_template_invalid_declaration",
             format!("{scope}: apply_expression_template node missing or empty 'name'"),
@@ -733,7 +1047,7 @@ fn expand_apply(
             format!("{scope}: apply_expression_template 'name' must be non-empty"),
         ));
     }
-    let decl = templates.get(name).ok_or_else(|| {
+    let decl = decls.get(name).ok_or_else(|| {
         err(
             "apply_expression_template_unknown_template",
             format!("{scope}: apply_expression_template references undeclared template '{name}'"),
@@ -745,15 +1059,15 @@ fn expand_apply(
             format!("{scope}: template '{name}' declaration is not an object"),
         )
     })?;
-    let bindings = node
-        .get("bindings")
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| {
-            err(
+    let bindings: &[(String, Sv)] = match obj_get(node, "bindings").map(|v| &**v) {
+        Some(SNode::Obj(fields)) => fields,
+        _ => {
+            return Err(err(
                 "apply_expression_template_bindings_mismatch",
                 format!("{scope}: apply_expression_template '{name}' missing 'bindings' object"),
-            )
-        })?;
+            ));
+        }
+    };
 
     let params: Vec<&str> = decl_obj
         .get("params")
@@ -761,7 +1075,8 @@ fn expand_apply(
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
     let declared: std::collections::HashSet<&str> = params.iter().copied().collect();
-    let provided: std::collections::HashSet<&str> = bindings.keys().map(String::as_str).collect();
+    let provided: std::collections::HashSet<&str> =
+        bindings.iter().map(|(k, _)| k.as_str()).collect();
     for p in &params {
         if !provided.contains(p) {
             return Err(err(
@@ -772,8 +1087,8 @@ fn expand_apply(
             ));
         }
     }
-    for p in &provided {
-        if !declared.contains(p) {
+    for (p, _) in bindings {
+        if !declared.contains(p.as_str()) {
             return Err(err(
                 "apply_expression_template_bindings_mismatch",
                 format!("{scope}: apply_expression_template '{name}' supplies unknown param '{p}'"),
@@ -784,13 +1099,15 @@ fn expand_apply(
     // Splice the bindings' sub-ASTs into the body AS-IS (esm-spec §9.6.3): the
     // substituted body is re-scanned in a SUBSEQUENT pass, so any
     // `apply_expression_template` op or `match`-eligible sub-AST inside a
-    // binding is rewritten then — not here. A body itself may not contain
-    // `apply_expression_template` (rejected by `validate_templates`).
-    let mut resolved = Map::new();
-    for (k, v) in bindings {
-        resolved.insert(k.clone(), v.clone());
-    }
-    let body = decl_obj.get("body").cloned().unwrap_or(Value::Null);
+    // binding is rewritten then — not here. Bindings are spliced BY
+    // REFERENCE: a binding used at several substitution sites is shared, not
+    // copied. A body itself may not contain `apply_expression_template`
+    // call sites by this point (composed at registration, §9.7.3).
+    let resolved: Binds = bindings.to_vec();
+    let body = bodies
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| Rc::new(SNode::Null));
     Ok(substitute(&body, &resolved))
 }
 
@@ -809,32 +1126,66 @@ fn expand_apply(
 /// rewritten node and whether any rewrite occurred in this subtree; `last`
 /// records the op (and the firing rule's name) of the most recent rewrite,
 /// for the non-convergence diagnostic.
+///
+/// The walk is identity-memoized and sharing-preserving (mirroring the Julia
+/// reference): the rewrite of a node is a pure function of the node itself
+/// (pattern matching is structural; the registries and `shape_env` are
+/// pass-constant), so a subtree shared under many parents is rewritten ONCE
+/// and the shared result respliced — preserving the DAG `substitute` builds
+/// instead of exploding it back into a tree, and keeping pass cost linear in
+/// UNIQUE nodes. Unchanged subtrees are returned by identity. Each memo
+/// entry also records the subtree's final `last` value (when it rewrote
+/// anything), replayed on memo hits so the non-convergence diagnostic sees
+/// exactly what an unmemoized sequential walk would have seen.
 fn rewrite_pass(
-    node: &Value,
+    node: &Sv,
     ctx: &RewriteCtx,
     scope: &str,
     last: &mut String,
-) -> Result<(Value, bool), ExpressionTemplateError> {
-    match node {
-        Value::Array(arr) => {
+    memo: &mut PtrMemo<(Sv, bool, Option<String>)>,
+) -> Result<(Sv, bool), ExpressionTemplateError> {
+    match &**node {
+        SNode::Arr(items) => {
+            let key = Rc::as_ptr(node);
+            if let Some((res, ch, l)) = memo.get(&key) {
+                if let Some(l) = l {
+                    *last = l.clone();
+                }
+                return Ok((res.clone(), *ch));
+            }
             let mut changed = false;
-            let mut out = Vec::with_capacity(arr.len());
-            for c in arr {
-                let (nc, ch) = rewrite_pass(c, ctx, scope, last)?;
+            let mut out = Vec::with_capacity(items.len());
+            for c in items {
+                let (nc, ch) = rewrite_pass(c, ctx, scope, last, memo)?;
                 out.push(nc);
                 changed |= ch;
             }
-            Ok((Value::Array(out), changed))
+            let res = if changed {
+                Rc::new(SNode::Arr(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(key, (res.clone(), changed, changed.then(|| last.clone())));
+            Ok((res, changed))
         }
-        Value::Object(obj) => {
-            let op = obj.get("op").and_then(|v| v.as_str());
+        SNode::Obj(fields) => {
+            let key = Rc::as_ptr(node);
+            if let Some((res, ch, l)) = memo.get(&key) {
+                if let Some(l) = l {
+                    *last = l.clone();
+                }
+                return Ok((res.clone(), *ch));
+            }
+            let op = obj_op(fields);
             // (1) Outermost-first: fire a rule AT this node before descending.
             if op == Some(APPLY_OP) {
                 *last = APPLY_OP.to_string();
-                return Ok((expand_apply(obj, ctx.templates, scope)?, true));
+                let res = expand_apply(fields, ctx.decls, ctx.bodies, scope)?;
+                memo.insert(key, (res.clone(), true, Some(last.clone())));
+                return Ok((res, true));
             }
             for rule in ctx.rules {
-                let mut binds = Map::new();
+                let mut binds = Binds::new();
                 // Constraint filtering is part of match ELIGIBILITY (esm-spec
                 // §9.6.3 constraint 2): a `where`-excluded rule is treated
                 // exactly like a non-matching rule at this node, so the scan
@@ -843,18 +1194,26 @@ fn rewrite_pass(
                     && where_satisfied(&rule.where_c, &binds, ctx.shape_env)
                 {
                     *last = format!("{} (rule '{}')", op.unwrap_or(""), rule.name);
-                    return Ok((substitute(&rule.body, &binds), true));
+                    let res = substitute(&rule.body, &binds);
+                    memo.insert(key, (res.clone(), true, Some(last.clone())));
+                    return Ok((res, true));
                 }
             }
             // (2) No rule fired here — descend into children.
             let mut changed = false;
-            let mut out = Map::new();
-            for (k, v) in obj {
-                let (nv, ch) = rewrite_pass(v, ctx, scope, last)?;
-                out.insert(k.clone(), nv);
+            let mut out = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                let (nv, ch) = rewrite_pass(v, ctx, scope, last, memo)?;
+                out.push((k.clone(), nv));
                 changed |= ch;
             }
-            Ok((Value::Object(out), changed))
+            let res = if changed {
+                Rc::new(SNode::Obj(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(key, (res.clone(), changed, changed.then(|| last.clone())));
+            Ok((res, changed))
         }
         _ => Ok((node.clone(), false)),
     }
@@ -868,14 +1227,20 @@ fn rewrite_pass(
 /// converge rather than being flagged up front. Selection and traversal are
 /// fully deterministic, so all bindings produce byte-identical fixpoints.
 fn rewrite_to_fixpoint(
-    node: &Value,
+    node: &Sv,
     ctx: &RewriteCtx,
     scope: &str,
-) -> Result<Value, ExpressionTemplateError> {
+) -> Result<Sv, ExpressionTemplateError> {
     let mut current = node.clone();
     let mut last = String::new();
     for _ in 0..MAX_REWRITE_PASSES {
-        let (next, changed) = rewrite_pass(&current, ctx, scope, &mut last)?;
+        // Fresh memo each pass: a pass's rewrite of a node is pass-local
+        // (freshly-produced bodies are deliberately not revisited until the
+        // next pass). The memo (and thus every raw-pointer key's referent)
+        // is kept alive by `current` plus the memo's own `Rc` handles for
+        // the duration of the pass.
+        let mut memo = PtrMemo::default();
+        let (next, changed) = rewrite_pass(&current, ctx, scope, &mut last, &mut memo)?;
         current = next;
         if !changed {
             return Ok(current); // fixpoint reached
@@ -960,7 +1325,10 @@ pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), Expressio
 /// their registered `where` constraints), and the static shape environment the
 /// constraints consult.
 struct CompRegistry {
-    templates: Map<String, Value>,
+    /// Template declarations (params / bindings validation).
+    decls: Map<String, Value>,
+    /// §9.7.3-composed closed bodies as shared DAGs (`Rc` clones — cheap).
+    bodies: std::collections::HashMap<String, Sv>,
     rules: Vec<MatchRule>,
     shape_env: std::collections::BTreeMap<String, Vec<String>>,
 }
@@ -1012,7 +1380,7 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             // the templates block is removed (it reads only `variables`).
             let shape_env = component_shape_env(comp);
             // Take the templates block (if any) so we can borrow comp mutably.
-            let mut templates: Map<String, Value> = match comp.remove("expression_templates") {
+            let templates: Map<String, Value> = match comp.remove("expression_templates") {
                 Some(Value::Object(t)) => t,
                 _ => Map::new(),
             };
@@ -1026,30 +1394,38 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             // Registration-time body composition (esm-spec §9.7.3): inline
             // body references to match-less in-scope templates as a
             // statically-checked acyclic DAG, so every rule body the
-            // fixpoint sees is a closed AST.
-            compose_template_bodies(&mut templates, &scope_base)?;
-            let rules = collect_match_rules(&templates, &iset_names, &scope_base)?;
+            // fixpoint sees is a closed AST. Composed bodies are shared
+            // DAGs — a referenced body is spliced by reference, never
+            // copied — so a deep multi-reference chain stays linear here.
+            let composed = compose_template_bodies_shared(&templates, &scope_base)?;
+            let rules = collect_match_rules(&templates, &composed.bodies, &iset_names, &scope_base)?;
             let ctx = RewriteCtx {
-                templates: &templates,
+                decls: &templates,
+                bodies: &composed.bodies,
                 rules: &rules,
                 shape_env: &shape_env,
             };
             // Outermost-first, priority-ordered, bounded-fixpoint rewrite per
             // non-template field (esm-spec §9.6.3): expands
             // `apply_expression_template` ops AND fires auto `match` rules until
-            // a pass performs zero rewrites (or the pass bound rejects).
+            // a pass performs zero rewrites (or the pass bound rejects). Each
+            // field is rewritten in the shared representation and materialized
+            // back into the owned document ONCE, only if it changed.
             let keys: Vec<String> = comp.keys().cloned().collect();
             for k in keys {
                 let scope = format!("{scope_base}.{k}");
-                if let Some(child) = comp.get(&k).cloned() {
-                    let rewritten = rewrite_to_fixpoint(&child, &ctx, &scope)?;
-                    comp.insert(k, rewritten);
+                let Some(child) = comp.get(&k) else { continue };
+                let shared = to_shared(child);
+                let rewritten = rewrite_to_fixpoint(&shared, &ctx, &scope)?;
+                if !Rc::ptr_eq(&rewritten, &shared) {
+                    comp.insert(k, to_value(&rewritten));
                 }
             }
             registries
                 .entry(cname.clone())
                 .or_insert_with(|| CompRegistry {
-                    templates: templates.clone(),
+                    decls: templates.clone(),
+                    bodies: composed.bodies.clone(),
                     rules: rules.clone(),
                     shape_env: shape_env.clone(),
                 });
@@ -1087,13 +1463,17 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                 continue;
             };
             let ctx = RewriteCtx {
-                templates: &reg.templates,
+                decls: &reg.decls,
+                bodies: &reg.bodies,
                 rules: &reg.rules,
                 shape_env: &reg.shape_env,
             };
             let scope = format!("coupling[{idx}].transform");
-            let rewritten = rewrite_to_fixpoint(&transform, &ctx, &scope)?;
-            obj.insert("transform".to_string(), rewritten);
+            let shared = to_shared(&transform);
+            let rewritten = rewrite_to_fixpoint(&shared, &ctx, &scope)?;
+            if !Rc::ptr_eq(&rewritten, &shared) {
+                obj.insert("transform".to_string(), to_value(&rewritten));
+            }
         }
     }
 
@@ -1369,6 +1749,80 @@ mod tests {
         });
         let e = lower_expression_templates(&mut v).expect_err("should fail");
         assert_eq!(e.code, "apply_expression_template_recursive_body");
+    }
+
+    /// A chain of match-less templates T0..T12 where each T_i's body
+    /// references T_{i-1} TWICE (esm-spec §9.7.3) logically expands to 2^12
+    /// copies of the T0 leaf. Composition and call-site expansion must build
+    /// this with structural sharing (shared DAGs, materialized into the owned
+    /// document once): the old deep-copy substitution was exponential in time
+    /// and memory across every intermediate — composed bodies, per-pass tree
+    /// rebuilds, registry clones — and OOMed real ~4KB documents at depth 19
+    /// while respecting every documented limit (chain depth <= 32). The
+    /// expanded document itself is byte-identical either way; this pins the
+    /// expansion's correctness at a depth where the pre-fix pipeline was
+    /// already pathological.
+    #[test]
+    fn deep_double_reference_chain_expands_correctly() {
+        const DEPTH: usize = 12;
+        let apply = |name: &str| -> Value {
+            json!({"op": APPLY_OP, "args": [], "name": name, "bindings": {}})
+        };
+        let mut templates = Map::new();
+        templates.insert(
+            "T0".to_string(),
+            json!({"params": [], "body": {"op": "*", "args": [
+                1.8e-12,
+                {"op": "exp", "args": [
+                    {"op": "/", "args": [{"op": "-", "args": [1500.0]}, "T"]}
+                ]}
+            ]}}),
+        );
+        for i in 1..=DEPTH {
+            let prev = format!("T{}", i - 1);
+            templates.insert(
+                format!("T{i}"),
+                json!({"params": [], "body": {"op": "+", "args": [apply(&prev), apply(&prev)]}}),
+            );
+        }
+        let mut v = json!({
+            "esm": "0.4.0",
+            "metadata": {"name": "deep_chain", "authors": ["t"]},
+            "reaction_systems": {"chem": {
+                "species": {"A": {"default": 1.0}, "B": {"default": 0.5}},
+                "parameters": {"T": {"default": 298.15}},
+                "expression_templates": Value::Object(templates),
+                "reactions": [{
+                    "id": "R1",
+                    "substrates": [{"species": "A", "stoichiometry": 1}],
+                    "products": [{"species": "B", "stoichiometry": 1}],
+                    "rate": apply(&format!("T{DEPTH}"))
+                }]
+            }}
+        });
+        lower_expression_templates(&mut v).expect("expansion");
+        let chem = &v["reaction_systems"]["chem"];
+        assert!(chem.get("expression_templates").is_none());
+        let rate = &chem["reactions"][0]["rate"];
+        assert_eq!(rate["op"], json!("+"));
+        // Leftmost leaf: the T0 Arrhenius-style body, fully closed.
+        let mut leaf = rate;
+        while leaf["op"] == json!("+") {
+            leaf = &leaf["args"][0];
+        }
+        assert_eq!(leaf["op"], json!("*"));
+        assert_eq!(leaf["args"][0], json!(1.8e-12));
+        // Node count of the materialized tree: the T0 body has 15 JSON values
+        // and each `+` level contributes 3 (object + "op" string + args
+        // array) plus its two children -> nodes(d) = 2^d * 18 - 3.
+        fn count(v: &Value) -> usize {
+            match v {
+                Value::Array(a) => 1 + a.iter().map(count).sum::<usize>(),
+                Value::Object(o) => 1 + o.values().map(count).sum::<usize>(),
+                _ => 1,
+            }
+        }
+        assert_eq!(count(rate), (1usize << DEPTH) * 18 - 3);
     }
 
     #[test]

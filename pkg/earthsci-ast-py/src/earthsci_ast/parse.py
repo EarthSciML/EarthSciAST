@@ -212,14 +212,35 @@ def _get_schema() -> dict[str, Any]:
         return json.load(f)
 
 
-def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
-    """Parse an expression from JSON data."""
+def _parse_expression(
+    expr_data: int | float | str | dict[str, Any],
+    _memo: dict[int, tuple[dict, Any]] | None = None,
+) -> Expr:
+    """Parse an expression from JSON data.
+
+    ``_memo`` (id(raw dict) -> (raw dict, ExprNode)) is an identity memo scoped
+    to one top-level expression: template expansion splices subtrees by
+    reference (see ``lower_expression_templates._substitute``), so the raw JSON
+    is a shared DAG and the typed IR must mirror that sharing — one ExprNode per
+    unique raw node — or a nested-template chain rematerializes exponentially
+    many nodes here. The memo keeps the raw dict alive alongside its entry so
+    ids cannot be recycled mid-parse. Load-path passes over the typed IR never
+    mutate ExprNodes in place, so aliasing them is safe.
+    """
     if isinstance(expr_data, (int, float, str)):
         return expr_data
     if isinstance(expr_data, dict):
+        memo = {} if _memo is None else _memo
+        hit = memo.get(id(expr_data))
+        if hit is not None:
+            return hit[1]
+
+        def rec(sub: Any) -> Expr:  # recurse threading the identity memo
+            return _parse_expression(sub, memo)
+
         # Parse ExprNode
         op = expr_data["op"]
-        args = [_parse_expression(arg) for arg in expr_data["args"]]
+        args = [rec(arg) for arg in expr_data["args"]]
         wrt = expr_data.get("wrt")
         dim = expr_data.get("dim")
 
@@ -227,8 +248,8 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
         # variable name (`var`, a string) plus lower/upper bounds which are
         # themselves Expressions (numeric literal, parameter ref, or subtree).
         var = expr_data.get("var")
-        lower = _parse_expression(expr_data["lower"]) if "lower" in expr_data else None
-        upper = _parse_expression(expr_data["upper"]) if "upper" in expr_data else None
+        lower = rec(expr_data["lower"]) if "lower" in expr_data else None
+        upper = rec(expr_data["upper"]) if "upper" in expr_data else None
 
         # Validate operator-specific field requirements
         if op == "D" and wrt is None:
@@ -238,7 +259,7 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
 
         # Array-op fields (schema §ExpressionNode).
         output_idx = expr_data.get("output_idx")
-        body_expr = _parse_expression(expr_data["expr"]) if "expr" in expr_data else None
+        body_expr = rec(expr_data["expr"]) if "expr" in expr_data else None
         reduce = expr_data.get("reduce")
         semiring = expr_data.get("semiring")
         ranges = expr_data.get("ranges")
@@ -246,16 +267,16 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
         # index-set-producing fields. ``join``/``distinct`` are plain data;
         # ``filter``/``key`` are nested Expressions.
         join = expr_data.get("join")
-        filter_expr = _parse_expression(expr_data["filter"]) if "filter" in expr_data else None
+        filter_expr = rec(expr_data["filter"]) if "filter" in expr_data else None
         distinct = expr_data.get("distinct")
-        key_expr = _parse_expression(expr_data["key"]) if "key" in expr_data else None
+        key_expr = rec(expr_data["key"]) if "key" in expr_data else None
         # Documentary relation tag on a `skolem` node (§5.5). Purely descriptive —
         # NEVER part of the emitted key; `args` are pure key components.
         label = expr_data.get("label")
         regions = expr_data.get("regions")
         values = None
         if "values" in expr_data:
-            values = [_parse_expression(v) for v in expr_data["values"]]
+            values = [rec(v) for v in expr_data["values"]]
         shape = expr_data.get("shape")
         perm = expr_data.get("perm")
         axis = expr_data.get("axis")
@@ -296,14 +317,14 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
                 raise ParseError(
                     "Operator 'table_lookup' requires 'axes' to be an object mapping axis names to input expressions"
                 )
-            table_axes = {k: _parse_expression(v) for k, v in table_axes_raw.items()}
+            table_axes = {k: rec(v) for k, v in table_axes_raw.items()}
             if args:
                 raise ParseError(
                     "Operator 'table_lookup' must have empty 'args' (per-axis inputs live under 'axes')"
                 )
         output = expr_data.get("output")
 
-        return ExprNode(
+        node = ExprNode(
             op=op,
             args=args,
             wrt=wrt,
@@ -336,6 +357,9 @@ def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
             table_axes=table_axes,
             output=output,
         )
+        # Keep the raw dict alive alongside the memo entry so its id is stable.
+        memo[id(expr_data)] = (expr_data, node)
+        return node
     raise ParseError(f"Invalid expression data: {expr_data}")
 
 

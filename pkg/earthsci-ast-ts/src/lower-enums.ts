@@ -41,15 +41,32 @@ export class EnumLoweringError extends Error {
 
 type EnumsMap = { [k: string]: { [k: string]: number } }
 
-function lowerExpr(expr: unknown, enums: EnumsMap): unknown {
+/**
+ * `memo` is an identity-keyed cache (one per `lowerEnums` run): template
+ * expansion produces shared DAGs (`lower-expression-templates.ts`
+ * `substitute`), so a subtree reachable through many parents is lowered once
+ * and the single (possibly identical) result is spliced everywhere. The pass
+ * was already identity-preserving; memoization keeps it linear in UNIQUE
+ * nodes and preserves the sharing. Safe because the rewrite is a pure
+ * function of the node and the fixed `enums` block.
+ */
+function lowerExpr(expr: unknown, enums: EnumsMap, memo: Map<object, unknown>): unknown {
   if (expr === null || expr === undefined) return expr
   if (typeof expr !== 'object') return expr
   if (isNumericLiteral(expr)) return expr
+  const hit = memo.get(expr)
+  if (hit !== undefined) return hit
+  const res = lowerExprUncached(expr, enums, memo)
+  memo.set(expr, res)
+  return res
+}
+
+function lowerExprUncached(expr: object, enums: EnumsMap, memo: Map<object, unknown>): unknown {
   if (Array.isArray(expr)) {
     let changed = false
     const out: unknown[] = new Array(expr.length)
     for (let i = 0; i < expr.length; i++) {
-      const child = lowerExpr(expr[i], enums)
+      const child = lowerExpr(expr[i], enums, memo)
       if (child !== expr[i]) changed = true
       out[i] = child
     }
@@ -100,7 +117,7 @@ function lowerExpr(expr: unknown, enums: EnumsMap): unknown {
     let changed = false
     for (const key of Object.keys(node)) {
       const v = node[key]
-      const lv = EXPRESSION_CHILD_KEY_SET.has(key) ? lowerExpr(v, enums) : v
+      const lv = EXPRESSION_CHILD_KEY_SET.has(key) ? lowerExpr(v, enums, memo) : v
       if (lv !== v) changed = true
       out[key] = lv
     }
@@ -113,7 +130,7 @@ function lowerExpr(expr: unknown, enums: EnumsMap): unknown {
   const out: Record<string, unknown> = {}
   for (const key of Object.keys(node)) {
     const v = node[key]
-    const lv = lowerExpr(v, enums)
+    const lv = lowerExpr(v, enums, memo)
     if (lv !== v) changed = true
     out[key] = lv
   }
@@ -130,7 +147,7 @@ export function lowerEnums(file: EsmFile): EsmFile {
   if (!enums || Object.keys(enums).length === 0) {
     // Still scan: an enum op without a declaration is an error and we
     // want it surfaced even if the user forgot the block.
-    return lowerExpr(file, {} as EnumsMap) as EsmFile
+    return lowerExpr(file, {} as EnumsMap, new Map()) as EsmFile
   }
-  return lowerExpr(file, enums) as EsmFile
+  return lowerExpr(file, enums, new Map()) as EsmFile
 }

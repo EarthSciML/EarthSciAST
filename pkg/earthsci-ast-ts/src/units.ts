@@ -256,6 +256,45 @@ export function checkDimensions(
   unitBindings: Map<string, ParsedUnit>,
   coordinateBindings?: Map<string, ParsedUnit>,
 ): UnitResult {
+  return checkDimensionsMemo(expr, unitBindings, coordinateBindings, new Map())
+}
+
+/**
+ * Identity-memoized driver behind {@link checkDimensions}. Template expansion
+ * stores expanded expressions as shared DAGs
+ * (`lower-expression-templates.ts` `substitute`), so a subtree reachable
+ * through many parents is analyzed ONCE per walk — the check stays linear in
+ * unique nodes. A memo hit reuses the computed `dimensions`; its diagnostics
+ * were already reported at the node's first (pre-order-earliest) visit, so
+ * they are not duplicated per extra parent. On a freshly-parsed tree (no
+ * aliasing) there are no memo hits and behavior is byte-identical to the
+ * unmemoized walk. Safe because the analysis is a pure function of the node
+ * and the fixed binding environments, and results are never mutated.
+ */
+function checkDimensionsMemo(
+  expr: Expression,
+  unitBindings: Map<string, ParsedUnit>,
+  coordinateBindings: Map<string, ParsedUnit> | undefined,
+  memo: Map<object, UnitResult>,
+): UnitResult {
+  const isNode = typeof expr === 'object' && expr !== null
+  if (isNode) {
+    const hit = memo.get(expr)
+    if (hit !== undefined) {
+      return { dimensions: hit.dimensions, warnings: [], diagnostics: [] }
+    }
+  }
+  const res = computeDimensions(expr, unitBindings, coordinateBindings, memo)
+  if (isNode) memo.set(expr, res)
+  return res
+}
+
+function computeDimensions(
+  expr: Expression,
+  unitBindings: Map<string, ParsedUnit>,
+  coordinateBindings: Map<string, ParsedUnit> | undefined,
+  memo: Map<object, UnitResult>,
+): UnitResult {
   const diagnostics: UnitDiagnostic[] = []
   // Record a diagnostic with its classification made EXPLICIT here (not
   // recovered later from the prose). `dimensional_mismatch` is the promotable
@@ -313,7 +352,9 @@ export function checkDimensions(
   const op = node.op
   const args = node.args ?? []
 
-  const argResults = args.map((arg) => checkDimensions(arg, unitBindings, coordinateBindings))
+  const argResults = args.map((arg) =>
+    checkDimensionsMemo(arg, unitBindings, coordinateBindings, memo),
+  )
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
   // `get(i)` is the i-th operand's dimension, or `null` when indeterminate.
@@ -964,7 +1005,11 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
           const diagnostics = [...lhsResult.diagnostics, ...rhsResult.diagnostics]
           const lhs = lhsResult.dimensions
           const rhs = rhsResult.dimensions
-          const equationText = `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`
+          // Rendered LAZILY: stringifying a template-expanded equation
+          // re-expands its shared DAG textually, so the text is only built
+          // when a mismatch is actually reported (the message is unchanged).
+          const equationText = (): string =>
+            `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`
 
           // `D(x)` with an UNDECLARED independent variable is indeterminate, so
           // the plain LHS-vs-RHS comparison below cannot see it. Apply the
@@ -986,7 +1031,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                 message: derivMessage,
                 code: 'dimensional_mismatch',
                 location: eqLocation,
-                equation: equationText,
+                equation: equationText(),
               },
             }
           }
@@ -1000,7 +1045,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                   message: `Dimensional mismatch in equation: LHS has ${formatDims(lhs.dims)}, RHS has ${formatDims(rhs.dims)}`,
                   code: 'dimensional_mismatch',
                   location: eqLocation,
-                  equation: equationText,
+                  equation: equationText(),
                 }
               : null
           return { diagnostics, mismatch }

@@ -662,8 +662,32 @@ function _lower_expr_enums(e::NumExpr, _) ; return e end
 function _lower_expr_enums(e::IntExpr, _) ; return e end
 function _lower_expr_enums(e::VarExpr, _) ; return e end
 
+# Identity-memoized entry: enum lowering is a pure, context-free function of
+# the node, so a subtree shared under many parents (template expansion stores
+# the expanded AST as a shared DAG) is lowered ONCE and the shared result
+# respliced — keeping this pass linear in UNIQUE nodes instead of exponential
+# in paths, and preserving the sharing for downstream consumers (the
+# build-time `IdDict` memo caches in tree_walk/compile.jl key on it).
 function _lower_expr_enums(e::OpExpr,
                            enums::Dict{String,Dict{String,Int}})::ASTExpr
+    return _lower_expr_enums(e, enums, IdDict{OpExpr,ASTExpr}())
+end
+
+_lower_expr_enums(e::ASTExpr, _, ::IdDict{OpExpr,ASTExpr}) = e
+
+function _lower_expr_enums(e::OpExpr,
+                           enums::Dict{String,Dict{String,Int}},
+                           memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    res = _lower_expr_enums_uncached(e, enums, memo)
+    memo[e] = res
+    return res
+end
+
+function _lower_expr_enums_uncached(e::OpExpr,
+                                    enums::Dict{String,Dict{String,Int}},
+                                    memo::IdDict{OpExpr,ASTExpr})::ASTExpr
     if e.op == "enum"
         # esm-spec §4.5: args are exactly two strings — the enum name and the
         # symbolic key. Strings come through `parse_expression` as `VarExpr`,
@@ -694,5 +718,5 @@ function _lower_expr_enums(e::OpExpr,
     # rebuild (the previous hand-listed ~17-keyword `OpExpr(...)` reconstruction
     # dropped `int_var`/`semiring`/`join`/`filter`/`id`/… whenever any child
     # changed, and never recursed `lower`/`upper`/`filter`/`key`/`ranges`).
-    return map_children(x -> _lower_expr_enums(x, enums), e)
+    return map_children(x -> _lower_expr_enums(x, enums, memo), e)
 end

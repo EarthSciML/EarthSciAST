@@ -102,6 +102,7 @@ def _walk_json(
     on_obj: Callable[[dict, str], None] | None = None,
     skip_keys: frozenset[str] | None = None,
     path: str = "",
+    dedup: bool = False,
 ) -> None:
     """Shared depth-first PRE-ORDER visitor over a JSON value — the single
     recursion skeleton behind the read-only tree-walkers in
@@ -115,26 +116,46 @@ def _walk_json(
     diagnostics that report one (collectors that don't need it omit ``on_obj``
     or ignore its second argument). Purely observational — it never rebuilds or
     mutates the tree, so transforming passes stay bespoke.
+
+    ``dedup=True`` visits each unique dict/list ONCE, at its first (pre-order)
+    occurrence. Template expansion splices subtrees by reference (see
+    :func:`earthsci_ast.lower_expression_templates._substitute`), so post-
+    expansion walkers run over a shared DAG: without dedup a subtree shared
+    under many parents is re-walked once per path, which is exponential in the
+    template-nesting depth. Callbacks must be per-node idempotent (all current
+    users are: validators raise on the node itself, collectors record the
+    node). Diagnostics are unaffected on trees without sharing, and on shared
+    DAGs a raising validator still fires at the same first pre-order path.
     """
-    if isinstance(node, str):
-        if on_str is not None:
-            on_str(node)
-        return
-    if _is_array(node):
-        for i, child in enumerate(node):
-            _walk_json(
-                child, on_str=on_str, on_obj=on_obj, skip_keys=skip_keys, path=f"{path}/{i}"
-            )
-        return
-    if _is_object(node):
-        if on_obj is not None:
-            on_obj(node, path)
-        for k, v in node.items():
-            if skip_keys is not None and k in skip_keys:
-                continue
-            _walk_json(
-                v, on_str=on_str, on_obj=on_obj, skip_keys=skip_keys, path=f"{path}/{k}"
-            )
+    seen: dict[int, Any] = {}
+
+    def rec(node: Any, path: str) -> None:
+        if isinstance(node, str):
+            if on_str is not None:
+                on_str(node)
+            return
+        if _is_array(node):
+            if dedup:
+                if id(node) in seen:
+                    return
+                # Keep the keyed object alive in the map so ids are not recycled.
+                seen[id(node)] = node
+            for i, child in enumerate(node):
+                rec(child, f"{path}/{i}")
+            return
+        if _is_object(node):
+            if dedup:
+                if id(node) in seen:
+                    return
+                seen[id(node)] = node
+            if on_obj is not None:
+                on_obj(node, path)
+            for k, v in node.items():
+                if skip_keys is not None and k in skip_keys:
+                    continue
+                rec(v, f"{path}/{k}")
+
+    rec(node, path)
 
 
 # ---------------------------------------------------------------------------

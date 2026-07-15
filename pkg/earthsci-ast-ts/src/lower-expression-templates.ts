@@ -358,25 +358,62 @@ function registeredWhere(
   return out
 }
 
-/** Substitute parameter occurrences in a template body. */
+/**
+ * Substitute parameter occurrences in a template body.
+ *
+ * STRUCTURAL SHARING (mirrors the Julia reference fix "store expanded
+ * expression templates as shared DAGs, not exponential trees"): binding values
+ * and untouched body subtrees are spliced in BY REFERENCE, never copied, and
+ * the walk is identity-preserving (a subtree containing no parameter
+ * occurrence is returned as the SAME object) and identity-memoized (a subtree
+ * shared under many parents is processed once). A template chain in which each
+ * body references its predecessor twice therefore expands to a DAG with O(n)
+ * unique nodes instead of a 2^n-node tree. This changes representation only:
+ * expansion is otherwise pure, every subsequent pass over the expanded form is
+ * non-mutating, and the canonical serialized bytes are unchanged (JSON
+ * serialization of the DAG re-expands it textually).
+ */
 function substitute(body: Json, bindings: Record<string, Json>): Json {
-  if (typeof body === 'string') {
-    if (Object.prototype.hasOwnProperty.call(bindings, body)) {
-      return deepClone(bindings[body])
+  const memo = new Map<object, Json>()
+  const go = (node: Json): Json => {
+    if (typeof node === 'string') {
+      if (Object.prototype.hasOwnProperty.call(bindings, node)) {
+        // Splice the binding by reference: expanded forms are never mutated in
+        // place downstream, so sharing is safe and keeps expansion linear.
+        return bindings[node]
+      }
+      return node
     }
-    return body
-  }
-  if (Array.isArray(body)) {
-    return body.map((c) => substitute(c, bindings))
-  }
-  if (isObject(body)) {
-    const out: Record<string, unknown> = {}
-    for (const k of Object.keys(body)) {
-      out[k] = substitute(body[k], bindings)
+    if (Array.isArray(node)) {
+      const hit = memo.get(node)
+      if (hit !== undefined) return hit
+      let changed = false
+      const out = node.map((c) => {
+        const r = go(c)
+        if (r !== c) changed = true
+        return r
+      })
+      const res = changed ? out : node
+      memo.set(node, res)
+      return res
     }
-    return out
+    if (isObject(node)) {
+      const hit = memo.get(node)
+      if (hit !== undefined) return hit
+      let changed = false
+      const out: Record<string, unknown> = {}
+      for (const k of Object.keys(node)) {
+        const r = go(node[k])
+        if (r !== node[k]) changed = true
+        out[k] = r
+      }
+      const res = changed ? out : node
+      memo.set(node, res)
+      return res
+    }
+    return node
   }
-  return body
+  return go(body)
 }
 
 /**
@@ -710,9 +747,10 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
       )
     }
   }
-  // Bindings are spliced in AS-IS (esm-spec §9.6.3): `substitute` deep-clones
-  // each value on use, so the narrowed `bindings` map is passed straight
-  // through — no intermediate copy is needed or meaningful here.
+  // Bindings are spliced in AS-IS (esm-spec §9.6.3): `substitute` splices each
+  // value BY REFERENCE (structural sharing — expanded forms are never mutated
+  // in place downstream), so the narrowed `bindings` map is passed straight
+  // through — no copy is needed or meaningful here.
   return substitute(decl.body, bindings)
 }
 
@@ -736,6 +774,17 @@ interface PassResult {
  * fires, the walk descends into the node's children. `changed` is `true` iff any
  * rewrite occurred in this subtree; `last.op` records the op of the most recent
  * rewrite, for the non-convergence diagnostic.
+ *
+ * The pass is IDENTITY-PRESERVING (a subtree with no rewrite is returned as
+ * the SAME object, not a copy) and IDENTITY-MEMOIZED per pass (`memo`, keyed
+ * on object identity): expanded template bodies are shared DAGs (see
+ * `substitute`), so a subtree reachable through many parents is rewritten
+ * once and the single result is spliced everywhere — the pass stays linear in
+ * UNIQUE nodes and preserves the sharing. This is safe because the pass is a
+ * pure function of the node (rules, templates, and shape env are fixed for
+ * the pass) and nothing mutates expanded nodes in place afterwards; the
+ * fixpoint result is byte-identical to the unshared expansion when
+ * serialized.
  */
 function onePass(
   node: Json,
@@ -744,19 +793,41 @@ function onePass(
   scope: string,
   last: { op: string },
   shapeEnv: ShapeEnv,
+  memo: Map<object, PassResult>,
 ): PassResult {
   if (Array.isArray(node)) {
+    const hit = memo.get(node)
+    if (hit !== undefined) return hit
     let changed = false
     const out = node.map((c) => {
-      const r = onePass(c, templates, sortedRules, scope, last, shapeEnv)
+      const r = onePass(c, templates, sortedRules, scope, last, shapeEnv, memo)
       changed = changed || r.changed
       return r.node
     })
-    return { node: out, changed }
+    const res: PassResult = { node: changed ? out : node, changed }
+    memo.set(node, res)
+    return res
   }
   if (!isObject(node)) {
     return { node, changed: false }
   }
+  const hit = memo.get(node)
+  if (hit !== undefined) return hit
+  const res = onePassObject(node, templates, sortedRules, scope, last, shapeEnv, memo)
+  memo.set(node, res)
+  return res
+}
+
+/** The object-node arm of {@link onePass} (split out so memoization stays in one place). */
+function onePassObject(
+  node: Record<string, unknown>,
+  templates: Templates,
+  sortedRules: MatchRule[],
+  scope: string,
+  last: { op: string },
+  shapeEnv: ShapeEnv,
+  memo: Map<object, PassResult>,
+): PassResult {
   // (1) Outermost-first: fire a rule AT this node before descending.
   if (node.op === APPLY_OP) {
     last.op = APPLY_OP
@@ -780,11 +851,11 @@ function onePass(
   let changed = false
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(node)) {
-    const r = onePass(node[k], templates, sortedRules, scope, last, shapeEnv)
+    const r = onePass(node[k], templates, sortedRules, scope, last, shapeEnv, memo)
     out[k] = r.node
     changed = changed || r.changed
   }
-  return { node: out, changed }
+  return { node: changed ? out : node, changed }
 }
 
 /**
@@ -805,7 +876,18 @@ function rewriteToFixpoint(
   const last = { op: '' }
   let current = node
   for (let pass = 0; pass < MAX_REWRITE_PASSES; pass++) {
-    const { node: next, changed } = onePass(current, templates, sortedRules, scope, last, shapeEnv)
+    // Fresh identity-memo per pass: rule context is fixed within a pass, so a
+    // shared subtree is rewritten once per pass and stays shared.
+    const memo = new Map<object, PassResult>()
+    const { node: next, changed } = onePass(
+      current,
+      templates,
+      sortedRules,
+      scope,
+      last,
+      shapeEnv,
+      memo,
+    )
     current = next
     if (!changed) return current // fixpoint reached
   }
@@ -818,15 +900,28 @@ function rewriteToFixpoint(
   )
 }
 
-/** Walk the file looking for apply_expression_template ops anywhere. */
+/**
+ * Walk the file looking for apply_expression_template ops anywhere.
+ *
+ * Expanded template bodies are shared DAGs (see `substitute`), so the walk
+ * skips any object/array it has already visited (`seen`, keyed on object
+ * identity): each unique node is scanned once. This cannot change the result
+ * on freshly-parsed JSON (a tree — no aliasing), and shared expanded subtrees
+ * are apply-free by construction, so the reported hit paths are unchanged.
+ */
 function findStrayApplyOps(view: unknown): string[] {
   const hits: string[] = []
+  const seen = new Set<object>()
   const visit = (v: unknown, path: string): void => {
     if (Array.isArray(v)) {
+      if (seen.has(v)) return
+      seen.add(v)
       for (let i = 0; i < v.length; i++) visit(v[i], `${path}/${i}`)
       return
     }
     if (isObject(v)) {
+      if (seen.has(v)) return
+      seen.add(v)
       if (v.op === APPLY_OP) hits.push(path)
       for (const k of Object.keys(v)) {
         // An `apply_expression_template` inside an `expression_templates` BLOCK is
@@ -989,29 +1084,43 @@ function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
  * (e.g. a template invocation binding the manifold parameter to a non-member
  * literal). Throws `EsmMachineryError` with code
  * `geometry_manifold_invalid`.
+ *
+ * The expanded form is a shared DAG (see `substitute`), so the walk visits
+ * each unique node once (`seen`, keyed on object identity). The first —
+ * pre-order-earliest — offending node still throws with the same path as an
+ * unshared walk would, because memoization never changes when a node is FIRST
+ * visited.
  */
 export function validateGeometryManifolds(tree: unknown, path = ''): void {
-  if (Array.isArray(tree)) {
-    for (let i = 0; i < tree.length; i++) validateGeometryManifolds(tree[i], `${path}/${i}`)
-    return
-  }
-  if (!isObject(tree)) return
-  const node = tree as Record<string, unknown>
-  if (typeof node.op === 'string' && GEOMETRY_MANIFOLD_OPS.has(node.op) && 'manifold' in node) {
-    const m = node.manifold
-    if (!(typeof m === 'string' && GEOMETRY_MANIFOLD_VALUES.has(m))) {
-      throw new EsmMachineryError(
-        ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
-        `${path}: \`${node.op}\` carries manifold ${JSON.stringify(m)}, not a member of the closed set ${GEOMETRY_MANIFOLD_SET_DISPLAY}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.`,
-      )
+  const seen = new Set<object>()
+  const visit = (tree: unknown, path: string): void => {
+    if (Array.isArray(tree)) {
+      if (seen.has(tree)) return
+      seen.add(tree)
+      for (let i = 0; i < tree.length; i++) visit(tree[i], `${path}/${i}`)
+      return
+    }
+    if (!isObject(tree)) return
+    if (seen.has(tree)) return
+    seen.add(tree)
+    const node = tree as Record<string, unknown>
+    if (typeof node.op === 'string' && GEOMETRY_MANIFOLD_OPS.has(node.op) && 'manifold' in node) {
+      const m = node.manifold
+      if (!(typeof m === 'string' && GEOMETRY_MANIFOLD_VALUES.has(m))) {
+        throw new EsmMachineryError(
+          ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
+          `${path}: \`${node.op}\` carries manifold ${JSON.stringify(m)}, not a member of the closed set ${GEOMETRY_MANIFOLD_SET_DISPLAY}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.`,
+        )
+      }
+    }
+    for (const k of Object.keys(node)) {
+      // Pre-substitution template trees; params may legally occupy the manifold
+      // position there (esm-spec §9.6.1).
+      if (k === 'expression_templates') continue
+      visit(node[k], `${path}/${k}`)
     }
   }
-  for (const k of Object.keys(node)) {
-    // Pre-substitution template trees; params may legally occupy the manifold
-    // position there (esm-spec §9.6.1).
-    if (k === 'expression_templates') continue
-    validateGeometryManifolds(node[k], `${path}/${k}`)
-  }
+  visit(tree, path)
 }
 
 /**
@@ -1028,13 +1137,26 @@ export function validateGeometryManifolds(tree: unknown, path = ''): void {
  * there; only concrete integer pairs are checked (a fully-folded document tree
  * carries nothing else in bound position). Throws `EsmMachineryError`
  * with code `makearray_region_inverted`.
+ *
+ * Visits each unique node once (`seen` — the expanded form is a shared DAG;
+ * see `validateGeometryManifolds` for why the first-thrown diagnostic is
+ * unchanged).
  */
 export function validateMakearrayRegions(tree: unknown, path = ''): void {
+  const seen = new Set<object>()
+  visitMakearrayRegions(tree, path, seen)
+}
+
+function visitMakearrayRegions(tree: unknown, path: string, seen: Set<object>): void {
   if (Array.isArray(tree)) {
-    for (let i = 0; i < tree.length; i++) validateMakearrayRegions(tree[i], `${path}/${i}`)
+    if (seen.has(tree)) return
+    seen.add(tree)
+    for (let i = 0; i < tree.length; i++) visitMakearrayRegions(tree[i], `${path}/${i}`, seen)
     return
   }
   if (!isObject(tree)) return
+  if (seen.has(tree)) return
+  seen.add(tree)
   const node = tree as Record<string, unknown>
   if (node.op === 'makearray') {
     const regions = node.regions
@@ -1062,7 +1184,7 @@ export function validateMakearrayRegions(tree: unknown, path = ''): void {
     // Template bodies/matches are pre-substitution trees; bounds may legally
     // carry metaparameter names or fold later (esm-spec §9.7.6).
     if (k === 'expression_templates') continue
-    validateMakearrayRegions(node[k], `${path}/${k}`)
+    visitMakearrayRegions(node[k], `${path}/${k}`, seen)
   }
 }
 

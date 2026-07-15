@@ -49,6 +49,18 @@ function namespace_expr(expr::VarExpr, prefix::String,
     return expr
 end
 
+# Identity-memoized recursion arms: prefixing is a pure function of the node
+# (prefix and local_names are traversal-constant), so a subtree shared under
+# many parents — template expansion stores expanded ASTs as shared DAGs — is
+# rewritten ONCE and the shared result respliced. Without the memo a rewrite
+# that touches every leaf (the common case here: every local reference gets
+# the prefix) re-materializes a shared DAG as an exponential tree.
+_namespace_expr(e::NumExpr, ::String, ::Set{String}, ::IdDict{OpExpr,ASTExpr}) = e
+_namespace_expr(e::IntExpr, ::String, ::Set{String}, ::IdDict{OpExpr,ASTExpr}) = e
+_namespace_expr(e::VarExpr, prefix::String, local_names::Set{String},
+                ::IdDict{OpExpr,ASTExpr}) =
+    namespace_expr(e, prefix, local_names)
+
 # Namespace a value-equality `join`'s key-column names (RFC §5.3). A join column
 # may name a value-invention MAP buffer that IS a component-local variable — the
 # conservative regridder's `join.on [[rg_src_bin, rg_tgt_bin]]` gates on the
@@ -76,6 +88,14 @@ end
 
 function namespace_expr(expr::OpExpr, prefix::String,
                         local_names::Set{String})::ASTExpr
+    return _namespace_expr(expr, prefix, local_names, IdDict{OpExpr,ASTExpr}())
+end
+
+function _namespace_expr(expr::OpExpr, prefix::String,
+                         local_names::Set{String},
+                         memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+    r = get(memo, expr, nothing)
+    r === nothing || return r
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach arrayop / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
@@ -86,15 +106,18 @@ function namespace_expr(expr::OpExpr, prefix::String,
     # hand-listed keywords and silently dropped int_var/lower/upper/table/
     # table_axes/output.
     result = map_children(
-        x -> namespace_expr(x, prefix, local_names), expr)::OpExpr
+        x -> _namespace_expr(x, prefix, local_names, memo), expr)::OpExpr
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
     # column may name a component-local bin buffer (see `_namespace_join`).
     # `join` is `nothing` for models without a value-equality join, so those are
-    # byte-identical to before. Index-set identifier fields (`id`,
-    # `ranges[*].from`) are document-scoped (v0.8.0) and never prefixed.
-    return reconstruct(result;
-        join=_namespace_join(expr.join, prefix, local_names))
+    # byte-identical to before (and skip the reconstruct copy). Index-set
+    # identifier fields (`id`, `ranges[*].from`) are document-scoped (v0.8.0)
+    # and never prefixed.
+    nj = _namespace_join(expr.join, prefix, local_names)
+    res = nj === expr.join ? result : reconstruct(result; join=nj)
+    memo[expr] = res
+    return res
 end
 
 # ========================================

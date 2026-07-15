@@ -556,25 +556,36 @@ def lower_enums(file: EsmFile) -> EsmFile:
     Mutates ``file`` in place; returns the file for convenience.
     """
     enums: dict[str, dict[str, int]] = file.enums or {}
+    # One identity memo for the whole file: lowering is a pure function of the
+    # node given `enums`, and template expansion splices subtrees by reference
+    # (a shared DAG), so a subtree aliased under many parents must be lowered
+    # once — not once per path (exponential in the template-nesting depth).
+    # Entries are (node, result) so the keyed node stays alive alongside the
+    # memo and its id cannot be recycled.
+    memo: dict[int, tuple[Any, Any]] = {}
     for model in file.models.values():
-        _lower_model(model, enums)
+        _lower_model(model, enums, memo)
     for rs in file.reaction_systems.values():
-        _lower_reaction_system(rs, enums)
+        _lower_reaction_system(rs, enums, memo)
     return file
 
 
-def _lower_model(model: Model, enums: dict[str, dict[str, int]]) -> None:
+def _lower_model(
+    model: Model,
+    enums: dict[str, dict[str, int]],
+    memo: dict[int, tuple[Any, Any]] | None = None,
+) -> None:
     for vname, var in list(model.variables.items()):
         if var.expression is not None:
-            new_expr = _lower_expr(var.expression, enums)
+            new_expr = _lower_expr(var.expression, enums, memo)
             if new_expr is not var.expression:
                 model.variables[vname] = replace(var, expression=new_expr)
     new_eqs: list[Equation] = []
     for eq in model.equations:
         new_eqs.append(
             Equation(
-                lhs=_lower_expr(eq.lhs, enums),
-                rhs=_lower_expr(eq.rhs, enums),
+                lhs=_lower_expr(eq.lhs, enums, memo),
+                rhs=_lower_expr(eq.rhs, enums, memo),
                 _comment=eq._comment,
             )
         )
@@ -583,8 +594,8 @@ def _lower_model(model: Model, enums: dict[str, dict[str, int]]) -> None:
     for eq in model.initialization_equations:
         new_init.append(
             Equation(
-                lhs=_lower_expr(eq.lhs, enums),
-                rhs=_lower_expr(eq.rhs, enums),
+                lhs=_lower_expr(eq.lhs, enums, memo),
+                rhs=_lower_expr(eq.rhs, enums, memo),
                 _comment=eq._comment,
             )
         )
@@ -593,20 +604,32 @@ def _lower_model(model: Model, enums: dict[str, dict[str, int]]) -> None:
         # Data-loader subsystems carry no equations/enums to lower.
         if isinstance(sub, DataLoader):
             continue
-        _lower_model(sub, enums)
+        _lower_model(sub, enums, memo)
 
 
-def _lower_reaction_system(rs: ReactionSystem, enums: dict[str, dict[str, int]]) -> None:
+def _lower_reaction_system(
+    rs: ReactionSystem,
+    enums: dict[str, dict[str, int]],
+    memo: dict[int, tuple[Any, Any]] | None = None,
+) -> None:
     for r in rs.reactions:
         if r.rate_constant is not None:
-            r.rate_constant = _lower_expr(r.rate_constant, enums)
+            r.rate_constant = _lower_expr(r.rate_constant, enums, memo)
     for sub in rs.subsystems.values():
-        _lower_reaction_system(sub, enums)
+        _lower_reaction_system(sub, enums, memo)
 
 
-def _lower_expr(node: Any, enums: dict[str, dict[str, int]]) -> Any:
+def _lower_expr(
+    node: Any,
+    enums: dict[str, dict[str, int]],
+    memo: dict[int, tuple[Any, Any]] | None = None,
+) -> Any:
     if not isinstance(node, ExprNode):
         return node
+    if memo is not None:
+        hit = memo.get(id(node))
+        if hit is not None:
+            return hit[1]
     if node.op == "enum":
         if len(node.args) != 2 or not all(isinstance(a, str) for a in node.args):
             raise ValueError(
@@ -625,13 +648,19 @@ def _lower_expr(node: Any, enums: dict[str, dict[str, int]]) -> Any:
                 UNKNOWN_ENUM_SYMBOL,
                 f"symbol `{symbol_name}` is not declared under enum `{enum_name}`",
             )
-        return ExprNode(op="const", args=[], value=mapping[symbol_name])
+        lowered = ExprNode(op="const", args=[], value=mapping[symbol_name])
+        if memo is not None:
+            memo[id(node)] = (node, lowered)
+        return lowered
     # Recurse through the FULL canonical child set (args, lower, upper, expr,
     # filter, key, values, table_axes) via expr_walk.map_children so this can
     # never again drift from the canonical child slots and silently skip an
     # `enum` hidden in an integral bound, aggregate filter, or skolem key.
     # Rebuild only when a child actually changed, preserving node identity.
-    rebuilt = map_children(node, lambda c: _lower_expr(c, enums))
+    rebuilt = map_children(node, lambda c: _lower_expr(c, enums, memo))
+    result = rebuilt
     if all(a is b for a, b in zip(iter_children(node), iter_children(rebuilt))):
-        return node
-    return rebuilt
+        result = node
+    if memo is not None:
+        memo[id(node)] = (node, result)
+    return result

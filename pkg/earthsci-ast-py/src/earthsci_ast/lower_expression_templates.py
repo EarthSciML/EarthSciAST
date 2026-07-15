@@ -218,24 +218,56 @@ def _validate_templates(templates: dict, scope: str) -> None:
 
 def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
     """Pure structural substitution: every bare-string occurrence of a bound
-    metavariable in ``body`` is replaced by a deep copy of its bound AST/literal.
+    metavariable in ``body`` is replaced by its bound AST/literal.
 
     This is the single substitution primitive of the rewrite engine — it
     instantiates both explicit ``apply_expression_template`` bodies (metavars
     bound from ``bindings``) and auto-applied ``match``-rule bodies (metavars
     bound by structural matching).
+
+    STRUCTURAL SHARING (nested-template OOM fix; mirrors the Julia binding):
+    bound ASTs are spliced BY REFERENCE, not deep-copied, the walk is
+    identity-preserving (a subtree containing no bound metavariable is returned
+    as the same object), and it is memoized on node identity so a subtree shared
+    under many parents is rewritten once. The expanded document is therefore a
+    DAG whose serialized form is byte-identical to the old tree — every
+    downstream pass must treat expanded nodes as immutable (all load-path passes
+    are functional or idempotent-in-place). Without this, a chain of templates
+    each referencing its predecessor twice expands to 2^depth copies of the leaf
+    and OOMs the loader well within the documented depth limits.
     """
-    # Bespoke (not on :func:`_walk_json`): this REBUILDS the tree with copies
-    # spliced in rather than merely observing it, so it stays a dedicated pass.
-    if isinstance(body, str):
-        if body in bindings:
-            return copy.deepcopy(bindings[body])
-        return body
-    if _is_array(body):
-        return [_substitute(c, bindings) for c in body]
-    if _is_object(body):
-        return {k: _substitute(v, bindings) for k, v in body.items()}
-    return body
+    # Bespoke (not on :func:`_walk_json`): this REBUILDS the tree with shared
+    # subtrees spliced in rather than merely observing it, so it stays a
+    # dedicated pass. The memo stores ``(node, result)`` so the keyed object
+    # stays alive alongside its entry (ids must not be recycled mid-walk).
+    memo: dict[int, tuple[Any, Any]] = {}
+
+    def sub(node: Any) -> Any:
+        if isinstance(node, str):
+            if node in bindings:
+                return bindings[node]  # spliced by reference (shared DAG)
+            return node
+        if _is_array(node):
+            hit = memo.get(id(node))
+            if hit is not None:
+                return hit[1]
+            out: Any = [sub(c) for c in node]
+            if all(o is c for o, c in zip(out, node)):
+                out = node  # identity-preserving: nothing bound below here
+            memo[id(node)] = (node, out)
+            return out
+        if _is_object(node):
+            hit = memo.get(id(node))
+            if hit is not None:
+                return hit[1]
+            out = {k: sub(v) for k, v in node.items()}
+            if all(out[k] is v for k, v in node.items()):
+                out = node
+            memo[id(node)] = (node, out)
+            return out
+        return node
+
+    return sub(body)
 
 
 # --- static match-scoping constraints (`where`, esm-spec §9.6.1) --------------
@@ -514,6 +546,7 @@ def _rewrite_pass(
     scope: str,
     last: list,
     shape_env: dict[str, list],
+    memo: dict[int, tuple] | None = None,
 ) -> tuple:
     """One pre-order (outermost-first) rewrite pass over ``node`` (esm-spec
     §9.6.3). At each object node the engine first tries to fire a rule AT the
@@ -535,34 +568,62 @@ def _rewrite_pass(
     this subtree; ``last`` (a one-element list) records the op of the most recent
     rewrite for the non-convergence diagnostic. ``shape_env`` is the enclosing
     component's static shape environment (:func:`_component_shape_env`).
+
+    The pass is IDENTITY-PRESERVING (an unchanged subtree is returned as the
+    same object) and MEMOIZED on node identity via ``memo`` (one dict per pass):
+    template substitution splices subtrees by reference, so the tree is really a
+    DAG, and a subtree shared under many parents must be rewritten once, not
+    once per path. Rewriting is a pure function of the node — matching is
+    structural, and ``templates`` / ``sorted_rules`` / ``shape_env`` are
+    pass-constant — so aliased visits are guaranteed to agree. The memo stores
+    ``(node, new_node, changed)`` tuples: keeping the keyed node alive alongside
+    its entry ensures ids are not recycled mid-pass.
     """
+    if memo is None:
+        memo = {}
     if _is_array(node):
+        hit = memo.get(id(node))
+        if hit is not None:
+            return hit[1], hit[2]
         changed = False
-        out = []
+        out: Any = []
         for c in node:
-            nc, ch = _rewrite_pass(c, templates, sorted_rules, scope, last, shape_env)
+            nc, ch = _rewrite_pass(c, templates, sorted_rules, scope, last, shape_env, memo)
             out.append(nc)
             changed = changed or ch
+        if not changed:
+            out = node  # identity-preserving
+        memo[id(node)] = (node, out, changed)
         return out, changed
     if not _is_object(node):
         return node, False
+    hit = memo.get(id(node))
+    if hit is not None:
+        return hit[1], hit[2]
     # (1) Outermost-first: fire a rule AT this node before descending.
     if node.get("op") == APPLY_OP:
         last[0] = APPLY_OP
-        return _expand_apply(node, templates, scope), True
+        expanded = _expand_apply(node, templates, scope)
+        memo[id(node)] = (node, expanded, True)
+        return expanded, True
     for rule in sorted_rules:
         binds = _match(rule.pattern, node, rule.params)
         if binds is not None and _where_satisfied(rule.where_c, binds, shape_env):
             op = node.get("op")
             last[0] = op if isinstance(op, str) else ""
-            return _substitute(rule.body, binds), True
+            replaced = _substitute(rule.body, binds)
+            memo[id(node)] = (node, replaced, True)
+            return replaced, True
     # (2) No rule fired here — descend into children.
     changed = False
     out = {}
     for k, v in node.items():
-        nv, ch = _rewrite_pass(v, templates, sorted_rules, scope, last, shape_env)
+        nv, ch = _rewrite_pass(v, templates, sorted_rules, scope, last, shape_env, memo)
         out[k] = nv
         changed = changed or ch
+    if not changed:
+        out = node  # identity-preserving
+    memo[id(node)] = (node, out, changed)
     return out, changed
 
 
@@ -586,7 +647,12 @@ def _rewrite_to_fixpoint(
     last = [""]
     current = node
     for _pass in range(MAX_REWRITE_PASSES):
-        current, changed = _rewrite_pass(current, templates, sorted_rules, scope, last, shape_env)
+        # Fresh identity memo per pass: rewriting is pure within one pass, but a
+        # node's fate can change between passes (outermost-first re-visits
+        # freshly produced bodies only on the NEXT pass).
+        current, changed = _rewrite_pass(
+            current, templates, sorted_rules, scope, last, shape_env, {}
+        )
         if not changed:
             return current  # fixpoint reached
     raise ExpressionTemplateError(
@@ -605,7 +671,11 @@ def _find_apply_paths(view: Any, path: str = "") -> list[str]:
         if node.get("op") == APPLY_OP:
             hits.append(p)
 
-    _walk_json(view, on_obj=_visit, path=path)
+    # dedup: the post-expansion leftover scan runs over a shared DAG (see
+    # _substitute); each unique node is checked once. Leftover applies can only
+    # live in never-rewritten (hence unshared) regions, so the reported path
+    # list is unchanged.
+    _walk_json(view, on_obj=_visit, path=path, dedup=True)
     return hits
 
 
@@ -770,7 +840,10 @@ def _validate_geometry_manifolds(tree: Any, path: str = "") -> None:
                     "the closed-set literals.",
                 )
 
-    _walk_json(tree, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path)
+    # dedup: runs on the expanded (possibly shared-DAG) form; a defect node
+    # shared under many parents raises once, at its first pre-order path —
+    # identical to the unshared behavior.
+    _walk_json(tree, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path, dedup=True)
 
 
 def _validate_makearray_regions(x: Any, path: str = "") -> None:
@@ -819,7 +892,8 @@ def _validate_makearray_regions(x: Any, path: str = "") -> None:
                         "minimum extent (§9.6.8).",
                     )
 
-    _walk_json(x, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path)
+    # dedup: same shared-DAG rationale as _validate_geometry_manifolds.
+    _walk_json(x, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path, dedup=True)
 
 
 def lower_expression_templates(file: dict) -> dict:
