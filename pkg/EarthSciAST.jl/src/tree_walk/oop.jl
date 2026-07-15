@@ -644,24 +644,83 @@ function _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
     any(vk -> _vec_has_pgather(vk.template), vec_kernels)
 end
 
+# ---- Affine access kernels, out of place (ess-affine) -----------------------
+#
+# The functional twin of `_run_acc_kernel!` (access_kernel.jl): the SAME cell walk
+# and the SAME `_eval_acc` spine evaluation — which is eltype-generic, so this
+# inherits AD and a bit-identical Float64 run for free — but each cell's value
+# lands through the `_oop_store` seam, which RETURNS `du`, so an immutable/rebound
+# output is expressible exactly as the rest of this emitter is. The box index math
+# mirrors `_run_box_kernel!` (rank ≤ 3 unrolled, `oln = base + Σ i_d·stride_d`).
+#
+# NOT de-scalarized for tracing. `_eval_acc` reads `u[oln+Δ]` directly (through the
+# descriptor `_fetch`, not the `_oop_read_state` seam) — one scalar index per gather
+# per cell, the per-lane scalar access XLA rejects (property 2 in this file's
+# header). Rewriting the affine gathers/scatters into whole-box array ops is the
+# same body of work `_make_rhs`'s de-scalarization was, and is deferred; `f` above
+# REFUSES a traced call while acc kernels are present rather than emit a program
+# that scalar-indexes a traced value. On host (Float64 / ForwardDiff `Dual`) it is
+# correct and matches both the in-place affine path and the per-cell reference.
+function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
+    cs = K.cells
+    if _is_contig(cs)                               # contiguous / unstructured
+        @inbounds for c in cs.ranges[1]
+            du = _oop_store(du, c, _eval_acc(K.spine, u, p, t, c, 0, c, (c, 1, 1), K, T))
+        end
+        return du
+    end
+    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
+    if nd == 1
+        s1 = st[1]
+        @inbounds for i in rg[1]
+            oln = b + i*s1
+            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, 1, 1), K, T))
+        end
+    elseif nd == 2
+        s1 = st[1]; s2 = st[2]
+        @inbounds for j in rg[2], i in rg[1]
+            oln = b + i*s1 + j*s2
+            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, 1), K, T))
+        end
+    elseif nd == 3
+        s1 = st[1]; s2 = st[2]; s3 = st[3]
+        @inbounds for k in rg[3], j in rg[2], i in rg[1]
+            oln = b + i*s1 + j*s2 + k*s3
+            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, k), K, T))
+        end
+    else
+        @inbounds for idxs in Iterators.product(rg...)
+            oln = b
+            for d in 1:nd; oln += idxs[d]*st[d]; end
+            mi = (idxs[1], nd >= 2 ? idxs[2] : 1, nd >= 3 ? idxs[3] : 1)
+            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, mi, K, T))
+        end
+    end
+    return du
+end
+
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        vec_prelude::AbstractVector{_VecNode},
                        vec_kernels::AbstractVector{_VecKernel},
                        acc_kernels::AbstractVector{_AccKernel},
                        n_states::Int)
-    # The affine access kernels are imperative Float64 (in-place `du[oln]=…`); the
-    # out-of-place / traced emitter is functional and eltype-generic. Bridging them
-    # (generic `_eval_acc` + functional scatter) is a later step — until then a
-    # build that produced access kernels must not use this emitter silently.
-    isempty(acc_kernels) ||
-        throw(TreeWalkError("E_TREEWALK_ACC_OOP_UNSUPPORTED",
-            "affine access kernels (ESS_AFFINE) are not yet supported by the " *
-            "out-of-place / traced emitter (form=:oop); use form=:inplace"))
+    has_acc = !isempty(acc_kernels)
     n_cse = length(cse_prelude)
     n_vec = length(vec_prelude)
     live_forcing = _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
     function f(u, p, t)
+        if has_acc && _is_traced(u, p, t)
+            throw(TreeWalkError("E_TREEWALK_ACC_XLA_UNSUPPORTED",
+                "This model built affine access kernels (ess-affine), which are not " *
+                "yet de-scalarized for tracing: `_eval_acc` reads `u[oln+Δ]` one " *
+                "scalar index per gather per cell, and an XLA/Reactant tracer rejects " *
+                "scalar indexing of a traced array. Rewriting the affine gathers/" *
+                "scatters into whole-box array ops (the same de-scalarization the vec " *
+                "kernels already have) is deferred. Run the interpreted evaluator " *
+                "(host Float64 or ForwardDiff `Dual`), where the affine path is correct " *
+                "and bit-identical to the per-cell reference."))
+        end
         if live_forcing && _is_traced(u, p, t)
             throw(TreeWalkError("E_TREEWALK_XLA_LIVE_FORCING",
                 "This model binds a live forcing buffer through `param_arrays`, and " *
@@ -700,6 +759,14 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         for vk in vec_kernels
             res = _oop_eval_vec(vk.template, u, p, t, cache, vcache)
             du = _oop_scatter(du, vk.out_slots, res)
+        end
+
+        # Affine access kernels (ess-affine), out of place. Each rebinds `du`
+        # through the `_oop_store` seam — see `_oop_run_acc_kernel`. On host these
+        # are the same values `f!`'s in-place `_run_acc_kernel!` writes, in the same
+        # slots, so a Float64 `:oop` run stays bit-identical to `:inplace`.
+        for K in acc_kernels
+            du = _oop_run_acc_kernel(du, u, p, t, K, T)
         end
         return du
     end

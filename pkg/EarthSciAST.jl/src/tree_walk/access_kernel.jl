@@ -49,84 +49,105 @@ const _NK_ACCESS = UInt8(20)   # gather/const via access descriptor (idx = table
 const _NK_REDUCE = UInt8(21)   # ⊕-reduction over the neighbour index (payload = _Bound)
 
 # ---- Access descriptors: how one leaf resolves to a value at (cell c, nbr n) ----
-# Signature `_fetch(a, u, c, n, oln, midx)`; every method takes all coordinates
-# and uses only what it needs, so `_eval_acc` dispatches monomorphically per
-# descriptor type without branching on which coordinates are live.
-abstract type _Access end
+#
+# ONE CONCRETE TAGGED STRUCT, not an abstract-type hierarchy — the same design as
+# `_VecNode` (vectorize.jl), and for the same reason. A per-kernel descriptor
+# TABLE is a `Vector{_AccDesc}`; if the element type were an abstract `_Access`,
+# every `_fetch(table[i], …)` would be a DYNAMIC DISPATCH on the boxed subtype,
+# which infers as `Any`, boxes each gathered value, and allocates O(#access-nodes
+# × #cells) per RHS call (measured ~140 B/cell — fatal at 1e6 cells). A concrete
+# struct dispatched by a `kind::UInt8` tag makes `_fetch` a branch ladder with
+# concrete field reads: no dynamic dispatch, no boxing, zero allocation at
+# `Float64`, and a small `Union{Float64,eltype(u)}` result under AD that the
+# operators promote — exactly `_eval_node`'s discipline.
+#
+# The named constructors below preserve the old per-descriptor call sites verbatim
+# (`_AccStateAffine(Δ)`, `_AccConstBox(arr, s1, s2, s3, off)`, …); only the storage
+# and `_fetch` changed. Fields are shared across kinds (an `Int` slot serves
+# `delta`/`idx`/… as the kind dictates), the way `_VecNode` shares `payload`/`idx`.
+const _AK_STATE_AFFINE       = UInt8(1)   # u[oln + delta]              (Cartesian stencil workhorse)
+const _AK_CONST_AFFINE       = UInt8(2)   # arr[oln + delta]            (const, full-grid layout)
+const _AK_CONST_BOX          = UInt8(3)   # arr[off + Σ(midx_d-1)·s_d]  (const on its own reduced-rank grid)
+const _AK_STATE_FIXED        = UInt8(4)   # u[idx]                      (invariant pinned state slot)
+const _AK_LOOP_IDX           = UInt8(5)   # Float64(midx[dim])          (loop index as a value)
+const _AK_SCALAR             = UInt8(6)   # v                           (hoisted invariant / literal leaf)
+const _AK_CONST_CELL         = UInt8(7)   # arr[c]                      (per-cell const)
+const _AK_CONST_EDGE         = UInt8(8)   # arr[(c-1)·width + n]        (per-edge, variable valence)
+const _AK_ARR_FIXED          = UInt8(9)   # arr[idx]                    (invariant forcing gather)
+const _AK_STATE_INDIRECT     = UInt8(10)  # u[conn[(c-1)·width + n]]    (unstructured neighbour gather)
+const _AK_STATE_INDIRECT_COL = UInt8(11)  # u[conn[(c-1)·width + col]]  (unstructured fixed column)
 
-# STATE, structured: u[oln + delta]. The workhorse of a Cartesian stencil.
-struct _AccStateAffine <: _Access
-    delta::Int
-end
-# STATE, unstructured: u[conn[(c-1)*width + n]]. Indirect neighbour gather.
-struct _AccStateIndirect <: _Access
-    conn::Vector{Int}
-    width::Int
-end
-# STATE, unstructured self or fixed column: u[conn[(c-1)*width + col]] (col fixed).
-struct _AccStateIndirectCol <: _Access
-    conn::Vector{Int}
-    width::Int
-    col::Int
-end
-# CONST array, per output cell: arr[oln + delta] (structured, FULL-grid layout).
-struct _AccConstAffine <: _Access
-    arr::Vector{Float64}
-    delta::Int
-end
-# CONST array on its OWN grid (possibly reduced rank): the flat array read by the
-# cell's multi-index through per-dim strides — `arr[off + Σ_d (midx[d]-1)*s_d]`.
-# A dim the const does not depend on gets stride 0 (broadcast); e.g. a vertical
-# profile K[k] over a 3D grid is `_AccConstBox(K, 0, 0, 1, 1)`.
-struct _AccConstBox <: _Access
-    arr::Vector{Float64}
-    s1::Int
+struct _AccDesc
+    kind::UInt8
+    arr::Vector{Float64}   # CONST_*, ARR_FIXED (empty sentinel otherwise)
+    conn::Vector{Int}      # STATE_INDIRECT[_COL] (empty sentinel otherwise)
+    delta::Int             # STATE_AFFINE, CONST_AFFINE
+    idx::Int               # STATE_FIXED, ARR_FIXED
+    width::Int             # STATE_INDIRECT[_COL], CONST_EDGE
+    col::Int               # STATE_INDIRECT_COL
+    dim::Int               # LOOP_IDX
+    s1::Int                # CONST_BOX per-dim strides + offset
     s2::Int
     s3::Int
     off::Int
-end
-# CONST array, per cell: arr[c].
-struct _AccConstCell <: _Access
-    arr::Vector{Float64}
-end
-# CONST array, per edge: arr[(c-1)*width + n] (variable-valence coefficients).
-struct _AccConstEdge <: _Access
-    arr::Vector{Float64}
-    width::Int
-end
-# STATE, loop-invariant fixed slot: u[idx] — every cell in the box reads the same
-# state slot (a boundary value pinned to one cell). Δ = idx-oln would vary per
-# cell, so this is its own descriptor, not an `_AccStateAffine`.
-struct _AccStateFixed <: _Access
-    idx::Int
-end
-# a captured array read at a fixed linear offset: arr[idx] — an invariant forcing
-# gather (`_NK_PARAM_GATHER`, constant index) broadcast to every cell.
-struct _AccArrFixed <: _Access
-    arr::Vector{Float64}
-    idx::Int
-end
-# the cell's own loop index in dim `dim`, used as a numeric value: Float64(midx[dim]).
-struct _AccLoopIdx <: _Access
-    dim::Int
-end
-# a bare Float64 the cell reads directly (a hoisted invariant / literal-as-leaf).
-struct _AccScalar <: _Access
-    v::Float64
+    v::Float64             # SCALAR
 end
 
-@inline _fetch(a::_AccStateAffine,      u, c, n, oln, midx) = @inbounds u[oln + a.delta]
-@inline _fetch(a::_AccStateIndirect,    u, c, n, oln, midx) = @inbounds u[a.conn[(c-1)*a.width + n]]
-@inline _fetch(a::_AccStateIndirectCol, u, c, n, oln, midx) = @inbounds u[a.conn[(c-1)*a.width + a.col]]
-@inline _fetch(a::_AccStateFixed,       u, c, n, oln, midx) = @inbounds u[a.idx]
-@inline _fetch(a::_AccConstAffine,      u, c, n, oln, midx) = @inbounds a.arr[oln + a.delta]
-@inline _fetch(a::_AccConstBox,         u, c, n, oln, midx) =
-    @inbounds a.arr[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
-@inline _fetch(a::_AccConstCell,        u, c, n, oln, midx) = @inbounds a.arr[c]
-@inline _fetch(a::_AccConstEdge,        u, c, n, oln, midx) = @inbounds a.arr[(c-1)*a.width + n]
-@inline _fetch(a::_AccArrFixed,         u, c, n, oln, midx) = @inbounds a.arr[a.idx]
-@inline _fetch(a::_AccLoopIdx,          u, c, n, oln, midx) = Float64(midx[a.dim])
-@inline _fetch(a::_AccScalar,           u, c, n, oln, midx) = a.v
+const _AK_NO_ARR  = Float64[]
+const _AK_NO_CONN = Int[]
+
+@inline _mkacc(kind::UInt8; arr::Vector{Float64}=_AK_NO_ARR, conn::Vector{Int}=_AK_NO_CONN,
+               delta::Int=0, idx::Int=0, width::Int=0, col::Int=0, dim::Int=0,
+               s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, v::Float64=0.0) =
+    _AccDesc(kind, arr, conn, delta, idx, width, col, dim, s1, s2, s3, off, v)
+
+# Named constructors — the descriptor call sites (stencil_affine.jl, tests) use
+# these and are unchanged by the tagged-struct storage.
+_AccStateAffine(delta::Int)                      = _mkacc(_AK_STATE_AFFINE; delta=delta)
+_AccStateIndirect(conn::Vector{Int}, width::Int) = _mkacc(_AK_STATE_INDIRECT; conn=conn, width=width)
+_AccStateIndirectCol(conn::Vector{Int}, width::Int, col::Int) =
+    _mkacc(_AK_STATE_INDIRECT_COL; conn=conn, width=width, col=col)
+_AccConstAffine(arr::Vector{Float64}, delta::Int) = _mkacc(_AK_CONST_AFFINE; arr=arr, delta=delta)
+_AccConstBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
+    _mkacc(_AK_CONST_BOX; arr=arr, s1=s1, s2=s2, s3=s3, off=off)
+_AccConstCell(arr::Vector{Float64})              = _mkacc(_AK_CONST_CELL; arr=arr)
+_AccConstEdge(arr::Vector{Float64}, width::Int)  = _mkacc(_AK_CONST_EDGE; arr=arr, width=width)
+_AccStateFixed(idx::Int)                         = _mkacc(_AK_STATE_FIXED; idx=idx)
+_AccArrFixed(arr::Vector{Float64}, idx::Int)     = _mkacc(_AK_ARR_FIXED; arr=arr, idx=idx)
+_AccLoopIdx(dim::Int)                            = _mkacc(_AK_LOOP_IDX; dim=dim)
+_AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
+
+# One `_fetch`, dispatched by the kind tag — concrete field reads throughout, so
+# no dynamic dispatch and no boxing. Hot Cartesian cases first. The result is
+# `eltype(u)` for a state read and `Float64` for a const/scalar/loop-index read; a
+# small `Union` the caller's operators promote (identical to `_eval_node`).
+@inline function _fetch(a::_AccDesc, u, c, n, oln, midx)
+    k = a.kind
+    if k === _AK_STATE_AFFINE
+        return @inbounds u[oln + a.delta]
+    elseif k === _AK_CONST_AFFINE
+        return @inbounds a.arr[oln + a.delta]
+    elseif k === _AK_CONST_BOX
+        return @inbounds a.arr[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
+    elseif k === _AK_STATE_FIXED
+        return @inbounds u[a.idx]
+    elseif k === _AK_LOOP_IDX
+        return Float64(midx[a.dim])
+    elseif k === _AK_SCALAR
+        return a.v
+    elseif k === _AK_CONST_CELL
+        return @inbounds a.arr[c]
+    elseif k === _AK_CONST_EDGE
+        return @inbounds a.arr[(c-1)*a.width + n]
+    elseif k === _AK_ARR_FIXED
+        return @inbounds a.arr[a.idx]
+    elseif k === _AK_STATE_INDIRECT
+        return @inbounds u[a.conn[(c-1)*a.width + n]]
+    elseif k === _AK_STATE_INDIRECT_COL
+        return @inbounds u[a.conn[(c-1)*a.width + a.col]]
+    end
+    throw(TreeWalkError("E_TREEWALK_ACC_BAD_DESC", "unknown access kind $(Int(k))"))
+end
 
 # ---- Reduction bound (fixed structured count vs runtime per-cell valence) ----
 abstract type _Bound end
@@ -158,17 +179,33 @@ _contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell], 0)
 struct _AccKernel
     cells::_CellSet
     spine::_Node               # op tree with _NK_ACCESS / _NK_REDUCE leaves
-    acc::Vector{_Access}       # descriptor table (spine `_NK_ACCESS.idx` indexes this)
+    acc::Vector{_AccDesc}      # descriptor table (spine `_NK_ACCESS.idx` indexes this)
     bound::_Bound              # reduction bound (for any _NK_REDUCE in the spine)
     zerobar::Float64           # ⊕ identity seed for the reduction (0.0 for sum)
 end
 
-# ---- The evaluator (foundation: Float64; AD genericity is a later step) ----
+# ---- The evaluator ----
+# ELTYPE-GENERIC in the value type `T`, exactly as the scalar `_eval_node`
+# (compile.jl) is, and for the same reason: the in-place `f!` must DIFFERENTIATE
+# through these kernels (ForwardDiff over state OR over parameters), not just
+# integrate them. `T` is threaded and passed down but leaves are NEVER converted
+# to it — the type flows naturally from the leaves (a state read yields
+# `eltype(u)`, a const/literal yields `Float64`) and promotes at the operators.
+# That duck-typing is load-bearing: it is what keeps a LITERAL `^` exponent a
+# `Float64` (see the `:^` arm of `_eval_acc_op`), and it makes the `T === Float64`
+# path bit-identical to the pre-AD walker, instruction for instruction. Matches
+# `_eval_node`'s discipline arm for arm — the differential + AD tests pin it.
+#
 # `t` current time, `c` cell ordinal, `n` neighbour index (0 outside a
 # reduction), `oln` output slot, `midx` the cell's (i,j,k) loop multi-index
-# (padded with 1s).
+# (padded with 1s). The 9-arg form derives `T` from the runtime inputs (the
+# build-time / test entry point), mirroring `_eval_node`'s 4-arg convenience form.
+@inline _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+                  midx::NTuple{3,Int}, K::_AccKernel) =
+    _eval_acc(nd, u, p, t, c, n, oln, midx, K, _rhs_value_type(u, p, t))
+
 function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                   midx::NTuple{3,Int}, K::_AccKernel)::Float64
+                   midx::NTuple{3,Int}, K::_AccKernel, ::Type{T}) where {T}
     k = nd.kind
     if k === _NK_ACCESS
         return _fetch(K.acc[nd.idx], u, c, n, oln, midx)
@@ -179,15 +216,15 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         s = K.zerobar
         cnt = _nbrcount(K.bound, c)
         @inbounds for m in 1:cnt
-            s += _eval_acc(body, u, p, t, c, m, oln, midx, K)
+            s += _eval_acc(body, u, p, t, c, m, oln, midx, K, T)
         end
         return s
     elseif k === _NK_PARAM
-        return Float64(getproperty(p, nd.sym))
+        return getfield(p, nd.sym)
     elseif k === _NK_TIME
-        return Float64(t)
+        return t
     else # _NK_OP
-        return _eval_acc_op(nd, u, p, t, c, n, oln, midx, K)
+        return _eval_acc_op(nd, u, p, t, c, n, oln, midx, K, T)
     end
 end
 
@@ -198,10 +235,10 @@ end
 # only difference is the leaf recursion (`_eval_acc`, which resolves `_NK_ACCESS` /
 # `_NK_REDUCE`). Drift between the two tables is caught by the differential test.
 function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                      midx::NTuple{3,Int}, K::_AccKernel)::Float64
+                      midx::NTuple{3,Int}, K::_AccKernel, ::Type{T}) where {T}
     op = nd.op
     ch = nd.children
-    @inline ev(x) = _eval_acc(x, u, p, t, c, n, oln, midx, K)
+    @inline ev(x) = _eval_acc(x, u, p, t, c, n, oln, midx, K, T)
     if op === :+
         length(ch) == 1 && return ev(ch[1])
         s = ev(ch[1]); @inbounds for i in 2:length(ch); s += ev(ch[i]); end
@@ -286,21 +323,28 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
 end
 
 # ---- Run one kernel into du (in place) ----
-function _run_acc_kernel!(du, u, p, t, K::_AccKernel)
+# `T` is the value type (`_rhs_value_type(u, p, t)`); a compile-time constant at
+# the call site, so at `T === Float64` every `_eval_acc` below is the monomorphic
+# Float64 walk it always was, and under AD the SAME loop evaluates in `Dual`. The
+# 5-arg form derives `T` (test / standalone entry point).
+_run_acc_kernel!(du, u, p, t, K::_AccKernel) =
+    _run_acc_kernel!(du, u, p, t, K, _rhs_value_type(u, p, t))
+
+function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     cs = K.cells
     if _is_contig(cs)                               # contiguous / unstructured
         @inbounds for c in cs.ranges[1]
-            du[c] = _eval_acc(K.spine, u, p, t, c, 0, c, (c, 1, 1), K)
+            du[c] = _eval_acc(K.spine, u, p, t, c, 0, c, (c, 1, 1), K, T)
         end
     else                                            # structured: strided box walk
-        _run_box_kernel!(du, u, p, t, K, cs)
+        _run_box_kernel!(du, u, p, t, K, cs, T)
     end
     return du
 end
 
 # Nested loop over a Cartesian box; rank ≤ 3 (the latlon3d ceiling) is unrolled
 # for a tight `oln`, with a product-based fallback for higher rank.
-function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet)
+function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) where {T}
     st = cs.strides
     rg = cs.ranges
     b  = cs.base
@@ -309,26 +353,26 @@ function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet)
         s1 = st[1]
         @inbounds for i in rg[1]
             oln = b + i*s1
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, 1, 1), K)
+            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, 1, 1), K, T)
         end
     elseif nd == 2
         s1 = st[1]; s2 = st[2]
         @inbounds for j in rg[2], i in rg[1]
             oln = b + i*s1 + j*s2
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, 1), K)
+            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, 1), K, T)
         end
     elseif nd == 3
         s1 = st[1]; s2 = st[2]; s3 = st[3]
         @inbounds for k in rg[3], j in rg[2], i in rg[1]
             oln = b + i*s1 + j*s2 + k*s3
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, k), K)
+            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, k), K, T)
         end
     else
         @inbounds for idxs in Iterators.product(rg...)
             oln = b
             for d in 1:nd; oln += idxs[d]*st[d]; end
             mi = (idxs[1], nd >= 2 ? idxs[2] : 1, nd >= 3 ? idxs[3] : 1)
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, mi, K)
+            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, mi, K, T)
         end
     end
     return du

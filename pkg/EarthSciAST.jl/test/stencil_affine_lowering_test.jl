@@ -43,7 +43,7 @@ const E = EarthSciAST
     Lit0    = E._LitRepl(0.0)
 
     function mkkernel(l1, l2, l3, ir)
-        acc = E._Access[]
+        acc = E._AccDesc[]
         spine = E._lower_to_access(tmpl, E._LaneRepl[l1, l2, l3], acc)
         E._AccKernel(box(ir), spine, acc, E._FixedBound(0), 0.0)
     end
@@ -55,10 +55,10 @@ const E = EarthSciAST
 
     # the lowered spine's descriptor table is built in traversal order:
     # [qW, qC, qE, fixed-state] — 4 entries for a fully-in-bounds box.
-    let acc = E._Access[]
+    let acc = E._AccDesc[]
         E._lower_to_access(tmpl, E._LaneRepl[Acc(SA(-1)), Acc(SA(0)), Acc(SA(+1))], acc)
         @test length(acc) == 4
-        @test acc[4] isa E._AccStateFixed && (acc[4]::E._AccStateFixed).idx == fixslot
+        @test acc[4].kind === E._AK_STATE_FIXED && acc[4].idx == fixslot
     end
 
     du = zeros(ncell)
@@ -66,13 +66,13 @@ const E = EarthSciAST
     @test du == ref                      # bit-identical through the lowering
 
     # a ghost lane lowers to a literal, not an access → one fewer descriptor.
-    let acc = E._Access[]
+    let acc = E._AccDesc[]
         E._lower_to_access(tmpl, E._LaneRepl[Lit0, Acc(SA(0)), Acc(SA(+1))], acc)
         @test length(acc) == 3           # qW dropped to literal; qC, qE, fixed remain
     end
 
     # an interp `:fn` node forces a fallback (not yet modelled by the affine path).
     let fn = E._mknode(kind=E._NK_OP, op=:fn, children=E._Node[st(-1)], payload=("f", nothing))
-        @test_throws E._StencilFallback E._lower_to_access(fn, E._LaneRepl[Acc(SA(0))], E._Access[])
+        @test_throws E._StencilFallback E._lower_to_access(fn, E._LaneRepl[Acc(SA(0))], E._AccDesc[])
     end
 end

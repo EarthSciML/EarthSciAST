@@ -1245,7 +1245,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # a strided output box — no per-lane slot vectors were built. The reduction
         # bound / connectivity are data, so one kernel covers every valence.
         @inbounds for j in 1:length(acc_kernels)
-            _run_acc_kernel!(du, u, p, t, acc_kernels[j])
+            _run_acc_kernel!(du, u, p, t, acc_kernels[j], T)
         end
         return nothing
     end

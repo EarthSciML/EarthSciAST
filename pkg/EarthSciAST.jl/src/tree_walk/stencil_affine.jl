@@ -43,7 +43,7 @@ struct _LitRepl <: _LaneRepl
     v::Float64
 end
 struct _AccRepl <: _LaneRepl
-    desc::_Access
+    desc::_AccDesc
 end
 
 # Lower a compiled sentinel template `tmpl` to an access spine, appending each
@@ -56,7 +56,7 @@ end
 # Anything not modelled (a contraction node, an interp `:fn`) throws
 # `_StencilFallback` so the caller runs the per-cell path — never a wrong kernel.
 function _lower_to_access(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
-                          acc::Vector{_Access})::_Node
+                          acc::Vector{_AccDesc})::_Node
     k = tmpl.kind
     if k === _NK_STATE
         if tmpl.idx < 0
@@ -233,11 +233,17 @@ function _segments(starts::Vector{Int}, rng::UnitRange{Int})
 end
 
 # Serialize a lane-lowering vector into a memo key (so boxes with identical
-# descriptors share ONE spine + descriptor table object).
-function _desc_key(d::_AccStateAffine); "SA$(d.delta)"; end
-_desc_key(d::_AccLoopIdx) = "LI$(d.dim)"
-_desc_key(d::_AccConstBox) = "CB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
-_desc_key(d::_Access) = "?$(objectid(d))"
+# descriptors share ONE spine + descriptor table object). Keyed by CONTENT for the
+# kinds the box processor actually emits into a lane_repl (STATE_AFFINE, LOOP_IDX,
+# CONST_BOX); any other kind falls back to identity keying — safe (it can only
+# OVER-split, never merge two genuinely different descriptors).
+function _desc_key(d::_AccDesc)
+    k = d.kind
+    k === _AK_STATE_AFFINE && return "SA$(d.delta)"
+    k === _AK_LOOP_IDX     && return "LI$(d.dim)"
+    k === _AK_CONST_BOX    && return "CB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
+    return "?$(objectid(d))"
+end
 function _lane_repl_key(lane_repl)
     io = IOBuffer()
     for r in lane_repl
@@ -340,7 +346,7 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     end
 
     spine, acc = get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
-        a = _Access[]
+        a = _AccDesc[]
         (_lower_to_access(tmpl, lane_repl, a), a)
     end
     cs = _CellSet(collect(Int, strides), UnitRange{Int}[box[d] for d in 1:D], base)
@@ -397,7 +403,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                                   var_map, param_sym_set, reg_funcs)
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
         kernels = _AccKernel[]
-        spine_cache = Dict{String,Tuple{_Node,Vector{_Access}}}()
+        spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc}}}()
         flat_cache = IdDict{Any,Vector{Float64}}()
         boxes = Vector{UnitRange{Int}}[]
         for segtuple in Iterators.product(segs...)

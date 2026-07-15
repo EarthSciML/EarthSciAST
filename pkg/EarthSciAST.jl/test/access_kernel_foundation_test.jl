@@ -27,7 +27,7 @@ const E = EarthSciAST
         strides = [1, N1, N1*N2]
         cbase = -(N1 + N1*N2)                     # oln = cbase + i + j*N1 + k*N1*N2 == lin(i,j,k)
         mkspine(dW, dC, dE) = begin
-            acc = E._Access[E._AccStateAffine(dW), E._AccStateAffine(dC), E._AccStateAffine(dE)]
+            acc = E._AccDesc[E._AccStateAffine(dW), E._AccStateAffine(dC), E._AccStateAffine(dE)]
             sp  = E._aop(:+, E._aop(:-, E._acc(1), E._aop(:*, E._alit(2.0), E._acc(2))), E._acc(3))
             sp, acc
         end
@@ -80,7 +80,7 @@ const E = EarthSciAST
         dU = N1*N2; dD = -N1*N2
         # spine: Kz[k] * ((qU - 2 qC) + qD); acc 1=qU 2=qC 3=qD 4=Kz[k]
         mkspine(du_, dd_) = begin
-            acc = E._Access[E._AccStateAffine(du_), E._AccStateAffine(0),
+            acc = E._AccDesc[E._AccStateAffine(du_), E._AccStateAffine(0),
                             E._AccStateAffine(dd_), E._AccConstBox(Kz, 0, 0, 1, 1)]
             body = E._aop(:+, E._aop(:-, E._acc(1), E._aop(:*, E._alit(2.0), E._acc(2))), E._acc(3))
             E._aop(:*, E._acc(4), body), acc
@@ -136,7 +136,7 @@ const E = EarthSciAST
         # ONE kernel, VarBound valence, indirect neighbour gather. Build is O(1).
         # descriptors: 1=q[c] (self, affine Δ0), 2=q[noc[c,n]] (indirect),
         #              3=efl[c,n] (edge const), 4=area[c] (cell const)
-        acc = E._Access[
+        acc = E._AccDesc[
             E._AccStateAffine(0),                # q[c]  (self; oln==c for contiguous)
             E._AccStateIndirect(noc, maxval),    # q[noc[c,n]]
             E._AccConstEdge(efl, maxval),        # efl[c,n]
