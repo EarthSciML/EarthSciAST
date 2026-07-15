@@ -500,11 +500,18 @@ struct DiscreteEvent <: EventType
     affects::Vector{FunctionalAffect}
     description::Union{String,Nothing}
     functional_affect::Union{Dict{String,Any},Nothing}
+    # Names the event mutates as *discrete parameters* (MTK `discrete_parameters`).
+    # Every entry must name a declared PARAMETER of the enclosing model — see
+    # `validate_single_event_consistency`, which reports `invalid_discrete_param`
+    # otherwise. Previously parsed-and-dropped, which both lost the field on
+    # round-trip and made the check impossible.
+    discrete_parameters::Union{Vector{String},Nothing}
 
     # Constructor with optional description / handler descriptor
     DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{FunctionalAffect};
-                  description=nothing, functional_affect=nothing) =
-        new(trigger, affects, description, functional_affect)
+                  description=nothing, functional_affect=nothing,
+                  discrete_parameters=nothing) =
+        new(trigger, affects, description, functional_affect, discrete_parameters)
 end
 
 # ========================================
@@ -521,12 +528,27 @@ Type enumeration for model variables:
 - BrownianVariable: stochastic noise sources (Wiener processes). The presence
   of any brownian variable promotes the enclosing model from an ODE system to
   an SDE system. Maps to MTK `@brownians` and an `SDESystem`.
+- DiscreteVariable: piecewise-constant between refreshes rather than
+  continuously integrated — it holds its value until a `cadence` boundary, a
+  loader refresh, or an event assigns a new one, so the solver never
+  differentiates it. This is the fifth member of the schema's
+  `ModelVariable.type` enum (the spelling for a loader/forcing-fed field,
+  CONFORMANCE_SPEC §5.10.1). It lowers to a solver-side PARAMETER BUFFER: the
+  refresh machinery writes it (`build_evaluator(...; param_arrays = …)`), and
+  the cadence partition (§5.7) seeds it `discrete`, tainting every field that
+  reads it. Declaring it is what distinguishes a real forcing from a typo
+  (esm-spec §4.9.5); a bare undeclared forcing name is indistinguishable from
+  a misspelling.
+
+`discrete` is deliberately LAST so the existing members keep their integer
+values.
 """
 @enum ModelVariableType begin
     StateVariable
     ParameterVariable
     ObservedVariable
     BrownianVariable
+    DiscreteVariable
 end
 
 """
@@ -1203,10 +1225,20 @@ end
 Spatial and temporal domain specification.
 """
 struct Domain
+    # The name of the independent (time) variable, `"t"` unless the document
+    # renames it. It was parsed by NOBODY: the field is in esm-schema.json (with
+    # `additionalProperties: false`, so it is the only spelling), yet `Domain`
+    # did not carry it — so `load` silently DROPPED it and a round-trip through
+    # Julia rewrote a `tau`-based document as a `t`-based one. Validation needs
+    # it too: the independent variable is implicitly declared (finding (a)), and
+    # the check for it used to be a literal `name == "t"`, which both accepted a
+    # bare `t` in a document that renamed it and rejected the real name.
+    independent_variable::String
     temporal::Union{Dict{String,Any},Nothing}
 
     # Constructor with optional parameters
-    Domain(; temporal=nothing) = new(temporal)
+    Domain(; independent_variable::AbstractString="t", temporal=nothing) =
+        new(String(independent_variable), temporal)
 end
 
 """
@@ -1377,6 +1409,27 @@ struct EsmFile
     # the document declares none.
     index_sets::Dict{String,IndexSet}
 
+    # The top-level `expression_templates` registry and `metaparameters` block,
+    # PRESERVED VERBATIM (raw JSON) across parse → emit.
+    #
+    # Option A expands CALL SITES; it does not delete DECLARATIONS (esm-spec
+    # §9.6.4 rule 5). These two are peers of `index_sets`, not
+    # `apply_expression_template` invocations — but the loader treated the
+    # registry as if it were a call site and dropped it, so a pure template
+    # LIBRARY (a file whose only payload is `expression_templates`) re-emitted as
+    # `{esm, metadata, index_sets}`: no payload key at all, which the top-level
+    # `anyOf` correctly rejects. The file was legal on disk and illegal the
+    # instant it was loaded and written back — and since §9.6.4 rule 4 runs
+    # schema validation on the POST-EXPANSION form, a conforming library file was
+    # literally unrepresentable (tests/valid/template_import_lib.esm,
+    # template_import_rename_lib.esm).
+    #
+    # They are kept raw rather than typed because nothing in the pipeline reads
+    # them back after lowering — their only job is to survive the round trip so a
+    # library file emits to itself.
+    expression_templates::Union{Dict{String,Any},Nothing}
+    metaparameters::Union{Dict{String,Any},Nothing}
+
     # Constructor with optional parameters
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
@@ -1386,10 +1439,13 @@ struct EsmFile
             domain=nothing,
             enums=nothing,
             function_tables=nothing,
-            index_sets=Dict{String,IndexSet}()) =
+            index_sets=Dict{String,IndexSet}(),
+            expression_templates=nothing,
+            metaparameters=nothing) =
         new(esm, metadata, models, reaction_systems, data_loaders,
             coupling, domain, enums, function_tables,
-            Dict{String,IndexSet}(index_sets))
+            Dict{String,IndexSet}(index_sets),
+            expression_templates, metaparameters)
 end
 
 # ========================================
@@ -1568,8 +1624,14 @@ function variable_exists_in_system(system::ReactionSystem, variable_name::String
 end
 
 function variable_exists_in_system(system::DataLoader, variable_name::String)::Bool
-    # Data loaders are referenced by type/name, not variables
-    return false
+    # A DataLoader EXPOSES variables (`variables: {u: {file_variable: …}}`), and
+    # `coupling` entries name them (`from: "GEOSFP.u"`). This used to return a
+    # hardcoded `false` — "data loaders are referenced by type/name, not
+    # variables" — which was true before the pure-io-data-loaders RFC gave the
+    # loader a `variables` table, and afterwards made EVERY loader-sourced
+    # coupling reference in the corpus fail to resolve (7 of the 82 valid
+    # fixtures). Same defect as the Go binding's G7.
+    return haskey(system.variables, variable_name)
 end
 
 """

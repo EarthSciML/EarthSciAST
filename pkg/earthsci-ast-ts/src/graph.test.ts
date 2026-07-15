@@ -203,24 +203,38 @@ describe('componentGraph function', () => {
     expect(coupleEdge?.data.label).toBe('couple')
   })
 
-  it('collapses operator_compose to a single systems[0] → systems[1] edge', () => {
-    // A >2-system compose chain records only the head-to-next link (one edge),
-    // matching the Rust/Go/Julia reference model.
+  it('records one systems[0] → systems[1] edge per operator_compose entry', () => {
+    // `operator_compose` is a BINARY operator: spec §10.1 defines it as
+    // `operator_compose(a, b)`, and the schema pins `systems` at exactly two
+    // entries (`$defs/CouplingOperatorCompose/properties/systems`,
+    // minItems: 2, maxItems: 2). An N-way chain is therefore spelled as N-1
+    // consecutive binary entries — which is how the whole corpus writes it —
+    // and each entry contributes exactly one edge.
+    //
+    // (This test previously built a single 3-element `systems` array. That is
+    // not a representable ESM document: it violates `maxItems: 2`, and the type
+    // generated from the schema is the 2-tuple `[string, string]`, so it did not
+    // typecheck. The premise was wrong, not the schema.)
     const file: EsmFile = {
       esm: '0.1.0',
-      metadata: { name: 'compose3' },
+      metadata: { name: 'compose-chain' },
       models: {
         A: { variables: {}, equations: [] },
         B: { variables: {}, equations: [] },
         C: { variables: {}, equations: [] },
       },
-      coupling: [{ type: 'operator_compose', systems: ['A', 'B', 'C'] }],
+      coupling: [
+        { type: 'operator_compose', systems: ['A', 'B'] },
+        { type: 'operator_compose', systems: ['B', 'C'] },
+      ],
     }
     const graph = componentGraph(file)
     const composeEdges = graph.edges.filter((e) => e.data.type === 'operator_compose')
-    expect(composeEdges).toHaveLength(1)
-    expect(composeEdges[0].source).toBe('A')
-    expect(composeEdges[0].target).toBe('B')
+    expect(composeEdges).toHaveLength(2)
+    expect(composeEdges.map((e) => [e.source, e.target])).toEqual([
+      ['A', 'B'],
+      ['B', 'C'],
+    ])
   })
 
   it('skips coupling edges whose endpoints are not declared nodes (no fabrication)', () => {

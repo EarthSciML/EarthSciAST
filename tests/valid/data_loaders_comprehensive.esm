@@ -205,6 +205,12 @@
           "units": "mol/mol",
           "default": 1e-08,
           "description": "NO concentration"
+        },
+        "wind_u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "Eastward wind speed — the `param_to_var` target of the GEOSFP_MeteoData.u coupling entry below; a variable_map `to` endpoint must be a declared parameter of the receiving system (esm-spec §10.4)"
         }
       },
       "equations": [

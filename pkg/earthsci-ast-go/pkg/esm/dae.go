@@ -103,7 +103,10 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 			info.PerModelFactored[mname] = 0
 			continue
 		}
-		factored := factorTrivialDAE(&m, indep)
+		factored, err := factorTrivialDAE(&m, indep)
+		if err != nil {
+			return info, err
+		}
 		info.TrivialFactoredCount += factored
 		info.PerModelFactored[mname] = factored
 
@@ -143,7 +146,21 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 
 // factorTrivialDAE runs trivial-algebraic factoring on a single model
 // until fixed point. Returns the number of equations factored out.
-func factorTrivialDAE(model *Model, indep string) int {
+//
+// The `y` of a candidate equation `y ~ f(...)` is eliminated only when `y` does
+// not occur anywhere in `f` — and "anywhere" now genuinely means anywhere,
+// because Contains walks EVERY expression-bearing field (audit G1). Before that
+// fix, an occurrence hidden in a sidecar field (`aggregate.expr`, an integral
+// bound, a `table_lookup` axis, …) was invisible: the guard passed, the
+// defining equation was DELETED, and the surviving equations went on referencing
+// an now-undefined variable — a silently corrupted model returned with err=nil
+// (audit G2).
+//
+// Substitution errors are propagated rather than discarded. The acyclicity of a
+// single binding makes a SubstitutionError unreachable in principle, but
+// swallowing it with `_ =` would have hidden exactly the class of corruption
+// above, so the error path is real.
+func factorTrivialDAE(model *Model, indep string) (int, error) {
 	factored := 0
 	for {
 		idx := -1
@@ -166,23 +183,29 @@ func factorTrivialDAE(model *Model, indep string) int {
 			break
 		}
 		if idx < 0 {
-			return factored
+			return factored, nil
 		}
-		// A single binding y -> f where y does not occur in f (guaranteed by the
-		// Contains guard above): acyclic by construction, so substitution here
-		// cannot return a SubstitutionError — the errors are safely discarded.
 		bindings := map[string]Expression{lhsName: rhsExpr}
 		for j := range model.Equations {
 			if j == idx {
 				continue
 			}
-			model.Equations[j], _ = SubstituteInEquation(model.Equations[j], bindings)
+			out, err := SubstituteInEquation(model.Equations[j], bindings)
+			if err != nil {
+				return factored, err
+			}
+			model.Equations[j] = out
 		}
 		for vname, v := range model.Variables {
-			if v.Expression != nil {
-				v.Expression, _ = Substitute(v.Expression, bindings)
-				model.Variables[vname] = v
+			if v.Expression == nil {
+				continue
 			}
+			out, err := Substitute(v.Expression, bindings)
+			if err != nil {
+				return factored, err
+			}
+			v.Expression = out
+			model.Variables[vname] = v
 		}
 		model.Equations = append(model.Equations[:idx], model.Equations[idx+1:]...)
 		factored++

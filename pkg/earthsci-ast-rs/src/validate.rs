@@ -110,6 +110,8 @@ pub enum StructuralErrorCode {
     CircularDependency,
     /// Reaction rate expression has incompatible units for reaction stoichiometry
     UnitInconsistency,
+    /// A declared `units` string denotes no real unit (esm-spec §4.8.4)
+    UnitParseError,
     /// An `ic`-op equation placed inside a reaction system's `constraint_equations`
     IcInReactionSystem,
     /// A `variable_map` expression transform carries a `factor` (esm-spec
@@ -135,6 +137,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::OperatorVariableMissing => "operator_variable_missing",
             Self::CircularDependency => "circular_dependency",
             Self::UnitInconsistency => "unit_inconsistency",
+            Self::UnitParseError => "unit_parse_error",
             Self::IcInReactionSystem => "ic_in_reaction_system",
             Self::FactorWithExpressionTransform => "factor_with_expression_transform",
         };
@@ -221,6 +224,7 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         for (rs_name, rs) in reaction_systems {
             crate::structural::validate_reaction_system(
+                esm_file,
                 rs_name,
                 rs,
                 &system_refs,
@@ -228,6 +232,16 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
             );
         }
     }
+
+    // A data-loader variable's `unit_conversion` (§8.5) is an Expression, so
+    // reference integrity applies to it (§4.9.5). It is applied to the loaded
+    // value and may name any declared symbol in the document, so it resolves
+    // against the document-wide declared set.
+    crate::structural::validate_data_loader_unit_conversions(
+        esm_file,
+        &system_refs,
+        &mut structural_errors,
+    );
 
     // Validate coupling
     if let Some(ref coupling) = esm_file.coupling {
@@ -358,6 +372,16 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
                     parameters,
                 },
             );
+
+            // A scoped reference is a dot path of ARBITRARY DEPTH (esm-spec
+            // §4.9.2): `EarthSystem.Atmosphere.Chemistry.O3` walks the
+            // `subsystems` maps down and takes `O3` from the system it lands on.
+            // Registering every nested subsystem under its FULL DOTTED PATH
+            // turns that walk into a single prefix lookup for both the variable
+            // resolver (structural.rs) and the coupling system position
+            // (coupling.rs) — without it, any reference more than two segments
+            // deep is a spurious `unresolved_scoped_ref`/`undefined_system`.
+            register_subsystems(name, model.subsystems.as_ref(), &mut systems);
         }
     }
 
@@ -377,6 +401,9 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
                     parameters,
                 },
             );
+
+            // Reaction systems nest too (esm-spec §4.9.2).
+            register_subsystems(name, rs.subsystems.as_ref(), &mut systems);
         }
     }
 
@@ -415,6 +442,71 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     systems
 }
 
+/// Register a model's `subsystems` — recursively, at arbitrary depth — under
+/// their full dotted paths (`Parent.Child`, `Parent.Child.Grandchild`, …).
+///
+/// `Model::subsystems` is raw `serde_json::Value` (a subsystem may be an inline
+/// system object or an unresolved `{"ref": …}` edge), so this reads the nested
+/// shape structurally rather than through the typed `Model`. A `{"ref": …}` edge
+/// that has not been resolved contributes no variables — it is registered as an
+/// empty system so that the PATH resolves (the file may legitimately be inlined
+/// later) without claiming to know its contents.
+fn register_subsystems(
+    prefix: &str,
+    subsystems: Option<&HashMap<String, serde_json::Value>>,
+    systems: &mut HashMap<String, SystemInfo>,
+) {
+    let Some(subsystems) = subsystems else {
+        return;
+    };
+    for (child_name, child) in subsystems {
+        let path = format!("{prefix}.{child_name}");
+
+        let variables: HashSet<String> = child
+            .get("variables")
+            .and_then(|v| v.as_object())
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        let species: HashSet<String> = child
+            .get("species")
+            .and_then(|v| v.as_object())
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        // Parameter-typed variables also resolve as scoped `<path>.<param>`
+        // refs, mirroring the top-level model case above.
+        let mut parameters: HashSet<String> = child
+            .get("variables")
+            .and_then(|v| v.as_object())
+            .map(|m| {
+                m.iter()
+                    .filter(|(_, v)| v.get("type").and_then(|t| t.as_str()) == Some("parameter"))
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(params) = child.get("parameters").and_then(|v| v.as_object()) {
+            parameters.extend(params.keys().cloned());
+        }
+
+        systems.insert(
+            path.clone(),
+            SystemInfo {
+                _system_type: SystemType::Model,
+                variables,
+                species,
+                parameters,
+            },
+        );
+
+        // Recurse into this subsystem's own `subsystems` map.
+        if let Some(nested) = child.get("subsystems").and_then(|v| v.as_object()) {
+            let nested: HashMap<String, serde_json::Value> =
+                nested.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            register_subsystems(&path, Some(&nested), systems);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SystemInfo {
     pub(crate) _system_type: SystemType,
@@ -441,6 +533,8 @@ mod tests {
     #[test]
     fn test_validate_empty_file() {
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -481,6 +575,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: None,
                 default: None,
@@ -522,6 +617,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -572,6 +669,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: None,
                 default: None,
@@ -586,6 +684,7 @@ mod tests {
         variables.insert(
             "y".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: None,
                 default: None,
@@ -630,6 +729,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -666,10 +767,15 @@ mod tests {
             error.code,
             StructuralErrorCode::EquationCountMismatch
         ));
+        // esm-spec §4.9.4: the balance is UNKNOWNS vs EQUATIONS. This model
+        // declares two states and carries one equation, so it is genuinely
+        // under-determined.
         assert!(
-            error.message.contains(
-                "Number of ODE equations (1) does not match number of state variables (2)"
-            )
+            error
+                .message
+                .contains("Number of equations (1) does not match number of unknowns (2)"),
+            "unexpected message: {}",
+            error.message
         );
     }
 
@@ -677,6 +783,8 @@ mod tests {
     fn test_validation_result_structure() {
         // Test that the new ValidationResult structure works as expected
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -722,6 +830,7 @@ mod tests {
         variables.insert(
             "total".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Observed,
                 units: None,
                 default: None,
@@ -754,6 +863,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -805,6 +916,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()),
                 default: Some(1.0),
@@ -821,6 +933,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("1/s".to_string()),
                 default: Some(0.1),
@@ -837,6 +950,7 @@ mod tests {
         variables.insert(
             "rate".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Observed,
                 units: Some("m/s".to_string()),
                 default: None,
@@ -887,6 +1001,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -993,6 +1109,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
@@ -1009,6 +1126,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("1/s".to_string()), // per second
                 default: Some(0.1),
@@ -1059,6 +1177,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1112,6 +1232,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
@@ -1128,6 +1249,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("kg".to_string()), // mass units (incompatible)
                 default: Some(0.1),
@@ -1169,6 +1291,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1197,18 +1321,20 @@ mod tests {
         };
 
         let result = validate(&esm_file);
-        // Should still be structurally valid (no structural errors)
-        assert!(result.is_valid, "Structural validation should pass");
-        assert!(result.structural_errors.is_empty());
-        // But should have unit warnings
+        // D(x)/dt = k with x in metres and k in kilograms: no time unit can
+        // reconcile the two sides, so this is a PROVABLE mismatch and therefore
+        // a hard error rather than a warning.
         assert!(
-            !result.unit_warnings.is_empty(),
-            "Should have unit warnings"
+            !result.is_valid,
+            "An unreconcilable derivative equation must fail validation: {result:?}"
         );
-        assert!(
-            result.unit_warnings[0].contains("Dimension mismatch"),
-            "Should contain dimension mismatch warning"
-        );
+        let unit_errors: Vec<_> = result
+            .structural_errors
+            .iter()
+            .filter(|e| matches!(e.code, StructuralErrorCode::UnitInconsistency))
+            .collect();
+        assert_eq!(unit_errors.len(), 1, "{:?}", result.structural_errors);
+        assert_eq!(unit_errors[0].path, "/models/test/equations/0");
     }
 
     #[test]
@@ -1221,6 +1347,7 @@ mod tests {
         variables.insert(
             "position".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()),
                 default: Some(0.0),
@@ -1237,6 +1364,7 @@ mod tests {
         variables.insert(
             "velocity".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("m/s".to_string()),
                 default: Some(1.0),
@@ -1278,6 +1406,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1329,6 +1459,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
@@ -1376,6 +1507,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1404,21 +1537,40 @@ mod tests {
         };
 
         let result = validate(&esm_file);
-        // Should still be structurally valid
+        // `exp(x)` with x in metres is a PROVABLE dimensional inconsistency, so
+        // it is a hard `unit_inconsistency` error, not a warning — the shared
+        // corpus pins `units_*.esm` fixtures as `is_valid: false`.
         assert!(
-            result.is_valid,
-            "Structural validation should pass: {result:?}"
+            !result.is_valid,
+            "A dimensional argument to exp must fail validation: {result:?}"
         );
-        assert!(result.structural_errors.is_empty());
-        // But should have unit warnings about exp requiring dimensionless input
+        let unit_errors: Vec<_> = result
+            .structural_errors
+            .iter()
+            .filter(|e| matches!(e.code, StructuralErrorCode::UnitInconsistency))
+            .collect();
+        // `D(x)/dt = exp(x)` has TWO independent provable defects: the
+        // dimensional argument to `exp`, and the resulting equation (which no
+        // time unit can reconcile). BOTH are reported — propagation no longer
+        // abandons the equation at the first finding, which is what used to let
+        // one defect hide another.
+        assert_eq!(unit_errors.len(), 2, "{:?}", result.structural_errors);
         assert!(
-            !result.unit_warnings.is_empty(),
-            "Should have unit warnings"
+            unit_errors.iter().any(|e| e
+                .message
+                .contains("Argument to 'exp' must be dimensionless")),
+            "{unit_errors:?}"
         );
         assert!(
-            result.unit_warnings[0].contains("must be dimensionless"),
-            "Should warn about dimensionless requirement: {:?}",
-            result.unit_warnings
+            unit_errors
+                .iter()
+                .any(|e| e.message.contains("No time unit can reconcile")),
+            "{unit_errors:?}"
+        );
+        assert!(
+            unit_errors
+                .iter()
+                .all(|e| e.path == "/models/test/equations/0")
         );
     }
 
@@ -1429,6 +1581,8 @@ mod tests {
 
         // Create a valid EsmFile structure
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,

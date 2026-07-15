@@ -123,12 +123,29 @@ def test_effective_order_pins_tie_break_and_priority_flips_it():
 
 
 def test_valid_suite_library_file_loads_clean():
-    """A model-less template-library document loads (esm-spec §9.7.1);
-    round-trip strips every §9.7 construct, leaving the folded registry."""
+    """A model-less template-library document loads (esm-spec §9.7.1) and its
+    top-level DECLARATIONS SURVIVE.
+
+    This test used to assert the opposite — that round-trip "strips every §9.7
+    construct, leaving the folded registry" — which enshrined the bug as the
+    contract. §9.6.4 rule 5: Option A expands `apply_expression_template` CALL
+    SITES; it does not delete DECLARATIONS. The registry and `metaparameters` are
+    peers of `index_sets` and survive `parse -> emit` verbatim; a library file
+    MUST round-trip to itself. Dropping them emitted `{esm, metadata,
+    index_sets}` — none of the five top-level payload keys — which the schema's
+    top-level `anyOf` rejects, so a conforming library was unrepresentable.
+    """
     lib = load(os.path.join(VALID_DIR, "template_import_lib.esm"))
     assert not lib.models
-    assert lib.index_sets["cells"]["size"] == 8  # size "N" folded by default
-    # Loader-API binding overrides the default on the library itself.
+    assert lib.expression_templates, "the template registry is a declaration; it survives"
+    assert lib.metaparameters, "the metaparameter block is a declaration; it survives"
+    # A library is GENERIC: `N` is bound per import edge, so an unbound load must
+    # NOT fold `size: "N"` to the default. Folding it here would hard-wire the
+    # library to 8 and destroy the genericity that makes it a library.
+    assert lib.index_sets["cells"]["size"] == "N"
+
+    # But a loader-API binding (§9.7.6 site 4) is a request to INSTANTIATE the
+    # library at a size, so there the fold is exactly what was asked for.
     lib12 = load(os.path.join(VALID_DIR, "template_import_lib.esm"), metaparameters={"N": 12})
     assert lib12.index_sets["cells"]["size"] == 12
 

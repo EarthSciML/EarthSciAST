@@ -624,18 +624,49 @@ function _pgather_key_expr_uncached(e::OpExpr, ctx::_PGatherKeyCtx)
     return changed ? rebuilt : e
 end
 
-# Canonical-form key for a subexpression, or `nothing` if it cannot be
-# canonicalized (e.g. a non-finite literal). A `nothing` key disables sharing
-# for that subtree — CSE is a pure optimization and silently declines anything
-# it cannot key safely.
+# Canonical-form key for a subexpression, or `nothing` if it cannot be keyed
+# safely. A `nothing` key disables sharing for that subtree — CSE is a pure
+# optimization and silently declines anything it cannot key safely.
 #
 # `pgctx` is the live-forcing stand-in context (above) when the build binds any
 # `param_arrays` buffer or discrete cache, and `nothing` otherwise — in which case
 # no `_PGatherRef` can exist and this is byte-for-byte the pre-ess-qic key.
+#
+# ---------------------------------------------------------------------------
+# WHY A BARE-LITERAL CANONICAL FORM IS REFUSED (bug audit 2026-07-14, J4)
+#
+# The CSE key is `canonical_json`, and `canonicalize` contains folds that are NOT
+# value-preserving on the IEEE reals: `_canon_mul` maps `x*0 → 0` and `_canon_div`
+# maps `0/x → 0` **regardless of x**. Those are wrong when `x` is `Inf` or `NaN`
+# (`Inf*0` is `NaN`, not `0`), which is fine for a canonical *identity* key in the
+# abstract-algebra sense, but fatal for CSE: two structurally DIFFERENT
+# expressions both canonicalize to the literal `0.0`, `_cse_count!` sees one key
+# with two occurrences, hoists ONE slot, and compiles that slot's definition from
+# whichever occurrence it saw FIRST. Every other occurrence then reads a value
+# computed from a different expression.
+#
+#     D(x) = (1/z)*0                 alone  ->  du[x] = NaN   (correct: Inf*0)
+#     D(y) = w*0  ;  D(x) = (1/z)*0         ->  du[x] = 0.0   (WRONG)
+#
+# `D(x)` is byte-identical between the two models: adding an UNRELATED equation
+# changed another equation's value, and the error is unbounded (NaN ↔ 0.0), not
+# the sub-ulp reassociation drift the existing pin at the top of this file
+# describes. Fail-close: refuse to key any subexpression whose canonical form
+# collapses to a bare literal.
+#
+# A canonical form that collapses to a bare VARIABLE (`x*1 → x`, `x+0 → x`) is
+# NOT refused: those folds *are* value-preserving, so two expressions sharing
+# such a key really do compute the same value.
+# ---------------------------------------------------------------------------
 function _cse_key(e::ASTExpr, pgctx::Union{Nothing,_PGatherKeyCtx})
     keyed = pgctx === nothing ? e : _pgather_key_expr(e, pgctx)
     try
-        return canonical_json(keyed)
+        # `canonical_json` is `_emit_json ∘ canonicalize`; split it so the
+        # canonical NODE can be inspected before it is flattened to bytes.
+        canon = canonicalize(keyed)
+        # Fail-close on a non-value-preserving collapse to a literal.
+        (canon isa NumExpr || canon isa IntExpr) && return nothing
+        return _emit_json(canon)
     catch err
         err isa CanonicalizeError && return nothing
         rethrow()

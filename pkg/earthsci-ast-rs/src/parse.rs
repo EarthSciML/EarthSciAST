@@ -3,6 +3,7 @@
 use crate::{EsmFile, error::EsmError};
 use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// Library version supported by this implementation (major, minor, patch),
@@ -448,6 +449,47 @@ fn check_data_loader_temporal_durations(
     }
 }
 
+/// Every system named by a coupling entry, read off the RAW JSON.
+///
+/// The typed [`crate::structural::coupled_system_names`] is the same rule, but
+/// these two load-time checks run BEFORE the document is typed, so the set has
+/// to be recovered from the untyped tree. See that function for why a coupled
+/// system's checks relax.
+fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<String> {
+    let mut coupled = HashSet::new();
+    let mut add = |name: &str| {
+        if name.is_empty() {
+            return;
+        }
+        coupled.insert(name.to_string());
+        if let Some((root, _)) = name.split_once('.') {
+            coupled.insert(root.to_string());
+        }
+    };
+    for entry in obj
+        .get("coupling")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        for key in ["from", "to"] {
+            if let Some(s) = entry.get(key).and_then(|v| v.as_str()) {
+                add(s);
+            }
+        }
+        for s in entry
+            .get("systems")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+        {
+            add(s);
+        }
+    }
+    coupled
+}
+
 /// A model that declares state variables must provide at least one equation.
 /// An empty `equations: []` array paired with declared state variables is a
 /// structural contradiction — there is nothing to integrate.
@@ -456,6 +498,13 @@ fn check_data_loader_temporal_durations(
 /// LHS of a D(_, t) equation: state variables may be governed by coupled
 /// equations in other models, reaction systems, or operators elsewhere in
 /// the file. Python and Julia take the same lenient-per-variable stance.
+///
+/// …and for a COUPLED model that same reasoning applies to the WHOLE BLOCK, not
+/// just to individual variables: a model composed with another may legitimately
+/// declare states and carry NO equations of its own, because every one of them
+/// lives in its partner (tests/valid/scoped_refs_coupling.esm). The check
+/// contradicted its own rationale by rejecting the empty array outright, so it
+/// is skipped for coupled systems — Go has no such check at all.
 fn check_model_state_has_derivatives(
     obj: &serde_json::Map<String, Value>,
     errors: &mut Vec<String>,
@@ -463,7 +512,11 @@ fn check_model_state_has_derivatives(
     let Some(models) = obj.get("models").and_then(|v| v.as_object()) else {
         return;
     };
+    let coupled = coupled_system_names_raw(obj);
     for (mname, mv) in models {
+        if coupled.contains(mname.as_str()) {
+            continue;
+        }
         let Some(m) = mv.as_object() else { continue };
         let Some(vars) = m.get("variables").and_then(|v| v.as_object()) else {
             continue;
@@ -668,12 +721,28 @@ fn check_event_variable_references(obj: &serde_json::Map<String, Value>, errors:
         .map(|m| m.keys().map(String::as_str).collect())
         .unwrap_or_default();
 
+    let coupled = coupled_system_names_raw(obj);
+
     for (mname, mv) in models {
         let Some(m) = mv.as_object() else { continue };
         let Some(vars) = m.get("variables").and_then(|v| v.as_object()) else {
             continue;
         };
-        let declared: std::collections::HashSet<&str> = vars.keys().map(String::as_str).collect();
+        let mut declared: std::collections::HashSet<&str> =
+            vars.keys().map(String::as_str).collect();
+
+        // The §6.4 operator placeholder. In an operator-composed / coupled model
+        // `_var` stands for each matching state variable of the system this one
+        // is composed with, and it is substituted at composition — so an event
+        // affect that ASSIGNS to it is legal, exactly as an equation that
+        // differentiates it is. Reporting `_var` as an undeclared event variable
+        // while the very same document's equations are exempt from the reference
+        // check is internally inconsistent, and it rejected the valid
+        // tests/valid/full_coupled.esm. Credited only for a COUPLED model, so a
+        // genuinely undeclared event target is still caught everywhere else.
+        if coupled.contains(mname.as_str()) {
+            declared.insert("_var");
+        }
 
         // Continuous events: affects[].lhs must be declared; conditions[] expr
         // bare variable refs must be declared.

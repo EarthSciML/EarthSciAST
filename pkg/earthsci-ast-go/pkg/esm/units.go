@@ -1,16 +1,129 @@
 package esm
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
-// Dimension is a vector of exponents over the 7 SI base units plus radian.
-// Index order: m, kg, s, mol, K, A, cd, rad.
-type Dimension [8]int8
+// Rat is an exact RATIONAL unit exponent (num/den).
+//
+// Dimension exponents are rational, not integer: `1/s^0.5` is the noise
+// intensity of an SDE (tests/fixtures/sde/*.esm), `m^(1/2)` and `s^(-1/2)`
+// appear wherever a square root of a dimensional quantity does, and `sqrt(x)`
+// halves whatever exponents x carries. An int8 exponent vector cannot represent
+// any of them, so — now that an unparseable unit is a HARD ERROR — an integer
+// representation falsely rejects those files.
+//
+// The ZERO VALUE is the exponent 0: every operation normalizes a zero (or
+// missing) denominator to 1 via fix(), so `Rat{}` and a composite literal such
+// as `Rat{Num: 2}` are both well-formed. Nothing compares two Rats (or two
+// Dimensions) with `==` — Equal cross-multiplies, so a non-reduced value never
+// silently compares unequal to its reduced form.
+type Rat struct {
+	Num int32 `json:"num"`
+	Den int32 `json:"den"`
+}
+
+// newRat builds a Rat in lowest terms with a positive denominator. A zero
+// denominator is treated as 1 (see the Rat doc comment).
+func newRat(num, den int64) Rat {
+	if den == 0 {
+		den = 1
+	}
+	if den < 0 {
+		num, den = -num, -den
+	}
+	if g := gcd64(num, den); g > 1 {
+		num, den = num/g, den/g
+	}
+	return Rat{Num: int32(num), Den: int32(den)}
+}
+
+func gcd64(a, b int64) int64 {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
+}
+
+// fix normalizes the zero-value / int-literal spelling (Den == 0) to a proper
+// fraction over 1.
+func (r Rat) fix() Rat {
+	if r.Den == 0 {
+		return Rat{Num: r.Num, Den: 1}
+	}
+	return r
+}
+
+// ratInt is the exponent n/1.
+func ratInt(n int) Rat { return Rat{Num: int32(n), Den: 1} }
+
+// Add returns r + o.
+func (r Rat) Add(o Rat) Rat {
+	a, b := r.fix(), o.fix()
+	return newRat(int64(a.Num)*int64(b.Den)+int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+}
+
+// Sub returns r − o.
+func (r Rat) Sub(o Rat) Rat {
+	a, b := r.fix(), o.fix()
+	return newRat(int64(a.Num)*int64(b.Den)-int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+}
+
+// Mul returns r × o.
+func (r Rat) Mul(o Rat) Rat {
+	a, b := r.fix(), o.fix()
+	return newRat(int64(a.Num)*int64(b.Num), int64(a.Den)*int64(b.Den))
+}
+
+// Equal reports whether two exponents denote the same rational number,
+// regardless of whether either is in lowest terms.
+func (r Rat) Equal(o Rat) bool {
+	a, b := r.fix(), o.fix()
+	return int64(a.Num)*int64(b.Den) == int64(b.Num)*int64(a.Den)
+}
+
+// IsZero reports whether the exponent is 0.
+func (r Rat) IsZero() bool { return r.fix().Num == 0 }
+
+// Float returns the exponent as a float64 (used for scale arithmetic).
+func (r Rat) Float() float64 {
+	a := r.fix()
+	return float64(a.Num) / float64(a.Den)
+}
+
+// Neg returns −r.
+func (r Rat) Neg() Rat {
+	a := r.fix()
+	return Rat{Num: -a.Num, Den: a.Den}
+}
+
+// String renders the exponent: "2", "-1", "1/2", "-3/2".
+func (r Rat) String() string {
+	a := r.fix()
+	if a.Den == 1 {
+		return strconv.Itoa(int(a.Num))
+	}
+	return fmt.Sprintf("%d/%d", a.Num, a.Den)
+}
+
+// Dimension is a vector of RATIONAL exponents over the 7 SI base units plus
+// radian. Index order: m, kg, s, mol, K, A, cd, rad.
+type Dimension [8]Rat
 
 const (
 	dimLength = iota
@@ -30,7 +143,7 @@ var Dimensionless = Dimension{}
 func (d Dimension) Multiply(other Dimension) Dimension {
 	var r Dimension
 	for i := range d {
-		r[i] = d[i] + other[i]
+		r[i] = d[i].Add(other[i])
 	}
 	return r
 }
@@ -39,51 +152,61 @@ func (d Dimension) Multiply(other Dimension) Dimension {
 func (d Dimension) Divide(other Dimension) Dimension {
 	var r Dimension
 	for i := range d {
-		r[i] = d[i] - other[i]
+		r[i] = d[i].Sub(other[i])
 	}
 	return r
 }
 
-// Power scales each exponent by n.
+// Power scales each exponent by the integer n.
 func (d Dimension) Power(n int) Dimension {
+	return d.PowerRat(ratInt(n))
+}
+
+// PowerRat scales each exponent by the rational e — the operation `sqrt` and a
+// fractional literal exponent both need.
+func (d Dimension) PowerRat(e Rat) Dimension {
 	var r Dimension
 	for i := range d {
-		r[i] = int8(int(d[i]) * n)
+		r[i] = d[i].Mul(e)
 	}
 	return r
 }
 
-// Equal reports whether two dimensions are identical.
+// Equal reports whether two dimensions denote the same exponent vector.
 func (d Dimension) Equal(other Dimension) bool {
-	return d == other
+	for i := range d {
+		if !d[i].Equal(other[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // IsDimensionless reports whether every exponent is zero.
 func (d Dimension) IsDimensionless() bool {
-	return d == Dimensionless
+	for i := range d {
+		if !d[i].IsZero() {
+			return false
+		}
+	}
+	return true
 }
 
-// String renders a dimension vector in SI-base notation (e.g. "m*kg/s^2").
+// String renders a dimension vector in SI-base notation (e.g. "m*kg/s^2",
+// "1/s^(1/2)").
 func (d Dimension) String() string {
 	if d.IsDimensionless() {
 		return "1"
 	}
 	symbols := [8]string{"m", "kg", "s", "mol", "K", "A", "cd", "rad"}
 	var num, den []string
-	for i, e := range d {
+	for i := range d {
+		e := d[i].fix()
 		switch {
-		case e > 0:
-			if e == 1 {
-				num = append(num, symbols[i])
-			} else {
-				num = append(num, fmt.Sprintf("%s^%d", symbols[i], e))
-			}
-		case e < 0:
-			if e == -1 {
-				den = append(den, symbols[i])
-			} else {
-				den = append(den, fmt.Sprintf("%s^%d", symbols[i], -e))
-			}
+		case e.Num > 0:
+			num = append(num, dimFactor(symbols[i], e))
+		case e.Num < 0:
+			den = append(den, dimFactor(symbols[i], e.Neg()))
 		}
 	}
 	var sb strings.Builder
@@ -97,6 +220,32 @@ func (d Dimension) String() string {
 		sb.WriteString(strings.Join(den, "/"))
 	}
 	return sb.String()
+}
+
+// radDim is the dimension of a plane angle (the `rad` base axis) — what the
+// inverse circular functions return.
+func radDim() Dimension {
+	var d Dimension
+	d[dimAngle] = ratInt(1)
+	return d
+}
+
+// isAngleDim reports whether a dimension is exactly a plane angle (rad^1), the
+// argument the circular functions accept alongside a pure number.
+func isAngleDim(d Dimension) bool { return d.Equal(radDim()) }
+
+// dimFactor renders one base-unit factor with a POSITIVE exponent: "m",
+// "m^2", "m^(1/2)".
+func dimFactor(symbol string, e Rat) string {
+	e = e.fix()
+	switch {
+	case e.Num == 1 && e.Den == 1:
+		return symbol
+	case e.Den == 1:
+		return fmt.Sprintf("%s^%d", symbol, e.Num)
+	default:
+		return fmt.Sprintf("%s^(%s)", symbol, e)
+	}
 }
 
 // Unit is a named physical unit with a dimension vector and a scale factor
@@ -119,13 +268,18 @@ func (u Unit) Divide(other Unit) Unit {
 
 // Power raises a unit to an integer power.
 func (u Unit) Power(n int) Unit {
-	return Unit{Dim: u.Dim.Power(n), Scale: math.Pow(u.Scale, float64(n))}
+	return u.PowerRat(ratInt(n))
+}
+
+// PowerRat raises a unit to a RATIONAL power (`s^(-1/2)`, `sqrt(m^3)`).
+func (u Unit) PowerRat(e Rat) Unit {
+	return Unit{Dim: u.Dim.PowerRat(e), Scale: math.Pow(u.Scale, e.Float())}
 }
 
 // baseUnit constructs a single-dimension unit with an explicit scale.
 func baseUnit(idx int, scale float64) Unit {
 	var d Dimension
-	d[idx] = 1
+	d[idx] = ratInt(1)
 	return Unit{Dim: d, Scale: scale}
 }
 
@@ -151,6 +305,7 @@ func buildUnitRegistry() map[string]Unit {
 	r["ug"] = Unit{Dim: r["kg"].Dim, Scale: 1e-9}
 
 	// Length scales.
+	r["dm"] = Unit{Dim: r["m"].Dim, Scale: 1e-1}
 	r["cm"] = Unit{Dim: r["m"].Dim, Scale: 1e-2}
 	r["mm"] = Unit{Dim: r["m"].Dim, Scale: 1e-3}
 	r["um"] = Unit{Dim: r["m"].Dim, Scale: 1e-6}
@@ -164,8 +319,13 @@ func buildUnitRegistry() map[string]Unit {
 	r["min"] = Unit{Dim: r["s"].Dim, Scale: 60}
 	r["h"] = Unit{Dim: r["s"].Dim, Scale: 3600}
 	r["hr"] = Unit{Dim: r["s"].Dim, Scale: 3600}
+	r["hour"] = r["h"]
+	// The day is spelled "day". The one-letter "d" is DELIBERATELY NOT a unit
+	// (§4.8.1): it reads as a deci- prefix or as a differential, and a binding
+	// that accepts it diverges permissively from the spec registry.
 	r["day"] = Unit{Dim: r["s"].Dim, Scale: 86400}
 	r["yr"] = Unit{Dim: r["s"].Dim, Scale: 365.25 * 86400}
+	r["year"] = r["yr"]
 
 	// Volume (derived length^3 shortcut).
 	liter := Unit{Dim: r["m"].Dim.Power(3), Scale: 1e-3}
@@ -173,9 +333,17 @@ func buildUnitRegistry() map[string]Unit {
 	r["l"] = liter
 	r["mL"] = Unit{Dim: liter.Dim, Scale: 1e-6}
 
+	// Length, long form. The corpus spells metres out ("meters/second" in a
+	// description-driven fixture); both spellings are the same unit.
+	r["meter"] = r["m"]
+	r["meters"] = r["m"]
+
 	// Temperature (Celsius shares the Kelvin dimension; offset is not modeled).
+	// Celsius is spelled "degC", "Celsius" or "°C" (normalizeUnitString folds
+	// the latter into "degC"). The bare symbol "C" is NOT Celsius — see the
+	// coulomb entry below.
 	r["degC"] = r["K"]
-	r["C"] = r["K"] // NOTE: overloaded with coulomb below if needed — coulomb disabled
+	r["Celsius"] = r["K"]
 
 	// Derived coherent SI units (scale 1 except where noted).
 	r["Hz"] = Unit{Dim: r["s"].Dim.Power(-1), Scale: 1}
@@ -187,50 +355,246 @@ func buildUnitRegistry() map[string]Unit {
 	r["kcal"] = Unit{Dim: r["J"].Dim, Scale: 4184}
 	r["W"] = r["J"].Divide(r["s"])
 
+	// Pressure (non-SI but ubiquitous in atmospheric science).
 	r["atm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325}
+	// Micro-atmosphere: the standard unit of seawater/air CO2 partial pressure
+	// (pCO2) throughout the ocean-carbon corpus.
+	r["uatm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325e-6}
+	r["bar"] = Unit{Dim: r["Pa"].Dim, Scale: 1e5}
+	r["hPa"] = Unit{Dim: r["Pa"].Dim, Scale: 100}
+	r["kPa"] = Unit{Dim: r["Pa"].Dim, Scale: 1000}
+	r["mbar"] = Unit{Dim: r["Pa"].Dim, Scale: 100}
+	r["Torr"] = Unit{Dim: r["Pa"].Dim, Scale: 101325.0 / 760.0}
+	r["mmHg"] = Unit{Dim: r["Pa"].Dim, Scale: 133.322387415}
+	r["psi"] = Unit{Dim: r["Pa"].Dim, Scale: 6894.757293168}
+
+	// Energy / power (non-coherent multiples).
+	r["erg"] = Unit{Dim: r["J"].Dim, Scale: 1e-7}
+	r["BTU"] = Unit{Dim: r["J"].Dim, Scale: 1055.05585262}
+	r["Wh"] = Unit{Dim: r["J"].Dim, Scale: 3600}
+	r["kWh"] = Unit{Dim: r["J"].Dim, Scale: 3.6e6}
+	r["kW"] = Unit{Dim: r["W"].Dim, Scale: 1000}
+	r["MW"] = Unit{Dim: r["W"].Dim, Scale: 1e6}
+
+	// Electromagnetic derived units.
+	//
+	// "C" is the COULOMB, per SI. It was previously bound to degrees Celsius,
+	// which silently injected a temperature dimension into every electromagnetic
+	// expression: tests/valid/units_dimensional_analysis.esm declares a charge
+	// `q: "C"` and a field `E: "V/m"`, and their product — a force, declared "N"
+	// — came out as kg*m*K/(s^3*A). Celsius has always had its own unambiguous
+	// spellings ("degC", "°C"), so the SI reading is the correct one and the only
+	// one that can be pinned as a cross-binding contract.
+	r["C"] = r["A"].Multiply(r["s"])                                                      // coulomb = A*s
+	r["V"] = r["W"].Divide(r["A"])                                                        // volt    = kg*m^2/(s^3*A)
+	r["Ohm"] = r["V"].Divide(r["A"])                                                      // ohm     = kg*m^2/(s^3*A^2)
+	r["F"] = Unit{Dim: r["C"].Dim.Divide(r["V"].Dim), Scale: 1}                           // farad   = A^2*s^4/(kg*m^2)
+	r["T"] = Unit{Dim: r["V"].Multiply(r["s"]).Dim.Divide(r["m"].Dim.Power(2)), Scale: 1} // tesla   = kg/(s^2*A)
+
+	// Temperature. degF is an INTERVAL of 5/9 K; like degC, the affine offset is
+	// deliberately not modeled (dimensional analysis only cares about the scale).
+	r["degF"] = Unit{Dim: r["K"].Dim, Scale: 5.0 / 9.0}
+
+	// Plane angle. "degrees" is the long-form alias the corpus uses for lon/lat
+	// coordinates and terrain aspect.
+	r["deg"] = Unit{Dim: r["rad"].Dim, Scale: math.Pi / 180}
+	r["degrees"] = r["deg"]
+
+	// Amount of substance, scaled ("μmol/(m^2*s)" — photosynthesis flux — is in
+	// the valid corpus; μ normalizes to u, see normalizeUnitString).
+	r["kmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e3}
+	r["mmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-3}
+	r["umol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-6}
+	r["nmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-9}
 
 	// Concentration-ish.
 	r["M"] = r["mol"].Divide(liter) // molarity
 
 	// ESM / atmospheric chemistry units.
 	// mol/mol, ppm, ppb, ppt are dimensionless mixing ratios; the scale is the
-	// multiplier relative to 1 (mol/mol).
+	// multiplier relative to 1 (mol/mol). The "v" (by-volume) spellings are the
+	// same quantity.
 	r["ppm"] = Unit{Dim: Dimensionless, Scale: 1e-6}
 	r["ppb"] = Unit{Dim: Dimensionless, Scale: 1e-9}
 	r["ppt"] = Unit{Dim: Dimensionless, Scale: 1e-12}
-	// "molec" is a count of molecules. ESM models treat it as dimensionless so
-	// that e.g. "molec/cm^3" matches "1/cm^3" — avogadro folds into the scale.
+	r["ppmv"] = r["ppm"]
+	r["ppbv"] = r["ppb"]
+	r["pptv"] = r["ppt"]
+	// COUNT NOUNS. A count of discrete things carries no physical dimension, so
+	// each is dimensionless with scale 1 — exactly the treatment "molec" has
+	// always had here (so that "molec/cm^3" matches "1/cm^3"). They are REAL unit
+	// names in the shared corpus (population density "individuals/km^2", traffic
+	// density "vehicles/km^2", clinical activity "units/L"), and since an
+	// unresolvable unit string is now a hard error (see UnitFindingUnparseable),
+	// omitting them would falsely reject those files.
 	r["molec"] = Unit{Dim: Dimensionless, Scale: 1}
-	// Dobson unit: 2.69e16 molec/cm^2 → dimension is length^-2.
-	r["Dobson"] = Unit{Dim: r["m"].Dim.Power(-2), Scale: 2.69e20} // 2.69e16 * (1/cm^2 → 1/m^2 ×1e4)
+	r["molecule"] = r["molec"]
+	r["individuals"] = Unit{Dim: Dimensionless, Scale: 1}
+	r["vehicles"] = Unit{Dim: Dimensionless, Scale: 1}
+	r["units"] = Unit{Dim: Dimensionless, Scale: 1}
+	r["count"] = Unit{Dim: Dimensionless, Scale: 1}
+
+	// Dimensionless RATIOS with a scale.
+	//
+	// "%" is a real unit token in the corpus (cloud fraction, relative humidity,
+	// soil moisture). It is not an identifier byte, so parseAtom recognises it as
+	// a symbol of its own; "percent" is the spelled-out alias.
+	r["%"] = Unit{Dim: Dimensionless, Scale: 0.01}
+	r["percent"] = r["%"]
+	// Practical salinity: dimensionless by definition (PSS-78 is a conductivity
+	// ratio), scale 1 — the ocean corpus declares salinity in "psu".
+	r["psu"] = Unit{Dim: Dimensionless, Scale: 1}
+
+	// Dobson unit: 2.6867e16 molec/cm^2 → dimension is length^-2.
+	//
+	// The constant is 2.6867e20 m^-2, NOT the rounded 2.69e20 this used to
+	// carry: Rust checks conversion factors against the physically correct value
+	// and Go's conversion tolerance is 1e-9 relative, so the two bindings
+	// disagreed — by 5e-3 relative — on the SAME file, one accepting a declared
+	// factor the other rejected. The exact value is the cross-binding contract.
+	r["Dobson"] = Unit{Dim: r["m"].Dim.Power(-2), Scale: 2.6867e20} // 2.6867e16 * (1/cm^2 → 1/m^2 ×1e4)
 	r["DU"] = r["Dobson"]
 
 	return r
 }
 
+// normalizeUnitString rewrites the non-ASCII and alternate spellings the shared
+// corpus uses into the ASCII grammar ParseUnit implements. It is a pure
+// spelling normalization — no unit is invented here, each target already exists
+// in the registry — and it runs before the byte-level scanner, which only
+// recognizes ASCII bytes:
+//
+//   - SUPERSCRIPT DIGITS ⁰¹²³⁴⁵⁶⁷⁸⁹ and superscript sign ⁻/⁺ → "^n"
+//     ("W/m²" → "W/m^2", "cm³" → "cm^3", "m⁻³" → "m^-3"). A RUN of superscript
+//     characters is one exponent, so "m¹⁰" is m^10, not m^1*0.
+//   - MIDDOT · (U+00B7) and DOT OPERATOR ⋅ (U+22C5) → "*" ("J/(kg·K)",
+//     "kg⋅m/s"). Both are multiplication in SI typography.
+//   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → "u" ("μg" → "ug")
+//   - "°C"/"°F"/"°K" → degC/degF/K, and a bare "°" → "deg"
+//   - Ω (U+03A9 GREEK CAPITAL OMEGA) and Ω (U+2126 OHM SIGN) → "Ohm"
+//
+// These spellings are pervasive in tests/libraries and the spec's own examples;
+// each of them used to be a parse failure, which — now that an unresolvable unit
+// string is a HARD ERROR — is a false rejection of a valid file.
+func normalizeUnitString(s string) string {
+	if isASCIIString(s) {
+		return s
+	}
+	runes := []rune(s)
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if isSuperscriptRune(r) {
+			// A run of superscript characters is a single exponent.
+			b.WriteByte('^')
+			for i < len(runes) && isSuperscriptRune(runes[i]) {
+				b.WriteByte(superscriptASCII(runes[i]))
+				i++
+			}
+			i-- // the outer loop advances past the last consumed rune
+			continue
+		}
+		switch r {
+		case '·', '⋅': // MIDDLE DOT, DOT OPERATOR
+			b.WriteByte('*')
+		case 'µ', 'μ': // MICRO SIGN, GREEK SMALL LETTER MU
+			b.WriteByte('u')
+		case 'Ω', 'Ω': // GREEK CAPITAL OMEGA, OHM SIGN
+			b.WriteString("Ohm")
+		case '°': // DEGREE SIGN
+			if i+1 < len(runes) {
+				switch runes[i+1] {
+				case 'C':
+					b.WriteString("degC")
+					i++
+					continue
+				case 'F':
+					b.WriteString("degF")
+					i++
+					continue
+				case 'K':
+					b.WriteString("K")
+					i++
+					continue
+				}
+			}
+			b.WriteString("deg")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// isASCIIString reports whether s needs no Unicode normalization.
+func isASCIIString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// superscriptTable maps every superscript rune to the ASCII byte it denotes.
+var superscriptTable = map[rune]byte{
+	'⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+	'⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+	'⁻': '-', '⁺': '+',
+}
+
+func isSuperscriptRune(r rune) bool {
+	_, ok := superscriptTable[r]
+	return ok
+}
+
+func superscriptASCII(r rune) byte { return superscriptTable[r] }
+
 // ParseUnit parses a unit string into a Unit. Grammar:
 //
-//	unit    := term ( ('*'|'/') term )*
-//	term    := atom ( '^' integer )?
-//	atom    := number | symbol | '(' unit ')' | '1'
+//	unit     := term ( ('*'|'/')? term )*
+//	term     := atom ( ('^'|'**') exponent )?
+//	exponent := integer | decimal | '(' integer '/' integer ')'
+//	atom     := number | symbol | '%' | '(' unit ')' | '1'
 //
-// Whitespace is ignored. Division is left-associative: "a/b/c" == "a/(b*c)".
-// Examples that must parse:
+// EXPONENTS ARE RATIONAL. "1/s^0.5" (SDE noise intensity), "s^(-1/2)" and
+// "m^(3/2)" are legitimate corpus units; an integer-only exponent grammar
+// cannot express them and — under the hard-error severity for an unparseable
+// unit — falsely rejects the files that carry them.
 //
-//	"m", "m/s", "m/s^2", "kg*m^2/s^3", "cm^3/molec/s", "mol/mol",
-//	"1/s", "Pa", "J/(mol*K)", "".
+// '*' AND '/' ARE ONE PRECEDENCE LEVEL, applied strictly left to right:
+// "J/mol*K" is (J/mol)*K, NOT J/(mol*K), and "a/b/c" is a/(b*c). Giving '*' a
+// tighter binding silently negates the exponent of every factor after a '/'.
+//
+// Whitespace separates tokens and, between two terms, means MULTIPLICATION —
+// the SI style "kg m^2 s^-2" and the corpus's "ppb^-1 s^-1" (== ppb^-1 *
+// s^-1). An explicit '*' is equivalent. '**' is accepted as a synonym for '^'
+// (the Python/pint spelling, e.g. "Pa*m**3").
+//
+// A unit string carries DIMENSIONS ONLY: there is no species-tag convention, so
+// the "C" of "kg C/m^2" is the coulomb, not a carbon tag.
+//
+// The empty string, "1" and "dimensionless" are the dimensionless unit.
+// Non-ASCII spellings (μg, °C, W/m², J/(kg·K), Ω) are normalized first — see
+// normalizeUnitString. Examples that must parse:
+//
+//	"m", "m/s", "m/s^2", "kg*m^2/s^3", "cm^3/molec/s", "mol/mol", "1/s",
+//	"Pa", "J/(mol*K)", "Pa*m**3", "ppb^-1 s^-1", "μg/m^3", "°C", "1/s^0.5",
+//	"s^(-1/2)", "W/m²", "J/(kg·K)", "%", "".
 func ParseUnit(s string) (Unit, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "1" || s == "dimensionless" {
 		return Unit{Scale: 1}, nil
 	}
-	p := &unitParser{src: s}
+	src := normalizeUnitString(s)
+	p := &unitParser{src: src}
 	u, err := p.parseUnit()
 	if err != nil {
 		return Unit{}, fmt.Errorf("parse %q: %w", s, err)
 	}
 	if p.pos != len(p.src) {
-		return Unit{}, fmt.Errorf("parse %q: unexpected %q at position %d", s, s[p.pos:], p.pos)
+		return Unit{}, fmt.Errorf("parse %q: unexpected %q at position %d", s, src[p.pos:], p.pos)
 	}
 	u.Symbol = s
 	return u, nil
@@ -262,21 +626,40 @@ func (p *unitParser) parseUnit() (Unit, error) {
 	}
 	for {
 		c := p.peek()
-		if c != '*' && c != '/' {
-			break
-		}
-		p.pos++
-		next, err := p.parseTerm()
-		if err != nil {
-			return Unit{}, err
-		}
-		if c == '*' {
+		switch {
+		case c == '*' || c == '/':
+			p.pos++
+			next, err := p.parseTerm()
+			if err != nil {
+				return Unit{}, err
+			}
+			if c == '*' {
+				u = u.Multiply(next)
+			} else {
+				u = u.Divide(next)
+			}
+		case startsAtom(c):
+			// Juxtaposition is multiplication: "kg m^2 s^-2". peek() has
+			// already skipped the separating whitespace, and the scanner is
+			// greedy over identifier bytes, so "ms" remains ONE symbol
+			// (millisecond) rather than m*s — juxtaposition can only arise
+			// across a real token boundary.
+			next, err := p.parseTerm()
+			if err != nil {
+				return Unit{}, err
+			}
 			u = u.Multiply(next)
-		} else {
-			u = u.Divide(next)
+		default:
+			return u, nil
 		}
 	}
-	return u, nil
+}
+
+// startsAtom reports whether c can begin an atom (identifier, number, percent,
+// or a parenthesized sub-unit) — the lookahead that drives implicit
+// multiplication.
+func startsAtom(c byte) bool {
+	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '(' || c == '%'
 }
 
 func (p *unitParser) parseTerm() (Unit, error) {
@@ -284,15 +667,21 @@ func (p *unitParser) parseTerm() (Unit, error) {
 	if err != nil {
 		return Unit{}, err
 	}
-	if p.peek() == '^' {
+	// Exponent: '^' or the Python/pint spelling '**'. peek() skips whitespace,
+	// so the '**' bytes must be checked against the un-skipped position.
+	switch {
+	case p.peek() == '^':
 		p.pos++
-		exp, err := p.parseInt()
-		if err != nil {
-			return Unit{}, err
-		}
-		u = u.Power(exp)
+	case p.peek() == '*' && p.pos+1 < len(p.src) && p.src[p.pos+1] == '*':
+		p.pos += 2
+	default:
+		return u, nil
 	}
-	return u, nil
+	exp, err := p.parseExponent()
+	if err != nil {
+		return Unit{}, err
+	}
+	return u.PowerRat(exp), nil
 }
 
 func (p *unitParser) parseAtom() (Unit, error) {
@@ -312,6 +701,11 @@ func (p *unitParser) parseAtom() (Unit, error) {
 		}
 		p.pos++
 		return u, nil
+	}
+	// "%" is a unit symbol, not an identifier byte, so it is scanned on its own.
+	if c == '%' {
+		p.pos++
+		return unitRegistry["%"], nil
 	}
 	// Bare integer "1" is dimensionless; any other bare number is a scalar factor.
 	if c >= '0' && c <= '9' {
@@ -342,23 +736,122 @@ func (p *unitParser) parseAtom() (Unit, error) {
 	return u, nil
 }
 
-func (p *unitParser) parseInt() (int, error) {
+// parseExponent parses a RATIONAL exponent:
+//
+//	exponent := integer | decimal | '(' integer '/' integer ')'
+//
+// e.g. "2", "-1", "0.5", "(1/2)", "(-1/2)". A parenthesized form may also hold
+// a plain (possibly decimal) number — "m^(-2)" is the common pint spelling.
+// The decimal form is converted EXACTLY (0.5 → 1/2, 1.25 → 5/4), never through
+// a float, so two spellings of the same exponent compare equal.
+func (p *unitParser) parseExponent() (Rat, error) {
+	p.skipSpace()
+	if p.pos < len(p.src) && p.src[p.pos] == '(' {
+		p.pos++
+		num, err := p.parseSignedNumber()
+		if err != nil {
+			return Rat{}, err
+		}
+		exp := num
+		if p.peek() == '/' {
+			p.pos++
+			den, err := p.parseSignedNumber()
+			if err != nil {
+				return Rat{}, err
+			}
+			if den.IsZero() {
+				return Rat{}, fmt.Errorf("zero denominator in exponent")
+			}
+			// Both sides are rationals; the quotient is num * den^-1.
+			d := den.fix()
+			exp = num.Mul(Rat{Num: d.Den, Den: d.Num})
+		}
+		if p.peek() != ')' {
+			return Rat{}, fmt.Errorf("missing ')' closing exponent at position %d", p.pos)
+		}
+		p.pos++
+		return exp, nil
+	}
+	return p.parseSignedNumber()
+}
+
+// parseSignedNumber scans an optionally signed integer or decimal literal and
+// returns it as an exact rational.
+func (p *unitParser) parseSignedNumber() (Rat, error) {
 	p.skipSpace()
 	start := p.pos
 	if p.pos < len(p.src) && (p.src[p.pos] == '-' || p.src[p.pos] == '+') {
 		p.pos++
 	}
+	digits := 0
 	for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
 		p.pos++
+		digits++
 	}
-	if start == p.pos || (p.pos-start == 1 && (p.src[start] == '-' || p.src[start] == '+')) {
-		return 0, fmt.Errorf("expected integer exponent at position %d", start)
+	frac := 0
+	if p.pos < len(p.src) && p.src[p.pos] == '.' {
+		p.pos++
+		for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
+			p.pos++
+			frac++
+		}
 	}
-	n, err := strconv.Atoi(p.src[start:p.pos])
+	if digits == 0 && frac == 0 {
+		return Rat{}, fmt.Errorf("expected a numeric exponent at position %d", start)
+	}
+	return ratFromDecimalLiteral(p.src[start:p.pos])
+}
+
+// ratFromFloat converts a literal exponent VALUE from the AST (where a number
+// arrives as a float64) into an exact rational. Whole numbers and the short
+// decimals that actually occur (0.5, 1.5, 0.25, 0.3333…) round-trip through the
+// shortest decimal representation, which is exactly what strconv.FormatFloat
+// with 'f'/-1 produces.
+func ratFromFloat(v float64) (Rat, error) {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return Rat{}, fmt.Errorf("exponent is not finite")
+	}
+	if v == math.Trunc(v) && math.Abs(v) < 1e9 {
+		return ratInt(int(v)), nil
+	}
+	return ratFromDecimalLiteral(strconv.FormatFloat(v, 'f', -1, 64))
+}
+
+// ratFromDecimalLiteral converts a signed decimal literal ("-1", "0.5",
+// "1.25") to an exact rational: the digits are read as an integer over the
+// corresponding power of ten. No float is involved, so "0.5", ".5" and "(1/2)"
+// all yield exactly 1/2.
+func ratFromDecimalLiteral(lit string) (Rat, error) {
+	neg := false
+	switch {
+	case strings.HasPrefix(lit, "-"):
+		neg, lit = true, lit[1:]
+	case strings.HasPrefix(lit, "+"):
+		lit = lit[1:]
+	}
+	intPart, fracPart, _ := strings.Cut(lit, ".")
+	if intPart == "" {
+		intPart = "0"
+	}
+	// An exponent with more than 9 fractional digits cannot be represented as an
+	// int32 fraction; nothing in the corpus needs one, and a silent overflow
+	// would corrupt the dimension.
+	if len(fracPart) > 9 || len(intPart) > 9 {
+		return Rat{}, fmt.Errorf("exponent %q has too many digits to represent exactly", lit)
+	}
+	digits := intPart + fracPart
+	n, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil {
-		return 0, err
+		return Rat{}, fmt.Errorf("invalid exponent %q", lit)
 	}
-	return n, nil
+	den := int64(1)
+	for i := 0; i < len(fracPart); i++ {
+		den *= 10
+	}
+	if neg {
+		n = -n
+	}
+	return newRat(n, den), nil
 }
 
 func isIdentStart(c byte) bool {
@@ -369,6 +862,61 @@ func isIdentCont(c byte) bool {
 	return isIdentStart(c) || (c >= '0' && c <= '9')
 }
 
+// Unit-finding codes. A unit finding is either a DEFECT IN THE FILE — which
+// invalidates the document — or a limit of the ANALYSIS, which does not. The
+// classification is decided at the point the finding is raised (never recovered
+// later from the prose) and carried on UnitWarning.Code; ValidateStructuralWithCodes
+// promotes the defect-bearing codes to `unit_inconsistency` structural errors.
+//
+// The split is the cross-binding policy and mirrors TypeScript's units.ts:
+//
+//   - UnitFindingDimensionalMismatch — a PROVABLE inconsistency: adding metres
+//     to kilograms, log() of a dimensional quantity, an equation whose sides
+//     have different dimensions. The file is wrong. → HARD ERROR.
+//   - UnitFindingUnparseable — a declared unit string that does not denote a
+//     real unit ("not_a_unit"). The file is wrong. → HARD ERROR.
+//   - UnitFindingAnalysis — the checker cannot DETERMINE a dimension: a
+//     symbolic (non-literal) exponent, an operator with no dimensional rule
+//     (index/fn/aggregate/table_lookup), a malformed arity. That is a statement
+//     about the checker, not a defect in the file. → WARNING.
+//
+// An unknown VARIABLE is likewise never a mismatch (it propagates as "unknown"
+// and suppresses the check); it is separately a hard `undefined_variable` error,
+// so the units layer does not double-report it.
+const (
+	UnitFindingDimensionalMismatch = "dimensional_mismatch"
+	UnitFindingUnparseable         = "unparseable_unit"
+	UnitFindingAnalysis            = "analysis"
+)
+
+// dimError is a propagation failure that carries its classification.
+type dimError struct {
+	code string
+	msg  string
+}
+
+func (e *dimError) Error() string { return e.msg }
+
+// mismatchErrf builds a PROVABLE dimensional inconsistency (promotable).
+func mismatchErrf(format string, a ...any) error {
+	return &dimError{code: UnitFindingDimensionalMismatch, msg: fmt.Sprintf(format, a...)}
+}
+
+// analysisErrf builds an "I cannot determine this" finding (stays a warning).
+func analysisErrf(format string, a ...any) error {
+	return &dimError{code: UnitFindingAnalysis, msg: fmt.Sprintf(format, a...)}
+}
+
+// findingCode recovers the classification of a propagation error. An error from
+// anywhere else is treated conservatively as an analysis limit.
+func findingCode(err error) string {
+	var de *dimError
+	if errors.As(err, &de) {
+		return de.code
+	}
+	return UnitFindingAnalysis
+}
+
 // PropagateDimension walks an Expression AST and returns the resulting Unit.
 // It mirrors the Julia reference implementation (get_expression_dimensions):
 //
@@ -377,9 +925,13 @@ func isIdentCont(c byte) bool {
 //     (dimensional analysis is best-effort when unit annotations are missing)
 //   - "+", "-" require all operands to share a dimension
 //   - "*" multiplies dimensions, "/" divides
-//   - "^" requires a dimensionless constant exponent
-//   - transcendental functions (sin/cos/tan/exp/log/ln/sqrt) require a
-//     dimensionless argument and return dimensionless
+//   - "^" requires a dimensionless constant exponent (which may be RATIONAL)
+//   - CIRCULAR functions (sin/cos/tan) take an ANGLE or a dimensionless number
+//     and return dimensionless; INVERSE circular functions (asin/acos/atan,
+//     atan2) take dimensionless arguments and RETURN AN ANGLE (rad)
+//   - the remaining transcendentals (exp/log/ln/log10, the hyperbolics) require
+//     a dimensionless argument and return dimensionless; sqrt halves the
+//     operand's dimension
 //   - "D" (derivative) divides by the wrt variable's unit (default "t")
 //
 // A non-nil error signals a dimensional inconsistency discovered during
@@ -398,13 +950,30 @@ func propagateDimensionWithCoords(expr Expression, env map[string]Unit, coordEnv
 	case nil:
 		return nil, nil
 	case float64, int, int32, int64, float32:
-		u := Unit{Scale: 1}
-		return &u, nil
+		// A BARE NUMERIC LITERAL has an INDETERMINATE dimension, not a
+		// dimensionless one. Nothing in the AST says whether `273.15` is a pure
+		// number or a temperature offset, whether `0.0224` is a molar volume, or
+		// whether `1.23` is a ppb→µg/m³ conversion factor. The valid corpus is
+		// full of these implicit-unit constants, and calling them dimensionless
+		// manufactures a mismatch on every line that uses one.
+		//
+		// This matters BECAUSE dimensional findings are now hard errors: a
+		// checker that fails the build must not fabricate a dimension it cannot
+		// know. It costs nothing on the invalid corpus, where every pinned
+		// inconsistency is stated between DECLARED quantities (`length + mass`,
+		// `ln(mass)`, `m^kg`). Literals still behave correctly where their
+		// meaning IS determined: additively they are neutral and adopt their
+		// sibling's dimension (`T - 273.15` → K), an all-literal expression is
+		// dimensionless (`1 + 2`), and an exponent is read by VALUE (`x^2`).
+		return nil, nil
 	case string:
 		if u, ok := env[e]; ok {
 			cp := u
 			return &cp, nil
 		}
+		// Unknown variable ⇒ UNKNOWN dimension, not dimensionless. It is
+		// separately a hard `undefined_variable` error, so the units layer does
+		// not double-report it.
 		return nil, nil
 	case ExprNode:
 		return propagateExprNode(e, env, coordEnv)
@@ -422,8 +991,20 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if node.Op == "-" && len(node.Args) == 1 {
 			return propagateDimensionWithCoords(node.Args[0], env, coordEnv)
 		}
+		// A bare literal in ADDITIVE position is dimensionally NEUTRAL, not
+		// dimensionless: it adopts the dimension of what it is added to. That is
+		// how models are actually written — `T - 273.15`, `1 - phi`,
+		// `biomass + 0.5` — with the literal silently carrying its sibling's
+		// unit. Literal operands are therefore skipped, not compared. It costs no
+		// coverage: a genuine inconsistency (`length + mass`) is between two
+		// DECLARED quantities and is still caught.
 		var first *Unit
+		sawNonLiteral := false
 		for i, arg := range node.Args {
+			if _, isLiteral := toFloat64(arg); isLiteral {
+				continue
+			}
+			sawNonLiteral = true
 			u, err := propagateDimensionWithCoords(arg, env, coordEnv)
 			if err != nil {
 				return nil, err
@@ -436,34 +1017,39 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 				continue
 			}
 			if !first.Dim.Equal(u.Dim) {
-				return nil, fmt.Errorf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
+				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
 					node.Op, first.Dim, i, u.Dim)
 			}
+		}
+		if !sawNonLiteral {
+			// An all-literal sum ("1 + 2") is a pure number.
+			return &Unit{Scale: 1}, nil
 		}
 		return first, nil
 
 	case "*":
+		// A single indeterminate factor makes the whole product indeterminate.
+		// Skipping the unknown factor instead (as this did) silently asserts it
+		// is dimensionless, which is exactly wrong for the implicit-unit
+		// constants the corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³
+		// conversion, and reporting its dimension as "dimensionless" manufactures
+		// a mismatch against the declared µg/m³.
 		result := Unit{Scale: 1}
-		anyKnown := false
 		for _, arg := range node.Args {
 			u, err := propagateDimensionWithCoords(arg, env, coordEnv)
 			if err != nil {
 				return nil, err
 			}
 			if u == nil {
-				continue
+				return nil, nil
 			}
 			result = result.Multiply(*u)
-			anyKnown = true
-		}
-		if !anyKnown {
-			return nil, nil
 		}
 		return &result, nil
 
 	case "/":
 		if len(node.Args) != 2 {
-			return nil, fmt.Errorf("'/' requires exactly 2 arguments, got %d", len(node.Args))
+			return nil, analysisErrf("'/' requires exactly 2 arguments, got %d", len(node.Args))
 		}
 		num, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
 		if err != nil {
@@ -481,7 +1067,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 
 	case "^", "**", "pow":
 		if len(node.Args) != 2 {
-			return nil, fmt.Errorf("'%s' requires exactly 2 arguments, got %d", node.Op, len(node.Args))
+			return nil, analysisErrf("'%s' requires exactly 2 arguments, got %d", node.Op, len(node.Args))
 		}
 		base, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
 		if err != nil {
@@ -492,98 +1078,184 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 			return nil, err
 		}
 		if expDim != nil && !expDim.Dim.IsDimensionless() {
-			return nil, fmt.Errorf("exponent in '%s' must be dimensionless, got %s", node.Op, expDim.Dim)
+			return nil, mismatchErrf("exponent in '%s' must be dimensionless, got %s", node.Op, expDim.Dim)
 		}
 		if base == nil {
 			return nil, nil
 		}
 		expVal, ok := toFloat64(node.Args[1])
 		if !ok {
-			// Non-constant exponent: cannot compute integer power; assume base dim.
-			cp := *base
-			return &cp, nil
+			// SYMBOLIC exponent (`x^alpha`, alpha a parameter): the result's
+			// dimension depends on alpha's runtime VALUE, so it is genuinely
+			// undeterminable. Assuming the base's dimension (as this did) is a
+			// fabrication — for `k2 * x^alpha * z^beta` it manufactured a clean
+			// `1/s` and then reported a mismatch against the true LHS, rejecting
+			// the valid tests/valid/expr_graphs_variable_deps.esm.
+			return nil, nil
 		}
-		if expVal != math.Trunc(expVal) {
-			return nil, fmt.Errorf("non-integer exponent %v in '%s' not supported for dimensional analysis", expVal, node.Op)
+		// A FRACTIONAL literal exponent is fine: dimension exponents are
+		// rational, so `p^0.5` is p's dimension halved.
+		exp, err := ratFromFloat(expVal)
+		if err != nil {
+			return nil, analysisErrf("exponent %v in '%s' is not a representable rational: %v", expVal, node.Op, err)
 		}
-		r := base.Power(int(expVal))
+		r := base.PowerRat(exp)
 		return &r, nil
 
-	case "sin", "cos", "tan", "asin", "acos", "atan",
-		"sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-		"exp", "log", "log10", "ln", "sqrt":
-		if node.Op == "sqrt" {
-			if len(node.Args) != 1 {
-				return nil, fmt.Errorf("sqrt requires 1 argument, got %d", len(node.Args))
-			}
-			base, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
-			if err != nil {
-				return nil, err
-			}
-			if base == nil {
-				return nil, nil
-			}
-			// sqrt halves exponents — require each to be even.
-			var r Dimension
-			for i, e := range base.Dim {
-				if e%2 != 0 {
-					return nil, fmt.Errorf("sqrt of non-square dimension %s", base.Dim)
-				}
-				r[i] = e / 2
-			}
-			return &Unit{Dim: r, Scale: math.Sqrt(base.Scale)}, nil
-		}
+	case "sqrt":
 		if len(node.Args) != 1 {
-			return nil, fmt.Errorf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
+			return nil, analysisErrf("sqrt requires 1 argument, got %d", len(node.Args))
+		}
+		base, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if base == nil {
+			return nil, nil
+		}
+		// sqrt HALVES every exponent — it is not a transcendental and does not
+		// require a dimensionless argument. With RATIONAL exponents that is always
+		// defined: sqrt(m^2/s^2) is m/s (the ordinary spelling of a wave speed or
+		// an RMS) and sqrt(m^3) is m^(3/2). The old "non-square dimension"
+		// rejection was an artifact of the integer exponent vector.
+		return &Unit{Dim: base.Dim.PowerRat(newRat(1, 2)), Scale: math.Sqrt(base.Scale)}, nil
+
+	case "sin", "cos", "tan":
+		// CIRCULAR functions take an ANGLE. With `rad` carried as a base axis, the
+		// argument is legitimately dimensioned — `sin(theta)` with theta declared
+		// "rad" (or "deg") — so the rule is: an angle OR a dimensionless number.
+		// `sin(kg)` is still rejected.
+		if len(node.Args) != 1 {
+			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
+		}
+		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if arg != nil && !arg.Dim.IsDimensionless() && !isAngleDim(arg.Dim) {
+			return nil, mismatchErrf("argument of '%s' must be an angle or dimensionless, got %s", node.Op, arg.Dim)
+		}
+		return &Unit{Scale: 1}, nil
+
+	case "asin", "acos", "atan":
+		// INVERSE CIRCULAR functions RETURN AN ANGLE. Asserting a dimensionless
+		// result while `rad` is a base axis makes every `theta: "rad"` computed by
+		// `acos(...)` a guaranteed mismatch — which is exactly what the shipped
+		// stdlib does (lib/solar.esm's solar zenith angle).
+		if len(node.Args) != 1 {
+			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
 		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
 		if err != nil {
 			return nil, err
 		}
 		if arg != nil && !arg.Dim.IsDimensionless() {
-			return nil, fmt.Errorf("argument of '%s' must be dimensionless, got %s", node.Op, arg.Dim)
+			return nil, mismatchErrf("argument of '%s' must be dimensionless, got %s", node.Op, arg.Dim)
+		}
+		return &Unit{Dim: radDim(), Scale: 1}, nil
+
+	case "atan2":
+		// atan2(y, x) RETURNS AN ANGLE. Its two arguments are a ratio, so they need
+		// only share a dimension — any dimension.
+		if len(node.Args) != 2 {
+			return nil, analysisErrf("'atan2' requires 2 arguments, got %d", len(node.Args))
+		}
+		y, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		x, err := propagateDimensionWithCoords(node.Args[1], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if x != nil && y != nil && !x.Dim.Equal(y.Dim) {
+			return nil, mismatchErrf("atan2 arguments must share a dimension: %s vs %s", y.Dim, x.Dim)
+		}
+		return &Unit{Dim: radDim(), Scale: 1}, nil
+
+	case "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+		"exp", "log", "log10", "ln":
+		// The remaining transcendentals: a dimensionless argument, a dimensionless
+		// result. (A hyperbolic argument is a pure number, not an angle.)
+		if len(node.Args) != 1 {
+			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
+		}
+		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		if err != nil {
+			return nil, err
+		}
+		if arg != nil && !arg.Dim.IsDimensionless() {
+			return nil, mismatchErrf("argument of '%s' must be dimensionless, got %s", node.Op, arg.Dim)
 		}
 		return &Unit{Scale: 1}, nil
 
 	case "abs", "sign":
 		if len(node.Args) != 1 {
-			return nil, fmt.Errorf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
+			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
 		return propagateDimensionWithCoords(node.Args[0], env, coordEnv)
 
 	case OpDerivative:
 		if len(node.Args) != 1 {
-			return nil, fmt.Errorf("'D' requires 1 argument, got %d", len(node.Args))
+			return nil, analysisErrf("'D' requires 1 argument, got %d", len(node.Args))
 		}
 		varDim, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
 		if err != nil {
 			return nil, err
 		}
-		wrt := DefaultIndepVar
-		if node.Wrt != nil {
-			wrt = *node.Wrt
-		}
-		wrtUnit, ok := env[wrt]
-		if !ok {
-			// Default: time in seconds.
-			wrtUnit = unitRegistry["s"]
-		}
 		if varDim == nil {
+			return nil, nil
+		}
+		wrtUnit, ok := env[derivativeWrt(node)]
+		if !ok {
+			// An UNDECLARED independent variable has an unknown dimension, so the
+			// derivative's dimension is unknown too. Defaulting to seconds here
+			// was a false-positive factory: in a nondimensionalized model (state
+			// and RHS both declared "1", `t` undeclared) it manufactured `1/s` on
+			// the left against `1` on the right and reported a mismatch in a
+			// perfectly valid file — 8 of them in tests/valid.
+			//
+			// Coverage is not lost: the equation-level rule
+			// (derivativeTimeMismatch, applied in validateEquationDimensionsCoords)
+			// still rejects a derivative equation that NO choice of time unit
+			// could reconcile, which is what the invalid corpus actually pins.
 			return nil, nil
 		}
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
-	case "grad", "div", "laplacian":
-		// Spatial derivative: operand dimensions divided by the spatial
-		// coordinate's declared units. The coordinate is identified by
-		// node.Dim and resolved against the enclosing model's domain
-		// (coordEnv). When coordEnv is nil (no domain context) or the
-		// coordinate is missing / declared without units, we return the
-		// unpropagated operand dim — the structural check in
-		// checkSpatialOperatorCoordinateUnits emits the unit_inconsistency
-		// error separately, so we avoid hard-coding a metre denominator
-		// here.
+	case OpGrad, OpDivergence, OpLaplacian:
+		// SPATIAL DIFFERENTIAL OPERATORS (esm-spec §7.1.2). Each divides its
+		// operand's dimension by the dimension of the coordinate `node.Dim` names:
+		//
+		//   grad(u)      over x  →  dim(u) / dim(x)
+		//   div(F)       over x  →  dim(F) / dim(x)
+		//   laplacian(u) over x  →  dim(u) / dim(x)^2   (it is D(D(u,x),x))
+		//
+		// (`curl` is not an operator this format ships — §6.3 lists grad, div,
+		// laplacian and integral — so there is nothing to model here.)
+		//
+		// The coordinate is resolved against the model's DECLARED variables
+		// (coordEnv, three-state — see buildModelCoordEnv). Since the v0.8.0
+		// removal of Domain.spatial, a physical coordinate is an ordinary declared
+		// variable/parameter, so that table IS the coordinate table:
+		//
+		//   declared WITH units    → divide, exactly as above.
+		//   declared WITHOUT units → the operator's dimension is UNDECIDABLE, and
+		//                            the file is wrong to ask for it: report it.
+		//                            This is the defect
+		//                            tests/invalid/units_gradient_operator_mismatch.esm
+		//                            pins at /models/<M>/equations/0.
+		//   NOT declared at all    → INDETERMINATE (nil). The dim names an
+		//                            index-set axis lowered by a discretization
+		//                            rewrite rule (§9.6.8), not a physical
+		//                            coordinate; there is nothing to divide by and
+		//                            nothing to complain about.
+		//
+		// What we must NOT do in the last two cases is invent a metre denominator.
+		// A fabricated dimension under hard-error severity is a false-rejection
+		// factory — the same trap already documented for bare additive literals and
+		// for `D` with an undeclared `wrt`.
 		if len(node.Args) < 1 {
 			return nil, nil
 		}
@@ -597,11 +1269,21 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if node.Dim == nil || coordEnv == nil {
 			return nil, nil
 		}
-		coord, present := coordEnv[*node.Dim]
-		if !present || coord == nil || coord.Dim.IsDimensionless() {
+		coord, declared := coordEnv[*node.Dim]
+		if !declared {
 			return nil, nil
 		}
+		if coord == nil {
+			return nil, mismatchErrf(
+				"%q over coordinate %q: the coordinate is declared without units, so the operator's "+
+					"dimension (%s per unit of %q) is undecidable — declare units on %q",
+				node.Op, *node.Dim, operand.Dim, *node.Dim, *node.Dim)
+		}
 		r := operand.Divide(*coord)
+		if node.Op == OpLaplacian {
+			// laplacian(u) = Σᵢ D(D(u,xᵢ),xᵢ): the coordinate divides TWICE.
+			r = r.Divide(*coord)
+		}
 		return &r, nil
 
 	case "min", "max":
@@ -620,7 +1302,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 				continue
 			}
 			if !first.Dim.Equal(u.Dim) {
-				return nil, fmt.Errorf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
+				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
 					node.Op, first.Dim, i, u.Dim)
 			}
 		}
@@ -664,6 +1346,39 @@ func buildModelUnitEnv(model *Model) (map[string]Unit, map[string]error) {
 	return BuildUnitEnv(raw)
 }
 
+// buildModelCoordEnv builds the COORDINATE TABLE the spatial operators resolve
+// `node.Dim` against — a THREE-state map, which is the whole point of it:
+//
+//	key present, value non-nil → the coordinate is declared WITH units
+//	key present, value nil     → the coordinate is declared WITHOUT (or with
+//	                             unparseable) units — its dimension is unknown
+//	key ABSENT                 → the name is not a declared variable at all
+//
+// The distinction is what lets grad/div/laplacian tell a coordinate whose units
+// the author FORGOT (a defect: the operator's dimension is undecidable, and
+// tests/invalid/units_gradient_operator_mismatch.esm pins it) apart from a dim
+// that names an INDEX-SET AXIS lowered by a discretization rewrite rule (§9.6.8),
+// which is not a physical coordinate and must not be flagged. A two-state
+// map[string]Unit collapses those two cases into "missing" and cannot.
+//
+// Since v0.8.0 removed Domain.spatial, a physical coordinate has no separate
+// declaration site: it IS an ordinary declared variable/parameter, so the model's
+// variable table is the coordinate table.
+func buildModelCoordEnv(model *Model) map[string]*Unit {
+	env, _ := buildModelUnitEnv(model)
+	coords := make(map[string]*Unit, len(model.Variables))
+	for name := range model.Variables {
+		if u, ok := env[name]; ok {
+			u := u
+			coords[name] = &u
+			continue
+		}
+		// Declared, but with no parseable units: dimension unknown.
+		coords[name] = nil
+	}
+	return coords
+}
+
 // buildSystemUnitEnv builds the unit environment for a reaction system from the
 // declared units of its species and parameters. See BuildUnitEnv for the
 // return-value contract.
@@ -697,36 +1412,179 @@ func dimString(u *Unit) string {
 	return u.Dim.String()
 }
 
-// validateModelUnits runs dimensional analysis over every equation in a model
-// and appends any warnings it finds to the result.
+// derivativeWrt names the variable a derivative node differentiates with respect
+// to, defaulting to the implicit independent variable.
+func derivativeWrt(node ExprNode) string {
+	if node.Wrt != nil {
+		return *node.Wrt
+	}
+	return DefaultIndepVar
+}
+
+// derivativeStateDim inspects an equation's LHS. When it is a derivative taken
+// with respect to an UNDECLARED variable — the ordinary case, since `t` is
+// rarely given units — it returns the dimension of the differentiated state and
+// true, signalling that the caller must use derivativeTimeMismatch instead of a
+// direct LHS/RHS comparison. Otherwise it returns false.
+func derivativeStateDim(lhs Expression, env map[string]Unit, coordEnv map[string]*Unit) (*Unit, bool) {
+	var node ExprNode
+	switch e := lhs.(type) {
+	case ExprNode:
+		node = e
+	case *ExprNode:
+		node = *e
+	default:
+		return nil, false
+	}
+	if node.Op != OpDerivative || len(node.Args) != 1 {
+		return nil, false
+	}
+	if _, declared := env[derivativeWrt(node)]; declared {
+		return nil, false
+	}
+	state, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+	if err != nil {
+		return nil, false
+	}
+	return state, true
+}
+
+// derivativeTimeMismatch decides a derivative equation whose independent
+// variable carries no declared unit.
+//
+// The time unit is unknown, so d(state)/dt could have any time exponent — but
+// the NON-time dimensions cannot move. If dim(state)/dim(rhs) has a nonzero
+// exponent in any dimension other than time, no choice of time unit reconciles
+// the two sides and the equation is provably wrong.
+//
+// This is what keeps units_invalid_derivative.esm (an `m` state assigned a `kg`
+// expression) and units_incompatible_assignment.esm rejected, while accepting
+// `D(x) = -x` with `x` dimensionless (ratio is a pure power of time).
+func derivativeTimeMismatch(state, rhs *Unit) error {
+	if state == nil || rhs == nil {
+		return nil
+	}
+	ratio := state.Dim.Divide(rhs.Dim)
+	for i := range ratio {
+		if i == dimTime || ratio[i].IsZero() {
+			continue
+		}
+		return mismatchErrf(
+			"no time unit can reconcile d(%s)/dt with %s (their ratio %s is not a power of time)",
+			state.Dim, rhs.Dim, ratio)
+	}
+	return nil
+}
+
+// validateModelUnits runs dimensional analysis over a model's declared units,
+// its equations, and its observed-variable expressions, appending every finding
+// to the result. Findings are CODED (see the UnitFinding* constants); the caller
+// promotes the promotable ones to structural errors.
 func validateModelUnits(modelName string, model *Model, basePath string, file *ESMFile, result *StructuralValidationResult) {
 	env, bad := buildModelUnitEnv(model)
-	for name, err := range bad {
+	coordEnv := buildModelCoordEnv(model)
+	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			Path:    fmt.Sprintf("%s/variables/%s/units", basePath, name),
-			Message: fmt.Sprintf("could not parse unit: %v", err),
+			Code:    UnitFindingUnparseable,
+			Message: fmt.Sprintf("could not parse unit: %v", bad[name]),
 		})
 	}
 	for i, eq := range model.Equations {
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
-		if w := validateEquationDimensionsCoords(&eq, env, nil, eqPath); w != nil {
+		if w := validateEquationDimensionsCoords(&eq, env, coordEnv, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
+	validateObservedVariableUnits(model, env, coordEnv, basePath, result)
 	checkConversionFactorConsistency(modelName, model, result)
 	checkPhysicalConstantUnits(modelName, model, result)
+	checkDefaultUnits(modelName, model, result)
+}
+
+// validateObservedVariableUnits dimension-checks each OBSERVED variable's
+// defining expression against the variable's own declared units.
+//
+// An observed variable is an equation in every sense that matters here —
+// `invalid_sum: {units: "m", expression: length + mass}` is exactly as wrong as
+// the equation `invalid_sum = length + mass` — but it is stored in the variable
+// table, not in `equations`, so a checker that walks only `model.Equations`
+// (as this one did) is blind to it. That blindness is why Go accepted
+// units_inconsistent_addition.esm, units_inconsistent_subtraction.esm,
+// units_invalid_exponent.esm, units_invalid_logarithm.esm and
+// units_mixed_dimensional_operations.esm — five fixtures the shared corpus pins
+// as INVALID, each of whose only defect lives in an observed variable.
+//
+// Findings are reported at `/models/<M>/variables/<v>`, the pointer
+// tests/invalid/expected_errors.json pins (and the one TypeScript emits).
+func validateObservedVariableUnits(model *Model, env map[string]Unit, coordEnv map[string]*Unit, basePath string, result *StructuralValidationResult) {
+	for _, name := range sortedKeys(model.Variables) {
+		v := model.Variables[name]
+		if v.Type != VarTypeObserved || v.Expression == nil {
+			continue
+		}
+		path := fmt.Sprintf("%s/variables/%s", basePath, name)
+
+		got, err := propagateDimensionWithCoords(v.Expression, env, coordEnv)
+		if err != nil {
+			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
+				Path:     path,
+				Code:     findingCode(err),
+				Message:  fmt.Sprintf("dimensional analysis failed on observed variable %q: %v", name, err),
+				LhsUnits: declaredDimString(v.Units),
+				RhsUnits: "error",
+			})
+			continue
+		}
+		// The expression's dimension must equal the variable's DECLARED units.
+		// Either side being unknown means the check cannot be decided, which is
+		// not a finding (an undeclared unit is not an error; an unparseable one
+		// is already reported above).
+		declared, ok := env[name]
+		if !ok || got == nil {
+			continue
+		}
+		if !declared.Dim.Equal(got.Dim) {
+			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
+				Path:     path,
+				Code:     UnitFindingDimensionalMismatch,
+				Message:  fmt.Sprintf("observed variable %q is declared %s but its expression has dimension %s", name, declared.Dim, got.Dim),
+				LhsUnits: declared.Dim.String(),
+				RhsUnits: got.Dim.String(),
+			})
+		}
+	}
+}
+
+// declaredDimString renders a declared unit string's dimension, or "unknown"
+// when it is absent or does not parse.
+func declaredDimString(units *string) string {
+	if units == nil {
+		return "unknown"
+	}
+	u, err := ParseUnit(*units)
+	if err != nil {
+		return "unknown"
+	}
+	return u.Dim.String()
 }
 
 // validateEquationDimensionsCoords mirrors ValidateEquationDimensions but uses
 // the coord-aware propagator so grad/div/laplacian resolves node.Dim against
 // the enclosing model's domain.
+// The reported Path is the EQUATION pointer (`/models/<M>/equations/<i>`) for
+// every finding, including one discovered inside the LHS or RHS. That is the
+// pointer tests/invalid/expected_errors.json pins and the one TypeScript emits;
+// the previous `/lhs` and `/rhs` suffixes pointed at no schema node and did not
+// match the corpus.
 func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEnv map[string]*Unit, path string) *UnitWarning {
 	lhs, lhsErr := propagateDimensionWithCoords(eq.LHS, env, coordEnv)
 	rhs, rhsErr := propagateDimensionWithCoords(eq.RHS, env, coordEnv)
 
 	if lhsErr != nil {
 		return &UnitWarning{
-			Path:     path + "/lhs",
+			Path:     path,
+			Code:     findingCode(lhsErr),
 			Message:  "dimensional analysis failed on LHS: " + lhsErr.Error(),
 			LhsUnits: "error",
 			RhsUnits: dimString(rhs),
@@ -734,18 +1592,37 @@ func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEn
 	}
 	if rhsErr != nil {
 		return &UnitWarning{
-			Path:     path + "/rhs",
+			Path:     path,
+			Code:     findingCode(rhsErr),
 			Message:  "dimensional analysis failed on RHS: " + rhsErr.Error(),
 			LhsUnits: dimString(lhs),
 			RhsUnits: "error",
 		}
 	}
+
+	// D(x)/d<wrt> = rhs with an UNDECLARED <wrt>: the LHS dimension is unknown
+	// (see the OpDerivative case), so the sides cannot be compared directly. The
+	// equation is still provably wrong when no time unit could reconcile them.
+	if state, undeclared := derivativeStateDim(eq.LHS, env, coordEnv); undeclared {
+		if err := derivativeTimeMismatch(state, rhs); err != nil {
+			return &UnitWarning{
+				Path:     path,
+				Code:     UnitFindingDimensionalMismatch,
+				Message:  err.Error(),
+				LhsUnits: dimString(state),
+				RhsUnits: dimString(rhs),
+			}
+		}
+		return nil
+	}
+
 	if lhs == nil || rhs == nil {
 		return nil
 	}
 	if !lhs.Dim.Equal(rhs.Dim) {
 		return &UnitWarning{
 			Path:     path,
+			Code:     UnitFindingDimensionalMismatch,
 			Message:  fmt.Sprintf("LHS dimension %s does not match RHS dimension %s", lhs.Dim, rhs.Dim),
 			LhsUnits: lhs.Dim.String(),
 			RhsUnits: rhs.Dim.String(),
@@ -884,7 +1761,7 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 		if lhsUnits == "" {
 			continue
 		}
-		node, ok := exprAsNode(vdef.Expression)
+		node, ok := asExprNode(vdef.Expression)
 		if !ok || node.Op != "*" || len(node.Args) != 2 {
 			continue
 		}
@@ -959,34 +1836,55 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 	}
 }
 
-// exprAsNode normalizes Expression to an ExprNode value.
-func exprAsNode(e Expression) (ExprNode, bool) {
-	switch v := e.(type) {
-	case ExprNode:
-		return v, true
-	case *ExprNode:
-		if v == nil {
-			return ExprNode{}, false
-		}
-		return *v, true
-	}
-	return ExprNode{}, false
-}
-
 // isAffineTempUnit reports whether a unit string denotes a temperature scale
-// with an offset (Celsius). Go's unit registry represents Celsius as plain
-// Kelvin, so we use a conservative string match to skip it from scale-factor
-// comparisons. Only the Celsius spellings that ParseUnit accepts ("degC", "C")
-// are matched — Fahrenheit ("degF"/"F") is absent from unitRegistry, so it
-// never reaches this check (the caller's ParseUnit fails and short-circuits
-// first); add it here if and when the registry gains a Fahrenheit entry.
+// with an OFFSET (Celsius, Fahrenheit). The registry models both as a scaled
+// Kelvin — the offset is deliberately not carried — so a scale-factor comparison
+// against them is meaningless and is skipped.
+//
+// The bare "C" is NOT matched: it is the COULOMB (esm-spec §4.8.1). Celsius is
+// spelled "degC", "Celsius", or "°C" (which normalizeUnitString folds to degC).
 func isAffineTempUnit(s string) bool {
-	s = strings.TrimSpace(s)
-	switch s {
-	case "degC", "C":
+	switch strings.TrimSpace(normalizeUnitString(s)) {
+	case "degC", "degF", "Celsius":
 		return true
 	}
 	return false
+}
+
+// checkDefaultUnits flags a variable whose `default_units` require an AFFINE
+// conversion to its declared `units` (`units: "K"` with `default_units: "degC"`:
+// 25 degC is 298.15 K, not 25 K).
+//
+// A scalar `default` can only carry a multiplicative conversion; an offset
+// cannot be applied to it, so the declaration is unsatisfiable and the value it
+// would produce is silently wrong. Mirrors TS validate/model-checks.ts
+// `validateDefaultUnits` (tests/invalid/units_parameter_default_mismatch.esm).
+func checkDefaultUnits(modelName string, model *Model, result *StructuralValidationResult) {
+	for _, vname := range sortedKeys(model.Variables) {
+		v := model.Variables[vname]
+		if v.DefaultUnits == nil || v.Units == nil {
+			continue
+		}
+		declared, defaultUnits := *v.Units, *v.DefaultUnits
+		if declared == "" || defaultUnits == "" || declared == defaultUnits {
+			continue
+		}
+		if !isAffineTempUnit(declared) && !isAffineTempUnit(defaultUnits) {
+			continue
+		}
+		result.StructuralErrors = append(result.StructuralErrors, StructuralError{
+			Path: fmt.Sprintf("/models/%s/variables/%s", modelName, vname),
+			Code: ErrorUnitInconsistency,
+			Message: fmt.Sprintf(
+				"default_units '%s' requires an affine conversion to/from '%s'; a scalar default cannot carry an offset — use an expression instead",
+				defaultUnits, declared),
+			Details: map[string]any{
+				"variable":      vname,
+				"units":         declared,
+				"default_units": defaultUnits,
+			},
+		})
+	}
 }
 
 // validateReactionRateUnits enforces the mass-action dimensional constraint
@@ -998,7 +1896,7 @@ func isAffineTempUnit(s string) bool {
 func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
 	env, _ := buildSystemUnitEnv(system)
 
-	timeUnit := Unit{Dim: Dimension{dimTime: 1}, Scale: 1.0}
+	timeUnit := Unit{Dim: Dimension{dimTime: ratInt(1)}, Scale: 1.0}
 
 	for i, rx := range system.Reactions {
 		rxPath := fmt.Sprintf("%s/reactions/%d", basePath, i)
@@ -1041,7 +1939,22 @@ func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string
 			continue
 		}
 
+		// `rate` carries EITHER of two things, and they have different units:
+		//
+		//   - a mass-action rate CONSTANT (`rate: "k"`), whose units are
+		//     conc^(1-order)/time — the reaction's rate is then k * ΠCᵢ; or
+		//   - an explicit rate LAW that already multiplies in the substrate
+		//     concentrations (`rate: k*exp(...)*A*B`), whose units are the rate
+		//     itself, conc/time.
+		//
+		// Comparing a rate LAW against the rate-CONSTANT units is off by exactly
+		// ΠCᵢ and rejects correct chemistry — it fired on the perfectly valid
+		// second-order Arrhenius law in tests/valid/expr_graphs_variable_deps.esm.
+		// A rate expression that REFERENCES its own substrates is a rate law.
 		expectedRateUnit := concUnit.Power(1 - totalOrder).Divide(timeUnit)
+		if rateIsExplicitLaw(rx) {
+			expectedRateUnit = concUnit.Divide(timeUnit)
+		}
 		if !rateUnit.Dim.Equal(expectedRateUnit.Dim) {
 			rateUnitsStr := ""
 			if varName, isVar := rateVarName(rx.Rate); isVar {
@@ -1158,15 +2071,31 @@ func rateVarName(rate Expression) (string, bool) {
 	return "", false
 }
 
+// rateIsExplicitLaw reports whether a reaction's `rate` expression is a full
+// rate LAW (it multiplies in its own substrate concentrations, e.g.
+// `k*exp(-Ea/(R*T))*A*B`) rather than a bare mass-action rate CONSTANT
+// (`rate: "k"`). The two have different units — conc/time vs
+// conc^(1-order)/time — so the dimensional check must know which it is looking
+// at. Referencing a substrate is the discriminator.
+func rateIsExplicitLaw(rx Reaction) bool {
+	for _, sub := range rx.Substrates {
+		if exprReferencesName(rx.Rate, sub.Species) {
+			return true
+		}
+	}
+	return false
+}
+
 // validateReactionSystemUnits runs dimensional analysis over a reaction
 // system. Rate expressions whose dimensions cannot be determined are skipped;
 // rate expressions that surface a concrete inconsistency produce a warning.
 func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
 	env, bad := buildSystemUnitEnv(system)
-	for name, err := range bad {
+	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			Path:    fmt.Sprintf("%s/%s/units", basePath, name),
-			Message: fmt.Sprintf("could not parse unit: %v", err),
+			Code:    UnitFindingUnparseable,
+			Message: fmt.Sprintf("could not parse unit: %v", bad[name]),
 		})
 	}
 	for i, rx := range system.Reactions {
@@ -1174,6 +2103,7 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 		if _, err := PropagateDimension(rx.Rate, env); err != nil {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:    rxPath,
+				Code:    findingCode(err),
 				Message: "dimensional analysis failed: " + err.Error(),
 			})
 		}

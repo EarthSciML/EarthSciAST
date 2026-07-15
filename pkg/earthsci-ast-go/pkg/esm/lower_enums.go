@@ -103,6 +103,65 @@ func lowerModelEnums(m *Model, enums map[string]map[string]int) error {
 		m.InitializationEquations[i].LHS = l
 		m.InitializationEquations[i].RHS = r
 	}
+	if err := lowerDiscreteEventEnums(m.DiscreteEvents, enums); err != nil {
+		return err
+	}
+	return lowerContinuousEventEnums(m.ContinuousEvents, enums)
+}
+
+// lowerDiscreteEventEnums lowers `enum` ops in a discrete event's trigger
+// condition and affect right-hand sides. Events were skipped entirely by the
+// enum-lowering walk, so an `enum` in an event survived the pass — violating the
+// post-condition that no `enum` node remains after LowerEnums, and leaving the
+// `unknown_enum` / `unknown_enum_symbol` diagnostics dead in those positions
+// (audit G15).
+func lowerDiscreteEventEnums(events []DiscreteEvent, enums map[string]map[string]int) error {
+	for i := range events {
+		if events[i].Trigger.Expression != nil {
+			lowered, err := lowerExprEnums(events[i].Trigger.Expression, enums)
+			if err != nil {
+				return err
+			}
+			events[i].Trigger.Expression = lowered
+		}
+		if err := lowerAffectEnums(events[i].Affects, enums); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lowerContinuousEventEnums lowers `enum` ops in a continuous event's root-find
+// conditions and both affect lists.
+func lowerContinuousEventEnums(events []ContinuousEvent, enums map[string]map[string]int) error {
+	for i := range events {
+		for j := range events[i].Conditions {
+			lowered, err := lowerExprEnums(events[i].Conditions[j], enums)
+			if err != nil {
+				return err
+			}
+			events[i].Conditions[j] = lowered
+		}
+		if err := lowerAffectEnums(events[i].Affects, enums); err != nil {
+			return err
+		}
+		if err := lowerAffectEnums(events[i].AffectNeg, enums); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lowerAffectEnums lowers `enum` ops in the RHS of each affect equation. The LHS
+// is a variable NAME, not an expression, so it is left alone.
+func lowerAffectEnums(affects []AffectEquation, enums map[string]map[string]int) error {
+	for i := range affects {
+		lowered, err := lowerExprEnums(affects[i].RHS, enums)
+		if err != nil {
+			return err
+		}
+		affects[i].RHS = lowered
+	}
 	return nil
 }
 
@@ -126,7 +185,10 @@ func lowerReactionSystemEnums(rs *ReactionSystem, enums map[string]map[string]in
 		rs.ConstraintEquations[i].LHS = l
 		rs.ConstraintEquations[i].RHS = r
 	}
-	return nil
+	if err := lowerDiscreteEventEnums(rs.DiscreteEvents, enums); err != nil {
+		return err
+	}
+	return lowerContinuousEventEnums(rs.ContinuousEvents, enums)
 }
 
 // lowerCouplingEntryEnums lowers enum ops inside a coupling entry's connector
@@ -150,19 +212,27 @@ func lowerCouplingEntryEnums(ce CouplingEntry, enums map[string]map[string]int) 
 }
 
 // lowerExprEnums recursively lowers `enum` ops to `const` integer nodes.
+//
+// Operator nodes are recognized in EVERY on-heap spelling (asExprNode), raw
+// decoded map included, so an `enum` in a hand-built or un-normalized subtree is
+// lowered rather than passed through untouched by a `default:` arm (audit G15).
+// Raw lists are descended for the same reason.
 func lowerExprEnums(expr Expression, enums map[string]map[string]int) (Expression, error) {
-	switch e := expr.(type) {
-	case ExprNode:
-		return lowerExprNodeEnums(e, enums)
-	case *ExprNode:
-		if e == nil {
-			return nil, nil
-		}
-		out, err := lowerExprNodeEnums(*e, enums)
-		return out, err
-	default:
-		return expr, nil
+	if node, ok := asExprNode(expr); ok {
+		return lowerExprNodeEnums(node, enums)
 	}
+	if list, ok := expr.([]any); ok {
+		out := make([]any, len(list))
+		for i, el := range list {
+			lowered, err := lowerExprEnums(el, enums)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = lowered
+		}
+		return out, nil
+	}
+	return expr, nil
 }
 
 func lowerExprNodeEnums(node ExprNode, enums map[string]map[string]int) (Expression, error) {

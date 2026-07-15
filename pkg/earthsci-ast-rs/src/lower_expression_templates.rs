@@ -1097,8 +1097,25 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
         }
     }
 
+    // Residual call sites. The top-level `expression_templates` registry is
+    // EXCLUDED: it is a DECLARATION that survives verbatim (esm-spec §9.6.4 rule
+    // 5), and a template BODY may legitimately carry `apply_expression_template`
+    // nodes referencing other match-less templates — resolved at registration
+    // time as an acyclic DAG (§9.6.3 / §9.7.3), not leftover call sites. Scanning
+    // it would report a template library's own declarations as unexpanded, which
+    // is exactly what happened the moment the registry stopped being deleted.
     let mut leftover: Vec<String> = Vec::new();
-    find_apply_paths(value, "", &mut leftover);
+    match value.as_object() {
+        Some(root) => {
+            for (key, child) in root {
+                if key == "expression_templates" {
+                    continue;
+                }
+                find_apply_paths(child, &format!("/{key}"), &mut leftover);
+            }
+        }
+        None => find_apply_paths(value, "", &mut leftover),
+    }
     if !leftover.is_empty() {
         return Err(err(
             "apply_expression_template_unknown_template",

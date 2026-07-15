@@ -304,7 +304,12 @@ func loadSubsystemRefBytes(ref, basePath, key string, visited map[string]bool) (
 
 	data, refBasePath, err = loadRefBytes(ref, basePath)
 	if err != nil {
-		return nil, refKey, "", fmt.Errorf("subsystem %q: failed to read referenced file %q: %w", key, refKey, err)
+		// A ref that names no readable file is the §4.7 `ref_not_found`
+		// diagnostic (tests/invalid/subsystem_ref_not_found.esm), not an
+		// anonymous I/O failure — the code is what the shared corpus pins and
+		// what the other bindings emit.
+		return nil, refKey, "", newETErr(CodeUnresolvedSubsystemRef,
+			fmt.Sprintf("subsystem %q: reference %q could not be resolved — %v", key, ref, err))
 	}
 	return data, refKey, refBasePath, nil
 }
@@ -395,12 +400,18 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 	total := len(models) + len(rss) + len(loaders)
 
 	if total == 0 {
-		return nil, fmt.Errorf("referenced file %q contains no models, reaction systems, or data loaders", path)
+		return nil, newETErr(CodeAmbiguousSubsystemRef,
+			fmt.Sprintf("referenced file %q contains no models, reaction systems, or data loaders; exactly one is required (esm-spec §4.7)", path))
 	}
 
 	if total > 1 {
-		return nil, fmt.Errorf("referenced file %q contains %d systems (expected exactly 1); "+
-			"models=%d, reaction_systems=%d, data_loaders=%d", path, total, len(models), len(rss), len(loaders))
+		// §4.7: a subsystem ref must name a file with EXACTLY ONE top-level
+		// system — with several, the mount is ambiguous. `ref_ambiguous_system`
+		// is the code the shared corpus pins
+		// (tests/invalid/subsystem_ref_ambiguous.esm).
+		return nil, newETErr(CodeAmbiguousSubsystemRef,
+			fmt.Sprintf("referenced file %q contains %d systems (expected exactly 1); "+
+				"models=%d, reaction_systems=%d, data_loaders=%d", path, total, len(models), len(rss), len(loaders)))
 	}
 
 	// Extract the single system. Precedence: models -> reaction_systems -> data_loaders.

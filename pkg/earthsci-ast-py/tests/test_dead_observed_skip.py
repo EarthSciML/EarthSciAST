@@ -1,19 +1,32 @@
 """Dead-observed tolerance on the NumPy array/PDE simulate path.
 
 An observed variable that no live equation reads (a DEAD observed) whose body
-cannot be evaluated — e.g. a passive-axis ``dy = 1/NY`` whose count ``NY`` was
-closed at a template-import edge and therefore, per esm-spec §9.7.6, is NOT
-substituted into the importing model's own expression scope (it stays a bare
-symbol after §9.7 resolution in every binding) — must never abort the
-integration. The Julia reference tree-walk only evaluates observeds in the
-state-derivative dependency cone, so it never touches such a dead observed; the
-NumPy path must match that (``_materialize_observeds(..., skip_unresolved=True)``
-in both the per-step RHS driver and the read-only ``BuildInspection`` fill).
+cannot be evaluated must never abort the integration. The Julia reference
+tree-walk only evaluates observeds in the state-derivative dependency cone, so it
+never touches such a dead observed; the NumPy path must match that
+(``_materialize_observeds(..., skip_unresolved=True)`` in both the per-step RHS
+driver and the read-only ``BuildInspection`` fill).
 
 The skip only drops an observed nothing consumes: a LIVE observed a driver
 equation actually reads still surfaces a clear ``Unresolved symbol`` error when
 that equation evaluates (the NumPy interpreter never defaults an unbound name),
 so no real defect is masked — see ``test_needed_broken_observed_still_errors``.
+
+**These are RUNTIME pins, and the doc they use is deliberately INVALID.** This
+file used to justify its unbound ``NY`` by claiming a passive-axis count closed
+at a template-import edge "stays a bare symbol after §9.7 resolution in every
+binding". That claim is FALSE: esm-spec §9.7.6 says a metaparameter in an
+ordinary *expression position* "is substituted as an integer literal at load"
+(``{"op":"/","args":[360,"NLON"]}`` becomes ``{"op":"/","args":[360,144]}``), an
+unbound one is ``metaparameter_unbound``, and "validators run on the folded,
+expanded form". A bare ``NY`` in an observed expression is therefore simply an
+undefined variable, and §4.9.5 reference integrity now correctly REJECTS it at
+load (pinned by ``tests/invalid/undefined_variable_in_observed_expression.esm``).
+
+The runtime tolerance is still worth pinning — ``simulate()`` also runs on
+programmatically built ``EsmFile`` objects that never pass through ``load()`` —
+so these tests build the doc with the structural gate bypassed, and
+``test_dead_observed_doc_is_rejected_by_load`` pins the load-time rejection.
 """
 
 from __future__ import annotations
@@ -21,9 +34,27 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 
+import earthsci_ast.parse as _parse
 from earthsci_ast.parse import load
 from earthsci_ast.simulation import BuildInspection, simulate
+
+
+def _load_unvalidated(doc_json: str):
+    """``load()`` with the §4.9.5 structural gate bypassed.
+
+    The fixtures below are intentionally invalid documents (an undefined ``NY``
+    in an observed expression). Only the RUNTIME behaviour of the array
+    evaluator is under test here, so the load-time reference-integrity check —
+    which correctly rejects them — is suppressed for the build.
+    """
+    original = _parse._validate_structural
+    _parse._validate_structural = lambda *a, **k: None
+    try:
+        return _parse.load(doc_json)
+    finally:
+        _parse._validate_structural = original
 
 
 def _doc(dead_body):
@@ -79,7 +110,11 @@ def test_dead_unresolvable_observed_does_not_break_array_rhs() -> None:
     """The per-step RHS driver skips the dead ``dead = 1/NY`` and integrates the
     live dynamics (``D(u) = k = 3`` from u(0)=0 gives u(1)=3 in every cell)."""
     result = simulate(
-        load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12
+        _load_unvalidated(json.dumps(_doc(_DEAD_BODY))),
+        (0.0, 1.0),
+        method="LSODA",
+        rtol=1e-10,
+        atol=1e-12,
     )
     assert result.success, result.message
     final = result.y[:, -1]
@@ -92,7 +127,7 @@ def test_dead_unresolvable_observed_tolerated_by_build_inspection() -> None:
     so the unevaluable scalar simply never lands in ``setup_arrays``."""
     insp = BuildInspection()
     result = simulate(
-        load(json.dumps(_doc(_DEAD_BODY))),
+        _load_unvalidated(json.dumps(_doc(_DEAD_BODY))),
         (0.0, 1.0),
         method="LSODA",
         rtol=1e-10,
@@ -107,10 +142,14 @@ def test_inspect_never_changes_the_trajectory_with_a_dead_observed() -> None:
     """The returned trajectory is identical with and without ``inspect`` even
     when a dead unresolvable observed is present (the skip is lossless)."""
     plain = simulate(
-        load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12
+        _load_unvalidated(json.dumps(_doc(_DEAD_BODY))),
+        (0.0, 1.0),
+        method="LSODA",
+        rtol=1e-10,
+        atol=1e-12,
     )
     inspected = simulate(
-        load(json.dumps(_doc(_DEAD_BODY))),
+        _load_unvalidated(json.dumps(_doc(_DEAD_BODY))),
         (0.0, 1.0),
         method="LSODA",
         rtol=1e-10,
@@ -130,7 +169,21 @@ def test_needed_broken_observed_still_errors() -> None:
     doc = _doc(_DEAD_BODY)
     # Break the LIVE observed the ODE actually reads.
     doc["models"]["M"]["variables"]["live"]["expression"] = {"op": "/", "args": [1.0, "Z"]}
-    result = simulate(load(json.dumps(doc)), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12)
+    result = simulate(
+        _load_unvalidated(json.dumps(doc)), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12
+    )
     assert not result.success
     assert "Unresolved symbol" in (result.message or "")
     assert "live" in (result.message or "")
+
+
+def test_dead_observed_doc_is_rejected_by_load() -> None:
+    """The counterpart of the runtime skip: the document above is INVALID, and
+    plain ``load()`` must say so. `NY` is an undefined name in an observed
+    expression — esm-spec §4.9.5 reference integrity applies to every
+    expression-bearing field, not just `equations`."""
+    from earthsci_ast.parse import SchemaValidationError
+
+    with pytest.raises(SchemaValidationError) as exc:
+        load(json.dumps(_doc(_DEAD_BODY)))
+    assert "NY" in str(exc.value)

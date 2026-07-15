@@ -7,8 +7,9 @@ Shared fixture + analytic golden live under
 (``discrete_materialize_conformance.rs``) reproduce the same golden.
 
 Model ``M`` mixes a CONST weight matrix ``W`` (an in-file ``const`` observed) with
-a DISCRETE forcing field ``src`` (a bare, undeclared forcing name resolved through
-the array evaluator's ``input_arrays``) inside a conservative-regrid-shaped
+a DISCRETE forcing field ``src`` (declared ``type: "discrete"`` — the spelling for
+a loader/forcing-fed variable, CONFORMANCE_SPEC §5.10.1 — and fed at run time
+through the array evaluator's ``input_arrays``) inside a conservative-regrid-shaped
 CONTRACTION ``g[j] = sum_i W[i,j]*src[i]`` — state-free but forcing-tainted, so it
 changes only when ``src`` is refreshed at a cadence boundary. A sibling
 ``k[j] = sum_i W[i,j]*offset`` reads only const/parameter data, so it is
@@ -85,8 +86,14 @@ def test_discrete_materialize_trajectory_matches_golden() -> None:
     for seg_start, seg_end in zip(endpoints[:-1], endpoints[1:]):
         snap = _snapshot_at(golden, seg_start)
         res = _simulate_with_numpy(
-            flat, (seg_start, seg_end), {}, ics, "LSODA",
-            rtol=1e-10, atol=1e-12, loader_arrays={_SRC_KEY: snap},
+            flat,
+            (seg_start, seg_end),
+            {},
+            ics,
+            "LSODA",
+            rtol=1e-10,
+            atol=1e-12,
+            loader_arrays={_SRC_KEY: snap},
         )
         assert res.success, res.message
         idx = {name: k for k, name in enumerate(res.vars)}

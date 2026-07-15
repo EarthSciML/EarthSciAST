@@ -554,6 +554,7 @@ mod tests {
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("K".to_string()),
                 default: Some(298.15),
@@ -586,6 +587,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -634,6 +637,7 @@ mod tests {
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("K".to_string()),
                 default: Some(298.15),
@@ -666,6 +670,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -717,6 +723,7 @@ mod tests {
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("K".to_string()),
                 default: Some(298.15),
@@ -749,6 +756,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -800,6 +809,7 @@ mod tests {
         model_variables.insert(
             "Chemistry.FastChem.O3".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("mol/L".to_string()),
                 default: Some(40e-9),
@@ -814,6 +824,7 @@ mod tests {
         model_variables.insert(
             "Chemistry.FastChem.k_rate".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::Parameter,
                 units: Some("s-1".to_string()),
                 default: Some(1.8e-12),
@@ -846,6 +857,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -1019,6 +1032,7 @@ mod tests {
                 vars.insert(
                     "state_var".to_string(),
                     ModelVariable {
+                        default_units: None,
                         var_type: VariableType::State,
                         units: Some("m".to_string()),
                         default: Some(0.0),

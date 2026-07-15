@@ -144,6 +144,42 @@ Then append, in this exact order, each clause only when the field is present:
 - unicode `argmin[G] (E)`, latex `\mathrm{argmin}_{G} (E)`, ascii `argmin[G](E)`.
 - If `ranges` present, append the same ` where {…}` clause as `aggregate`.
 
+## Associativity and parenthesization (NORMATIVE — added 2026-07-15)
+
+The generic rule (a sub-expression that is an operator node is parenthesized where a leaf
+would not be) leaves two cases that every binding currently gets WRONG. Both are
+correctness bugs, not style, and the fixtures pin the CORRECT answer — do not "fix" the
+fixture to match the code:
+
+- **`^` is RIGHT-associative, so a LEFT-nested power MUST be parenthesized.**
+  `{op:"^", args:[{op:"^", args:["a","b"]}, "c"]}` is `(a^b)^c` and MUST render
+  `(a^b)^c` / `(a^{b})^{c}`. Emitting `a^b^c` is a **semantic error**: read back, it means
+  `a^(b^c)`.
+- **`D`'s operand is parenthesized when it is an operator node.**
+  `D(x + y)` MUST render `∂(x + y)/∂t`, never `∂x + y/∂t`, which reads as `(∂x) + (y/∂t)`.
+
+Conversely, parentheses are NOT added where precedence already disambiguates: a comparison
+inside an `and`/`or` renders `x > 0 and x < 10`, not `(x > 0) and (x < 10)` (only a
+logical-`or` *argument* is parenthesized — see Generic fallback).
+
+Unary minus IS an operator node, so `{op:"*", args:[{op:"-",args:["a"]}, "b"]}` renders
+`(−a)·b`.
+
+## Number formatting (NORMATIVE — added 2026-07-15)
+
+Previously UNSPECIFIED — the contract said only "Scalar → number formatting" and left the
+rule to whatever each binding happened to do, which is why the number goldens drifted.
+
+- **Sign.** `unicode` uses U+2212 MINUS SIGN (`−`); `latex` and `ascii` use ASCII `-`.
+  This applies to the mantissa and the exponent alike.
+- **Non-finite values are RENDERED, never stringified.** `Infinity` / `-Infinity` / `NaN`
+  MUST render as `∞` / `−∞` / `NaN` (unicode), `\infty` / `-\infty` / `\text{NaN}` (latex),
+  `inf` / `-inf` / `nan` (ascii). Emitting the literal token `Infinity` is a bug.
+- **Precision is never lost.** The rendered mantissa MUST round-trip the input value at full
+  precision: `0.009999` renders with mantissa `9.999`, NOT `1.0` — a golden that rounds it to
+  `1.0×10⁻²` is wrong.
+- **Exponent form.** `ascii` writes `1.5e4`, with NO `+` on a positive exponent.
+
 ## Removed
 
 `binomial`, `gamma`, `erf`, `erfc` special cases are deleted from every

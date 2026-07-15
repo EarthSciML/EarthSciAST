@@ -40,6 +40,8 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -57,6 +59,7 @@ fn empty_file() -> EsmFile {
 
 fn model_variable(var_type: VariableType, default: Option<f64>) -> ModelVariable {
     ModelVariable {
+        default_units: None,
         var_type,
         units: None,
         default,

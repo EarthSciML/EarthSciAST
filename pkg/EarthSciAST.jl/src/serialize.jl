@@ -147,6 +147,8 @@ function serialize_model_variable_type(var_type::ModelVariableType)::String
         return "observed"
     elseif var_type == BrownianVariable
         return "brownian"
+    elseif var_type == DiscreteVariable
+        return "discrete"
     else
         throw(ArgumentError("Unknown ModelVariableType: $(var_type)"))
     end
@@ -220,6 +222,9 @@ function serialize_discrete_event(event::DiscreteEvent)::Dict{String,Any}
             "lhs" => a.target,
             "rhs" => serialize_expression(a.expression),
         ) for a in event.affects]
+    end
+    if event.discrete_parameters !== nothing
+        result["discrete_parameters"] = event.discrete_parameters
     end
     if event.description !== nothing
         result["description"] = event.description
@@ -940,6 +945,12 @@ Serialize Domain to JSON-compatible format.
 """
 function serialize_domain(domain::Domain)::Dict{String,Any}
     result = Dict{String,Any}()
+    # Emit only a NON-default independent variable. `"t"` is the schema default,
+    # so writing it back unconditionally would add a key to every document that
+    # omitted it and break canonical-bytes round-tripping.
+    if domain.independent_variable != "t"
+        result["independent_variable"] = domain.independent_variable
+    end
     if domain.temporal !== nothing
         result["temporal"] = domain.temporal
     end
@@ -990,6 +1001,19 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     if !isempty(file.index_sets)
         result["index_sets"] = Dict{String,Any}(
             k => serialize_index_set(v) for (k, v) in file.index_sets)
+    end
+
+    # The top-level `expression_templates` registry and `metaparameters` block,
+    # written back VERBATIM. Option A expands call sites; it does not delete
+    # declarations (§9.6.4 rule 5). Dropping these emitted a pure template
+    # library as `{esm, metadata, index_sets}` — no payload key — which the
+    # top-level `anyOf` rejects, making a conforming library file unrepresentable
+    # once loaded. A library must round-trip to itself.
+    if file.expression_templates !== nothing && !isempty(file.expression_templates)
+        result["expression_templates"] = file.expression_templates
+    end
+    if file.metaparameters !== nothing && !isempty(file.metaparameters)
+        result["metaparameters"] = file.metaparameters
     end
 
     return result

@@ -12,6 +12,12 @@
           "units": "1",
           "default": 0.0
         },
+        "xmin": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "Lower bound of the cumulative integral: the left edge of the x domain. Previously referenced by cumuSum.lower but DECLARED NOWHERE -- a free variable hiding in an observed expression, exactly the false-negative class esm-spec 4.9.5 exists to surface."
+        },
         "cumuSum": {
           "type": "observed",
           "units": "1",

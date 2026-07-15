@@ -133,7 +133,10 @@ function generate_model_code(name::String, model::Model)
         for (var_name, variable) in model.variables
             if variable.type == StateVariable
                 push!(state_vars, (var_name, variable))
-            elseif variable.type == ParameterVariable
+            elseif variable.type == ParameterVariable || variable.type == DiscreteVariable
+                # A discrete variable is a refresh-fed buffer the solver never
+                # differentiates — it emits as an MTK parameter (`@parameters`),
+                # written by the cadence/loader refresh callback.
                 push!(parameters, (var_name, variable))
             elseif variable.type == BrownianVariable
                 push!(brownians, (var_name, variable))

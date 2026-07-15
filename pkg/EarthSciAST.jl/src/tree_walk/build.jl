@@ -442,7 +442,15 @@ function _partition_variables(model::Model;
         name in const_obs_vars && continue
         if v.type == StateVariable
             push!(state_var_names, name)
-        elseif v.type == ParameterVariable
+        elseif v.type == ParameterVariable || v.type == DiscreteVariable
+            # A DISCRETE variable lowers exactly like a parameter here: it is a
+            # solver-side buffer the refresh machinery writes at each cadence
+            # boundary, never a differentiated slot. Array-shaped ⇒ it must be
+            # backed by a live forcing buffer (`param_arrays`) or const data;
+            # scalar ⇒ an ordinary scalar parameter slot. The taint seed for the
+            # discrete-materialize cut is `keys(param_arrays)` (the buffers
+            # actually supplied), so declaring the forcing changes no cadence
+            # semantics — it only stops the name from looking like a typo.
             if _is_array_shape(v.shape)
                 # An array-shaped parameter is supported only when supplied as
                 # const data (e.g. the polygon operands of an intersect_polygon

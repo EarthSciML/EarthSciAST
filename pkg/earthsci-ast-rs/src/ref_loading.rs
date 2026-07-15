@@ -33,7 +33,10 @@ use std::path::{Path, PathBuf};
 /// mount (e.g. `NTGT = NX*NY`), captured BEFORE the root template-machinery
 /// pass consumes the `metaparameters` block. Mirrors the Python `load()`
 /// `root_meta_env`.
-fn root_metaparameter_env(value: &Value, api_meta: &BTreeMap<String, i64>) -> BTreeMap<String, i64> {
+fn root_metaparameter_env(
+    value: &Value,
+    api_meta: &BTreeMap<String, i64>,
+) -> BTreeMap<String, i64> {
     let mut env: BTreeMap<String, i64> = BTreeMap::new();
     if let Some(decls) = value.get("metaparameters").and_then(|v| v.as_object()) {
         for (name, decl) in decls {
@@ -135,12 +138,23 @@ struct RefNoun {
 }
 
 /// A subsystem `{ "ref": ... }` edge (used by [`resolve_value`]).
+///
+/// `code` is the settled cross-binding name for a subsystem ref that cannot be
+/// resolved (a missing file, a remote URL, a cycle, an unreadable document); the
+/// distinct "resolved, but the file does not contain exactly one system" case is
+/// [`AMBIGUOUS_SUBSYSTEM_REF`]. Both names are pinned by
+/// `tests/invalid/expected_errors.json`.
 const SUBSYSTEM_REF: RefNoun = RefNoun {
     remote_plural: "subsystem refs",
     cycle_singular: "subsystem reference",
     item: "ref",
-    code: "subsystem_ref_unresolved",
+    code: "unresolved_subsystem_ref",
 };
+
+/// A subsystem ref that resolved to a file containing MULTIPLE (or zero)
+/// top-level systems — the ref mechanism requires exactly one, so which system
+/// to mount is ambiguous. Distinct from a ref that could not be resolved at all.
+const AMBIGUOUS_SUBSYSTEM_REF: &str = "ambiguous_subsystem_ref";
 
 /// A top-level `models.<k>` mount edge (used by [`inline_toplevel_model_refs`]).
 const TOPLEVEL_MODEL_REF: RefNoun = RefNoun {
@@ -178,10 +192,12 @@ fn load_ref_document(
         ));
     }
 
-    let canonical = base
-        .join(ref_str)
-        .canonicalize()
-        .map_err(|e| err(noun.code, format!("failed to resolve {} {ref_str:?}: {e}", noun.item)))?;
+    let canonical = base.join(ref_str).canonicalize().map_err(|e| {
+        err(
+            noun.code,
+            format!("failed to resolve {} {ref_str:?}: {e}", noun.item),
+        )
+    })?;
 
     if visited.contains(&canonical) {
         return Err(err(
@@ -199,13 +215,23 @@ fn load_ref_document(
         let content = std::fs::read_to_string(&canonical).map_err(|e| {
             err(
                 noun.code,
-                format!("failed to read {} {}: {}", noun.item, canonical.display(), e),
+                format!(
+                    "failed to read {} {}: {}",
+                    noun.item,
+                    canonical.display(),
+                    e
+                ),
             )
         })?;
         serde_json::from_str(&content).map_err(|e| {
             err(
                 noun.code,
-                format!("failed to parse {} {}: {}", noun.item, canonical.display(), e),
+                format!(
+                    "failed to parse {} {}: {}",
+                    noun.item,
+                    canonical.display(),
+                    e
+                ),
             )
         })
     })();
@@ -321,9 +347,15 @@ fn inline_toplevel_model_refs(
             .and_then(|m| m.remove(&name))
             .expect("edge entry present");
         let entry_obj = entry.as_object().expect("edge entry is an object");
-        let ref_str = entry_obj.get("ref").and_then(|v| v.as_str()).ok_or_else(|| {
-            err(TOPLEVEL_MODEL_REF.code, "top-level model ref must be a string")
-        })?;
+        let ref_str = entry_obj
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                err(
+                    TOPLEVEL_MODEL_REF.code,
+                    "top-level model ref must be a string",
+                )
+            })?;
         let (canonical, mut comp) =
             load_ref_document(ref_str, base_path, visited, &TOPLEVEL_MODEL_REF)?;
         let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
@@ -525,8 +557,13 @@ fn walk_subsystems(
     let names: Vec<String> = subs.keys().cloned().collect();
     for name in names {
         let entry = subs.remove(&name).unwrap_or(Value::Null);
-        let resolved =
-            resolve_value(entry, base_path, visited, registry.as_deref_mut(), parent_meta)?;
+        let resolved = resolve_value(
+            entry,
+            base_path,
+            visited,
+            registry.as_deref_mut(),
+            parent_meta,
+        )?;
         subs.insert(name, resolved);
     }
 
@@ -713,29 +750,37 @@ fn extract_single_system(value: Value, source: &Path) -> Result<Value, Diagnosti
         )
     })?;
 
-    let pick_single = |key: &str| -> Option<Value> {
-        obj.get(key).and_then(|v| v.as_object()).and_then(|m| {
-            if m.len() == 1 {
-                m.values().next().cloned()
-            } else {
-                None
-            }
-        })
-    };
+    // "Exactly one top-level system" counts across ALL system kinds TOGETHER —
+    // it is not a per-kind question.
+    //
+    // The previous chain asked each kind in turn (`models` → `reaction_systems`
+    // → `data_loaders`) and took the first that happened to hold exactly one
+    // entry. A file with TWO models and ONE data loader therefore fell past the
+    // ambiguous `models` map and silently mounted the LOADER — the caller asked
+    // for a subsystem and got a completely different object, with no diagnostic.
+    // That is precisely tests/invalid/subsystem_ref_ambiguous.esm (2 models +
+    // 1 loader), and it is a worse failure than the error it was avoiding.
+    let systems: Vec<&Value> = ["models", "reaction_systems", "data_loaders"]
+        .iter()
+        .filter_map(|key| obj.get(*key).and_then(|v| v.as_object()))
+        .flat_map(|m| m.values())
+        .collect();
 
-    pick_single("models")
-        .or_else(|| pick_single("reaction_systems"))
-        .or_else(|| pick_single("data_loaders"))
-        .ok_or_else(|| {
-            err(
-                SUBSYSTEM_REF.code,
-                format!(
-                    "ref {} must contain exactly one top-level model, reaction system, or data \
-                     loader",
-                    source.display()
-                ),
-            )
-        })
+    match systems.as_slice() {
+        [only] => Ok((*only).clone()),
+        // The file WAS found and read — it just does not contain exactly one
+        // top-level system (zero, or several), so which system to mount is
+        // AMBIGUOUS. This is a different defect from a ref that could not be
+        // resolved at all, and the corpus pins the two under different codes.
+        _ => Err(err(
+            AMBIGUOUS_SUBSYSTEM_REF,
+            format!(
+                "Subsystem reference '{}' resolves to a file containing multiple top-level \
+                 systems; exactly one is required",
+                source.display()
+            ),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -887,7 +932,12 @@ mod tests {
 
         let result = resolve_subsystem_refs(&mut value, Path::new("/tmp"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Remote subsystem refs"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Remote subsystem refs")
+        );
     }
 
     #[test]
@@ -962,7 +1012,12 @@ mod tests {
 
         let result = resolve_subsystem_refs(&mut value, dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("failed to resolve ref"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to resolve ref")
+        );
     }
 
     #[test]

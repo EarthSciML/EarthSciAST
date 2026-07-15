@@ -153,9 +153,9 @@
           "description": "Population size"
         },
         "r": {
-          "units": "1/time",
+          "units": "1/s",
           "default": 0.1,
-          "description": "Growth rate",
+          "description": "Growth rate. `time` is a DIMENSION name, not a registry unit (esm-spec §4.8.1).",
           "type": "parameter"
         },
         "K": {

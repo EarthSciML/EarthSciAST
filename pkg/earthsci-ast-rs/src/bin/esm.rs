@@ -229,6 +229,10 @@ enum Commands {
         /// Directory to write results.json into
         #[arg(value_name = "OUT_DIR")]
         out_dir: PathBuf,
+        /// Shared corpus manifest (scripts/conformance_corpus.py). Defaults to
+        /// $ESM_CONFORMANCE_MANIFEST, then <OUT_DIR>/../corpus_manifest.json.
+        #[arg(value_name = "MANIFEST")]
+        manifest: Option<PathBuf>,
     },
 }
 
@@ -660,10 +664,7 @@ fn contains_redundant_operations(expr: &earthsci_ast::Expr) -> bool {
     }
 }
 
-fn contains_common_subexpressions(
-    lhs: &earthsci_ast::Expr,
-    rhs: &earthsci_ast::Expr,
-) -> bool {
+fn contains_common_subexpressions(lhs: &earthsci_ast::Expr, rhs: &earthsci_ast::Expr) -> bool {
     let mut lhs_subexprs = Vec::new();
     let mut rhs_subexprs = Vec::new();
 
@@ -682,10 +683,7 @@ fn contains_common_subexpressions(
     })
 }
 
-fn collect_subexpressions(
-    expr: &earthsci_ast::Expr,
-    subexprs: &mut Vec<earthsci_ast::Expr>,
-) {
+fn collect_subexpressions(expr: &earthsci_ast::Expr, subexprs: &mut Vec<earthsci_ast::Expr>) {
     subexprs.push(expr.clone());
     if let earthsci_ast::Expr::Operator(node) = expr {
         for arg in &node.args {
@@ -697,9 +695,7 @@ fn collect_subexpressions(
 fn expressions_equal(expr1: &earthsci_ast::Expr, expr2: &earthsci_ast::Expr) -> bool {
     // Simple structural equality check
     match (expr1, expr2) {
-        (earthsci_ast::Expr::Number(n1), earthsci_ast::Expr::Number(n2)) => {
-            (n1 - n2).abs() < 1e-10
-        }
+        (earthsci_ast::Expr::Number(n1), earthsci_ast::Expr::Number(n2)) => (n1 - n2).abs() < 1e-10,
         (earthsci_ast::Expr::Variable(v1), earthsci_ast::Expr::Variable(v2)) => v1 == v2,
         (earthsci_ast::Expr::Operator(op1), earthsci_ast::Expr::Operator(op2)) => {
             op1.op == op2.op
@@ -1526,8 +1522,8 @@ const TEMPLATE_ATMOSPHERIC: &str = r#"{
   "reaction_systems": {
     "atmospheric_chemistry": {
       "species": {
-        "O2": {"units": "molec/cm3", "default": 1.0e18},
-        "O3": {"units": "molec/cm3", "default": 1.0e12}
+        "O2": {"units": "molec/cm^3", "default": 1.0e18},
+        "O3": {"units": "molec/cm^3", "default": 1.0e12}
       },
       "parameters": {
         "k": {"units": "1/s", "default": 1.0e-6, "description": "Rate constant"}
@@ -1555,7 +1551,7 @@ const TEMPLATE_ECOSYSTEM: &str = r#"{
   "models": {
     "ecosystem": {
       "variables": {
-        "biomass": {"type": "state", "units": "kg/m2", "default": 1.0},
+        "biomass": {"type": "state", "units": "kg/m^2", "default": 1.0},
         "r": {"type": "parameter", "units": "1/s", "default": 0.1}
       },
       "equations": [
@@ -1930,6 +1926,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Create a new ESM file with just the requested component
             let mut extracted_esm = earthsci_ast::EsmFile {
                 coupling_roles: None,
+                // The extracted component is a NEW document. Any template call
+                // sites it had were already expanded at load, and metaparameters
+                // already folded, so it declares neither.
+                expression_templates: None,
+                metaparameters: None,
                 esm: esm_file.esm.clone(),
                 metadata: esm_file.metadata.clone(),
                 // Document-scoped registry (v0.8.0): preserve it on the
@@ -2283,8 +2284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         for (i, rule) in coupling.iter().enumerate() {
                             match rule {
                                 earthsci_ast::CouplingEntry::OperatorCompose {
-                                    systems,
-                                    ..
+                                    systems, ..
                                 } => {
                                     if systems.len() >= 2 {
                                         println!(
@@ -2305,24 +2305,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         );
                                     }
                                 }
-                                earthsci_ast::CouplingEntry::VariableMap {
-                                    from, to, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::VariableMap { from, to, .. } => {
                                     println!("  Rule {}: {} -> {} (VariableMap)", i + 1, from, to);
                                 }
-                                earthsci_ast::CouplingEntry::OperatorApply {
-                                    operator, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::OperatorApply { operator, .. } => {
                                     println!("  Rule {}: {} (OperatorApply)", i + 1, operator);
                                 }
-                                earthsci_ast::CouplingEntry::Callback {
-                                    callback_id, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::Callback { callback_id, .. } => {
                                     println!("  Rule {}: {} (Callback)", i + 1, callback_id);
                                 }
-                                earthsci_ast::CouplingEntry::Event {
-                                    name, affects, ..
-                                } => {
+                                earthsci_ast::CouplingEntry::Event { name, affects, .. } => {
                                     let event_name = name.as_deref().unwrap_or("unnamed_event");
                                     let systems: Vec<String> = affects
                                         .as_ref()
@@ -2356,11 +2348,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 earthsci_ast::CouplingEntry::CouplingImport {
                                     reference, ..
                                 } => {
-                                    println!(
-                                        "  Rule {}: {} (CouplingImport)",
-                                        i + 1,
-                                        reference
-                                    );
+                                    println!("  Rule {}: {} (CouplingImport)", i + 1, reference);
                                 }
                             }
                         }
@@ -2380,14 +2368,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let opts = earthsci_ast::SimulateOptions::default();
             let params = HashMap::new();
             let initial_conditions = HashMap::new();
-            let sol = earthsci_ast::simulate(
-                &esm_file,
-                (0.0, time),
-                &params,
-                &initial_conditions,
-                &opts,
-            )
-            .map_err(|e| format!("simulation failed: {e}"))?;
+            let sol =
+                earthsci_ast::simulate(&esm_file, (0.0, time), &params, &initial_conditions, &opts)
+                    .map_err(|e| format!("simulation failed: {e}"))?;
 
             println!(
                 "✓ Simulation complete: {} output points, solver {}",
@@ -3002,20 +2985,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        Commands::ConformanceTest { out_dir } => {
-            run_conformance_test(&out_dir)?;
+        Commands::ConformanceTest { out_dir, manifest } => {
+            run_conformance_test(&out_dir, manifest.as_deref())?;
         }
     }
 
     Ok(())
 }
 
-fn find_tests_dir() -> Option<std::path::PathBuf> {
+// === Cross-language conformance PRODUCER ====================================
+//
+// Reads the shared CORPUS MANIFEST (`scripts/conformance_corpus.py`) and emits a
+// record for every entry in it. The producer does NOT enumerate the corpus
+// itself: each producer used to walk `tests/valid` / `tests/invalid`
+// NON-recursively and all four skipped the same 69 fixtures — the entire
+// `aggregate` and `template_imports` corpora — plus `lib/**`, which nothing swept
+// at all (audit 2026-07-14, F5; CONFORMANCE_SPEC §2.2.1).
+//
+// Every validation entry runs the full **load → resolve → validate** pipeline.
+// `load_path` resolves §4.7 subsystem refs against the file's own directory; the
+// producer used to call `validate_complete(&content)` on the file's TEXT, which
+// takes no base path, so no `{ref}` could ever resolve here.
+//
+// See `scripts/run-python-conformance.py` for the emitted wire shape; every
+// producer emits the same one.
+
+#[derive(serde::Deserialize)]
+struct ConformanceManifest {
+    validation_files: Vec<ManifestValidationEntry>,
+    display_cases: Vec<ManifestDisplayCase>,
+    substitution_cases: Vec<ManifestSubstitutionCase>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestValidationEntry {
+    id: String,
+    path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestDisplayCase {
+    id: String,
+    // The manifest's `kind` ("formula" | "expression") is deliberately not read
+    // here: `Expr` deserializes a bare string as `Expr::Variable`, and the
+    // renderers chemical-subscript a variable name exactly as they do a formula,
+    // so both kinds take the same path. Bindings whose renderer dispatches on a
+    // static type (Julia, Go) do need the tag. Serde ignores the extra key.
+    input: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestSubstitutionCase {
+    id: String,
+    input: serde_json::Value,
+    bindings: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Walk up from the current directory to the repo root, so the manifest's
+/// repo-relative paths resolve no matter where the binary is invoked from.
+fn find_repo_root() -> Option<std::path::PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
-        let candidate = dir.join("tests").join("valid");
-        if candidate.is_dir() {
-            return Some(dir.join("tests"));
+        if dir.join("tests").join("valid").is_dir() {
+            return Some(dir);
         }
         if !dir.pop() {
             return None;
@@ -3023,174 +3055,233 @@ fn find_tests_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-fn run_conformance_test(out_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+/// The manifest path is passed by the harness; there is no fallback sweep. A
+/// producer that invents its own corpus when the manifest is missing is a
+/// producer that can silently under-report coverage. Fail instead.
+fn locate_manifest(
+    out_dir: &std::path::Path,
+    explicit: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let candidate = match explicit {
+        Some(p) => p.to_path_buf(),
+        None => match std::env::var("ESM_CONFORMANCE_MANIFEST") {
+            Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
+            _ => out_dir
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("corpus_manifest.json"),
+        },
+    };
+    if !candidate.is_file() {
+        return Err(format!(
+            "Corpus manifest not found: {}\nGenerate it with: python3 scripts/conformance_corpus.py --output <path>",
+            candidate.display()
+        )
+        .into());
+    }
+    Ok(candidate)
+}
+
+fn schema_error_json(e: &earthsci_ast::SchemaError) -> serde_json::Value {
+    serde_json::json!({
+        "path": e.path,
+        "message": e.message,
+        "keyword": e.keyword,
+        "code": e.keyword,
+        "details": {},
+    })
+}
+
+fn structural_error_json(e: &earthsci_ast::StructuralError) -> serde_json::Value {
+    // `code` is an enum whose Display is the snake_case spec spelling
+    // (`undefined_variable`, …) — the same spelling `expected_errors.json` pins.
+    let code = e.code.to_string();
+    serde_json::json!({
+        "path": e.path,
+        "message": e.message,
+        "code": code,
+        "keyword": code,
+        "details": e.details,
+    })
+}
+
+fn run_conformance_test(
+    out_dir: &std::path::Path,
+    manifest_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
 
     fs::create_dir_all(out_dir)?;
 
-    let tests_dir = find_tests_dir()
-        .ok_or("Could not locate tests/ directory by walking up from current directory")?;
+    let manifest_file = locate_manifest(out_dir, manifest_path)?;
+    let manifest: ConformanceManifest =
+        serde_json::from_str(&fs::read_to_string(&manifest_file)?)?;
+    let repo_root = find_repo_root()
+        .ok_or("Could not locate repo root by walking up from the current directory")?;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let timestamp = format!("{now}");
+    // --- validation: load -> resolve -> validate --------------------------
+    let mut validation: BTreeMap<String, Value> = BTreeMap::new();
+    for entry in &manifest.validation_files {
+        let path = repo_root.join(&entry.path);
+        let mut record = serde_json::Map::new();
+        record.insert("schema_errors".into(), json!([]));
+        record.insert("structural_errors".into(), json!([]));
 
-    let mut errors: Vec<String> = Vec::new();
+        let content = fs::read_to_string(&path).unwrap_or_default();
 
-    // --- validation tests ---
-    let mut validation_valid: BTreeMap<String, Value> = BTreeMap::new();
-    let mut validation_invalid: BTreeMap<String, Value> = BTreeMap::new();
+        // load_path anchors §4.7 subsystem refs and §9.7 template imports at the
+        // file's own directory: this IS the resolve phase.
+        let loaded = earthsci_ast::load_path(&path);
+        let resolve_ok = loaded.is_ok();
+        record.insert("resolve_ok".into(), json!(resolve_ok));
 
-    let valid_dir = tests_dir.join("valid");
-    if valid_dir.is_dir() {
-        let mut entries: Vec<_> = fs::read_dir(&valid_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("esm"))
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            match fs::read_to_string(&path) {
-                Ok(content) => {
-                    let result = validate_complete(&content);
-                    let parsed_ok = !result.schema_errors.iter().any(|e| {
-                        e.message.contains("JSON parse") || e.message.contains("failed to parse")
-                    });
-                    validation_valid.insert(name, json!({
-                        "is_valid": result.is_valid,
-                        "schema_errors": result.schema_errors.iter().map(|e| format!("{}: {}", e.path, e.message)).collect::<Vec<_>>(),
-                        "structural_errors": result.structural_errors.iter().map(|e| format!("{}: {}", e.path, e.message)).collect::<Vec<_>>(),
-                        "parsed_successfully": parsed_ok,
-                    }));
-                }
-                Err(e) => {
-                    let msg = format!("valid/{name}: read error: {e}");
-                    errors.push(msg.clone());
-                    validation_valid.insert(
-                        name,
-                        json!({ "parsed_successfully": false, "error": e.to_string() }),
-                    );
-                }
+        match &loaded {
+            Ok(esm_file) => {
+                // Schema validation judges the document AS WRITTEN, so it runs
+                // on the raw text; structural validation judges the RESOLVED
+                // form, so it runs on the loaded file (which has its §4.7 refs
+                // spliced in). `validate_complete` is the only exported entry
+                // that reports schema errors, so its structural half is
+                // discarded — it saw the unresolved document.
+                let schema = validate_complete(&content);
+                let structural = validate(esm_file);
+                record.insert(
+                    "schema_errors".into(),
+                    json!(schema.schema_errors.iter().map(schema_error_json).collect::<Vec<_>>()),
+                );
+                record.insert(
+                    "structural_errors".into(),
+                    json!(
+                        structural
+                            .structural_errors
+                            .iter()
+                            .map(structural_error_json)
+                            .collect::<Vec<_>>()
+                    ),
+                );
+                record.insert(
+                    "is_valid".into(),
+                    json!(
+                        schema.schema_errors.is_empty() && structural.structural_errors.is_empty()
+                    ),
+                );
+                record.insert("phase".into(), json!("validate"));
+            }
+            Err(e) => {
+                record.insert("error".into(), json!(e.to_string()));
+                record.insert("error_type".into(), json!("LoadError"));
+                record.insert("phase".into(), json!("load"));
+                record.insert("is_valid".into(), json!(false));
+                // Raw document: the load-phase rejection still yields whatever
+                // structured findings the binding is able to enumerate.
+                let raw = validate_complete(&content);
+                record.insert(
+                    "schema_errors".into(),
+                    json!(raw.schema_errors.iter().map(schema_error_json).collect::<Vec<_>>()),
+                );
+                record.insert(
+                    "structural_errors".into(),
+                    json!(
+                        raw.structural_errors
+                            .iter()
+                            .map(structural_error_json)
+                            .collect::<Vec<_>>()
+                    ),
+                );
+            }
+        }
+
+        // The verdict is "did this binding accept the document", regardless of
+        // WHICH phase answered. A rejection at resolve is still a rejection.
+        let is_valid = record
+            .get("is_valid")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            && resolve_ok;
+        record.insert("is_valid".into(), json!(is_valid));
+        record.insert(
+            "outcome".into(),
+            json!(if is_valid { "valid" } else { "invalid" }),
+        );
+        validation.insert(entry.id.clone(), Value::Object(record));
+    }
+
+    // --- display: render every manifest case in all three formats ----------
+    // The producer used to emit a literal `"display_results": {}` here, which the
+    // comparator scored as a category with zero divergences — a permanent,
+    // structurally unfailable 1.00 that diluted the one real category (audit C2).
+    let mut display: BTreeMap<String, Value> = BTreeMap::new();
+    for case in &manifest.display_cases {
+        let parsed: Result<earthsci_ast::Expr, _> = serde_json::from_value(case.input.clone());
+        match parsed {
+            Ok(expr) => {
+                display.insert(
+                    case.id.clone(),
+                    json!({
+                        "unicode": earthsci_ast::to_unicode(&expr),
+                        "latex": earthsci_ast::to_latex(&expr),
+                        "ascii": earthsci_ast::to_ascii(&expr),
+                    }),
+                );
+            }
+            Err(e) => {
+                display.insert(
+                    case.id.clone(),
+                    json!({
+                        "unicode": Value::Null,
+                        "latex": Value::Null,
+                        "ascii": Value::Null,
+                        "errors": { "parse": e.to_string() },
+                    }),
+                );
             }
         }
     }
 
-    let invalid_dir = tests_dir.join("invalid");
-    if invalid_dir.is_dir() {
-        let mut entries: Vec<_> = fs::read_dir(&invalid_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("esm"))
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            match fs::read_to_string(&path) {
-                Ok(content) => {
-                    let result = validate_complete(&content);
-                    let parsed_ok = !result.schema_errors.iter().any(|e| {
-                        e.message.contains("JSON parse") || e.message.contains("failed to parse")
-                    });
-                    validation_invalid.insert(name, json!({
-                        "is_valid": result.is_valid,
-                        "schema_errors": result.schema_errors.iter().map(|e| format!("{}: {}", e.path, e.message)).collect::<Vec<_>>(),
-                        "structural_errors": result.structural_errors.iter().map(|e| format!("{}: {}", e.path, e.message)).collect::<Vec<_>>(),
-                        "parsed_successfully": parsed_ok,
-                        "is_expected_error": !result.is_valid,
-                    }));
+    // --- substitution ------------------------------------------------------
+    let mut substitution: BTreeMap<String, Value> = BTreeMap::new();
+    for case in &manifest.substitution_cases {
+        let expr: Result<earthsci_ast::Expr, _> = serde_json::from_value(case.input.clone());
+        let mut bindings: HashMap<String, earthsci_ast::Expr> = HashMap::new();
+        let mut binding_err: Option<String> = None;
+        for (name, value) in &case.bindings {
+            match serde_json::from_value::<earthsci_ast::Expr>(value.clone()) {
+                Ok(e) => {
+                    bindings.insert(name.clone(), e);
                 }
-                Err(e) => {
-                    validation_invalid.insert(
-                        name,
-                        json!({
-                            "parsed_successfully": false,
-                            "error": e.to_string(),
-                            "is_expected_error": true,
-                        }),
-                    );
-                }
+                Err(e) => binding_err = Some(e.to_string()),
             }
         }
-    }
-
-    // --- mathematical correctness tests ---
-    let mut math_results: BTreeMap<String, Value> = BTreeMap::new();
-    let math_dir = tests_dir.join("mathematical_correctness");
-    if math_dir.is_dir() {
-        let mut entries: Vec<_> = fs::read_dir(&math_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("esm"))
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            match fs::read_to_string(&path) {
-                Ok(content) => {
-                    let result = validate_complete(&content);
-                    math_results.insert(
-                        name,
-                        json!({
-                            "loaded": true,
-                            "is_valid": result.is_valid,
-                            "schema_error_count": result.schema_errors.len(),
-                            "structural_error_count": result.structural_errors.len(),
-                        }),
-                    );
-                }
-                Err(e) => {
-                    math_results.insert(name, json!({ "loaded": false, "error": e.to_string() }));
-                }
+        match (expr, binding_err) {
+            (Ok(e), None) => {
+                let result = earthsci_ast::substitute(&e, &bindings);
+                substitution.insert(
+                    case.id.clone(),
+                    json!({ "result": serde_json::to_value(&result)? }),
+                );
             }
-        }
-    }
-
-    // --- graph tests ---
-    let mut graph_results: BTreeMap<String, Value> = BTreeMap::new();
-    let graphs_dir = tests_dir.join("graphs");
-    if graphs_dir.is_dir() {
-        let mut entries: Vec<_> = fs::read_dir(&graphs_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            match fs::read_to_string(&path) {
-                Ok(content) => match serde_json::from_str::<Value>(&content) {
-                    Ok(fixture) => {
-                        let result = run_graph_fixture(&fixture, &tests_dir);
-                        graph_results.insert(name, result);
-                    }
-                    Err(e) => {
-                        graph_results
-                            .insert(name, json!({ "loaded": false, "error": e.to_string() }));
-                    }
-                },
-                Err(e) => {
-                    graph_results.insert(name, json!({ "loaded": false, "error": e.to_string() }));
-                }
+            (Err(e), _) => {
+                substitution.insert(
+                    case.id.clone(),
+                    json!({ "result": Value::Null, "error": e.to_string() }),
+                );
+            }
+            (_, Some(e)) => {
+                substitution.insert(
+                    case.id.clone(),
+                    json!({ "result": Value::Null, "error": e }),
+                );
             }
         }
     }
 
     let results = json!({
         "language": "rust",
-        "timestamp": timestamp,
-        "validation_results": {
-            "valid": validation_valid,
-            "invalid": validation_invalid,
-        },
-        "display_results": {},
-        "substitution_results": {},
-        "graph_results": graph_results,
-        "mathematical_correctness_results": math_results,
-        "errors": errors,
+        "validation_results": validation,
+        "display_results": display,
+        "substitution_results": substitution,
+        "errors": Vec::<String>::new(),
     });
 
     let results_file = out_dir.join("results.json");
@@ -3199,118 +3290,16 @@ fn run_conformance_test(out_dir: &std::path::Path) -> Result<(), Box<dyn std::er
         "Rust conformance results written to: {}",
         results_file.display()
     );
-
-    if errors.is_empty() {
-        println!("Rust conformance testing completed successfully!");
-    } else {
-        eprintln!(
-            "Rust conformance testing completed with {} errors",
-            errors.len()
-        );
-        std::process::exit(1);
-    }
+    println!(
+        "✓ Validation sweep completed ({} files); display {} cases; substitution {} cases",
+        manifest.validation_files.len(),
+        manifest.display_cases.len(),
+        manifest.substitution_cases.len()
+    );
 
     Ok(())
 }
 
-fn run_graph_fixture(
-    fixture: &serde_json::Value,
-    tests_dir: &std::path::Path,
-) -> serde_json::Value {
-    use serde_json::json;
-
-    if let Some(arr) = fixture.as_array() {
-        let mut cases = serde_json::Map::new();
-        for (i, case) in arr.iter().enumerate() {
-            let name = case
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("case_{i}"));
-            let src = case.get("esm_file").or_else(|| case.get("input_file"));
-            match src {
-                None => {
-                    cases.insert(name, json!({ "skipped": "no esm_file/input_file" }));
-                }
-                Some(v) => {
-                    let record = exercise_graph_esm_source(v, tests_dir);
-                    cases.insert(name, record);
-                }
-            }
-        }
-        return json!({ "test_cases": cases });
-    }
-
-    if let Some(obj) = fixture.as_object() {
-        let src = obj.get("input_file").or_else(|| obj.get("esm_file"));
-        match src {
-            None => return json!({ "skipped": "no input_file/esm_file" }),
-            Some(v) => {
-                let mut record = exercise_graph_esm_source(v, tests_dir);
-                if let Some(s) = v.as_str() {
-                    record["input_file"] = json!(s);
-                } else {
-                    record["input_file"] = json!("<inline>");
-                }
-                return record;
-            }
-        }
-    }
-
-    json!({ "skipped": "unrecognized fixture shape" })
-}
-
-fn exercise_graph_esm_source(
-    src: &serde_json::Value,
-    tests_dir: &std::path::Path,
-) -> serde_json::Value {
-    use serde_json::json;
-
-    let content = if let Some(filename) = src.as_str() {
-        // resolve relative to tests/valid/ or tests/
-        let candidates = [
-            tests_dir.join("valid").join(filename),
-            tests_dir.join(filename),
-        ];
-        let path = candidates.iter().find(|p| p.exists());
-        match path {
-            None => {
-                return json!({ "loaded": false, "error": format!("ESM file not found: {filename}") });
-            }
-            Some(p) => match fs::read_to_string(p) {
-                Ok(s) => s,
-                Err(e) => return json!({ "loaded": false, "error": e.to_string() }),
-            },
-        }
-    } else {
-        // inline ESM object
-        match serde_json::to_string(src) {
-            Ok(s) => s,
-            Err(e) => return json!({ "loaded": false, "error": e.to_string() }),
-        }
-    };
-
-    let esm_file = match load(&content) {
-        Ok(f) => f,
-        Err(e) => return json!({ "loaded": false, "error": e.to_string() }),
-    };
-
-    let validation = validate(&esm_file);
-    let graph = component_graph(&esm_file);
-
-    json!({
-        "loaded": true,
-        "validation": {
-            "is_valid": validation.is_valid,
-            "schema_error_count": validation.schema_errors.len(),
-            "structural_error_count": validation.structural_errors.len(),
-        },
-        "component_graph": {
-            "nodes": graph.nodes.len(),
-            "edges": graph.edges.len(),
-        },
-    })
-}
 
 #[cfg(test)]
 mod tests {

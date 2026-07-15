@@ -393,10 +393,10 @@ UnitWarning:
 | `null_reaction` | Reaction has both `substrates: null` and `products: null` |
 | `missing_observed_expr` | Observed variable is missing its `expression` field |
 | `event_var_undeclared` | Variable in event affects/conditions is not declared |
-| `ref_not_found` | Subsystem reference points to a local file that does not exist |
+| `unresolved_subsystem_ref` | Subsystem reference points to a local file that does not exist (canonical; RETIRES `ref_not_found` — CONFORMANCE_SPEC §7.1.3f) |
 | `ref_unreachable` | Subsystem reference URL is unreachable or returned a non-200 status |
 | `ref_invalid_json` | Referenced file is not valid JSON or not a valid ESM file |
-| `ref_ambiguous_system` | Referenced file contains zero or more than one top-level model/reaction system |
+| `ambiguous_subsystem_ref` | Referenced file contains zero or more than one top-level model/reaction system (canonical; RETIRES `ref_ambiguous_system` — CONFORMANCE_SPEC §7.1.3f) |
 | `ref_circular` | Circular subsystem reference detected (e.g., file A → file B → file A) |
 
 ---

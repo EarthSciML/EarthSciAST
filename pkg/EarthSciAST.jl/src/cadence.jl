@@ -28,9 +28,10 @@ Like [`build_reference_graph`](@ref) (`reference_graph.jl`), this pass walks the
 **raw parsed JSON** of a model (`AbstractDict` / `JSON3.Object` → native dicts),
 *not* the typed `OpExpr` IR. The cadence vocabulary lives in fields the typed IR
 does not preserve — the aggregate-node `id`, the `expect_cadence` assertion, the
-`distinct` flag — and in the `discrete` variable kind, which the typed parser
-does not yet model. The schema already admits all of them, so the raw document
-carries everything the partition needs.
+`distinct` flag. The schema already admits all of them, so the raw document
+carries everything the partition needs. (The `discrete` variable kind IS now
+modelled by the typed parser — `DiscreteVariable` — but the other three fields
+still are not, so this pass stays on the raw document.)
 
 # The gather rule (the design's load-bearing rule)
 
@@ -112,8 +113,9 @@ to_native(x) = x
 """
     load_model_json(path, model_name) -> Dict{String,Any}
 
-Load one model from an `.esm` document as a native JSON dict (no typed coercion,
-so a `discrete` variable kind does not trip the typed parser).
+Load one model from an `.esm` document as a native JSON dict (no typed coercion:
+this pass needs the `id` / `expect_cadence` / `distinct` fields the typed IR does
+not preserve).
 """
 function load_model_json(path::AbstractString, model_name::AbstractString)
     doc = to_native(JSON3.read(read(path, String)))

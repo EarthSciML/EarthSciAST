@@ -98,6 +98,7 @@ export
     Equation, AffectEquation,
     # Model component types
     ModelVariableType, StateVariable, ParameterVariable, ObservedVariable, BrownianVariable,
+    DiscreteVariable,
     ModelVariable, Model, SubsystemRef, Species, Parameter, Reaction, ReactionSystem,
     # Event types
     EventType, ContinuousEvent, DiscreteEvent, FunctionalAffect, DiscreteEventTrigger,
@@ -151,6 +152,11 @@ export
     parse_units, get_expression_dimensions, validate_equation_dimensions,
     validate_model_dimensions, validate_reaction_system_dimensions, validate_file_dimensions,
     infer_variable_units,
+    # The error-collecting units engine: these distinguish a PROVABLE dimensional
+    # inconsistency from an indeterminate one, which the Bool/`nothing` API above
+    # cannot. `validate()` is built on these.
+    expression_unit_findings, equation_unit_findings, model_unit_findings,
+    UnitFinding, UNIT_DIMENSION_MISMATCH, UNIT_PARSE_ERROR,
     # Editing operations (Section 4). EsmFile merging extends `Base.merge`
     # (always in scope for consumers), so `merge` is not re-exported.
     EditError,

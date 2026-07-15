@@ -39,6 +39,14 @@ Ensure you have the following installed:
 - **Node.js** 20+ and npm (for TypeScript/JavaScript packages)
 - **Python** 3.8+ and pip (for Python package development)
 - **Rust** 1.75.0+ and Cargo (for Rust package development)
+  - Also needs **CMake** and **OpenSSL headers**: the `s2bindings-sys` dependency
+    builds vendored s2geometry, which includes `<openssl/bn.h>`. On Linux the
+    distro package (`libssl-dev` / `openssl-devel`) puts these on the default
+    include path. On **macOS**, Homebrew's openssl is keg-only, so the crate ships
+    a `pkg/earthsci-ast-rs/.cargo/config.toml` that adds both Homebrew prefixes to
+    `CXXFLAGS` — `brew install cmake openssl@3` and `cargo build` works with no
+    manual environment. (Upstream bug: the shim CMake target does not inherit
+    OpenSSL's include dirs; see that config for the full note.)
 - **Go** 1.19+ (for Go package development)
 - **Git** (for version control)
 

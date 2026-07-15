@@ -270,11 +270,65 @@ function _affect_to_eq(affect, var_dict::Dict{String,Any}, t_sym, dim_dict,
     return nothing
 end
 
+"""
+    _condition_to_root_equation(cond, var_dict, t_sym, dim_dict) -> Equation
+
+Lower one ESM continuous-event condition to the MTK ROOT-FINDING equation that
+expresses it.
+
+MTK's `SymbolicContinuousCallback` takes `conditions::Vector{Equation}`, not a
+scalar expression: an entry `lhs ~ rhs` names the zero-crossing function
+`lhs - rhs`, and the integrator winds back to the instant it crosses zero.
+Passing the raw `Num` that `_esm_to_symbolic` produces is what broke every
+continuous event —
+
+    MethodError: no method matching SymbolicContinuousCallback(::Num, ::Vector{Equation})
+
+so the whole `continuous_events` feature failed at System() construction time.
+
+An ESM condition (esm-spec §5) is a zero-crossing FUNCTION, so the mapping is:
+
+  * `{"op":"-","args":[a,b]}` — the canonical spelling, 70 of the corpus's 88
+    conditions — is the crossing `a - b`, i.e. `a ~ b`.
+  * a RELATIONAL condition (`a < b`, `a >= b`, …) crosses exactly where its two
+    sides are equal, so it is also `a ~ b`. The direction is carried by the
+    edge (`affect` vs `affect_neg`), not by the operator.
+  * anything else — a bare variable (`"height"`), an arbitrary expression — is
+    the crossing `f ~ 0`.
+
+A BOOLEAN CONNECTIVE (`and`/`or`/`not`) has no zero-crossing function at all: it
+is piecewise-constant, so root-finding on it is meaningless. That is a discrete
+trigger wearing a continuous event's clothes, and it FAILS LOUDLY here rather
+than being lowered to something that silently never fires.
+"""
+function _condition_to_root_equation(cond::ASTExpr, var_dict, t_sym, dim_dict)
+    if cond isa OpExpr
+        if cond.op in ("and", "or", "not")
+            throw(ArgumentError(
+                "continuous-event condition uses the boolean operator '$(cond.op)', " *
+                "which has no zero-crossing function — a continuous event roots on a " *
+                "CONTINUOUS expression (esm-spec §5). Express the crossing directly " *
+                "(e.g. {\"op\":\"-\",\"args\":[a,b]} for a ~ b), or use a discrete " *
+                "event with a condition trigger."))
+        end
+        # Binary `-` and the relationals both root where the two sides meet.
+        if length(cond.args) == 2 && cond.op in ("-", "<", "<=", ">", ">=", "==")
+            lhs = _esm_to_symbolic(cond.args[1], var_dict, t_sym, dim_dict)
+            rhs = _esm_to_symbolic(cond.args[2], var_dict, t_sym, dim_dict)
+            return lhs ~ rhs
+        end
+    end
+    return _esm_to_symbolic(cond, var_dict, t_sym, dim_dict) ~ 0
+end
+
 function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_dict,
                                   state_syms)
     cbs = Any[]
     for ev in flat.continuous_events
-        conds = [_esm_to_symbolic(c, var_dict, t_sym, dim_dict) for c in ev.conditions]
+        conds = ModelingToolkit.Equation[
+            _condition_to_root_equation(c, var_dict, t_sym, dim_dict)
+            for c in ev.conditions
+        ]
         affects = filter(!isnothing,
                          [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
                           for a in ev.affects])
@@ -282,12 +336,14 @@ function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_di
         # parses as `a || (b && continue)`, letting an event with EMPTY
         # conditions fall through to `conds[1]` (BoundsError).
         (isempty(conds) || isempty(affects)) && continue
-        # MTK's SymbolicContinuousCallback accepts a vector of condition
-        # equations (all must root simultaneously); pass the single
-        # condition bare to preserve the long-standing scalar behavior.
-        cb = ModelingToolkit.SymbolicContinuousCallback(
-            length(conds) == 1 ? conds[1] : conds, affects)
-        push!(cbs, cb)
+        # `conditions` is a Vector{Equation}; `affect` a Vector{Equation} that
+        # MTK wraps into a SymbolicAffect. `affect_neg` is deliberately left at
+        # its MTK default — which is `affect` — because esm-spec §5.2 says the
+        # same thing: "If `null` or absent, `affects` is used for both
+        # directions." That default is what makes the bouncing ball bounce: it
+        # crosses `height ~ 0` on the NEGATIVE edge (falling), so an event that
+        # fired only on the positive edge would never trigger.
+        push!(cbs, ModelingToolkit.SymbolicContinuousCallback(conds, affects))
     end
     return cbs
 end

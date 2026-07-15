@@ -2,7 +2,7 @@
   "esm": "0.1.0",
   "metadata": {
     "name": "SubsystemRefNotFound",
-    "description": "Invalid: subsystem reference points to a nonexistent local file. Expected error: ref_not_found.",
+    "description": "Invalid: subsystem reference points to a nonexistent local file. Expected error: unresolved_subsystem_ref (canonical spelling; RETIRES the older `ref_not_found` — CONFORMANCE_SPEC §7.1.3f).",
     "authors": ["Test Suite"],
     "created": "2026-04-10T00:00:00Z"
   },

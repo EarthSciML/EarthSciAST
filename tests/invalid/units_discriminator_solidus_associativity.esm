@@ -1,0 +1,63 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnitsDiscriminatorSolidusAssociativity",
+    "description": "Invalid: `*` and `/` are ONE precedence level, LEFT to RIGHT (§4.8.2), so `J/mol*K` is `(J/mol)*K` = `J*K/mol` -- NOT `J/(mol*K)`. `bad_assoc` is declared `J/(mol*K)` but its expression is `R_slash_star`, in `J/mol*K`; the two differ by K^2. A correct binding rejects. A parser that gives `*` HIGHER precedence than `/` silently negates the exponent of every symbol after the first solidus, reads both strings as `J*mol^-1*K^-1`, and ACCEPTS -- and because the result is a PLAUSIBLE dimension, nothing downstream can detect it. This is the NEGATIVE half of the discriminator in tests/valid/units_registry_grammar.esm. A VALID fixture can only prove a binding does not FALSELY REJECT; it CANNOT prove the binding checks anything -- mutation testing showed every observed variable in the valid fixture could be corrupted and still pass, because no binding compared a declared unit against the dimension its expression computes. This file makes the same assertion in the contrapositive: a CORRECT binding REJECTS it, and a binding carrying the bug ACCEPTS it. Everything but the one observed variable is dimensionally clean.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State. Dimensionally clean; not part of the defect."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate. Dimensionally clean; not part of the defect."
+        },
+        "R_slash_star": {
+          "type": "parameter",
+          "units": "J/mol*K",
+          "default": 1.0,
+          "description": "Gas constant spelled WITHOUT parentheses: left-to-right, this is J*K/mol."
+        },
+        "bad_assoc": {
+          "type": "observed",
+          "units": "J/(mol*K)",
+          "description": "THE ONLY DEFECT: declared units do not match the dimension its expression computes.",
+          "expression": "R_slash_star"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

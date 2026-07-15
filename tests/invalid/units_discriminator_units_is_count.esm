@@ -1,0 +1,63 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnitsDiscriminatorUnitsIsCount",
+    "description": "Invalid: `units` is a dimensionless COUNT (as in a `units/L` dose), NOT the candela. `bad_luminance` is declared in `cd/m^3` but its expression is `dose`, in `units/L` -- a number density. A correct binding rejects. A binding that resolved `units` to a luminous intensity computes `cd/L` = `cd/m^3` and ACCEPTS. This is the NEGATIVE half of the discriminator in tests/valid/units_registry_grammar.esm. A VALID fixture can only prove a binding does not FALSELY REJECT; it CANNOT prove the binding checks anything -- mutation testing showed every observed variable in the valid fixture could be corrupted and still pass, because no binding compared a declared unit against the dimension its expression computes. This file makes the same assertion in the contrapositive: a CORRECT binding REJECTS it, and a binding carrying the bug ACCEPTS it. Everything but the one observed variable is dimensionally clean.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State. Dimensionally clean; not part of the defect."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate. Dimensionally clean; not part of the defect."
+        },
+        "dose": {
+          "type": "parameter",
+          "units": "units/L",
+          "default": 1.0,
+          "description": "Dose concentration: a COUNT per volume."
+        },
+        "bad_luminance": {
+          "type": "observed",
+          "units": "cd/m^3",
+          "description": "THE ONLY DEFECT: declared units do not match the dimension its expression computes.",
+          "expression": "dose"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

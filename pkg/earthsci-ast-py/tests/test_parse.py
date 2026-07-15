@@ -227,7 +227,12 @@ def test_load_comprehensive_fields():
         "coupling": [
             {
                 "type": "operator_compose",
-                "systems": ["model1", "model2"],
+                # `model1`/`model2` were declared NOWHERE in this document — the
+                # only systems it defines are `test_model` and the `weather`
+                # loader. A coupling entry naming a nonexistent system is now
+                # caught (`undefined_system`, tests/invalid/undefined_system.esm);
+                # this fixture exercises FIELD PARSING, so point it at real ones.
+                "systems": ["test_model", "weather"],
                 "description": "Compose two models",
             },
             {

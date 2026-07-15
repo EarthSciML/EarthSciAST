@@ -77,7 +77,12 @@
                       "density"
                     ]
                   },
-                  "velocity"
+                  {
+                    "op": "laplacian",
+                    "args": [
+                      "velocity"
+                    ]
+                  }
                 ]
               }
             ]
@@ -101,6 +106,18 @@
           "default": 1e-07,
           "description": "Thermal diffusivity",
           "type": "parameter"
+        },
+        "convective_heat_flux": {
+          "type": "parameter",
+          "units": "K/s",
+          "default": 0.0,
+          "description": "Convective heating rate supplied by the FluidFlow<->HeatTransfer connector (additive). A coupling `to` target MUST be a DECLARED variable -- flattening (esm-spec 10.4/10.7) REPLACES it with a derived observed carrying the connector expression -- and this name was previously read by the temperature equation while being declared NOWHERE."
+        },
+        "viscous_heating": {
+          "type": "parameter",
+          "units": "K/s",
+          "default": 0.0,
+          "description": "Viscous-dissipation heating rate supplied by the connector (additive). Previously the connector wrote to this name and NOTHING read it -- a dead coupling edge; the temperature equation now consumes it."
         },
         "heat_capacity": {
           "units": "J/(kg·K)",
@@ -133,7 +150,8 @@
                   }
                 ]
               },
-              "convective_heat_flux"
+              "convective_heat_flux",
+              "viscous_heating"
             ]
           }
         }
@@ -150,8 +168,8 @@
       "connector": {
         "equations": [
           {
-            "from": "convective_heat_flux",
-            "to": "convective_heat_flux",
+            "from": "FluidFlow.velocity",
+            "to": "HeatTransfer.convective_heat_flux",
             "transform": "additive",
             "expression": {
               "op": "*",
@@ -168,24 +186,36 @@
             }
           },
           {
-            "from": "viscous_heating",
-            "to": "viscous_heating",
+            "from": "FluidFlow.velocity",
+            "to": "HeatTransfer.viscous_heating",
             "transform": "additive",
             "expression": {
-              "op": "*",
+              "op": "/",
               "args": [
-                "FluidFlow.viscosity",
                 {
-                  "op": "^",
+                  "op": "*",
                   "args": [
+                    "FluidFlow.viscosity",
                     {
-                      "op": "grad",
+                      "op": "^",
                       "args": [
-                        "FluidFlow.velocity"
-                      ],
-                      "dim": "x"
-                    },
-                    2
+                        {
+                          "op": "grad",
+                          "args": [
+                            "FluidFlow.velocity"
+                          ],
+                          "dim": "x"
+                        },
+                        2
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "FluidFlow.density",
+                    "HeatTransfer.heat_capacity"
                   ]
                 }
               ]

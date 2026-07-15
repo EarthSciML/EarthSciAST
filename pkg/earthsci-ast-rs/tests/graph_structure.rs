@@ -27,6 +27,7 @@ fn test_component_graph_generation() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),
@@ -87,6 +88,8 @@ fn test_component_graph_generation() {
     reaction_systems.insert("rs1".to_string(), rs);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -165,6 +168,8 @@ fn test_component_graph_exports() {
     models.insert("simple".to_string(), model);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -218,6 +223,7 @@ fn test_model_expression_graph() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),
@@ -232,6 +238,7 @@ fn test_model_expression_graph() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(0.1),
@@ -421,6 +428,8 @@ fn test_component_existence() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -518,6 +527,7 @@ fn test_expected_graph_outputs() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(1.0),

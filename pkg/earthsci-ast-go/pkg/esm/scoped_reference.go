@@ -55,7 +55,74 @@ func resolveScopedReference(scopedRef string, file *ESMFile, currentSystem strin
 		return resolveScopedInReactionSystem(remainingPath, &system)
 	}
 
+	// A DATA LOADER is a scopable namespace too: `GEOSFP_MeteoData.u` names the
+	// variable `u` the loader exposes. Loaders were absent from this resolver, so
+	// every loader-scoped reference — the whole point of a data loader — came back
+	// unresolved (audit G7).
+	if loader, exists := file.DataLoaders[systemName]; exists {
+		return resolveScopedInDataLoader(remainingPath, &loader)
+	}
+
 	return scopedRef, false
+}
+
+// resolveScopedInDataLoader resolves a reference into a data loader's exposed
+// variable set. A loader has no subsystems, so the path must be exactly one
+// segment: the variable name.
+func resolveScopedInDataLoader(path []string, loader *DataLoader) (string, bool) {
+	if len(path) != 1 {
+		return strings.Join(path, "."), false
+	}
+	varName := path[0]
+	if _, exists := loader.Variables[varName]; exists {
+		return varName, true
+	}
+	return varName, false
+}
+
+// subsystemPathExists reports whether a dotted name addresses a subsystem that
+// really exists — "AtmosphericChemistry.Aerosols", or a deeper chain such as
+// "EmissionSources.Biogenic.Forest". Coupling `systems` entries may name a
+// subsystem, so the coupling check consults this before reporting the name as an
+// undefined system.
+func subsystemPathExists(dotted string, file *ESMFile) bool {
+	parts := strings.Split(dotted, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	root, rest := parts[0], parts[1:]
+
+	if model, exists := file.Models[root]; exists {
+		return subsystemChainExists(rest, model.Subsystems)
+	}
+	if system, exists := file.ReactionSystems[root]; exists {
+		return subsystemChainExists(rest, system.Subsystems)
+	}
+	return false
+}
+
+// subsystemChainExists walks a chain of subsystem names down from a subsystems
+// map, reporting whether the whole chain resolves.
+func subsystemChainExists(path []string, subsystems map[string]any) bool {
+	if len(path) == 0 {
+		return true
+	}
+	raw, exists := subsystems[path[0]]
+	if !exists {
+		return false
+	}
+	if len(path) == 1 {
+		return true
+	}
+	// Descend: the nested value may be spelled as either component kind, so try
+	// a Model first and fall back to a ReactionSystem.
+	if sub, ok := decodeSubsystemAs[Model](raw); ok && len(sub.Subsystems) > 0 {
+		return subsystemChainExists(path[1:], sub.Subsystems)
+	}
+	if sub, ok := decodeSubsystemAs[ReactionSystem](raw); ok && len(sub.Subsystems) > 0 {
+		return subsystemChainExists(path[1:], sub.Subsystems)
+	}
+	return false
 }
 
 // resolveScopedInModel resolves a scoped reference within a model

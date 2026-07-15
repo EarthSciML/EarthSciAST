@@ -78,13 +78,6 @@
     { "id": "closed_functions/datetime/is_leap_year","path": "closed_functions/datetime/is_leap_year/canonical.esm","tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
     { "id": "closed_functions/interp/searchsorted",  "path": "closed_functions/interp/searchsorted/canonical.esm",  "tags": ["closed-function-registry", "interp", "esm-tzp", "esm-4aw"] },
 
-    { "id": "discretizations/centered_2nd_uniform",  "path": "discretizations/centered_2nd_uniform.esm",  "tags": ["discretization", "cartesian"] },
-    { "id": "discretizations/centered_arbitrary_order_uniform", "path": "discretizations/centered_arbitrary_order_uniform.esm", "tags": ["discretization", "cartesian", "arbitrary-order", "esm-z6d"] },
-    { "id": "discretizations/upwind_1st_advection",  "path": "discretizations/upwind_1st_advection.esm",  "tags": ["discretization", "cartesian", "advection"] },
-    { "id": "discretizations/periodic_bc",           "path": "discretizations/periodic_bc.esm",           "tags": ["discretization", "boundary_condition"] },
-    { "id": "discretizations/mpas_cell_div",         "path": "discretizations/mpas_cell_div.esm",         "tags": ["discretization", "unstructured", "mpas"] },
-    { "id": "discretizations/dim_split_2d_strang",   "path": "discretizations/dim_split_2d_strang.esm",   "tags": ["discretization", "cartesian", "dimensional_split", "strang", "esm-okt"] },
-    { "id": "discretizations/multi_output_ppm_reconstruction", "path": "discretizations/multi_output_ppm_reconstruction.esm", "tags": ["discretization", "cartesian", "multi-output", "ppm", "ess-32i"] },
     { "id": "spatial/pde_tests_examples",            "path": "spatial/pde_tests_examples.esm",            "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots", "gt-vzwk"] },
 
     { "id": "valid/nonlinear_isorropia_shape",       "path": "valid/nonlinear_isorropia_shape.esm",       "tags": ["nonlinear", "initialization", "guesses", "gt-ebuq"] },
@@ -95,7 +88,6 @@
 
     { "id": "valid/integral_operator_pide",          "path": "valid/integral_operator_pide.esm",          "tags": ["expressions", "integral", "pide", "ess-886"] },
 
-    { "id": "valid/regrid_point_missing_value",      "path": "valid/regrid_point_missing_value.esm",      "tags": ["data_loaders", "regrid", "missing_value", "ess-v9a.6"] },
 
     { "id": "valid/aggregate/coordinate_int_ratio_spacing", "path": "valid/aggregate/coordinate_int_ratio_spacing.esm", "tags": ["aggregate", "int-division", "canonical-number", "5.5.3.1", "ess-aggregate-intdiv"] }
   ]

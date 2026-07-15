@@ -579,40 +579,40 @@ func namespaceAffects(affects []AffectEquation, systemName string, varNames map[
 // namespaceExpressionTree walks an Expression tree and returns a new tree with
 // variable references namespaced. Unlike namespaceExpression, this preserves
 // the tree structure rather than converting to a string.
+//
+// The rebuild routes through the shared field-preserving walker, so EVERY field
+// survives. The old rebuild spelled `ExprNode{Op, Args, Wrt, Dim}` literally and
+// silently destroyed everything else: an event affect
+// `{"op":"fn","name":"datetime.year","args":["t_utc"]}` came out of Flatten as
+// `{"op":"fn","args":["M.t_utc"]}` — the closed-registry function's `name` GONE,
+// leaving an unnamed call (audit G4) — and every sidecar subtree (aggregate
+// `expr`, integral bounds, table `axes`, …) went un-namespaced.
 func namespaceExpressionTree(expr Expression, systemName string, varNames map[string]bool) Expression {
-	switch e := expr.(type) {
-	case string:
-		if varNames[e] {
-			return systemName + "." + e
+	if s, ok := expr.(string); ok {
+		if varNames[s] {
+			return systemName + "." + s
 		}
-		return e
-	case float64, int:
-		return e
-	case ExprNode:
-		newArgs := make([]any, len(e.Args))
-		for i, arg := range e.Args {
-			newArgs[i] = namespaceExpressionTree(arg, systemName, varNames)
-		}
-		newNode := ExprNode{Op: e.Op, Args: newArgs, Wrt: e.Wrt, Dim: e.Dim}
-		// Namespace wrt if applicable
-		if e.Wrt != nil && varNames[*e.Wrt] {
-			ns := systemName + "." + *e.Wrt
-			newNode.Wrt = &ns
-		}
-		if e.Dim != nil && varNames[*e.Dim] {
-			ns := systemName + "." + *e.Dim
-			newNode.Dim = &ns
-		}
-		return newNode
-	case *ExprNode:
-		if e == nil {
-			return nil
-		}
-		result := namespaceExpressionTree(*e, systemName, varNames)
-		return result
-	default:
+		return s
+	}
+	node, ok := asExprNode(expr)
+	if !ok {
 		return expr
 	}
+
+	out, _ := mapExprChildren(node, func(child Expression) (Expression, error) {
+		return namespaceExpressionTree(child, systemName, varNames), nil
+	})
+
+	// The variable-NAME slots carried outside `args`.
+	if out.Wrt != nil && varNames[*out.Wrt] {
+		ns := systemName + "." + *out.Wrt
+		out.Wrt = &ns
+	}
+	if out.Dim != nil && varNames[*out.Dim] {
+		ns := systemName + "." + *out.Dim
+		out.Dim = &ns
+	}
+	return out
 }
 
 // applyCouplingRule applies a single coupling entry to the flattened system.
@@ -636,24 +636,36 @@ func applyCouplingRule(flat *FlattenedSystem, entry any, allVarNames map[string]
 
 // applyOperatorCompose merges two systems by unifying their equation sets.
 // The translate map renames variables from one system's namespace into the other's.
+//
+// The rename is a SIMULTANEOUS, single-pass substitution (replaceVarTokens), not
+// a sequence of independent passes. Applying the entries one at a time —
+// iterating a Go map, whose order is randomized — let renames CHAIN: with
+// {"A.q": "B.r", "B.r": "A.q"} the output depended on which entry ran first, and
+// flattening the same file twice could produce different systems (audit G5:
+// "B.r + B.r" ×18, "A.q + B.r" ×2 over 20 runs). A single pass over a sorted key
+// order makes the result a pure function of the input.
 func applyOperatorCompose(flat *FlattenedSystem, c OperatorComposeCoupling) error {
 	desc := fmt.Sprintf("operator_compose(%s, %s)", c.Systems[0], c.Systems[1])
 
-	// Apply variable translations if specified
 	if len(c.Translate) > 0 {
+		renames := make(map[string]string, len(c.Translate))
 		for fromVar, toVal := range c.Translate {
-			toVar, ok := toVal.(string)
-			if !ok {
-				continue
-			}
-			// Rewrite equations: replace whole-token occurrences of fromVar
-			// with toVar (token-aware so "A.x" does not corrupt "A.x2"/"BA.x").
-			for i, eq := range flat.Equations {
-				flat.Equations[i].LHS = replaceVarToken(eq.LHS, fromVar, toVar)
-				flat.Equations[i].RHS = replaceVarToken(eq.RHS, fromVar, toVar)
+			if toVar, ok := toVal.(string); ok {
+				renames[fromVar] = toVar
 			}
 		}
-		desc += fmt.Sprintf(" with translations: %v", c.Translate)
+		for i, eq := range flat.Equations {
+			flat.Equations[i].LHS = replaceVarTokens(eq.LHS, renames)
+			flat.Equations[i].RHS = replaceVarTokens(eq.RHS, renames)
+		}
+		// Render the translation table in sorted key order too: `%v` on a map is
+		// sorted by Go's fmt, but spelling it explicitly keeps the metadata
+		// string pinned to the same order the rewrite used.
+		parts := make([]string, 0, len(renames))
+		for _, k := range sortedKeys(renames) {
+			parts = append(parts, fmt.Sprintf("%s->%s", k, renames[k]))
+		}
+		desc += fmt.Sprintf(" with translations: [%s]", strings.Join(parts, " "))
 	}
 
 	flat.Metadata.CouplingRules = append(flat.Metadata.CouplingRules, desc)
@@ -719,7 +731,12 @@ func applyCoupleConnector(flat *FlattenedSystem, c CouplingCouple, allVarNames m
 func applyVariableMap(flat *FlattenedSystem, c VariableMapCoupling) error {
 	replacement := c.To
 	if c.Factor != nil {
-		replacement = fmt.Sprintf("%g*%s", *c.Factor, c.To)
+		// PARENTHESIZED. The replacement is spliced into surrounding equation
+		// TEXT, so an unbracketed "2*B.y" re-parses under the precedence of
+		// whatever it lands next to: `A.x^2` became `2*B.y^2`, i.e. `2*(B.y^2)`,
+		// when the substitution `A.x -> 2*B.y` means `(2*B.y)^2` (audit G13).
+		// Wrapping the product makes the splice precedence-safe in every context.
+		replacement = fmt.Sprintf("(%g*%s)", *c.Factor, c.To)
 	}
 
 	for i, eq := range flat.Equations {
@@ -768,11 +785,30 @@ func namespaceConnectorExpression(expr Expression, systems [2]string, allVarName
 }
 
 // lhsMentionsVar reports whether the flattened LHS string mentions varRef as a
-// substring. The connector-target match is intentionally a loose substring test
-// (not the token-aware replaceVarToken): the target `Sys.v` must be found inside
-// a derivative LHS like "D(Sys.v, t)", where it is not a standalone token.
+// WHOLE TOKEN — either standing alone ("Sys.v") or inside a derivative LHS
+// ("D(Sys.v, t)"), where the surrounding '(' and ',' are not identifier
+// characters and so still bound the token.
+//
+// It was a bare strings.Contains, which also matched a LONGER variable that
+// merely has varRef as a prefix: a connector targeting "A.v" was applied to the
+// equation for "A.v2" as well (audit G13). Token boundaries are exactly the ones
+// replaceVarToken uses, so the match test and the rewrite agree.
 func lhsMentionsVar(lhs, varRef string) bool {
-	return strings.Contains(lhs, varRef)
+	if varRef == "" {
+		return false
+	}
+	for i := 0; i+len(varRef) <= len(lhs); i++ {
+		if !strings.HasPrefix(lhs[i:], varRef) {
+			continue
+		}
+		beforeOK := i == 0 || !isIdentChar(lhs[i-1])
+		after := i + len(varRef)
+		afterOK := after == len(lhs) || !isIdentChar(lhs[after])
+		if beforeOK && afterOK {
+			return true
+		}
+	}
+	return false
 }
 
 // isIdentChar reports whether c can appear inside a flattened variable token — a
@@ -792,23 +828,54 @@ func isIdentChar(c byte) bool {
 // it is an identifier char. Scanning resumes past each replacement, so the
 // inserted `to` text is never itself rewritten.
 func replaceVarToken(s, from, to string) string {
-	if from == "" || !strings.Contains(s, from) {
+	if from == "" {
 		return s
 	}
+	return replaceVarTokens(s, map[string]string{from: to})
+}
+
+// replaceVarTokens performs a SIMULTANEOUS whole-token substitution of every
+// entry of renames in a single left-to-right pass: text written out as a
+// replacement is never re-examined, so a rename can never chain into another
+// rename ({"a":"b","b":"c"} maps "a" to "b", never to "c"). Where several keys
+// match at the same position, the LONGEST wins, and ties break on the sorted key
+// order — so the result never depends on Go's randomized map iteration (audit
+// G5).
+//
+// Token boundaries are the isIdentChar ones: a match counts only when neither
+// the character before nor the character after it is an identifier char, so
+// "A.x" never corrupts "A.x2" or "BA.x".
+func replaceVarTokens(s string, renames map[string]string) string {
+	if len(renames) == 0 || s == "" {
+		return s
+	}
+	// Longest-first, then lexicographic: a deterministic total order over the
+	// candidate keys, independent of map iteration order.
+	keys := sortedKeys(renames)
+	sort.SliceStable(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
+
 	var b strings.Builder
 	for i := 0; i < len(s); {
-		if strings.HasPrefix(s[i:], from) {
+		matched := false
+		for _, from := range keys {
+			if !strings.HasPrefix(s[i:], from) {
+				continue
+			}
 			beforeOK := i == 0 || !isIdentChar(s[i-1])
 			after := i + len(from)
 			afterOK := after == len(s) || !isIdentChar(s[after])
-			if beforeOK && afterOK {
-				b.WriteString(to)
-				i = after
+			if !beforeOK || !afterOK {
 				continue
 			}
+			b.WriteString(renames[from])
+			i = after
+			matched = true
+			break
 		}
-		b.WriteByte(s[i])
-		i++
+		if !matched {
+			b.WriteByte(s[i])
+			i++
+		}
 	}
 	return b.String()
 }

@@ -2,22 +2,39 @@
 """Cross-binding property-corpus conformance runner (gt-3fbf).
 
 Runs every binding's round-trip driver against the shared corpus at
-``tests/property_corpus/expressions/`` and reports divergences between
-bindings. Exit code is 0 when the acceptance criterion is satisfied
-(at least one divergence surfaced between bindings, OR all bindings agree
-— i.e., the run is informative), and 1 only on operational failure
-(driver startup crash, corpus missing, etc.). The acceptance claim for
-phase 2 is *surfacing* divergences, not hiding them, so divergence alone
-is not a failure.
+``tests/property_corpus/expressions/`` and diffs the re-serialized output across
+bindings.
+
+THE CONTRACT, AND WHY IT CHANGED (audit 2026-07-14, F7)
+------------------------------------------------------
+This gate used to be invoked with ``--require-divergence``, which exits 1 **iff
+``diverged_count == 0``** — and without that flag it exited 0 unconditionally. So
+in NEITHER polarity could actual cross-binding round-trip divergence fail the
+harness, and fixing every divergence would have turned the build RED. The gate
+was named for a property it could not test.
+
+The two questions were conflated, and they are separate:
+
+* **Is the round-trip CONFORMANT?**  Two bindings that re-serialize the same
+  expression differently do not implement one format. That is a conformance
+  failure and it must fail the build → ``--fail-on-divergence`` (what the harness
+  now passes).
+* **Is the CORPUS still interesting?**  A generator that has drifted into
+  emitting only trivially-agreeing shapes is a corpus-quality problem. It is a
+  real question, but it belongs to the corpus GENERATOR's own acceptance check —
+  spelling it as "the conformance gate fails when the bindings agree" is what
+  made the gate structurally incapable of failing on divergence.
+  ``--require-divergence`` remains available for that use, and must not be the
+  conformance gate.
+
+A binding whose driver is unavailable is SKIPPED by default; pass
+``--require-all-bindings`` (the harness does) to make a missing driver a failure,
+because a binding that did not run has not been checked (audit F10).
 
 Usage::
 
     python3 scripts/run-property-corpus-conformance.py [--corpus <dir>] \\
-        [--output <results.json>] [--require-divergence]
-
-``--require-divergence`` flips the polarity for the bead acceptance check:
-exit 1 if *no* divergence is seen (the corpus has become too tame and
-needs regeneration with a richer strategy).
+        [--output <results.json>] [--fail-on-divergence] [--require-all-bindings]
 """
 
 from __future__ import annotations
@@ -218,9 +235,22 @@ def main() -> int:
         help="Where to write the per-fixture comparison report.",
     )
     ap.add_argument(
+        "--fail-on-divergence",
+        action="store_true",
+        help="Exit 1 on ANY cross-binding round-trip divergence (the conformance gate).",
+    )
+    ap.add_argument(
+        "--require-all-bindings",
+        action="store_true",
+        help="Exit 1 if any binding's driver is unavailable (a binding that did not run "
+        "has not been checked).",
+    )
+    ap.add_argument(
         "--require-divergence",
         action="store_true",
-        help="Exit 1 if the corpus fails to surface any cross-binding divergence.",
+        help="CORPUS-QUALITY check, not a conformance gate: exit 1 if the corpus surfaces "
+        "no divergence at all (it has become too tame). Never combine with the "
+        "conformance gate — see this module's docstring.",
     )
     ap.add_argument(
         "--bindings",
@@ -261,6 +291,14 @@ def main() -> int:
         )
         return 1
 
+    if args.require_all_bindings and skipped:
+        print(
+            f"error: {len(skipped)} binding driver(s) unavailable: {skipped}\n"
+            "       a binding that did not run has not been checked",
+            file=sys.stderr,
+        )
+        return 1
+
     report = compare(outputs)
     summary = summarize(report, sorted(outputs.keys()))
 
@@ -284,6 +322,33 @@ def main() -> int:
             "error: corpus surfaced zero divergences; regenerate with a richer strategy",
             file=sys.stderr,
         )
+        return 1
+
+    # THE conformance gate: bindings that re-serialize the same expression
+    # differently do not implement one format.
+    if args.fail_on_divergence and summary["diverged_count"] > 0:
+        print(
+            f"error: {summary['diverged_count']} of {summary['total_fixtures']} corpus "
+            "expressions round-trip DIFFERENTLY across bindings",
+            file=sys.stderr,
+        )
+        # Group by the SHAPE of the divergence (which bindings said what), so a
+        # single root cause reads as one line instead of 44.
+        shapes: Dict[str, List[str]] = {}
+        for entry in report:
+            if not entry.get("diverged"):
+                continue
+            by_output: Dict[str, List[str]] = {}
+            for name, result in sorted(entry.get("bindings", {}).items()):
+                key = json.dumps(result.get("canonical"), sort_keys=True)
+                by_output.setdefault(key, []).append(name)
+            shape = " | ".join(
+                f"{','.join(langs)}={out}" for out, langs in sorted(by_output.items())
+            )
+            shapes.setdefault(shape, []).append(entry.get("fixture", "?"))
+        for shape, fixtures in sorted(shapes.items(), key=lambda kv: -len(kv[1])):
+            print(f"  [{len(fixtures)}x] {shape}", file=sys.stderr)
+            print(f"        e.g. {', '.join(fixtures[:4])}", file=sys.stderr)
         return 1
 
     return 0

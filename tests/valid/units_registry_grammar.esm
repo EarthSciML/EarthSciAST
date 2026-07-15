@@ -1,0 +1,361 @@
+{
+  "esm": "0.6.0",
+  "metadata": {
+    "name": "UnitsRegistryGrammar",
+    "description": "Cross-binding conformance pin for the esm-spec §4.8 units contract — the registry (§4.8.1), the mandatory Unicode normalisation and the grammar (§4.8.2), and the per-operator dimensional rules (§4.8.3). Every unit string here is a REAL spelling taken from the shared corpus, and every observed variable is a DISCRIMINATOR: its declared units are only satisfiable if the binding resolves the unit string the way §4.8 says. Under the §4.8.4 severity contract an unresolvable unit string is a HARD error, so a binding that has not implemented the corrected contract rejects this file rather than silently passing it. Pinned here, in order: (1) RATIONAL exponents — `1/s^0.5`, the intensity of a Wiener noise term; an integer-only grammar cannot parse it and falsely rejects every SDE fixture. (2) `*` and `/` are ONE precedence level, LEFT to RIGHT — `J/mol*K` is J·mol⁻¹·K⁺¹ and `J/(mol*K)` is J·mol⁻¹·K⁻¹; the two are DIFFERENT dimensions and `RT` / `enthalpy_scale` fail if a binding gives `*` the higher precedence. (3) WHITESPACE IS MULTIPLICATION — `ppb^-1 s^-1`. (4) UNICODE normalisation — superscripts (`W/m²`, `cm³`), middot `·` and dot-operator `⋅`, micro sign `µ`, `°C`, `Ω`. (5) COUNTS ARE DIMENSIONLESS and the axes are exactly m/kg/s/mol/K/A/cd/rad — `n_air_is_a_number_density` fails if `molec` is typed as an amount of substance, and `dose_is_a_number_density` fails if the count noun `units` is typed as micro-nit (a LUMINANCE — a real binding did this, and `units/L` came out as cd·m⁻⁵). (6) `C` IS THE COULOMB — `force_em` = charge × field is a newton; if `C` were Celsius it is kg·m·K·s⁻³·A⁻¹. (7) `sqrt` HALVES a dimension and is NOT a transcendental — `wave_speed` = sqrt(m²/s²) is m/s. (8) The registry additions `%`, `psu`, `uatm`, `molecule`, `meters`, `hour`, `Celsius`, `percent`, `degrees`, and the Dobson unit (dimension m⁻², scale exactly 2.6867e20 — two bindings shipped different roundings). NOTE that no unit string in this file carries a SPECIES TAG: `kg C/m^2` is illegal precisely because whitespace is multiplication, so it would parse as kg·coulomb·m⁻² — a silently WRONG dimension. The species belongs in the name and description (§4.8.1).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-07-14T00:00:00Z",
+    "tags": [
+      "units",
+      "registry",
+      "grammar",
+      "unicode-normalization",
+      "rational-exponents",
+      "dimensional_analysis",
+      "conformance"
+    ]
+  },
+  "models": {
+    "UnitsRegistryGrammar": {
+      "reference": {
+        "notes": "esm-spec §4.8. Each observed variable is a discriminator against one specific way a binding has actually gotten the units contract wrong."
+      },
+      "variables": {
+        "u": {
+          "type": "state",
+          "units": "kg/m^3",
+          "default": 1.0,
+          "description": "The single integrated unknown — a mass concentration. Its only role is to give the model one well-formed ODE; everything else here is a units discriminator."
+        },
+        "k_decay": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01,
+          "description": "First-order loss rate."
+        },
+        "noise_intensity": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "default": 0.05,
+          "description": "RATIONAL EXPONENT (§4.8.2). The intensity of a Wiener noise term — the unit of every SDE brownian variable in the corpus. An integer-only exponent grammar cannot parse this at all, and under the §4.8.4 hard-error severity it would falsely reject every conforming SDE file."
+        },
+        "R_slash_star": {
+          "type": "parameter",
+          "units": "J/mol*K",
+          "default": 8.314,
+          "description": "PRECEDENCE (§4.8.2). `*` and `/` are one level, LEFT to RIGHT, so this is (J/mol)*K = J·mol⁻¹·K⁺¹ — NOT J/(mol·K). A parser that gives `*` the higher precedence silently negates K's exponent, and because the result is a plausible dimension nothing downstream can see it. `enthalpy_scale` below is the discriminator."
+        },
+        "R_parenthesised": {
+          "type": "parameter",
+          "units": "J/(mol*K)",
+          "default": 8.314,
+          "description": "The molar gas constant, correctly spelled with the compound denominator parenthesised: J·mol⁻¹·K⁻¹. `RT` below is the discriminator."
+        },
+        "T_ref": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "Reference temperature."
+        },
+        "enthalpy_scale": {
+          "type": "observed",
+          "units": "J/mol",
+          "description": "R_slash_star / T_ref. J·mol⁻¹·K⁺¹ ÷ K = J·mol⁻¹. If a binding mis-parses `J/mol*K` as J/(mol·K), this comes out J·mol⁻¹·K⁻² and the check fails.",
+          "expression": {
+            "op": "/",
+            "args": [
+              "R_slash_star",
+              "T_ref"
+            ]
+          }
+        },
+        "RT": {
+          "type": "observed",
+          "units": "J/mol",
+          "description": "R_parenthesised * T_ref. J·mol⁻¹·K⁻¹ × K = J·mol⁻¹. If a binding drops the parentheses and reads J·mol⁻¹·K⁺¹, this comes out J·mol⁻¹·K² and the check fails.",
+          "expression": {
+            "op": "*",
+            "args": [
+              "R_parenthesised",
+              "T_ref"
+            ]
+          }
+        },
+        "k_ws": {
+          "type": "parameter",
+          "units": "ppb^-1 s^-1",
+          "default": 0.002,
+          "description": "WHITESPACE IS MULTIPLICATION (§4.8.2), as in pint and UDUNITS: ppb⁻¹·s⁻¹. `ppb` is dimensionless, so this is s⁻¹."
+        },
+        "ws_is_multiplication": {
+          "type": "observed",
+          "units": "1/s",
+          "description": "k_ws, unchanged. Passes only if the space between `ppb^-1` and `s^-1` was read as a multiplication (and `ppb` as dimensionless).",
+          "expression": "k_ws"
+        },
+        "heat_flux": {
+          "type": "parameter",
+          "units": "W/m²",
+          "default": 240.0,
+          "description": "UNICODE (§4.8.2): superscript digit. Normalises to W/m^2."
+        },
+        "heat_flux_is_a_flux_density": {
+          "type": "observed",
+          "units": "kg/s^3",
+          "description": "heat_flux, unchanged. W/m² = kg·s⁻³. Passes only if `²` was normalised to `^2` before parsing.",
+          "expression": "heat_flux"
+        },
+        "cp": {
+          "type": "parameter",
+          "units": "J/(kg·K)",
+          "default": 1004.0,
+          "description": "UNICODE (§4.8.2): middot U+00B7 → `*`. Specific heat capacity of dry air."
+        },
+        "cp_is_a_specific_heat": {
+          "type": "observed",
+          "units": "m^2/(s^2*K)",
+          "description": "cp, unchanged. J/(kg·K) = m²·s⁻²·K⁻¹. Passes only if `·` normalised to `*`.",
+          "expression": "cp"
+        },
+        "p_momentum": {
+          "type": "parameter",
+          "units": "kg⋅m/s",
+          "default": 3.0,
+          "description": "UNICODE (§4.8.2): dot operator U+22C5 → `*`. A DIFFERENT code point from the middot above, and both occur in the corpus."
+        },
+        "pm25": {
+          "type": "parameter",
+          "units": "µg/m^3",
+          "default": 12.0,
+          "description": "UNICODE (§4.8.2): micro sign U+00B5 → `u`. (The Greek mu U+03BC normalises the same way.) Fine particulate mass concentration."
+        },
+        "t_air": {
+          "type": "parameter",
+          "units": "°C",
+          "default": 25.0,
+          "description": "UNICODE (§4.8.2): `°C` → `degC`, which carries the KELVIN dimension (its zero offset is not modelled — §4.8.1)."
+        },
+        "resistivity": {
+          "type": "parameter",
+          "units": "Ω*m",
+          "default": 1.68e-08,
+          "description": "UNICODE (§4.8.2): `Ω` → `Ohm`."
+        },
+        "trend": {
+          "type": "parameter",
+          "units": "%/h",
+          "default": 1.5,
+          "description": "REGISTRY ADDITION (§4.8.1): `%` is a dimensionless fraction (scale 0.01), and the lexer must admit it as a symbol token even though it is not alphanumeric."
+        },
+        "percent_is_dimensionless": {
+          "type": "observed",
+          "units": "1/s",
+          "description": "trend, unchanged. `%/h` = s⁻¹ — a percent is a pure number.",
+          "expression": "trend"
+        },
+        "n_air": {
+          "type": "parameter",
+          "units": "molec/cm^3",
+          "default": 2.5e+19,
+          "description": "COUNTS ARE DIMENSIONLESS (§4.8.1). A number density of air molecules."
+        },
+        "n_air_is_a_number_density": {
+          "type": "observed",
+          "units": "1/m^3",
+          "description": "n_air, unchanged. DISCRIMINATOR: passes only if `molec` carries NO dimension. A binding that types `molec` as an amount of substance gets mol·m⁻³ and fails.",
+          "expression": "n_air"
+        },
+        "k_bimol": {
+          "type": "parameter",
+          "units": "cm³/(molecule*s)",
+          "default": 9e-12,
+          "description": "REGISTRY ADDITION (§4.8.1): `molecule` is a spelling of `molec`. Also UNICODE `³`. A second-order gas-phase rate constant."
+        },
+        "bimolecular_loss": {
+          "type": "observed",
+          "units": "1/s",
+          "description": "k_bimol * n_air. cm³·molecule⁻¹·s⁻¹ × molec·cm⁻³ = s⁻¹ — which only works if the two count nouns are the SAME dimensionless entry.",
+          "expression": {
+            "op": "*",
+            "args": [
+              "k_bimol",
+              "n_air"
+            ]
+          }
+        },
+        "dose": {
+          "type": "parameter",
+          "units": "units/L",
+          "default": 40.0,
+          "description": "COUNTS ARE DIMENSIONLESS (§4.8.1). A clinical activity concentration — `units` is a COUNT NOUN."
+        },
+        "dose_is_a_number_density": {
+          "type": "observed",
+          "units": "1/m^3",
+          "description": "dose, unchanged. DISCRIMINATOR: passes only if the count noun `units` carries NO dimension. A binding that delegates its registry to a general-purpose units library and lets it resolve `units` as MICRO-NIT — a luminance — gets cd·m⁻⁵ and fails. This is not hypothetical; it shipped.",
+          "expression": "dose"
+        },
+        "charge": {
+          "type": "parameter",
+          "units": "C",
+          "default": 1.6e-19,
+          "description": "`C` IS THE COULOMB (§4.8.1), per SI — never Celsius. Celsius is `degC` / `°C` / `Celsius`."
+        },
+        "efield": {
+          "type": "parameter",
+          "units": "V/m",
+          "default": 1000.0,
+          "description": "Electric field strength."
+        },
+        "force_em": {
+          "type": "observed",
+          "units": "N",
+          "description": "charge * efield. DISCRIMINATOR: C × V·m⁻¹ = A·s × kg·m²·s⁻³·A⁻¹·m⁻¹ = kg·m·s⁻² = N. If a binding binds `C` to Celsius it gets kg·m·K·s⁻³·A⁻¹ and fails — that is how a temperature dimension leaks into every electromagnetic expression.",
+          "expression": {
+            "op": "*",
+            "args": [
+              "charge",
+              "efield"
+            ]
+          }
+        },
+        "ke2": {
+          "type": "parameter",
+          "units": "m^2/s^2",
+          "default": 4.0,
+          "description": "A squared speed (twice a specific kinetic energy)."
+        },
+        "wave_speed": {
+          "type": "observed",
+          "units": "m/s",
+          "description": "sqrt(ke2). DISCRIMINATOR for §4.8.3: `sqrt` HALVES every exponent of its operand's dimension, and is NOT a transcendental. A checker that puts `sqrt` in the dimensionless-argument set with `log`/`exp` rejects this — the ordinary spelling of a wave speed or an RMS.",
+          "expression": {
+            "op": "sqrt",
+            "args": [
+              "ke2"
+            ]
+          }
+        },
+        "salinity": {
+          "type": "parameter",
+          "units": "psu",
+          "default": 35.0,
+          "description": "REGISTRY ADDITION (§4.8.1): the practical salinity unit — dimensionless by definition."
+        },
+        "pco2": {
+          "type": "parameter",
+          "units": "uatm",
+          "default": 400.0,
+          "description": "REGISTRY ADDITION (§4.8.1): the microatmosphere, a PRESSURE. It is a flat table entry — there is deliberately NO SI-prefix mechanism (a prefix rule would also accept `kmolec` and reintroduce the T=tesla-vs-tera and M=molar-vs-mega collisions)."
+        },
+        "pco2_is_a_pressure": {
+          "type": "observed",
+          "units": "Pa",
+          "description": "pco2, unchanged.",
+          "expression": "pco2"
+        },
+        "depth": {
+          "type": "parameter",
+          "units": "meters",
+          "default": 100.0,
+          "description": "REGISTRY ADDITION (§4.8.1): long-form alias of `m`."
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "hour",
+          "default": 6.0,
+          "description": "REGISTRY ADDITION (§4.8.1): long-form alias of `h`."
+        },
+        "t_boil": {
+          "type": "parameter",
+          "units": "Celsius",
+          "default": 100.0,
+          "description": "REGISTRY ADDITION (§4.8.1): long-form alias of `degC`. This — never the bare `C` — is how Celsius is spelled."
+        },
+        "aspect": {
+          "type": "parameter",
+          "units": "degrees",
+          "default": 180.0,
+          "description": "REGISTRY ADDITION (§4.8.1): long-form alias of `deg` (the angle). Used throughout the corpus for lon/lat coordinates and terrain aspect."
+        },
+        "long_forms_resolve": {
+          "type": "observed",
+          "units": "m/s",
+          "description": "depth / tau. `meters` / `hour` = m·s⁻¹ — passes only if both long-form aliases resolve to their base entries.",
+          "expression": {
+            "op": "/",
+            "args": [
+              "depth",
+              "tau"
+            ]
+          }
+        },
+        "ozone_column": {
+          "type": "parameter",
+          "units": "DU",
+          "default": 300.0,
+          "description": "The DOBSON UNIT (§4.8.1) — pinned at EXACTLY 2.6867e20 molec/m², so with counts dimensionless its dimension is m⁻². Two bindings shipped different roundings (2.6867e20 and 2.69e20) and one then compared conversions to a 1e-9 tolerance, so the same file errored in one binding and not the other."
+        },
+        "ozone_column_is_a_column_density": {
+          "type": "observed",
+          "units": "1/m^2",
+          "description": "ozone_column, unchanged. Passes only if `DU` is an areal number density, not a dimensionless scalar.",
+          "expression": "ozone_column"
+        },
+        "dy_north": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Northward offset; an atan2 operand."
+        },
+        "dx_east": {
+          "type": "parameter",
+          "units": "m",
+          "default": 4.0,
+          "description": "Eastward offset; the other atan2 operand, COMMENSURATE with dy_north."
+        },
+        "bearing_is_an_angle": {
+          "type": "observed",
+          "units": "rad",
+          "description": "DISCRIMINATOR (atan2, §4.8.3): atan2 requires its two operands to be COMMENSURATE with EACH OTHER (here both m) and returns an ANGLE. atan2 is the one inverse-trig op that does NOT take a dimensionless argument -- it takes a ratio not yet formed. A checker that gives atan2 the asin/acos/atan dimensionless-argument rule FALSELY REJECTS this, the ordinary spelling of a bearing.",
+          "expression": {
+            "op": "atan2",
+            "args": [
+              "dy_north",
+              "dx_east"
+            ]
+          }
+        }
+      },
+      "equations": [
+        {
+          "_comment": "The one ODE. d(u)/dt has dimension kg·m⁻³·s⁻¹, and k_decay*u is s⁻¹ × kg·m⁻³ — the model's only dynamical content; everything else in this fixture is a units discriminator.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k_decay",
+                  "u"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-10
+      }
+    }
+  }
+}

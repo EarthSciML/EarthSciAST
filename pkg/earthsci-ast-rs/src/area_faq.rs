@@ -146,7 +146,12 @@ pub fn polygon_area_faq(ring: &[(f64, f64)], manifold: Manifold) -> f64 {
     };
     let mut inputs: HashMap<String, ArrayD<f64>> = HashMap::new();
     inputs.insert("overlap_clip".to_string(), clip);
-    match eval_expression(&faq, &inputs, &[], &[], 0.0) {
+    // The FAQ node is built HERE (`shoelace_faq_node` / `spherical_excess_faq_node`)
+    // out of evaluable-core ops only, so `eval_expression`'s operator gate cannot
+    // reject it — it is not user input.
+    let value = eval_expression(&faq, &inputs, &[], &[], 0.0)
+        .expect("the polygon-area FAQ node is built from evaluable ops by construction");
+    match value {
         Value::Scalar(s) => s.abs(),
         // A scalar aggregate (empty output_idx) always reduces to a scalar.
         Value::Array(_) => unreachable!("scalar polygon_area FAQ must reduce to a scalar"),

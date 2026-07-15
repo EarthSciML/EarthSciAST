@@ -99,6 +99,57 @@ function findJsonFiles(dir: string): string[] {
 }
 
 describe('Conformance Test Suite', () => {
+  /**
+   * CONFORMANCE_SPEC §7.1.3 row (i): a fixture in `tests/valid/**` MUST BE
+   * ASSERTED VALID, not merely round-tripped.
+   *
+   * This assertion did not exist. The valid half of the corpus was only ever fed
+   * through `load → save → load` and compared for fidelity, so a fixture could
+   * be riddled with undefined variables, dimensional nonsense, or unresolvable
+   * references and still sail through — `validate()` was never called on it. The
+   * suite therefore could not fail on the valid corpus, which is the very
+   * "mechanism that cannot fail" this audit exists to root out, sitting inside
+   * the test we were using to PROVE the fixes worked. Every previous "the valid
+   * corpus is clean" claim from this binding was vacuous.
+   *
+   * `validate()` performs no file I/O by contract, so a subsystem `{ref}` stub
+   * reads as unresolved and a relative `expression_template_imports` ref cannot
+   * be fetched. A fixture is therefore brought to a validatable state exactly as
+   * a real consumer would: LOAD (with `basePath`, which anchors template
+   * imports, §9.7.2) → RESOLVE `{ref}` stubs → VALIDATE. That resolution step is
+   * genuinely load-bearing and not a way of dodging the assertion:
+   * `tests/invalid/subsystem_ref_not_found.esm` still fails AT resolution, and
+   * the invalid-corpus sweep below still runs `validate()` on raw text.
+   */
+  describe('Valid fixtures must VALIDATE (§7.1.3 row (i))', () => {
+    const validFiles = findEsmFiles(join(testsDir, 'valid'))
+
+    it('finds the valid corpus (guards against an empty, vacuously-passing sweep)', () => {
+      expect(validFiles.length).toBeGreaterThan(50)
+    })
+
+    it.each(validFiles)('should validate %s', (filePath) => {
+      // Every valid fixture, including a pure template-library file (§9.7.1), is
+      // validated the same way. The library used to need a carve-out because the
+      // emitter dropped its payload; §9.6.4 rule 5 fixed that, so the carve-out is
+      // gone too.
+      //
+      // `basePath` lets `validate()` OPEN relative `{ref}` and template-import
+      // targets, exactly as a consumer holding the file on disk would.
+      const result = validate(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
+
+      if (!result.is_valid) {
+        // Surface WHAT failed — a bare `false !== true` on a 200-line fixture is
+        // useless to whoever has to fix it.
+        const detail = [...result.schema_errors, ...result.structural_errors]
+          .map((e) => `  ${e.code} @ ${e.path}\n    ${e.message}`)
+          .join('\n')
+        throw new Error(`${basename(filePath)} is in tests/valid but does not validate:\n${detail}`)
+      }
+      expect(result.is_valid).toBe(true)
+    })
+  })
+
   describe('Round-trip tests', () => {
     const validFiles = findEsmFiles(join(testsDir, 'valid'))
 
@@ -109,17 +160,14 @@ describe('Conformance Test Suite', () => {
       const basePath = dirname(filePath)
       const original = load(originalContent, { basePath })
 
-      // A pure template-library file (top-level expression_templates,
-      // esm-spec §9.7.1) loads clean, but its §9.7 payload does not survive
-      // parse → emit (Option A round-trip, §9.7.6) — the emitted registry
-      // document carries no models/reaction_systems/data_loaders payload and
-      // is not a standalone loadable file, exactly as in the Julia reference.
-      // Assert load-clean only.
-      const rawView = JSON.parse(originalContent) as Record<string, unknown>
-      if ('expression_templates' in rawView) {
-        expect(original).toBeDefined()
-        return
-      }
+      // NO BAIL-OUT HERE. A template-library file used to be waved through with
+      // `expect(original).toBeDefined()` — an assertion that cannot fail, guarding
+      // the exact code path that was broken: the emitter DROPPED the top-level
+      // `expression_templates` registry and `metaparameters` block, so a library
+      // emitted as `{esm, metadata, index_sets}` and could not be re-loaded. Per
+      // esm-spec §9.6.4 rule 5 (Option A expands CALL SITES; it does not delete
+      // DECLARATIONS) a library file round-trips to ITSELF, so it is round-tripped
+      // exactly like every other fixture.
 
       // Save and reload
       const serialized = save(original)
@@ -206,32 +254,48 @@ describe('Conformance Test Suite', () => {
     // marks them `resolver_only: true`; for those, schema validation must PASS,
     // so this recursive invalid-fixture sweep does not flag the acceptance as a
     // failure. See bead ess-my4.1.6.
-    const expectedErrors = loadJsonFixture<Record<string, { resolver_only?: boolean }>>(
-      join(testsDir, 'invalid/expected_errors.json'),
-    )
+    const expectedErrors = loadJsonFixture<
+      Record<
+        string,
+        {
+          resolver_only?: boolean
+          structural_errors?: { code: string; path: string }[]
+          schema_errors?: { code: string; path: string }[]
+        }
+      >
+    >(join(testsDir, 'invalid/expected_errors.json'))
 
-    // Pending cross-binding work (open-op-namespace-fixpoint-rewrite RFC §12,
-    // item 5): opening the `op` namespace (0.8.0) means the schema no longer
-    // rejects `ln` as an unknown op, so this fixture is now caught ONLY by the
-    // log-argument dimensionality unit-check — a hard structural error the
-    // reference bindings implement but the TS binding has not yet landed
-    // (`expected_errors.json` already expects `schema_errors: []` +
-    // `structural_errors: [{code: "unit_inconsistency", ...}]`). Quarantined
-    // here exactly as the Python suite's `pending_binding_phase` marker until
-    // that check ships; the shared fixture is unchanged.
-    const PENDING_BINDING_PHASE = new Set<string>(['units_invalid_logarithm.esm'])
+    // Pending BINDING work — a fixture the shared corpus pins invalid that THIS
+    // binding cannot yet reject. The quarantine is for a gap in the checker, never
+    // a licence to weaken the pin; each entry must name the missing check.
+    //
+    // BOTH former entries are gone, because both gaps were closed rather than
+    // excused:
+    //  - `units_invalid_logarithm.esm` — the log-argument dimensionality check
+    //    has landed (`unit_inconsistency @ .../variables/invalid_log`).
+    //  - `unparseable_unit.esm` — was excused on the grounds that the unit
+    //    registry was incomplete ("missing V/T/F/Ohm and binds `C` to Celsius
+    //    rather than the coulomb, so promoting today would reject legitimate
+    //    fixtures"). The registry is now complete and `C` is the coulomb, so an
+    //    unresolvable unit is the hard `unit_parse_error` §4.8.4 requires.
+    //
+    // The set is empty. Keep it that way: a name here is a checker that does not
+    // work, advertised as a test that passes.
+    const PENDING_BINDING_PHASE = new Set<string>([])
 
     it.each(invalidFiles)('should detect errors in %s', (filePath) => {
       const content = readFileSync(filePath, 'utf-8')
 
       if (PENDING_BINDING_PHASE.has(basename(filePath))) {
-        // Skip the "must be invalid" assertion until the log-arg dimensionality
-        // unit-check (RFC §12 item 5) lands in the TS binding.
         return
       }
 
-      // Attempt to validate - should find schema or structural errors
-      const result = validate(content)
+      // `basePath` lets `validate()` OPEN the ref targets, so a defect only the
+      // RESOLVER can see is reported with the code the corpus actually pins:
+      // `subsystem_ref_ambiguous.esm`'s target holds three top-level components,
+      // which is `ambiguous_subsystem_ref` — a verdict the I/O-free path cannot
+      // reach, since without opening the file it can only say "unresolved".
+      const result = validate(content, { basePath: dirname(filePath) })
 
       if (expectedErrors[basename(filePath)]?.resolver_only) {
         // Resolver-only: the JSON-Schema layer must ACCEPT it (no schema_errors).
@@ -243,15 +307,48 @@ describe('Conformance Test Suite', () => {
         return
       }
 
-      expect(result.is_valid).toBe(false)
-      const totalErrors = result.schema_errors.length + result.structural_errors.length
-      expect(totalErrors).toBeGreaterThan(0)
+      const all = [...result.schema_errors, ...result.structural_errors]
+      expect(result.is_valid, `${basename(filePath)} is pinned invalid but was accepted`).toBe(
+        false,
+      )
+      expect(all.length).toBeGreaterThan(0)
 
       // Ensure each error has required fields
-      for (const error of [...result.schema_errors, ...result.structural_errors]) {
+      for (const error of all) {
         expect(error.code).toBeDefined()
         expect(error.path).toBeDefined()
         expect(error.message).toBeDefined()
+      }
+
+      // ...and that it is rejected for the RIGHT REASON. "Some error was
+      // produced" is a weak contract: a fixture pinned as, say, a dimensional
+      // defect could be rejected for an unrelated typo and the suite would call
+      // that a pass, so the binding could drift arbitrarily far from the shared
+      // diagnostic vocabulary while staying green. Where the corpus pins a code,
+      // assert THAT code was emitted.
+      // The ONE fixture whose pin no implementation can satisfy. The corpus pins
+      // a `variable_map` `from` naming a nonexistent system THREE ways for the
+      // same defect and the same stated intent ("coupling references nonexistent
+      // system"):
+      //
+      //   undefined_system.esm                     -> undefined_system      @ /coupling/0
+      //   unresolved_scoped_ref.esm                -> unresolved_scoped_ref @ /coupling/0/from
+      //   unresolved_scoped_ref_missing_system.esm -> unresolved_scoped_ref @ /coupling/0/from
+      //
+      // We emit the code two of the three agree on. This is NOT a quarantine of a
+      // checker gap: the file is still asserted REJECTED above; only the
+      // code-matching half is suspended, and it is suspended because the contract
+      // is self-contradictory, not because the binding is deficient. Reported
+      // upstream; delete this the moment the corpus settles on one spelling.
+      const CONTRADICTORY_PIN = new Set(['undefined_system.esm'])
+
+      const pinned = expectedErrors[basename(filePath)]?.structural_errors?.[0]
+      if (pinned && !CONTRADICTORY_PIN.has(basename(filePath))) {
+        const codes = all.map((e) => e.code)
+        expect(
+          codes,
+          `${basename(filePath)}: corpus pins "${pinned.code}", binding emitted: ${codes.join(', ') || '(none)'}`,
+        ).toContain(pinned.code)
       }
     })
   })
@@ -546,20 +643,20 @@ describe('Conformance Test Suite', () => {
   describe('End-to-end system tests', () => {
     const endToEndFiles = findEsmFiles(join(testsDir, 'end_to_end'))
 
+    // The SAME defect as the valid-corpus sweep, in a second place: this called
+    // `validate()`, `console.warn`ed whatever came back, and then asserted only
+    // that `load()` does not throw — so an end-to-end system could fail every
+    // structural check in the book and the test stayed green. Assert the result.
     it.each(endToEndFiles)('should validate complex system %s', (filePath) => {
-      const content = readFileSync(filePath, 'utf-8')
-
-      // These are complex systems that should validate successfully
-      const result = validate(content)
+      const result = validate(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
 
       if (!result.is_valid) {
-        console.warn(`End-to-end validation failed for ${filePath}:`)
-        console.warn('Schema errors:', result.schema_errors)
-        console.warn('Structural errors:', result.structural_errors)
+        const detail = [...result.schema_errors, ...result.structural_errors]
+          .map((e) => `  ${e.code} @ ${e.path}\n    ${e.message}`)
+          .join('\n')
+        throw new Error(`end-to-end system ${basename(filePath)} does not validate:\n${detail}`)
       }
-
-      // Complex systems should at least parse without throwing
-      expect(() => load(content)).not.toThrow()
+      expect(result.is_valid).toBe(true)
     })
   })
 })

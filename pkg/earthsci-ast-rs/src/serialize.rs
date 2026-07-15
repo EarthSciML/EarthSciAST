@@ -38,6 +38,8 @@ use crate::{EsmFile, error::EsmError};
 ///         discretized_from: None,
 ///     },
 ///     index_sets: None,
+///     expression_templates: None,
+///     metaparameters: None,
 ///     models: None,
 ///     reaction_systems: None,
 ///     data_loaders: None,
@@ -82,6 +84,8 @@ mod tests {
     #[test]
     fn test_save_minimal_file() {
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -124,6 +128,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
+                default_units: None,
                 var_type: VariableType::State,
                 units: Some("m".to_string()),
                 default: Some(0.0),
@@ -159,6 +164,8 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,
@@ -199,6 +206,8 @@ mod tests {
     #[test]
     fn test_save_compact() {
         let esm_file = EsmFile {
+            expression_templates: None,
+            metaparameters: None,
             coupling_roles: None,
             domain: None,
             index_sets: None,

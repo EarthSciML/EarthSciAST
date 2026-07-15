@@ -1,0 +1,75 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "UnitsDiscriminatorAtan2Commensurate",
+    "description": "Invalid: `atan2(y, x)` requires its two operands to be COMMENSURATE WITH EACH OTHER (§4.8.3). Here `dy_north` is in `m` and `dt_elapsed` is in `s` -- not commensurate -- so a correct binding rejects. This pins the half of the atan2 rule that the permissive reading loses: `atan2` does NOT require dimensionless arguments (that would reject the ordinary bearing `atan2(dy_m, dx_m)`, pinned VALID in tests/valid/units_registry_grammar.esm), but it does require the two to MATCH. A binding with no atan2 rule at all -- treating the result as undeterminable -- ACCEPTS. This is the NEGATIVE half of the discriminator in tests/valid/units_registry_grammar.esm. A VALID fixture can only prove a binding does not FALSELY REJECT; it CANNOT prove the binding checks anything -- mutation testing showed every observed variable in the valid fixture could be corrupted and still pass, because no binding compared a declared unit against the dimension its expression computes. This file makes the same assertion in the contrapositive: a CORRECT binding REJECTS it, and a binding carrying the bug ACCEPTS it. Everything but the one observed variable is dimensionally clean.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "y": {
+          "type": "state",
+          "units": "1",
+          "description": "State. Dimensionally clean; not part of the defect."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate. Dimensionally clean; not part of the defect."
+        },
+        "dy_north": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "Northward offset."
+        },
+        "dt_elapsed": {
+          "type": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "description": "An elapsed TIME -- NOT commensurate with a length."
+        },
+        "bad_atan2": {
+          "type": "observed",
+          "units": "rad",
+          "description": "THE ONLY DEFECT: declared units do not match the dimension its expression computes.",
+          "expression": {
+            "op": "atan2",
+            "args": [
+              "dy_north",
+              "dt_elapsed"
+            ]
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -36,9 +36,15 @@ import {
   resolveTemplateMachinery,
 } from './template-imports.js'
 import { isCouplingLibraryDoc } from './coupling-imports.js'
-import { canonicalizePath, isRemoteRef, joinPath, normalizeRef } from './path-utils.js'
+import {
+  canonicalizePath,
+  isRemoteRef,
+  joinPath,
+  normalizeRef,
+  readFileSyncNode,
+} from './path-utils.js'
 import { ERROR_CODES } from './errors.js'
-import { load, validateSchema } from './parse.js'
+import { load, validateSchema, ROOT_PATH } from './parse.js'
 import { save } from './serialize.js'
 
 /**
@@ -56,19 +62,77 @@ export class CircularReferenceError extends Error {
 }
 
 /**
- * Error thrown when a referenced file cannot be loaded or parsed.
+ * Error thrown when a referenced file cannot be loaded, parsed, or uniquely
+ * resolved to one system.
+ *
+ * Carries the CANONICAL cross-binding diagnostic code (see `ERROR_CODES`):
+ *
+ *  - `unresolved_subsystem_ref` (default) — the file does not exist, or could
+ *    not be read or parsed.
+ *  - `ambiguous_subsystem_ref` — the file WAS read, and holds more than one
+ *    top-level system; §4.7 requires exactly one.
+ *
+ * The resolver is the only layer that reads the referenced file, so it is the
+ * only layer that can tell those two apart — the synchronous `validate()` does
+ * no I/O and reports every unresolved `{ref}` as `unresolved_subsystem_ref`.
  */
 export class RefLoadError extends Error {
   /** The reference path or URL that failed to load */
   public readonly ref: string
+  /** Canonical code: `unresolved_subsystem_ref` or `ambiguous_subsystem_ref`. */
+  public readonly code: string
+  /**
+   * JSON Pointer of the SUBSYSTEM ENTRY that carries the bad ref (e.g.
+   * `/models/ClimateModel/subsystems/Atm`) — not the document root. The corpus
+   * pins these errors at the offending mount, and a caller handed `$` has to go
+   * hunting for which of a dozen mounts failed.
+   */
+  public readonly path: string
 
-  constructor(ref: string, cause?: Error) {
-    const message = cause
-      ? `Failed to load ref "${ref}": ${cause.message}`
-      : `Failed to load ref "${ref}"`
-    super(message)
+  constructor(
+    ref: string,
+    cause?: Error,
+    code: string = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
+    message?: string,
+    path: string = ROOT_PATH,
+  ) {
+    super(
+      message ??
+        (cause ? `Failed to load ref "${ref}": ${cause.message}` : `Failed to load ref "${ref}"`),
+    )
     this.name = 'RefLoadError'
     this.ref = ref
+    this.code = code
+    this.path = path
+  }
+}
+
+/**
+ * Enforce the §4.7 invariant that a referenced subsystem file holds EXACTLY ONE
+ * top-level system.
+ *
+ * A file with two models (or a model plus a loader) gives the mount no way to
+ * say WHICH one it means. The loader used to silently take the first entry —
+ * `Object.entries(parsed.models)[0]` — so a multi-system file resolved to
+ * whichever component happened to serialize first: a silent, order-dependent
+ * mis-mount. It is instead a hard `ambiguous_subsystem_ref`, the code the shared
+ * corpus pins for `subsystem_ref_ambiguous.esm`.
+ */
+function assertSingleTopLevelSystem(parsed: EsmFile, ref: string, path: string): void {
+  const systems = [
+    ...Object.keys(parsed.models ?? {}),
+    ...Object.keys(parsed.reaction_systems ?? {}),
+    ...Object.keys(parsed.data_loaders ?? {}),
+  ]
+  if (systems.length > 1) {
+    throw new RefLoadError(
+      ref,
+      undefined,
+      ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF,
+      `Subsystem reference '${ref}' resolves to a file containing multiple top-level systems; ` +
+        `exactly one is required (found ${systems.join(', ')})`,
+      path,
+    )
   }
 }
 
@@ -89,7 +153,11 @@ export class RefLoadError extends Error {
  * @throws CircularReferenceError if a circular reference chain is detected
  * @throws RefLoadError if a referenced file cannot be loaded or parsed
  */
-export async function resolveSubsystemRefs(file: EsmFile, basePath: string): Promise<void> {
+export function resolveSubsystemRefsSync(
+  file: EsmFile,
+  basePath: string,
+  read: SyncRefReader = loadRefSync,
+): void {
   const resolving = new Set<string>()
 
   // The importing document's index-set registry (esm-spec §4.7): every
@@ -105,7 +173,7 @@ export async function resolveSubsystemRefs(file: EsmFile, basePath: string): Pro
   // Process all models
   if (file.models) {
     for (const [name, model] of Object.entries(file.models)) {
-      await resolveModelRefs(model, basePath, resolving, [name], registry)
+      resolveModelRefs(model, basePath, resolving, [name], registry, read, `/models/${name}`)
     }
   }
 
@@ -121,9 +189,95 @@ export async function resolveSubsystemRefs(file: EsmFile, basePath: string): Pro
   // model walk).
   if (file.reaction_systems) {
     for (const [name, rs] of Object.entries(file.reaction_systems)) {
-      await resolveReactionSystemRefs(rs, basePath, resolving, [name])
+      resolveReactionSystemRefs(rs, basePath, resolving, [name], read, `/reaction_systems/${name}`)
     }
   }
+}
+
+/**
+ * Async resolution — the historical entry point, and the only one that can reach
+ * a REMOTE (`http(s)://`) ref, since `fetch` cannot be awaited synchronously.
+ *
+ * It is now a thin shell around the SYNC core: fetch every reachable ref into a
+ * cache first, then run the one and only resolution walk against that cache.
+ * There is deliberately no second walk implementing the same semantics — index-set
+ * merging, the §4.7 single-component invariant, template-machinery lowering,
+ * cycle detection and component inlining exist in exactly one place, so the sync
+ * and async paths cannot drift apart.
+ */
+export async function resolveSubsystemRefs(file: EsmFile, basePath: string): Promise<void> {
+  const cache = new Map<string, string>()
+  await prefetchRefs(file, basePath, cache, new Set())
+  resolveSubsystemRefsSync(file, basePath, (ref, refBase) => {
+    const cached = cache.get(normalizeRef(ref, refBase))
+    // Unreachable in practice (the prefetch walks the same `ref` fields), but
+    // fail CLOSED rather than silently leaving a stub unresolved.
+    if (cached === undefined) throw new RefLoadError(ref)
+    return cached
+  })
+}
+
+/**
+ * Walk the `subsystems[*].ref` graph over RAW JSON and read every reachable
+ * document into `cache`, so the sync core can then run without doing I/O itself.
+ *
+ * Raw JSON is the right surface to scan: a `ref` is a structural field, and
+ * neither scope injection nor template lowering can introduce or remove one — so
+ * the set of reachable refs is identical before and after the machinery runs.
+ * `seen` both dedupes shared mounts and stops the prefetch from looping on a
+ * CYCLE; the cycle itself is still detected and reported by the sync core, which
+ * owns that rule.
+ */
+async function prefetchRefs(
+  doc: unknown,
+  basePath: string,
+  cache: Map<string, string>,
+  seen: Set<string>,
+): Promise<void> {
+  const walk = async (subsystems: unknown, currentBase: string): Promise<void> => {
+    if (typeof subsystems !== 'object' || subsystems === null) return
+    for (const sub of Object.values(subsystems as Record<string, unknown>)) {
+      const ref = (sub as RefEdge | null)?.ref
+      if (typeof ref !== 'string') {
+        walkComponent(sub, currentBase)
+        await walkNested(sub, currentBase)
+        continue
+      }
+      const key = normalizeRef(ref, currentBase)
+      if (seen.has(key)) continue
+      seen.add(key)
+
+      const content = await loadRef(ref, currentBase)
+      cache.set(key, content)
+
+      const refBase = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, currentBase)
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(content)
+      } catch {
+        // A malformed target is the sync core's error to report, with its code.
+        continue
+      }
+      await walkDocument(parsed, refBase)
+    }
+  }
+
+  const walkNested = async (component: unknown, base: string): Promise<void> => {
+    const nested = (component as { subsystems?: unknown } | null)?.subsystems
+    if (nested) await walk(nested, base)
+  }
+  // Kept as a no-op hook so the recursion reads symmetrically; components carry
+  // no refs outside `subsystems`.
+  const walkComponent = (_component: unknown, _base: string): void => {}
+
+  const walkDocument = async (parsed: unknown, base: string): Promise<void> => {
+    const root = parsed as { models?: object; reaction_systems?: object } | null
+    for (const component of Object.values(root?.models ?? {})) await walkNested(component, base)
+    for (const component of Object.values(root?.reaction_systems ?? {}))
+      await walkNested(component, base)
+  }
+
+  await walkDocument(doc, basePath)
 }
 
 /**
@@ -284,15 +438,17 @@ interface RefEdge {
  * has already established `sub.ref` is present), so no non-null assertion on
  * the optional `RefEdge.ref` field is needed here.
  */
-async function resolveRefEdge(
+function resolveRefEdge(
   sub: RefEdge,
   ref: string,
   subName: string,
   basePath: string,
   resolving: Set<string>,
   refChain: string[],
-  inline: (parsed: EsmFile, refBasePath: string) => Promise<void>,
-): Promise<void> {
+  read: SyncRefReader,
+  pointer: string,
+  inline: (parsed: EsmFile, refBasePath: string) => void,
+): void {
   const chainKey = normalizeRef(ref, basePath)
 
   // Check for circular references
@@ -302,7 +458,16 @@ async function resolveRefEdge(
 
   resolving.add(chainKey)
   try {
-    const content = await loadRef(ref, basePath)
+    let content: string
+    try {
+      content = read(ref, basePath)
+    } catch (error) {
+      // Re-throw with the offending mount's pointer attached.
+      if (error instanceof RefLoadError) {
+        throw new RefLoadError(error.ref, undefined, error.code, error.message, pointer)
+      }
+      throw error
+    }
     const refBasePath = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, basePath)
     const parsed = resolveRefDocument(
       JSON.parse(content) as EsmFile,
@@ -311,7 +476,7 @@ async function resolveRefEdge(
       readEdgeBindings(sub, subName),
       readEdgeInjectedImports(sub),
     )
-    await inline(parsed, refBasePath)
+    inline(parsed, refBasePath)
   } finally {
     resolving.delete(chainKey)
   }
@@ -326,34 +491,39 @@ async function resolveRefEdge(
  * are unified; only the per-kind component extraction differs and is supplied
  * by the callbacks.
  */
-async function walkSubsystemRefs(
+function walkSubsystemRefs(
   subsystems: Record<string, unknown>,
   basePath: string,
   resolving: Set<string>,
   refChain: string[],
+  read: SyncRefReader,
+  pointer: string,
   onRef: (
     parsed: EsmFile,
     refBasePath: string,
-    ctx: { subName: string; ref: string },
-  ) => Promise<void>,
-  onRecurse: (subsystem: unknown, subName: string) => Promise<void>,
-): Promise<void> {
+    ctx: { subName: string; ref: string; pointer: string },
+  ) => void,
+  onRecurse: (subsystem: unknown, subName: string, pointer: string) => void,
+): void {
   for (const [subName, subsystem] of Object.entries(subsystems)) {
     const sub = subsystem as RefEdge
     const ref = sub.ref
+    const subPointer = `${pointer}/subsystems/${subName}`
     if (ref) {
-      await resolveRefEdge(
+      resolveRefEdge(
         sub,
         ref,
         subName,
         basePath,
         resolving,
         refChain,
-        (parsed, refBasePath) => onRef(parsed, refBasePath, { subName, ref }),
+        read,
+        subPointer,
+        (parsed, refBasePath) => onRef(parsed, refBasePath, { subName, ref, pointer: subPointer }),
       )
     } else {
       // Even without a ref, recurse into nested subsystems.
-      await onRecurse(subsystem, subName)
+      onRecurse(subsystem, subName, subPointer)
     }
   }
 }
@@ -361,25 +531,29 @@ async function walkSubsystemRefs(
 /**
  * Recursively resolve refs in a Model's subsystems.
  */
-async function resolveModelRefs(
+function resolveModelRefs(
   model: Model | SubsystemRef,
   basePath: string,
   resolving: Set<string>,
   refChain: string[],
   registry: Record<string, unknown>,
-): Promise<void> {
+  read: SyncRefReader,
+  pointer: string,
+): void {
   // A bare `{ ref }` stub (SubsystemRef) has no subsystems to walk; the
   // top-level model union admits it under v0.8.0, but only a full Model
   // carries `subsystems`.
   if (!('subsystems' in model) || !model.subsystems) return
   const subsystems = model.subsystems
 
-  await walkSubsystemRefs(
+  walkSubsystemRefs(
     subsystems,
     basePath,
     resolving,
     refChain,
-    async (parsed, refBasePath, { subName, ref }) => {
+    read,
+    pointer,
+    (parsed, refBasePath, { subName, ref, pointer: subPointer }) => {
       // esm-spec §4.7: the mounted file's document-scoped index sets (already
       // metaparameter-folded) join the importing document's registry, so the
       // importer's variables may be shaped over the mesh file's axes and a
@@ -387,11 +561,10 @@ async function resolveModelRefs(
       mergeSubsystemIndexSets(registry, parsed, ref)
 
       // esm-spec §4.7 invariant: a referenced subsystem file holds exactly ONE
-      // top-level component. Only the FIRST model is extracted; any additional
-      // top-level models in a malformed multi-component file are silently
-      // ignored (the schema/validator is the enforcement point, not this
-      // loader). A referenced file with no `models` and no `data_loaders`
-      // leaves the original `{ref}` stub in place — nothing is inlined here.
+      // top-level component — enforced, not assumed. A referenced file with no
+      // `models` and no `data_loaders` leaves the original `{ref}` stub in
+      // place; nothing is inlined here.
+      assertSingleTopLevelSystem(parsed, ref, subPointer)
       if (parsed.models) {
         const firstEntry = Object.entries(parsed.models)[0]
         if (firstEntry) {
@@ -400,12 +573,14 @@ async function resolveModelRefs(
           // recursively resolve any refs in it, relative to the referenced
           // file's own directory.
           subsystems[subName] = resolvedModel
-          await resolveModelRefs(
+          resolveModelRefs(
             resolvedModel,
             refBasePath,
             resolving,
             [...refChain, subName],
             registry,
+            read,
+            subPointer,
           )
         }
       } else if (parsed.data_loaders) {
@@ -420,13 +595,15 @@ async function resolveModelRefs(
         }
       }
     },
-    async (subsystem, subName) =>
+    (subsystem, subName, subPointer) =>
       resolveModelRefs(
         subsystem as Model & RefEdge,
         basePath,
         resolving,
         [...refChain, subName],
         registry,
+        read,
+        subPointer,
       ),
   )
 }
@@ -434,24 +611,29 @@ async function resolveModelRefs(
 /**
  * Recursively resolve refs in a ReactionSystem's subsystems.
  */
-async function resolveReactionSystemRefs(
+function resolveReactionSystemRefs(
   rs: ReactionSystem,
   basePath: string,
   resolving: Set<string>,
   refChain: string[],
-): Promise<void> {
+  read: SyncRefReader,
+  pointer: string,
+): void {
   if (!rs.subsystems) return
   const subsystems = rs.subsystems
 
-  await walkSubsystemRefs(
+  walkSubsystemRefs(
     subsystems,
     basePath,
     resolving,
     refChain,
-    async (parsed, refBasePath, { subName }) => {
-      // esm-spec §4.7 invariant: exactly one top-level reaction system per
-      // referenced file; only the FIRST is extracted (extras ignored), and a
-      // file with no `reaction_systems` leaves the `{ref}` stub in place.
+    read,
+    pointer,
+    (parsed, refBasePath, { subName, ref, pointer: subPointer }) => {
+      // esm-spec §4.7 invariant: exactly one top-level system per referenced
+      // file — enforced, not assumed. A file with no `reaction_systems` leaves
+      // the `{ref}` stub in place.
+      assertSingleTopLevelSystem(parsed, ref, subPointer)
       if (parsed.reaction_systems) {
         const firstEntry = Object.entries(parsed.reaction_systems)[0]
         if (firstEntry) {
@@ -460,18 +642,26 @@ async function resolveReactionSystemRefs(
           // recursively resolve any refs in it, relative to the referenced
           // file's own directory.
           subsystems[subName] = resolvedRs
-          await resolveReactionSystemRefs(resolvedRs, refBasePath, resolving, [
-            ...refChain,
-            subName,
-          ])
+          resolveReactionSystemRefs(
+            resolvedRs,
+            refBasePath,
+            resolving,
+            [...refChain, subName],
+            read,
+            subPointer,
+          )
         }
       }
     },
-    async (subsystem, subName) =>
-      resolveReactionSystemRefs(subsystem as ReactionSystem & RefEdge, basePath, resolving, [
-        ...refChain,
-        subName,
-      ]),
+    (subsystem, subName, subPointer) =>
+      resolveReactionSystemRefs(
+        subsystem as ReactionSystem & RefEdge,
+        basePath,
+        resolving,
+        [...refChain, subName],
+        read,
+        subPointer,
+      ),
   )
 }
 
@@ -543,6 +733,43 @@ export async function ephemeralInjectedFile(
 /**
  * Load content from a ref, dispatching to fetch() for URLs or fs for local paths.
  */
+/**
+ * The I/O primitive the resolution walk is parameterised over: given a `ref` and
+ * the base directory it is relative to, hand back the target document's text.
+ *
+ * Parameterising the walk (rather than hard-wiring `fs`) is what lets ONE
+ * implementation of the §4.7 semantics serve both the synchronous `validate()` /
+ * `resolveSubsystemRefsSync()` path and the asynchronous, remote-capable
+ * `resolveSubsystemRefs()` path.
+ */
+export type SyncRefReader = (ref: string, basePath: string) => string
+
+/**
+ * Synchronous local-file reader — the default for `resolveSubsystemRefsSync()`.
+ *
+ * A REMOTE ref is refused here rather than silently ignored: `fetch` cannot be
+ * awaited synchronously, so a synchronous caller genuinely cannot resolve one.
+ * Refusing it produces the ordinary `unresolved_subsystem_ref` diagnostic (with a
+ * message naming the async resolver), which is the honest answer — as opposed to
+ * leaving the `{ref}` stub in place and letting the document validate as though
+ * the mount had succeeded.
+ */
+function loadRefSync(ref: string, basePath: string): string {
+  if (isRemoteRef(ref)) {
+    throw new RefLoadError(
+      ref,
+      undefined,
+      ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
+      `Remote ref "${ref}" cannot be resolved synchronously; use the async resolveSubsystemRefs()`,
+    )
+  }
+  try {
+    return readFileSyncNode(joinPath(basePath, ref))
+  } catch (error) {
+    throw new RefLoadError(ref, error instanceof Error ? error : new Error(String(error)))
+  }
+}
+
 async function loadRef(ref: string, basePath: string): Promise<string> {
   if (isRemoteRef(ref)) {
     return loadRemoteRef(ref)

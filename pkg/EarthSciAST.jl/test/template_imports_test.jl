@@ -253,21 +253,74 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             metaparameters=Dict("Q" => 1))) == "template_import_unknown_name"
     end
 
-    @testset "round-trip emits the expanded, folded form (§9.7.6)" begin
+    @testset "round-trip expands CALL SITES, keeps DECLARATIONS (§9.6.4 rule 5)" begin
+        # This testset used to assert `!occursin("expression_templates", text)`
+        # and `!occursin("metaparameters", text)` — i.e. that a round trip strips
+        # EVERY §9.7 construct. That is the bug, enshrined as the contract.
+        #
+        # Option A expands CALL SITES; it does not delete DECLARATIONS. The two
+        # assertions passed only incidentally, because this fixture declares
+        # neither block at the top level (its templates come in over an import
+        # edge). Applied to a file that DOES declare them — a template library —
+        # the same rule emitted `{esm, metadata, index_sets}`: not one of the five
+        # payload keys the top-level `anyOf` requires. See the next testset.
         f = EarthSciAST.load(conf("import_smoke", "fixture.esm"))
         tmp = tempname() * ".esm"
         try
             EarthSciAST.save(f, tmp)
             text = read(tmp, String)
+            # CALL SITES are expanded away — this part was always right.
             @test !occursin("expression_template_imports", text)
-            @test !occursin("metaparameters", text)
-            @test !occursin("expression_templates", text)
             @test !occursin("apply_expression_template", text)
             reloaded = EarthSciAST.load(tmp)
             @test reloaded.index_sets["lon"].size == 288
             @test reloaded.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         finally
             isfile(tmp) && rm(tmp, force=true)
+        end
+    end
+
+    @testset "a template LIBRARY round-trips to itself (§9.6.4 rule 5)" begin
+        # A pure library's only payload IS its `expression_templates` registry.
+        # Deleting it on load left a document with no payload key at all, which
+        # the top-level `anyOf` correctly rejects — so a conforming library file
+        # was legal on disk and illegal the instant it was loaded and re-emitted.
+        for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
+            src = joinpath(repo_root, "tests", "valid", name)
+            isfile(src) || continue
+            f = EarthSciAST.load(src)
+
+            # The declarations SURVIVE the load...
+            @test f.expression_templates !== nothing
+            @test !isempty(f.expression_templates)
+
+            # ...verbatim: the AUTHORED registry, not the folded one. (Folding
+            # rewrites template bodies in place and drops `params`, so a snapshot
+            # taken after lowering would emit a mangled registry that fails the
+            # schema's `required: [params, body]`.)
+            authored = JSON3.read(read(src, String))
+            for (tname, tdef) in pairs(authored.expression_templates)
+                @test haskey(f.expression_templates, String(tname))
+                emitted = f.expression_templates[String(tname)]
+                @test haskey(emitted, "body")
+                @test haskey(emitted, "params") == haskey(tdef, :params)
+            end
+
+            # ...and the re-emitted document is itself valid: payload key present,
+            # schema-clean, structurally clean.
+            result = EarthSciAST.validate(f)
+            @test result.is_valid
+            @test isempty(result.schema_errors)
+
+            tmp = tempname() * ".esm"
+            try
+                EarthSciAST.save(f, tmp)
+                reloaded = EarthSciAST.load(tmp)
+                @test reloaded.expression_templates !== nothing
+                @test EarthSciAST.validate(reloaded).is_valid
+            finally
+                isfile(tmp) && rm(tmp, force=true)
+            end
         end
     end
 

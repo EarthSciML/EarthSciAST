@@ -828,7 +828,16 @@ function findStrayApplyOps(view: unknown): string[] {
     }
     if (isObject(v)) {
       if (v.op === APPLY_OP) hits.push(path)
-      for (const k of Object.keys(v)) visit(v[k], `${path}/${k}`)
+      for (const k of Object.keys(v)) {
+        // An `apply_expression_template` inside an `expression_templates` BLOCK is
+        // not a stray call site — it is template COMPOSITION (§9.7.3): one template's
+        // body naming another, expanded when the template is INVOKED, not where it is
+        // DECLARED. The scanner never saw one before only because the declaration was
+        // deleted on the way out; now that §9.6.4 rule 5 keeps the registry, skipping
+        // the block is what tells a declaration apart from an unexpanded call.
+        if (k === 'expression_templates') continue
+        visit(v[k], `${path}/${k}`)
+      }
     }
   }
   visit(view, '')

@@ -32,6 +32,8 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        expression_templates: None,
+        metaparameters: None,
         coupling_roles: None,
         domain: None,
         index_sets: None,
@@ -188,6 +190,7 @@ fn flatten_mixed_model_and_reaction_system() {
     model_vars.insert(
         "y".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
@@ -376,6 +379,7 @@ fn flatten_conflicting_derivative_raises_error() {
     model_vars.insert(
         "X".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
@@ -454,6 +458,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     vars_a.insert(
         "u".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
@@ -468,6 +473,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     vars_a.insert(
         "k".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(1.0),
@@ -486,6 +492,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     vars_b.insert(
         "k".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(2.0),
@@ -600,6 +607,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     vars_m.insert(
         "u".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
@@ -614,6 +622,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     vars_m.insert(
         "T".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(298.0),
@@ -630,6 +639,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     vars_s.insert(
         "T_out".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::Observed,
             units: None,
             default: None,
@@ -724,6 +734,7 @@ fn flatten_couple_includes_connector_equations() {
     vars_a.insert(
         "x".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
@@ -802,6 +813,7 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
     vars.insert(
         "q".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
@@ -845,6 +857,7 @@ fn flatten_rejects_spatial_operators() {
     vars.insert(
         "c".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
@@ -917,6 +930,7 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
     vars.insert(
         "c".to_string(),
         ModelVariable {
+            default_units: None,
             var_type: VariableType::State,
             units: None,
             default: Some(0.0),
