@@ -76,10 +76,11 @@ const _AK_CONST_EDGE         = UInt8(8)   # arr[(c-1)·width + n]        (per-ed
 const _AK_ARR_FIXED          = UInt8(9)   # arr[idx]                    (invariant forcing gather)
 const _AK_STATE_INDIRECT     = UInt8(10)  # u[conn[(c-1)·width + n]]    (unstructured neighbour gather)
 const _AK_STATE_INDIRECT_COL = UInt8(11)  # u[conn[(c-1)·width + col]]  (unstructured fixed column)
+const _AK_FORCING_BOX        = UInt8(12)  # flat[off + Σ(midx_d-1)·s_d] (LIVE forcing on its own grid)
 
 struct _AccDesc
     kind::UInt8
-    arr::Vector{Float64}   # CONST_*, ARR_FIXED (empty sentinel otherwise)
+    arr::Vector{Float64}   # CONST_*, ARR_FIXED, FORCING_BOX (empty sentinel otherwise)
     conn::Vector{Int}      # STATE_INDIRECT[_COL] (empty sentinel otherwise)
     delta::Int             # STATE_AFFINE, CONST_AFFINE
     idx::Int               # STATE_FIXED, ARR_FIXED
@@ -110,6 +111,12 @@ _AccStateIndirectCol(conn::Vector{Int}, width::Int, col::Int) =
 _AccConstAffine(arr::Vector{Float64}, delta::Int) = _mkacc(_AK_CONST_AFFINE; arr=arr, delta=delta)
 _AccConstBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_CONST_BOX; arr=arr, s1=s1, s2=s2, s3=s3, off=off)
+# LIVE forcing gather with a lane-affine flat index. Same addressing as CONST_BOX
+# but `arr` MUST be the aliased `_PGatherArray.flat` buffer (a data-refresh mutates
+# it in place, so a captured reference stays live) — never a copy. A distinct kind
+# from CONST_BOX so an invariant/const-hoisting analysis can never freeze it.
+_AccForcingBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
+    _mkacc(_AK_FORCING_BOX; arr=arr, s1=s1, s2=s2, s3=s3, off=off)
 _AccConstCell(arr::Vector{Float64})              = _mkacc(_AK_CONST_CELL; arr=arr)
 _AccConstEdge(arr::Vector{Float64}, width::Int)  = _mkacc(_AK_CONST_EDGE; arr=arr, width=width)
 _AccStateFixed(idx::Int)                         = _mkacc(_AK_STATE_FIXED; idx=idx)
@@ -141,6 +148,8 @@ _AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
         return @inbounds a.arr[(c-1)*a.width + n]
     elseif k === _AK_ARR_FIXED
         return @inbounds a.arr[a.idx]
+    elseif k === _AK_FORCING_BOX
+        return @inbounds a.arr[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
     elseif k === _AK_STATE_INDIRECT
         return @inbounds u[a.conn[(c-1)*a.width + n]]
     elseif k === _AK_STATE_INDIRECT_COL

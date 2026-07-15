@@ -245,6 +245,7 @@ function _desc_key(d::_AccDesc)
     k === _AK_STATE_AFFINE && return "SA$(d.delta)"
     k === _AK_LOOP_IDX     && return "LI$(d.dim)"
     k === _AK_CONST_BOX    && return "CB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
+    k === _AK_FORCING_BOX  && return "FB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
     return "?$(objectid(d))"
 end
 function _lane_repl_key(lane_repl)
@@ -257,8 +258,10 @@ function _lane_repl_key(lane_repl)
 end
 
 # Derive one lane's lowering for a box and VERIFY it is uniform across the box
-# corners (Δ constant, ghost uniform, const index affine). Any non-uniformity —
-# an incomplete cut, a clamp, a non-affine gather — throws `_StencilFallback`.
+# corners (state Δ constant, ghost uniform, const/forcing index affine). Any
+# non-uniformity — an incomplete cut, a clamp, a non-affine gather — throws
+# `_StencilFallback`. A live forcing (pgather) lane lowers to `_AccForcingBox`
+# over the aliased buffer (never folded to a literal, so it stays refresh-live).
 function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                            oln_rep, base, strides, D, var_map, const_arrays, flat_cache)
     env = Dict{String,Int}()
@@ -306,8 +309,29 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 throw(_StencilFallback("const index non-affine in box"))
         end
         return _AccRepl(_AccConstBox(arr_flat, s[1], s[2], s[3], off))
-    else
-        throw(_StencilFallback("pgather not yet modelled in affine path"))
+    else  # LANE_PGATHER — LIVE forcing gather
+        # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
+        # own grid), so this is the LANE_CONST derivation applied to the INDEX, not
+        # the value: finite-difference across unit loop steps for the affine strides,
+        # then VERIFY at every corner. Two differences from LANE_CONST: (1) never
+        # fold to a literal even when the index is constant — the buffer contents are
+        # refreshed in place, so the read must stay live; (2) pass `pg.flat`
+        # (the aliased live buffer) straight through, NEVER a copy.
+        pg = rec.arr::_PGatherArray
+        lin_rep = ev(rep)
+        s = zeros(Int, 3)
+        for d in 1:D
+            if !thin[d]
+                l2 = copy(rep); l2[d] += 1
+                s[d] = ev(l2) - lin_rep
+            end
+        end
+        off = lin_rep - sum((rep[d]-1)*s[d] for d in 1:D)
+        for cn in corners
+            (off + sum((cn[d]-1)*s[d] for d in 1:D)) == ev(cn) ||
+                throw(_StencilFallback("pgather index non-affine in box"))
+        end
+        return _AccRepl(_AccForcingBox(pg.flat, s[1], s[2], s[3], off))
     end
 end
 
