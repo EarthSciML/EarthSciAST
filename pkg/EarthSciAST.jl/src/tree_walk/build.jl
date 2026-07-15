@@ -1884,6 +1884,9 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
                             const_registry, pgather, param_sym_set, reg_funcs,
                             covered) : nothing
     if affine_kernels !== nothing
+        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
+            (println(stderr, "[ess-affine] FIRED: ", length(affine_kernels),
+                     " access kernels for ", _output_idx_strings(lhs_op)); flush(stderr))
         append!(acc_kernels, affine_kernels)
         return nothing
     end

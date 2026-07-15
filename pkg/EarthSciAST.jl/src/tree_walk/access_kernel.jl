@@ -191,37 +191,96 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     end
 end
 
+# Op application over an access spine. MIRRORS `_eval_node_op` (compile.jl) arm for
+# arm — same arities, same n-ary folds, same `^`/comparison/logical/elementary-fn
+# semantics — because the affine path must be bit-identical to the per-cell path,
+# whose spine is the SAME compiled `_Node` tree evaluated by `_eval_node_op`. The
+# only difference is the leaf recursion (`_eval_acc`, which resolves `_NK_ACCESS` /
+# `_NK_REDUCE`). Drift between the two tables is caught by the differential test.
 function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
                       midx::NTuple{3,Int}, K::_AccKernel)::Float64
     op = nd.op
     ch = nd.children
+    @inline ev(x) = _eval_acc(x, u, p, t, c, n, oln, midx, K)
     if op === :+
-        s = 0.0
-        @inbounds for i in eachindex(ch); s += _eval_acc(ch[i], u, p, t, c, n, oln, midx, K); end
+        length(ch) == 1 && return ev(ch[1])
+        s = ev(ch[1]); @inbounds for i in 2:length(ch); s += ev(ch[i]); end
         return s
     elseif op === :*
-        s = 1.0
-        @inbounds for i in eachindex(ch); s *= _eval_acc(ch[i], u, p, t, c, n, oln, midx, K); end
+        length(ch) == 1 && return ev(ch[1])
+        s = ev(ch[1]); @inbounds for i in 2:length(ch); s *= ev(ch[i]); end
         return s
     elseif op === :-
-        a = _eval_acc(ch[1], u, p, t, c, n, oln, midx, K)
-        return length(ch) == 1 ? -a : a - _eval_acc(ch[2], u, p, t, c, n, oln, midx, K)
-    elseif op === :/
-        return _eval_acc(ch[1], u, p, t, c, n, oln, midx, K) / _eval_acc(ch[2], u, p, t, c, n, oln, midx, K)
-    elseif op === :min
-        return min(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K), _eval_acc(ch[2], u, p, t, c, n, oln, midx, K))
-    elseif op === :max
-        return max(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K), _eval_acc(ch[2], u, p, t, c, n, oln, midx, K))
-    elseif op === :abs
-        return abs(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K))
-    elseif op === :sign
-        return sign(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K))
+        length(ch) == 1 && return -ev(ch[1])
+        length(ch) == 2 && return ev(ch[1]) - ev(ch[2])
+        throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
     elseif op === :neg
-        return -_eval_acc(ch[1], u, p, t, c, n, oln, midx, K)
+        return -ev(ch[1])
+    elseif op === :/
+        return ev(ch[1]) / ev(ch[2])
+    elseif op === :^ || op === :pow
+        return ev(ch[1]) ^ ev(ch[2])
+
+    # Comparisons → 1.0/0.0
+    elseif op === :<;            return ev(ch[1]) <  ev(ch[2]) ? 1.0 : 0.0
+    elseif op === Symbol("<=");  return ev(ch[1]) <= ev(ch[2]) ? 1.0 : 0.0
+    elseif op === :>;            return ev(ch[1]) >  ev(ch[2]) ? 1.0 : 0.0
+    elseif op === Symbol(">=");  return ev(ch[1]) >= ev(ch[2]) ? 1.0 : 0.0
+    elseif op === Symbol("==");  return ev(ch[1]) == ev(ch[2]) ? 1.0 : 0.0
+    elseif op === Symbol("!=");  return ev(ch[1]) != ev(ch[2]) ? 1.0 : 0.0
+
+    # Logical
+    elseif op === :and
+        @inbounds for x in ch; ev(x) == 0 && return 0.0; end
+        return 1.0
+    elseif op === :or
+        @inbounds for x in ch; ev(x) != 0 && return 1.0; end
+        return 0.0
+    elseif op === :not
+        return ev(ch[1]) == 0 ? 1.0 : 0.0
+
     elseif op === :ifelse
-        return _eval_acc(ch[1], u, p, t, c, n, oln, midx, K) != 0 ?
-               _eval_acc(ch[2], u, p, t, c, n, oln, midx, K) :
-               _eval_acc(ch[3], u, p, t, c, n, oln, midx, K)
+        return ev(ch[1]) != 0 ? ev(ch[2]) : ev(ch[3])
+
+    # Elementary functions
+    elseif op === :sin;   return sin(ev(ch[1]))
+    elseif op === :cos;   return cos(ev(ch[1]))
+    elseif op === :tan;   return tan(ev(ch[1]))
+    elseif op === :asin;  return asin(ev(ch[1]))
+    elseif op === :acos;  return acos(ev(ch[1]))
+    elseif op === :atan
+        length(ch) == 1 && return atan(ev(ch[1]))
+        length(ch) == 2 && return atan(ev(ch[1]), ev(ch[2]))
+        throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
+    elseif op === :atan2; return atan(ev(ch[1]), ev(ch[2]))
+    elseif op === :sinh;  return sinh(ev(ch[1]))
+    elseif op === :cosh;  return cosh(ev(ch[1]))
+    elseif op === :tanh;  return tanh(ev(ch[1]))
+    elseif op === :asinh; return asinh(ev(ch[1]))
+    elseif op === :acosh; return acosh(ev(ch[1]))
+    elseif op === :atanh; return atanh(ev(ch[1]))
+    elseif op === :exp;   return exp(ev(ch[1]))
+    elseif op === :log;   return log(ev(ch[1]))
+    elseif op === :log10; return log10(ev(ch[1]))
+    elseif op === :sqrt;  return sqrt(ev(ch[1]))
+    elseif op === :abs;   return abs(ev(ch[1]))
+    elseif op === :sign;  return sign(ev(ch[1]))
+    elseif op === :floor; return floor(ev(ch[1]))
+    elseif op === :ceil;  return ceil(ev(ch[1]))
+    elseif op === :min
+        length(ch) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
+        s = ev(ch[1]); @inbounds for i in 2:length(ch); s = min(s, ev(ch[i])); end
+        return s
+    elseif op === :max
+        length(ch) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "max needs ≥2 args"))
+        s = ev(ch[1]); @inbounds for i in 2:length(ch); s = max(s, ev(ch[i])); end
+        return s
+    elseif op === :pi || op === :π
+        return Float64(pi)
+    elseif op === :e
+        return Float64(ℯ)
+    elseif op === :Pre
+        return ev(ch[1])
     end
     throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))
 end
