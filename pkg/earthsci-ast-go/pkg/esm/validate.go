@@ -590,15 +590,15 @@ func (s *structuralScan) couplingScope() map[string]bool {
 // `systems` member (including the root of a dotted subsystem path) or as the
 // system half of a `from`/`to` scoped reference.
 //
-// A COUPLED system does not own all the names its equations mention. An
-// operator-style model spells its operand as the §6.4 placeholder `_var` (or as
-// a bare stand-in name), and a `variable_map` supplies a value the target model
-// never declares; its `equations` may likewise drive a state that lives in the
-// system it is composed with, so its own equation/unknown count need not
-// balance. Equation balance and reference integrity are therefore skipped for
-// these systems — exactly as TS validate/orchestrator.ts does. Event
-// consistency still runs (with `_var` credited, see validateModel), which is
-// where a genuinely undeclared event target is still caught.
+// A COUPLED system does not own all the names its equations mention: an
+// operator-style model spells its operand as the §6.4 placeholder `_var`, and it
+// legitimately references the state of the systems it is composed with by bare
+// name. Reference integrity therefore checks such a model against the
+// DOCUMENT-WIDE declared names plus `_var` (see validateModel), not its own
+// variables — a cross-system reference resolves, while a name declared nowhere is
+// still caught. Only equation-unknown BALANCE is skipped for these systems: their
+// `equations` may drive a state that lives in the system they are composed with,
+// so a local count is meaningless. Mirrors TS validate/orchestrator.ts.
 func coupledSystemNames(file *ESMFile) map[string]bool {
 	coupled := map[string]bool{}
 	add := func(name string) {
@@ -688,9 +688,29 @@ func coordinateNames(file *ESMFile) map[string]bool {
 func (s *structuralScan) validateModel(modelName string, model *Model) {
 	basePath := fmt.Sprintf("/models/%s", modelName)
 
+	isCoupled := s.coupled[modelName]
+
+	// A COUPLED model — operator-composed or a coupling target — resolves its
+	// references against the DOCUMENT-WIDE declared names plus the §6.4 `_var`
+	// placeholder: `operator_compose`/`couple` merge the participating systems'
+	// scopes, so a cross-system bare reference is legitimate, while a name declared
+	// NOWHERE in the document is still an `undefined_variable` (F-1). Only
+	// equation-unknown balance stays gated (below) — a coupled model's unknowns
+	// may be driven by equations another system contributes. Mirrors Python
+	// `global_symbols` and TS `documentDeclaredNames`.
 	allVars := make(map[string]bool)
-	for varName := range model.Variables {
-		allVars[varName] = true
+	if isCoupled {
+		allVars = s.documentWideScope()
+		for _, loader := range s.file.DataLoaders {
+			for name := range loader.Variables {
+				allVars[name] = true
+			}
+		}
+		allVars[operatorPlaceholderVar] = true
+	} else {
+		for varName := range model.Variables {
+			allVars[varName] = true
+		}
 	}
 	// The document-scoped `index_sets` registry is a legitimate non-variable
 	// identifier namespace (RFC semiring-faq-unified-ir §5.2): an `aggregate`
@@ -698,51 +718,50 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// `aggregate(args:["faces"], …)`) or reduce over it (`rank(edges)`). Credit
 	// those names so the full-child descent below does not mis-flag them as
 	// undefined, mirroring TS `validateReferenceIntegrity`'s `declaredIndexSets`.
+	// (Redundant but harmless for the coupled branch, which already credited them
+	// via documentWideScope.)
 	s.creditIndexSetNames(allVars)
 	s.creditIndependentVariable(allVars)
 	s.creditCoordinateNames(allVars)
 	s.creditCallbackVariables(allVars, modelName)
 
-	// A COUPLED model does not own every name it mentions, and its own equations
-	// need not balance its own unknowns (see coupledSystemNames). Reference
-	// integrity and equation balance are therefore skipped for it; event
-	// consistency below still runs, with the §6.4 `_var` placeholder credited.
-	isCoupled := s.coupled[modelName]
+	// Reference integrity runs for EVERY model (F-1).
+	for i, eq := range model.Equations {
+		s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/equations/%d", basePath, i), modelName)
+	}
 
+	// An OBSERVED variable's defining expression is a reference site like any
+	// other — `T_v ~ T*(1 + 0.61*q_typo)` names variables, and an undeclared one
+	// there is exactly as broken as in an equation. It went unchecked because
+	// reference integrity only ever entered through `equations`.
+	for _, varName := range sortedKeys(model.Variables) {
+		variable := model.Variables[varName]
+		if variable.Expression == nil {
+			continue
+		}
+		scope := allVars
+		if bound := expressionBoundSymbols(variable.Expression); len(bound) > 0 {
+			scope = unionScope(allVars, bound)
+		}
+		s.validateExpressionVariables(variable.Expression, scope,
+			fmt.Sprintf("%s/variables/%s/expression", basePath, varName), modelName)
+	}
+
+	// `initialization_equations` hold at t=0 but are ordinary equations, and
+	// `guesses` seed a nonlinear solve. Both name variables; neither was reached.
+	for i, eq := range model.InitializationEquations {
+		s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), modelName)
+	}
+	s.validateGuesses(model.Guesses, allVars, basePath, modelName)
+
+	// An inline test's assertion `reference` (§6.6.5) is an expression over the
+	// model's own variables.
+	s.validateTestRefs(model.Tests, allVars, basePath, modelName)
+
+	// Equation-unknown balance validation (Section 3.2.1). Skipped for a coupled
+	// model: its unknowns may be driven by equations another system contributes,
+	// so a local count is meaningless.
 	if !isCoupled {
-		for i, eq := range model.Equations {
-			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/equations/%d", basePath, i), modelName)
-		}
-
-		// An OBSERVED variable's defining expression is a reference site like any
-		// other — `T_v ~ T*(1 + 0.61*q_typo)` names variables, and an undeclared one
-		// there is exactly as broken as in an equation. It went unchecked because
-		// reference integrity only ever entered through `equations`.
-		for _, varName := range sortedKeys(model.Variables) {
-			variable := model.Variables[varName]
-			if variable.Expression == nil {
-				continue
-			}
-			scope := allVars
-			if bound := expressionBoundSymbols(variable.Expression); len(bound) > 0 {
-				scope = unionScope(allVars, bound)
-			}
-			s.validateExpressionVariables(variable.Expression, scope,
-				fmt.Sprintf("%s/variables/%s/expression", basePath, varName), modelName)
-		}
-
-		// `initialization_equations` hold at t=0 but are ordinary equations, and
-		// `guesses` seed a nonlinear solve. Both name variables; neither was reached.
-		for i, eq := range model.InitializationEquations {
-			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), modelName)
-		}
-		s.validateGuesses(model.Guesses, allVars, basePath, modelName)
-
-		// An inline test's assertion `reference` (§6.6.5) is an expression over the
-		// model's own variables.
-		s.validateTestRefs(model.Tests, allVars, basePath, modelName)
-
-		// Equation-unknown balance validation (Section 3.2.1).
 		s.validateEquationUnknownBalance(modelName, model, basePath)
 	}
 

@@ -21,6 +21,7 @@ import {
 } from './expr-utils.js'
 import { isAffineTempUnit } from './unit-format.js'
 import { forEachExpressionScope } from '../traverse.js'
+import { documentDeclaredNames } from './coupling-checks.js'
 
 /**
  * Check equation-unknown balance for a model.
@@ -232,8 +233,18 @@ export function declaredNamesFor(
   // (4) implicit independent coordinates
   for (const implicit of implicitNames(esmFile)) names.add(implicit)
 
-  // (5) the operator-model placeholder, only where composition can bind it
-  if (isCoupled) names.add(OPERATOR_VAR_PLACEHOLDER)
+  // (5) A coupled model — operator-composed or a coupling target — is checked
+  // against the DOCUMENT-WIDE declared names, not just its own. Composition
+  // merges the participating systems' scopes, so such a model legitimately
+  // references another composed system's state by bare name (the end-to-end
+  // atmosphere/land fixtures do exactly this). Its one reserved implicit name is
+  // the §6.4 placeholder `_var`. A name declared NOWHERE in the document is still
+  // an `undefined_variable` — that residue is the F-1 false negative the former
+  // blanket exemption let through.
+  if (isCoupled) {
+    names.add(OPERATOR_VAR_PLACEHOLDER)
+    for (const n of documentDeclaredNames(esmFile)) names.add(n)
+  }
 
   // (6) names a `callback` coupling entry injects into this component
   for (const entry of esmFile.coupling ?? []) {

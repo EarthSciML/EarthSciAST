@@ -1144,16 +1144,19 @@ Validate that all variable references can be resolved through the hierarchy.
 function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
     errors = StructuralError[]
 
-    # Validate model variable references. A COUPLED model is skipped: it does not
-    # own every name it mentions (see `_coupled_system_names`). Its events are
-    # still checked below, with `_var` credited — that is where a genuinely
-    # undeclared event target is still caught.
+    # Validate model variable references. A COUPLED model — operator-composed or
+    # a coupling target — is checked against the DOCUMENT-WIDE declared names plus
+    # the §6.4 `_var` placeholder (see `validate_model_references`): composition
+    # merges the participating systems' scopes, so a cross-system bare reference
+    # is legitimate, while a name declared NOWHERE in the document is still an
+    # `undefined_variable`. This replaces the former blanket skip, which saw none
+    # of a coupled model's references (F-1).
     if file.models !== nothing
         coupled = _coupled_system_names(file)
         for (model_name, model) in file.models
-            model_name ∈ coupled && continue
             append!(errors, validate_model_references(file, model, "/models/$model_name";
-                                                      model_name=model_name))
+                                                      model_name=model_name,
+                                                      is_coupled=(model_name ∈ coupled)))
         end
     end
 
@@ -1362,7 +1365,8 @@ end
 Validate variable references within a model.
 """
 function validate_model_references(file::EsmFile, model::Model, path::String;
-                                   model_name::AbstractString="")::Vector{StructuralError}
+                                   model_name::AbstractString="",
+                                   is_coupled::Bool=false)::Vector{StructuralError}
     errors = StructuralError[]
 
     # Names in scope for this model's equations: its declared variables (state,
@@ -1372,7 +1376,14 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     # solved-for unknown, e.g. an ODE state referenced as `D(u)` that is not
     # separately listed under `variables`). Bound loop indices are added per-node
     # during the descent (see `validate_expression_references`).
-    scope = Set{String}(keys(model.variables))
+    #
+    # A COUPLED model instead resolves against the DOCUMENT-WIDE declared names
+    # plus the §6.4 `_var` placeholder: `operator_compose`/`couple` merge the
+    # participating systems' scopes, so a cross-system bare reference is
+    # legitimate, while a name declared nowhere is still an `undefined_variable`
+    # (F-1). Mirrors Python's `global_symbols` and TS `documentDeclaredNames`.
+    scope = is_coupled ? _document_declared_names(file) : Set{String}(keys(model.variables))
+    is_coupled && push!(scope, _OPERATOR_PLACEHOLDER_VAR)
     union!(scope, keys(file.index_sets))
     for eq in model.equations
         target = _equation_lhs_target(eq)

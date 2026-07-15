@@ -157,23 +157,22 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       if (!isCoupled) {
         errors.push(...validateEquationBalance(model, modelPath))
       }
-      // An OPERATOR-COMPOSED model is exempt from reference integrity, and the
-      // exemption is semantically required rather than a convenience: such a
-      // model is written against a GENERIC state it does not declare, under a
-      // placeholder name the AUTHOR chooses. `tests/valid/minimal_chemistry.esm`
-      // is the canonical case — its `Advection` operator declares only
-      // `u_wind`/`v_wind` and writes `D(u)/dt = -u_wind*grad(u,x) + …`, where `u`
-      // is the field composition will substitute. No local declaration-site union
-      // can decide `u`, because the name is arbitrary. (§6.4 blesses `_var` for
-      // this; the flagship fixture uses `u` — see the report.)
+      // A coupled model IS reference-checked (F-1). It gets exactly one
+      // concession over a standalone model: the §6.4 operator placeholder
+      // `_var`. An operator-composed model is written against a GENERIC state it
+      // does not declare, and `_var` is the RESERVED name for it — substituted
+      // with each matching state variable of the target at `operator_compose`
+      // time. `validateReferenceIntegrity` credits `_var` when `isCoupled` (see
+      // `declaredNamesFor`), so the model is checked against
+      // {its declarations} ∪ {`_var`}. An undefined name anywhere else in a
+      // coupled model — a typo, an arbitrary placeholder — is therefore caught,
+      // instead of the whole model being waved through by a blanket exemption.
+      // `tests/valid/minimal_chemistry.esm`'s `Advection` uses `_var`, as §6.4
+      // mandates.
       //
-      // A CALLBACK target is NOT exempt: its injected names are knowable, so it
-      // is checked against them (see `declaredNamesFor` site 6). That is the (k)
-      // fix — `callback_examples.esm` was falsely rejected because the names its
-      // callback injects were not credited anywhere.
-      if (!isCoupled) {
-        errors.push(...validateReferenceIntegrity(model, modelPath, esmFile, modelName, isCoupled))
-      }
+      // A CALLBACK target is likewise checked against its injected names (see
+      // `declaredNamesFor` site 6) — the (k) fix.
+      errors.push(...validateReferenceIntegrity(model, modelPath, esmFile, modelName, isCoupled))
 
       // `isCoupled` also admits the §6.4 `_var` placeholder as an event-affect
       // target.
@@ -198,17 +197,15 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           if (!isCoupled) {
             errors.push(...validateEquationBalance(subsystem, subsystemPath))
           }
-          if (!isCoupled) {
-            errors.push(
-              ...validateReferenceIntegrity(
-                subsystem,
-                subsystemPath,
-                esmFile,
-                subsystemName,
-                isCoupled,
-              ),
-            )
-          }
+          errors.push(
+            ...validateReferenceIntegrity(
+              subsystem,
+              subsystemPath,
+              esmFile,
+              subsystemName,
+              isCoupled,
+            ),
+          )
           errors.push(...validateEventConsistency(subsystem, subsystemPath, isCoupled))
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
           errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath))

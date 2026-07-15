@@ -503,7 +503,7 @@ export function validateTemporalResolution(esmFile: EsmFile): StructuralError[] 
  * states this explicitly: "`y` and `k` are declared; the ONLY defect is the
  * undefined name `undefined_xyz`", where `y`/`k` belong to a MODEL.)
  */
-function documentDeclaredNames(esmFile: EsmFile): Set<string> {
+export function documentDeclaredNames(esmFile: EsmFile): Set<string> {
   const names = new Set<string>()
   for (const model of Object.values(esmFile.models ?? {})) {
     if ('ref' in model) continue

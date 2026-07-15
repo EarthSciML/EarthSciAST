@@ -55,27 +55,37 @@ pub(crate) fn validate_model(
     // subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
     let local_scoped = loader_subsystem_scoped_refs(model);
 
-    // A COUPLED model does not own every name it mentions, and its own equations
-    // need not balance its own unknowns (see `coupled_system_names`). Reference
-    // integrity and equation balance are therefore SKIPPED for it — the settled
-    // contract, matching Go `validate.go` and TS `validate/orchestrator.ts`.
-    // Event consistency still runs, with the §6.4 `_var` placeholder credited,
-    // which is where a genuinely undeclared event target is still caught.
+    // A COUPLED model — operator-composed or a coupling target — does not own
+    // every name it mentions: `operator_compose`/`couple` merge the participating
+    // systems' scopes, so it legitimately references another composed system's
+    // state by bare name. Reference integrity therefore checks it against the
+    // DOCUMENT-WIDE declared names plus the §6.4 `_var` placeholder (already in
+    // `defined_vars` via `implicitly_declared_symbols`); a name declared NOWHERE
+    // is still an `undefined_variable` (F-1). Only equation-unknown BALANCE stays
+    // skipped (its unknowns may be driven by equations another system
+    // contributes). Mirrors Go `validate.go`, TS `validate/orchestrator.ts` and
+    // Python `global_symbols`.
     let is_coupled = coupled_system_names(esm_file).contains(model_name);
+    if is_coupled {
+        defined_vars.extend(document_declared_names(esm_file));
+    }
 
-    // Every reference check routes through this one gate, so "a coupled model
-    // skips reference integrity" is enforced in ONE place rather than sprinkled
-    // across the five call sites below. Unit propagation is deliberately NOT
-    // gated: a coupled model may not own every NAME it mentions, but the
-    // dimensions of what it does spell still have to agree.
+    // Every reference check routes through this one gate, which keeps the five
+    // call sites below uniform. A coupled model is checked too (F-1) — its
+    // `defined_vars` was widened to the document scope above — so the gate no
+    // longer short-circuits. Unit propagation is a separate pass: the dimensions
+    // of what a model spells must agree regardless of which system owns a name.
     let check_refs =
         |expr: &crate::Expr, path: &str, idx: usize, errs: &mut Vec<StructuralError>| {
-            if is_coupled {
-                return;
-            }
+            // Any binder introduced ANYWHERE in this expression is in scope
+            // throughout it (a `makearray` binds its grid indices for every
+            // value; see `collect_bound_symbols`). Seed those before the descent,
+            // which then adds nested binders on top per node.
+            let mut scope = defined_vars.clone();
+            collect_bound_symbols(expr, &mut scope);
             validate_expression_references_with_systems(
                 expr,
-                &defined_vars,
+                &scope,
                 system_refs,
                 &local_scoped,
                 path,
@@ -510,16 +520,7 @@ pub(crate) fn validate_data_loader_unit_conversions(
 
     // Every name declared anywhere in the document, plus the implicit symbols.
     let mut scope = implicitly_declared_symbols(esm_file);
-    for model in esm_file.models.iter().flatten().map(|(_, m)| m) {
-        scope.extend(model.variables.keys().cloned());
-    }
-    for rs in esm_file.reaction_systems.iter().flatten().map(|(_, r)| r) {
-        scope.extend(rs.species.keys().cloned());
-        scope.extend(rs.parameters.keys().cloned());
-    }
-    for loader in loaders.values() {
-        scope.extend(loader.variables.keys().cloned());
-    }
+    scope.extend(document_declared_names(esm_file));
 
     let empty = HashSet::new();
     for (loader_name, loader) in loaders {
@@ -561,6 +562,27 @@ pub(crate) fn validate_data_loader_unit_conversions(
 /// 3. **`_var`** — §6.4, the operator-model placeholder, legal wherever a state
 ///    variable is legal (equation LHS/RHS, a continuous event's
 ///    `affects`/`affect_neg`, a `functional_affect`'s `read_vars`).
+/// Every name DECLARED anywhere in the document: each model's `variables`, each
+/// reaction system's `species` and `parameters`, and each data loader's
+/// `variables`. Does NOT include the implicit symbols (`t`, coordinates, index
+/// sets, `_var`, callback-injected names) — combine with
+/// `implicitly_declared_symbols` for the full document scope. Mirrors Julia
+/// `_document_declared_names`, TS `documentDeclaredNames`, Go `documentWideScope`.
+fn document_declared_names(esm_file: &EsmFile) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for model in esm_file.models.iter().flatten().map(|(_, m)| m) {
+        names.extend(model.variables.keys().cloned());
+    }
+    for rs in esm_file.reaction_systems.iter().flatten().map(|(_, r)| r) {
+        names.extend(rs.species.keys().cloned());
+        names.extend(rs.parameters.keys().cloned());
+    }
+    for loader in esm_file.data_loaders.iter().flatten().map(|(_, l)| l) {
+        names.extend(loader.variables.keys().cloned());
+    }
+    names
+}
+
 fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     let mut symbols = HashSet::new();
 
@@ -1511,6 +1533,24 @@ fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
         syms.extend(bindings.keys().cloned());
     }
     syms
+}
+
+/// Collect every binder-introduced symbol anywhere in an expression subtree —
+/// `index` element positions, `output_idx`/`ranges` keys, integral vars,
+/// argmin/argmax witnesses and template `bindings`. Per-node scoping alone binds
+/// a symbol only for the subtree UNDER the node that introduces it, which is too
+/// narrow for a `makearray` stencil: it binds the grid indices `i`/`j` for ALL
+/// its `values`, yet an index spelled `i + 1` in one value is a USE of the `i`
+/// bound (as a bare `index` position) in another. Scanning the whole expression
+/// once and holding the union in scope throughout it matches Go
+/// `collectBoundSymbols` / TS `collectIndexSymbols`.
+fn collect_bound_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
+    if let crate::Expr::Operator(node) = expr {
+        for sym in bound_index_symbols(node) {
+            out.insert(sym);
+        }
+        node.for_each_child(&mut |child| collect_bound_symbols(child, out));
+    }
 }
 
 fn validate_rate_expression(
