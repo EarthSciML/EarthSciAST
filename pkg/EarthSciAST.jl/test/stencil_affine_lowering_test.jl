@@ -71,8 +71,16 @@ const E = EarthSciAST
         @test length(acc) == 3           # qW dropped to literal; qC, qE, fixed remain
     end
 
-    # an interp `:fn` node forces a fallback (not yet modelled by the affine path).
+    # an interp `:fn` node now LOWERS: the op passes through carrying its
+    # `(fname, spec)` payload, its lane children lowered like any subtree.
     let fn = E._mknode(kind=E._NK_OP, op=:fn, children=E._Node[st(-1)], payload=("f", nothing))
-        @test_throws E._StencilFallback E._lower_to_access(fn, E._LaneRepl[Acc(SA(0))], E._AccDesc[])
+        acc = E._AccDesc[]
+        out = E._lower_to_access(fn, E._LaneRepl[Acc(SA(0))], acc)
+        @test out.kind === E._NK_OP && out.op === :fn && out.payload == ("f", nothing)
+        @test length(acc) == 1 && acc[1].kind === E._AK_STATE_AFFINE
+    end
+    # a contraction node is the remaining unmodelled kind → still a fallback.
+    let ctr = E._mknode(kind=E._NK_CONTRACTION, op=:+, children=E._Node[st(-1)])
+        @test_throws E._StencilFallback E._lower_to_access(ctr, E._LaneRepl[Acc(SA(0))], E._AccDesc[])
     end
 end
