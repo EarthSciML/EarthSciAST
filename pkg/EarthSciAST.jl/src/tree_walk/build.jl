@@ -1823,6 +1823,33 @@ end
 # (`_compile_arrayop_percell!`).
 # (`vec_kernels` is a `Vector{_VecKernel}`; the annotation is omitted because
 # `_VecKernel` is defined in section 4b, after this build section.)
+
+# ess-affine: unroll a CONSTANT-bound contraction (aggregate reduction) into a
+# plain ⊕-fold AST so the existing affine box processor can lower it — no runtime
+# reduce, no per-cell loop. Output indices stay SYMBOLIC (one fold template shared
+# across every output cell); only the contracted indices are expanded, through the
+# SAME `_foreach_aggregate_term` core the per-cell path uses, so term order and the
+# filter `ifelse`-guard are byte-identical. The fold is seeded with the 0̄ identity
+# FIRST — matching `_eval_contraction`'s in-place fold exactly (signed-zero `+`, the
+# min/max identities) — so the lowered `+`/`min`/`max`/`*` op is bit-identical.
+#
+# Caller guarantees every contracted bound is constant (`contract_const[d] !==
+# nothing`) and there are no join gates (a join can drop terms per output cell,
+# which would break the shared template). A filter is fine: it references the
+# contracted (now concrete) and/or output (still symbolic) indices and lowers to a
+# runtime `ifelse` guard the box processor verifies affine.
+function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{String},
+        contract_const, filt, oplus::String, zerobar::Float64)
+    iters = Vector{Int}[c::Vector{Int} for c in contract_const]
+    terms = ASTExpr[]
+    _foreach_aggregate_term(rhs_body, contract_names, iters, nothing, filt, zerobar,
+                            nothing) do term
+        push!(terms, term)
+    end
+    isempty(terms) && return NumExpr(zerobar)            # empty ⊕-reduction → 0̄ (§5.1)
+    return OpExpr(oplus, ASTExpr[NumExpr(zerobar); terms])
+end
+
 function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
@@ -1877,12 +1904,26 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
     # groups), producing `_AccKernel`s that resolve gathers at runtime. Opt-in
     # via ESS_AFFINE=1 during rollout; returns `nothing` (covered untouched) for
     # anything it cannot model, falling through to the symbolic / per-cell chain.
-    affine_kernels = (isempty(contract_names) && _affine_enabled() &&
-                      !_stencil_disabled()) ?
-        _try_affine_stencil(rhs_body, idx_names, range_iters, lhs_body,
-                            resolved_obs, array_var_info, var_map,
-                            const_registry, pgather, param_sym_set, reg_funcs,
-                            covered) : nothing
+    #
+    # A CONSTANT-bound contraction with no join gate is UNROLLED into a plain
+    # ⊕-fold body (`_unrolled_contraction_body`) and lowered by the SAME box
+    # processor — no runtime reduce, no per-cell loop. A variable-valence bound or
+    # a join gate (either can vary the term set per output cell) is left to the
+    # per-cell path.
+    affine_kernels = nothing
+    if _affine_enabled() && !_stencil_disabled()
+        affine_body =
+            isempty(contract_names) ? rhs_body :
+            (agg_gates === nothing && all(c -> c !== nothing, contract_const)) ?
+                _unrolled_contraction_body(rhs_body, contract_names, contract_const,
+                                           agg_filter, rhs_oplus, rhs_zerobar) :
+            nothing
+        affine_kernels = affine_body === nothing ? nothing :
+            _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
+                                resolved_obs, array_var_info, var_map,
+                                const_registry, pgather, param_sym_set, reg_funcs,
+                                covered)
+    end
     if affine_kernels !== nothing
         get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
             (println(stderr, "[ess-affine] FIRED: ", length(affine_kernels),
