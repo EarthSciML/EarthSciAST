@@ -105,8 +105,14 @@ const _GREEK_NAME_ALT = "alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kapp
 # Character class spans the two Greek ranges Α-Ω (U+0391..03A9) and α-ω
 # (U+03B1..03C9) using literal characters (PCRE's ALT_BSUX rejects \x{…}).
 const _GREEK_CLASS = "[Α-Ωα-ω]"
-const GREEK_LATEX_RE = Regex("$(_GREEK_CLASS)|(?:$(_GREEK_NAME_ALT))(?![A-Z}])")
-const GREEK_NAME_RE = Regex("(?:$(_GREEK_NAME_ALT))(?![A-Z])")
+# The negative lookbehind `(?<![\\A-Za-z])` leaves a name that is already part
+# of a control word (`\theta`) or a longer identifier untouched, so a
+# pre-formatted `\theta` is not turned into `\\theta`.
+const GREEK_LATEX_RE = Regex("$(_GREEK_CLASS)|(?<![\\\\A-Za-z])(?:$(_GREEK_NAME_ALT))(?![A-Z}])")
+# The negative lookbehind `(?<![\\A-Za-z])` leaves a name already part of a
+# control word (`\theta`) or a longer identifier untouched, so a pre-formatted
+# `\theta` is not turned into `\θ` on the unicode path.
+const GREEK_NAME_RE = Regex("(?<![\\\\A-Za-z])(?:$(_GREEK_NAME_ALT))(?![A-Z])")
 const GREEK_UNICODE_RE = Regex(_GREEK_CLASS)
 
 """
@@ -178,62 +184,245 @@ function _scan_element_tokens(on_element::Function, on_other::Function, variable
 end
 
 """
-    has_element_pattern(variable::String) -> Bool
+    has_element_pattern(variable) -> Bool
 
-Check if a variable has element patterns (for chemical formula detection).
-Uses the greedy matching algorithm per spec Section 6.1 (see
-[`_scan_element_tokens`](@ref)).
+True when `variable` is a PURE chemical formula: it contains at least one
+recognized element symbol and no non-element ASCII letter (mirrors
+pretty-print.ts `hasElementPattern`). Underscores are stripped first; Greek and
+other non-ASCII letters are treated as separators (NOT disqualifiers), so
+`"αH2O"` is a formula but `"xyz"` is not. Uses the greedy 2-char-before-1-char
+tokenizer (see [`_scan_element_tokens`](@ref)).
 """
-has_element_pattern(variable::String) =
-    _scan_element_tokens((element, digits) -> nothing, c -> nothing, variable)
+function has_element_pattern(variable::AbstractString)
+    clean = replace(String(variable), "_" => "")
+    hasel = Ref(false)
+    disq = Ref(false)
+    _scan_element_tokens(
+        (element, digits) -> (hasel[] = true),
+        c -> (('A' <= c <= 'Z' || 'a' <= c <= 'z') && (disq[] = true)),
+        clean)
+    return hasel[] && !disq[]
+end
+
+# ── Chemical / variable subscript formatting (mirrors pretty-print.ts) ────────
+# The LaTeX and Unicode variable renderers are a faithful port of pretty-print.ts
+# `formatChemicalLatex` / `formatChemicalUnicode`, including single-digit
+# subscripts left BARE (`O_3`, `x_1`) with only multi-digit runs braced
+# (`C_6H_{12}O_6`, `T_{298}`), mixed non-element-prefix + chemical-suffix
+# splitting (`jNO2` → `j_{\mathrm{NO_2}}`), and underscore-segmented names
+# (`rate_OH_NO2` → `\mathrm{rate}_{\mathrm{OH}}_{\mathrm{NO_2}}`). A trailing
+# ionic CHARGE (`Ca2+`, `SO4-2`) renders as a Unicode superscript per the
+# rendering contract (`Ca²⁺`, `SO₄²⁻`).
+
+"""Convert every digit run of a formula to its LaTeX subscript (`H2O`→`H_2O`,
+`CO12`→`CO_{12}`): single digit bare, multi-digit braced. No `\\mathrm{}` wrap."""
+latex_chemical_inner(formula::AbstractString) =
+    replace(String(formula), r"(\d+)" => s -> length(s) == 1 ? "_$s" : "_{$s}")
+
+"""Peel one leading `\\mathrm{` and one trailing `}` (each independently)."""
+function strip_outer_mathrm(s::AbstractString)
+    inner = startswith(s, "\\mathrm{") ? s[9:end] : s
+    return endswith(inner, "}") ? inner[1:prevind(inner, lastindex(inner))] : String(inner)
+end
 
 """
-    format_chemical_subscripts(variable::String, format::Symbol) -> String
+    get_chemical_suffix(variable) -> Union{Tuple{String,String},Nothing}
 
-Apply element-aware chemical subscript formatting to a variable name.
-Uses greedy 2-char-before-1-char matching for element detection per spec Section 6.1.
-
-# Arguments
-- `variable::String`: Variable name to format
-- `format::Symbol`: Output format (:unicode or :latex)
+Split a variable into a non-element `prefix` and a chemical `suffix` (the largest
+trailing element-bearing part), or `nothing`. Mirrors pretty-print.ts
+`getChemicalSuffix`: for `k_NO_O3` → (`k`, `NO_O3`); for `jNO2` → (`j`, `NO2`).
 """
-function format_chemical_subscripts(variable::String, format::Symbol)
-    if format == :latex
-        if has_element_pattern(variable)
-            # A bare element symbol without digits (e.g. "B", "P", "S") is a
-            # variable name, not a chemical formula — leave it italic/unwrapped
-            # (mirrors pretty-print.ts).
-            if variable in ELEMENTS && !occursin(r"\d", variable)
-                return variable
+function get_chemical_suffix(variable::AbstractString)
+    v = String(variable)
+    if occursin("_", v)
+        parts = split(v, "_")
+        if length(parts) == 2
+            pre, suf = String(parts[1]), String(parts[2])
+            has_element_pattern(suf) && !has_element_pattern(pre) && return (pre, suf)
+        end
+        if length(parts) == 3
+            pre = String(parts[1]); suf = join(parts[2:end], "_")
+            has_element_pattern(suf) && !has_element_pattern(pre) && return (pre, suf)
+        end
+    end
+    # Character-based split (byte slicing throws on multi-byte names like "α2").
+    chars = collect(v)
+    for i in 1:length(chars)-1
+        pre = String(chars[1:i]); suf = String(chars[i+1:end])
+        has_element_pattern(suf) && !has_element_pattern(pre) && return (pre, suf)
+    end
+    return nothing
+end
+
+"""Inner content (no `\\mathrm{}` wrapper) of a chemical suffix embedded in a
+larger variable's subscript (mirrors pretty-print.ts `formatChemicalSuffixInner`)."""
+function format_chemical_suffix_inner(variable::AbstractString)
+    if get_chemical_suffix(variable) !== nothing
+        return strip_outer_mathrm(format_chemical_latex(variable))
+    end
+    if variable in ELEMENTS && !occursin(r"\d", variable)
+        return String(variable)
+    end
+    return latex_chemical_inner(variable)
+end
+
+"""
+    is_preformatted_latex(variable) -> Bool
+
+Whether a variable name is ALREADY LaTeX and should render verbatim rather than
+be re-wrapped (which only mangles it), mirroring pretty-print.ts
+`isPreformattedLatex`. Three shapes qualify: a roman-wrapped species
+(`\\mathrm{...}`); a bare control word with no group (`\\theta`); or a name that
+carries its own `{...}` grouping but no command (`k_{NO_O3}`). A different
+`\\command{...}` atom such as `\\mathbf{v}` is NOT pre-formatted — it still takes
+the generic `\\mathrm{...}` wrap.
+"""
+function is_preformatted_latex(variable::AbstractString)
+    startswith(variable, "\\mathrm{") && return true
+    occursin("\\", variable) && return !occursin("{", variable)
+    return occursin(r"[{}]", variable)
+end
+
+"""LaTeX chemical/variable subscript formatting (mirrors pretty-print.ts `formatChemicalLatex`)."""
+function format_chemical_latex(variable::AbstractString)
+    v = String(variable)
+    # A trailing ionic charge is a superscript, not a subscript: `Ca2+`→`Ca^{2+}`,
+    # `SO4-2`→`\mathrm{SO_4}^{2-}` (mirrors pretty-print.ts).
+    ch = split_charge(v)
+    if ch !== nothing && has_element_pattern(ch[1])
+        return "$(format_chemical_latex(ch[1]))^{$(ch[2])}"
+    end
+    # A name that is already LaTeX passes through untouched.
+    is_preformatted_latex(v) && return v
+    hasel = has_element_pattern(v)
+
+    ci = get_chemical_suffix(v)
+    if ci !== nothing
+        pre, suf = ci
+        if occursin("_", suf)
+            segs = split(suf, "_")
+            should_split = occursin(r"\d$", segs[1]) || length(pre) > 1
+            if should_split
+                result = (length(pre) == 1 && occursin(r"[A-Za-z]", pre)) ? pre : "\\mathrm{$pre}"
+                for seg in segs
+                    if has_element_pattern(seg)
+                        result *= "_{\\mathrm{$(latex_chemical_inner(seg))}}"
+                    else
+                        result *= "_\\mathrm{$seg}"
+                    end
+                end
+                return result
             end
-            # Chemical formula: wrap in \\mathrm{} and convert digits to subscripts.
-            result = replace(variable, r"(\d+)" => s"_{\1}")
-            return "\\mathrm{$result}"
         end
-        # Greek names pass through unchanged; convert_greek_letters maps them.
-        if variable in GREEK_NAMES
-            return variable
-        end
-        # Single character (Latin or Greek) → italic, no wrapping.
-        if length(variable) == 1
-            return variable
-        end
-        # Multi-character non-chemical variable → upright, underscores escaped.
-        return "\\mathrm{$(replace(variable, "_" => "\\_"))}"
+        inner = format_chemical_suffix_inner(suf)
+        fpre = length(pre) > 1 ? "\\mathrm{$pre}" : pre
+        return "$(fpre)_{\\mathrm{$inner}}"
     end
 
-    if format == :ascii
-        # For ASCII, just return as-is (no special formatting for chemical subscripts)
-        return variable
+    if hasel
+        # A bare element symbol without digits (e.g. "B", "C", "N") is a variable
+        # name, not a chemical formula — italic, unwrapped.
+        if v in ELEMENTS && !occursin(r"\d", v)
+            return v
+        end
+        return "\\mathrm{$(latex_chemical_inner(v))}"
     end
 
-    if !has_element_pattern(variable)
-        # No element pattern found, return as-is
-        return variable
+    # Regular (non-chemical) variable.
+    # Greek name → pass through unchanged (convert_greek_letters maps it later).
+    if v in GREEK_NAMES
+        return v
+    end
+    # Single letter (Latin/Greek) + digits → italic with subscript (T_{298}, x_1).
+    m = match(r"^([A-Za-zΑ-Ωα-ω])(\d+)$", v)
+    if m !== nothing
+        letter, digits = m.captures[1], m.captures[2]
+        return length(digits) == 1 ? "$(letter)_$(digits)" : "$(letter)_{$(digits)}"
+    end
+    # Single character → italic, no wrapping.
+    if length(v) == 1
+        return v
+    end
+    # Underscore-separated variable with mixed chemical / non-chemical segments.
+    if occursin("_", v)
+        parts = split(v, "_")
+        if any(has_element_pattern, parts)
+            base = parts[1]
+            result = (length(base) == 1 && occursin(r"[A-Za-z]", base)) ? String(base) :
+                     has_element_pattern(base) ? format_chemical_latex(base) : "\\mathrm{$base}"
+            for i in 2:length(parts)
+                part = parts[i]
+                if has_element_pattern(part)
+                    result *= "_{\\mathrm{$(latex_chemical_inner(part))}}"
+                else
+                    result *= "_\\mathrm{$part}"
+                end
+            end
+            return result
+        end
+        return "\\mathrm{$(replace(v, "_" => "\\_"))}"
+    end
+    # A symbol with no lowercase letters (e.g. "RT", "-E") is a math variable,
+    # not a descriptive name — leave it italic instead of wrapping in \mathrm{}.
+    if !occursin(r"[a-z]", v)
+        return v
+    end
+    # Multi-character non-chemical variable → upright.
+    return "\\mathrm{$v}"
+end
+
+"""
+    split_charge(variable) -> Union{Tuple{String,String},Nothing}
+
+Detect a trailing ionic charge and return `(body, charge)`, or `nothing`
+(mirrors pretty-print.ts `splitCharge`). `charge` is the magnitude-then-sign
+string with the sign LAST regardless of source order: `Ca2+` → (`Ca`, `2+`),
+`SO4-2` → (`SO4`, `2-`), `Na+` → (`Na`, `+`). Callers render it as a Unicode
+superscript (`to_superscript`) or a LaTeX superscript (`^{…}`).
+"""
+function split_charge(variable::AbstractString)
+    v = String(variable)
+    m = match(r"^(.+?)(\d+)([+-])$", v)    # digits-then-sign, e.g. "Ca2+"
+    m !== nothing && return (String(m.captures[1]), m.captures[2] * m.captures[3])
+    m = match(r"^(.+?)([+-])(\d+)$", v)    # sign-then-digits, e.g. "SO4-2"
+    m !== nothing && return (String(m.captures[1]), m.captures[3] * m.captures[2])
+    m = match(r"^(.+?)([+-])$", v)         # bare sign, e.g. "Na+"
+    m !== nothing && return (String(m.captures[1]), String(m.captures[2]))
+    return nothing
+end
+
+"""Unicode chemical/variable subscript formatting (mirrors pretty-print.ts `formatChemicalUnicode`)."""
+function format_chemical_unicode(variable::AbstractString)
+    v = String(variable)
+    # A name that already carries a LaTeX command (a backslash) is passed through
+    # verbatim — `\mathrm{O_3}`, `\theta` — rather than chemical-/Greek-converted.
+    # (A `{…}`-only name like `k_{NO_O3}` is NOT verbatim here: it still takes the
+    # subscript pass, matching the Rust reference `k_{NO_O₃}`.)
+    occursin("\\", v) && return v
+    # Trailing ionic charge → superscript on the formatted body.
+    ch = split_charge(v)
+    if ch !== nothing && has_element_pattern(ch[1])
+        return format_chemical_unicode(ch[1]) * to_superscript(ch[2])
     end
 
-    # For unicode: element-aware subscript conversion — digits become Unicode
-    # subscripts only when they follow a recognized element symbol.
+    if !has_element_pattern(v)
+        ci = get_chemical_suffix(v)
+        if ci !== nothing
+            pre, suf = ci
+            chem = format_chemical_unicode(suf)
+            return occursin("_", v) ? "$(pre)_$(chem)" : "$(pre)$(chem)"
+        end
+        if occursin("_", v)
+            parts = split(v, "_")
+            if any(has_element_pattern, parts)
+                return join((has_element_pattern(p) ? format_chemical_unicode(String(p)) : String(p)
+                             for p in parts), "_")
+            end
+        end
+        return v
+    end
+
+    # Pure formula: element digits AND stray digits (e.g. after `)`) become subscripts.
     buf = IOBuffer()
     _scan_element_tokens(
         (element, digits) -> begin
@@ -242,9 +431,22 @@ function format_chemical_subscripts(variable::String, format::Symbol)
                 print(buf, SUBSCRIPT_MAP[d])
             end
         end,
-        c -> print(buf, c),
-        variable)
+        c -> print(buf, (isdigit(c) && haskey(SUBSCRIPT_MAP, c)) ? SUBSCRIPT_MAP[c] : c),
+        v)
     return String(take!(buf))
+end
+
+"""
+    format_chemical_subscripts(variable, format::Symbol) -> String
+
+Apply element-aware chemical subscript formatting to a variable name, dispatching
+to the per-format implementation (mirrors pretty-print.ts). ASCII is a passthrough
+(no subscripts).
+"""
+function format_chemical_subscripts(variable::AbstractString, format::Symbol)
+    format == :latex && return format_chemical_latex(variable)
+    format == :ascii && return String(variable)
+    return format_chemical_unicode(variable)
 end
 
 """
@@ -253,47 +455,52 @@ end
 Format a number in scientific notation with appropriate formatting.
 """
 function format_number(num::Real, format::Symbol)
-    if isinteger(num) && abs(num) < 1e6
-        return string(Int(num))
+    # Non-finite values are RENDERED, never stringified (RENDERING_CONTRACT.md).
+    if !isfinite(num)
+        if isnan(num)
+            return format == :latex ? "\\text{NaN}" : "NaN"
+        elseif num > 0
+            return format == :unicode ? "∞" : format == :latex ? "\\infty" : "inf"
+        else
+            return format == :unicode ? "−∞" : format == :latex ? "-\\infty" : "-inf"
+        end
     end
 
-    # Use standard scientific notation formatting without @sprintf
-    str = string(num)
-    if Base.contains(str, "e") || Base.contains(str, "E")
-        # Already in scientific notation
-        parts = split(lowercase(str), "e")
-        mantissa = parts[1]
-        exponent = parse(Int, parts[2])
+    num == 0 && return "0"
 
+    # Unicode uses U+2212 MINUS SIGN; latex/ascii use ASCII '-'.
+    _uni_minus(s) = (format == :unicode && startswith(s, "-")) ? "−" * s[2:end] : s
+
+    absnum = abs(num)
+    # Scientific notation for very small / very large magnitudes (spec §6.1).
+    if absnum < 0.01 || absnum >= 10000
+        exp = floor(Int, log10(absnum))
+        mant = num / exp10(exp)
+        # Normalize the mantissa into [1, 10) (guards log10 rounding at exact powers).
+        while abs(mant) >= 10
+            exp += 1; mant = num / exp10(exp)
+        end
+        while abs(mant) < 1
+            exp -= 1; mant = num / exp10(exp)
+        end
+        # Strip floating-point noise so a clean mantissa round-trips (`9.999`, not
+        # `9.998999…`) while preserving genuine precision.
+        mant = parse(Float64, string(round(mant, sigdigits=15)))
+        ms = string(mant)
         if format == :unicode
-            return "$(mantissa)×10$(to_superscript(string(exponent)))"
+            return "$(_uni_minus(ms))×10$(to_superscript(string(exp)))"
         elseif format == :latex
-            return "$(mantissa) \\times 10^{$(exponent)}"
-        elseif format == :ascii
-            return "$(mantissa)*10^$(exponent)"
+            return "$(ms) \\times 10^{$(exp)}"
         else
-            return str # Plain scientific notation for fallback
-        end
-    else
-        # For very large/small numbers, convert to scientific notation manually
-        if abs(num) >= 1e6 || abs(num) < 1e-4
-            log10_val = floor(log10(abs(num)))
-            mantissa = num / (10.0^log10_val)
-            exponent = Int(log10_val)
-
-            if format == :unicode
-                return "$(round(mantissa, digits=2))×10$(to_superscript(string(exponent)))"
-            elseif format == :latex
-                return "$(round(mantissa, digits=2)) \\times 10^{$(exponent)}"
-            elseif format == :ascii
-                return "$(round(mantissa, digits=2))*10^$(exponent)"
-            else
-                return "$(round(mantissa, digits=2))e$(exponent)"
-            end
-        else
-            return string(num)
+            # ASCII: no '+' on a positive exponent.
+            return "$(ms)e$(exp)"
         end
     end
+
+    if isinteger(num)
+        return _uni_minus(string(Int64(num)))
+    end
+    return _uni_minus(string(num))
 end
 
 # Display-notation operator precedence (mirrors pretty-print.ts). Hoisted to a
@@ -369,16 +576,17 @@ function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::
         return false
     end
 
-    # Same precedence: need parens if child is right operand and operator is not
-    # associative.
-    # NOTE deliberate divergence from codegen.jl `_codegen_needs_parens`: for
-    # `^` at equal precedence, DISPLAY parenthesizes the RIGHT operand — the
-    # rule frozen by the cross-language pretty-printer contract
-    # (pretty-print.ts `needsParentheses`, pinned by the tests/display
-    # fixtures) — while the code emitters parenthesize the LEFT operand so
-    # emitted code re-parses with the right-associativity of Julia `^` /
-    # Python `**`. Do not reconcile the two.
-    if is_right_operand && parent_op in ["-", "/", "^"]
+    # Same precedence. `^` is right-associative, so a NESTED `^` operand is
+    # parenthesized at BOTH positions to keep the reading unambiguous:
+    # `(a^b)^c` (left) and `a^(b^c)` (right) — RENDERING_CONTRACT.md
+    # "Associativity and parenthesization". (In LaTeX the exponent sits in
+    # `{}`, so the right `^` operand is rendered without `needs_parentheses`
+    # and needs no extra parens: `a^{b^{c}}`.) The left-associative `-`/`/`
+    # parenthesize only their RIGHT operand (`a - (b - c)`, `a / (b / c)`).
+    if parent_op == "^"
+        return true
+    end
+    if is_right_operand && (parent_op == "-" || parent_op == "/")
         return true
     end
 
@@ -427,8 +635,7 @@ function format_expression(expr::ASTExpr, format::Symbol)
     end
 
     if isa(expr, IntExpr)
-        s = string(expr.value)
-        return (format == :unicode && startswith(s, "-")) ? "−" * s[2:end] : s
+        return format_number(expr.value, format)
     end
 
     if isa(expr, VarExpr)
@@ -751,6 +958,13 @@ const _INFIX_SEPARATORS = Dict{String,NamedTuple{(:ascii, :unicode, :latex),NTup
 _infix_separator(op::String, format::Symbol) =
     getproperty(_INFIX_SEPARATORS[op], format)
 
+# LaTeX product separator: a product whose factors are already-typeset LaTeX
+# STRING operands (e.g. `\mathrm{O_3}`) is written by implicit juxtaposition (a
+# space), while a product of plain symbols uses ` \cdot ` to stay unambiguous
+# (`a \cdot b`) — mirrors pretty-print.ts `*` renderer.
+_latex_product_sep(args) =
+    any(a -> a isa VarExpr && occursin("\\", a.name), args) ? " " : " \\cdot "
+
 """Format one operand of `op`, parenthesizing per [`needs_parentheses`](@ref)."""
 function _format_operand(op::String, arg::ASTExpr, format::Symbol,
                          is_right_operand::Bool=false)
@@ -772,6 +986,11 @@ function _format_infix_op(node::OpExpr, format::Symbol)
     fa(arg, is_right_operand=false) = _format_operand(op, arg, format, is_right_operand)
 
     if op == "+"
+        # Simplify `a + (-b)` → `a - b` by rendering as a binary subtraction
+        # (mirrors pretty-print.ts), keeping the subtraction formatting in one place.
+        if isa(right, OpExpr) && right.op == "-" && length(right.args) == 1
+            return format_operator_expression(OpExpr("-", ASTExpr[left, right.args[1]]), format)
+        end
         return "$(fa(left)) + $(fa(right, true))"
     elseif op == "/"
         if format == :latex
@@ -793,6 +1012,9 @@ function _format_infix_op(node::OpExpr, format::Symbol)
         end
     elseif op in [">", "<"]
         return "$(fa(left)) $op $(fa(right, true))"
+    elseif op == "*"
+        sep = format == :latex ? _latex_product_sep(node.args) : _infix_separator(op, format)
+        return "$(fa(left))$sep$(fa(right, true))"
     elseif haskey(_INFIX_SEPARATORS, op)
         sep = _infix_separator(op, format)
         return "$(fa(left))$sep$(fa(right, true))"
@@ -908,10 +1130,12 @@ function _format_unary_op(node::OpExpr, format::Symbol)
             "Pre($(fa(arg)))"
     elseif op == "D"
         wrt_var = isnothing(node.wrt) ? "t" : node.wrt
+        # The differentiated operand is parenthesized when it is an operator node
+        # (`∂(x + y)/∂t`, never `∂x + y/∂t`) — RENDERING_CONTRACT.md.
         if format == :unicode
-            return "∂$(format_expression_unicode(arg))/∂$wrt_var"
+            return "∂$(wrap_if_op(arg, :unicode))/∂$wrt_var"
         elseif format == :latex
-            return "\\frac{\\partial $(format_expression_latex(arg))}{\\partial $wrt_var}"
+            return "\\frac{\\partial $(wrap_if_op(arg, :latex))}{\\partial $wrt_var}"
         else
             return "D($(format_expression_ascii(arg)))/D$wrt_var"
         end
@@ -937,7 +1161,10 @@ function _format_nary_op(node::OpExpr, format::Symbol)
     if length(args) >= 3
         if op == "+"
             return join([fa(arg) for arg in args], " + ")
-        elseif op == "*" || op == "or"
+        elseif op == "*"
+            sep = format == :latex ? _latex_product_sep(args) : _infix_separator(op, format)
+            return join([fa(arg) for arg in args], sep)
+        elseif op == "or"
             return join([fa(arg) for arg in args], _infix_separator(op, format))
         end
     end
@@ -1278,8 +1505,21 @@ to_ascii(::Nothing) = "nothing"
 
 to_ascii(target::Real) = format_number(target, :ascii)
 
-to_ascii(target::String) =
-    convert_greek_letters(format_chemical_subscripts(target, :ascii), :ascii)
+# JSON has no non-finite number literals, so the corpus (and the wider ESM
+# world) carries ±Infinity / NaN as STRINGS. When a bare string denotes one of
+# them, render it as the non-finite NUMBER it names (∞ / −∞ / NaN) per
+# RENDERING_CONTRACT.md, not as a variable/chemical name.
+const _NONFINITE_TOKENS = Dict{String,Float64}(
+    "Infinity" => Inf, "-Infinity" => -Inf, "NaN" => NaN)
+
+_maybe_nonfinite(target::AbstractString, format::Symbol) =
+    haskey(_NONFINITE_TOKENS, target) ? format_number(_NONFINITE_TOKENS[target], format) : nothing
+
+function to_ascii(target::String)
+    r = _maybe_nonfinite(target, :ascii)
+    r === nothing || return r
+    return convert_greek_letters(format_chemical_subscripts(target, :ascii), :ascii)
+end
 
 to_ascii(target::ASTExpr) = format_expression_ascii(target)
 
@@ -1310,8 +1550,11 @@ to_unicode(target) =
     throw(ArgumentError("Unsupported type for Unicode formatting: $(typeof(target))"))
 to_unicode(::Nothing) = "nothing"
 to_unicode(target::Real) = format_number(target, :unicode)
-to_unicode(target::String) =
-    convert_greek_letters(format_chemical_subscripts(target, :unicode), :unicode)
+function to_unicode(target::String)
+    r = _maybe_nonfinite(target, :unicode)
+    r === nothing || return r
+    return convert_greek_letters(format_chemical_subscripts(target, :unicode), :unicode)
+end
 to_unicode(target::ASTExpr) = format_expression_unicode(target)
 to_unicode(target::Equation) =
     "$(format_expression_unicode(target.lhs)) = $(format_expression_unicode(target.rhs))"
@@ -1320,8 +1563,11 @@ to_latex(target) =
     throw(ArgumentError("Unsupported type for LaTeX formatting: $(typeof(target))"))
 to_latex(::Nothing) = "nothing"
 to_latex(target::Real) = format_number(target, :latex)
-to_latex(target::String) =
-    convert_greek_letters(format_chemical_subscripts(target, :latex), :latex)
+function to_latex(target::String)
+    r = _maybe_nonfinite(target, :latex)
+    r === nothing || return r
+    return convert_greek_letters(format_chemical_subscripts(target, :latex), :latex)
+end
 to_latex(target::ASTExpr) = format_expression_latex(target)
 to_latex(target::Equation) =
     "$(format_expression_latex(target.lhs)) = $(format_expression_latex(target.rhs))"

@@ -9,120 +9,86 @@ Based on ESM Format Specification Section 6.1
 """
 from __future__ import annotations
 
+import math
 import re
 import warnings
 
 from . import op_registry
 from .esm_types import Equation, EsmFile, Expr, ExprNode, Model, ReactionSystem
 
-# Greek letter to LaTeX mapping
-GREEK_LATEX = {
-    "α": "\\alpha",
-    "β": "\\beta",
-    "γ": "\\gamma",
-    "δ": "\\delta",
-    "ε": "\\epsilon",
-    "ζ": "\\zeta",
-    "η": "\\eta",
-    "θ": "\\theta",
-    "ι": "\\iota",
-    "κ": "\\kappa",
-    "λ": "\\lambda",
-    "μ": "\\mu",
-    "ν": "\\nu",
-    "ξ": "\\xi",
-    "π": "\\pi",
-    "ρ": "\\rho",
-    "σ": "\\sigma",
-    "τ": "\\tau",
-    "υ": "\\upsilon",
-    "φ": "\\phi",
-    "χ": "\\chi",
-    "ψ": "\\psi",
-    "ω": "\\omega",
-    "Γ": "\\Gamma",
-    "Δ": "\\Delta",
-    "Θ": "\\Theta",
-    "Λ": "\\Lambda",
-    "Ξ": "\\Xi",
-    "Π": "\\Pi",
-    "Σ": "\\Sigma",
-    "Φ": "\\Phi",
-    "Ψ": "\\Psi",
-    "Ω": "\\Omega",
-}
+# ---------------------------------------------------------------------------
+# Greek letters: ONE canonical table drives every derived lookup / regex below
+# (LaTeX / unicode / ascii), mirroring pretty-print.ts GREEK_TABLE. Each row is
+# [asciiName, lowerChar, upperChar, hasUpperLatex] where hasUpperLatex marks the
+# uppercase forms with a distinct LaTeX command (\Gamma, ...).
+# ---------------------------------------------------------------------------
+GREEK_TABLE = [
+    ("alpha", "α", "Α", False),
+    ("beta", "β", "Β", False),
+    ("gamma", "γ", "Γ", True),
+    ("delta", "δ", "Δ", True),
+    ("epsilon", "ε", "Ε", False),
+    ("zeta", "ζ", "Ζ", False),
+    ("eta", "η", "Η", False),
+    ("theta", "θ", "Θ", True),
+    ("iota", "ι", "Ι", False),
+    ("kappa", "κ", "Κ", False),
+    ("lambda", "λ", "Λ", True),
+    ("mu", "μ", "Μ", False),
+    ("nu", "ν", "Ν", False),
+    ("xi", "ξ", "Ξ", True),
+    ("omicron", "ο", "Ο", False),
+    ("pi", "π", "Π", True),
+    ("rho", "ρ", "Ρ", False),
+    ("sigma", "σ", "Σ", True),
+    ("tau", "τ", "Τ", False),
+    ("upsilon", "υ", "Υ", True),
+    ("phi", "φ", "Φ", True),
+    ("chi", "χ", "Χ", False),
+    ("psi", "ψ", "Ψ", True),
+    ("omega", "ω", "Ω", True),
+]
+
+# LaTeX: named lowercase → \name, lowercase char → \name, distinct uppercase → \Name.
+GREEK_LETTERS: dict[str, str] = {}
+# Named lowercase → Unicode symbol (unicode output).
+GREEK_NAME_TO_CHAR: dict[str, str] = {}
+# Lowercase Unicode char → ascii name (ascii output).
+GREEK_CHAR_TO_NAME: dict[str, str] = {}
+for _name, _lower, _upper, _has_upper_latex in GREEK_TABLE:
+    GREEK_LETTERS[_name] = f"\\{_name}"
+    GREEK_LETTERS[_lower] = f"\\{_name}"
+    if _has_upper_latex:
+        GREEK_LETTERS[_name.capitalize()] = f"\\{_name.capitalize()}"
+    GREEK_NAME_TO_CHAR[_name] = _lower
+    GREEK_CHAR_TO_NAME[_lower] = _name
+
+_GREEK_NAME_GROUP = "(?:" + "|".join(name for name, *_ in GREEK_TABLE) + ")"
+_GREEK_CHAR_CLASS = "[α-ωΑ-Ω]"
+# LaTeX: a Greek char OR a named letter that is NOT preceded by a backslash or
+# another letter (so the `eta` inside `\theta`, and any `\command`, is left
+# alone) and NOT followed by an uppercase letter (chemical prefix) or `}`
+# (already inside \mathrm{}).
+_GREEK_LATEX_RE = re.compile(
+    _GREEK_CHAR_CLASS + r"|(?<![\\A-Za-z])" + _GREEK_NAME_GROUP + r"(?![A-Z}])"
+)
+# Unicode: a named letter not followed by an uppercase letter (chemical prefix).
+_GREEK_UNICODE_RE = re.compile(f"{_GREEK_NAME_GROUP}(?![A-Z])")
+# ASCII: bare Greek Unicode chars.
+_GREEK_CHAR_RE = re.compile(_GREEK_CHAR_CLASS)
 
 
-# Named Greek letters (spelled out) → Unicode symbol. Mirrors the reference
-# pretty-printer (pretty-print.ts convertGreekLetters). Applied only to a
-# STANDALONE variable name (chemical prefixes like "alphaCO2" go through the
-# element-aware path and keep the spelled-out form).
-NAMED_GREEK_UNICODE = {
-    "alpha": "α",
-    "beta": "β",
-    "gamma": "γ",
-    "delta": "δ",
-    "epsilon": "ε",
-    "zeta": "ζ",
-    "eta": "η",
-    "theta": "θ",
-    "iota": "ι",
-    "kappa": "κ",
-    "lambda": "λ",
-    "mu": "μ",
-    "nu": "ν",
-    "xi": "ξ",
-    "omicron": "ο",
-    "pi": "π",
-    "rho": "ρ",
-    "sigma": "σ",
-    "tau": "τ",
-    "upsilon": "υ",
-    "phi": "φ",
-    "chi": "χ",
-    "psi": "ψ",
-    "omega": "ω",
-}
-
-# Named Greek letters (spelled out) → LaTeX command. Mirrors the reference
-# pretty-printer's GREEK_LETTERS named entries.
-NAMED_GREEK_LATEX = {
-    "alpha": "\\alpha",
-    "beta": "\\beta",
-    "gamma": "\\gamma",
-    "delta": "\\delta",
-    "epsilon": "\\epsilon",
-    "zeta": "\\zeta",
-    "eta": "\\eta",
-    "theta": "\\theta",
-    "iota": "\\iota",
-    "kappa": "\\kappa",
-    "lambda": "\\lambda",
-    "mu": "\\mu",
-    "nu": "\\nu",
-    "xi": "\\xi",
-    "omicron": "\\omicron",
-    "pi": "\\pi",
-    "rho": "\\rho",
-    "sigma": "\\sigma",
-    "tau": "\\tau",
-    "upsilon": "\\upsilon",
-    "phi": "\\phi",
-    "chi": "\\chi",
-    "psi": "\\psi",
-    "omega": "\\omega",
-    "Gamma": "\\Gamma",
-    "Delta": "\\Delta",
-    "Theta": "\\Theta",
-    "Lambda": "\\Lambda",
-    "Xi": "\\Xi",
-    "Pi": "\\Pi",
-    "Sigma": "\\Sigma",
-    "Upsilon": "\\Upsilon",
-    "Phi": "\\Phi",
-    "Psi": "\\Psi",
-    "Omega": "\\Omega",
-}
+def _convert_greek(text: str, format_type: str) -> str:
+    """Port of pretty-print.ts convertGreekLetters (unicode / latex / ascii)."""
+    if format_type == "latex":
+        return _GREEK_LATEX_RE.sub(lambda m: GREEK_LETTERS.get(m.group(0), m.group(0)), text)
+    if format_type == "unicode":
+        return _GREEK_UNICODE_RE.sub(
+            lambda m: GREEK_NAME_TO_CHAR.get(m.group(0), m.group(0)), text
+        )
+    if format_type == "ascii":
+        return _GREEK_CHAR_RE.sub(lambda m: GREEK_CHAR_TO_NAME.get(m.group(0), m.group(0)), text)
+    return text
 
 
 # Element lookup table for chemical subscript detection (118 elements)
@@ -285,226 +251,362 @@ def _to_superscript(text: str) -> str:
     return "".join(SUPERSCRIPT_MAP.get(c, c) for c in text)
 
 
-def _has_element_pattern(variable: str) -> bool:
-    """Check if a variable has element patterns (for chemical formula detection)."""
+def _is_ascii_letter(ch: str) -> bool:
+    """True for a single ``[A-Za-z]`` character (mirrors JS ``/[A-Za-z]/``)."""
+    return ("a" <= ch <= "z") or ("A" <= ch <= "Z")
+
+
+def _scan_elements(s: str):
+    """Greedy 2-char-before-1-char element tokenizer (pretty-print.ts scanElements).
+
+    Yields ``{"element", "digits"}`` for a recognized symbol plus the ASCII-digit
+    run that immediately follows it, or ``{"other"}`` for any single other
+    character. ASCII digits only (`[0-9]`), so pre-formatted Unicode subscripts
+    (e.g. ``₃``) are treated as ``other``.
+    """
+    tokens = []
     i = 0
-    has_element = False
-
-    while i < len(variable):
-        # Skip non-alphabetic characters at the start
-        while i < len(variable) and not variable[i].isalpha():
-            i += 1
-
-        if i >= len(variable):
-            break
-
-        # Try 2-character element first
-        if i + 1 < len(variable):
-            two_char = variable[i : i + 2]
-            if two_char in ELEMENTS:
-                has_element = True
-                i += 2
-                # Skip digits
-                while i < len(variable) and variable[i].isdigit():
-                    i += 1
-                continue
-
-        # Try 1-character element
-        one_char = variable[i]
-        if one_char in ELEMENTS:
-            has_element = True
-            i += 1
-            # Skip digits
-            while i < len(variable) and variable[i].isdigit():
+    n = len(s)
+    while i < n:
+        sym = None
+        if i + 1 < n and s[i : i + 2] in ELEMENTS:
+            sym = s[i : i + 2]
+        elif s[i] in ELEMENTS:
+            sym = s[i]
+        if sym is not None:
+            i += len(sym)
+            digits = ""
+            while i < n and s[i] in "0123456789":
+                digits += s[i]
                 i += 1
-            continue
+            tokens.append({"element": sym, "digits": digits})
+        else:
+            tokens.append({"other": s[i]})
+            i += 1
+    return tokens
 
-        # Not an element, move to next character
-        i += 1
 
+def _has_element_pattern(variable: str) -> bool:
+    """True only if ``variable`` is PURELY a chemical formula (pretty-print.ts).
+
+    Underscores are stripped first; any non-element ASCII letter disqualifies the
+    string (so ``alphaCO2`` is NOT a pure formula and routes to the mixed path).
+    """
+    clean = variable.replace("_", "")
+    has_element = False
+    for t in _scan_elements(clean):
+        if "element" in t:
+            has_element = True
+        elif _is_ascii_letter(t["other"]):
+            return False
     return has_element
 
 
-def _find_first_element_index(variable: str) -> int:
-    """Find the index of the first chemical element in the variable name."""
-    i = 0
-    while i < len(variable):
-        if not variable[i].isalpha():
-            i += 1
-            continue
-        if i + 1 < len(variable):
-            two_char = variable[i : i + 2]
-            if two_char in ELEMENTS:
-                return i
-        if variable[i] in ELEMENTS:
-            return i
-        i += 1
-    return -1
+def _latex_chemical_inner(formula: str) -> str:
+    """Digit runs → LaTeX subscripts, WITHOUT the ``\\mathrm{}`` wrapper.
 
-
-def _latex_subscript_digits(s: str) -> str:
-    """Convert digit sequences in a string to LaTeX subscripts.
-    Single digits: _N, multi-digit: _{NN}"""
+    ``H2O`` → ``H_2O``, ``CO12`` → ``CO_{12}`` (pretty-print.ts latexChemicalInner).
+    """
     return re.sub(
-        r"(\d+)", lambda m: f"_{{{m.group(1)}}}" if len(m.group(1)) > 1 else f"_{m.group(1)}", s
+        r"([0-9]+)",
+        lambda m: f"_{m.group(1)}" if len(m.group(1)) == 1 else f"_{{{m.group(1)}}}",
+        formula,
     )
 
 
-def _format_chemical_subscripts(variable: str, format_type: str) -> str:
+def _strip_outer_mathrm(s: str) -> str:
+    """Peel one leading ``\\mathrm{`` and one trailing ``}`` (pretty-print.ts)."""
+    inner = s[len("\\mathrm{") :] if s.startswith("\\mathrm{") else s
+    return inner[:-1] if inner.endswith("}") else inner
+
+
+def _get_chemical_suffix(variable: str):
+    """Split a variable into a non-element prefix and a chemical suffix, or None.
+
+    Port of pretty-print.ts getChemicalSuffix.
     """
-    Apply element-aware chemical subscript formatting to a variable name.
-    Uses greedy 2-char-before-1-char matching for element detection.
+    if "_" in variable:
+        parts = variable.split("_")
+        if len(parts) == 2:
+            prefix, suffix = parts
+            if _has_element_pattern(suffix) and not _has_element_pattern(prefix):
+                return {"prefix": prefix, "suffix": suffix}
+        if len(parts) == 3:
+            prefix = parts[0]
+            suffix = "_".join(parts[1:])
+            if _has_element_pattern(suffix) and not _has_element_pattern(prefix):
+                return {"prefix": prefix, "suffix": suffix}
+    for i in range(1, len(variable)):
+        prefix, suffix = variable[:i], variable[i:]
+        if _has_element_pattern(suffix) and not _has_element_pattern(prefix):
+            return {"prefix": prefix, "suffix": suffix}
+    return None
+
+
+def _format_chemical_suffix_inner(variable: str) -> str:
+    """Inner content of a chemical suffix embedded in a subscript (pretty-print.ts)."""
+    if _get_chemical_suffix(variable):
+        return _strip_outer_mathrm(_format_chemical_latex(variable))
+    if variable in ELEMENTS and not any(c in "0123456789" for c in variable):
+        return variable
+    return _latex_chemical_inner(variable)
+
+
+def _is_preformatted_latex(variable: str) -> bool:
+    """Whether a variable NAME is already LaTeX that must render verbatim.
+
+    Port of pretty-print.ts isPreformattedLatex. Three shapes qualify: an
+    already roman-wrapped species (``\\mathrm{...}``); a bare control word with
+    no group (``\\theta``); or a name carrying its own ``{...}`` subscript
+    grouping but no command (``k_{NO_O3}``, ``j_{NO2}``). A different
+    ``\\command{...}`` atom (``\\mathbf{v}``) is NOT pre-formatted.
     """
-    # Check for Greek letters in latex mode
-    if format_type == "latex" and variable in GREEK_LATEX:
-        return GREEK_LATEX[variable]
+    if variable.startswith("\\mathrm{"):
+        return True
+    if "\\" in variable:
+        return "{" not in variable
+    return "{" in variable or "}" in variable
 
-    # Check if variable looks like a chemical formula
-    has_elements = _has_element_pattern(variable)
 
-    if format_type == "latex":
-        if has_elements:
-            # A bare element symbol without digits (e.g. "B", "P", "S") is a
-            # variable name, not a chemical formula → keep it italic/unwrapped.
-            if variable in ELEMENTS and not any(c.isdigit() for c in variable):
-                return variable
-            elem_start = _find_first_element_index(variable)
-            if elem_start > 0:
-                # Mixed variable: non-element prefix + chemical part
-                prefix = variable[:elem_start].rstrip("_")
-                chemical = variable[elem_start:]
-                formatted_chemical = _latex_subscript_digits(chemical)
-                return f"{prefix}_{{\\mathrm{{{formatted_chemical}}}}}"
-            # Pure chemical formula
-            formatted = _latex_subscript_digits(variable)
-            return f"\\mathrm{{{formatted}}}"
-        # Standalone named Greek letter → LaTeX command (e.g. "phi" → "\phi").
-        if variable in NAMED_GREEK_LATEX:
-            return NAMED_GREEK_LATEX[variable]
-        # Single character → italic, no wrapping.
-        if len(variable) == 1:
-            return variable
-        # Multi-character non-chemical name → upright \mathrm, escaping
-        # LaTeX-special underscores (mirrors pretty-print.ts).
-        escaped = variable.replace("_", "\\_")
-        return f"\\mathrm{{{escaped}}}"
-
-    if format_type == "ascii":
-        # For ASCII, just return as-is (no special formatting for chemical subscripts)
+def _format_chemical_latex(variable: str) -> str:
+    """LaTeX chemical / variable subscript formatting (pretty-print.ts formatChemicalLatex)."""
+    # A trailing ionic charge is a superscript (``Ca^{2+}``), not a subscript.
+    body, charge = _split_charge(variable)
+    if charge is not None and _has_element_pattern(body):
+        return f"{_format_chemical_latex(body)}^{{{charge}}}"
+    # A name that is already LaTeX renders verbatim (re-formatting only mangles it).
+    if _is_preformatted_latex(variable):
         return variable
 
+    has_elements = _has_element_pattern(variable)
+
+    chem = _get_chemical_suffix(variable)
+    if chem:
+        prefix, suffix = chem["prefix"], chem["suffix"]
+        if "_" in suffix:
+            segments = suffix.split("_")
+            should_split = bool(re.search(r"[0-9]$", segments[0])) or len(prefix) > 1
+            if should_split:
+                if len(prefix) == 1 and _is_ascii_letter(prefix):
+                    result = prefix
+                else:
+                    result = f"\\mathrm{{{prefix}}}"
+                for seg in segments:
+                    if _has_element_pattern(seg):
+                        result += f"_{{\\mathrm{{{_latex_chemical_inner(seg)}}}}}"
+                    else:
+                        result += f"_\\mathrm{{{seg}}}"
+                return result
+        inner_content = _format_chemical_suffix_inner(suffix)
+        formatted_prefix = f"\\mathrm{{{prefix}}}" if len(prefix) > 1 else prefix
+        return f"{formatted_prefix}_{{\\mathrm{{{inner_content}}}}}"
+
+    if has_elements:
+        # A bare element symbol without digits (e.g. "B", "C", "N") is a variable name.
+        if variable in ELEMENTS and not any(c in "0123456789" for c in variable):
+            return variable
+        return f"\\mathrm{{{_latex_chemical_inner(variable)}}}"
+
+    # Regular (non-chemical) variable.
+    # Greek letter (Unicode or named) → return as-is (convertGreek handles later).
+    if variable in GREEK_LETTERS:
+        return variable
+    # Single letter + digits → italic with subscript (e.g. T_{298}, x_1).
+    single = re.match(r"^([A-Za-zΑ-ω])([0-9]+)$", variable)
+    if single:
+        letter, digits = single.group(1), single.group(2)
+        return f"{letter}_{digits}" if len(digits) == 1 else f"{letter}_{{{digits}}}"
+    # Single letter (Latin or Greek) → italic (no wrapping).
+    if len(variable) == 1:
+        return variable
+    # Underscore-separated variable with mixed segments.
+    if "_" in variable:
+        parts = variable.split("_")
+        if any(_has_element_pattern(p) for p in parts):
+            base = parts[0]
+            if len(base) == 1 and _is_ascii_letter(base):
+                result = base
+            elif _has_element_pattern(base):
+                result = _format_chemical_latex(base)
+            else:
+                result = f"\\mathrm{{{base}}}"
+            for part in parts[1:]:
+                if _has_element_pattern(part):
+                    result += f"_{{\\mathrm{{{_latex_chemical_inner(part)}}}}}"
+                else:
+                    result += f"_\\mathrm{{{part}}}"
+            return result
+        escaped = variable.replace("_", "\\_")
+        return f"\\mathrm{{{escaped}}}"
+    # A symbol with no lowercase letters (e.g. "RT", "-E") is a math variable,
+    # not a descriptive name — leave it italic instead of wrapping in \mathrm{}.
+    if not re.search(r"[a-z]", variable):
+        return variable
+    # Multi-character → \mathrm{}.
+    return f"\\mathrm{{{variable}}}"
+
+
+# Trailing ionic charge: digits-then-sign (``Ca2+``), sign-then-digits
+# (``SO4-2``), or a bare sign (``Na+``). Normalized to ``<digits><sign>`` and
+# rendered as a SUPERSCRIPT (contract F-7). ``(.+?)`` keeps the body non-empty
+# so a bare operator token (``+``/``-``) is never mistaken for a charge.
+_CHARGE_DIGIT_SIGN_RE = re.compile(r"^(.+?)([0-9]+)([+-])$")
+_CHARGE_SIGN_DIGIT_RE = re.compile(r"^(.+?)([+-])([0-9]+)$")
+_CHARGE_BARE_SIGN_RE = re.compile(r"^(.+?)([+-])$")
+
+
+def _split_charge(formula: str):
+    """Split a trailing ionic charge off a formula (pretty-print.ts splitCharge).
+
+    Returns ``(body, charge)`` with the charge normalized to magnitude-then-sign
+    (``"2+"``, ``"2-"``), or ``(formula, None)`` when there is no trailing charge.
+    """
+    m = _CHARGE_DIGIT_SIGN_RE.match(formula)
+    if m:
+        return m.group(1), m.group(2) + m.group(3)
+    m = _CHARGE_SIGN_DIGIT_RE.match(formula)
+    if m:
+        return m.group(1), m.group(3) + m.group(2)
+    m = _CHARGE_BARE_SIGN_RE.match(formula)
+    if m:
+        return m.group(1), m.group(2)
+    return formula, None
+
+
+def _format_chemical_unicode(variable: str) -> str:
+    """Unicode chemical / variable subscript formatting (pretty-print.ts formatChemicalUnicode)."""
+    # A trailing ionic charge is a superscript (``Ca²⁺``), not a subscript.
+    body, charge = _split_charge(variable)
+    if charge is not None and _has_element_pattern(body):
+        return f"{_format_chemical_unicode(body)}{_to_superscript(charge)}"
+
+    has_elements = _has_element_pattern(variable)
+
     if not has_elements:
-        # Standalone named Greek letter → Unicode symbol; otherwise unchanged.
-        return NAMED_GREEK_UNICODE.get(variable, variable)
+        chem = _get_chemical_suffix(variable)
+        if chem:
+            prefix, suffix = chem["prefix"], chem["suffix"]
+            chemical_part = _format_chemical_unicode(suffix)
+            if "_" not in variable:
+                return f"{prefix}{chemical_part}"
+            return f"{prefix}_{chemical_part}"
+        if "_" in variable:
+            parts = variable.split("_")
+            if any(_has_element_pattern(p) for p in parts):
+                return "_".join(
+                    _format_chemical_unicode(p) if _has_element_pattern(p) else p for p in parts
+                )
+        return variable
 
-    # For unicode: element-aware subscript detection
+    # Element-aware subscript detection: elements keep their digits as subscripts;
+    # stray digits (e.g. after a closing paren) are subscripted too.
     result = ""
-    i = 0
-
-    while i < len(variable):
-        matched = False
-
-        # Try 2-character element first
-        if i + 1 < len(variable):
-            two_char = variable[i : i + 2]
-            if two_char in ELEMENTS:
-                result += two_char
-                i += 2
-                # Convert following digits to subscripts
-                while i < len(variable) and variable[i].isdigit():
-                    result += SUBSCRIPT_DIGITS[int(variable[i])]
-                    i += 1
-                matched = True
-
-        # Try 1-character element if 2-char didn't match
-        if not matched and i < len(variable):
-            one_char = variable[i]
-            if one_char in ELEMENTS:
-                result += one_char
-                i += 1
-                # Convert following digits to subscripts
-                while i < len(variable) and variable[i].isdigit():
-                    result += SUBSCRIPT_DIGITS[int(variable[i])]
-                    i += 1
-                matched = True
-
-        # If not an element, copy character as-is
-        if not matched:
-            result += variable[i]
-            i += 1
-
+    for t in _scan_elements(variable):
+        if "element" in t:
+            result += t["element"]
+            for d in t["digits"]:
+                result += SUBSCRIPT_DIGITS[int(d)]
+        elif t["other"] in "0123456789":
+            result += SUBSCRIPT_DIGITS[int(t["other"])]
+        else:
+            result += t["other"]
     return result
 
 
-# Integers with magnitude below this are printed as plain decimals; larger ones
-# fall through to scientific notation.
-_INT_DECIMAL_THRESHOLD = 1e6
-# Upper bound (exclusive) of the plain-decimal band for floats; above it uses
-# scientific notation.
-_LARGE_NUMBER_THRESHOLD = 1e5
-# Lower bound (inclusive) of the plain-decimal band for floats; below it uses
-# scientific notation.
-_SMALL_NUMBER_THRESHOLD = 1e-4
+def _format_chemical_subscripts(variable: str, format_type: str) -> str:
+    """Element-aware chemical subscript + Greek-letter formatting of a bare name.
+
+    Mirrors pretty-print.ts formatAny's ``variable`` case: ASCII transliterates
+    Greek Unicode chars to names; unicode / latex format chemical subscripts then
+    apply the Greek conversion to the result.
+    """
+    if format_type == "ascii":
+        return _convert_greek(variable, "ascii")
+    if format_type == "latex":
+        # A name already in LaTeX form (`\mathrm{O_3}`, `\theta`, `k_{NO_O3}`)
+        # renders verbatim — re-formatting or Greek transliteration only mangles it.
+        if _is_preformatted_latex(variable):
+            return variable
+        return _convert_greek(_format_chemical_latex(variable), "latex")
+    # unicode: a name carrying a LaTeX command (backslash) renders verbatim
+    # (`\mathrm{O_3}`, `\theta`); a brace-only name like `k_{NO_O3}` still gets
+    # its digits subscripted (`k_{NO_O₃}`), matching the reference bindings.
+    if "\\" in variable:
+        return variable
+    return _convert_greek(_format_chemical_unicode(variable), "unicode")
+
+
+# Scientific-notation cutoffs (RENDERING_CONTRACT.md / spec §6.1): a nonzero
+# number whose magnitude is below the min or at/above the max renders in
+# scientific notation; everything between renders as a plain decimal / integer.
+_SCI_NOTATION_MIN = 0.01
+_SCI_NOTATION_MAX = 10000
 # Precision format for plain-decimal floats (trailing zeros stripped afterward).
 _DECIMAL_FLOAT_FORMAT = "%.12g"
 # Precision format for scientific-notation numbers.
 _SCIENTIFIC_FORMAT = "%.6e"
+# JSON string tokens for non-finite values → their float value.
+_NONFINITE = {"Infinity": math.inf, "-Infinity": -math.inf, "NaN": math.nan}
 
 
 def _format_number(num: int | float, format_type: str) -> str:
-    """Format a number in scientific notation with appropriate formatting."""
-    if isinstance(num, int) and abs(num) < _INT_DECIMAL_THRESHOLD:
-        s = str(num)
-        if format_type == "unicode":
-            s = s.replace("-", "−")
-        return s
+    """Format a number per the rendering contract (number-formatting section).
 
-    if (
-        isinstance(num, float)
-        and abs(num) >= _SMALL_NUMBER_THRESHOLD
-        and abs(num) < _LARGE_NUMBER_THRESHOLD
-        and num.is_integer()
-    ):
+    Non-finite values render as symbols (``∞`` / ``−∞`` / ``NaN``); the unicode
+    sign is U+2212 (mantissa AND exponent); ascii scientific notation carries NO
+    ``+`` on a positive exponent; mantissa precision is never lost.
+    """
+    if isinstance(num, float):
+        if math.isinf(num):
+            if format_type == "unicode":
+                return "∞" if num > 0 else "−∞"
+            if format_type == "latex":
+                return "\\infty" if num > 0 else "-\\infty"
+            return "inf" if num > 0 else "-inf"
+        if math.isnan(num):
+            if format_type == "latex":
+                return "\\text{NaN}"
+            return "NaN"
+
+    if num == 0:
+        return "0"
+
+    abs_num = abs(num)
+
+    if abs_num < _SCI_NOTATION_MIN or abs_num >= _SCI_NOTATION_MAX:
+        mantissa, exponent = (_SCIENTIFIC_FORMAT % num).split("e")
+        exp = int(exponent)
+        mantissa_val = float(mantissa)
+        # A whole mantissa keeps one decimal place ("2.0") to preserve precision.
+        if mantissa_val == int(mantissa_val):
+            mantissa = f"{int(mantissa_val)}.0"
+        else:
+            mantissa = str(mantissa_val)
+        if format_type == "unicode":
+            return f"{mantissa.replace('-', '−')}×10{_to_superscript(str(exp))}"
+        if format_type == "latex":
+            return f"{mantissa} \\times 10^{{{exp}}}"
+        # ascii: no leading `+` on a positive exponent.
+        return f"{mantissa}e{exp}"
+
+    # Plain-decimal band. Integers (and integral floats) print without a point.
+    if isinstance(num, int) or (isinstance(num, float) and num.is_integer()):
         s = str(int(num))
-        if format_type == "unicode":
-            s = s.replace("-", "−")
-        return s
-
-    # For regular-sized floats, return as-is without scientific notation
-    if (
-        isinstance(num, float)
-        and abs(num) >= _SMALL_NUMBER_THRESHOLD
-        and abs(num) < _LARGE_NUMBER_THRESHOLD
-    ):
-        # Use reasonable precision for display
-        s = (_DECIMAL_FLOAT_FORMAT % num).rstrip("0").rstrip(".")
-        if format_type == "unicode":
-            s = s.replace("-", "−")
-        return s
-
-    # Use scientific notation for very large or very small numbers
-    str_repr = _SCIENTIFIC_FORMAT % num
-    if "e" not in str_repr:
-        return str_repr
-
-    mantissa, exponent = str_repr.split("e")
-    exp = int(exponent)
-
-    # Convert mantissa to float to handle it properly
-    mantissa_val = float(mantissa)
-    # If mantissa is a whole number, format it with one decimal place to preserve precision like "2.0"
-    if mantissa_val == int(mantissa_val):
-        mantissa = f"{int(mantissa_val)}.0"
     else:
-        mantissa = str(mantissa_val)
-
+        s = (_DECIMAL_FLOAT_FORMAT % num).rstrip("0").rstrip(".")
     if format_type == "unicode":
-        return f"{mantissa}×10{_to_superscript(str(exp))}"
-    if format_type == "latex":
-        return f"{mantissa} \\times 10^{{{exp}}}"
-    if format_type == "ascii":
-        return f"{mantissa}*10^{exp}"
-    return str_repr  # Plain scientific notation
+        s = s.replace("-", "−")
+    return s
+
+
+def _latex_mult_sep(args) -> str:
+    """LaTeX multiplication separator (pretty-print.ts `*`).
+
+    A product whose operands are already-typeset factors (a string containing a
+    backslash, e.g. ``\\mathrm{O_3}``) is written by implicit juxtaposition (a
+    space); a product of plain symbols uses ``\\cdot`` to stay unambiguous.
+    """
+    return " " if any(isinstance(a, str) and "\\" in a for a in args) else " \\cdot "
 
 
 def _get_operator_precedence(op: str) -> int:
@@ -558,6 +660,11 @@ def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = F
     if is_right_operand and parent.op in ["-", "/", "^", "**", "pow"]:
         return True
 
+    # `^` is RIGHT-associative, so a LEFT-nested power must be parenthesized:
+    # `(a^b)^c` reads back correctly, `a^b^c` would mean `a^(b^c)` (contract F-7).
+    if not is_right_operand and parent.op in ["^", "**", "pow"]:
+        return True
+
     return False
 
 
@@ -577,6 +684,11 @@ def _format(target: Expr | Equation | Model | ReactionSystem | EsmFile, format_t
         return _format_number(target, format_type)
 
     if isinstance(target, str):
+        # Non-finite values may arrive as the JSON string tokens; render them as
+        # symbols (∞ / −∞ / NaN) rather than treating them as variable names.
+        nonfinite = _NONFINITE.get(target)
+        if nonfinite is not None:
+            return _format_number(nonfinite, format_type)
         return _format_chemical_subscripts(target, format_type)
 
     if isinstance(target, ExprNode):
@@ -1001,13 +1113,14 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
         # same-precedence parenthesization) that the plain fold does not need.
         if len(args) > 2:
             if op == "*":
+                latex_sep = _latex_mult_sep(args)
                 result = format_arg(args[0])
                 for a in args[1:]:
                     fa = format_arg(a, True)
                     if format_type == "unicode":
                         result = f"{result}·{fa}"
                     elif format_type == "latex":
-                        result = f"{result} \\cdot {fa}"
+                        result = f"{result}{latex_sep}{fa}"
                     else:
                         result = f"{result} * {fa}"
                 return result
@@ -1037,8 +1150,9 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 if format_type == "latex":
                     sym = " \\land " if op == "and" else " \\lor "
                     return sym.join(format_arg(a) for a in args)
-                sym = " && " if op == "and" else " || "
-                return sym.join(f"({format_arg(a)})" for a in args)
+                # ascii: word operators, precedence disambiguates (no parens).
+                sym = " and " if op == "and" else " or "
+                return sym.join(format_arg(a) for a in args)
             if op in ("min", "max"):
                 if format_type == "latex":
                     return f"\\{op}(" + ", ".join(to_latex(a) for a in args) + ")"
@@ -1072,7 +1186,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
             if format_type == "unicode":
                 return f"{format_arg(left)}·{format_arg(right, True)}"
             if format_type == "latex":
-                return f"{format_arg(left)} \\cdot {format_arg(right, True)}"
+                return f"{format_arg(left)}{_latex_mult_sep(args)}{format_arg(right, True)}"
             return f"{format_arg(left)} * {format_arg(right, True)}"
 
         if op == "/":
@@ -1125,14 +1239,14 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"{format_arg(left)} ∧ {format_arg(right, True)}"
             if format_type == "latex":
                 return f"{format_arg(left)} \\land {format_arg(right, True)}"
-            return f"({format_arg(left)}) && ({format_arg(right)})"
+            return f"{format_arg(left)} and {format_arg(right, True)}"
 
         if op == "or":
             if format_type == "unicode":
                 return f"{format_arg(left)} ∨ {format_arg(right, True)}"
             if format_type == "latex":
                 return f"{format_arg(left)} \\lor {format_arg(right, True)}"
-            return f"({format_arg(left)}) || ({format_arg(right)})"
+            return f"{format_arg(left)} or {format_arg(right, True)}"
 
         if op in ("min", "max"):
             if format_type == "latex":
@@ -1159,7 +1273,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"¬{format_arg(arg)}"
             if format_type == "latex":
                 return f"\\neg {format_arg(arg)}"
-            return f"!({format_arg(arg)})"
+            return f"not {format_arg(arg)}"
 
         # Standard trig
         if op in ("sin", "cos", "tan"):
@@ -1212,7 +1326,8 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
         if op == "sqrt":
             if format_type == "unicode":
-                return f"√{fa}"
+                # Parenthesize a compound radicand for clarity: √(a² + b²).
+                return f"√({fa})" if _is_op_node(arg) else f"√{fa}"
             if format_type == "latex":
                 return f"\\sqrt{{{to_latex(arg)}}}"
             return f"sqrt({fa})"
@@ -1238,11 +1353,16 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
         if op == "D":
             wrt_var = wrt or "t"
+            # The operand is parenthesized when it is an operator node so
+            # `∂(x + y)/∂t` cannot read back as `(∂x) + (y/∂t)` (contract F-7).
             if format_type == "unicode":
-                return f"∂{to_unicode(arg)}/∂{wrt_var}"
+                return f"∂{_wrap_if_op(arg, 'unicode')}/∂{wrt_var}"
             if format_type == "latex":
-                return f"\\frac{{\\partial {to_latex(arg)}}}{{\\partial {wrt_var}}}"
-            return f"D({fa})/D{wrt_var}"
+                return f"\\frac{{\\partial {_wrap_if_op(arg, 'latex')}}}{{\\partial {wrt_var}}}"
+            # ascii fraction form mirroring unicode/latex ∂x/∂t: `D(x)/Dt`, and
+            # `D(x + y)/Dt` for an operator-node operand (the D() call parens
+            # supply the parenthesization the goldens require).
+            return f"D({to_ascii(arg)})/D{wrt_var}"
 
         if op == "sign":
             if format_type == "unicode":

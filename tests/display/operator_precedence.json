@@ -237,7 +237,7 @@
           },
           "unicode": "∂x/∂t + y",
           "latex": "\\frac{\\partial x}{\\partial t} + y",
-          "ascii": "D(x,t) + y",
+          "ascii": "D(x)/Dt + y",
           "note": "Derivative has function-like precedence"
         },
         {
@@ -256,7 +256,7 @@
           },
           "unicode": "∂(x + y)/∂t",
           "latex": "\\frac{\\partial (x + y)}{\\partial t}",
-          "ascii": "D(x + y, t)",
+          "ascii": "D(x + y)/Dt",
           "note": "Derivative of sum requires parentheses"
         },
         {
@@ -484,7 +484,7 @@
           },
           "unicode": "∂CH₂O/∂t + k_OH·CH₂O·OH",
           "latex": "\\frac{\\partial \\mathrm{CH_2O}}{\\partial t} + k_{\\mathrm{OH}} \\cdot \\mathrm{CH_2O} \\cdot \\mathrm{OH}",
-          "ascii": "D(CH2O,t) + k_OH * CH2O * OH",
+          "ascii": "D(CH2O)/Dt + k_OH * CH2O * OH",
           "note": "Complex chemical equation with subscripts"
         }
       ]
@@ -584,9 +584,9 @@
               }
             ]
           },
-          "unicode": "t ≤ 0 ∨ t ≥ 86400",
-          "latex": "t \\leq 0 \\lor t \\geq 86400",
-          "ascii": "t <= 0 or t >= 8.64e+4",
+          "unicode": "t ≤ 0 ∨ t ≥ 8.64×10⁴",
+          "latex": "t \\leq 0 \\lor t \\geq 8.64 \\times 10^{4}",
+          "ascii": "t <= 0 or t >= 8.64e4",
           "note": "Outside time window condition"
         }
       ]

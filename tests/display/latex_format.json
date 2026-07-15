@@ -312,7 +312,7 @@
             }
           ]
         },
-        "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t} = -k_{NO_O3} \\mathrm{O_3} \\mathrm{NO} M + j_{NO2} \\mathrm{NO_2}",
+        "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t} = (-k_{NO_O3}) \\mathrm{O_3} \\mathrm{NO} M + j_{NO2} \\mathrm{NO_2}",
         "description": "Complete atmospheric chemistry ODE"
       }
     ]

@@ -247,7 +247,17 @@ async function prefetchRefs(
       if (seen.has(key)) continue
       seen.add(key)
 
-      const content = await loadRef(ref, currentBase)
+      let content: string
+      try {
+        content = await loadRef(ref, currentBase)
+      } catch {
+        // An unreadable target (missing file / failed fetch) is the sync core's
+        // error to report — resolveRefEdge re-throws it WITH the offending
+        // mount's JSON Pointer attached (the async prefetch has no pointer
+        // context). Leave it uncached and let the sync pass reject it. Mirrors
+        // the malformed-JSON handling below.
+        continue
+      }
       cache.set(key, content)
 
       const refBase = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, currentBase)

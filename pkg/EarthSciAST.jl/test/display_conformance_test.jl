@@ -20,8 +20,9 @@ if !isdefined(Main, :ESM_TESTUTILS_LOADED)
 end
 
 # Build the typed AST from a fixture `input` object. `apply_expression_template`
-# is intentionally rejected by `parse_expression` (it is lowered before typed
-# parsing), so construct that node directly from its `name` + `bindings`.
+# is normally lowered before typed parsing; `parse_expression` also builds it
+# directly (for the display path), but this constructs the node explicitly from
+# its `name` + `bindings` so the test is independent of that entry point.
 function _build_display_expr(input)
     op = string(get(input, :op, ""))
     if op == "apply_expression_template"

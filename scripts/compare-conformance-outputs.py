@@ -354,14 +354,20 @@ def _route_pin_mismatch(
     agreed = len({json.dumps(v, sort_keys=True, default=str) for v in mismatched.values()}) == 1
 
     if unanimous and agreed:
+        # All bindings produce the SAME output, and it is not the golden. This is
+        # a triage signal, NOT a verdict: unanimity is not proof the golden
+        # drifted — five bindings can share the same bug (audit F-7). Route it to
+        # the fixture owner so it is not misattributed to one binding, but frame
+        # it as a question. The run fails red either way; a human decides whether
+        # the golden or all five bindings are wrong.
         corpus_failures.append(
             Failure(
-                f"{check}:stale_pin",
+                f"{check}:unanimous_mismatch",
                 "+".join(sorted(got_by_lang)),
                 item,
                 expected=want,
                 actual=next(iter(mismatched.values())),
-                note="every binding agrees on a DIFFERENT answer — the pin has drifted",
+                note="all bindings agree on the same output, which differs from the golden — verify whether the golden or all five bindings are wrong",
             )
         )
         return

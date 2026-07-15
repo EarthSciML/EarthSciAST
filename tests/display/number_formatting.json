@@ -33,9 +33,9 @@
     "test_cases": [
       {
         "input": 0.005,
-        "unicode": "0.005",
-        "latex": "0.005",
-        "ascii": "0.005"
+        "unicode": "5.0×10⁻³",
+        "latex": "5.0 \\times 10^{-3}",
+        "ascii": "5.0e-3"
       },
       {
         "input": 298.15,

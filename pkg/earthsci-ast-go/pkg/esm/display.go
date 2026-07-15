@@ -77,6 +77,16 @@ func formatExpression(target any, format string) string {
 		}
 		return "false"
 	case string:
+		// JSON cannot express non-finite numbers as literals, so they arrive as
+		// the strings "Infinity" / "-Infinity" / "NaN"; render them as numbers.
+		switch expr {
+		case "Infinity":
+			return formatNumber(math.Inf(1), format)
+		case "-Infinity":
+			return formatNumber(math.Inf(-1), format)
+		case "NaN":
+			return formatNumber(math.NaN(), format)
+		}
 		return formatVariable(expr, format)
 	case ExprNode:
 		return formatExprNode(expr, format)
@@ -105,60 +115,206 @@ func formatExpression(target any, format string) string {
 	}
 }
 
-// formatNumber formats numeric values with scientific notation when appropriate
+// formatNumber formats numeric values per the cross-language rendering contract
+// (tests/display/RENDERING_CONTRACT.md "Number formatting"): non-finite values
+// render as symbols; magnitudes below 0.01 or at/above 10000 use scientific
+// notation with a full-precision, round-tripping mantissa; the unicode sign is
+// U+2212 while latex/ascii use ASCII '-'; ascii puts no '+' on a positive
+// exponent.
 func formatNumber(num float64, format string) string {
+	uni := format == FmtUnicode || format == FmtUnicodeSpaced
+
+	// Non-finite values are RENDERED, not stringified.
+	if math.IsNaN(num) {
+		if format == FmtLatex {
+			return "\\text{NaN}"
+		}
+		return "NaN"
+	}
+	if math.IsInf(num, 1) {
+		switch {
+		case uni:
+			return "∞"
+		case format == FmtLatex:
+			return "\\infty"
+		default:
+			return "inf"
+		}
+	}
+	if math.IsInf(num, -1) {
+		switch {
+		case uni:
+			return "−∞"
+		case format == FmtLatex:
+			return "-\\infty"
+		default:
+			return "-inf"
+		}
+	}
+
 	if num == 0 {
 		return "0"
 	}
 
-	// Handle scientific notation for very large or very small numbers
 	abs := math.Abs(num)
-	if abs >= 1e4 || abs < 0.01 {
-		// Calculate exponent manually for better control
-		exp := int(math.Floor(math.Log10(abs)))
-		mantissa := num / math.Pow(10, float64(exp))
-
-		switch format {
-		case FmtUnicode, FmtUnicodeSpaced:
-			expStr := formatSuperscript(exp)
-			mantissaStr := fmt.Sprintf("%.3g", mantissa)
-			// Replace regular minus with unicode minus for negative mantissa
-			if strings.HasPrefix(mantissaStr, "-") {
-				mantissaStr = "−" + mantissaStr[1:]
+	if abs < 0.01 || abs >= 10000 {
+		// Scientific notation. Use the shortest round-trip exponential so the
+		// mantissa never loses precision (0.009999 → 9.999, not 1.0).
+		es := strconv.FormatFloat(num, 'e', -1, 64) // e.g. "9.999e-03", "-1.8e-12"
+		eIdx := strings.IndexByte(es, 'e')
+		mantissa := es[:eIdx]
+		exp, _ := strconv.Atoi(strings.TrimPrefix(es[eIdx+1:], "+"))
+		// A whole-number mantissa shows ".0" (1 → 1.0) so 10000 prints 1.0×10⁴.
+		if !strings.Contains(mantissa, ".") {
+			mantissa += ".0"
+		}
+		switch {
+		case uni:
+			if strings.HasPrefix(mantissa, "-") {
+				mantissa = "−" + mantissa[1:]
 			}
-			return fmt.Sprintf("%s×10%s", mantissaStr, expStr)
-		case FmtLatex:
-			return fmt.Sprintf("%.3g \\times 10^{%d}", mantissa, exp)
+			return mantissa + "×10" + formatSuperscript(exp)
+		case format == FmtLatex:
+			return mantissa + " \\times 10^{" + strconv.Itoa(exp) + "}"
 		default:
-			return fmt.Sprintf("%.2g", num)
+			return mantissa + "e" + strconv.Itoa(exp)
 		}
 	}
 
-	result := fmt.Sprintf("%g", num)
-	// Replace regular minus with unicode minus in unicode format
-	if (format == FmtUnicode || format == FmtUnicodeSpaced) && strings.HasPrefix(result, "-") {
+	// Plain decimal (shortest round-trip; never exponent form in this window).
+	result := strconv.FormatFloat(num, 'f', -1, 64)
+	if uni && strings.HasPrefix(result, "-") {
 		result = "−" + result[1:]
 	}
 	return result
 }
 
-// greekUnicode maps Greek letter names to their Unicode symbols.
-var greekUnicode = map[string]string{
-	"alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
-	"zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
-	"lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "omicron": "ο",
-	"pi": "π", "rho": "ρ", "sigma": "σ", "tau": "τ", "upsilon": "υ",
-	"phi": "φ", "chi": "χ", "psi": "ψ", "omega": "ω",
+// greekNamesCanonical lists the 24 lowercase Greek names in canonical order.
+// No name is a prefix of another, so a name match at a given position is unique.
+var greekNamesCanonical = []string{
+	"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+	"iota", "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho",
+	"sigma", "tau", "upsilon", "phi", "chi", "psi", "omega",
 }
 
-// greekLatex maps Greek letter names to their LaTeX commands.
-var greekLatex = map[string]string{
-	"alpha": "\\alpha", "beta": "\\beta", "gamma": "\\gamma", "delta": "\\delta",
-	"epsilon": "\\epsilon", "zeta": "\\zeta", "eta": "\\eta", "theta": "\\theta",
-	"iota": "\\iota", "kappa": "\\kappa", "lambda": "\\lambda", "mu": "\\mu",
-	"nu": "\\nu", "xi": "\\xi", "omicron": "\\omicron", "pi": "\\pi",
-	"rho": "\\rho", "sigma": "\\sigma", "tau": "\\tau", "upsilon": "\\upsilon",
-	"phi": "\\phi", "chi": "\\chi", "psi": "\\psi", "omega": "\\omega",
+// greekNameToChar maps a Greek name to its lowercase Unicode char; the two
+// reverse maps drive char→name (ascii) and char→command (latex) conversion.
+var (
+	greekNameToChar  = map[string]rune{}
+	greekCharToName  = map[rune]string{}
+	greekCharToLatex = map[rune]string{}
+)
+
+func init() {
+	lower := []rune("αβγδεζηθικλμνξοπρστυφχψω")
+	for i, name := range greekNamesCanonical {
+		greekNameToChar[name] = lower[i]
+		greekCharToName[lower[i]] = name
+		greekCharToLatex[lower[i]] = "\\" + name
+	}
+}
+
+// isGreekLetterKey reports whether v is a lowercase Greek name (e.g. "phi") or a
+// single lowercase Greek char — the tokens convertGreekLetters can map to a
+// command, so the LaTeX variable formatter leaves them unwrapped.
+func isGreekLetterKey(v string) bool {
+	if _, ok := greekNameToChar[v]; ok {
+		return true
+	}
+	if r := []rune(v); len(r) == 1 {
+		_, ok := greekCharToName[r[0]]
+		return ok
+	}
+	return false
+}
+
+// convertGreekLetters rewrites Greek letters in already-rendered text, mirroring
+// pretty-print.ts convertGreekLetters. ascii maps each Greek char to its name;
+// unicode maps a Greek NAME (not followed by an uppercase letter — a chemical
+// prefix) to its char; latex maps a Greek char to its command AND a Greek name
+// (not followed by an uppercase letter or '}' — already inside \mathrm{}) to its
+// command. Go's regexp lacks lookahead, so the name+lookahead scan is manual.
+func convertGreekLetters(text, format string) string {
+	if format == FmtAscii {
+		var b strings.Builder
+		for _, r := range text {
+			if nm, ok := greekCharToName[r]; ok {
+				b.WriteString(nm)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	latex := format == FmtLatex
+	runes := []rune(text)
+	var b strings.Builder
+	i := 0
+	for i < len(runes) {
+		r := runes[i]
+		if latex {
+			if cmd, ok := greekCharToLatex[r]; ok {
+				b.WriteString(cmd)
+				i++
+				continue
+			}
+		}
+		if repl, n, ok := matchGreekName(runes, i, latex); ok {
+			var next rune = -1
+			if i+n < len(runes) {
+				next = runes[i+n]
+			}
+			blocked := next >= 'A' && next <= 'Z'
+			if latex {
+				// GREEK_LATEX_RE lookahead (?![A-Z}]) and lookbehind
+				// (?<![\\A-Za-z]): a name inside a \command or glued to a letter
+				// (the `eta` in `\theta`) is left alone.
+				if next == '}' {
+					blocked = true
+				}
+				if i > 0 {
+					prev := runes[i-1]
+					if prev == '\\' || (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z') {
+						blocked = true
+					}
+				}
+			}
+			if !blocked {
+				b.WriteString(repl)
+				i += n
+				continue
+			}
+		}
+		b.WriteRune(r)
+		i++
+	}
+	return b.String()
+}
+
+// matchGreekName reports whether a Greek name begins at runes[i] (all ASCII).
+// The replacement is the command (latex) or the Unicode char (unicode); n is the
+// name length in runes.
+func matchGreekName(runes []rune, i int, latex bool) (repl string, n int, ok bool) {
+	for _, name := range greekNamesCanonical {
+		L := len(name) // ASCII ⇒ rune-length == byte-length
+		if i+L > len(runes) {
+			continue
+		}
+		match := true
+		for k := 0; k < L; k++ {
+			if runes[i+k] != rune(name[k]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			if latex {
+				return "\\" + name, L, true
+			}
+			return string(greekNameToChar[name]), L, true
+		}
+	}
+	return "", 0, false
 }
 
 // latexEscape escapes LaTeX-special characters in a bare identifier / op name.
@@ -175,51 +331,25 @@ func opDisplayName(name, format string) string {
 	return name
 }
 
-// formatVariable formats variable names, mirroring the cross-language rendering
-// contract (tests/display/RENDERING_CONTRACT.md): chemical species get
-// element-aware subscripts; Greek letter names render as symbols/commands;
-// single-character identifiers stay italic (bare); multi-character non-chemical
-// identifiers render upright (\mathrm{…}, underscores escaped) in LaTeX.
+// formatVariable formats a variable-name leaf, mirroring pretty-print.ts
+// formatAny's variable case: ascii applies only Greek transliteration (no
+// chemical subscripts); unicode and latex apply element-aware chemical
+// subscripting (formatChemical*) and then Greek conversion.
 func formatVariable(varName string, format string) string {
-	// A bare element symbol without digits (e.g. "S", "P", "B", "He") is a
-	// plain variable name, NOT a chemical formula — render it verbatim in every
-	// format (matches the cross-language rendering contract).
-	if chemicalElements[varName] && !strings.ContainsAny(varName, "0123456789") {
-		return varName
-	}
-
-	// Chemical species: element-aware subscripting.
-	if isChemicalSpecies(varName) {
-		formatted := formatChemicalSubscripts(varName, format)
-		if format == FmtLatex {
-			return "\\mathrm{" + formatted + "}"
-		}
-		return formatted
-	}
-
 	switch format {
-	case FmtUnicode, FmtUnicodeSpaced:
-		if sym, ok := greekUnicode[varName]; ok {
-			return sym
-		}
-		return varName
+	case FmtAscii:
+		return convertGreekLetters(varName, FmtAscii)
 	case FmtLatex:
-		if cmd, ok := greekLatex[varName]; ok {
-			return cmd
-		}
-		if utf8.RuneCountInString(varName) <= 1 {
+		return convertGreekLetters(formatChemicalLatex(varName), FmtLatex)
+	default: // FmtUnicode, FmtUnicodeSpaced
+		// A name that already carries a LaTeX command (a backslash) is passed
+		// through verbatim — chemical-subscript/Greek conversion would only
+		// mangle it (\mathrm{O_3} → \mathrm_{O_₃}, \theta → \θ).
+		if strings.Contains(varName, "\\") {
 			return varName
 		}
-		return "\\mathrm{" + latexEscape(varName) + "}"
-	default:
-		return varName
+		return convertGreekLetters(formatChemicalUnicode(varName), FmtUnicode)
 	}
-}
-
-// isChemicalSpecies reports whether a variable name contains at least one
-// element-symbol token (using the shared greedy tokenizer).
-func isChemicalSpecies(name string) bool {
-	return tokenizeChemical(name, nil, nil)
 }
 
 // isDigit reports whether c is an ASCII digit.
@@ -227,67 +357,365 @@ func isDigit(c byte) bool {
 	return c >= '0' && c <= '9'
 }
 
-// tokenizeChemical walks name as a chemical formula with a greedy tokenizer that
-// prefers a 2-character element symbol over a 1-character one. For each
-// recognized element it calls onElement with the symbol and its trailing digit
-// run; every other byte is passed to onOther (either callback may be nil). It
-// returns whether any element symbol was recognized. Both chemical detection
-// (isChemicalSpecies) and unicode subscript rendering (formatChemicalSubscripts)
-// share this single walker.
-func tokenizeChemical(name string, onElement func(symbol, digits string), onOther func(b byte)) bool {
+// isASCIILetter reports whether c is an ASCII letter.
+func isASCIILetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+// chemToken is one token of a chemical-formula scan: a recognized element symbol
+// (with the run of digits that immediately follows), or a single other byte.
+type chemToken struct {
+	isElement bool
+	element   string
+	digits    string
+	other     byte
+}
+
+// scanElements is the greedy 2-char-before-1-char element tokenizer shared by
+// chemical detection and unicode subscript rendering (pretty-print.ts
+// scanElements).
+func scanElements(s string) []chemToken {
+	var toks []chemToken
 	i := 0
-	hasElement := false
-	for i < len(name) {
-		symLen := 0
-		if i+1 < len(name) && chemicalElements[name[i:i+2]] {
-			symLen = 2
-		} else if chemicalElements[name[i:i+1]] {
-			symLen = 1
+	for i < len(s) {
+		sym := ""
+		if i+1 < len(s) && chemicalElements[s[i:i+2]] {
+			sym = s[i : i+2]
+		} else if chemicalElements[s[i:i+1]] {
+			sym = s[i : i+1]
 		}
-
-		if symLen == 0 {
-			if onOther != nil {
-				onOther(name[i])
+		if sym != "" {
+			i += len(sym)
+			start := i
+			for i < len(s) && isDigit(s[i]) {
+				i++
 			}
+			toks = append(toks, chemToken{isElement: true, element: sym, digits: s[start:i]})
+		} else {
+			toks = append(toks, chemToken{other: s[i]})
 			i++
-			continue
 		}
+	}
+	return toks
+}
 
-		symbol := name[i : i+symLen]
-		i += symLen
-		start := i
-		for i < len(name) && isDigit(name[i]) {
-			i++
+// hasElementPattern reports whether a name is PURELY a chemical formula: it
+// contains at least one element symbol and no non-element letter (underscores
+// are ignored, mirroring pretty-print.ts hasElementPattern).
+func hasElementPattern(variable string) bool {
+	clean := strings.ReplaceAll(variable, "_", "")
+	hasElement := false
+	for _, t := range scanElements(clean) {
+		if t.isElement {
+			hasElement = true
+		} else if isASCIILetter(t.other) {
+			return false
 		}
-		if onElement != nil {
-			onElement(symbol, name[start:i])
-		}
-		hasElement = true
 	}
 	return hasElement
 }
 
-// formatChemicalSubscripts renders a chemical formula's digit runs as subscripts.
-// It is only called for names already confirmed as chemical species. In latex,
-// a digit run following any letter becomes _{…}; in the other formats, digits
-// following a recognized element symbol become Unicode subscripts.
-func formatChemicalSubscripts(name string, format string) string {
-	if format == FmtLatex {
-		// Chemical formula: convert digits to subscripts using regex.
-		re := regexp.MustCompile(`([A-Za-z])([0-9]+)`)
-		return re.ReplaceAllString(name, `${1}_{${2}}`)
+// getChemicalSuffix splits a name into a non-element prefix and an element-
+// bearing suffix (pretty-print.ts getChemicalSuffix). Underscore forms are tried
+// first (k_NO_O3 → k / NO_O3), then every character split (jNO2 → j / NO2).
+func getChemicalSuffix(variable string) (prefix, suffix string, ok bool) {
+	if strings.Contains(variable, "_") {
+		parts := strings.Split(variable, "_")
+		if len(parts) == 2 {
+			if hasElementPattern(parts[1]) && !hasElementPattern(parts[0]) {
+				return parts[0], parts[1], true
+			}
+		}
+		if len(parts) == 3 {
+			p := parts[0]
+			s := strings.Join(parts[1:], "_")
+			if hasElementPattern(s) && !hasElementPattern(p) {
+				return p, s, true
+			}
+		}
+	}
+	runes := []rune(variable)
+	for i := 1; i < len(runes); i++ {
+		p := string(runes[:i])
+		s := string(runes[i:])
+		if hasElementPattern(s) && !hasElementPattern(p) {
+			return p, s, true
+		}
+	}
+	return "", "", false
+}
+
+// latexDigitRun matches a run of decimal digits (for LaTeX subscript conversion).
+var latexDigitRun = regexp.MustCompile(`[0-9]+`)
+
+// latexChemicalInner converts every digit run to its LaTeX subscript form
+// (single digit → _D, multi-digit → _{DD}), WITHOUT a \mathrm{} wrapper.
+func latexChemicalInner(formula string) string {
+	return latexDigitRun.ReplaceAllStringFunc(formula, func(d string) string {
+		if len(d) == 1 {
+			return "_" + d
+		}
+		return "_{" + d + "}"
+	})
+}
+
+// stripOuterMathrm peels one leading `\mathrm{` and one trailing `}`.
+func stripOuterMathrm(s string) string {
+	inner := s
+	if strings.HasPrefix(inner, "\\mathrm{") {
+		inner = inner[len("\\mathrm{"):]
+	}
+	if strings.HasSuffix(inner, "}") {
+		inner = inner[:len(inner)-1]
+	}
+	return inner
+}
+
+// formatChemicalSuffixInner renders the inner content of a chemical/element-
+// bearing suffix embedded in a larger variable's subscript (pretty-print.ts
+// formatChemicalSuffixInner).
+func formatChemicalSuffixInner(variable string) string {
+	if _, _, ok := getChemicalSuffix(variable); ok {
+		return stripOuterMathrm(formatChemicalLatex(variable))
+	}
+	if chemicalElements[variable] && !strings.ContainsAny(variable, "0123456789") {
+		return variable
+	}
+	return latexChemicalInner(variable)
+}
+
+// endsWithDigit reports whether s ends with an ASCII digit.
+func endsWithDigit(s string) bool {
+	return len(s) > 0 && isDigit(s[len(s)-1])
+}
+
+// singleLetterDigits reports whether variable is a single letter (Latin or
+// Greek) followed by a run of digits, and if so returns the letter and digits.
+func singleLetterDigits(variable string) (letter, digits string, ok bool) {
+	runes := []rune(variable)
+	if len(runes) < 2 {
+		return "", "", false
+	}
+	r0 := runes[0]
+	isLetter := (r0 >= 'A' && r0 <= 'Z') || (r0 >= 'a' && r0 <= 'z') || (r0 >= 0x0391 && r0 <= 0x03C9)
+	if !isLetter {
+		return "", "", false
+	}
+	for _, r := range runes[1:] {
+		if r < '0' || r > '9' {
+			return "", "", false
+		}
+	}
+	return string(r0), string(runes[1:]), true
+}
+
+// isPreformattedLatex reports whether a variable name is ALREADY LaTeX that must
+// render verbatim rather than be re-wrapped (which only mangles it): a
+// \mathrm{…} species, a bare control word with no group (\theta), or a name
+// carrying its own {…} grouping but no command (k_{NO_O3}, j_{NO2}). A different
+// \command{…} atom such as \mathbf{v} is NOT pre-formatted — it still takes the
+// generic \mathrm{} wrap. Mirrors pretty-print.ts isPreformattedLatex.
+func isPreformattedLatex(variable string) bool {
+	if strings.HasPrefix(variable, "\\mathrm{") {
+		return true
+	}
+	if strings.Contains(variable, "\\") {
+		return !strings.Contains(variable, "{")
+	}
+	return strings.ContainsAny(variable, "{}")
+}
+
+// hasLowercaseLetter reports whether s contains an ASCII lowercase letter.
+func hasLowercaseLetter(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'a' && s[i] <= 'z' {
+			return true
+		}
+	}
+	return false
+}
+
+// formatChemicalLatex is the LaTeX variable/chemical subscript formatter
+// (pretty-print.ts formatChemicalLatex).
+func formatChemicalLatex(variable string) string {
+	// A trailing ionic charge is a superscript (Ca^{2+}), not a subscript.
+	if body, charge, ok := splitCharge(variable); ok && hasElementPattern(body) {
+		return formatChemicalLatex(body) + "^{" + charge + "}"
+	}
+	// A name that is already LaTeX passes through untouched.
+	if isPreformattedLatex(variable) {
+		return variable
 	}
 
-	// Element-aware subscript conversion for the unicode / ascii formats.
-	result := strings.Builder{}
-	tokenizeChemical(name,
-		func(symbol, digits string) {
-			result.WriteString(symbol)
-			result.WriteString(formatSubscript(digits))
-		},
-		func(b byte) { result.WriteByte(b) },
-	)
-	return result.String()
+	hasElements := hasElementPattern(variable)
+
+	if prefix, suffix, ok := getChemicalSuffix(variable); ok {
+		if strings.Contains(suffix, "_") {
+			segments := strings.Split(suffix, "_")
+			shouldSplit := endsWithDigit(segments[0]) || utf8.RuneCountInString(prefix) > 1
+			if shouldSplit {
+				var result string
+				if utf8.RuneCountInString(prefix) == 1 && isASCIILetter(prefix[0]) {
+					result = prefix
+				} else {
+					result = "\\mathrm{" + prefix + "}"
+				}
+				for _, seg := range segments {
+					if hasElementPattern(seg) {
+						result += "_{\\mathrm{" + latexChemicalInner(seg) + "}}"
+					} else {
+						result += "_\\mathrm{" + seg + "}"
+					}
+				}
+				return result
+			}
+		}
+		innerContent := formatChemicalSuffixInner(suffix)
+		formattedPrefix := prefix
+		if utf8.RuneCountInString(prefix) > 1 {
+			formattedPrefix = "\\mathrm{" + prefix + "}"
+		}
+		return formattedPrefix + "_{\\mathrm{" + innerContent + "}}"
+	}
+
+	if hasElements {
+		if chemicalElements[variable] && !strings.ContainsAny(variable, "0123456789") {
+			return variable
+		}
+		return "\\mathrm{" + latexChemicalInner(variable) + "}"
+	}
+
+	// Regular (non-chemical) variable.
+	// A Greek letter (name or char) is returned as-is so convertGreekLetters can
+	// map it to its command (phi → \phi), rather than wrapping it in \mathrm{}.
+	if isGreekLetterKey(variable) {
+		return variable
+	}
+	if letter, digits, ok := singleLetterDigits(variable); ok {
+		if len(digits) == 1 {
+			return letter + "_" + digits
+		}
+		return letter + "_{" + digits + "}"
+	}
+	if utf8.RuneCountInString(variable) == 1 {
+		return variable
+	}
+	if strings.Contains(variable, "_") {
+		parts := strings.Split(variable, "_")
+		anyChemical := false
+		for _, p := range parts {
+			if hasElementPattern(p) {
+				anyChemical = true
+				break
+			}
+		}
+		if anyChemical {
+			base := parts[0]
+			var result string
+			if utf8.RuneCountInString(base) == 1 && isASCIILetter(base[0]) {
+				result = base
+			} else if hasElementPattern(base) {
+				result = formatChemicalLatex(base)
+			} else {
+				result = "\\mathrm{" + base + "}"
+			}
+			for i := 1; i < len(parts); i++ {
+				part := parts[i]
+				if hasElementPattern(part) {
+					result += "_{\\mathrm{" + latexChemicalInner(part) + "}}"
+				} else {
+					result += "_\\mathrm{" + part + "}"
+				}
+			}
+			return result
+		}
+		return "\\mathrm{" + latexEscape(variable) + "}"
+	}
+	// A symbol with no lowercase letters (e.g. "RT", "-E") is a math variable,
+	// not a descriptive name — leave it italic rather than \mathrm{}-wrapping it.
+	if !hasLowercaseLetter(variable) {
+		return variable
+	}
+	return "\\mathrm{" + variable + "}"
+}
+
+// chargeDigitsSign / chargeSignDigits / chargeBareSign detect a trailing ion
+// charge: digits-then-sign ("Ca2+"), sign-then-digits ("SO4-2"), or a bare sign
+// ("Na+"). The charge always renders magnitude-then-sign.
+var (
+	chargeDigitsSign = regexp.MustCompile(`^(.+?)([0-9]+)([+-])$`)
+	chargeSignDigits = regexp.MustCompile(`^(.+?)([+-])([0-9]+)$`)
+	chargeBareSign   = regexp.MustCompile(`^(.+?)([+-])$`)
+)
+
+// splitCharge peels a trailing ion charge from a formula, returning the body and
+// the charge (magnitude then sign, e.g. "2+" / "2-" / "+"). Mirrors
+// pretty-print.ts splitCharge. The charge renders as a superscript, never a
+// count subscript.
+func splitCharge(formula string) (body, charge string, ok bool) {
+	if m := chargeDigitsSign.FindStringSubmatch(formula); m != nil {
+		return m[1], m[2] + m[3], true
+	}
+	if m := chargeSignDigits.FindStringSubmatch(formula); m != nil {
+		return m[1], m[3] + m[2], true
+	}
+	if m := chargeBareSign.FindStringSubmatch(formula); m != nil {
+		return m[1], m[2], true
+	}
+	return formula, "", false
+}
+
+// formatChemicalUnicode is the unicode variable/chemical subscript formatter
+// (pretty-print.ts formatChemicalUnicode), extended with ion-charge superscripts.
+func formatChemicalUnicode(variable string) string {
+	// A trailing ionic charge is a superscript (Ca²⁺), not a subscript.
+	if body, charge, ok := splitCharge(variable); ok && hasElementPattern(body) {
+		return formatChemicalUnicode(body) + formatSuperscriptStr(charge)
+	}
+
+	if !hasElementPattern(variable) {
+		if prefix, suffix, ok := getChemicalSuffix(variable); ok {
+			chemicalPart := formatChemicalUnicode(suffix)
+			if !strings.Contains(variable, "_") {
+				return prefix + chemicalPart
+			}
+			return prefix + "_" + chemicalPart
+		}
+		if strings.Contains(variable, "_") {
+			parts := strings.Split(variable, "_")
+			anyChemical := false
+			for _, p := range parts {
+				if hasElementPattern(p) {
+					anyChemical = true
+					break
+				}
+			}
+			if anyChemical {
+				for i, p := range parts {
+					if hasElementPattern(p) {
+						parts[i] = formatChemicalUnicode(p)
+					}
+				}
+				return strings.Join(parts, "_")
+			}
+		}
+		return variable
+	}
+
+	// Pure chemical formula (any ionic charge already peeled above).
+	var b strings.Builder
+	for _, t := range scanElements(variable) {
+		switch {
+		case t.isElement:
+			b.WriteString(t.element)
+			b.WriteString(formatSubscript(t.digits))
+		case isDigit(t.other):
+			b.WriteString(formatSubscript(string(t.other)))
+		default:
+			b.WriteByte(t.other)
+		}
+	}
+	return b.String()
 }
 
 // subscriptRunes maps ASCII digits to their Unicode subscript characters.
@@ -316,11 +744,16 @@ func formatSubscript(num string) string {
 	return result.String()
 }
 
-// formatSuperscript converts numbers to Unicode superscript characters
+// formatSuperscript converts an integer to Unicode superscript characters.
 func formatSuperscript(num int) string {
-	numStr := fmt.Sprintf("%d", num)
+	return formatSuperscriptStr(strconv.Itoa(num))
+}
+
+// formatSuperscriptStr converts each digit/sign character of s to its Unicode
+// superscript form (others copied verbatim).
+func formatSuperscriptStr(s string) string {
 	result := strings.Builder{}
-	for _, char := range numStr {
+	for _, char := range s {
 		if sup, ok := superscriptRunes[char]; ok {
 			result.WriteRune(sup)
 		} else {
@@ -330,150 +763,353 @@ func formatSuperscript(num int) string {
 	return result.String()
 }
 
-// formatExprNode formats an expression node with proper precedence and parentheses
+// formatExprNode formats a scalar operator node with precedence-aware
+// parenthesization, mirroring pretty-print.ts formatExpressionNode + OP_RENDERERS
+// (plus the F-7 corrections: `^` is right-associative so a left-nested power is
+// parenthesized, and `D`'s operator operand is parenthesized). Structural ops go
+// through formatStructuralOp; open-tier sugar (grad/div/laplacian) and unknown
+// ops through the generic function-call fallback.
 func formatExprNode(node ExprNode, format string) string {
 	op := node.Op
 	args := node.Args
 
-	// Closed structural / array-query tier (esm-spec §4.2) whose defining data
-	// lives in fields other than `args`, plus `integral`. See
-	// tests/display/RENDERING_CONTRACT.md and tests/display/structural_ops.json.
 	if s, ok := formatStructuralOp(node, format); ok {
+		return s
+	}
+
+	uni := format == FmtUnicode || format == FmtUnicodeSpaced
+
+	// raw renders a child with no parenthesization; arg adds precedence-aware
+	// parentheses (isRight marks a right operand of a binary op).
+	raw := func(a any) string { return formatExpression(a, format) }
+	arg := func(a any, isRight bool) string {
+		s := formatExpression(a, format)
+		if needsParentheses(op, len(args), a, isRight) {
+			return "(" + s + ")"
+		}
 		return s
 	}
 
 	switch op {
 	case "+":
-		if len(args) < 2 {
-			return op + "(...)"
+		if len(args) == 2 {
+			// Simplify a + (-b) → a − b via a synthetic binary-minus node so the
+			// subtraction formatting lives in one place.
+			if rn, ok := asExprNode(args[1]); ok && rn.Op == "-" && len(rn.Args) == 1 {
+				return formatExprNode(ExprNode{Op: "-", Args: []any{args[0], rn.Args[0]}}, format)
+			}
+			return arg(args[0], false) + " + " + arg(args[1], true)
 		}
-
-		parts := make([]string, len(args))
-		for i, arg := range args {
-			parts[i] = formatExpression(arg, format)
+		if len(args) >= 3 {
+			parts := make([]string, len(args))
+			for i, a := range args {
+				parts[i] = arg(a, false)
+			}
+			return strings.Join(parts, " + ")
 		}
-
-		return strings.Join(parts, " + ")
 
 	case "-":
 		if len(args) == 1 {
-			// Unary minus
-			arg := formatExpression(args[0], format)
-			switch format {
-			case FmtUnicode, FmtUnicodeSpaced:
-				return "−" + arg
-			case FmtLatex:
-				return "-" + arg
-			default:
-				return "-" + arg
+			if uni {
+				return "−" + arg(args[0], false)
 			}
+			return "-" + arg(args[0], false)
 		}
-		// Binary subtraction - format as a + (-b)
 		if len(args) == 2 {
-			left := formatExpression(args[0], format)
-			right := formatExpression(args[1], format)
-
-			// Check if we need to add parentheses around the right argument
-			if node, ok := args[1].(ExprNode); ok && needsParenthesesForSubtraction(node) {
-				right = "(" + right + ")"
+			sep := " - "
+			if uni {
+				sep = " − "
 			}
-
-			switch format {
-			case FmtUnicode, FmtUnicodeSpaced:
-				return left + " − " + right
-			case FmtLatex:
-				return left + " - " + right
-			default:
-				return left + " - " + right
-			}
+			return arg(args[0], false) + sep + arg(args[1], true)
 		}
 
 	case "*":
-		return formatMultiplication(args, format)
+		if len(args) >= 2 {
+			sep := mulSeparator(format)
+			// In LaTeX, a product whose operands are already-typeset factors
+			// (e.g. \mathrm{O_3}) is written by implicit juxtaposition (a space);
+			// a product of plain symbols uses \cdot to stay unambiguous.
+			if format == FmtLatex && anyBackslashStringArg(args) {
+				sep = " "
+			}
+			if len(args) == 2 {
+				return arg(args[0], false) + sep + arg(args[1], true)
+			}
+			parts := make([]string, len(args))
+			for i, a := range args {
+				parts[i] = arg(a, false)
+			}
+			return strings.Join(parts, sep)
+		}
 
 	case "/":
-		return formatDivision(args, format)
+		if len(args) == 2 {
+			if format == FmtLatex {
+				return "\\frac{" + raw(args[0]) + "}{" + raw(args[1]) + "}"
+			}
+			sep := "/"
+			if format == FmtAscii {
+				sep = " / "
+			}
+			return arg(args[0], false) + sep + arg(args[1], true)
+		}
 
 	case "^":
-		return formatExponentiation(args, format)
+		if len(args) == 2 {
+			if format == FmtLatex {
+				return arg(args[0], false) + "^{" + raw(args[1]) + "}"
+			}
+			if uni {
+				if v, ok := numericValueOf(args[1]); ok && !math.IsInf(v, 0) && v == math.Trunc(v) {
+					return arg(args[0], false) + formatSuperscript(int(v))
+				}
+			}
+			return arg(args[0], false) + "^" + arg(args[1], true)
+		}
 
 	case "D":
-		return formatDerivative(args, node.Wrt, format)
+		if len(args) == 1 && node.Wrt != nil {
+			w := *node.Wrt
+			switch {
+			case uni:
+				return "∂" + dOperand(args[0], format) + "/∂" + w
+			case format == FmtLatex:
+				return "\\frac{\\partial " + dOperand(args[0], format) + "}{\\partial " + w + "}"
+			default:
+				return "D(" + raw(args[0]) + ")/D" + w
+			}
+		}
+
+	case ">", "<", ">=", "<=", "==", "=", "!=":
+		if len(args) == 2 {
+			return arg(args[0], false) + " " + comparisonSymbol(op, format) + " " + arg(args[1], true)
+		}
+
+	case "and":
+		if len(args) == 2 {
+			sym := "and"
+			switch {
+			case uni:
+				sym = "∧"
+			case format == FmtLatex:
+				sym = "\\land"
+			}
+			return arg(args[0], false) + " " + sym + " " + arg(args[1], true)
+		}
+
+	case "or":
+		if len(args) == 2 {
+			return arg(args[0], false) + " " + orSymbol(format) + " " + arg(args[1], true)
+		}
+		if len(args) >= 3 {
+			sep := " or "
+			switch {
+			case uni:
+				sep = " ∨ "
+			case format == FmtLatex:
+				sep = " \\lor "
+			}
+			parts := make([]string, len(args))
+			for i, a := range args {
+				parts[i] = arg(a, false)
+			}
+			return strings.Join(parts, sep)
+		}
+
+	case "not":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return "¬" + arg(args[0], false)
+			case format == FmtLatex:
+				return "\\neg " + arg(args[0], false)
+			default:
+				return "not " + arg(args[0], false)
+			}
+		}
+
+	case "exp", "sin", "cos", "tan", "sinh", "cosh", "tanh":
+		if len(args) == 1 {
+			if format == FmtLatex {
+				la := raw(args[0])
+				if strings.Contains(la, "\\frac") {
+					return "\\" + op + "\\left(" + la + "\\right)"
+				}
+				return "\\" + op + "(" + la + ")"
+			}
+			return op + "(" + arg(args[0], false) + ")"
+		}
+
+	case "asin", "acos", "atan":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return "arc" + op[1:] + "(" + arg(args[0], false) + ")"
+			case format == FmtLatex:
+				return "\\arc" + op[1:] + "(" + raw(args[0]) + ")"
+			default:
+				return op + "(" + arg(args[0], false) + ")"
+			}
+		}
+
+	case "asinh", "acosh", "atanh":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return op[1:] + "⁻¹(" + arg(args[0], false) + ")"
+			case format == FmtLatex:
+				return "\\" + op[1:] + "^{-1}(" + raw(args[0]) + ")"
+			default:
+				return op + "(" + arg(args[0], false) + ")"
+			}
+		}
+
+	case "log":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return "ln(" + arg(args[0], false) + ")"
+			case format == FmtLatex:
+				return "\\ln(" + raw(args[0]) + ")"
+			default:
+				return "log(" + arg(args[0], false) + ")"
+			}
+		}
+
+	case "log10":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return "log₁₀(" + arg(args[0], false) + ")"
+			case format == FmtLatex:
+				return "\\log_{10}(" + raw(args[0]) + ")"
+			default:
+				return "log10(" + arg(args[0], false) + ")"
+			}
+		}
+
+	case "sqrt":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				if isOpNodeValue(args[0]) {
+					return "√(" + raw(args[0]) + ")"
+				}
+				return "√" + raw(args[0])
+			case format == FmtLatex:
+				return "\\sqrt{" + raw(args[0]) + "}"
+			default:
+				return "sqrt(" + arg(args[0], false) + ")"
+			}
+		}
 
 	case "abs":
 		if len(args) == 1 {
-			arg := formatExpression(args[0], format)
-			switch format {
-			case FmtUnicode, FmtUnicodeSpaced, FmtLatex:
-				return "|" + arg + "|"
+			switch {
+			case uni:
+				return "|" + arg(args[0], false) + "|"
+			case format == FmtLatex:
+				return "|" + raw(args[0]) + "|"
 			default:
-				return "abs(" + arg + ")"
+				return "abs(" + arg(args[0], false) + ")"
 			}
 		}
 
-	case "exp":
-		// Guard args[0] for malformed nodes; fall through to the generic
-		// function-call fallback (like abs) when arity is wrong.
-		if len(args) >= 1 {
-			arg := formatExpression(args[0], format)
-			switch format {
-			case FmtUnicode, FmtUnicodeSpaced:
-				return "exp(" + arg + ")"
-			case FmtLatex:
-				if shouldUseExpLeft(args[0]) {
-					return "\\exp\\left(" + arg + "\\right)"
-				}
-				return "\\exp(" + arg + ")"
+	case "floor":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return "⌊" + arg(args[0], false) + "⌋"
+			case format == FmtLatex:
+				return "\\lfloor " + raw(args[0]) + " \\rfloor"
 			default:
-				return "exp(" + arg + ")"
+				return "floor(" + arg(args[0], false) + ")"
 			}
 		}
 
-	case "ifelse":
+	case "ceil":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return "⌈" + arg(args[0], false) + "⌉"
+			case format == FmtLatex:
+				return "\\lceil " + raw(args[0]) + " \\rceil"
+			default:
+				return "ceil(" + arg(args[0], false) + ")"
+			}
+		}
+
+	case "sign":
+		if len(args) == 1 {
+			switch {
+			case uni:
+				return "sgn(" + arg(args[0], false) + ")"
+			case format == FmtLatex:
+				return "\\mathrm{sgn}(" + raw(args[0]) + ")"
+			default:
+				return "sign(" + arg(args[0], false) + ")"
+			}
+		}
+
+	case "min":
+		if len(args) == 2 {
+			if format == FmtLatex {
+				return "\\min(" + raw(args[0]) + ", " + raw(args[1]) + ")"
+			}
+			return "min(" + arg(args[0], false) + ", " + arg(args[1], false) + ")"
+		}
+
+	case "max":
+		if len(args) == 2 {
+			if format == FmtLatex {
+				return "\\max(" + raw(args[0]) + ", " + raw(args[1]) + ")"
+			}
+			return "max(" + arg(args[0], false) + ", " + arg(args[1], false) + ")"
+		}
 		if len(args) >= 3 {
-			condition := formatExpression(args[0], format)
-			trueVal := formatExpression(args[1], format)
-			falseVal := formatExpression(args[2], format)
-
-			switch format {
-			case FmtLatex:
-				return fmt.Sprintf("\\begin{cases} %s & \\text{if } %s \\\\ %s & \\text{otherwise} \\end{cases}",
-					trueVal, condition, falseVal)
-			default:
-				return fmt.Sprintf("ifelse(%s, %s, %s)", condition, trueVal, falseVal)
+			parts := make([]string, len(args))
+			for i, a := range args {
+				parts[i] = raw(a)
 			}
+			list := strings.Join(parts, ", ")
+			if format == FmtLatex {
+				return "\\max(" + list + ")"
+			}
+			return "max(" + list + ")"
+		}
+
+	case "atan2":
+		if len(args) == 2 {
+			if format == FmtLatex {
+				return "\\mathrm{atan2}(" + raw(args[0]) + ", " + raw(args[1]) + ")"
+			}
+			return "atan2(" + arg(args[0], false) + ", " + arg(args[1], false) + ")"
 		}
 
 	case "Pre":
-		// Guard args[0] for malformed nodes; fall through to the generic
-		// function-call fallback (like abs) when arity is wrong.
-		if len(args) >= 1 {
-			arg := formatExpression(args[0], format)
-			switch format {
-			case FmtLatex:
-				return "\\mathrm{Pre}(" + arg + ")"
-			default:
-				return "Pre(" + arg + ")"
+		if len(args) == 1 {
+			if format == FmtLatex {
+				return "\\mathrm{Pre}(" + raw(args[0]) + ")"
 			}
+			return "Pre(" + arg(args[0], false) + ")"
 		}
 
-	// Comparison operators
-	case ">", "<", ">=", "<=", "==", "!=":
-		if len(args) >= 2 {
-			left := formatExpression(args[0], format)
-			right := formatExpression(args[1], format)
-			return left + " " + op + " " + right
+	case "ifelse":
+		if len(args) == 3 {
+			if format == FmtLatex {
+				return "\\begin{cases} " + raw(args[1]) + " & \\text{if } " + raw(args[0]) +
+					" \\\\ " + raw(args[2]) + " & \\text{otherwise} \\end{cases}"
+			}
+			return "ifelse(" + arg(args[0], false) + ", " + arg(args[1], false) + ", " + arg(args[2], false) + ")"
 		}
-
 	}
 
 	// Generic fallback: function-call notation for open-tier rewrite sugar
 	// (grad/div/laplacian) and any unknown user op. Only `args` are shown; any
 	// non-`args` fields (e.g. grad's `dim`) are NOT rendered.
-	// unicode/ascii: name(a0, a1, …);  latex: \mathrm{ESC(name)}(a0, a1, …).
 	argStrs := make([]string, len(args))
-	for i, arg := range args {
-		argStrs[i] = formatExpression(arg, format)
+	for i, a := range args {
+		argStrs[i] = raw(a)
 	}
 	inner := strings.Join(argStrs, ", ")
 	if format == FmtLatex {
@@ -482,87 +1118,91 @@ func formatExprNode(node ExprNode, format string) string {
 	return op + "(" + inner + ")"
 }
 
-func formatMultiplication(args []any, format string) string {
-	if len(args) < 2 {
-		return "*(...)"
-	}
-
-	parts := make([]string, len(args))
-	for i, arg := range args {
-		formatted := formatExpression(arg, format)
-
-		// Add parentheses if needed for addition/subtraction terms
-		if node, ok := arg.(ExprNode); ok && isAdditiveNode(node) {
-			formatted = "(" + formatted + ")"
+// anyBackslashStringArg reports whether any arg is a raw string carrying a
+// backslash (an already-typeset LaTeX factor), which selects space (implicit)
+// multiplication in LaTeX.
+func anyBackslashStringArg(args []any) bool {
+	for _, a := range args {
+		if s, ok := a.(string); ok && strings.Contains(s, "\\") {
+			return true
 		}
-
-		parts[i] = formatted
 	}
+	return false
+}
 
+// mulSeparator returns the multiplication operator string for a format.
+func mulSeparator(format string) string {
 	switch format {
 	case FmtUnicodeSpaced:
-		// Spacing is applied here, at the operator, so it can never touch a "·"
-		// occurring inside a rendered leaf (variable name, chemical formula).
-		return strings.Join(parts, " · ")
+		// Spacing is applied at the operator so it never touches a "·" inside a
+		// rendered leaf (e.g. a hydrate chemical formula).
+		return " · "
 	case FmtUnicode:
-		return strings.Join(parts, "·")
+		return "·"
 	case FmtLatex:
-		return strings.Join(parts, " \\cdot ")
+		return " \\cdot "
 	default:
-		return strings.Join(parts, " * ")
+		return " * "
 	}
 }
 
-func formatDivision(args []any, format string) string {
-	if len(args) != 2 {
-		return "/(...)"
-	}
-
-	left := formatExpression(args[0], format)
-	right := formatExpression(args[1], format)
-
-	switch format {
-	case FmtLatex:
-		return "\\frac{" + left + "}{" + right + "}"
-	default:
-		// Add parentheses if the right side is complex
-		if node, ok := args[1].(ExprNode); ok && isArithmeticNode(node) {
-			right = "(" + right + ")"
+// comparisonSymbol returns the infix symbol for a comparison op per format.
+func comparisonSymbol(op, format string) string {
+	uni := format == FmtUnicode || format == FmtUnicodeSpaced
+	switch op {
+	case ">=":
+		switch {
+		case uni:
+			return "≥"
+		case format == FmtLatex:
+			return "\\geq"
 		}
-		return left + "/" + right
+		return ">="
+	case "<=":
+		switch {
+		case uni:
+			return "≤"
+		case format == FmtLatex:
+			return "\\leq"
+		}
+		return "<="
+	case "==", "=":
+		if format == FmtAscii {
+			return "=="
+		}
+		return "="
+	case "!=":
+		switch {
+		case uni:
+			return "≠"
+		case format == FmtLatex:
+			return "\\neq"
+		}
+		return "!="
+	}
+	return op // ">" and "<" are identical in every format
+}
+
+// orSymbol returns the binary logical-or symbol per format.
+func orSymbol(format string) string {
+	switch {
+	case format == FmtUnicode || format == FmtUnicodeSpaced:
+		return "∨"
+	case format == FmtLatex:
+		return "\\lor"
+	default:
+		return "or"
 	}
 }
 
-func formatExponentiation(args []any, format string) string {
-	if len(args) != 2 {
-		return "^(...)"
+// dOperand renders a derivative's operand, parenthesizing it when it is an
+// operator node (F-7: ∂(x + y)/∂t, never ∂x + y/∂t).
+func dOperand(a any, format string) string {
+	s := formatExpression(a, format)
+	if isOpNodeValue(a) {
+		return "(" + s + ")"
 	}
-
-	base := formatExpression(args[0], format)
-	exp := formatExpression(args[1], format)
-
-	// Add parentheses to base if it's a complex expression
-	if node, ok := args[0].(ExprNode); ok && isArithmeticNode(node) {
-		base = "(" + base + ")"
-	}
-
-	switch format {
-	case FmtUnicode, FmtUnicodeSpaced:
-		if exp == "2" {
-			return base + "²"
-		} else if exp == "3" {
-			return base + "³"
-		} else if numExp, ok := args[1].(float64); ok && numExp == math.Trunc(numExp) {
-			// Only integer-valued exponents get a superscript; a fractional
-			// exponent (e.g. x^2.5) must not be truncated to x².
-			return base + formatSuperscript(int(numExp))
-		}
-		return base + "^" + exp
-	case FmtLatex:
-		return base + "^{" + exp + "}"
-	default:
-		return base + "^" + exp
-	}
+	return s
 }
 
 // ToUnicodeSpaced converts an expression to a Unicode string identical to
@@ -734,25 +1374,6 @@ func summarizeDomain(b *strings.Builder, esm *ESMFile) {
 		parts = append(parts, fmt.Sprintf("%s to %s", start, end))
 	}
 	fmt.Fprintf(b, "  Domain: %s\n", strings.Join(parts, ", "))
-}
-
-func formatDerivative(args []any, wrt *string, format string) string {
-	if len(args) != 1 || wrt == nil {
-		return "D(...)"
-	}
-
-	variable := formatExpression(args[0], format)
-	timeVar := *wrt
-
-	switch format {
-	case FmtUnicode, FmtUnicodeSpaced:
-		return "∂" + variable + "/∂" + timeVar
-	case FmtLatex:
-		formattedVar := formatExpression(args[0], format)
-		return "\\frac{\\partial " + formattedVar + "}{\\partial " + timeVar + "}"
-	default:
-		return "D(" + variable + ")/D" + timeVar
-	}
 }
 
 // ============================================================================
@@ -1256,29 +1877,119 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 	return "", false
 }
 
-// Helper functions for specific formatting decisions
+// ============================================================================
+// Precedence and parenthesization (mirrors op-registry.ts + pretty-print.ts).
+// ============================================================================
 
-// isAdditiveNode reports whether an operator node is an addition or a binary
-// subtraction — the terms that need parenthesizing inside a product or on the
-// right of a subtraction.
-func isAdditiveNode(node ExprNode) bool {
-	return node.Op == "+" || (node.Op == "-" && len(node.Args) == 2)
+// functionPrecedence is the precedence of a function-call / unknown op (binds
+// tightest). Higher precedence binds tighter.
+const functionPrecedence = 8
+
+// loosestPrecedence is opPrecedence("or") — inside a function call or unary
+// minus, only a child at or below this precedence is parenthesized.
+const loosestPrecedence = 1
+
+// opPrecedenceTable holds the infix precedence of every operator that renders
+// infix; every other op (function call, structural, unknown) binds tightest.
+var opPrecedenceTable = map[string]int{
+	"+": 4, "-": 4, "*": 5, "/": 5, "^": 7,
+	">": 3, "<": 3, ">=": 3, "<=": 3, "==": 3, "!=": 3, "=": 3,
+	"and": 2, "or": 1, "not": 6,
 }
 
-// isArithmeticNode reports whether an operator node is any of + - * / — the
-// terms that need parenthesizing inside a quotient or as an exponent base.
-func isArithmeticNode(node ExprNode) bool {
-	return node.Op == "+" || node.Op == "-" || node.Op == "*" || node.Op == "/"
+// registeredFunctionCallOps are the registered scalar ops that render as a
+// function call (no infix precedence) — mirrors op-registry.ts isFunctionCallOp.
+// Unknown ops (grad/div/laplacian) are deliberately absent.
+var registeredFunctionCallOps = map[string]bool{
+	"exp": true, "log": true, "log10": true, "sqrt": true, "abs": true,
+	"sin": true, "cos": true, "tan": true, "asin": true, "acos": true,
+	"atan": true, "atan2": true, "sinh": true, "cosh": true, "tanh": true,
+	"asinh": true, "acosh": true, "atanh": true, "min": true, "max": true,
+	"floor": true, "ceil": true, "sign": true, "ifelse": true, "Pre": true,
+	"D": true,
 }
 
-func needsParenthesesForSubtraction(node ExprNode) bool {
-	return isAdditiveNode(node)
+func opPrecedence(op string) int {
+	if p, ok := opPrecedenceTable[op]; ok {
+		return p
+	}
+	return functionPrecedence
 }
 
-func shouldUseExpLeft(arg any) bool {
-	// Use \left( \right) for complex expressions in exp()
-	if node, ok := arg.(ExprNode); ok {
-		return node.Op == "/" || node.Op == "+" || node.Op == "-"
+func isFunctionCallOp(op string) bool {
+	return registeredFunctionCallOps[op]
+}
+
+// needsParentheses reports whether child needs parentheses inside a parent op.
+// It mirrors pretty-print.ts needsParentheses, with the F-7 correction that a
+// LEFT operand of the right-associative `^` at equal precedence is parenthesized
+// ((a^b)^c, not a^b^c).
+func needsParentheses(parentOp string, parentArgc int, child any, isRight bool) bool {
+	childOp, ok := opNodeOp(child)
+	if !ok {
+		return false // number / string leaf never needs parentheses
+	}
+	parentPrec := opPrecedence(parentOp)
+	childPrec := opPrecedence(childOp)
+
+	// Function arguments sit inside the call's own parentheses — only the
+	// loosest-binding (logical-or) child is parenthesized.
+	if isFunctionCallOp(parentOp) {
+		return childPrec <= loosestPrecedence
+	}
+	// Unary minus is likewise lenient.
+	if parentOp == "-" && parentArgc == 1 {
+		return childPrec <= loosestPrecedence
+	}
+	if childPrec < parentPrec {
+		return true
+	}
+	if childPrec > parentPrec {
+		return false
+	}
+	// Same precedence: a right operand of a non-associative op is parenthesized,
+	// and (F-7) so is a LEFT operand of the right-associative `^`.
+	if isRight && (parentOp == "-" || parentOp == "/" || parentOp == "^") {
+		return true
+	}
+	if !isRight && parentOp == "^" {
+		return true
 	}
 	return false
+}
+
+// opNodeOp returns the operator name of an operator-node value (ExprNode,
+// *ExprNode, or a raw {"op": …} map), or ok=false for a leaf.
+func opNodeOp(v any) (string, bool) {
+	switch x := v.(type) {
+	case ExprNode:
+		return x.Op, true
+	case *ExprNode:
+		if x != nil {
+			return x.Op, true
+		}
+	case map[string]any:
+		if op, ok := x["op"].(string); ok {
+			return op, true
+		}
+	}
+	return "", false
+}
+
+// numericValueOf extracts a float64 from a numeric leaf (int64/int/float64/
+// json.Number), reporting ok=false for anything else.
+func numericValueOf(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case json.Number:
+		if f, err := x.Float64(); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
 }

@@ -238,9 +238,14 @@ for (const [name, lower, upper, hasUpperLatex] of GREEK_TABLE) {
 const GREEK_NAME_GROUP = `(?:${GREEK_TABLE.map(([name]) => name).join('|')})`
 // Unicode Greek code-point range (lower + upper).
 const GREEK_CHAR_CLASS = '[α-ωΑ-Ω]'
-// LaTeX: a Greek char OR a named letter not followed by an uppercase letter
+// LaTeX: a Greek char OR a named letter that is a standalone identifier — not
+// preceded by a backslash or another letter (so the `eta` inside `\theta`, and
+// any `\command`, is left alone) and not followed by an uppercase letter
 // (chemical prefix) or `}` (already inside \mathrm{}).
-const GREEK_LATEX_RE = new RegExp(`${GREEK_CHAR_CLASS}|${GREEK_NAME_GROUP}(?![A-Z}])`, 'g')
+const GREEK_LATEX_RE = new RegExp(
+  `${GREEK_CHAR_CLASS}|(?<![\\\\A-Za-z])${GREEK_NAME_GROUP}(?![A-Z}])`,
+  'g',
+)
 // Unicode: a named letter not followed by an uppercase letter (chemical prefix).
 const GREEK_UNICODE_RE = new RegExp(`${GREEK_NAME_GROUP}(?![A-Z])`, 'g')
 // ASCII / MathML: bare Greek Unicode chars.
@@ -354,8 +359,51 @@ function formatChemicalSuffixInner(variable: string): string {
   return latexChemicalInner(variable)
 }
 
+/**
+ * Split a trailing ionic charge off a chemical formula. The charge is a sign
+ * with optional magnitude at the very END, in either written order (`Ca2+`,
+ * `SO4-2`), and is normalized to magnitude-then-sign (`2+`, `2-`) so it renders
+ * as a superscript (`Ca²⁺`, `SO₄²⁻`) per RENDERING_CONTRACT.md — the trailing
+ * sign+digits is a CHARGE, not an atom-count subscript. Returns the formula body
+ * and normalized charge, or `charge: null` when there is no trailing charge. The
+ * body is required non-empty so a bare operator token (`+`, `-`) is never a
+ * charge.
+ */
+function splitCharge(formula: string): { body: string; charge: string | null } {
+  let m = /^(.+?)(\d+)([+-])$/.exec(formula) // digits-then-sign, e.g. "Ca2+"
+  if (m) return { body: m[1], charge: m[2] + m[3] }
+  m = /^(.+?)([+-])(\d+)$/.exec(formula) // sign-then-digits, e.g. "SO4-2"
+  if (m) return { body: m[1], charge: m[3] + m[2] }
+  m = /^(.+?)([+-])$/.exec(formula) // bare sign, e.g. "Na+"
+  if (m) return { body: m[1], charge: m[2] }
+  return { body: formula, charge: null }
+}
+
+/**
+ * Whether a variable name is ALREADY LaTeX that should render verbatim rather
+ * than be re-formatted (which only mangles it). Three shapes qualify:
+ *   - an already roman-wrapped species, `\mathrm{...}`;
+ *   - a bare control word with no group, e.g. `\theta`;
+ *   - a name that carries its own `{...}` subscript grouping but no command,
+ *     e.g. `k_{NO_O3}`, `j_{NO2}`.
+ * A different `\command{...}` atom such as `\mathbf{v}` is NOT pre-formatted —
+ * it still takes the generic `\mathrm{...}` wrap.
+ */
+function isPreformattedLatex(variable: string): boolean {
+  if (variable.startsWith('\\mathrm{')) return true
+  if (variable.includes('\\')) return !variable.includes('{')
+  return /[{}]/.test(variable)
+}
+
 /** LaTeX chemical/variable subscript formatting (see {@link formatChemicalSubscripts}). */
 function formatChemicalLatex(variable: string): string {
+  // A trailing ionic charge is a superscript, not a subscript.
+  const { body: chargeBody, charge } = splitCharge(variable)
+  if (charge !== null && hasElementPattern(chargeBody)) {
+    return `${formatChemicalLatex(chargeBody)}^{${charge}}`
+  }
+  if (isPreformattedLatex(variable)) return variable
+
   const hasElements = hasElementPattern(variable)
 
   // First check if it's a mixed variable (non-element prefix + chemical suffix)
@@ -452,6 +500,9 @@ function formatChemicalLatex(variable: string): string {
       const escaped = variable.replace(/_/g, '\\_')
       return `\\mathrm{${escaped}}`
     }
+    // A symbol with no lowercase letters (e.g. "RT", "-E") is a math variable,
+    // not a descriptive name — leave it italic instead of wrapping in \mathrm{}.
+    if (!/[a-z]/.test(variable)) return variable
     // Multi-character → \mathrm{}
     return `\\mathrm{${variable}}`
   }
@@ -459,6 +510,12 @@ function formatChemicalLatex(variable: string): string {
 
 /** Unicode chemical/variable subscript formatting (see {@link formatChemicalSubscripts}). */
 function formatChemicalUnicode(variable: string): string {
+  // A trailing ionic charge is a superscript (`Ca²⁺`), not a subscript.
+  const { body: chargeBody, charge } = splitCharge(variable)
+  if (charge !== null && hasElementPattern(chargeBody)) {
+    return `${formatChemicalUnicode(chargeBody)}${toSuperscript(charge)}`
+  }
+
   const hasElements = hasElementPattern(variable)
 
   if (!hasElements) {
@@ -584,38 +641,35 @@ const SCI_NOTATION_MAX = 10000
  * Format a number in scientific notation with appropriate formatting
  */
 function formatNumber(num: number, format: 'unicode' | 'latex' | 'ascii'): string {
+  // Non-finite values are RENDERED as symbols, never stringified (contract).
+  if (Number.isNaN(num)) return format === 'latex' ? '\\text{NaN}' : 'NaN'
+  if (num === Infinity) return format === 'unicode' ? '∞' : format === 'latex' ? '\\infty' : 'inf'
+  if (num === -Infinity)
+    return format === 'unicode' ? '−∞' : format === 'latex' ? '-\\infty' : '-inf'
+
   // Format according to ESM spec Section 6.1
   if (num === 0) return '0'
 
   const absNum = Math.abs(num)
+  // unicode uses U+2212 MINUS SIGN; latex/ascii keep ASCII '-'.
+  const signed = (s: string) => (format === 'unicode' ? s.replace(/^-/, '−') : s)
 
   // Use scientific notation for very small or large numbers (spec Section 6.1)
   if (absNum < SCI_NOTATION_MIN || absNum >= SCI_NOTATION_MAX) {
-    const str = num.toExponential()
-    const [mantissa, exponent] = str.split('e')
-    const cleanMantissa = parseFloat(mantissa).toString() // Remove trailing zeros
-    const exp = parseInt(exponent)
+    const [mantissaTok, exponentTok] = num.toExponential().split('e')
+    let mantissa = parseFloat(mantissaTok).toString() // remove trailing zeros
+    // An integer-valued mantissa keeps one fractional digit (`1` → `1.0`) so the
+    // rendering advertises its scientific form (contract number-formatting).
+    if (!mantissa.includes('.')) mantissa += '.0'
+    const exp = parseInt(exponentTok)
 
-    if (format === 'unicode') {
-      return `${cleanMantissa}×10${toSuperscript(exp.toString())}`
-    } else if (format === 'latex') {
-      return `${cleanMantissa} \\times 10^{${exp}}`
-    } else {
-      return `${cleanMantissa}e${exp >= 0 ? '+' : ''}${exp}` // ASCII with explicit sign
-    }
+    if (format === 'unicode') return `${signed(mantissa)}×10${toSuperscript(exp.toString())}`
+    if (format === 'latex') return `${mantissa} \\times 10^{${exp}}`
+    return `${mantissa}e${exp}` // ASCII: no '+' on a positive exponent
   }
 
-  // For integers, show as plain integer
-  if (Number.isInteger(num)) {
-    const str = num.toString()
-    if (format === 'unicode') return str.replace(/^-/, '−')
-    return str
-  }
-
-  // For decimals, use standard notation
-  const str = num.toString()
-  if (format === 'unicode') return str.replace(/^-/, '−')
-  return str
+  // Plain integer or decimal notation.
+  return signed(num.toString())
 }
 
 /**
@@ -665,6 +719,12 @@ function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false)
     return true
   }
 
+  // `^` is RIGHT-associative, so a LEFT-nested power must be parenthesized:
+  // `(a^b)^c` — emitting `a^b^c` would read back as `a^(b^c)` (a semantic error).
+  if (!isRightOperand && parent.op === '^') {
+    return true
+  }
+
   return false
 }
 
@@ -704,7 +764,19 @@ function formatAny(
       return formatNumber(numericValue(expr)!, format)
     case 'variable': {
       const s = expr as string
+      // JSON cannot carry ±Infinity / NaN, so they arrive as string tokens;
+      // render them as the non-finite number they denote (contract).
+      if (s === 'Infinity' || s === '-Infinity' || s === 'NaN') {
+        return formatNumber(Number(s), format)
+      }
       if (format === 'ascii') return convertGreekLetters(s, 'ascii')
+      // A name that is ALREADY LaTeX renders verbatim rather than being mangled
+      // by chemical-subscript / Greek conversion. In LaTeX any pre-formatted name
+      // qualifies (a `\command` OR a brace group like `k_{NO_O3}`); in Unicode
+      // only a name carrying a `\command` does — a brace-only name still takes
+      // normal subscript conversion (`k_{NO_O3}` → `k_{NO_O₃}`).
+      const preformatted = format === 'unicode' ? s.includes('\\') : isPreformattedLatex(s)
+      if (preformatted) return s
       return convertGreekLetters(formatChemicalSubscripts(s, format), format)
     }
     case 'node':
@@ -1040,14 +1112,20 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
   '*': {
     text: (c) => {
       const { args, format } = c
+      // In LaTeX, a product whose operands are already-typeset factors (e.g.
+      // `\mathrm{O_3}`) is written by implicit juxtaposition (a space), while a
+      // product of plain symbols uses ` \cdot ` to stay unambiguous (`a \cdot b`).
+      const latexSep = args.some((a) => typeof a === 'string' && a.includes('\\'))
+        ? ' '
+        : ' \\cdot '
       if (args.length === 2) {
         const [left, right] = args
         if (format === 'unicode') return `${c.arg(left)}·${c.arg(right, true)}`
-        if (format === 'latex') return `${c.arg(left)} \\cdot ${c.arg(right, true)}`
+        if (format === 'latex') return `${c.arg(left)}${latexSep}${c.arg(right, true)}`
         return `${c.arg(left)} * ${c.arg(right, true)}`
       }
       if (args.length >= 3) {
-        const sep = format === 'unicode' ? '·' : format === 'latex' ? ' \\cdot ' : ' * '
+        const sep = format === 'unicode' ? '·' : format === 'latex' ? latexSep : ' * '
         return args.map((a) => c.arg(a)).join(sep)
       }
       return undefined
@@ -1312,8 +1390,10 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
       if (c.args.length !== 1) return undefined
       const a = c.args[0]
       const w = c.wrt || 't'
-      if (c.format === 'unicode') return `∂${toUnicode(a)}/∂${w}`
-      if (c.format === 'latex') return `\\frac{\\partial ${toLatex(a)}}{\\partial ${w}}`
+      // The differentiated operand is parenthesized when it is an operator node:
+      // `∂(x + y)/∂t`, never `∂x + y/∂t` (which reads as `(∂x) + (y/∂t)`).
+      if (c.format === 'unicode') return `∂${wrapIfOp(a, 'unicode')}/∂${w}`
+      if (c.format === 'latex') return `\\frac{\\partial ${wrapIfOp(a, 'latex')}}{\\partial ${w}}`
       return `D(${toAscii(a)})/D${w}`
     },
     mathml: (c) => {

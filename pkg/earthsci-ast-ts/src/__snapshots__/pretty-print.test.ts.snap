@@ -2459,16 +2459,16 @@ exports[`Rendering output lock (all display fixtures) > renders element_recognit
   {
     "ascii": "Ca2+",
     "input": "Ca2+",
-    "latex": "\\mathrm{Ca_2+}",
+    "latex": "Ca^{2+}",
     "mathml": "<mi>Ca</mi><msub><mi></mi><mn>2</mn></msub>+",
-    "unicode": "Ca₂+",
+    "unicode": "Ca²⁺",
   },
   {
     "ascii": "SO4-2",
     "input": "SO4-2",
-    "latex": "\\mathrm{SO_4-_2}",
+    "latex": "\\mathrm{SO_4}^{2-}",
     "mathml": "<mi>S</mi><mi>O</mi><msub><mi></mi><mn>4</mn></msub>-2",
-    "unicode": "SO₄-₂",
+    "unicode": "SO₄²⁻",
   },
   {
     "ascii": "NO2",
@@ -2737,10 +2737,10 @@ exports[`Rendering output lock (all display fixtures) > renders expr_precedence.
     "unicode": "1.8×10⁻¹²",
   },
   {
-    "ascii": "2.46e+19",
+    "ascii": "2.46e19",
     "input": 24600000000000000000,
     "latex": "2.46 \\times 10^{19}",
-    "mathml": "<mn>2.46e+19</mn>",
+    "mathml": "<mn>2.46e19</mn>",
     "unicode": "2.46×10¹⁹",
   },
   {
@@ -2917,9 +2917,9 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       ],
       "op": "*",
     },
-    "latex": "k \\cdot \\mathrm{\\mathrm}_{\\mathrm{{O}}_\\mathrm{3}} \\cdot \\mathrm{\\mathrm}_{\\mathrm{{_{\\mathrm{NO}}}}",
+    "latex": "k \\mathrm{O_3} \\mathrm{NO}",
     "mathml": "<mrow><mi>k</mi><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub></mrow>",
-    "unicode": "k·\\mathrm_{O_₃}·\\mathrm{NO}",
+    "unicode": "k·\\mathrm{O_3}·\\mathrm{NO}",
   },
   {
     "ascii": "1.8e-12",
@@ -2929,10 +2929,10 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
     "unicode": "1.8×10⁻¹²",
   },
   {
-    "ascii": "2.46e+19",
+    "ascii": "2.46e19",
     "input": 24600000000000000000,
     "latex": "2.46 \\times 10^{19}",
-    "mathml": "<mn>2.46e+19</mn>",
+    "mathml": "<mn>2.46e19</mn>",
     "unicode": "2.46×10¹⁹",
   },
   {
@@ -2949,7 +2949,7 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       ],
       "op": "exp",
     },
-    "latex": "\\exp\\left(\\frac{\\mathrm{-E}}{\\mathrm{RT}}\\right)",
+    "latex": "\\exp\\left(\\frac{-E}{RT}\\right)",
     "mathml": "<mrow><mi>exp</mi><mo>(</mo><mfrac><mi>-E</mi><mi>RT</mi></mfrac><mo>)</mo></mrow>",
     "unicode": "exp(-E/RT)",
   },
@@ -2973,9 +2973,9 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       ],
       "op": "sin",
     },
-    "latex": "\\sin(\\mathrm{\\theta})",
+    "latex": "\\sin(\\theta)",
     "mathml": "<mrow><mi>sin</mi><mo>(</mo><mi>\\theta</mi><mo>)</mo></mrow>",
-    "unicode": "sin(\\θ)",
+    "unicode": "sin(\\theta)",
   },
   {
     "ascii": "x^2",
@@ -3073,9 +3073,9 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       ],
       "op": "=",
     },
-    "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t} = (-k_{\\mathrm{{_{\\mathrm{NO_O_3}}}}) \\cdot \\mathrm{\\mathrm}_{\\mathrm{{O}}_\\mathrm{3}} \\cdot \\mathrm{\\mathrm}_{\\mathrm{{_{\\mathrm{NO}}}} \\cdot M + j_{\\mathrm{{_{\\mathrm{NO_2}}}} \\cdot \\mathrm{\\mathrm}_{\\mathrm{{NO}}_\\mathrm{2}}",
+    "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t} = (-k_{NO_O3}) \\mathrm{O_3} \\mathrm{NO} M + j_{NO2} \\mathrm{NO_2}",
     "mathml": "<mrow><mi>=</mi><mo>(</mo><mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>,</mo><mrow><mrow><mrow><mo>-</mo><mi>k</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub>}</mrow></msub></mrow><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub><mo>&cdot;</mo><mi>M</mi></mrow><mo>+</mo><mrow><mi>j</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_2}</mrow></msub></mrow></mrow><mo>)</mo></mrow>",
-    "unicode": "∂O₃/∂t = (−k_{NO_O₃})·\\mathrm_{O_₃}·\\mathrm{NO}·M + j_{NO₂}·\\mathrm_{NO_₂}",
+    "unicode": "∂O₃/∂t = (−k_{NO_O₃})·\\mathrm{O_3}·\\mathrm{NO}·M + j_{NO₂}·\\mathrm{NO_2}",
   },
 ]
 `;
@@ -3111,11 +3111,11 @@ exports[`Rendering output lock (all display fixtures) > renders number_formattin
     "unicode": "0",
   },
   {
-    "ascii": "5e-3",
+    "ascii": "5.0e-3",
     "input": 0.005,
-    "latex": "5 \\times 10^{-3}",
-    "mathml": "<mn>5e-3</mn>",
-    "unicode": "5×10⁻³",
+    "latex": "5.0 \\times 10^{-3}",
+    "mathml": "<mn>5.0e-3</mn>",
+    "unicode": "5.0×10⁻³",
   },
   {
     "ascii": "298.15",
@@ -3139,24 +3139,24 @@ exports[`Rendering output lock (all display fixtures) > renders number_formattin
     "unicode": "1.8×10⁻¹²",
   },
   {
-    "ascii": "2.46e+19",
+    "ascii": "2.46e19",
     "input": 24600000000000000000,
     "latex": "2.46 \\times 10^{19}",
-    "mathml": "<mn>2.46e+19</mn>",
+    "mathml": "<mn>2.46e19</mn>",
     "unicode": "2.46×10¹⁹",
   },
   {
-    "ascii": "1e-3",
+    "ascii": "1.0e-3",
     "input": 0.001,
-    "latex": "1 \\times 10^{-3}",
-    "mathml": "<mn>1e-3</mn>",
-    "unicode": "1×10⁻³",
+    "latex": "1.0 \\times 10^{-3}",
+    "mathml": "<mn>1.0e-3</mn>",
+    "unicode": "1.0×10⁻³",
   },
   {
-    "ascii": "1.5e+4",
+    "ascii": "1.5e4",
     "input": 15000,
     "latex": "1.5 \\times 10^{4}",
-    "mathml": "<mn>1.5e+4</mn>",
+    "mathml": "<mn>1.5e4</mn>",
     "unicode": "1.5×10⁴",
   },
   {
@@ -3195,11 +3195,11 @@ exports[`Rendering output lock (all display fixtures) > renders number_formattin
     "unicode": "9999.99",
   },
   {
-    "ascii": "1e+4",
+    "ascii": "1.0e4",
     "input": 10000,
-    "latex": "1 \\times 10^{4}",
-    "mathml": "<mn>1e+4</mn>",
-    "unicode": "1×10⁴",
+    "latex": "1.0 \\times 10^{4}",
+    "mathml": "<mn>1.0e4</mn>",
+    "unicode": "1.0×10⁴",
   },
   {
     "ascii": "-3.14",
@@ -3213,26 +3213,26 @@ exports[`Rendering output lock (all display fixtures) > renders number_formattin
     "input": -1.8e-12,
     "latex": "-1.8 \\times 10^{-12}",
     "mathml": "<mn>-1.8e-12</mn>",
-    "unicode": "-1.8×10⁻¹²",
+    "unicode": "−1.8×10⁻¹²",
   },
   {
-    "ascii": "Infinity",
+    "ascii": "inf",
     "input": "Infinity",
-    "latex": "\\mathrm{Infinity}",
+    "latex": "\\infty",
     "mathml": "<mi>Infinity</mi>",
-    "unicode": "Infinity",
+    "unicode": "∞",
   },
   {
-    "ascii": "-Infinity",
+    "ascii": "-inf",
     "input": "-Infinity",
-    "latex": "\\mathrm{-Infinity}",
+    "latex": "-\\infty",
     "mathml": "<mi>-Infinity</mi>",
-    "unicode": "-Infinity",
+    "unicode": "−∞",
   },
   {
     "ascii": "NaN",
     "input": "NaN",
-    "latex": "\\mathrm{NaN}",
+    "latex": "\\text{NaN}",
     "mathml": "<mi>Na</mi><mi>N</mi>",
     "unicode": "NaN",
   },
@@ -3477,9 +3477,9 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "D",
       "wrt": "t",
     },
-    "latex": "\\frac{\\partial x + y}{\\partial t}",
+    "latex": "\\frac{\\partial (x + y)}{\\partial t}",
     "mathml": "<mfrac><mrow><mo>&part;</mo><mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
-    "unicode": "∂x + y/∂t",
+    "unicode": "∂(x + y)/∂t",
   },
   {
     "ascii": "grad(f * g)",
@@ -3577,7 +3577,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
     "unicode": "a^(b^c)",
   },
   {
-    "ascii": "a^b^c",
+    "ascii": "(a^b)^c",
     "input": {
       "args": [
         {
@@ -3591,9 +3591,9 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       ],
       "op": "^",
     },
-    "latex": "a^{b}^{c}",
+    "latex": "(a^{b})^{c}",
     "mathml": "<msup><msup><mi>a</mi><mi>b</mi></msup><mi>c</mi></msup>",
-    "unicode": "a^b^c",
+    "unicode": "(a^b)^c",
   },
   {
     "ascii": "sin(x) * cos(y) + z^2",
@@ -3762,7 +3762,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
     "unicode": "x > 0 ∧ x < 10",
   },
   {
-    "ascii": "t <= 0 or t >= 8.64e+4",
+    "ascii": "t <= 0 or t >= 8.64e4",
     "input": {
       "args": [
         {
@@ -3783,7 +3783,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "or",
     },
     "latex": "t \\leq 0 \\lor t \\geq 8.64 \\times 10^{4}",
-    "mathml": "<mrow><mrow><mi>t</mi><mo>&leq;</mo><mn>0</mn></mrow><mo>&or;</mo><mrow><mi>t</mi><mo>&geq;</mo><mn>8.64e+4</mn></mrow></mrow>",
+    "mathml": "<mrow><mrow><mi>t</mi><mo>&leq;</mo><mn>0</mn></mrow><mo>&or;</mo><mrow><mi>t</mi><mo>&geq;</mo><mn>8.64e4</mn></mrow></mrow>",
     "unicode": "t ≤ 0 ∨ t ≥ 8.64×10⁴",
   },
   {

@@ -296,7 +296,7 @@
             }
           ]
         },
-        "unicode": "∂O₃/∂t = −k_NO_O3·O₃·NO·M + jNO2·NO₂",
+        "unicode": "∂O₃/∂t = (−k_NO_O₃)·O₃·NO·M + jNO₂·NO₂",
         "description": "Complete ODE with chemical species and parameters"
       }
     ]

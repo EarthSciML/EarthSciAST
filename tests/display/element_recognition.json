@@ -39,7 +39,7 @@
     {
       "name": "latex_format",
       "input": "NO2",
-      "expected_output": "\\text{NO}_2",
+      "expected_output": "\\mathrm{NO_2}",
       "format": "latex",
       "description": "LaTeX format for nitrogen dioxide"
     },

@@ -41,17 +41,17 @@ func TestToUnicodeBasic(t *testing.T) {
 		{
 			name:     "threshold value 0.001 - should use scientific",
 			input:    0.001,
-			expected: "1×10⁻³",
+			expected: "1.0×10⁻³",
 		},
 		{
 			name:     "threshold value 0.005 - should use scientific",
 			input:    0.005,
-			expected: "5×10⁻³",
+			expected: "5.0×10⁻³",
 		},
 		{
 			name:     "threshold value 0.009 - should use scientific",
 			input:    0.009,
-			expected: "9×10⁻³",
+			expected: "9.0×10⁻³",
 		},
 		{
 			name:     "threshold value 0.01 - should NOT use scientific",
@@ -140,7 +140,7 @@ func TestToLatexBasic(t *testing.T) {
 		{
 			name:     "chemical species",
 			input:    "O3",
-			expected: "\\mathrm{O_{3}}",
+			expected: "\\mathrm{O_3}",
 		},
 		{
 			name: "simple addition",
@@ -181,7 +181,7 @@ func TestToLatexBasic(t *testing.T) {
 				Args: []any{"O3"},
 				Wrt:  strPtr("t"),
 			},
-			expected: "\\frac{\\partial \\mathrm{O_{3}}}{\\partial t}",
+			expected: "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
 		},
 		{
 			name: "exponential simple",
@@ -298,12 +298,12 @@ func TestFormatChemicalSpecies(t *testing.T) {
 		unicode string
 		latex   string
 	}{
-		{"O3", "O₃", "\\mathrm{O_{3}}"},
-		{"NO2", "NO₂", "\\mathrm{NO_{2}}"},
-		{"H2O", "H₂O", "\\mathrm{H_{2}O}"},
-		{"CO2", "CO₂", "\\mathrm{CO_{2}}"},
-		{"CH4", "CH₄", "\\mathrm{CH_{4}}"},
-		{"SO4", "SO₄", "\\mathrm{SO_{4}}"},
+		{"O3", "O₃", "\\mathrm{O_3}"},
+		{"NO2", "NO₂", "\\mathrm{NO_2}"},
+		{"H2O", "H₂O", "\\mathrm{H_2O}"},
+		{"CO2", "CO₂", "\\mathrm{CO_2}"},
+		{"CH4", "CH₄", "\\mathrm{CH_4}"},
+		{"SO4", "SO₄", "\\mathrm{SO_4}"},
 	}
 
 	for _, tt := range tests {
@@ -346,7 +346,7 @@ func TestComplexChemicalExpression(t *testing.T) {
 	latex := ToLatex(input)
 
 	assert.Equal(t, "1.8×10⁻¹²·O₃·NO·M", unicode)
-	assert.Equal(t, "1.8 \\times 10^{-12} \\cdot \\mathrm{O_{3}} \\cdot \\mathrm{NO} \\cdot M", latex)
+	assert.Equal(t, "1.8 \\times 10^{-12} \\cdot \\mathrm{O_3} \\cdot \\mathrm{NO} \\cdot M", latex)
 }
 
 // TestToUnicodeSpacedMatchesUnicode pins that ToUnicodeSpaced (now rendered via
@@ -532,8 +532,9 @@ func TestModelSummary(t *testing.T) {
 	assert.Contains(t, result, "R2: NO₂ → NO + O₃    rate: jNO₂")
 	assert.Contains(t, result, "Advection (2 parameters, 1 equation)")
 	// grad now renders via the generic fallback (dim is NOT rendered), so both
-	// advection terms print as grad(_var).
-	assert.Contains(t, result, "∂_var/∂t = −u_wind · grad(_var) + −v_wind · grad(_var)")
+	// advection terms print as grad(_var). Unary minus is an operator node, so it
+	// is parenthesized inside the product ((−a)·b), per RENDERING_CONTRACT.md.
+	assert.Contains(t, result, "∂_var/∂t = (−u_wind) · grad(_var) + (−v_wind) · grad(_var)")
 	assert.Contains(t, result, "GEOSFP: T, u, v (grid)")
 	assert.Contains(t, result, "operator_compose: SimpleOzone + Advection")
 	assert.Contains(t, result, "variable_map: GEOSFP.T → SimpleOzone.T")

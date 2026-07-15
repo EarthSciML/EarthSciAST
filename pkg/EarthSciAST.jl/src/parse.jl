@@ -171,17 +171,15 @@ function _parse_op_dict(data)
         # ops or `fn` invocations of closed registry entries.
         throw(ParseError("`call` op is not valid in v0.3.0+ (removed by esm-spec §9 closure). " *
                          "Migrate to AST ops or `fn` invocations of the closed function registry."))
-    elseif op == "apply_expression_template"
-        # `apply_expression_template` should have been expanded by
-        # `lower_expression_templates` before any tree reached
-        # `parse_expression` (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md).
-        # Reaching this branch means a binding caller fed unexpanded JSON
-        # directly to parse_expression — surface that as an error rather
-        # than silently producing an `OpExpr` with the template op.
-        throw(ParseError("`apply_expression_template` op encountered during " *
-                         "parse_expression; expected `lower_expression_templates` to " *
-                         "have expanded it (esm-spec §9.6)."))
     end
+    # `apply_expression_template` is normally expanded by
+    # `lower_expression_templates` before any tree reaches `parse_expression`
+    # (esm-spec §9.6). When a caller feeds an unexpanded node directly — as the
+    # cross-language display conformance producer does — it is built into an
+    # `OpExpr` carrying `name` + `bindings` so the pretty-printer can render it
+    # per RENDERING_CONTRACT.md (matching the other four bindings), rather than
+    # throwing. The load pipeline still lowers templates ahead of typed parsing,
+    # so a loaded document never carries an `apply_expression_template` node.
     args_data = _get_field(data, :args, ())
     args = Vector{ASTExpr}([parse_expression(arg) for arg in args_data])
     wrt = _opt_string(data, :wrt)

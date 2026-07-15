@@ -74,8 +74,12 @@ fn format_chemical_subscripts(s: &str) -> String {
         return greek_converted.to_string();
     }
 
+    // Peel a trailing ionic charge (`Ca2+`, `SO4-2`) so its magnitude renders
+    // as a SUPERSCRIPT (`Ca²⁺`, `SO₄²⁻`) rather than an atom-count subscript.
+    let (body, charge) = split_charge(s);
+
     let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
+    let chars: Vec<char> = body.chars().collect();
     let mut i = 0;
 
     while i < chars.len() {
@@ -117,36 +121,72 @@ fn format_chemical_subscripts(s: &str) -> String {
             result.push(ch);
             i += 1;
         } else {
+            // A group-count after a closing bracket subscripts too (`Ca(OH)2`
+            // → `Ca(OH)₂`); every other non-element character is copied as-is.
             result.push(ch);
             i += 1;
+            if ch == ')' || ch == ']' {
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    let digit = chars[i].to_digit(10).unwrap();
+                    result.push(UNICODE_SUBSCRIPTS[digit as usize]);
+                    i += 1;
+                }
+            }
         }
     }
 
+    result.push_str(&to_superscript_str(&charge));
     result
 }
 
-/// Find if there's a valid element symbol at the given position
-fn find_element_at_position(s: &str, pos: usize) -> Option<usize> {
-    // Look backwards from position to find potential element start
-    let chars: Vec<char> = s.chars().collect();
-
-    // Try 2-letter elements first (at pos-1, pos)
-    if pos > 0 && pos < chars.len() {
-        let two_letter = format!("{}{}", chars[pos - 1], chars[pos]);
-        if ELEMENTS.contains(&two_letter.as_str()) {
-            return Some(pos);
+/// Split off a trailing ionic charge suffix, returning `(body, charge)` where
+/// `charge` is the raw magnitude-then-sign string (`"2+"`, `"2-"`) — the caller
+/// renders it as a superscript (Unicode `²⁺` via `to_superscript_str`, or LaTeX
+/// `^{2+}`). Empty `charge` when no sign is present or the remaining body is not
+/// a chemical formula, so ordinary identifiers are untouched. Input `2+` and
+/// `-2` after a chemical body both normalize to `"2+"` / `"2-"`.
+fn split_charge(s: &str) -> (&str, String) {
+    let last = match s.chars().last() {
+        Some(c) => c,
+        None => return (s, String::new()),
+    };
+    // digits-then-sign, e.g. "Ca2+"
+    if last == '+' || last == '-' {
+        let without_sign = &s[..s.len() - 1];
+        let mag: String = without_sign
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let body = &without_sign[..without_sign.len() - mag.len()];
+        if !mag.is_empty() && is_chemical_formula(body) {
+            return (body, format!("{mag}{last}"));
         }
     }
-
-    // Try 1-letter elements (at pos)
-    if pos < chars.len() {
-        let one_letter = chars[pos].to_string();
-        if ELEMENTS.contains(&one_letter.as_str()) {
-            return Some(pos);
+    // sign-then-digits, e.g. "SO4-2"
+    if last.is_ascii_digit() {
+        let mag: String = s
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let before = &s[..s.len() - mag.len()];
+        if let Some(sign) = before.chars().last()
+            && (sign == '+' || sign == '-')
+        {
+            let body = &before[..before.len() - 1];
+            if is_chemical_formula(body) {
+                return (body, format!("{mag}{sign}"));
+            }
         }
     }
-
-    None
+    (s, String::new())
 }
 
 /// Backend-independent pieces of a formatted floating-point number.
@@ -157,97 +197,131 @@ fn find_element_at_position(s: &str, pos: usize) -> Option<usize> {
 /// share `format_display_float` and differ only in how they render the
 /// exponent (Unicode superscripts, LaTeX `\times 10^{...}`, ASCII `e`).
 enum FloatParts {
-    /// Rendered verbatim in every backend (e.g. "0.0", "42", "3.15").
+    /// Rendered verbatim in every backend (e.g. "0", "42", "3.15").
     Plain(String),
-    /// Scientific notation, e.g. mantissa "1.80" with exponent "-12".
+    /// Scientific notation, e.g. mantissa "1.8" with exponent "-12". The
+    /// mantissa always carries at least one decimal digit ("1" -> "1.0") and
+    /// the exponent has no leading `+` (matching tests/display goldens).
     Scientific { mantissa: String, exponent: String },
+    /// `+inf` (`false`) / `-inf` (`true`).
+    Inf(bool),
+    /// Not-a-number.
+    NaN,
 }
 
-/// Shared float-formatting core for all three expression printers.
+// Scientific-notation cutoffs (esm-spec §6.1 / RENDERING_CONTRACT.md "Number
+// formatting"): a nonzero magnitude below the min or at/above the max renders
+// in scientific notation, in EVERY backend and for integers alike.
+const SCI_NOTATION_MIN: f64 = 0.01;
+const SCI_NOTATION_MAX: f64 = 10000.0;
+
+/// Shared float-formatting core for all three expression printers. Integer and
+/// float leaves both flow through here so a magnitude like `15000` renders as
+/// `1.5×10⁴` regardless of which JSON token produced it.
 fn format_display_float(n: f64) -> FloatParts {
-    let abs_n = n.abs();
-
-    // Scientific notation for very large or very small magnitudes. This
-    // check comes first (matching the reference Unicode printer) so integral
-    // values like 2e4 render as scientific rather than collapsing to "20000".
-    if abs_n >= 10000.0 || (abs_n < 0.0001 && abs_n != 0.0) {
-        // `{:.2e}` normalizes the mantissa (including rounding overflow such
-        // as 9.999e4 -> 1.00e5), which manual log10 arithmetic got wrong.
-        let sci = format!("{n:.2e}");
-        return match sci.find('e') {
-            Some(e_pos) => FloatParts::Scientific {
-                mantissa: sci[..e_pos].to_string(),
-                exponent: sci[e_pos + 1..].trim_start_matches('+').to_string(),
-            },
-            // Non-finite values ("inf", "NaN") carry no exponent.
-            None => FloatParts::Plain(sci),
-        };
+    if n.is_nan() {
+        return FloatParts::NaN;
     }
-
-    // Special handling for 0.0 - display as "0.0" instead of "0"
+    if n.is_infinite() {
+        return FloatParts::Inf(n < 0.0);
+    }
+    // Zero prints as a bare "0" (never "0.0"), in every backend.
     if n == 0.0 {
-        return FloatParts::Plain("0.0".to_string());
+        return FloatParts::Plain("0".to_string());
     }
 
-    // Other integers in normal range display without a decimal point
+    let abs_n = n.abs();
+    if !(SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&abs_n) {
+        // Rust's `{:e}` yields the shortest round-tripping mantissa with no
+        // precision loss (e.g. 0.009999 -> "9.999e-3") and an exponent with no
+        // leading `+`, matching the normative number-formatting contract.
+        let sci = format!("{n:e}");
+        if let Some(e_pos) = sci.find('e') {
+            let mut mantissa = sci[..e_pos].to_string();
+            // Ensure at least one decimal place: "1" -> "1.0", "8.64" stays.
+            if !mantissa.contains('.') {
+                mantissa.push_str(".0");
+            }
+            return FloatParts::Scientific {
+                mantissa,
+                exponent: sci[e_pos + 1..].to_string(),
+            };
+        }
+        return FloatParts::Plain(sci);
+    }
+
+    // Integers in normal range display without a decimal point.
     if n.fract() == 0.0 {
         return FloatParts::Plain(format!("{}", n as i64));
     }
 
-    // 1-4 significant digits in decimal notation, trailing zeros removed
-    let formatted = format!("{n:.4}");
-    FloatParts::Plain(
-        formatted
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string(),
-    )
+    // In-range fractional value: shortest round-tripping decimal, no rounding.
+    FloatParts::Plain(format!("{n}"))
 }
 
-/// Format a number according to the specification
+/// Replace a leading ASCII hyphen with the Unicode U+2212 MINUS SIGN (used by
+/// the Unicode number printer for both the mantissa and plain values).
+fn unicode_minus(s: String) -> String {
+    match s.strip_prefix('-') {
+        Some(rest) => format!("−{rest}"),
+        None => s,
+    }
+}
+
+/// Unicode number rendering (U+2212 minus, superscript exponent, `∞`/`NaN`).
 fn format_number_unicode(n: f64) -> String {
+    match format_display_float(n) {
+        FloatParts::Plain(s) => unicode_minus(s),
+        FloatParts::Scientific { mantissa, exponent } => {
+            format!(
+                "{}×10{}",
+                unicode_minus(mantissa),
+                to_superscript_str(&exponent)
+            )
+        }
+        FloatParts::Inf(neg) => if neg { "−∞" } else { "∞" }.to_string(),
+        FloatParts::NaN => "NaN".to_string(),
+    }
+}
+
+/// LaTeX number rendering (`\times 10^{…}`, `\infty`/`\text{NaN}`).
+fn format_number_latex(n: f64) -> String {
     match format_display_float(n) {
         FloatParts::Plain(s) => s,
         FloatParts::Scientific { mantissa, exponent } => {
-            format_scientific_unicode(&format!("{mantissa}e{exponent}"))
+            format!("{mantissa} \\times 10^{{{exponent}}}")
         }
+        FloatParts::Inf(neg) => if neg { "-\\infty" } else { "\\infty" }.to_string(),
+        FloatParts::NaN => "\\text{NaN}".to_string(),
     }
 }
 
-/// Convert scientific notation to Unicode with superscripts
-fn format_scientific_unicode(sci: &str) -> String {
-    if let Some(e_pos) = sci.find('e') {
-        let (mantissa, exponent) = sci.split_at(e_pos);
-        let exp_part = &exponent[1..]; // Skip 'e'
-
-        let mut unicode_exp = String::new();
-        let mut exp_chars = exp_part.chars();
-
-        // Handle sign
-        if let Some(first) = exp_chars.next() {
-            match first {
-                '+' => {} // Skip plus
-                '-' => unicode_exp.push('⁻'),
-                d if d.is_ascii_digit() => {
-                    if let Some(digit) = d.to_digit(10) {
-                        unicode_exp.push(UNICODE_SUPERSCRIPTS[digit as usize]);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Convert remaining digits
-        for ch in exp_chars {
-            if let Some(digit) = ch.to_digit(10) {
-                unicode_exp.push(UNICODE_SUPERSCRIPTS[digit as usize]);
-            }
-        }
-
-        format!("{mantissa}×10{unicode_exp}")
-    } else {
-        sci.to_string()
+/// ASCII number rendering (`mantissa e exp`, no `+` on a positive exponent).
+fn format_number_ascii(n: f64) -> String {
+    match format_display_float(n) {
+        FloatParts::Plain(s) => s,
+        FloatParts::Scientific { mantissa, exponent } => format!("{mantissa}e{exponent}"),
+        FloatParts::Inf(neg) => if neg { "-inf" } else { "inf" }.to_string(),
+        FloatParts::NaN => "NaN".to_string(),
     }
+}
+
+/// Render a non-finite value carried as a JSON *string* token (`"Infinity"`,
+/// `"-Infinity"`, `"NaN"`) — JSON cannot encode these as numbers, so the corpus
+/// smuggles them through as variable names. Returns `None` for any ordinary
+/// identifier. See RENDERING_CONTRACT.md "Number formatting".
+fn nonfinite_string(name: &str, fmt: Fmt) -> Option<String> {
+    let n = match name {
+        "Infinity" => f64::INFINITY,
+        "-Infinity" => f64::NEG_INFINITY,
+        "NaN" => f64::NAN,
+        _ => return None,
+    };
+    Some(match fmt {
+        Fmt::Unicode => format_number_unicode(n),
+        Fmt::Latex => format_number_latex(n),
+        Fmt::Ascii => format_number_ascii(n),
+    })
 }
 
 impl fmt::Display for Expr {
@@ -264,17 +338,12 @@ impl Expr {
 
     fn to_unicode_with_precedence(&self, parent_prec: i32) -> String {
         match self {
+            // Integers and floats share one formatter so a large-magnitude
+            // integer (e.g. 15000) renders as scientific `1.5×10⁴` too.
             Expr::Number(n) => format_number_unicode(*n),
-            // Unicode uses U+2212 MINUS SIGN for negative literals (matching
-            // the reference float printer), not the ASCII hyphen.
-            Expr::Integer(n) => {
-                let s = n.to_string();
-                match s.strip_prefix('-') {
-                    Some(rest) => format!("−{rest}"),
-                    None => s,
-                }
-            }
-            Expr::Variable(name) => format_chemical_subscripts(name),
+            Expr::Integer(n) => format_number_unicode(*n as f64),
+            Expr::Variable(name) => nonfinite_string(name, Fmt::Unicode)
+                .unwrap_or_else(|| format_chemical_subscripts(name)),
             Expr::Operator(node) => format_operator_unicode(node, parent_prec),
         }
     }
@@ -457,6 +526,56 @@ fn wrap_if_op(expr: &Expr, fmt: Fmt) -> String {
     }
 }
 
+/// Render a sub-expression at a specific parent precedence in the given backend.
+fn render_at(expr: &Expr, fmt: Fmt, prec: i32) -> String {
+    match fmt {
+        Fmt::Unicode => expr.to_unicode_with_precedence(prec),
+        Fmt::Latex => to_latex_prec(expr, prec),
+        Fmt::Ascii => to_ascii_prec(expr, prec),
+    }
+}
+
+/// Render one operand of an associative n-ary operator (`+`, `*`). A child that
+/// is the SAME operator is not self-parenthesized, so `(a+b)+c` prints
+/// `a + b + c` and `(a·b)·c` prints `a·b·c`; every other child uses the normal
+/// precedence threshold (so `(a+b)·c` and `a·(b/c)` keep their parentheses).
+fn render_assoc_operand(expr: &Expr, parent_op: &str, op_prec: i32, fmt: Fmt) -> String {
+    let prec = match expr {
+        Expr::Operator(n) if n.op == parent_op => 0,
+        _ => op_prec,
+    };
+    render_at(expr, fmt, prec)
+}
+
+/// A binary `+` whose right operand is a unary minus renders as a subtraction
+/// (`a + (−b)` → `a − b`); returns the rendered string when this applies.
+fn sum_as_difference(args: &[Expr], op_prec: i32, fmt: Fmt) -> Option<String> {
+    if args.len() != 2 {
+        return None;
+    }
+    let Expr::Operator(n) = &args[1] else {
+        return None;
+    };
+    if n.op != "-" || n.args.len() != 1 {
+        return None;
+    }
+    let minus = if fmt == Fmt::Unicode { "−" } else { "-" };
+    Some(format!(
+        "{} {minus} {}",
+        render_assoc_operand(&args[0], "+", op_prec, fmt),
+        render_at(&n.args[0], fmt, op_prec + 1)
+    ))
+}
+
+/// True when a LaTeX product has a direct operand that is a variable NAME
+/// already carrying a command backslash (e.g. `\mathrm{O_3}`); such products
+/// render by juxtaposition (a space) rather than with `\cdot`. Mirrors the
+/// `latexSep` decision in pretty-print.ts.
+fn latex_mul_juxtapose(args: &[Expr]) -> bool {
+    args.iter()
+        .any(|a| matches!(a, Expr::Variable(v) if v.contains('\\')))
+}
+
 /// Render a `const` node's literal JSON value (scalar number or nested array).
 /// Integer JSON tokens print as plain integers (so `const 0` is `0`, not
 /// `0.0`); float tokens use the backend's number formatting.
@@ -478,18 +597,8 @@ fn format_const_value(value: &serde_json::Value, fmt: Fmt) -> String {
             } else if let Some(f) = num.as_f64() {
                 match fmt {
                     Fmt::Unicode => format_number_unicode(f),
-                    Fmt::Latex => match format_display_float(f) {
-                        FloatParts::Plain(s) => s,
-                        FloatParts::Scientific { mantissa, exponent } => {
-                            format!("{mantissa} \\times 10^{{{exponent}}}")
-                        }
-                    },
-                    Fmt::Ascii => match format_display_float(f) {
-                        FloatParts::Plain(s) => s,
-                        FloatParts::Scientific { mantissa, exponent } => {
-                            format!("{mantissa}e{exponent}")
-                        }
-                    },
+                    Fmt::Latex => format_number_latex(f),
+                    Fmt::Ascii => format_number_ascii(f),
                 }
             } else {
                 num.to_string()
@@ -942,9 +1051,11 @@ fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
 
     let result = match op {
         "+" => {
-            if args.len() >= 2 {
+            if let Some(s) = sum_as_difference(args, op_prec, Fmt::Unicode) {
+                s
+            } else if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(op_prec))
+                    .map(|arg| render_assoc_operand(arg, "+", op_prec, Fmt::Unicode))
                     .collect::<Vec<_>>()
                     .join(" + ")
             } else {
@@ -969,7 +1080,7 @@ fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
         "*" => {
             if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(op_prec))
+                    .map(|arg| render_assoc_operand(arg, "*", op_prec, Fmt::Unicode))
                     .collect::<Vec<_>>()
                     .join("·")
             } else {
@@ -1011,9 +1122,14 @@ fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
             }
         }
         "D" => {
-            // Derivative operator
+            // Derivative operator; the operand is parenthesized when it is an
+            // operator node (`∂(x + y)/∂t`, never `∂x + y/∂t`).
             if let (Some(wrt_var), [arg]) = (wrt, args) {
-                format!("∂{}/∂{}", r0(arg), format_chemical_subscripts(wrt_var))
+                format!(
+                    "∂{}/∂{}",
+                    wrap_if_op(arg, Fmt::Unicode),
+                    format_chemical_subscripts(wrt_var)
+                )
             } else {
                 call_form("D", args, r0)
             }
@@ -1208,75 +1324,159 @@ pub fn to_latex(expr: &Expr) -> String {
 /// same parenthesization rule as the reference Unicode printer.
 fn to_latex_prec(expr: &Expr, parent_prec: i32) -> String {
     match expr {
-        Expr::Integer(n) => n.to_string(),
-        Expr::Number(n) => match format_display_float(*n) {
-            FloatParts::Plain(s) => s,
-            FloatParts::Scientific { mantissa, exponent } => {
-                format!("{mantissa} \\times 10^{{{exponent}}}")
-            }
-        },
-        Expr::Variable(name) => format_variable_latex(name),
+        Expr::Integer(n) => format_number_latex(*n as f64),
+        Expr::Number(n) => format_number_latex(*n),
+        Expr::Variable(name) => {
+            nonfinite_string(name, Fmt::Latex).unwrap_or_else(|| format_variable_latex(name))
+        }
         Expr::Operator(node) => format_operator_latex(node, parent_prec),
     }
 }
 
 fn format_variable_latex(name: &str) -> String {
-    // A variable that is exactly a Greek letter (spelled name or Unicode
-    // character) renders as its LaTeX command.
+    // A name that is already LaTeX passes through verbatim.
+    if is_preformatted_latex(name) {
+        return name.to_string();
+    }
+    // A variable that is exactly a Greek letter renders as its LaTeX command.
     if let Some(cmd) = greek_to_latex(name) {
         return cmd.to_string();
     }
+    format_chemical_latex(name)
+}
 
-    // Simple variable (single letter, no digits)
-    if name.len() == 1 && !name.chars().any(|c| c.is_ascii_digit()) {
-        return name.to_string();
+/// True when a variable NAME is already hand-written LaTeX and must be emitted
+/// verbatim (mirrors `isPreformattedLatex` in pretty-print.ts): a `\mathrm{…}`
+/// atom, a bare command like `\theta` (a backslash with no brace), or a subscript
+/// atom like `k_{NO_O3}` (braces without a leading `\command{…}`). A braced
+/// `\command{…}` such as `\mathbf{v}` is NOT pre-formatted — it still takes the
+/// generic `\mathrm{…}` wrap.
+fn is_preformatted_latex(v: &str) -> bool {
+    if v.starts_with("\\mathrm{") {
+        return true;
     }
+    if v.contains('\\') {
+        return !v.contains('{');
+    }
+    v.contains('{') || v.contains('}')
+}
 
-    // Check if the name contains chemical elements after a prefix
-    // Look for patterns like "k_NO_O3" where we want "k_{\\mathrm{NO_O_3}}"
-    if let Some(underscore_pos) = name.find('_') {
-        let prefix = &name[..underscore_pos + 1]; // Include underscore
-        let suffix = &name[underscore_pos + 1..];
-
-        // Check if suffix looks like a chemical formula (starts with element)
-        if is_chemical_formula(suffix) {
-            return format!(
-                "{}{{\\mathrm{{{}}}}}",
-                prefix,
-                format_chemical_latex(suffix)
-            );
+/// True when `variable` (underscores ignored) is PURELY a chemical formula: at
+/// least one element symbol and no non-element letters. Uses the same greedy
+/// 2-char-before-1-char element tokenizer as `scanElements` in pretty-print.ts.
+fn has_element_pattern(variable: &str) -> bool {
+    let chars: Vec<char> = variable.chars().filter(|&c| c != '_').collect();
+    let mut has_element = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let mut sym_len = 0;
+        if i + 1 < chars.len() {
+            let two: String = [chars[i], chars[i + 1]].iter().collect();
+            if ELEMENTS.contains(&two.as_str()) {
+                sym_len = 2;
+            }
         }
-    }
-
-    // Check if starts with lowercase letters that could be non-chemical prefix
-    let mut prefix_end = 0;
-    for ch in name.chars() {
-        if ch.is_ascii_lowercase() || ch == '_' {
-            prefix_end += ch.len_utf8();
+        if sym_len == 0 && ELEMENTS.contains(&chars[i].to_string().as_str()) {
+            sym_len = 1;
+        }
+        if sym_len > 0 {
+            has_element = true;
+            i += sym_len;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
         } else {
-            break;
+            // A non-element letter means this is not a pure chemical formula.
+            if chars[i].is_ascii_alphabetic() {
+                return false;
+            }
+            i += 1;
         }
     }
+    has_element
+}
 
-    if prefix_end > 0 && prefix_end < name.len() {
-        let prefix = &name[..prefix_end];
-        let suffix = &name[prefix_end..];
-
-        if is_chemical_formula(suffix) {
-            return format!(
-                "{}_{{\\mathrm{{{}}}}}",
-                prefix,
-                format_chemical_latex(suffix)
-            );
+/// Convert every digit run in a formula to a LaTeX subscript (`H2O` → `H_2O`,
+/// `C12` → `C_{12}`), WITHOUT the `\mathrm{}` wrapper.
+fn latex_chemical_inner(formula: &str) -> String {
+    let chars: Vec<char> = formula.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let mut digits = String::new();
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                digits.push(chars[i]);
+                i += 1;
+            }
+            if digits.chars().count() == 1 {
+                out.push('_');
+                out.push_str(&digits);
+            } else {
+                out.push_str(&format!("_{{{digits}}}"));
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
         }
     }
+    out
+}
 
-    // Default: treat entire name as potentially chemical
-    if name.len() > 1 || name.chars().any(|c| c.is_ascii_digit()) {
-        format!("\\mathrm{{{}}}", format_chemical_latex(name))
-    } else {
-        name.to_string()
+/// Peel one leading `\mathrm{` and one trailing `}` (independently).
+fn strip_outer_mathrm(s: &str) -> String {
+    let inner = s.strip_prefix("\\mathrm{").unwrap_or(s);
+    inner.strip_suffix('}').unwrap_or(inner).to_string()
+}
+
+/// Split a variable into a non-element prefix + element-bearing suffix
+/// (`jNO2` → `("j","NO2")`, `k_NO_O3` → `("k","NO_O3")`), or `None`.
+fn get_chemical_suffix(variable: &str) -> Option<(String, String)> {
+    if variable.contains('_') {
+        let parts: Vec<&str> = variable.split('_').collect();
+        if parts.len() == 2 && has_element_pattern(parts[1]) && !has_element_pattern(parts[0]) {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+        if parts.len() == 3 {
+            let suffix = parts[1..].join("_");
+            if has_element_pattern(&suffix) && !has_element_pattern(parts[0]) {
+                return Some((parts[0].to_string(), suffix));
+            }
+        }
     }
+    let chars: Vec<char> = variable.chars().collect();
+    for i in 1..chars.len() {
+        let prefix: String = chars[..i].iter().collect();
+        let suffix: String = chars[i..].iter().collect();
+        if has_element_pattern(&suffix) && !has_element_pattern(&prefix) {
+            return Some((prefix, suffix));
+        }
+    }
+    None
+}
+
+/// Inner content of an element-bearing suffix embedded in a larger variable's
+/// subscript (the text INSIDE the enclosing `\mathrm{...}`).
+fn format_chemical_suffix_inner(variable: &str) -> String {
+    if get_chemical_suffix(variable).is_some() {
+        return strip_outer_mathrm(&format_chemical_latex(variable));
+    }
+    if ELEMENTS.contains(&variable) && !variable.chars().any(|c| c.is_ascii_digit()) {
+        return variable.to_string();
+    }
+    latex_chemical_inner(variable)
+}
+
+/// Match a single-letter-then-digits variable (`x1`, `T298`) → `(letter, digits)`.
+fn single_letter_digits(name: &str) -> Option<(String, String)> {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() >= 2
+        && chars[0].is_ascii_alphabetic()
+        && chars[1..].iter().all(|c| c.is_ascii_digit())
+    {
+        return Some((chars[0].to_string(), chars[1..].iter().collect()));
+    }
+    None
 }
 
 fn is_chemical_formula(s: &str) -> bool {
@@ -1302,45 +1502,101 @@ fn is_chemical_formula(s: &str) -> bool {
     ELEMENTS.contains(&one_letter)
 }
 
-fn format_chemical_latex(s: &str) -> String {
-    let mut result = String::new();
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch.is_alphabetic() {
-            result.push(ch);
-
-            // Check if this starts an element symbol and convert following digits
-            let current_pos = result.len() - 1;
-            if find_element_at_position(&result, current_pos).is_some() {
-                // Collect consecutive digits after the element
-                let mut digits = String::new();
-                while let Some(&next_ch) = chars.peek() {
-                    if next_ch.is_ascii_digit() {
-                        digits.push(chars.next().unwrap());
-                    } else {
-                        break;
-                    }
-                }
-
-                // Convert digits to LaTeX subscripts
-                if !digits.is_empty() {
-                    result.push('_');
-                    if digits.len() > 1 {
-                        result.push('{');
-                        result.push_str(&digits);
-                        result.push('}');
-                    } else {
-                        result.push_str(&digits);
-                    }
-                }
-            }
-        } else {
-            result.push(ch);
-        }
+/// LaTeX chemical/variable subscript formatting (mirrors `formatChemicalLatex`
+/// in pretty-print.ts). Greek and raw-LaTeX names are handled by the caller.
+fn format_chemical_latex(variable: &str) -> String {
+    // A trailing ionic charge is a superscript, not a subscript
+    // (`Ca2+` → `Ca^{2+}`, `SO4-2` → `\mathrm{SO_4}^{2-}`).
+    let (charge_body, charge) = split_charge(variable);
+    if !charge.is_empty() {
+        return format!("{}^{{{charge}}}", format_chemical_latex(charge_body));
     }
 
-    result
+    // Mixed variable: non-element prefix + element-bearing suffix.
+    if let Some((prefix, suffix)) = get_chemical_suffix(variable) {
+        let prefix_multi = prefix.chars().count() > 1;
+        if suffix.contains('_') {
+            let segments: Vec<&str> = suffix.split('_').collect();
+            // Split into per-segment subscripts when the first segment is a
+            // complete formula (ends in a digit) or the prefix is multi-char;
+            // otherwise the whole suffix stays one `\mathrm{...}` block.
+            let should_split =
+                segments[0].chars().last().is_some_and(|c| c.is_ascii_digit()) || prefix_multi;
+            if should_split {
+                let mut result = if prefix_multi {
+                    format!("\\mathrm{{{prefix}}}")
+                } else {
+                    prefix.clone()
+                };
+                for seg in &segments {
+                    if has_element_pattern(seg) {
+                        result.push_str(&format!("_{{\\mathrm{{{}}}}}", latex_chemical_inner(seg)));
+                    } else {
+                        result.push_str(&format!("_\\mathrm{{{seg}}}"));
+                    }
+                }
+                return result;
+            }
+        }
+        let inner = format_chemical_suffix_inner(&suffix);
+        let formatted_prefix = if prefix_multi {
+            format!("\\mathrm{{{prefix}}}")
+        } else {
+            prefix
+        };
+        return format!("{formatted_prefix}_{{\\mathrm{{{inner}}}}}");
+    }
+
+    if has_element_pattern(variable) {
+        // A bare element symbol without digits (e.g. "C", "Ca") is a variable.
+        if ELEMENTS.contains(&variable) && !variable.chars().any(|c| c.is_ascii_digit()) {
+            return variable.to_string();
+        }
+        // Pure chemical formula: digit runs → subscripts, wrapped in `\mathrm`.
+        return format!("\\mathrm{{{}}}", latex_chemical_inner(variable));
+    }
+
+    // Regular (non-chemical) variable.
+    if let Some((letter, digits)) = single_letter_digits(variable) {
+        return if digits.chars().count() == 1 {
+            format!("{letter}_{digits}")
+        } else {
+            format!("{letter}_{{{digits}}}")
+        };
+    }
+    if variable.chars().count() == 1 {
+        return variable.to_string();
+    }
+    if variable.contains('_') {
+        let parts: Vec<&str> = variable.split('_').collect();
+        if parts.iter().any(|p| has_element_pattern(p)) {
+            let base = parts[0];
+            let mut result = if base.chars().count() == 1 && base.chars().all(|c| c.is_ascii_alphabetic())
+            {
+                base.to_string()
+            } else if has_element_pattern(base) {
+                format_chemical_latex(base)
+            } else {
+                format!("\\mathrm{{{base}}}")
+            };
+            for part in &parts[1..] {
+                if has_element_pattern(part) {
+                    result.push_str(&format!("_{{\\mathrm{{{}}}}}", latex_chemical_inner(part)));
+                } else {
+                    result.push_str(&format!("_\\mathrm{{{part}}}"));
+                }
+            }
+            return result;
+        }
+        // No chemical segment → plain multi-word variable, underscores escaped.
+        return format!("\\mathrm{{{}}}", variable.replace('_', "\\_"));
+    }
+    // A symbol with no lowercase letters (e.g. "RT", "-E") is a math variable,
+    // not a descriptive name — leave it italic instead of wrapping in `\mathrm`.
+    if !variable.chars().any(|c| c.is_ascii_lowercase()) {
+        return variable.to_string();
+    }
+    format!("\\mathrm{{{variable}}}")
 }
 
 fn format_operator_latex(node: &ExpressionNode, parent_prec: i32) -> String {
@@ -1366,9 +1622,11 @@ fn format_operator_latex(node: &ExpressionNode, parent_prec: i32) -> String {
 
     let result = match op {
         "+" => {
-            if args.len() >= 2 {
+            if let Some(s) = sum_as_difference(args, op_prec, Fmt::Latex) {
+                s
+            } else if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| to_latex_prec(arg, op_prec))
+                    .map(|arg| render_assoc_operand(arg, "+", op_prec, Fmt::Latex))
                     .collect::<Vec<_>>()
                     .join(" + ")
             } else {
@@ -1392,10 +1650,17 @@ fn format_operator_latex(node: &ExpressionNode, parent_prec: i32) -> String {
         }
         "*" => {
             if args.len() >= 2 {
+                // A product of already-typeset factors (`\mathrm{O_3}`) uses
+                // implicit juxtaposition; plain symbols use `\cdot`.
+                let sep = if latex_mul_juxtapose(args) {
+                    " "
+                } else {
+                    " \\cdot "
+                };
                 args.iter()
-                    .map(|arg| to_latex_prec(arg, op_prec))
+                    .map(|arg| render_assoc_operand(arg, "*", op_prec, Fmt::Latex))
                     .collect::<Vec<_>>()
-                    .join(" \\cdot ")
+                    .join(sep)
             } else {
                 call_form("\\cdot", args, r0)
             }
@@ -1414,7 +1679,12 @@ fn format_operator_latex(node: &ExpressionNode, parent_prec: i32) -> String {
         }
         "D" => {
             if let (Some(wrt_var), [arg]) = (wrt, args) {
-                format!("\\frac{{\\partial {}}}{{\\partial {}}}", r0(arg), wrt_var)
+                // Operand parenthesized when it is an operator node.
+                format!(
+                    "\\frac{{\\partial {}}}{{\\partial {}}}",
+                    wrap_if_op(arg, Fmt::Latex),
+                    wrt_var
+                )
             } else {
                 call_form("D", args, r0)
             }
@@ -1568,13 +1838,12 @@ pub fn to_ascii(expr: &Expr) -> String {
 /// same parenthesization rule as the reference Unicode printer.
 fn to_ascii_prec(expr: &Expr, parent_prec: i32) -> String {
     match expr {
-        Expr::Integer(n) => n.to_string(),
-        Expr::Number(n) => match format_display_float(*n) {
-            FloatParts::Plain(s) => s,
-            FloatParts::Scientific { mantissa, exponent } => format!("{mantissa}e{exponent}"),
-        },
+        Expr::Integer(n) => format_number_ascii(*n as f64),
+        Expr::Number(n) => format_number_ascii(*n),
         // ASCII spells Greek characters out by name (e.g. `θ` → `theta`).
-        Expr::Variable(name) => greek_to_ascii(name),
+        Expr::Variable(name) => {
+            nonfinite_string(name, Fmt::Ascii).unwrap_or_else(|| greek_to_ascii(name))
+        }
         Expr::Operator(node) => format_operator_ascii(node, parent_prec),
     }
 }
@@ -1596,9 +1865,11 @@ fn format_operator_ascii(node: &ExpressionNode, parent_prec: i32) -> String {
 
     let result = match op {
         "+" => {
-            if args.len() >= 2 {
+            if let Some(s) = sum_as_difference(args, op_prec, Fmt::Ascii) {
+                s
+            } else if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| to_ascii_prec(arg, op_prec))
+                    .map(|arg| render_assoc_operand(arg, "+", op_prec, Fmt::Ascii))
                     .collect::<Vec<_>>()
                     .join(" + ")
             } else {
@@ -1623,7 +1894,7 @@ fn format_operator_ascii(node: &ExpressionNode, parent_prec: i32) -> String {
         "*" => {
             if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| to_ascii_prec(arg, op_prec))
+                    .map(|arg| render_assoc_operand(arg, "*", op_prec, Fmt::Ascii))
                     .collect::<Vec<_>>()
                     .join(" * ")
             } else {
@@ -1656,7 +1927,10 @@ fn format_operator_ascii(node: &ExpressionNode, parent_prec: i32) -> String {
         }
         "D" => {
             if let (Some(wrt_var), [arg]) = (wrt, args) {
-                format!("D({})/D{}", r0(arg), wrt_var)
+                // ASCII derivative uses the fraction form `D(operand)/Dt`
+                // (mirrors unicode/latex `∂x/∂t`); the operand sits inside the
+                // `D(...)` parentheses, so `D(x + y)/Dt`.
+                format!("D({})/D{wrt_var}", r0(arg))
             } else {
                 call_form("D", args, r0)
             }
@@ -1719,7 +1993,12 @@ fn format_operator_ascii(node: &ExpressionNode, parent_prec: i32) -> String {
         }
         "not" => {
             if args.len() == 1 {
-                format!("not {}", r0(&args[0]))
+                // Parenthesize a complex operand: `not (x == 0)`.
+                if matches!(&args[0], Expr::Operator(_)) {
+                    format!("not ({})", r0(&args[0]))
+                } else {
+                    format!("not {}", r0(&args[0]))
+                }
             } else {
                 call_form("not", args, r0)
             }
@@ -1973,45 +2252,53 @@ mod tests {
     fn test_number_formatting_unicode() {
         assert_eq!(format_number_unicode(42.0), "42");
         assert_eq!(format_number_unicode(3.15), "3.15");
-        assert_eq!(format_number_unicode(1.8e-12), "1.80×10⁻¹²");
+        // Mantissa is full-precision (no forced trailing zero): 1.8, not 1.80.
+        assert_eq!(format_number_unicode(1.8e-12), "1.8×10⁻¹²");
         assert_eq!(format_number_unicode(2.46e19), "2.46×10¹⁹");
 
-        // Test special handling of 0.0 - should display as "0.0" not "0"
-        assert_eq!(format_number_unicode(0.0), "0.0");
-        assert_eq!(format_number_unicode(-0.0), "0.0");
+        // Zero prints as a bare "0" (never "0.0") in every backend.
+        assert_eq!(format_number_unicode(0.0), "0");
+        assert_eq!(format_number_unicode(-0.0), "0");
 
-        // Other integers should still display without decimal point
+        // Other integers display without a decimal point; Unicode uses U+2212.
         assert_eq!(format_number_unicode(1.0), "1");
-        assert_eq!(format_number_unicode(-1.0), "-1");
+        assert_eq!(format_number_unicode(-1.0), "−1");
     }
 
     #[test]
     fn test_zero_formatting_all_formats() {
-        // Test that 0.0 is handled specially in all formatting functions
+        // Zero renders as a bare "0" in every backend (RENDERING_CONTRACT.md).
         let zero_expr = Expr::Number(0.0);
         let one_expr = Expr::Number(1.0);
         let neg_zero_expr = Expr::Number(-0.0);
 
         // Unicode formatting
-        assert_eq!(to_unicode(&zero_expr), "0.0");
-        assert_eq!(to_unicode(&neg_zero_expr), "0.0");
+        assert_eq!(to_unicode(&zero_expr), "0");
+        assert_eq!(to_unicode(&neg_zero_expr), "0");
         assert_eq!(to_unicode(&one_expr), "1");
 
         // LaTeX formatting
-        assert_eq!(to_latex(&zero_expr), "0.0");
-        assert_eq!(to_latex(&neg_zero_expr), "0.0");
+        assert_eq!(to_latex(&zero_expr), "0");
+        assert_eq!(to_latex(&neg_zero_expr), "0");
         assert_eq!(to_latex(&one_expr), "1");
 
         // ASCII formatting
-        assert_eq!(to_ascii(&zero_expr), "0.0");
-        assert_eq!(to_ascii(&neg_zero_expr), "0.0");
+        assert_eq!(to_ascii(&zero_expr), "0");
+        assert_eq!(to_ascii(&neg_zero_expr), "0");
         assert_eq!(to_ascii(&one_expr), "1");
     }
 
     #[test]
-    fn test_scientific_unicode() {
-        assert_eq!(format_scientific_unicode("1.80e-12"), "1.80×10⁻¹²");
-        assert_eq!(format_scientific_unicode("2.46e+19"), "2.46×10¹⁹");
+    fn test_scientific_all_backends() {
+        // Full-precision mantissa, U+2212 minus / `\times` / `e`, no `+` sign.
+        assert_eq!(format_number_unicode(1.8e-12), "1.8×10⁻¹²");
+        assert_eq!(format_number_unicode(2.46e19), "2.46×10¹⁹");
+        assert_eq!(format_number_latex(1.8e-12), "1.8 \\times 10^{-12}");
+        assert_eq!(format_number_ascii(1.8e-12), "1.8e-12");
+        // Non-finite values render as symbols, never stringified.
+        assert_eq!(format_number_unicode(f64::INFINITY), "∞");
+        assert_eq!(format_number_latex(f64::NEG_INFINITY), "-\\infty");
+        assert_eq!(format_number_ascii(f64::NAN), "NaN");
     }
 
     #[test]
@@ -2020,7 +2307,7 @@ mod tests {
         assert_eq!(format!("{expr}"), "O₃");
 
         let expr = Expr::Number(1.8e-12);
-        assert_eq!(format!("{expr}"), "1.80×10⁻¹²");
+        assert_eq!(format!("{expr}"), "1.8×10⁻¹²");
     }
 
     #[test]
@@ -2301,8 +2588,13 @@ mod tests {
         assert_eq!(to_ascii(&large), "2.46e19");
 
         let small = Expr::Number(1.8e-12);
-        assert_eq!(to_unicode(&small), "1.80×10⁻¹²");
-        assert_eq!(to_latex(&small), "1.80 \\times 10^{-12}");
-        assert_eq!(to_ascii(&small), "1.80e-12");
+        assert_eq!(to_unicode(&small), "1.8×10⁻¹²");
+        assert_eq!(to_latex(&small), "1.8 \\times 10^{-12}");
+        assert_eq!(to_ascii(&small), "1.8e-12");
+
+        // A large-magnitude *integer* leaf uses scientific notation too.
+        let big_int = Expr::Integer(15000);
+        assert_eq!(to_unicode(&big_int), "1.5×10⁴");
+        assert_eq!(to_ascii(&big_int), "1.5e4");
     }
 }

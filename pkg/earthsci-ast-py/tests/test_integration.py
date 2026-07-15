@@ -128,7 +128,9 @@ class TestFullWorkflowIntegration:
         latex_rate = to_latex(r2_rate)
 
         assert "k2" in unicode_rate and "B" in unicode_rate
-        assert "k2" in latex_rate and "B" in latex_rate
+        # LaTeX renders a single letter followed by digits as a subscript
+        # (`k2` → `k_2`), matching the rendering contract (see `x1` → `x_1`).
+        assert "k_2" in latex_rate and "B" in latex_rate
 
         # 4. Save and re-validate (verify roundtrip)
         saved_json = save(loaded_model)

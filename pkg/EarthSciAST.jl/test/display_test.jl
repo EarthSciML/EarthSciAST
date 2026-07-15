@@ -33,10 +33,12 @@ using EarthSciAST
         @test EarthSciAST.format_chemical_subscripts("CaCO3", :unicode) == "CaCO₃"
         @test EarthSciAST.format_chemical_subscripts("temp", :unicode) == "temp"  # Non-chemical variable unchanged
 
-        # Test format_chemical_subscripts for latex
-        @test EarthSciAST.format_chemical_subscripts("H2O", :latex) == "\\mathrm{H_{2}O}"
-        @test EarthSciAST.format_chemical_subscripts("CO2", :latex) == "\\mathrm{CO_{2}}"
-        @test EarthSciAST.format_chemical_subscripts("NH3", :latex) == "\\mathrm{NH_{3}}"
+        # Test format_chemical_subscripts for latex.
+        # Single-digit subscripts are BARE; only multi-digit runs are braced
+        # (RENDERING_CONTRACT.md; matches pretty-print.ts `latexChemicalInner`).
+        @test EarthSciAST.format_chemical_subscripts("H2O", :latex) == "\\mathrm{H_2O}"
+        @test EarthSciAST.format_chemical_subscripts("CO2", :latex) == "\\mathrm{CO_2}"
+        @test EarthSciAST.format_chemical_subscripts("NH3", :latex) == "\\mathrm{NH_3}"
         @test EarthSciAST.format_chemical_subscripts("temp", :latex) == "\\mathrm{temp}"  # Non-chemical multi-char var → upright
 
         # Test format_chemical_subscripts for ascii
@@ -55,7 +57,8 @@ using EarthSciAST
         # Test format_number for unicode with small numbers
         @test EarthSciAST.format_number(3.14, :unicode) == "3.14"
         @test EarthSciAST.format_number(1.0, :unicode) == "1"  # Julia formats 1.0 as "1"
-        @test EarthSciAST.format_number(-2.5, :unicode) == "-2.5"
+        # Unicode uses U+2212 MINUS SIGN (RENDERING_CONTRACT.md number formatting).
+        @test EarthSciAST.format_number(-2.5, :unicode) == "−2.5"
         @test EarthSciAST.format_number(0, :unicode) == "0"
 
         # Test format_number for latex with small numbers
@@ -102,7 +105,7 @@ using EarthSciAST
         # Test chemical VarExpr formatting
         chem_var = VarExpr("H2O")
         @test EarthSciAST.format_expression_unicode(chem_var) == "H₂O"
-        @test EarthSciAST.format_expression_latex(chem_var) == "\\mathrm{H_{2}O}"
+        @test EarthSciAST.format_expression_latex(chem_var) == "\\mathrm{H_2O}"
 
         # Test basic OpExpr formatting
         add_expr = OpExpr("+", EarthSciAST.ASTExpr[NumExpr(1.0), VarExpr("x")])
