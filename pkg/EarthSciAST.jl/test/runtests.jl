@@ -67,6 +67,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_test.jl")
     include("tree_walk_arrayop_test.jl")
     include("tree_walk_vectorized_test.jl")
+    include("access_kernel_foundation_test.jl")     # ess-affine IR foundation
+    include("stencil_affine_lowering_test.jl")       # ess-affine _lower_to_access
+    include("stencil_affine_diff_test.jl")           # ess-affine ≡ per-cell (differential)
     include("tree_walk_invariant_hoist_test.jl")
     include("tree_walk_vec_share_test.jl")
     include("tree_walk_oop_test.jl")
