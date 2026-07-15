@@ -1531,7 +1531,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
-    scalar_entries, vec_kernels = _compile_derivative_equations(derivative_eqs,
+    scalar_entries, vec_kernels, acc_kernels = _compile_derivative_equations(derivative_eqs,
         resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states)
     # States without a D(...) equation get du=0 (integrator leaves them
@@ -1599,9 +1599,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
         _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_prelude, vec_kernels,
-                  const_slots, dyn_slots)
+                  acc_kernels, const_slots, dyn_slots)
     elseif form === :oop
-        _make_rhs_oop(rhs_list, scalar_prelude, vec_prelude, vec_kernels, n_states)
+        _make_rhs_oop(rhs_list, scalar_prelude, vec_prelude, vec_kernels, acc_kernels, n_states)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
@@ -1639,6 +1639,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     #                         into the prelude, so the two must be read together — the sum
     #                         is what shrinks, and `template_node_count` alone can only fall.
     diag = (; n_vec_kernels = length(vec_kernels),
+              n_acc_kernels = length(acc_kernels),
               n_scalar_entries = length(rhs_list),
               template_node_count =
                   sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
@@ -1763,6 +1764,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int)
     scalar_entries = Tuple{Int,ASTExpr}[]
     vec_kernels = _VecKernel[]
+    acc_kernels = _AccKernel[]
     covered = falses(n_states)
 
     for eq in derivative_eqs
@@ -1801,12 +1803,12 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_arrayop_D_lhs(eq.lhs)
-            _compile_arrayop_equation!(vec_kernels, covered, eq, resolved_obs,
+            _compile_arrayop_equation!(vec_kernels, acc_kernels, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs)
         end
     end
-    return scalar_entries, vec_kernels
+    return scalar_entries, vec_kernels, acc_kernels
 end
 
 # ---- Stage: one arrayop derivative equation → whole-array kernels ----
@@ -1821,7 +1823,7 @@ end
 # (`_compile_arrayop_percell!`).
 # (`vec_kernels` is a `Vector{_VecKernel}`; the annotation is omitted because
 # `_VecKernel` is defined in section 4b, after this build section.)
-function _compile_arrayop_equation!(vec_kernels,
+function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
@@ -1871,6 +1873,20 @@ function _compile_arrayop_equation!(vec_kernels,
     end
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+    # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
+    # groups), producing `_AccKernel`s that resolve gathers at runtime. Opt-in
+    # via ESS_AFFINE=1 during rollout; returns `nothing` (covered untouched) for
+    # anything it cannot model, falling through to the symbolic / per-cell chain.
+    affine_kernels = (isempty(contract_names) && _affine_enabled() &&
+                      !_stencil_disabled()) ?
+        _try_affine_stencil(rhs_body, idx_names, range_iters, lhs_body,
+                            resolved_obs, array_var_info, var_map,
+                            const_registry, pgather, param_sym_set, reg_funcs,
+                            covered) : nothing
+    if affine_kernels !== nothing
+        append!(acc_kernels, affine_kernels)
+        return nothing
+    end
     # Fast path (ess-perf §4c): compile the stencil spine ONCE symbolically
     # and derive each cell's gather slots by evaluating the index expressions
     # per lane, instead of running sub→resolve→compile for every cell. Only

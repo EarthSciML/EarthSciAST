@@ -136,19 +136,22 @@ struct _VarBound   <: _Bound; valence::Vector{Int}; end   # per-cell edge count 
 @inline _nbrcount(b::_VarBound,   c) = @inbounds b.valence[c]
 
 # ---- Output cell set ----
-# STRUCTURED (Cartesian box): `strides` are the state grid's per-dim linear
-# strides (s[1]=1, s[2]=N1, s[3]=N1*N2, …) and `ranges[d]` is the box's 1-based
-# index range in dim d. The output slot of cell (i₁,…,i_d) is
-# `1 + Σ_d (i_d-1)·strides[d]`, walked with no stored per-lane out_slots. A box
+# STRUCTURED (Cartesian box): `strides` are the state grid's per-loop-dim linear
+# slot strides and `ranges[d]` is the box's index range in loop dim d. The output
+# slot of cell (i₁,…,i_d) is the AFFINE map `base + Σ_d i_d·strides[d]`, walked
+# with no stored per-lane out_slots. `base` and the strides are DERIVED from the
+# state layout (var_map) and verified — the state ordering is a lexicographic sort
+# of the index tuples (row-major for a full grid), NOT a fixed convention. A box
 # may restrict ANY subset of dims (longitude wrap in i, poles in j, vertical
 # regions in k), so it is a general strided box, not a slab.
 # UNSTRUCTURED / CONTIGUOUS: `strides` is empty; `ranges[1]` is the cell range
-# 1:ncell and the out slot == the cell ordinal.
+# 1:ncell, `base` unused, and the out slot == the cell ordinal.
 struct _CellSet
     strides::Vector{Int}
     ranges::Vector{UnitRange{Int}}
+    base::Int
 end
-_contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell])
+_contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell], 0)
 @inline _is_contig(cs::_CellSet) = isempty(cs.strides)
 
 # ---- One kernel ----
@@ -241,29 +244,30 @@ end
 function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet)
     st = cs.strides
     rg = cs.ranges
+    b  = cs.base
     nd = length(st)
     if nd == 1
         s1 = st[1]
         @inbounds for i in rg[1]
-            oln = 1 + (i-1)*s1
+            oln = b + i*s1
             du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, 1, 1), K)
         end
     elseif nd == 2
         s1 = st[1]; s2 = st[2]
         @inbounds for j in rg[2], i in rg[1]
-            oln = 1 + (i-1)*s1 + (j-1)*s2
+            oln = b + i*s1 + j*s2
             du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, 1), K)
         end
     elseif nd == 3
         s1 = st[1]; s2 = st[2]; s3 = st[3]
         @inbounds for k in rg[3], j in rg[2], i in rg[1]
-            oln = 1 + (i-1)*s1 + (j-1)*s2 + (k-1)*s3
+            oln = b + i*s1 + j*s2 + k*s3
             du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, k), K)
         end
     else
         @inbounds for idxs in Iterators.product(rg...)
-            oln = 1
-            for d in 1:nd; oln += (idxs[d]-1)*st[d]; end
+            oln = b
+            for d in 1:nd; oln += idxs[d]*st[d]; end
             mi = (idxs[1], nd >= 2 ? idxs[2] : 1, nd >= 3 ? idxs[3] : 1)
             du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, mi, K)
         end

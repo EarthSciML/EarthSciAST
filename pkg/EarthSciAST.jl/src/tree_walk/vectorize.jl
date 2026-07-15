@@ -1162,6 +1162,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    cse_cache::_CSECache,
                    vec_prelude::AbstractVector{_VecNode},
                    vec_kernels::AbstractVector{_VecKernel},
+                   acc_kernels::AbstractVector{_AccKernel},
                    const_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int})
     function f!(du, u, p, t)
@@ -1237,6 +1238,14 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
             for m in 1:length(out)
                 du[out[m]] = res[m]
             end
+        end
+
+        # ---- Affine access kernels (ess-affine, access_kernel.jl) ----
+        # Each resolves its gathers at runtime from an access-descriptor table over
+        # a strided output box — no per-lane slot vectors were built. The reduction
+        # bound / connectivity are data, so one kernel covers every valence.
+        @inbounds for j in 1:length(acc_kernels)
+            _run_acc_kernel!(du, u, p, t, acc_kernels[j])
         end
         return nothing
     end

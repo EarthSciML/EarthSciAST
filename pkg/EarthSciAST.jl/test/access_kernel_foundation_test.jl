@@ -25,12 +25,13 @@ const E = EarthSciAST
         # build one kernel per structural group (interior + 2 wrap boxes), by hand.
         # spine shape is shared; only the two wrapping deltas differ per group.
         strides = [1, N1, N1*N2]
+        cbase = -(N1 + N1*N2)                     # oln = cbase + i + j*N1 + k*N1*N2 == lin(i,j,k)
         mkspine(dW, dC, dE) = begin
             acc = E._Access[E._AccStateAffine(dW), E._AccStateAffine(dC), E._AccStateAffine(dE)]
             sp  = E._aop(:+, E._aop(:-, E._acc(1), E._aop(:*, E._alit(2.0), E._acc(2))), E._acc(3))
             sp, acc
         end
-        box(ir) = E._CellSet(strides, UnitRange{Int}[ir, 1:N2, 1:N3])
+        box(ir) = E._CellSet(strides, UnitRange{Int}[ir, 1:N2, 1:N3], cbase)
         kernels = E._AccKernel[]
         # interior box i∈2:N1-1, j,k full : deltas -1, 0, +1
         if N1 >= 3
@@ -75,6 +76,7 @@ const E = EarthSciAST
         end
 
         strides = [1, N1, N1*N2]
+        cbase = -(N1 + N1*N2)
         dU = N1*N2; dD = -N1*N2
         # spine: Kz[k] * ((qU - 2 qC) + qD); acc 1=qU 2=qC 3=qD 4=Kz[k]
         mkspine(du_, dd_) = begin
@@ -83,7 +85,7 @@ const E = EarthSciAST
             body = E._aop(:+, E._aop(:-, E._acc(1), E._aop(:*, E._alit(2.0), E._acc(2))), E._acc(3))
             E._aop(:*, E._acc(4), body), acc
         end
-        kbox(kr) = E._CellSet(strides, UnitRange{Int}[1:N1, 1:N2, kr])
+        kbox(kr) = E._CellSet(strides, UnitRange{Int}[1:N1, 1:N2, kr], cbase)
         kernels = E._AccKernel[]
         # bottom k=1: qD collapses to self (delta 0)
         let (sp,acc) = mkspine(dU, 0)

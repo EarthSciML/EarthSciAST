@@ -36,7 +36,8 @@ const E = EarthSciAST
     tmpl    = op(:+, op(:*, prm, stencil), st(fixslot))
 
     strides = [1, N1, N1*N2]
-    box(ir) = E._CellSet(strides, UnitRange{Int}[ir, 1:N2, 1:N3])
+    cbase = -(N1 + N1*N2)
+    box(ir) = E._CellSet(strides, UnitRange{Int}[ir, 1:N2, 1:N3], cbase)
     SA(d)   = E._AccStateAffine(d)
     Acc     = E._AccRepl
     Lit0    = E._LitRepl(0.0)

@@ -648,7 +648,16 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        vec_prelude::AbstractVector{_VecNode},
                        vec_kernels::AbstractVector{_VecKernel},
+                       acc_kernels::AbstractVector{_AccKernel},
                        n_states::Int)
+    # The affine access kernels are imperative Float64 (in-place `du[oln]=…`); the
+    # out-of-place / traced emitter is functional and eltype-generic. Bridging them
+    # (generic `_eval_acc` + functional scatter) is a later step — until then a
+    # build that produced access kernels must not use this emitter silently.
+    isempty(acc_kernels) ||
+        throw(TreeWalkError("E_TREEWALK_ACC_OOP_UNSUPPORTED",
+            "affine access kernels (ESS_AFFINE) are not yet supported by the " *
+            "out-of-place / traced emitter (form=:oop); use form=:inplace"))
     n_cse = length(cse_prelude)
     n_vec = length(vec_prelude)
     live_forcing = _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
