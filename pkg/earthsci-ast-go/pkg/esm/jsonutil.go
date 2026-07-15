@@ -1,6 +1,9 @@
 package esm
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 // jsonutil.go provides the single generic raw-JSON tree walker that the
 // bespoke recursive walkers in lower_expression_templates.go
@@ -66,4 +69,48 @@ func walkJSONTreeSkipping(tree any, path string, skipKeys map[string]struct{}, v
 		}
 	}
 	return nil
+}
+
+// walkJSONTreeUniqueSkipping is walkJSONTreeSkipping over a tree that may carry
+// STRUCTURAL SHARING (the post-expansion DAG produced by the §9.6 template
+// rewrite): each unique object node is visited exactly once, keyed by map
+// pointer identity, so a subtree shared under many parents costs one visit
+// instead of one per parent (which would be exponential for a doubling
+// template chain). The path passed to visit for a shared node is the path of
+// its FIRST encounter in the deterministic sorted-key pre-order walk — for an
+// erroring visitor this surfaces the identical first diagnostic as the
+// unshared walk, since the first encounter is where the plain walk would have
+// erred too.
+func walkJSONTreeUniqueSkipping(tree any, path string, skipKeys map[string]struct{}, visit func(path string, obj map[string]any) error) error {
+	seen := map[uintptr]struct{}{}
+	var walk func(tree any, path string) error
+	walk = func(tree any, path string) error {
+		switch t := tree.(type) {
+		case map[string]any:
+			key := reflect.ValueOf(t).Pointer()
+			if _, dup := seen[key]; dup {
+				return nil
+			}
+			seen[key] = struct{}{}
+			if err := visit(path, t); err != nil {
+				return err
+			}
+			for _, k := range sortedKeys(t) {
+				if _, skip := skipKeys[k]; skip {
+					continue
+				}
+				if err := walk(t[k], path+"/"+k); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for i, child := range t {
+				if err := walk(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(tree, path)
 }

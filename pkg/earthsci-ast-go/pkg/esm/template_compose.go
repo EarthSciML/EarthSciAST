@@ -36,37 +36,77 @@ func collectApplyNames(out *[]string, x any) {
 // referenced template's (already-closed) body by post-order expandApply
 // (esm-spec §9.7.3 registration-time body composition). Because referenced
 // bodies are inlined dependencies-first, one pass yields an apply-free subtree.
-// Returns a new tree; node is not mutated.
+// node is never mutated; subtrees without an apply are returned AS-IS
+// (identity-preserving), and expandApply splices referenced bodies by
+// reference, so a composed body is a shared DAG: a chain of templates that
+// each reference the previous one twice composes in O(chain) unique nodes
+// instead of 2^chain materialized copies (representation-only — the denoted
+// expansion, and its serialized bytes, are unchanged).
 func inlineApplies(node any, templates map[string]any, scope string) (any, error) {
+	out, _, err := inlineAppliesShared(node, templates, scope)
+	return out, err
+}
+
+// inlineAppliesShared upholds the identity-preservation invariant:
+// changed == false ⟹ the returned value IS `node` (the same object).
+func inlineAppliesShared(node any, templates map[string]any, scope string) (any, bool, error) {
 	switch v := node.(type) {
 	case []any:
-		out := make([]any, len(v))
+		var out []any
 		for i, c := range v {
-			nc, err := inlineApplies(c, templates, scope)
+			nc, ch, err := inlineAppliesShared(c, templates, scope)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
-			out[i] = nc
+			if ch && out == nil {
+				out = make([]any, len(v))
+				copy(out, v[:i])
+			}
+			if out != nil {
+				out[i] = nc
+			}
 		}
-		return out, nil
+		if out == nil {
+			return v, false, nil
+		}
+		return out, true, nil
 	case map[string]any:
-		out := make(map[string]any, len(v))
+		var out map[string]any
 		for k, c := range v {
-			nc, err := inlineApplies(c, templates, scope)
+			nc, ch, err := inlineAppliesShared(c, templates, scope)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
-			out[k] = nc
+			if ch {
+				if out == nil {
+					out = make(map[string]any, len(v))
+					for k2, v2 := range v {
+						out[k2] = v2
+					}
+				}
+				out[k] = nc
+			}
 		}
-		if op, ok := out["op"].(string); ok && op == applyExpressionTemplateOp {
+		nodeMap := v
+		if out != nil {
+			nodeMap = out
+		}
+		if op, ok := nodeMap["op"].(string); ok && op == applyExpressionTemplateOp {
 			// Referenced bodies are already closed (topological order), so a
 			// single expandApply produces an apply-free subtree; the bindings'
 			// own sub-ASTs were inlined by the post-order walk above.
-			return expandApply(out, templates, scope)
+			expanded, err := expandApply(nodeMap, templates, scope)
+			if err != nil {
+				return nil, false, err
+			}
+			return expanded, true, nil
 		}
-		return out, nil
+		if out == nil {
+			return v, false, nil
+		}
+		return out, true, nil
 	}
-	return node, nil
+	return node, false, nil
 }
 
 // composeTemplateBodies performs registration-time body composition (esm-spec

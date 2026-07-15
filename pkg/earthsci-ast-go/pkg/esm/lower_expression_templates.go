@@ -39,9 +39,9 @@ package esm
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -80,7 +80,9 @@ var geometryManifoldValues = map[string]struct{}{
 func validateGeometryManifolds(tree any, path string) error {
 	// Pre-substitution template trees may legally carry a param name in the
 	// manifold position (esm-spec §9.6.1), so `expression_templates` is skipped.
-	return walkJSONTreeSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
+	// The expanded form is a shared DAG (structural sharing, substituteParams),
+	// so each unique node is validated once (pointer-identity visited set).
+	return walkJSONTreeUniqueSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
 		op, ok := t["op"].(string)
 		if !ok {
 			return nil
@@ -328,27 +330,88 @@ func deepCopyJSON(v any) any {
 	}
 }
 
+// substituteParams instantiates a template body against `bindings` with
+// STRUCTURAL SHARING (mirroring the Julia reference fix: expanded templates
+// are stored as shared DAGs, not exponential trees). A bound sub-AST is
+// spliced in BY REFERENCE — never deep-copied — and a map/array none of whose
+// children changed is returned as the SAME object. A body subtree with no
+// param occurrences therefore stays shared between every instantiation site,
+// so a chain of templates that each reference the previous one twice expands
+// to a DAG with O(chain) unique nodes instead of 2^chain materialized copies.
+// Representation-only: expansion semantics, diagnostics, and serialized bytes
+// are unchanged (json.Marshal expands the DAG). Sound because the rewrite
+// pipeline never mutates expanded nodes in place — every subsequent pass is
+// itself identity-preserving.
 func substituteParams(body any, bindings map[string]any) any {
+	out, _ := substituteParamsShared(body, bindings, substMemo{})
+	return out
+}
+
+// substMemo memoizes one substituteParams call over a shared-DAG body: object
+// nodes are keyed by map pointer identity, so a sub-body shared under many
+// parents is substituted once and its result re-shared. Sound because the
+// bindings are constant for the duration of one call. The memo is call-local —
+// different calls carry different bindings.
+type substMemo map[uintptr]substMemoEntry
+
+type substMemoEntry struct {
+	out     any
+	changed bool
+}
+
+// substituteParamsShared is substituteParams with a `changed` flag upholding
+// the identity-preservation invariant: changed == false ⟹ the returned value
+// IS `body` (the same object, not an equal copy).
+func substituteParamsShared(body any, bindings map[string]any, memo substMemo) (any, bool) {
 	switch b := body.(type) {
 	case string:
 		if v, ok := bindings[b]; ok {
-			return deepCopyJSON(v)
+			// Splice the bound sub-AST by reference (structural sharing).
+			return v, true
 		}
-		return body
+		return body, false
 	case []any:
-		out := make([]any, len(b))
+		var out []any
 		for i, c := range b {
-			out[i] = substituteParams(c, bindings)
+			nc, ch := substituteParamsShared(c, bindings, memo)
+			if ch && out == nil {
+				out = make([]any, len(b))
+				copy(out, b[:i])
+			}
+			if out != nil {
+				out[i] = nc
+			}
 		}
-		return out
+		if out == nil {
+			return b, false
+		}
+		return out, true
 	case map[string]any:
-		out := make(map[string]any, len(b))
-		for k, v := range b {
-			out[k] = substituteParams(v, bindings)
+		key := reflect.ValueOf(b).Pointer()
+		if e, hit := memo[key]; hit {
+			return e.out, e.changed
 		}
-		return out
+		var out map[string]any
+		for k, v := range b {
+			nv, ch := substituteParamsShared(v, bindings, memo)
+			if ch {
+				if out == nil {
+					out = make(map[string]any, len(b))
+					for k2, v2 := range b {
+						out[k2] = v2
+					}
+				}
+				out[k] = nv
+			}
+		}
+		if out == nil {
+			memo[key] = substMemoEntry{out: b, changed: false}
+			return b, false
+		}
+		memo[key] = substMemoEntry{out: out, changed: true}
+		return out, true
 	default:
-		return body
+		return body, false
 	}
 }
 
@@ -719,8 +782,9 @@ func asInt64Strict(v any) (int64, bool) {
 func validateMakearrayRegions(tree any, path string) error {
 	// Template bodies/matches are pre-substitution trees; bounds may legally
 	// carry metaparameter names or fold later (esm-spec §9.7.6), so
-	// `expression_templates` is skipped.
-	return walkJSONTreeSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
+	// `expression_templates` is skipped. The expanded form is a shared DAG
+	// (structural sharing), so each unique node is validated once.
+	return walkJSONTreeUniqueSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
 		if op, _ := t["op"].(string); op != "makearray" {
 			return nil
 		}
@@ -791,6 +855,23 @@ type matchRule struct {
 	whereC map[string][]string
 }
 
+// rewriteMemo memoizes one rewritePass over a (possibly structurally shared)
+// tree: object nodes are keyed by map pointer identity
+// (reflect.ValueOf(m).Pointer()), so a subtree shared under many parents is
+// rewritten once per pass and its result re-shared. Keys are taken only from
+// the pass's INPUT tree, which stays reachable for the whole pass, so a key
+// can never be recycled mid-pass. Only maps are memoized: every shareable
+// expansion subtree is rooted at an object node, and a bare slice's data
+// pointer is not a safe identity key on its own. Memoization is sound because
+// rewriting is context-free — a node's rewrite result depends only on the
+// subtree itself, never on its position in the document.
+type rewriteMemo map[uintptr]rewriteMemoEntry
+
+type rewriteMemoEntry struct {
+	out     any
+	changed bool
+}
+
 // rewritePass performs one pre-order (outermost-first) rewrite pass over `node`
 // (esm-spec §9.6.3). At each object node the engine first tries to fire a rule AT
 // the node before descending: (1) an `apply_expression_template` op is expanded,
@@ -800,21 +881,40 @@ type matchRule struct {
 // freshly-produced body during this pass. Otherwise it descends into children.
 // The returned bool is true iff any rewrite occurred; `last` records the op of
 // the most recent rewrite, for the non-convergence diagnostic.
-func rewritePass(node any, named map[string]any, rules []matchRule, scope string, last *string, shapeEnv map[string][]string) (any, bool, error) {
+//
+// The pass is IDENTITY-PRESERVING (returns the same map/slice when no rewrite
+// fired at or below it — the returned bool doubles as "result is a new object")
+// and memoized by pointer identity via `memo`, so structural sharing introduced
+// by substituteParams survives every pass instead of being exponentially
+// unshared by rebuild-everything copying.
+func rewritePass(node any, named map[string]any, rules []matchRule, scope string, last *string, shapeEnv map[string][]string, memo rewriteMemo) (any, bool, error) {
 	switch n := node.(type) {
 	case []any:
+		var out []any
 		changed := false
-		out := make([]any, len(n))
 		for i, c := range n {
-			nc, ch, err := rewritePass(c, named, rules, scope, last, shapeEnv)
+			nc, ch, err := rewritePass(c, named, rules, scope, last, shapeEnv, memo)
 			if err != nil {
 				return nil, false, err
 			}
-			out[i] = nc
+			if ch && out == nil {
+				out = make([]any, len(n))
+				copy(out, n[:i])
+			}
+			if out != nil {
+				out[i] = nc
+			}
 			changed = changed || ch
+		}
+		if out == nil {
+			return n, false, nil
 		}
 		return out, changed, nil
 	case map[string]any:
+		key := reflect.ValueOf(n).Pointer()
+		if e, hit := memo[key]; hit {
+			return e.out, e.changed, nil
+		}
 		op, _ := n["op"].(string)
 		// (1) Outermost-first: fire a rule AT this node before descending.
 		if op == applyExpressionTemplateOp {
@@ -823,6 +923,7 @@ func rewritePass(node any, named map[string]any, rules []matchRule, scope string
 			if err != nil {
 				return nil, false, err
 			}
+			memo[key] = rewriteMemoEntry{out: expanded, changed: true}
 			return expanded, true, nil
 		}
 		for i := range rules {
@@ -834,21 +935,34 @@ func rewritePass(node any, named map[string]any, rules []matchRule, scope string
 			if matchPattern(rules[i].pattern, n, rules[i].params, bindings) &&
 				whereSatisfied(rules[i].whereC, bindings, shapeEnv) {
 				*last = op
-				return substituteParams(rules[i].body, bindings), true, nil
+				fired := substituteParams(rules[i].body, bindings)
+				memo[key] = rewriteMemoEntry{out: fired, changed: true}
+				return fired, true, nil
 			}
 		}
 		// (2) No rule fired here — descend into children.
-		changed := false
-		out := make(map[string]any, len(n))
+		var out map[string]any
 		for k, v := range n {
-			nv, ch, err := rewritePass(v, named, rules, scope, last, shapeEnv)
+			nv, ch, err := rewritePass(v, named, rules, scope, last, shapeEnv, memo)
 			if err != nil {
 				return nil, false, err
 			}
-			out[k] = nv
-			changed = changed || ch
+			if ch {
+				if out == nil {
+					out = make(map[string]any, len(n))
+					for k2, v2 := range n {
+						out[k2] = v2
+					}
+				}
+				out[k] = nv
+			}
 		}
-		return out, changed, nil
+		if out == nil {
+			memo[key] = rewriteMemoEntry{out: n, changed: false}
+			return n, false, nil
+		}
+		memo[key] = rewriteMemoEntry{out: out, changed: true}
+		return out, true, nil
 	default:
 		return node, false, nil
 	}
@@ -863,7 +977,9 @@ func rewriteToFixpoint(node any, named map[string]any, rules []matchRule, scope 
 	last := ""
 	current := node
 	for pass := 0; pass < MaxRewritePasses; pass++ {
-		next, changed, err := rewritePass(current, named, rules, scope, &last, shapeEnv)
+		// Fresh memo per pass: a node's rewrite result is pass-local (its
+		// children may only reach their final form in a later pass).
+		next, changed, err := rewritePass(current, named, rules, scope, &last, shapeEnv, rewriteMemo{})
 		if err != nil {
 			return nil, err
 		}
@@ -984,20 +1100,38 @@ func hasTemplateMachinery(view map[string]any) bool {
 	return containsApplyOp(view)
 }
 
-// errStopWalk is a sentinel returned by a walkJSONTree visitor to halt the walk
-// early (the presence probe below only needs the first hit, not every path).
-var errStopWalk = errors.New("stop walk")
-
 // containsApplyOp reports whether tree contains any `apply_expression_template`
-// op, stopping at the first occurrence.
+// op, stopping at the first occurrence. The walk is pointer-identity-memoized
+// (each unique object node visited once) so probing a post-expansion shared
+// DAG costs O(unique nodes), not O(denoted tree size).
 func containsApplyOp(tree any) bool {
-	err := walkJSONTree(tree, "", func(_ string, obj map[string]any) error {
-		if op, ok := obj["op"].(string); ok && op == applyExpressionTemplateOp {
-			return errStopWalk
+	return containsApplyOpDAG(tree, map[uintptr]struct{}{})
+}
+
+func containsApplyOpDAG(tree any, seen map[uintptr]struct{}) bool {
+	switch t := tree.(type) {
+	case map[string]any:
+		key := reflect.ValueOf(t).Pointer()
+		if _, dup := seen[key]; dup {
+			return false
 		}
-		return nil
-	})
-	return errors.Is(err, errStopWalk)
+		seen[key] = struct{}{}
+		if op, ok := t["op"].(string); ok && op == applyExpressionTemplateOp {
+			return true
+		}
+		for _, v := range t {
+			if containsApplyOpDAG(v, seen) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range t {
+			if containsApplyOpDAG(c, seen) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findApplyPaths appends the JSON-pointer path of every
@@ -1295,9 +1429,14 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			}
 		}
 	}
-	leftover := []string{}
-	findApplyPaths(view, "", &leftover)
-	if len(leftover) > 0 {
+	// Presence probe first (pointer-memoized, cheap over a shared DAG); the
+	// full path enumeration — potentially expensive — runs only on the error
+	// path, where its output (and the diagnostic bytes) is unchanged: leftover
+	// applies live only in never-rewritten regions, which come straight from
+	// the parsed JSON and are therefore unshared trees.
+	if containsApplyOp(view) {
+		leftover := []string{}
+		findApplyPaths(view, "", &leftover)
 		return newETErr(
 			"apply_expression_template_unknown_template",
 			fmt.Sprintf("apply_expression_template ops remain after expansion at: %s — likely referenced from a component lacking an expression_templates block", strings.Join(leftover, ", ")),
