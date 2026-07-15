@@ -143,8 +143,6 @@ The ESM format supports:
 
 We welcome contributions! This project uses:
 
-- **[Beads](https://github.com/beadshq/beads)** for issue tracking and project management
-- **Julia** testing with `julia --project=. -e 'using Pkg; Pkg.test()'`
 - **Cross-language conformance tests** to ensure implementation consistency
 
 ### Testing the Conformance Infrastructure

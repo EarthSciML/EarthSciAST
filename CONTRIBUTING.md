@@ -160,62 +160,6 @@ See [CONFORMANCE_SPEC.md](CONFORMANCE_SPEC.md) for the fixture format, execution
 
 ## Contribution Workflow
 
-### Issue Tracking
-
-We use **[Beads](https://github.com/beadshq/beads)** for project management and issue tracking:
-
-```bash
-# Find available work
-bd ready
-
-# View issue details
-bd show <issue-id>
-
-# Claim an issue
-bd update <issue-id> --status=in_progress
-
-# Close completed work
-bd close <issue-id>
-```
-
-### Development Process
-
-1. **Find or Create an Issue:**
-   ```bash
-   # Find ready work
-   bd ready
-
-   # Or create new issue
-   bd create --title="Add feature X" --type=feature --priority=2
-   ```
-
-2. **Create a Branch:**
-   ```bash
-   git checkout -b feature/issue-description
-   ```
-
-3. **Make Changes:**
-   - Write tests first (TDD approach)
-   - Implement functionality
-   - Run tests frequently: `julia --project=. -e 'using Pkg; Pkg.test()'`
-   - Commit small, focused changes
-
-4. **Test Everything:**
-   ```bash
-   # Run full test suite
-   julia --project=. -e 'using Pkg; Pkg.test()'
-   ./scripts/test-conformance.sh
-
-   # Verify required tools are installed
-   ./install.sh --check
-   ```
-
-5. **Submit Pull Request:**
-   - Ensure all tests pass
-   - Update documentation as needed
-   - Reference the issue being addressed
-   - Include clear description of changes
-
 ### Commit Guidelines
 
 Follow conventional commit format:
@@ -329,36 +273,6 @@ All contributions must include appropriate documentation:
 ./scripts/generate_docs.py
 ```
 
-## Issue Tracking
-
-We use Beads for comprehensive project management:
-
-### Creating Issues
-
-```bash
-# Create different types of issues
-bd create --title="Bug: parsing fails on complex expressions" --type=bug --priority=1
-bd create --title="Feature: add GraphQL operator support" --type=feature --priority=2
-bd create --title="Docs: improve Python API examples" --type=task --priority=3
-```
-
-### Issue Labels and Priorities
-
-- **Priority Levels**: P0 (critical) to P4 (backlog)
-- **Types**: bug, feature, task, epic, documentation
-- **Languages**: julia, typescript, python, rust, go
-- **Areas**: parser, schema, validation, performance, conformance
-
-### Dependencies and Blocking
-
-```bash
-# Add dependencies between issues
-bd dep add <dependent-issue> <blocking-issue>
-
-# View blocked issues
-bd blocked
-```
-
 ## Release Process
 
 ### Version Management
@@ -382,7 +296,6 @@ All packages follow semantic versioning:
 
 ### Communication Channels
 
-- **Issues**: Use Beads issue tracker for bug reports and feature requests
 - **Discussions**: GitHub Discussions for questions and broader topics
 - **Security**: See SECURITY.md for security-related concerns
 
