@@ -63,10 +63,16 @@ covered here is intentionally not implemented (this wrapper exists
 only for the load-time path).
 """
 struct JSONLikeDict
-    data::Dict{String,Any}
+    # Any string-keyed dict (plain `Dict` from `_to_dict`, `OrderedDict` from
+    # the sharing-preserving rewrite/substitution rebuilds) is carried BY
+    # REFERENCE: the underlying object's identity is the key of the
+    # `parse_expression` identity memo (`_PARSE_EXPR_MEMO_KEY`, parse.jl), so
+    # converting on wrap would mint a fresh dict per access and silently
+    # unshare a structurally-shared expanded tree.
+    data::AbstractDict{String,Any}
 end
 
-_wrap(x) = x isa Dict{String,Any} ? JSONLikeDict(x) :
+_wrap(x) = x isa AbstractDict{String,Any} ? JSONLikeDict(x) :
            x isa AbstractDict ? JSONLikeDict(Dict{String,Any}(string(k) => v for (k,v) in pairs(x))) :
            x isa AbstractVector ? Any[_wrap(v) for v in x] :
            x
@@ -95,12 +101,12 @@ end
 # Iteration / pairs wrap nested values so `coerce_*` functions that
 # do `(k, v) in pairs(file.models)` see JSONLikeDict-wrapped models.
 struct _JSONLikePairs
-    inner::Dict{String,Any}
+    inner::AbstractDict{String,Any}
 end
 Base.iterate(p::_JSONLikePairs) = _step(p.inner, iterate(p.inner))
 Base.iterate(p::_JSONLikePairs, state) = _step(p.inner, iterate(p.inner, state))
 Base.length(p::_JSONLikePairs) = length(p.inner)
-function _step(_::Dict{String,Any}, it)
+function _step(_::AbstractDict{String,Any}, it)
     it === nothing && return nothing
     (kv, state) = it
     return (Pair(kv.first, _wrap(kv.second)), state)
@@ -199,19 +205,42 @@ const _KNOWN_DIAGNOSTIC_CODES = (
 # (`_is_object` / `_is_array` — the raw-JSON node-kind predicates — live in
 # src/json_walk.jl with the shared traversal combinators.)
 
+# SHARING-PRESERVING normalization: the identity memo maps each input
+# container to its (single) normalized counterpart, so a shared subtree — e.g.
+# a template body composed as a DAG by `_substitute` — normalizes to ONE
+# shared output object instead of being expanded into an exponential tree.
+# Fresh-parsed JSON3 views are trees (no aliasing is expressible in JSON
+# text), so the memo is a no-op there; it only ever fires on the native
+# Dict/Vector nodes the lowering passes themselves create.
 function _to_dict(x)::Dict{String,Any}
+    return _to_dict_memo(x, IdDict{Any,Any}())
+end
+
+function _to_dict_memo(x, memo::IdDict{Any,Any})::Dict{String,Any}
+    r = get(memo, x, nothing)
+    r === nothing || return r
     out = Dict{String,Any}()
+    memo[x] = out
     for (k, v) in pairs(x)
-        out[string(k)] = _normalize(v)
+        out[string(k)] = _normalize_memo(v, memo)
     end
     return out
 end
 
-function _normalize(x)
+_normalize(x) = _normalize_memo(x, IdDict{Any,Any}())
+
+function _normalize_memo(x, memo::IdDict{Any,Any})
     if _is_object(x)
-        return _to_dict(x)
+        return _to_dict_memo(x, memo)
     elseif _is_array(x)
-        return Any[_normalize(v) for v in x]
+        r = get(memo, x, nothing)
+        r === nothing || return r
+        out = Any[]
+        memo[x] = out
+        for v in x
+            push!(out, _normalize_memo(v, memo))
+        end
+        return out
     else
         return x
     end
@@ -355,16 +384,59 @@ end
     _substitute(body, bindings) -> instantiated tree
 
 Pure structural substitution of `bindings` into a template `body`: every
-string node naming a bound param is replaced by a deep copy of its binding.
-The replacement is spliced verbatim — NOT re-scanned for further params
-(esm-spec §9.6.3 rule 2: a replacement body is not re-matched).
+string node naming a bound param is replaced by its binding. The replacement
+is spliced verbatim — NOT re-scanned for further params (esm-spec §9.6.3
+rule 2: a replacement body is not re-matched).
+
+STRUCTURAL SHARING: the instantiated tree shares every untouched subtree with
+`body` and splices each binding BY REFERENCE (no deep copy), so repeated
+references to the same template compose into a DAG whose size is linear in
+the source, not exponential in nesting depth. This is a pure representation
+choice — identical subtrees are observationally indistinguishable, so the
+§9.6.3 fixpoint and every serialized byte are unchanged. The invariant that
+makes it sound is the same one the typed IR already relies on (`OpExpr`,
+types.jl): expanded trees are values — every later pass either reads them or
+copies-with-changes; the one in-place mutation on the raw view
+(`_narrow_arg_literals!`) is idempotent and value-local, so aliased visits
+commute. The memo is keyed on node IDENTITY so shared subtrees are
+substituted once.
 """
 function _substitute(body, bindings::Dict{String,Any})
-    return _map_json(body) do _, n
-        if n isa AbstractString && haskey(bindings, string(n))
-            return deepcopy(bindings[string(n)])
+    isempty(bindings) && return body
+    return _subst_shared(body, bindings, IdDict{Any,Any}())
+end
+
+function _subst_shared(n, bindings::Dict{String,Any}, memo::IdDict{Any,Any})
+    if n isa AbstractString
+        return haskey(bindings, string(n)) ? bindings[string(n)] : n
+    elseif _is_array(n)
+        r = get(memo, n, nothing)
+        r === nothing || return r
+        changed = false
+        buf = Vector{Any}(undef, length(n))
+        for (i, x) in enumerate(n)
+            rx = _subst_shared(x, bindings, memo)
+            rx === x || (changed = true)
+            buf[i] = rx
         end
-        return _JSON_DESCEND
+        res = changed ? buf : n
+        memo[n] = res
+        return res
+    elseif _is_object(n)
+        r = get(memo, n, nothing)
+        r === nothing || return r
+        changed = false
+        buf = OrderedDict{String,Any}()
+        for (k, v) in pairs(n)
+            rv = _subst_shared(v, bindings, memo)
+            rv === v || (changed = true)
+            buf[string(k)] = rv
+        end
+        res = changed ? buf : n
+        memo[n] = res
+        return res
+    else
+        return n
     end
 end
 
@@ -428,6 +500,10 @@ end
 # String). Used to enforce that a metavariable bound twice in the same pattern
 # binds to identical sub-trees.
 function _json_equal(a, b)::Bool
+    # Pointer-identical nodes are structurally equal by definition — and with
+    # structural sharing (see `_substitute`) this fast path is what keeps a
+    # twice-bound metavariable check linear on a shared DAG.
+    a === b && !(a isa Number) && return true
     if a isa Bool || b isa Bool
         return (a isa Bool) && (b isa Bool) && a == b
     elseif a isa Number
@@ -663,8 +739,9 @@ end
     _rewrite_pass(node, named, sorted_rules, scope, last, shape_env) -> (new_node, changed)
 
 One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3),
-expressed on [`_map_json`](@ref). At each object node the engine first tries
-to fire a rule AT the node before descending:
+expressed as an identity-memoized, sharing-preserving recursion
+([`_rewrite_node`](@ref)). At each object node the engine first tries to fire
+a rule AT the node before descending:
 
 1. an `apply_expression_template` op is expanded (`_expand_apply`), OR
 2. the first rule in `sorted_rules` (pre-sorted highest-`priority`-first, ties by
@@ -677,8 +754,8 @@ to fire a rule AT the node before descending:
 
 A fired rule's body replaces the node and the walk does NOT descend into that
 freshly-produced body during this pass (it is revisited next pass) — the
-`_map_json` replace-verbatim contract. If nothing fires, the walk descends
-into the node's children. `changed` is `true` iff any rewrite occurred in this
+replace-verbatim contract. If nothing fires, the walk descends into the
+node's children. `changed` is `true` iff any rewrite occurred in this
 subtree; `last` (a `Ref{String}`) records the op of the most recent rewrite,
 for the non-convergence diagnostic. `shape_env` is the enclosing component's
 static shape environment (`_component_shape_env`).
@@ -687,33 +764,85 @@ function _rewrite_pass(node, named::Dict{String,Any},
                        sorted_rules::Vector{_RewriteRule},
                        scope::String, last::Ref{String},
                        shape_env::Dict{String,Vector{String}})
-    changed = false
-    out = _map_json(node) do _, n
-        _is_object(n) || return _JSON_DESCEND
+    changed = Ref(false)
+    # Identity-memoized recursion (not `_map_json`): the rewrite of a node is a
+    # pure function of the node itself (pattern matching is structural, the
+    # registries and `shape_env` are pass-constant), so a subtree shared under
+    # many parents is rewritten ONCE and the shared result respliced —
+    # preserving the DAG `_substitute` builds instead of exploding it back
+    # into a tree, and keeping pass cost linear in UNIQUE nodes. Unchanged
+    # subtrees are returned by identity for the same reason.
+    memo = IdDict{Any,Any}()
+    out = _rewrite_node(node, named, sorted_rules, scope, last, shape_env,
+                        memo, changed)
+    return (out, changed[])
+end
+
+function _rewrite_node(n, named::Dict{String,Any},
+                       sorted_rules::Vector{_RewriteRule},
+                       scope::String, last::Ref{String},
+                       shape_env::Dict{String,Vector{String}},
+                       memo::IdDict{Any,Any}, changed::Base.RefValue{Bool})
+    if _is_object(n)
+        r = get(memo, n, _JSON_DESCEND)
+        r === _JSON_DESCEND || return r
         op = _raw_get(n, "op")
         op_str = op === nothing ? "" : string(op)
+        local res
         # (1) Outermost-first: fire a rule AT this node before descending.
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
             # Named-template expansion. The substituted body is spliced in with
             # its bindings' sub-ASTs intact; those are rewritten in subsequent
             # passes.
             last[] = APPLY_EXPRESSION_TEMPLATE_OP
-            changed = true
-            return _expand_apply(n, named, scope)
-        end
-        for rule in sorted_rules
-            bindings = Dict{String,Any}()
-            if _match_pattern(rule.pattern, n, rule.params, bindings) &&
-               _where_satisfied(rule.where_clause, bindings, shape_env)
-                last[] = op_str
-                changed = true
-                return _substitute(rule.body, bindings)
+            changed[] = true
+            res = _expand_apply(n, named, scope)
+        else
+            fired = false
+            for rule in sorted_rules
+                bindings = Dict{String,Any}()
+                if _match_pattern(rule.pattern, n, rule.params, bindings) &&
+                   _where_satisfied(rule.where_clause, bindings, shape_env)
+                    last[] = op_str
+                    changed[] = true
+                    res = _substitute(rule.body, bindings)
+                    fired = true
+                    break
+                end
+            end
+            if !fired
+                # (2) No rule fired here — descend into children,
+                # identity-preserving.
+                kids_changed = false
+                buf = OrderedDict{String,Any}()
+                for (k, v) in pairs(n)
+                    rv = _rewrite_node(v, named, sorted_rules, scope, last,
+                                       shape_env, memo, changed)
+                    rv === v || (kids_changed = true)
+                    buf[string(k)] = rv
+                end
+                res = kids_changed ? buf : n
             end
         end
-        # (2) No rule fired here — descend into children.
-        return _JSON_DESCEND
+        memo[n] = res
+        return res
+    elseif _is_array(n)
+        r = get(memo, n, _JSON_DESCEND)
+        r === _JSON_DESCEND || return r
+        kids_changed = false
+        buf = Vector{Any}(undef, length(n))
+        for (i, v) in enumerate(n)
+            rv = _rewrite_node(v, named, sorted_rules, scope, last,
+                               shape_env, memo, changed)
+            rv === v || (kids_changed = true)
+            buf[i] = rv
+        end
+        res = kids_changed ? buf : n
+        memo[n] = res
+        return res
+    else
+        return n
     end
-    return (out, changed)
 end
 
 """
@@ -769,8 +898,15 @@ end
 
 function _has_apply_op(x)
     found = false
+    # Visit each unique container once (`seen`): on a structurally-shared
+    # expanded tree the same subtree hangs under exponentially many paths.
+    seen = IdDict{Any,Nothing}()
     _walk_json(x) do _, n
         found && return false   # already answered — prune the rest
+        if _is_object(n) || _is_array(n)
+            haskey(seen, n) && return false
+            seen[n] = nothing
+        end
         if _is_object(n)
             op = _raw_get(n, "op")
             if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
@@ -841,14 +977,19 @@ an out-of-set value here is a real defect (e.g. a template invocation binding
 the manifold parameter to a non-member literal). Throws
 [`ExpressionTemplateError`](@ref) with code `geometry_manifold_invalid`.
 """
-function _validate_geometry_manifolds(x, path::String="")
+function _validate_geometry_manifolds(x, path::String="",
+                                       seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
     if _is_array(x)
+        haskey(seen, x) && return
+        seen[x] = nothing
         for (i, child) in enumerate(x)
-            _validate_geometry_manifolds(child, "$path/$(i-1)")
+            _validate_geometry_manifolds(child, "$path/$(i-1)", seen)
         end
         return
     end
     _is_object(x) || return
+    haskey(seen, x) && return
+    seen[x] = nothing
     op = _raw_get(x, "op")
     op_str = op === nothing ? "" : string(op)
     if op_str in GEOMETRY_MANIFOLD_OPS
@@ -868,7 +1009,7 @@ function _validate_geometry_manifolds(x, path::String="")
         # Template bodies/matches are pre-substitution trees; params may
         # legally occupy the manifold position there (esm-spec §9.6.1).
         ks == "expression_templates" && continue
-        _validate_geometry_manifolds(v, "$path/$ks")
+        _validate_geometry_manifolds(v, "$path/$ks", seen)
     end
     return
 end
@@ -890,14 +1031,19 @@ only concrete integer pairs are checked (a fully-folded document tree carries
 nothing else in bound position). Throws [`ExpressionTemplateError`](@ref) with
 code `makearray_region_inverted`.
 """
-function _validate_makearray_regions(x, path::String="")
+function _validate_makearray_regions(x, path::String="",
+                                     seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
     if _is_array(x)
+        haskey(seen, x) && return
+        seen[x] = nothing
         for (i, child) in enumerate(x)
-            _validate_makearray_regions(child, "$path/$(i-1)")
+            _validate_makearray_regions(child, "$path/$(i-1)", seen)
         end
         return
     end
     _is_object(x) || return
+    haskey(seen, x) && return
+    seen[x] = nothing
     op = _raw_get(x, "op")
     op_str = op === nothing ? "" : string(op)
     if op_str == "makearray"
@@ -930,7 +1076,7 @@ function _validate_makearray_regions(x, path::String="")
         # Template bodies/matches are pre-substitution trees; bounds may
         # legally carry metaparameter names or fold later (esm-spec §9.7.6).
         ks == "expression_templates" && continue
-        _validate_makearray_regions(v, "$path/$ks")
+        _validate_makearray_regions(v, "$path/$ks", seen)
     end
     return
 end
@@ -1024,15 +1170,26 @@ which deliberately preserves an authored `1.0`, is on a separate path and is
 untouched.
 """
 function _narrow_arg_literals!(x)
+    # One visit per unique container (`seen`): on a structurally-shared
+    # expanded tree the same node hangs under many parents, and narrowing is
+    # idempotent and value-local, so a single visit of the shared object is
+    # exactly equivalent to (exponentially many) repeated ones.
+    seen = IdDict{Any,Nothing}()
     _walk_json(x) do key, n
         # Narrow the DIRECT elements of every `args` array in place; the walk
         # then descends into the (mutated) array, recursing through nested
-        # operand objects toward their own `args` arrays.
+        # operand objects toward their own `args` arrays. This runs before the
+        # seen-prune because the trigger is POSITIONAL (the parent key), and a
+        # shared array can hang under more than one key.
         if key == "args" && n isa AbstractVector
             for i in eachindex(n)
                 vi = n[i]
                 _int64_narrowable(vi) && (n[i] = Int64(vi))
             end
+        end
+        if _is_object(n) || n isa AbstractVector
+            haskey(seen, n) && return false
+            seen[n] = nothing
         end
         return true
     end
@@ -1192,9 +1349,12 @@ function lower_expression_templates(raw_data)
         end
     end
 
-    leftover = String[]
-    _find_apply_paths!(leftover, root, "")
-    if !isempty(leftover)
+    # Cheap memoized existence check first — `_find_apply_paths!` enumerates
+    # every PATH, which is exponential on a structurally-shared expanded tree,
+    # so it runs only on the (already-failing) diagnostic branch.
+    if _has_apply_op(root)
+        leftover = String[]
+        _find_apply_paths!(leftover, root, "")
         throw(ExpressionTemplateError(
             "apply_expression_template_unknown_template",
             "apply_expression_template ops remain after expansion at: $(join(leftover, ", ")) — likely referenced from a component lacking an expression_templates block"))

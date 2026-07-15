@@ -232,10 +232,19 @@ True if the expression contains any spatial operator (`grad`, `div`,
 `laplacian`, or `D` with `wrt != "t"`).
 """
 function has_spatial_operator(expr::ASTExpr)::Bool
+    return _has_spatial_operator(expr, IdDict{OpExpr,Nothing}())
+end
+
+# `seen` visits each unique node once: a structurally-shared expression DAG
+# (template expansion) hangs the same subtree under exponentially many paths,
+# and this is a pure query of the node.
+function _has_spatial_operator(expr::ASTExpr, seen::IdDict{OpExpr,Nothing})::Bool
     if expr isa NumExpr || expr isa IntExpr || expr isa VarExpr
         return false
     end
     if expr isa OpExpr
+        haskey(seen, expr) && return false
+        seen[expr] = nothing
         if expr.op in _SPATIAL_OPS
             return true
         end
@@ -243,7 +252,7 @@ function has_spatial_operator(expr::ASTExpr)::Bool
             return true
         end
         for a in expr.args
-            has_spatial_operator(a) && return true
+            _has_spatial_operator(a, seen) && return true
         end
     end
     return false
@@ -256,12 +265,16 @@ Collect all spatial dimension names referenced by spatial operators in `expr`.
 """
 function spatial_dims_in_expr(expr::ASTExpr)::Set{Symbol}
     dims = Set{Symbol}()
-    _collect_spatial_dims!(dims, expr)
+    _collect_spatial_dims!(dims, expr, IdDict{OpExpr,Nothing}())
     return dims
 end
 
-function _collect_spatial_dims!(dims::Set{Symbol}, expr::ASTExpr)
+# `seen` visits each unique node once — see `_has_spatial_operator`.
+function _collect_spatial_dims!(dims::Set{Symbol}, expr::ASTExpr,
+                                seen::IdDict{OpExpr,Nothing})
     if expr isa OpExpr
+        haskey(seen, expr) && return
+        seen[expr] = nothing
         if expr.op in _DIM_SPATIAL_OPS && expr.dim !== nothing
             push!(dims, Symbol(expr.dim))
         elseif expr.op == "D" && expr.wrt !== nothing && expr.wrt != "t"
@@ -271,7 +284,7 @@ function _collect_spatial_dims!(dims::Set{Symbol}, expr::ASTExpr)
             # axes. We'll fill that in from the domain spec below.
         end
         for a in expr.args
-            _collect_spatial_dims!(dims, a)
+            _collect_spatial_dims!(dims, a, seen)
         end
     end
 end

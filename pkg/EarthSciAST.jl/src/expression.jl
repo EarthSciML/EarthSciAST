@@ -141,22 +141,35 @@ map_children(f, e::IntExpr)::ASTExpr = e
 map_children(f, e::VarExpr)::ASTExpr = e
 
 function map_children(f, e::OpExpr)::ASTExpr
-    mapf(x) = x === nothing ? nothing : f(x)
-    new_args = ASTExpr[f(arg) for arg in e.args]
+    # IDENTITY-PRESERVING: when `f` fixes every sub-expression (returns it
+    # `===`-identical), the node itself is returned, not a reconstruct-copy.
+    # This is what lets a whole-tree rewrite pass (enum lowering, substitute
+    # with no hits, …) leave a structurally-SHARED expression DAG shared —
+    # an unconditional rebuild would rematerialize the DAG as an exponential
+    # tree — and it matches the `r !== args[i]` did-this-subtree-change
+    # identity convention used throughout the tree walk (types.jl).
+    changed = false
+    mapf(x) = x === nothing ? nothing :
+        (r = f(x); r === x || (changed = true); r)
+    new_args = ASTExpr[mapf(arg) for arg in e.args]
     new_values = e.values === nothing ? nothing :
-        ASTExpr[f(v) for v in e.values]
+        ASTExpr[mapf(v) for v in e.values]
     new_table_axes = e.table_axes === nothing ? nothing :
-        Dict{String,ASTExpr}(k => f(v) for (k, v) in e.table_axes)
+        Dict{String,ASTExpr}(k => mapf(v) for (k, v) in e.table_axes)
     new_ranges = e.ranges === nothing ? nothing :
         Dict{String,Any}(k => (v isa AbstractVector ?
-                Any[x isa ASTExpr ? f(x) : x for x in v] : v)
+                Any[x isa ASTExpr ? mapf(x) : x for x in v] : v)
             for (k, v) in e.ranges)
+    new_lower = mapf(e.lower); new_upper = mapf(e.upper)
+    new_expr_body = mapf(e.expr_body); new_filter = mapf(e.filter)
+    new_key = mapf(e.key)
+    changed || return e
     return reconstruct(e;
         args = new_args,
-        lower = mapf(e.lower), upper = mapf(e.upper),
-        expr_body = mapf(e.expr_body), filter = mapf(e.filter),
+        lower = new_lower, upper = new_upper,
+        expr_body = new_expr_body, filter = new_filter,
         values = new_values, table_axes = new_table_axes,
-        ranges = new_ranges, key = mapf(e.key))
+        ranges = new_ranges, key = new_key)
 end
 
 # ========================================

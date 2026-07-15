@@ -80,7 +80,7 @@ function parse_expression(data::Any)::ASTExpr
     elseif _has_field(data, :op)
         # Any dict-like carrier (native Dict, JSON3.Object, JSONLikeDict)
         # holding an `op` key — one shared parse path for all of them.
-        return _parse_op_dict(data)
+        return _parse_op_dict_memoized(data)
     else
         throw(ParseError("Invalid expression format: expected number, string, or object with 'op' field. Got: $(typeof(data))"))
     end
@@ -115,6 +115,35 @@ const OPEXPR_WIRE_KEYS = (
     arg = :arg, bindings = :bindings,
     label = :label,
 )
+
+"""
+    _PARSE_EXPR_MEMO_KEY
+
+`task_local_storage` key under which [`_lower_and_coerce`](@ref) installs an
+`IdDict{Any,ASTExpr}` identity memo for the duration of one `coerce_esm_file`
+call. Template expansion builds STRUCTURALLY SHARED raw trees (`_substitute`
+splices bindings and bodies by reference), so the same raw node object can hang
+under many parents; parsing is a pure function of the node, and the memo makes
+the typed IR mirror that sharing — each unique raw node coerces to ONE `OpExpr`,
+keeping coercion linear in unique nodes instead of exponential in paths. The
+key is the UNDERLYING dict (a `JSONLikeDict` wrapper is allocated per access,
+so wrappers are unwrapped before keying). Outside an active memo scope,
+parsing is unmemoized — a caller that hand-mutates raw dicts between
+`parse_expression` calls sees unchanged behavior.
+"""
+const _PARSE_EXPR_MEMO_KEY = :_earthsci_ast_parse_expression_memo
+
+function _parse_op_dict_memoized(data)
+    memo = get(task_local_storage(), _PARSE_EXPR_MEMO_KEY,
+               nothing)::Union{Nothing,IdDict{Any,ASTExpr}}
+    memo === nothing && return _parse_op_dict(data)
+    key = data isa JSONLikeDict ? getfield(data, :data) : data
+    r = get(memo, key, nothing)
+    r === nothing || return r
+    res = _parse_op_dict(data)
+    memo[key] = res
+    return res
+end
 
 # Shared implementation for every dict-like carrier (native Dict, JSON3.Object,
 # JSONLikeDict). Field lookup goes through `_get_field`, which resolves both
@@ -1864,7 +1893,13 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
         # the JSON3-compatible property surface.
         expanded = JSONLikeDict(_to_dict(expanded))
     end
-    file = coerce_esm_file(expanded)
+    # Coerce under an identity parse memo (see `_PARSE_EXPR_MEMO_KEY`) so the
+    # structural sharing the template-expansion passes built in the raw tree
+    # carries over into the typed IR as shared `OpExpr` nodes — which the
+    # build-time `IdDict` memo caches (tree_walk/compile.jl) then exploit.
+    file = task_local_storage(_PARSE_EXPR_MEMO_KEY, IdDict{Any,ASTExpr}()) do
+        coerce_esm_file(expanded)
+    end
     return _with_declarations(file, raw_templates, raw_metaparams)
 end
 
