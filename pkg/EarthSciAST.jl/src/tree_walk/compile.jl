@@ -659,19 +659,82 @@ end
 # such a key really do compute the same value.
 # ---------------------------------------------------------------------------
 function _cse_key(e::ASTExpr, pgctx::Union{Nothing,_PGatherKeyCtx})
-    keyed = pgctx === nothing ? e : _pgather_key_expr(e, pgctx)
+    return _cse_key(e, pgctx, _CSEKeyMemos())
+end
+
+# Per-build memo pair for CSE keying over a structurally-SHARED expression DAG
+# (template expansion splices identical subtrees by reference, so the same
+# node object hangs under exponentially many paths):
+#
+#   * `canon` — node object → its canonical form (or the `CanonicalizeError`
+#     it raised, replayed on every later consumer so a shared failing subtree
+#     declines every ancestor exactly as the plain recursion did).
+#   * `key`   — node object → its `_cse_key` result (`String` or `nothing`).
+#
+# Both are keyed on OBJECT IDENTITY: keying is a pure function of the node
+# (and the build-constant `pgctx`), so one computation per unique node is
+# byte-identical to one per path. The count pass and the compile pass share
+# ONE memo pair (via `_CSEContext`) for the same reason they share `pgctx`.
+struct _CSEKeyMemos
+    canon::IdDict{OpExpr,Any}   # ASTExpr result or CanonicalizeError
+    key::IdDict{OpExpr,Any}     # String or nothing
+end
+_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr,Any}(), IdDict{OpExpr,Any}())
+
+# Identity-memoized `canonicalize`: drives the recursion over unique nodes
+# only, delegating the per-node work to `_canonicalize_shallow`
+# (canonicalize.jl) — `canonicalize` is compositional, so this is
+# byte-identical to the plain recursion on any tree and processes a shared
+# subtree once on a DAG. A `CanonicalizeError` is memoized and re-thrown so
+# repeated consumers of a failing shared subtree see the plain behavior.
+function _canonicalize_memo(e::ASTExpr, memo::IdDict{OpExpr,Any})
+    e isa OpExpr || return canonicalize(e)
+    v = get(memo, e, nothing)
+    if v !== nothing
+        v isa CanonicalizeError && throw(v)
+        return v::ASTExpr
+    end
+    local res::ASTExpr
     try
-        # `canonical_json` is `_emit_json ∘ canonicalize`; split it so the
-        # canonical NODE can be inspected before it is flattened to bytes.
-        canon = canonicalize(keyed)
-        # Fail-close on a non-value-preserving collapse to a literal.
-        (canon isa NumExpr || canon isa IntExpr) && return nothing
-        return _emit_json(canon)
+        new_args = Vector{ASTExpr}(undef, length(e.args))
+        for (i, a) in enumerate(e.args)
+            new_args[i] = _canonicalize_memo(a, memo)
+        end
+        res = _canonicalize_shallow(reconstruct(e; args=new_args))
     catch err
-        err isa CanonicalizeError && return nothing
+        if err isa CanonicalizeError
+            memo[e] = err
+        end
         rethrow()
     end
+    memo[e] = res
+    return res
 end
+
+function _cse_key(e::ASTExpr, pgctx::Union{Nothing,_PGatherKeyCtx},
+                  memos::_CSEKeyMemos)
+    if e isa OpExpr
+        v = get(memos.key, e, _CSE_KEY_UNSET)
+        v === _CSE_KEY_UNSET || return v
+    end
+    keyed = pgctx === nothing ? e : _pgather_key_expr(e, pgctx)
+    r = try
+        # `canonical_json` is `_emit_json ∘ canonicalize`; split it so the
+        # canonical NODE can be inspected before it is flattened to bytes.
+        canon = _canonicalize_memo(keyed, memos.canon)
+        # Fail-close on a non-value-preserving collapse to a literal.
+        (canon isa NumExpr || canon isa IntExpr) ? nothing : _emit_json(canon)
+    catch err
+        err isa CanonicalizeError || rethrow()
+        nothing
+    end
+    e isa OpExpr && (memos.key[e] = r)
+    return r
+end
+
+# Sentinel distinguishing "not memoized yet" from a memoized `nothing` key.
+struct _CSEKeyUnset end
+const _CSE_KEY_UNSET = _CSEKeyUnset()
 
 # Is argument `i` of `op` evaluated CONDITIONALLY — i.e. only when a sibling
 # argument takes a particular value? Exactly the three lazy/short-circuiting arms of
@@ -687,26 +750,75 @@ end
 # Count pass: tally `canonical_json` occurrences of every hoistable subexpression
 # across all RHS trees, splitting each key's tally into (TOTAL, UNCONDITIONAL).
 #
-# `conditional` is true iff `e` sits under a guard — under a lazy `ifelse` branch or
-# a short-circuited `and`/`or` argument, at any depth. Two counts, not one, because
-# the hoist rule needs both (see the GUARDS note above): >= 2 total occurrences makes
-# a key worth hoisting, and >= 1 unconditional occurrence makes hoisting it SAFE —
-# the original walk evaluates it at that occurrence regardless, so the prelude's
-# unconditional evaluation introduces no throw or NaN the walk did not already have.
+# An occurrence is CONDITIONAL iff it sits under a guard — under a lazy `ifelse`
+# branch or a short-circuited `and`/`or` argument, at any depth. Two counts, not
+# one, because the hoist rule needs both (see the GUARDS note above): >= 2 total
+# occurrences makes a key worth hoisting, and >= 1 unconditional occurrence makes
+# hoisting it SAFE — the original walk evaluates it at that occurrence regardless,
+# so the prelude's unconditional evaluation introduces no throw or NaN the walk
+# did not already have.
+#
+# Occurrences are counted as PATHS through the expression, exactly as the
+# original per-path recursion did — but computed by multiplicity propagation
+# over the UNIQUE-node DAG (template expansion splices identical subtrees by
+# reference, so one node object can hang under exponentially many paths; the
+# naive recursion re-walked and re-keyed it once per path). One reverse-
+# postorder pass pushes each node's (total, unconditional) path multiplicity
+# to its children — a conditional argument edge forwards no unconditional
+# multiplicity — and each unique node is then keyed ONCE and contributes its
+# multiplicities to its key's tally. On a pure tree this produces the same
+# numbers as the recursion, occurrence for occurrence; additions saturate at
+# `typemax(Int)` so a deeply-shared DAG cannot overflow the tally (the hoist
+# rule only ever asks >= 2 / >= 1).
 function _cse_count!(e::ASTExpr, counts::Dict{String,Tuple{Int,Int}},
                      pgctx::Union{Nothing,_PGatherKeyCtx},
-                     conditional::Bool=false)
+                     memos::_CSEKeyMemos=_CSEKeyMemos())
     (e isa OpExpr && _cse_hoistable(e)) || return
-    k = _cse_key(e, pgctx)
-    if k !== nothing
-        total, uncond = get(counts, k, (0, 0))
-        counts[k] = (total + 1, uncond + (conditional ? 0 : 1))
+    # Unique hoistable nodes in postorder (children before parents). The walk
+    # descends only through hoistable nodes — a non-hoistable node is a
+    # counting barrier, exactly as in the original recursion.
+    order = OpExpr[]
+    seen = IdDict{OpExpr,Nothing}()
+    function dfs(n::ASTExpr)
+        (n isa OpExpr && _cse_hoistable(n)) || return
+        haskey(seen, n) && return
+        seen[n] = nothing
+        for a in n.args
+            dfs(a)
+        end
+        push!(order, n)
     end
-    for (i, a) in enumerate(e.args)
-        _cse_count!(a, counts, pgctx, conditional || _cse_arg_conditional(e.op, i))
+    dfs(e)
+    total = IdDict{OpExpr,Int}()
+    uncond = IdDict{OpExpr,Int}()
+    total[e] = 1
+    uncond[e] = 1
+    # Reverse postorder = parents before children along DAG edges.
+    for i in length(order):-1:1
+        n = order[i]
+        t = get(total, n, 0)
+        u = get(uncond, n, 0)
+        for (j, a) in enumerate(n.args)
+            (a isa OpExpr && _cse_hoistable(a)) || continue
+            total[a] = _sat_add(get(total, a, 0), t)
+            if !_cse_arg_conditional(n.op, j)
+                uncond[a] = _sat_add(get(uncond, a, 0), u)
+            end
+        end
+    end
+    for n in order
+        k = _cse_key(n, pgctx, memos)
+        k === nothing && continue
+        t0, u0 = get(counts, k, (0, 0))
+        counts[k] = (_sat_add(t0, total[n]), _sat_add(u0, get(uncond, n, 0)))
     end
     return
 end
+
+# Saturating add for path-multiplicity tallies: a structurally-shared DAG can
+# have more paths than an `Int` holds, and the consumers only ever compare
+# against small thresholds.
+_sat_add(a::Int, b::Int) = a > typemax(Int) - b ? typemax(Int) : a + b
 
 # The CSE prelude's per-call scratch, captured on every `_NK_CACHED` node at
 # build time and refilled at the top of each `f!` call. TWO buffers, because the
@@ -855,6 +967,12 @@ mutable struct _CSEContext
     defs::Vector{_Node}
     cache::_CSECache
     pgctx::Union{Nothing,_PGatherKeyCtx}
+    # The SAME key/canonical memo pair the count pass used (the two passes
+    # must key identically), plus a compiled-node identity memo so a subtree
+    # shared under many parents is lowered once (`_compile_cse` is a pure
+    # function of the node for a fixed build context).
+    keymemos::_CSEKeyMemos
+    compiled::IdDict{OpExpr,_Node}
 end
 
 # Rebuild the `_Node` that plain `_compile` would emit for a hoistable `expr`,
@@ -882,22 +1000,39 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
     (expr isa OpExpr && _cse_hoistable(expr)) ||
         return _compile(expr, var_map, param_syms, reg_funcs)
 
-    key = _cse_key(expr, ctx.pgctx)
+    # Identity memo: the lowering of a node is a pure function of the node for
+    # a fixed build context, so a subtree shared under many parents (template
+    # expansion splices by reference) is lowered once. The memoized value is a
+    # `_NK_CACHED` ref for hoisted nodes and the rebuilt `_Node` otherwise —
+    # both stable after the first visit (the first visit performs any slot
+    # assignment, so def order is unchanged).
+    memoized = get(ctx.compiled, expr, nothing)
+    memoized === nothing || return memoized
+
+    key = _cse_key(expr, ctx.pgctx, ctx.keymemos)
+    local out::_Node
     if key !== nothing && key in ctx.cached
         s = get(ctx.slot, key, 0)
-        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
-        # First occurrence: compile children first (assigning them lower slots,
-        # keeping `defs` topologically ordered), reserve this slot, register the
-        # def, and return a ref. Every later occurrence hits the `s != 0` path.
-        defnode = _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
-        s = length(ctx.defs) + 1
-        ctx.slot[key] = s
-        push!(ctx.defs, defnode)
-        return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+        if s != 0
+            out = _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+        else
+            # First occurrence: compile children first (assigning them lower
+            # slots, keeping `defs` topologically ordered), reserve this slot,
+            # register the def, and return a ref. Every later occurrence hits
+            # the `s != 0` path.
+            defnode = _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
+            s = length(ctx.defs) + 1
+            ctx.slot[key] = s
+            push!(ctx.defs, defnode)
+            out = _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+        end
+    else
+        # Not cached: reconstruct the same `_Node` `_compile` would, but with
+        # hoisted children.
+        out = _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
     end
-    # Not cached: reconstruct the same `_Node` `_compile` would, but with
-    # hoisted children.
-    return _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
+    ctx.compiled[expr] = out
+    return out
 end
 
 # Compile a batch of scalar `(state_index, resolved_rhs_expr)` entries with
@@ -912,9 +1047,11 @@ end
 function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
                              var_map, param_syms, reg_funcs; has_pgather::Bool)
     pgctx = has_pgather ? _PGatherKeyCtx() : nothing
+    # One memo pair for BOTH passes: count and compile must key identically.
+    keymemos = _CSEKeyMemos()
     counts = Dict{String,Tuple{Int,Int}}()
     for (_, e) in entries
-        _cse_count!(e, counts, pgctx)
+        _cse_count!(e, counts, pgctx, keymemos)
     end
     cached = Set{String}()
     n_occ = 0
@@ -928,7 +1065,8 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
         end
     end
     cache = _CSECache()
-    ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache, pgctx)
+    ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache, pgctx,
+                      keymemos, IdDict{OpExpr,_Node}())
     rhs_list = Tuple{Int,_Node}[]
     for (idx, e) in entries
         push!(rhs_list, (idx, _compile_cse(e, var_map, param_syms, reg_funcs, ctx)))

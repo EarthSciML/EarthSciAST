@@ -73,6 +73,17 @@ function canonicalize(e::OpExpr)
     # matching the field-preserving rebuilds in the TS/Python/Rust bindings.
     # A hand-listed keyword subset here previously dropped ~11 fields.
     work = reconstruct(e; args=new_args)
+    return _canonicalize_shallow(work)
+end
+
+# The LOCAL (single-node) canonicalization step, applied to a node whose args
+# are already canonical. Factored out of `canonicalize(::OpExpr)` so the
+# tree-walk CSE's identity-memoized driver (`_canonicalize_memo`,
+# tree_walk/compile.jl) can canonicalize a structurally-SHARED expression DAG
+# node-by-unique-node — `canonicalize` is compositional, so
+# `canonicalize(e) == _canonicalize_shallow(e with canonicalized args)` and
+# the memoized driver is byte-identical to the plain recursion.
+function _canonicalize_shallow(work::OpExpr)
     if work.op == "+"
         return _canon_add(work)
     elseif work.op == "*"
