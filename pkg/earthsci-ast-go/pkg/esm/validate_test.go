@@ -705,7 +705,12 @@ func TestUndefinedVariableInAggregateBodyFlagged(t *testing.T) {
 	}
 	require.NotNil(t, found, "undefined variable in aggregate expr body must be flagged; got %+v", result.StructuralErrors)
 	assert.Equal(t, "undefined_var", found.Details["variable"])
-	assert.Truef(t, strings.HasSuffix(found.Path, "/rhs/expr"), "path %q should point at the aggregate body", found.Path)
+	// The reference is inside the aggregate body (`expr` sidecar), but the pointer
+	// names the containing expression FIELD, not the leaf position: §7.1.2 carries
+	// a reference-integrity defect at the equation `rhs`, and the shared corpus
+	// (undefined_variable_in_aggregate_expr.esm) and TypeScript pin `/rhs`.
+	assert.Equal(t, "/models/AggBody/equations/0/rhs", found.Path,
+		"reference-integrity finding must point at the rhs field, not the aggregate-body leaf")
 	assert.False(t, result.Valid)
 }
 
@@ -792,7 +797,10 @@ func TestUnparseableUnitIsAHardError(t *testing.T) {
 		if strings.Contains(w.Message, "could not parse unit") {
 			sawParseFinding = true
 			assert.Equal(t, UnitFindingUnparseable, w.Code)
-			assert.Equal(t, "/models/BadUnit/variables/x/units", w.Path)
+			// The finding points at the VARIABLE, not its `units` scalar — §7.1.2
+			// carries the defect on the declaration and the shared corpus pins the
+			// promoted unit_parse_error at `/models/M/variables/<name>`.
+			assert.Equal(t, "/models/BadUnit/variables/x", w.Path)
 		}
 		if strings.Contains(w.Message, "does not match") {
 			sawMismatch = true

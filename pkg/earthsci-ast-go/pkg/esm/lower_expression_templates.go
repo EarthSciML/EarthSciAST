@@ -39,6 +39,7 @@ package esm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -161,6 +162,14 @@ const MaxRewritePasses = 64
 type ExpressionTemplateError struct {
 	Code    string
 	Message string
+	// Path is an RFC 6901 JSON Pointer to the document node that carries the
+	// defect, when one can be attributed. It is populated for LOAD-phase
+	// rejections that a conformance producer must surface as a structured
+	// (code, path) structural finding — e.g. a §4.7 subsystem ref that does not
+	// resolve (`/models/<M>/subsystems/<name>`). Most template/metaparameter
+	// errors leave it empty; a caller that needs a pointer sets it via
+	// withETPath as the error unwinds past the frame that knows the location.
+	Path string
 }
 
 func (e *ExpressionTemplateError) Error() string {
@@ -169,6 +178,22 @@ func (e *ExpressionTemplateError) Error() string {
 
 // DiagnosticCode returns the stable diagnostic code (DiagnosticError).
 func (e *ExpressionTemplateError) DiagnosticCode() string { return e.Code }
+
+// DiagnosticPath returns the JSON Pointer the error is attributed to, or "" if
+// none was set.
+func (e *ExpressionTemplateError) DiagnosticPath() string { return e.Path }
+
+// withETPath attaches a JSON Pointer to the *ExpressionTemplateError anywhere in
+// err's wrap chain, but only if one is not already set — so the INNERMOST frame
+// that knows the location wins (a nested subsystem edge's own pointer is not
+// overwritten by an enclosing frame). Non-ET errors pass through untouched.
+func withETPath(err error, path string) error {
+	var et *ExpressionTemplateError
+	if errors.As(err, &et) && et.Path == "" {
+		et.Path = path
+	}
+	return err
+}
 
 func newETErr(code, msg string) *ExpressionTemplateError {
 	return &ExpressionTemplateError{Code: code, Message: msg}

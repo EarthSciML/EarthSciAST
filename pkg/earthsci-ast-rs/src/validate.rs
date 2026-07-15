@@ -14,7 +14,7 @@
 //! shared input both submodules consume.
 
 use crate::EsmFile;
-use crate::parse::load;
+use crate::parse::{LoadOptions, load, load_with_options};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -117,6 +117,12 @@ pub enum StructuralErrorCode {
     /// A `variable_map` expression transform carries a `factor` (esm-spec
     /// §10.4: the expression spells its own arithmetic — fold scaling into it)
     FactorWithExpressionTransform,
+    /// A subsystem `ref` (esm-spec §4.7) that could not be resolved — a missing
+    /// file, a remote URL, a cycle, or an otherwise unreadable document.
+    UnresolvedSubsystemRef,
+    /// A subsystem `ref` that resolved to a file NOT containing exactly one
+    /// top-level system (zero or several), so which system to mount is ambiguous.
+    AmbiguousSubsystemRef,
 }
 
 impl std::fmt::Display for StructuralErrorCode {
@@ -140,6 +146,8 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UnitParseError => "unit_parse_error",
             Self::IcInReactionSystem => "ic_in_reaction_system",
             Self::FactorWithExpressionTransform => "factor_with_expression_transform",
+            Self::UnresolvedSubsystemRef => "unresolved_subsystem_ref",
+            Self::AmbiguousSubsystemRef => "ambiguous_subsystem_ref",
         };
         write!(f, "{s}")
     }
@@ -271,13 +279,30 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
 /// # Arguments
 ///
 /// * `json_str` - The original JSON string to validate
+/// * `base_path` - Directory anchoring relative §4.7 subsystem refs and §9.7
+///   template-import refs (esm-spec §9.7.2). `None` anchors them at the process
+///   current directory (the historical behaviour); a caller that loaded the
+///   document from a known file MUST pass the file's own directory so relative
+///   refs resolve the same way `load_path` resolves them — otherwise a valid
+///   document with relative refs is wrongly rejected.
 ///
 /// # Returns
 ///
 /// * `ValidationResult` - Comprehensive validation results with both schema and structural errors
-pub fn validate_complete(json_str: &str) -> ValidationResult {
-    // First try to parse the JSON and ESM file
-    match load(json_str) {
+pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) -> ValidationResult {
+    // First try to parse the JSON and ESM file, anchoring relative refs at the
+    // caller-provided base directory (mirrors Python's `validate(base_path=…)`).
+    let loaded = match base_path {
+        Some(base) => load_with_options(
+            json_str,
+            &LoadOptions {
+                base_path: Some(base.to_path_buf()),
+                ..Default::default()
+            },
+        ),
+        None => load(json_str),
+    };
+    match loaded {
         Ok(esm_file) => {
             // If parsing/schema validation succeeded, do structural validation
             validate_with_schema(json_str, &esm_file)
@@ -1650,7 +1675,7 @@ mod tests {
         let result1 = validate(&esm_file);
 
         // The validate_complete() function - does both schema and structural validation
-        let result2 = validate_complete(invalid_json);
+        let result2 = validate_complete(invalid_json, None);
 
         // Correct behavior: validate() should have empty schema_errors (it doesn't check schema)
         assert!(
@@ -1701,7 +1726,7 @@ mod tests {
         }
         "#;
 
-        let result = validate_complete(invalid_json);
+        let result = validate_complete(invalid_json, None);
 
         // Should detect schema errors
         assert!(
@@ -1761,7 +1786,7 @@ mod tests {
         }
         "#;
 
-        let result = validate_complete(valid_json);
+        let result = validate_complete(valid_json, None);
 
         // Should pass validation
         assert!(

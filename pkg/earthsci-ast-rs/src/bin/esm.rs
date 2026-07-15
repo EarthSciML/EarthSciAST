@@ -1821,8 +1821,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Validate { file, verbose } => {
             let content = read_input(&file)?;
 
-            // Perform complete validation (schema + structural)
-            let validation_result = validate_complete(&content);
+            // Perform complete validation (schema + structural). Anchor relative
+            // §4.7/§9.7 refs at the input file's own directory when validating a
+            // real path so a document with relative refs is not spuriously
+            // rejected (stdin has no directory → process CWD).
+            let base_dir = file.parent();
+            let validation_result = validate_complete(&content, base_dir);
 
             if validation_result.is_valid {
                 println!("✓ Validation passed");
@@ -2868,7 +2872,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                 };
-                let result = validate_complete(&content);
+                let result = validate_complete(&content, path.parent());
                 if result.is_valid {
                     println!("✓ {}", path.display());
                     passed += 1;
@@ -3105,6 +3109,117 @@ fn structural_error_json(e: &earthsci_ast::StructuralError) -> serde_json::Value
     })
 }
 
+/// Recover subsystem-`ref` resolution errors (esm-spec §4.7) as structured
+/// `(code, path)` findings when the load aborted before the typed validator
+/// could run.
+///
+/// The §4.7 ref mechanism resolves against the referencing FILE'S OWN directory,
+/// and a bad ref fails inside `load` (`ref_loading`) as an opaque string error —
+/// so the producer, which owns the file path, reconstructs the finding here.
+/// Scans every `models.<M>.subsystems.<N>` and
+/// `reaction_systems.<R>.subsystems.<N>` edge for a `{ "ref": <str> }` and
+/// classifies it: a ref whose file cannot be found (or is remote) is
+/// `unresolved_subsystem_ref`; a ref resolving to a file that does NOT hold
+/// exactly one top-level system is `ambiguous_subsystem_ref` (matching
+/// `ref_loading::extract_single_system`). A ref that resolves cleanly
+/// contributes nothing — the load failed for some other reason. The pointer is
+/// the offending subsystem slot, `/<container>/<system>/subsystems/<name>`.
+fn collect_subsystem_ref_errors(
+    content: &str,
+    file_path: &std::path::Path,
+) -> Vec<earthsci_ast::StructuralError> {
+    use earthsci_ast::{StructuralError, StructuralErrorCode};
+    let mut out = Vec::new();
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(content) else {
+        return out;
+    };
+    let base = file_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    for container in ["models", "reaction_systems"] {
+        let Some(systems) = json.get(container).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for (sys_name, sys_val) in systems {
+            let Some(subs) = sys_val.get("subsystems").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for (sub_name, sub_val) in subs {
+                let Some(ref_str) = sub_val.get("ref").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let path = format!("/{container}/{sys_name}/subsystems/{sub_name}");
+                let details = serde_json::json!({
+                    "ref": ref_str,
+                    "subsystem": sub_name,
+                    "parent_model": sys_name,
+                });
+
+                // Remote refs are not resolvable by the local loader.
+                if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+                    out.push(StructuralError {
+                        path,
+                        code: StructuralErrorCode::UnresolvedSubsystemRef,
+                        message: format!(
+                            "Subsystem reference '{ref_str}' is a remote URL and could not be resolved"
+                        ),
+                        details,
+                    });
+                    continue;
+                }
+
+                let Ok(canonical) = base.join(ref_str).canonicalize() else {
+                    out.push(StructuralError {
+                        path,
+                        code: StructuralErrorCode::UnresolvedSubsystemRef,
+                        message: format!(
+                            "Subsystem reference '{ref_str}' could not be resolved — file does not exist"
+                        ),
+                        details,
+                    });
+                    continue;
+                };
+
+                let doc = fs::read_to_string(&canonical)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+                let Some(doc) = doc else {
+                    out.push(StructuralError {
+                        path,
+                        code: StructuralErrorCode::UnresolvedSubsystemRef,
+                        message: format!(
+                            "Subsystem reference '{ref_str}' could not be read or parsed"
+                        ),
+                        details,
+                    });
+                    continue;
+                };
+
+                // "Exactly one top-level system" counts models, reaction systems
+                // and data loaders TOGETHER (mirrors `extract_single_system`).
+                let count = ["models", "reaction_systems", "data_loaders"]
+                    .iter()
+                    .filter_map(|k| doc.get(*k).and_then(|v| v.as_object()))
+                    .map(|m| m.len())
+                    .sum::<usize>();
+                if count != 1 {
+                    out.push(StructuralError {
+                        path,
+                        code: StructuralErrorCode::AmbiguousSubsystemRef,
+                        message: format!(
+                            "Subsystem reference '{ref_str}' resolves to a file containing \
+                             multiple top-level systems; exactly one is required"
+                        ),
+                        details,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
 fn run_conformance_test(
     out_dir: &std::path::Path,
     manifest_path: Option<&std::path::Path>,
@@ -3144,7 +3259,7 @@ fn run_conformance_test(
                 // spliced in). `validate_complete` is the only exported entry
                 // that reports schema errors, so its structural half is
                 // discarded — it saw the unresolved document.
-                let schema = validate_complete(&content);
+                let schema = validate_complete(&content, path.parent());
                 let structural = validate(esm_file);
                 record.insert(
                     "schema_errors".into(),
@@ -3175,7 +3290,31 @@ fn run_conformance_test(
                 record.insert("is_valid".into(), json!(false));
                 // Raw document: the load-phase rejection still yields whatever
                 // structured findings the binding is able to enumerate.
-                let raw = validate_complete(&content);
+                let raw = validate_complete(&content, path.parent());
+
+                // A load rejection must STILL surface its structured `(code,
+                // path)` findings (CONFORMANCE_SPEC §7.1.2) — otherwise a document
+                // rejected at load records `is_valid:false` with an EMPTY
+                // `structural_errors`, and every pin on it silently misses. Some
+                // structural defects (an undeclared event target, an invalid
+                // discrete parameter, a coupling cycle, an empty-equation model,
+                // an unresolvable coupling scoped ref) reject the load before the
+                // typed `validate()` pass runs, yet the document is otherwise
+                // deserializable — so run the typed structural pass on a
+                // best-effort parse and merge its findings. This never flips the
+                // verdict: `resolve_ok` is already false, so the entry stays
+                // invalid; it only recovers the `(code, path)` records.
+                let mut structural_errors: Vec<earthsci_ast::StructuralError> =
+                    raw.structural_errors.clone();
+                if let Ok(esm_file) = serde_json::from_str::<earthsci_ast::EsmFile>(&content) {
+                    structural_errors.extend(validate(&esm_file).structural_errors);
+                }
+                // A subsystem `ref` that could not be resolved (missing file) or
+                // is ambiguous (resolves to a file with != 1 top-level system)
+                // aborts the load before any typed pass; recover those findings
+                // directly from the raw document against the file's own directory.
+                structural_errors.extend(collect_subsystem_ref_errors(&content, &path));
+
                 record.insert(
                     "schema_errors".into(),
                     json!(raw.schema_errors.iter().map(schema_error_json).collect::<Vec<_>>()),
@@ -3183,7 +3322,7 @@ fn run_conformance_test(
                 record.insert(
                     "structural_errors".into(),
                     json!(
-                        raw.structural_errors
+                        structural_errors
                             .iter()
                             .map(structural_error_json)
                             .collect::<Vec<_>>()

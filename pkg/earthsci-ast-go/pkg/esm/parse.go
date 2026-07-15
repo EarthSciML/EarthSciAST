@@ -537,14 +537,16 @@ func validateJSONSchema(jsonStr string) (*ValidationResult, error) {
 	}
 
 	if !result.Valid() {
-		for _, desc := range result.Errors() {
-			schemaError := SchemaError{
-				Path:    jsonPointerFromContext(desc.Context()),
-				Message: desc.Description(),
-				Keyword: schemaKeyword(desc.Type()),
-			}
-			validationResult.SchemaErrors = append(validationResult.SchemaErrors, schemaError)
-		}
+		// gojsonschema reports a failed `oneOf`/`anyOf` only as a SHALLOW
+		// composition error at the branch point — it does not surface the
+		// sub-schema errors (a missing `required`, a mismatched `const`) that
+		// explain WHY each branch failed, which AJV (the reference producer) does.
+		// The ESM schema wraps every component in a `oneOf` (a coupling entry, a
+		// model-vs-subsystem-ref, an event trigger), so most pinned sub-branch
+		// errors would otherwise hide behind a bare `oneOf`. descendSchemaErrors
+		// recovers them by compiling each failing branch standalone and
+		// re-validating the offending subtree — see schema_descent.go.
+		validationResult.SchemaErrors = collectSchemaErrorsWithDescent(jsonStr, result.Errors())
 	}
 
 	return validationResult, nil

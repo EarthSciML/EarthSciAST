@@ -95,6 +95,14 @@ async function runValidation(manifest) {
                 record.error = error.message
                 record.error_type = error?.constructor?.name ?? 'Error'
             }
+            // A resolve-phase rejection that carries a structured (code, path) —
+            // e.g. a RefLoadError for an unresolved or ambiguous §4.7 subsystem
+            // `ref` — is a pinned structural finding, not merely an opaque
+            // failure. Surface it so the (code, path) pin can match (F-9);
+            // otherwise the rejection is recorded only as an exception string.
+            if (error?.code && error?.path !== undefined) {
+                record.structural_errors.push(errorToRecord(error))
+            }
             esmData = null
         }
 

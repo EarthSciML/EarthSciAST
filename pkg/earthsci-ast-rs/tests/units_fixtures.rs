@@ -98,7 +98,7 @@ fn units_fixtures_dimensional_propagation() {
         ("units_propagation.esm", 0),
     ];
     for (name, content) in UNITS_FIXTURES {
-        let result = validate_complete(content);
+        let result = validate_complete(content, None);
         assert!(
             result.schema_errors.is_empty(),
             "{name}: unexpected schema errors: {:?}",

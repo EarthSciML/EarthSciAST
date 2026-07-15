@@ -993,7 +993,17 @@ def _check_circular_references(
             if color.get(nxt) == GRAY:
                 cycle_start = path.index(nxt) if nxt in path else 0
                 cycle = path[cycle_start:] + [nxt]
-                errors.append(f"circular reference (cycle) detected: {' -> '.join(cycle)}")
+                # A dependency cycle is carried by NO single model — it is a
+                # property of the `/models` graph — so the pointer is `/models`
+                # and the code is `circular_dependency` (CONFORMANCE_SPEC §7.1;
+                # TypeScript reference).
+                errors.append(
+                    (
+                        "/models",
+                        f"Circular dependency detected: {' → '.join(cycle)}",
+                        {"cycle": cycle},
+                    )
+                )
                 return True
             if color.get(nxt) == WHITE:
                 if dfs(nxt, path + [nxt]):
@@ -1027,18 +1037,33 @@ def _check_data_loader_variables(data: dict[str, Any], errors: list[str]) -> Non
 
 
 def _check_discrete_parameters(data: dict[str, Any], errors: list[str]) -> None:
-    """discrete_parameters list must reference variables of type 'parameter'."""
+    """discrete_parameters list must reference variables of type 'parameter'.
+
+    The pointer names the event's ``discrete_parameters`` FIELD — the node that
+    carries the defect — as ``/models/M/discrete_events/0/discrete_parameters``
+    (CONFORMANCE_SPEC §7.1.2; TypeScript reference).
+    """
     for mname, m in data.get("models", {}).items():
         var_types = {n: v.get("type") for n, v in m.get("variables", {}).items()}
         for ei, event in enumerate(m.get("discrete_events", [])):
+            dp_pointer = f"/models/{mname}/discrete_events/{ei}/discrete_parameters"
             for dp in event.get("discrete_parameters", []) or []:
                 if dp not in var_types:
                     errors.append(
-                        f"models/{mname}/discrete_events[{ei}]: discrete_parameter '{dp}' not declared in model"
+                        (
+                            dp_pointer,
+                            f'discrete_parameters entry "{dp}" does not match a declared parameter',
+                            {"parameter": dp},
+                        )
                     )
                 elif var_types[dp] != "parameter":
                     errors.append(
-                        f"models/{mname}/discrete_events[{ei}]: discrete_parameter '{dp}' references variable of type '{var_types[dp]}', expected 'parameter'"
+                        (
+                            dp_pointer,
+                            f'discrete_parameters entry "{dp}" references variable of type '
+                            f"'{var_types[dp]}', expected 'parameter'",
+                            {"parameter": dp, "actual_type": var_types[dp]},
+                        )
                     )
 
 
@@ -1668,6 +1693,62 @@ def _walk_expression_for_dimensionless_arg_checks(
         )
 
 
+_GRAD_OPS = frozenset({"grad", "div", "laplacian"})
+
+
+def _iter_grad_coords(expr: Any):
+    """Yield the coordinate name of every ``grad``/``div``/``laplacian`` node in
+    ``expr`` (the differentiation axis carried in the node's ``dim`` field)."""
+    if not isinstance(expr, dict):
+        return
+    if expr.get("op") in _GRAD_OPS:
+        dim = expr.get("dim")
+        if isinstance(dim, str):
+            yield dim
+    for arg in expr.get("args", []) or []:
+        yield from _iter_grad_coords(arg)
+    inner = expr.get("expr")
+    if inner is not None:
+        yield from _iter_grad_coords(inner)
+
+
+def _check_grad_coordinate_units(
+    data: dict[str, Any], errors: list
+) -> None:
+    """A spatial operator (``grad``/``div``/``laplacian``) differentiates with
+    respect to a COORDINATE, so the coordinate's units set the operator's
+    dimension. When the coordinate is a DECLARED model variable/parameter that
+    carries NO units, the equation is dimensionally undetermined — a provable
+    ``unit_inconsistency`` reported at the equation the operator lives in
+    (esm-spec §4.8; TypeScript reference).
+
+    Conservative: a coordinate that is NOT a declared model symbol (a bare axis
+    like ``lon`` from ``index_sets``) is left alone — its units are simply not
+    a model-level fact, so nothing is provably wrong.
+    """
+    for mname, m in data.get("models", {}).items():
+        variables = m.get("variables", {}) or {}
+        for i, eq in enumerate(m.get("equations", []) or []):
+            if not isinstance(eq, dict):
+                continue
+            flagged: set[str] = set()
+            for side in ("lhs", "rhs"):
+                for coord in _iter_grad_coords(eq.get(side)):
+                    if coord in flagged:
+                        continue
+                    vdef = variables.get(coord)
+                    if isinstance(vdef, dict) and not vdef.get("units"):
+                        flagged.add(coord)
+                        errors.append(
+                            (
+                                f"/models/{mname}/equations/{i}",
+                                f"Gradient operator applied over spatial coordinate "
+                                f"'{coord}' with no declared units",
+                                {"coordinate": coord, "equation_index": i},
+                            )
+                        )
+
+
 def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors: list) -> None:
     """
     Check unit compatibility in equations.
@@ -1846,9 +1927,12 @@ def _check_reaction_systems(data: dict[str, Any], errors: list[str]) -> None:
         params = set(rs.get("parameters", {}).keys())
         valid_rate_syms = species | params | _BUILTIN_SYMBOLS
         for ri, reaction in enumerate(rs.get("reactions", [])):
+            reaction_id = reaction.get("id")
+            reaction_pointer = f"/reaction_systems/{rsname}/reactions/{ri}"
             substrates = reaction.get("substrates")
             products = reaction.get("products")
-            # Reaction has both substrates and products explicitly null is invalid
+            # A reaction with both substrates and products explicitly null is a
+            # `null_reaction` (§7.1), carried by the reaction node itself.
             if (
                 "substrates" in reaction
                 and "products" in reaction
@@ -1856,10 +1940,17 @@ def _check_reaction_systems(data: dict[str, Any], errors: list[str]) -> None:
                 and products is None
             ):
                 errors.append(
-                    f"reaction_systems/{rsname}/reactions[{ri}]: reaction has both substrates and products as null"
+                    (
+                        "null_reaction",
+                        reaction_pointer,
+                        f'Reaction "{reaction_id}" has both substrates: null and products: null',
+                        {"reaction_id": reaction_id},
+                    )
                 )
                 continue
-            # Check rate expression references valid symbols
+            # A rate expression symbol that names neither a declared species nor
+            # a declared parameter is an `undefined_parameter`, carried by the
+            # reaction's `rate` field (§7.1; TypeScript reference).
             rate = reaction.get("rate")
             if rate is not None:
                 refs = []
@@ -1872,27 +1963,53 @@ def _check_reaction_systems(data: dict[str, Any], errors: list[str]) -> None:
                         continue  # Scoped refs handled elsewhere
                     if ref not in valid_rate_syms:
                         errors.append(
-                            f"reaction_systems/{rsname}/reactions[{ri}]/rate: undefined reference '{ref}'"
+                            (
+                                "undefined_parameter",
+                                f"{reaction_pointer}/rate",
+                                f'Variable "{ref}" in rate expression is not declared '
+                                f"as species or parameter",
+                                {"variable": ref, "reaction_id": reaction_id},
+                            )
                         )
 
 
 def _check_event_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
-    """Check that event affects/conditions reference declared variables."""
+    """Check that event affects reference declared variables.
+
+    The pointer names the affect's ``lhs`` FIELD under its own event container
+    (``continuous_events`` / ``discrete_events``) and the affect's array index —
+    ``/models/M/continuous_events/0/affects/0/lhs`` — not a flattened
+    ``events/<n>`` position (CONFORMANCE_SPEC §7.1.2; TypeScript reference).
+    """
     for mname, m in data.get("models", {}).items():
         local_vars = set(m.get("variables", {}).keys())
-        for ei, event in enumerate(m.get("discrete_events", []) + m.get("continuous_events", [])):
-            for ai, affect in enumerate(event.get("affects", []) or []):
-                if isinstance(affect, dict) and "lhs" in affect and isinstance(affect["lhs"], str):
-                    name = affect["lhs"]
-                    # Underscore-prefixed names are conventional placeholders
-                    if name.startswith("_"):
-                        continue
-                    if name not in local_vars and name not in tables["global_symbols"]:
-                        errors.append(
-                            f"models/{mname}/events[{ei}]/affects[{ai}]: undefined variable '{name}'"
-                        )
+        for kind in ("continuous_events", "discrete_events"):
+            for ei, event in enumerate(m.get(kind, []) or []):
+                if not isinstance(event, dict):
+                    continue
+                for ai, affect in enumerate(event.get("affects", []) or []):
+                    if (
+                        isinstance(affect, dict)
+                        and "lhs" in affect
+                        and isinstance(affect["lhs"], str)
+                    ):
+                        name = affect["lhs"]
+                        # Underscore-prefixed names are conventional placeholders
+                        if name.startswith("_"):
+                            continue
+                        if name not in local_vars and name not in tables["global_symbols"]:
+                            evt_word = (
+                                "continuous event" if kind == "continuous_events" else "event"
+                            )
+                            errors.append(
+                                (
+                                    f"/models/{mname}/{kind}/{ei}/affects/{ai}/lhs",
+                                    f'Variable "{name}" in {evt_word} affects is not declared',
+                                    {"variable": name},
+                                )
+                            )
 
 
 def _check_registered_function_calls(data: dict[str, Any], errors: list[str]) -> None:
@@ -2018,14 +2135,17 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # `undefined_variable` and Python was the only binding spelling it otherwise
     # — a cross-language conformance gap, not a cosmetic one.
     collect("undefined_variable", lambda sub: _check_variable_references(data, tables, sub))
-    collect("undefined_variable", lambda sub: _check_coupling_references(data, tables, sub))
+    # A coupling edge's `from` is a FULLY-QUALIFIED scoped reference (§4.6), so an
+    # unresolvable one is an `unresolved_scoped_ref`, not a bare
+    # `undefined_variable` (CONFORMANCE_SPEC §7.1; TypeScript reference).
+    collect("unresolved_scoped_ref", lambda sub: _check_coupling_references(data, tables, sub))
     # §4.9.5: reference integrity applies to EVERY expression-bearing field —
     # including the two that live outside `models`: a data loader's
     # `unit_conversion` and a coupling edge's connector/transform expressions.
     collect("undefined_variable", lambda sub: _check_data_loader_expressions(data, tables, sub))
     collect("unresolved_scoped_ref", lambda sub: _check_coupling_expressions(data, tables, sub))
     collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
-    collect("circular_reference", lambda sub: _check_circular_references(data, tables, sub))
+    collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_loader_config", lambda sub: _check_data_loader_variables(data, sub))
     collect("invalid_discrete_param", lambda sub: _check_discrete_parameters(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
@@ -2037,6 +2157,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # to fix a spelling, the second to fix the physics.
     collect("unit_parse_error", lambda sub: _check_unparseable_units(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
+    collect("unit_inconsistency", lambda sub: _check_grad_coordinate_units(data, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_physical_constant_units(data, sub))

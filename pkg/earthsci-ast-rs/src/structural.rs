@@ -168,8 +168,10 @@ pub(crate) fn validate_model(
     // `ExpressionNode::for_each_child` rather than `args` alone.)
     for (eq_idx, equation) in model.initialization_equations.iter().flatten().enumerate() {
         let eq_path = format!("{model_path}/initialization_equations/{eq_idx}");
-        for expr in [&equation.lhs, &equation.rhs] {
-            check_refs(expr, &eq_path, eq_idx, errors);
+        // The pointer is the containing expression FIELD (§7.1.2) — `.../<eq>/lhs`
+        // or `.../<eq>/rhs` — not the whole equation.
+        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+            check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
         }
     }
 
@@ -210,8 +212,13 @@ pub(crate) fn validate_model(
     // Check that all equation references are defined and validate dimensional consistency
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         let eq_path = format!("{model_path}/equations/{eq_idx}");
-        for expr in [&equation.lhs, &equation.rhs] {
-            check_refs(expr, &eq_path, eq_idx, errors);
+        // Reference integrity attaches to the containing expression FIELD
+        // (§7.1.2): an undefined name on the RHS is reported at
+        // `.../equations/<i>/rhs`, not at the whole equation. (Dimensional
+        // findings below stay at the equation level — an inconsistency is a
+        // property of the equation, not of one side.)
+        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+            check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
         }
 
         // Validate dimensional consistency of the equation via expression-level
@@ -315,7 +322,14 @@ pub(crate) fn validate_model(
     // Validate discrete events
     if let Some(ref discrete_events) = model.discrete_events {
         for (event_idx, event) in discrete_events.iter().enumerate() {
-            validate_discrete_event(event, event_idx, &model_path, &defined_vars, errors);
+            validate_discrete_event(
+                event,
+                event_idx,
+                &model_path,
+                &defined_vars,
+                &model.variables,
+                errors,
+            );
         }
     }
 
@@ -915,11 +929,14 @@ pub(crate) fn validate_reaction_system(
             });
         }
 
-        // Check substrate references
-        for substrate in reaction.substrates.iter().flatten() {
+        // Check substrate references. The pointer is the offending stoichiometry
+        // entry's own `species` FIELD (§7.1.2) — `.../reactions/<i>/substrates/<j>/species`
+        // — not the enclosing reaction, so the finding names the exact leaf that
+        // carries the undeclared name.
+        for (sub_idx, substrate) in reaction.substrates.iter().flatten().enumerate() {
             if !defined_species.contains(&substrate.species) {
                 errors.push(StructuralError {
-                    path: rxn_path.clone(),
+                    path: format!("{rxn_path}/substrates/{sub_idx}/species"),
                     code: StructuralErrorCode::UndefinedSpecies,
                     message: format!(
                         "Species '{}' referenced in reaction substrates is not declared",
@@ -935,11 +952,11 @@ pub(crate) fn validate_reaction_system(
             }
         }
 
-        // Check product references
-        for product in reaction.products.iter().flatten() {
+        // Check product references (pointer is the entry's own `species` field).
+        for (prod_idx, product) in reaction.products.iter().flatten().enumerate() {
             if !defined_species.contains(&product.species) {
                 errors.push(StructuralError {
-                    path: rxn_path.clone(),
+                    path: format!("{rxn_path}/products/{prod_idx}/species"),
                     code: StructuralErrorCode::UndefinedSpecies,
                     message: format!(
                         "Species '{}' referenced in reaction products is not declared",
@@ -955,12 +972,13 @@ pub(crate) fn validate_reaction_system(
             }
         }
 
-        // Validate rate expression references
+        // Validate rate expression references. The carrying field is the
+        // reaction's `rate` (§7.1.2), so the pointer is `.../reactions/<i>/rate`.
         validate_rate_expression(
             &reaction.rate,
             &defined_parameters,
             system_refs,
-            &rxn_path,
+            &format!("{rxn_path}/rate"),
             reaction_label,
             errors,
         );
@@ -1622,19 +1640,20 @@ fn validate_discrete_event(
     event_idx: usize,
     parent_path: &str,
     defined_vars: &HashSet<String>,
+    variables: &HashMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
     let event_path = format!("{parent_path}/discrete_events/{event_idx}");
+    let event_name = event.name.as_deref().unwrap_or("unnamed");
 
-    // Validate trigger expression
+    // A `condition` trigger's expression (§5.3) is an ordinary predicate: an
+    // undeclared bare name in it is an `undefined_variable`, carried by the
+    // trigger's `expression` field.
     if let crate::DiscreteEventTrigger::Condition { expression } = &event.trigger {
-        validate_event_expression(
+        validate_event_ref_expression(
             expression,
             defined_vars,
-            &event_path,
-            "condition",
-            event.name.as_deref().unwrap_or("unnamed"),
-            "discrete",
+            &format!("{event_path}/trigger/expression"),
             errors,
         );
     }
@@ -1646,13 +1665,42 @@ fn validate_discrete_event(
             defined_vars,
             &event_path,
             "affects",
-            event.name.as_deref().unwrap_or("unnamed"),
+            event_name,
             "discrete",
             errors,
         );
     }
 
-    // Note: discrete_parameters field validation would go here when DiscreteEvent type supports it
+    // `discrete_parameters` (§5.3): every entry must name a variable of type
+    // `parameter` — not a state/observed variable and not an undeclared name.
+    // The carrying field (§7.1.2) is the `discrete_parameters` array itself.
+    if let Some(ref dps) = event.discrete_parameters {
+        for dp in dps {
+            let declared_type = variables.get(dp).map(|v| &v.var_type);
+            if matches!(declared_type, Some(crate::VariableType::Parameter)) {
+                continue;
+            }
+            let found = match declared_type {
+                Some(crate::VariableType::State) => "found as state variable",
+                Some(crate::VariableType::Observed) => "found as observed variable",
+                Some(_) => "found as non-parameter variable",
+                None => "not declared in model",
+            };
+            errors.push(StructuralError {
+                path: format!("{event_path}/discrete_parameters"),
+                code: StructuralErrorCode::InvalidDiscreteParam,
+                message: format!(
+                    "Discrete parameter '{dp}' in event is not declared as a parameter ({found})"
+                ),
+                details: serde_json::json!({
+                    "parameter": dp,
+                    "event_name": event_name,
+                    "event_type": "discrete",
+                    "expected_in": "parameters",
+                }),
+            });
+        }
+    }
 }
 
 /// Structural checks for a continuous event (esm-spec §6.3): every zero-cross
@@ -1668,14 +1716,11 @@ fn validate_continuous_event(
     let event_path = format!("{parent_path}/continuous_events/{event_idx}");
     let event_name = event.name.as_deref().unwrap_or("unnamed");
 
-    for condition in &event.conditions {
-        validate_event_expression(
+    for (cond_idx, condition) in event.conditions.iter().enumerate() {
+        validate_event_ref_expression(
             condition,
             defined_vars,
-            &event_path,
-            "condition",
-            event_name,
-            "continuous",
+            &format!("{event_path}/conditions/{cond_idx}"),
             errors,
         );
     }
@@ -1714,10 +1759,13 @@ fn validate_event_affects(
     event_type: &str,
     errors: &mut Vec<StructuralError>,
 ) {
-    for affect in affects {
+    for (affect_idx, affect) in affects.iter().enumerate() {
+        // The assignment TARGET (LHS) must be a declared variable — a distinct
+        // defect (`event_var_undeclared`) from an ordinary reference. The
+        // carrying field (§7.1.2) is the affect's own `lhs`.
         if !defined_vars.contains(&affect.lhs) {
             errors.push(StructuralError {
-                path: event_path.to_string(),
+                path: format!("{event_path}/{location}/{affect_idx}/lhs"),
                 code: StructuralErrorCode::EventVarUndeclared,
                 message: format!(
                     "Variable '{}' in event {location} is not declared",
@@ -1732,57 +1780,45 @@ fn validate_event_affects(
                 }),
             });
         }
-        validate_event_expression(
+        // The RHS is an ordinary expression: an undeclared bare name in it is an
+        // `undefined_variable`, carried by the affect's `rhs` field.
+        validate_event_ref_expression(
             &affect.rhs,
             defined_vars,
-            event_path,
-            location,
-            event_name,
-            event_type,
+            &format!("{event_path}/{location}/{affect_idx}/rhs"),
             errors,
         );
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_event_expression(
+/// Reference-check an event expression — a continuous/discrete condition, a
+/// discrete `condition`-trigger, or an affect RHS. An undeclared bare name is an
+/// ordinary `undefined_variable`, reported at `path` (the containing expression
+/// FIELD, §7.1.2). The independent variable, `_var`, and the spatial coordinates
+/// are already seeded into `defined_vars` (esm-spec §4.9.1), so they resolve like
+/// any other name; built-in function heads are skipped.
+fn validate_event_ref_expression(
     expr: &crate::Expr,
     defined_vars: &HashSet<String>,
-    event_path: &str,
-    location: &str,
-    event_name: &str,
-    event_type: &str,
+    path: &str,
     errors: &mut Vec<StructuralError>,
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
-            if var_name != "t" && !is_builtin_function(var_name) && !defined_vars.contains(var_name)
-            {
+            if !is_builtin_function(var_name) && !defined_vars.contains(var_name) {
                 errors.push(StructuralError {
-                    path: event_path.to_string(),
-                    code: StructuralErrorCode::EventVarUndeclared,
-                    message: format!("Variable '{var_name}' in event {location} is not declared"),
-                    details: serde_json::json!({
-                        "variable": var_name,
-                        "event_name": event_name,
-                        "event_type": event_type,
-                        "location": location,
-                        "expected_in": "variables"
-                    }),
+                    path: path.to_string(),
+                    code: StructuralErrorCode::UndefinedVariable,
+                    message: format!(
+                        "Variable \"{var_name}\" referenced in event expression is not declared"
+                    ),
+                    details: serde_json::json!({ "variable": var_name }),
                 });
             }
         }
         crate::Expr::Operator(op_node) => {
             op_node.for_each_child(&mut |arg| {
-                validate_event_expression(
-                    arg,
-                    defined_vars,
-                    event_path,
-                    location,
-                    event_name,
-                    event_type,
-                    errors,
-                )
+                validate_event_ref_expression(arg, defined_vars, path, errors)
             });
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {

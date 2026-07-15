@@ -100,6 +100,14 @@ function run_validation(manifest, project_root::String)
             record["resolve_ok"] = false
             haskey(record, "error") || (record["error"] = string(e))
             haskey(record, "error_type") || (record["error_type"] = string(typeof(e)))
+            # Some rejections are decided at load/parse time yet are ALSO pinned
+            # structural findings (unresolvable/ambiguous subsystem `{ref}`,
+            # `ic_in_reaction_system`). Route them into `structural_errors` with
+            # their `(code, path)` so the pin check sees the finding, not just an
+            # opaque exception string.
+            serr = EarthSciAST.load_failure_structural_error(e)
+            serr === nothing ||
+                push!(record["structural_errors"], _structural_error_dict(serr))
         end
 
         # STRUCTURAL judges the RESOLVED form (§4.7 refs spliced in).

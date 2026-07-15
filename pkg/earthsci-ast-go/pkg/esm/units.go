@@ -1485,7 +1485,11 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 	coordEnv := buildModelCoordEnv(model)
 	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
-			Path:    fmt.Sprintf("%s/variables/%s/units", basePath, name),
+			// The defect is carried by the VARIABLE declaration, so the pointer
+			// names the variable, not its `units` scalar (§7.1.2;
+			// unparseable_unit.esm pins `/models/M/variables/c` for the promoted
+			// `unit_parse_error`, matching TypeScript).
+			Path:    fmt.Sprintf("%s/variables/%s", basePath, name),
 			Code:    UnitFindingUnparseable,
 			Message: fmt.Sprintf("could not parse unit: %v", bad[name]),
 		})

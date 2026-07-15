@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -140,6 +141,23 @@ func runValidation(root string, m *manifest) map[string]any {
 			record["error"] = loadErr.Error()
 			record["error_type"] = "LoadError"
 			record["phase"] = "load"
+			// A load-phase rejection that carries a STRUCTURED diagnostic — a
+			// stable code plus the JSON Pointer of the offending node — is surfaced
+			// as a structural finding. Some defects (an unresolved / ambiguous §4.7
+			// subsystem ref) are caught by esm.Load before the typed structural scan
+			// can run, so without this the producer would record is_valid:false but
+			// no (code, path) tuple, and the pin check would see nothing. See
+			// esm.ExpressionTemplateError.Path.
+			var etErr *esm.ExpressionTemplateError
+			if errors.As(loadErr, &etErr) && etErr.Path != "" {
+				record["structural_errors"] = []errRecord{{
+					Path:    etErr.Path,
+					Message: etErr.Message,
+					Code:    etErr.Code,
+					Keyword: etErr.Code,
+					Details: map[string]any{},
+				}}
+			}
 		} else {
 			record["resolve_ok"] = true
 			record["phase"] = "validate"

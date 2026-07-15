@@ -836,8 +836,13 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 		}
 	case []any:
 		// A raw nested array reached through a sidecar child; check each element.
-		for i, el := range e {
-			s.validateExpressionVariables(el, allVars, fmt.Sprintf("%s/%d", path, i), currentSystem)
+		// The error path stays at the containing expression FIELD (path is not
+		// deepened) — a reference-integrity finding is reported at the field the
+		// bad name lives in (`/models/M/equations/0/rhs`), never at the leaf
+		// position inside the tree (§7.1.2; the shared corpus and TypeScript pin
+		// the field, and anyPathMatches likewise credits it).
+		for _, el := range e {
+			s.validateExpressionVariables(el, allVars, path, currentSystem)
 		}
 	case float64, float32, int, int32, int64, json.Number:
 		// Numeric literals are always valid. float64/int64 are the shapes the
@@ -1028,8 +1033,15 @@ func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[str
 		return
 	}
 
+	// The error path stays at the containing expression FIELD: a bad reference
+	// found anywhere inside this operator tree is reported at the field the tree
+	// is rooted in (`/models/M/equations/0/rhs`, `/models/M/guesses/y`,
+	// `/reaction_systems/R/reactions/0/rate`), NOT at its leaf position
+	// (`.../rhs/args/0`). That is the granularity §7.1.2 requires and the one the
+	// shared corpus and TypeScript pin; child.Path still tags each child for the
+	// keystone-coverage test, but it is not appended to the diagnostic pointer.
 	for _, child := range exprRefChildren(node) {
-		s.validateExpressionVariables(child.Child, scope, path+child.Path, currentSystem)
+		s.validateExpressionVariables(child.Child, scope, path, currentSystem)
 	}
 }
 
@@ -1832,7 +1844,11 @@ func (s *structuralScan) validateCircularReferences() {
 			}
 			reported[key] = true
 			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("/models/%s", cycle[0]),
+				// A dependency cycle is carried by NO single model — it is a
+				// property of the model set — so the pointer is the `/models`
+				// container, not any one participant (§7.1.2; circular_coupling.esm
+				// pins `/models`, matching TypeScript).
+				Path:    "/models",
 				Code:    ErrorCircularDependency,
 				Message: fmt.Sprintf("Circular coupling detected: %s", strings.Join(cycle, " → ")),
 				Details: map[string]any{"cycle": cycle},
@@ -1917,7 +1933,10 @@ func (s *structuralScan) validateCouplingSystems(systems []string, allSystems ma
 			continue
 		}
 		s.addErr(StructuralError{
-			Path:    fmt.Sprintf("%s/systems/%d", basePath, j),
+			// The pointer names the `systems` FIELD of the coupling entry, not the
+			// individual bad element (§7.1.2; undefined_system.esm pins
+			// `/coupling/0/systems`, matching TypeScript).
+			Path:    fmt.Sprintf("%s/systems", basePath),
 			Code:    ErrorUndefinedSystem,
 			Message: fmt.Sprintf("Undefined system '%s' in coupling", sysName),
 			Details: map[string]any{

@@ -83,7 +83,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
-            @test errors[1].path == "/reaction_systems/test_reactions/reactions/0/products"
+            @test errors[1].path == "/reaction_systems/test_reactions/reactions/0/products/0/species"
             @test occursin("Species 'C' not declared", errors[1].message)
             @test errors[1].error_type == "undefined_species"
         end
@@ -130,9 +130,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
-            @test errors[1].path == "/models/test_model/continuous_events/0/affects/0"
-            @test occursin("Affect target variable 'undefined_var' not declared", errors[1].message)
-            @test errors[1].error_type == "undefined_affect_variable"
+            @test errors[1].path == "/models/test_model/continuous_events/0/affects/0/lhs"
+            @test occursin("Variable 'undefined_var' in event affects is not declared", errors[1].message)
+            @test errors[1].error_type == "event_var_undeclared"
         end
 
         @testset "Valid model - no errors" begin
@@ -207,7 +207,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             coupling_bad = EarthSciAST.CouplingOperatorCompose(["nonexistent_system"])
             errors = EarthSciAST.validate_coupling_references(esm_file, coupling_bad, "/coupling/0")
             @test length(errors) == 1
-            @test errors[1].path == "/coupling/0/systems/0"
+            @test errors[1].path == "/coupling/0/systems"
             @test occursin("nonexistent_system", errors[1].message)
             @test errors[1].error_type == "undefined_system"
         end
@@ -259,7 +259,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             @test length(errors) == 1
             @test errors[1].path == "/coupling/0/from"
             @test occursin("invalid.ref", errors[1].message)
-            @test errors[1].error_type == "unresolved_reference"
+            @test errors[1].error_type == "unresolved_scoped_ref"
 
             # Invalid 'to' reference
             coupling_bad_to = EarthSciAST.CouplingVariableMap("test_model.x", "invalid.ref", "identity")
@@ -267,7 +267,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             @test length(errors) == 1
             @test errors[1].path == "/coupling/0/to"
             @test occursin("invalid.ref", errors[1].message)
-            @test errors[1].error_type == "unresolved_reference"
+            @test errors[1].error_type == "unresolved_scoped_ref"
         end
     end
 

@@ -55,7 +55,8 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// that resolveSubsystemMap mutates in place, so no write-back of the Model
 	// struct into file.Models is needed.
 	for modelName, model := range file.Models {
-		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta); err != nil {
+		prefix := fmt.Sprintf("/models/%s/subsystems", modelName)
+		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta, prefix); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
 	}
@@ -63,7 +64,8 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// Resolve subsystems in reaction systems (rs.Subsystems is likewise mutated
 	// in place).
 	for rsName, rs := range file.ReactionSystems {
-		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta); err != nil {
+		prefix := fmt.Sprintf("/reaction_systems/%s/subsystems", rsName)
+		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta, prefix); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
 	}
@@ -126,14 +128,28 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, 
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64, pathPrefix string) (err error) {
 	if len(subsystems) == 0 {
 		return nil
 	}
 
+	// Attribute a JSON Pointer to whichever subsystem entry failed. pathPrefix is
+	// the entry's `subsystems` container (`/models/<M>/subsystems`); currentKey is
+	// the entry name being resolved. A load-phase rejection of a §4.7 ref
+	// (unresolved / ambiguous) is then a structured (code, path) finding a
+	// conformance producer can surface — withETPath is first-set-wins, so a nested
+	// edge that already carries its own deeper pointer is left untouched.
+	var currentKey string
+	defer func() {
+		if err != nil && currentKey != "" {
+			err = withETPath(err, fmt.Sprintf("%s/%s", pathPrefix, currentKey))
+		}
+	}()
+
 	// Iterate in sorted key order so a document with multiple bad refs fails
 	// with a deterministic diagnostic (the rest of the package does this).
 	for _, key := range sortedKeys(subsystems) {
+		currentKey = key
 		value := subsystems[key]
 		ref, bindingsRaw, isRef := extractRefWithBindings(value)
 		if !isRef {
@@ -258,7 +274,11 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 					continue
 				}
 				if subs, ok := compObj["subsystems"].(map[string]any); ok {
-					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta); err != nil {
+					// The nested edges live inside the mounted component, which is
+					// inlined at this entry's pointer — best-effort deeper prefix (not
+					// a corpus-pinned location).
+					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
+					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta, nestedPrefix); err != nil {
 						return fmt.Errorf("subsystem %q: resolving nested refs in %q: %w", key, refKey, err)
 					}
 				}

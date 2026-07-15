@@ -469,26 +469,35 @@ def _validate_stoich(
     side_key: str,
     label: str,
     structural_errors: list[ValidationError],
+    reaction_id: str | None = None,
 ) -> None:
     """
-    Validate one side (reactants or products) of a reaction: each species must
+    Validate one side (substrates or products) of a reaction: each species must
     be declared and its stoichiometry must be a finite, positive number.
 
-    Shared by the reactant and product checks in
-    :func:`_validate_reaction_consistency`. ``side_key`` is the path segment
-    (``"reactants"`` / ``"products"``) and ``label`` is the human-readable side
-    name (``"Reactant"`` / ``"Product"``) used in the error messages. The
-    emitted errors are identical to the previously inlined per-side checks.
+    Shared by the substrate and product checks in
+    :func:`_validate_reaction_consistency`. ``side_key`` is the SPEC path segment
+    (``"substrates"`` / ``"products"`` — the wire keys, not the ``reactants``
+    dataclass alias) and ``label`` is the human-readable side name
+    (``"Substrate"`` / ``"Product"``) used in the error messages.
+
+    Each side is a name→stoichiometry map that preserves the source list's order,
+    so the JSON Pointer names the array POSITION and the field carrying the defect
+    — ``.../{side_key}/{index}/species`` for an undeclared species,
+    ``.../{side_key}/{index}/stoichiometry`` for a bad stoichiometry — matching
+    the cross-language contract (CONFORMANCE_SPEC §7.1.2; TypeScript reference).
     """
-    for species_name, stoich in species_stoich.items():
+    for idx, (species_name, stoich) in enumerate(species_stoich.items()):
+        entry_path = f"{reaction_path}/{side_key}/{idx}"
         if species_name not in species_names:
             structural_errors.append(
                 ValidationError(
-                    path=f"{reaction_path}/{side_key}/{species_name}",
-                    message=f"{label} species '{species_name}' not declared in reaction system '{rs_name}'",
-                    code=ErrorCode.UNDECLARED_SPECIES.value,
+                    path=f"{entry_path}/species",
+                    message=f'Species "{species_name}" in reaction {side_key} is not declared',
+                    code=ErrorCode.UNDEFINED_SPECIES.value,
                     details={
                         "species": species_name,
+                        "reaction_id": reaction_id,
                         "reaction_system": rs_name,
                         "available_species": list(species_names),
                     },
@@ -498,7 +507,7 @@ def _validate_stoich(
         if not isinstance(stoich, (int, float)) or isinstance(stoich, bool):
             structural_errors.append(
                 ValidationError(
-                    path=f"{reaction_path}/{side_key}/{species_name}",
+                    path=f"{entry_path}/stoichiometry",
                     message=f"{label} stoichiometry must be a number, got {type(stoich).__name__}",
                     code=ErrorCode.INVALID_STOICHIOMETRY_TYPE.value,
                     details={
@@ -511,7 +520,7 @@ def _validate_stoich(
         elif isinstance(stoich, float) and (math.isnan(stoich) or math.isinf(stoich)):
             structural_errors.append(
                 ValidationError(
-                    path=f"{reaction_path}/{side_key}/{species_name}",
+                    path=f"{entry_path}/stoichiometry",
                     message=f"{label} stoichiometry must be finite, got {stoich}",
                     code=ErrorCode.INVALID_STOICHIOMETRY.value,
                     details={"species": species_name, "stoichiometry": stoich},
@@ -520,7 +529,7 @@ def _validate_stoich(
         elif stoich <= 0:
             structural_errors.append(
                 ValidationError(
-                    path=f"{reaction_path}/{side_key}/{species_name}",
+                    path=f"{entry_path}/stoichiometry",
                     message=f"{label} stoichiometry must be positive, got {stoich}",
                     code=ErrorCode.NEGATIVE_STOICHIOMETRY.value,
                     details={"species": species_name, "stoichiometry": stoich},
@@ -569,15 +578,18 @@ def _validate_reaction_consistency(
                     )
                 )
 
-            # Validate reactant species exist and have positive stoichiometry
+            # Validate substrate species exist and have positive stoichiometry.
+            # The dataclass field is `reactants`; the SPEC/wire key (and the
+            # pinned JSON-Pointer segment) is `substrates`.
             _validate_stoich(
                 reaction.reactants,
                 species_names,
                 rs.name,
                 reaction_path,
-                "reactants",
-                "Reactant",
+                "substrates",
+                "Substrate",
                 structural_errors,
+                reaction_id=reaction.id,
             )
 
             # Validate product species exist and have positive stoichiometry
@@ -589,6 +601,7 @@ def _validate_reaction_consistency(
                 "products",
                 "Product",
                 structural_errors,
+                reaction_id=reaction.id,
             )
 
             # Validate rate constant references (full expression parsing)

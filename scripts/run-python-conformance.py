@@ -105,8 +105,15 @@ def run_validation(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 result = earthsci_ast.validate(esm_data)
             else:
                 # Raw document, so a load-phase rejection still yields whatever
-                # structured findings the binding is able to enumerate.
-                result = earthsci_ast.validate(json.loads(path.read_text()))
+                # structured findings the binding is able to enumerate. Anchor
+                # relative §4.7 subsystem / §9.7 template refs at the fixture's
+                # OWN directory (exactly as the `load(path)` phase above does):
+                # without it a ref that resolves to a multi-system file degrades
+                # to `unresolved_subsystem_ref` (target not found relative to the
+                # CWD) instead of its true `ambiguous_subsystem_ref`.
+                result = earthsci_ast.validate(
+                    json.loads(path.read_text()), base_path=str(path.parent)
+                )
             record["schema_errors"] = [_error_to_dict(e) for e in (result.schema_errors or [])]
             record["structural_errors"] = [
                 _error_to_dict(e) for e in (result.structural_errors or [])

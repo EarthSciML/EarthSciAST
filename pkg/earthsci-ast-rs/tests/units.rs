@@ -102,7 +102,7 @@ fn validate_units_propagation_fixture_warning_free() {
     let json = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
 
-    let result = validate_complete(&json);
+    let result = validate_complete(&json, None);
     let dim_warnings: Vec<_> = result
         .unit_warnings
         .iter()

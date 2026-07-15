@@ -85,17 +85,28 @@ using EarthSciAST
         @test isfile(fixture)
 
         local threw = false
-        local msg = ""
+        local perr = nothing
         try
             EarthSciAST.load(fixture)
         catch e
             threw = true
-            msg = e isa EarthSciAST.ParseError ? e.message : string(e)
+            perr = e
         end
         @test threw
-        @test occursin("ic_in_reaction_system", msg)
-        @test occursin("/reaction_systems/Chemistry/constraint_equations/0", msg)
-        @test occursin("species=O3", msg)
+        # The rejection now carries the pinned finding as STRUCTURED fields
+        # (`code`, `path`, `details`) rather than baking them into the message,
+        # so `validate`/the conformance producer can render it as the shared
+        # `(code, path)` structural error.
+        @test perr isa EarthSciAST.ParseError
+        @test perr.code == "ic_in_reaction_system"
+        @test perr.path == "/reaction_systems/Chemistry/constraint_equations/0"
+        @test perr.details["species"] == "O3"
+
+        # And `load_failure_structural_error` maps it to the pinned StructuralError.
+        serr = EarthSciAST.load_failure_structural_error(perr)
+        @test serr !== nothing
+        @test serr.error_type == "ic_in_reaction_system"
+        @test serr.path == "/reaction_systems/Chemistry/constraint_equations/0"
 
         # No false positive: a reaction system whose constraint_equations carry
         # no `ic` op loads without error.

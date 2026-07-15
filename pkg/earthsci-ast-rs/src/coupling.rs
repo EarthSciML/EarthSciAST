@@ -79,14 +79,22 @@ pub(crate) fn validate_coupling(
                 factor,
                 ..
             } => {
+                // The carrying field (§7.1.2) is the `from` / `to` endpoint that
+                // holds the unresolvable reference, not the whole coupling entry.
                 validate_scoped_reference(
                     from,
                     system_refs,
-                    &coupling_path,
+                    &format!("{coupling_path}/from"),
                     "variable_map",
                     errors,
                 );
-                validate_scoped_reference(to, system_refs, &coupling_path, "variable_map", errors);
+                validate_scoped_reference(
+                    to,
+                    system_refs,
+                    &format!("{coupling_path}/to"),
+                    "variable_map",
+                    errors,
+                );
                 // An expression transform spells its own arithmetic, so a
                 // separate `factor` slot is a modeling error (esm-spec §10.4)
                 // — rejected rather than silently ignored, mirroring the
@@ -256,11 +264,14 @@ fn validate_pairwise_systems(
     system_refs: &HashMap<String, SystemInfo>,
     errors: &mut Vec<StructuralError>,
 ) {
+    // The carrying field (§7.1.2) is the entry's `systems` array, not the whole
+    // coupling entry.
+    let systems_path = format!("{coupling_path}/systems");
     if systems.len() >= 2 {
         for system in systems.iter().take(2) {
             if !system_refs.contains_key(system) {
                 errors.push(StructuralError {
-                    path: coupling_path.to_string(),
+                    path: systems_path.clone(),
                     code: StructuralErrorCode::UndefinedSystem,
                     message: format!("Coupling entry references nonexistent system '{system}'"),
                     details: serde_json::json!({
@@ -273,7 +284,7 @@ fn validate_pairwise_systems(
         }
     } else {
         errors.push(StructuralError {
-            path: coupling_path.to_string(),
+            path: systems_path,
             code: StructuralErrorCode::UndefinedSystem,
             message: format!("{label} coupling requires exactly 2 systems"),
             details: serde_json::json!({
