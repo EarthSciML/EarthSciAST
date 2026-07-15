@@ -71,6 +71,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("stencil_affine_lowering_test.jl")       # ess-affine _lower_to_access
     include("stencil_affine_diff_test.jl")           # ess-affine ≡ per-cell (differential)
     include("stencil_affine_ad_test.jl")             # ess-affine AD Jacobian + out-of-place
+    include("stencil_affine_fn_test.jl")             # ess-affine interp :fn ≡ per-cell
     include("tree_walk_invariant_hoist_test.jl")
     include("tree_walk_vec_share_test.jl")
     include("tree_walk_oop_test.jl")

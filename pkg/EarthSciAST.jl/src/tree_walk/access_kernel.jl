@@ -318,6 +318,34 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         return Float64(ℯ)
     elseif op === :Pre
         return ev(ch[1])
+
+    elseif op === :fn
+        # Interp / closed function. MIRRORS `_eval_node_op`'s `:fn` arm
+        # (compile.jl) exactly — SAME `(fname, spec)` payload dispatch, SAME
+        # validation-free `_interp_*_core` kernels, SAME const tables — so the
+        # affine path stays bit-identical on interp leaves. The scalar query
+        # children are `ev`'d (through the access evaluator) instead of
+        # `_eval_node`'d; everything else is identical. `isa`-matching the whole
+        # concrete tuple type keeps the inline spec unboxed (see compile.jl).
+        pl = nd.payload
+        if pl isa Tuple{String,_InterpLinearSpec}
+            spec = pl[2]
+            return _interp_linear_core(spec.table, spec.axis, ev(ch[1]))
+        elseif pl isa Tuple{String,_InterpBilinearSpec}
+            spec = pl[2]
+            return _interp_bilinear_core(spec.table, spec.axis_x, spec.axis_y,
+                                         ev(ch[1]), ev(ch[2]))
+        elseif pl isa Tuple{String,_InterpSearchsortedSpec}
+            spec = pl[2]
+            return Float64(_interp_searchsorted_core("interp.searchsorted",
+                                                     ev(ch[1]), spec.xs))
+        elseif pl isa Tuple{String,Nothing}
+            fname = pl[1]
+            args_evaluated = Any[ev(ci) for ci in ch]
+            return Float64(evaluate_closed_function(fname, args_evaluated))
+        end
+        throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
+            "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
     end
     throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))
 end
