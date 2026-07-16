@@ -146,15 +146,15 @@ struct _StencilCtx
     # DAG instead of re-inflating it to a tree (~2M nodes for a PPM operator). Reset
     # per `_build_branch_template` because it references that call's lane recipes.
     smemo::IdDict{OpExpr,ASTExpr}
-    # Memoized per-node variable set for the loop-var-reference guard, so
-    # `_stencilize`'s per-node check is an O(|idxset|) probe of a cached set rather
-    # than an O(subtree) re-walk (`_refs_loop_var`) plus a boxed-capture closure at
-    # every node.
-    vsmemo::IdDict{OpExpr,Set{String}}
+    # Memoized per-node "refers to a loop index" flag for the guard, so
+    # `_stencilize`'s per-node check is an O(1) memo hit rather than an O(subtree)
+    # re-walk (`_refs_loop_var`) plus a boxed-capture closure at every node — and a
+    # Bool per node instead of a Set{String}.
+    vsmemo::IdDict{OpExpr,Bool}
 end
 _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather) =
     _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
-                IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,Set{String}}())
+                IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,Bool}())
 
 # `_stencilize` transforms `expr` into the sentinel spine and appends a
 # `_LaneRecipe` (to `ctx.recipes`) for every loop-var-dependent leaf.
@@ -295,54 +295,53 @@ end
 # an O(|idxset|) probe of the cached set. (Hand-rolled memoized recursion, not
 # `foreach_subexpr`: the per-OpExpr `memo` shares interior sets, which a flat
 # whole-subtree visitor cannot.)
-_accum_vars!(::Set{String}, ::NumExpr, ::IdDict{OpExpr,Set{String}}) = nothing
-_accum_vars!(::Set{String}, ::IntExpr, ::IdDict{OpExpr,Set{String}}) = nothing
-_accum_vars!(s::Set{String}, e::VarExpr, ::IdDict{OpExpr,Set{String}}) = (push!(s, e.name); nothing)
-_accum_vars!(s::Set{String}, e::OpExpr, memo::IdDict{OpExpr,Set{String}}) =
-    (union!(s, _stencil_var_set(e, memo)); nothing)
-function _stencil_var_set(e::OpExpr, memo::IdDict{OpExpr,Set{String}})
+# `_refs_loop_var(e, idxset)` without re-walking `e` — and without the
+# `IdDict{OpExpr,Set{String}}` of every variable name it used to memoize (a Set per
+# node was the largest remaining build churn). The guard only asks a BOOLEAN — does
+# `e` reference any loop index in `idxset`? — so memoize THAT by node identity.
+# Short-circuits on the first hit; `idxset` is fixed per build, so the answer is a
+# pure function of the node. Byte-for-byte the same guard decision.
+_child_refs_idxset(x::VarExpr, idxset::Set{String}, ::IdDict{OpExpr,Bool}) = x.name in idxset
+_child_refs_idxset(::NumExpr, ::Set{String}, ::IdDict{OpExpr,Bool}) = false
+_child_refs_idxset(::IntExpr, ::Set{String}, ::IdDict{OpExpr,Bool}) = false
+_child_refs_idxset(x::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Bool}) =
+    _refs_idxset(x, idxset, memo)
+function _refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Bool})
     cached = get(memo, e, nothing)
     cached === nothing || return cached
-    s = Set{String}()
-    # Direct field walk (no `child_exprs` vector, no closure): every child feeds
-    # `_accum_vars!`, and order is irrelevant because the result is a Set — so the
-    # sorted `collect(keys(...))` the general `child_exprs`/`foreach_child` need for
-    # determinism is skipped here too.
+    r = _scan_refs_idxset(e, idxset, memo)
+    memo[e] = r
+    return r
+end
+# Same field set / order as `child_exprs`, but returns as soon as any child refers
+# to a loop index (no Set, no `child_exprs` vector, no closure).
+function _scan_refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Bool})
     for a in e.args
-        _accum_vars!(s, a, memo)
+        _child_refs_idxset(a, idxset, memo) && return true
     end
     for fld in (e.lower, e.upper, e.expr_body, e.filter, e.key)
-        fld === nothing || _accum_vars!(s, fld, memo)
+        if fld !== nothing && _child_refs_idxset(fld, idxset, memo)
+            return true
+        end
     end
     if e.values !== nothing
         for v in e.values
-            _accum_vars!(s, v, memo)
+            _child_refs_idxset(v, idxset, memo) && return true
         end
     end
     if e.table_axes !== nothing
         for (_, v) in e.table_axes
-            _accum_vars!(s, v, memo)
+            _child_refs_idxset(v, idxset, memo) && return true
         end
     end
     if e.ranges !== nothing
         for (_, rv) in e.ranges
             if rv isa AbstractVector
                 for x in rv
-                    x isa ASTExpr && _accum_vars!(s, x, memo)
+                    x isa ASTExpr && _child_refs_idxset(x, idxset, memo) && return true
                 end
             end
         end
-    end
-    memo[e] = s
-    return s
-end
-
-# `_refs_loop_var(e, idxset)` without re-walking `e`: probe the small `idxset`
-# against `e`'s memoized variable set. Byte-for-byte the same guard decision.
-@inline function _refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Set{String}})
-    vs = _stencil_var_set(e, memo)
-    for v in idxset
-        v in vs && return true
     end
     return false
 end
@@ -355,7 +354,7 @@ end
 # substitution — so a shared signature guarantees a shared template. `memo` caches
 # per-node variable sets across cells so the invariant guard costs O(|idxset|).
 function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays,
-                      memo::IdDict{OpExpr,Set{String}})
+                      memo::IdDict{OpExpr,Bool})
     e isa OpExpr || return
     _refs_idxset(e, idxset, memo) || return
     if e.op == "index" && !isempty(e.args)
@@ -377,7 +376,7 @@ function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_array
 end
 function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTExpr},
                               idxset::Set{String}, idx_env, const_arrays,
-                              memo::IdDict{OpExpr,Set{String}})
+                              memo::IdDict{OpExpr,Bool})
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
         r, _ = _select_region(producer, kvals)
@@ -506,6 +505,18 @@ function _ghost_key(lane_vals::Vector{Any}, state_ks::Vector{Int})
     io = IOBuffer()
     @inbounds for k in state_ks
         print(io, (lane_vals[k]::Int) == 0 ? '1' : '0')
+    end
+    return String(take!(io))
+end
+
+# Same ghost key from the STATE-lane slots ALREADY isolated into a Vector{Int}
+# (the affine sweep evaluates only those — `_ghost_key` never reads a non-state
+# lane), so `_cell_ckey!` needs no `Vector{Any}` and no boxing.
+function _ghost_key_states(state_vals::Vector{Int})
+    isempty(state_vals) && return ""
+    io = IOBuffer()
+    @inbounds for v in state_vals
+        print(io, v == 0 ? '1' : '0')
     end
     return String(take!(io))
 end
@@ -646,10 +657,16 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
     spine = _stencilize(body, ctx)
     # Attach each state gather's affine slot map (cold, once per branch) so the hot
     # per-cell `_eval_recipe` avoids the `_cell_key` String + index Vector.
+    # Cache by var name: every LANE_STATE recipe for the same var shares one affine
+    # map (its lo/hi are the var's array_var_info bounds), so derive it ONCE per var
+    # rather than once per recipe (the derivation's `_cell_key` probes were the top
+    # allocator otherwise).
+    aff_cache = Dict{String,Union{Nothing,Tuple{Int,Vector{Int}}}}()
     @inbounds for k in eachindex(rs)
         r = rs[k]
         r.kind == LANE_STATE || continue
-        aff = _derive_var_affine(r.var_name, r.lo, r.hi, var_map)
+        aff = get!(() -> _derive_var_affine(r.var_name, r.lo, r.hi, var_map),
+                   aff_cache, r.var_name)
         aff === nothing && continue
         rs[k] = _LaneRecipe(r.kind, r.var_name, r.idx_args, r.lo, r.hi,
                             r.arr, r.loop_name, aff)
@@ -686,7 +703,7 @@ function _collect_stencil_groups(body::ASTExpr, idx_names::Vector{String},
     bio = IOBuffer()
     # Per-node variable-set cache for the branch-key guard, built once and reused
     # across every cell (the spine is structurally identical cell to cell).
-    bmemo = IdDict{OpExpr,Set{String}}()
+    bmemo = IdDict{OpExpr,Bool}()
     try
         for idx_tuple in Iterators.product(range_iters...)
             empty!(idx_env)
