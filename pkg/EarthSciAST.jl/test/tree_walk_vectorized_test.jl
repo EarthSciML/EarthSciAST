@@ -55,11 +55,15 @@ end
             @test length(u0) == N                 # state DOES grow with N …
             d
         end
-        # … but the compiled array-kernel structure does NOT.
-        @test diags[1].n_vec_kernels == diags[2].n_vec_kernels == diags[3].n_vec_kernels
+        # … but the compiled array-kernel structure does NOT. Affine access kernels
+        # are the default path, so count array kernels of either flavour (vec + acc)
+        # — the intent, "one whole-array kernel per structural box, N-independent",
+        # holds whichever path owns the equation.
+        akerns(d) = d.n_vec_kernels + d.n_acc_kernels
+        @test akerns(diags[1]) == akerns(diags[2]) == akerns(diags[3])
         @test diags[1].template_node_count ==
               diags[2].template_node_count == diags[3].template_node_count
-        @test diags[1].n_vec_kernels >= 1
+        @test akerns(diags[1]) >= 1
         # The array equation produced ZERO per-cell scalar RHS entries: it is a
         # whole-array kernel, not an O(N) scalar node list.
         @test all(d -> d.n_scalar_entries == 0, diags)
@@ -94,7 +98,9 @@ end
                                              const_arrays=Dict("A" => A))
         _, _, _, _, _, d = ESM._build_evaluator_impl(m; initial_conditions=ics,
                                                      const_arrays=Dict("A" => A))
-        @test d.n_vec_kernels >= 1
+        # A constant-bound contraction is unrolled onto the affine path by default
+        # (acc kernel); either array-kernel flavour satisfies the whole-array intent.
+        @test d.n_vec_kernels + d.n_acc_kernels >= 1
         @test d.n_scalar_entries == 0
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[1]"]], 6.0;  rtol=1e-12)
@@ -476,8 +482,10 @@ end
         @test _bitsame(du[3], refB)
         @test _bitsame(du[4], refB)
         # Two distinct tables ⇒ two kernels. (Before the fix the per-cell paths
-        # collapsed to ONE kernel and returned refA in all four cells.)
-        @test d.n_vec_kernels == 2
+        # collapsed to ONE kernel and returned refA in all four cells.) The
+        # non-disabled cases take the affine path by default (acc kernels); count
+        # both array-kernel flavours.
+        @test d.n_vec_kernels + d.n_acc_kernels == 2
     end
 
     # The converse, and the reason the key must be CONTENT: two regions whose tables
@@ -513,12 +521,17 @@ end
                 ESM._build_evaluator_impl(model; initial_conditions=ics)[6]
             end
         end
-        @testset "$(disable ? "per-cell" : "symbolic stencil") path" for disable in (true, false)
+        @testset "$(disable ? "per-cell" : "affine") path" for disable in (true, false)
             ds = [_diag(N, disable) for N in (8, 16, 64)]
-            @test ds[1].n_vec_kernels == ds[2].n_vec_kernels == ds[3].n_vec_kernels
+            # disable=false takes the affine path by default (interp `:fn` in a
+            # makearray is modelled → acc kernels); disable=true stays per-cell (vec
+            # kernels). Either way: one whole-array kernel per distinct table,
+            # N-independent — count both flavours.
+            akerns(d) = d.n_vec_kernels + d.n_acc_kernels
+            @test akerns(ds[1]) == akerns(ds[2]) == akerns(ds[3])
             @test ds[1].template_node_count ==
                   ds[2].template_node_count == ds[3].template_node_count
-            @test ds[1].n_vec_kernels == 2   # one kernel per distinct table, not per cell
+            @test akerns(ds[1]) == 2   # one kernel per distinct table, not per cell
         end
     end
 end

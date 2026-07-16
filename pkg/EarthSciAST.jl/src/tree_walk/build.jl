@@ -1903,9 +1903,13 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
     # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
-    # groups), producing `_AccKernel`s that resolve gathers at runtime. Opt-in
-    # via ESS_AFFINE=1 during rollout; returns `nothing` (covered untouched) for
-    # anything it cannot model, falling through to the symbolic / per-cell chain.
+    # groups), producing `_AccKernel`s that resolve gathers at runtime. This is the
+    # DEFAULT array-kernel build; it now carries its own eval-time optimization
+    # (per-cell CSE + loop-invariant hoisting on the access spine), so it is a clean
+    # win over the vectorized path it supersedes. Returns `nothing` (covered
+    # untouched) for anything it cannot model, falling through to the symbolic /
+    # per-cell chain. `ESS_STENCIL_DISABLE=1` forces the per-cell reference (the
+    # differential-test escape hatch).
     #
     # A CONSTANT-bound contraction with no join gate is UNROLLED into a plain
     # ⊕-fold body (`_unrolled_contraction_body`) and lowered by the SAME box
@@ -1913,7 +1917,7 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
     # a join gate (either can vary the term set per output cell) is left to the
     # per-cell path.
     affine_kernels = nothing
-    if _affine_enabled() && !_stencil_disabled()
+    if !_stencil_disabled()
         affine_body =
             isempty(contract_names) ? rhs_body :
             (agg_gates === nothing && all(c -> c !== nothing, contract_const)) ?

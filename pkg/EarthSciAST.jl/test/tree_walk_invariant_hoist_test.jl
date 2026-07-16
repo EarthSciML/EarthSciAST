@@ -73,6 +73,13 @@ end
 
 _eval_rhs(f!, u0, p, t) = (du = similar(u0); f!(du, u0, p, t); du)
 
+# These pin the VEC-path invariant-hoisting pass (invariant_share.jl), which is now
+# the FALLBACK path — the affine path is the default and carries its own invariant
+# hoisting (covered by stencil_affine_invariant_test). Force the per-cell/vec path
+# for this file so it keeps exercising the vec sharing implementation, restoring the
+# environment afterward.
+_PREV_ESD_IH = get(ENV, "ESS_STENCIL_DISABLE", nothing)
+ENV["ESS_STENCIL_DISABLE"] = "1"
 @testset "lane-invariant hoisting in vectorized kernels" begin
 
     @testset "hoisted RHS is bit-identical to the hand-collapsed one" begin
@@ -863,3 +870,5 @@ _arrh_params() = Dict{String,ESM.ModelVariable}(
         @test rhs_alloc_bytes(fi!, du, u0, p, 1.25) == 0
     end
 end
+_PREV_ESD_IH === nothing ? delete!(ENV, "ESS_STENCIL_DISABLE") :
+    (ENV["ESS_STENCIL_DISABLE"] = _PREV_ESD_IH)

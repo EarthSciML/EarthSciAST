@@ -269,6 +269,13 @@ function _vs_battery(N = 6)
 end
 
 # ===========================================================================
+# These pin the VEC-path lane-vector CSE pass (vec_share.jl), which is now the
+# FALLBACK path — the affine path is the default and carries its own per-cell CSE
+# (covered by stencil_affine_cse_test). Force the per-cell/vec path for this file so
+# it keeps exercising the vec sharing implementation, restoring the environment
+# afterward.
+_PREV_ESD_VS = get(ENV, "ESS_STENCIL_DISABLE", nothing)
+ENV["ESS_STENCIL_DISABLE"] = "1"
 @testset "lane-varying vector CSE (vec_share.jl)" begin
 
 # ---------------------------------------------------------------------------
@@ -1086,3 +1093,5 @@ end
 end
 
 end # @testset "lane-varying vector CSE (vec_share.jl)"
+_PREV_ESD_VS === nothing ? delete!(ENV, "ESS_STENCIL_DISABLE") :
+    (ENV["ESS_STENCIL_DISABLE"] = _PREV_ESD_VS)

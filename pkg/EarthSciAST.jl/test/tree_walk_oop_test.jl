@@ -163,7 +163,10 @@ end
         # RD/0-D models are supposed to exercise, so a future refactor that empties one
         # of them makes the identity assertions fail loudly instead of vacuously.
         f_rd, = ESM.build_evaluator(_rd(64))
-        @test !isempty(getfield(f_rd, :vec_kernels))         # array kernels present
+        # array kernels present — affine (acc kernels) is the default path, the vec
+        # path is the fallback. Either flavour proves the array phase ran.
+        @test !isempty(getfield(f_rd, :vec_kernels)) ||
+              !isempty(getfield(f_rd, :acc_kernels))
         f_z, = ESM.build_evaluator(_zerod())
         @test !isempty(getfield(f_z, :cse_prelude))          # CSE prelude non-empty
         @test !isempty(getfield(f_z, :rhs_list))             # scalar equations present

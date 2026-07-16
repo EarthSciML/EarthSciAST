@@ -93,12 +93,11 @@ end
 # ========================================================================
 # THE BOX PROCESSOR — a rule body → Vector{_AccKernel} in O(#structural groups).
 # ========================================================================
-# Opt-in via ESS_AFFINE=1 during rollout (a dev switch to differential-test the
-# affine path against the per-cell reference before it becomes the default/only
-# path — like ESS_STENCIL_DISABLE). Returns kernels or `nothing` (fall back to the
+# The DEFAULT array-kernel build. Returns kernels or `nothing` (fall back to the
 # existing symbolic-stencil / per-cell chain, `covered` untouched).
-
-_affine_enabled() = get(ENV, "ESS_AFFINE", "") == "1"
+# `ESS_STENCIL_DISABLE=1` forces the per-cell reference — the differential-test
+# escape hatch and the sole remaining switch (the old opt-in `ESS_AFFINE` was
+# retired when the affine path became the default).
 
 # Reusable caches for the per-cell signature (branch template memo + branch-key
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
