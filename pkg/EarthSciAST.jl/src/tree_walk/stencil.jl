@@ -61,7 +61,15 @@ struct _LaneRecipe
     hi::Vector{Int}
     arr::Any                # const-array values (LANE_CONST) / _PGatherArray (LANE_PGATHER)
     loop_name::String       # loop index name (LANE_LOOPLIT)
+    # LANE_STATE only: the state var's affine slot map `(base, strides)` derived +
+    # corner-verified against var_map at build time, so `_eval_recipe` resolves the
+    # slot as `base + Σ inds_d·strides_d` — no per-cell index Vector, no formatted
+    # `_cell_key` String. `nothing` for a non-affine (or non-state) layout, which
+    # keeps the exact string lookup.
+    affine::Union{Nothing,Tuple{Int,Vector{Int}}}
 end
+_LaneRecipe(kind, var_name, idx_args, lo, hi, arr, loop_name) =
+    _LaneRecipe(kind, var_name, idx_args, lo, hi, arr, loop_name, nothing)
 
 # Whitelisted pure-elementwise ops: every op `_eval_node_op` evaluates by
 # recursing its `args` with no `expr_body`/`ranges`/`values` sub-structure. An op
@@ -438,6 +446,21 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
     end
     n = length(rec.idx_args)
     if rec.kind == LANE_STATE
+        aff = rec.affine
+        if aff !== nothing
+            # Arithmetic slot (build-time corner-verified to equal the string
+            # lookup): no index Vector, no `_cell_key` String. Same dims evaluated
+            # and same ghost decision as below, so the result is byte-identical.
+            base, strides = aff
+            slot = base
+            ghost = false
+            @inbounds for d in 1:n
+                v = _eval_const_int(rec.idx_args[d], idx_env, const_arrays)
+                (v < rec.lo[d] || v > rec.hi[d]) && (ghost = true)
+                slot += v * strides[d]
+            end
+            return ghost ? 0 : slot
+        end
         inds = Vector{Int}(undef, n)
         ghost = false
         @inbounds for d in 1:n
@@ -576,6 +599,43 @@ end
 # and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
 # TreeWalkError here also fires in the fallback path, so it propagates rather
 # than falling back.
+# Derive + corner-verify a state var's affine slot map (cell indices → var_map
+# slot: `slot = base + Σ_d inds_d·strides_d`) so a gather resolves arithmetically.
+# Returns `nothing` if any probe cell is absent or the layout is not affine on the
+# var's `[lo,hi]` box — in which case `_eval_recipe` keeps the exact string lookup.
+# ~2^D + D probes, once per var per branch template (cold); the payoff is per-cell.
+function _derive_var_affine(var_name::String, lo::Vector{Int}, hi::Vector{Int},
+                            var_map::Dict{String,Int})
+    n = length(lo)
+    (n == 0 || length(hi) != n) && return nothing
+    base0 = get(var_map, _cell_key(var_name, lo), 0)
+    base0 == 0 && return nothing
+    strides = zeros(Int, n)
+    probe = copy(lo)
+    for d in 1:n
+        hi[d] > lo[d] || continue           # single-cell dim → stride 0
+        probe[d] = lo[d] + 1
+        s = get(var_map, _cell_key(var_name, probe), 0)
+        probe[d] = lo[d]
+        s == 0 && return nothing
+        strides[d] = s - base0
+    end
+    base = base0
+    @inbounds for d in 1:n
+        base -= lo[d] * strides[d]
+    end
+    for corner in Iterators.product(((lo[d], hi[d]) for d in 1:n)...)
+        cl = collect(Int, corner)
+        want = base
+        @inbounds for d in 1:n
+            want += cl[d] * strides[d]
+        end
+        got = get(var_map, _cell_key(var_name, cl), 0)
+        (got == 0 || got != want) && return nothing
+    end
+    return (base, strides)
+end
+
 function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
                                 var_map::Dict{String,Int},
                                 param_sym_set, reg_funcs)::_StencilBranch
@@ -584,6 +644,16 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
                       ctx_proto.array_var_info, ctx_proto.const_arrays,
                       ctx_proto.pgather)
     spine = _stencilize(body, ctx)
+    # Attach each state gather's affine slot map (cold, once per branch) so the hot
+    # per-cell `_eval_recipe` avoids the `_cell_key` String + index Vector.
+    @inbounds for k in eachindex(rs)
+        r = rs[k]
+        r.kind == LANE_STATE || continue
+        aff = _derive_var_affine(r.var_name, r.lo, r.hi, var_map)
+        aff === nothing && continue
+        rs[k] = _LaneRecipe(r.kind, r.var_name, r.idx_args, r.lo, r.hi,
+                            r.arr, r.loop_name, aff)
+    end
     vm_ext = _lane_var_map(var_map, rs)
     # Identity memo so `_resolve_indices` + `_compile` carry the DAG that
     # `_stencilize` now preserves straight through to the compiled `_Node`
