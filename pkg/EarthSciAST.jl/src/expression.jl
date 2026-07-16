@@ -89,10 +89,82 @@ expression-bearing `OpExpr` field then has to be patched into every copy.
 field list; this is the corresponding whole-subtree visitor. Internal —
 read-only traversal; for structure-preserving rewrites use `map_children`.
 """
+# Apply `f` to each immediate child WITHOUT materializing a `child_exprs` vector —
+# the same field set, same order (args, then the single-expression fields, values,
+# then sorted table_axes / dense ranges bounds). Used by the hot read-only walks
+# (`foreach_subexpr`, `_stencil_var_set`) so a whole-tree scan allocates nothing on
+# the common args-only node.
+function foreach_child(f, e::OpExpr)
+    for a in e.args
+        f(a)
+    end
+    for fld in (e.lower, e.upper, e.expr_body, e.filter, e.key)
+        fld === nothing || f(fld)
+    end
+    if e.values !== nothing
+        for v in e.values
+            f(v)
+        end
+    end
+    if e.table_axes !== nothing
+        for k in sort!(collect(keys(e.table_axes)))
+            f(e.table_axes[k])
+        end
+    end
+    if e.ranges !== nothing
+        for k in sort!(collect(keys(e.ranges)))
+            v = e.ranges[k]
+            if v isa AbstractVector
+                for x in v
+                    x isa ASTExpr && f(x)
+                end
+            end
+        end
+    end
+    return nothing
+end
+foreach_child(::Any, ::NumExpr) = nothing
+foreach_child(::Any, ::IntExpr) = nothing
+foreach_child(::Any, ::VarExpr) = nothing
+
 function foreach_subexpr(f, expr::ASTExpr)
     f(expr)
-    for c in child_exprs(expr)
-        foreach_subexpr(f, c)
+    _foreach_subexpr_children(f, expr)
+    return nothing
+end
+# Recurse without an allocating per-node closure: `f` is threaded straight through
+# each recursive `foreach_subexpr` call (inlining the `foreach_child` field walk
+# here — a `c -> foreach_subexpr(f, c)` closure would allocate once per node,
+# which is exactly the cost this removes).
+_foreach_subexpr_children(f, ::NumExpr) = nothing
+_foreach_subexpr_children(f, ::IntExpr) = nothing
+_foreach_subexpr_children(f, ::VarExpr) = nothing
+function _foreach_subexpr_children(f, e::OpExpr)
+    for a in e.args
+        foreach_subexpr(f, a)
+    end
+    for fld in (e.lower, e.upper, e.expr_body, e.filter, e.key)
+        fld === nothing || foreach_subexpr(f, fld)
+    end
+    if e.values !== nothing
+        for v in e.values
+            foreach_subexpr(f, v)
+        end
+    end
+    if e.table_axes !== nothing
+        for k in sort!(collect(keys(e.table_axes)))
+            foreach_subexpr(f, e.table_axes[k])
+        end
+    end
+    if e.ranges !== nothing
+        for k in sort!(collect(keys(e.ranges)))
+            v = e.ranges[k]
+            if v isa AbstractVector
+                for x in v
+                    x isa ASTExpr && foreach_subexpr(f, x)
+                end
+            end
+        end
     end
     return nothing
 end

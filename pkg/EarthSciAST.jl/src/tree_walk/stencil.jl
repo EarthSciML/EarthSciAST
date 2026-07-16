@@ -138,10 +138,15 @@ struct _StencilCtx
     # DAG instead of re-inflating it to a tree (~2M nodes for a PPM operator). Reset
     # per `_build_branch_template` because it references that call's lane recipes.
     smemo::IdDict{OpExpr,ASTExpr}
+    # Memoized per-node variable set for the loop-var-reference guard, so
+    # `_stencilize`'s per-node check is an O(|idxset|) probe of a cached set rather
+    # than an O(subtree) re-walk (`_refs_loop_var`) plus a boxed-capture closure at
+    # every node.
+    vsmemo::IdDict{OpExpr,Set{String}}
 end
 _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather) =
     _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
-                IdDict{OpExpr,ASTExpr}())
+                IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,Set{String}}())
 
 # `_stencilize` transforms `expr` into the sentinel spine and appends a
 # `_LaneRecipe` (to `ctx.recipes`) for every loop-var-dependent leaf.
@@ -157,7 +162,9 @@ function _stencilize(e::VarExpr, ctx::_StencilCtx)
     return e
 end
 function _stencilize(e::OpExpr, ctx::_StencilCtx)
-    _refs_loop_var(e, ctx.idxset) || return e
+    # Memoized guard (byte-for-byte the `_refs_loop_var` decision): probe the cached
+    # variable set instead of re-walking the subtree + allocating a closure per node.
+    _refs_idxset(e, ctx.idxset, ctx.vsmemo) || return e
     # A shared subtree stencilizes identically every time it is reached (same
     # sentinel spine, same lane recipes), so dedupe by identity: the first visit
     # pushes the recipes and the rest reuse the cached spine node + lane indices.
@@ -289,8 +296,34 @@ function _stencil_var_set(e::OpExpr, memo::IdDict{OpExpr,Set{String}})
     cached = get(memo, e, nothing)
     cached === nothing || return cached
     s = Set{String}()
-    for c in child_exprs(e)
-        _accum_vars!(s, c, memo)
+    # Direct field walk (no `child_exprs` vector, no closure): every child feeds
+    # `_accum_vars!`, and order is irrelevant because the result is a Set — so the
+    # sorted `collect(keys(...))` the general `child_exprs`/`foreach_child` need for
+    # determinism is skipped here too.
+    for a in e.args
+        _accum_vars!(s, a, memo)
+    end
+    for fld in (e.lower, e.upper, e.expr_body, e.filter, e.key)
+        fld === nothing || _accum_vars!(s, fld, memo)
+    end
+    if e.values !== nothing
+        for v in e.values
+            _accum_vars!(s, v, memo)
+        end
+    end
+    if e.table_axes !== nothing
+        for (_, v) in e.table_axes
+            _accum_vars!(s, v, memo)
+        end
+    end
+    if e.ranges !== nothing
+        for (_, rv) in e.ranges
+            if rv isa AbstractVector
+                for x in rv
+                    x isa ASTExpr && _accum_vars!(s, x, memo)
+                end
+            end
+        end
     end
     memo[e] = s
     return s
