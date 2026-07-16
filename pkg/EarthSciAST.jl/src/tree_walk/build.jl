@@ -1808,6 +1808,13 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             _compile_arrayop_equation!(vec_kernels, acc_kernels, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs)
+            # Opt-in (ESS_BUILD_GC): reclaim this rule's build churn before the next
+            # rule. Each rule's tree-walk allocates ~0.5 GB of transients whose only
+            # live output is the pushed kernels, so a full GC here caps the heap
+            # high-water at ONE rule's footprint instead of the sum across rules —
+            # the difference between fitting and OOM on a RAM-constrained host. Off
+            # by default: it adds a GC pause per rule, pointless when RAM is ample.
+            haskey(ENV, "ESS_BUILD_GC") && GC.gc()
         end
     end
     return scalar_entries, vec_kernels, acc_kernels
