@@ -131,7 +131,17 @@ struct _StencilCtx
     array_var_info::Any
     const_arrays::AbstractDict
     pgather::AbstractDict
+    # Identity memo for `_stencilize`: a shared makearray body is a DAG (esm-spec
+    # §9.7.3 inlining has no `let` node, but the in-memory graph shares subtrees by
+    # object identity), and `_stencilize` is a pure function of the input node plus
+    # the structural ctx, so memoizing by node identity keeps the sentinel spine a
+    # DAG instead of re-inflating it to a tree (~2M nodes for a PPM operator). Reset
+    # per `_build_branch_template` because it references that call's lane recipes.
+    smemo::IdDict{OpExpr,ASTExpr}
 end
+_StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather) =
+    _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
+                IdDict{OpExpr,ASTExpr}())
 
 # `_stencilize` transforms `expr` into the sentinel spine and appends a
 # `_LaneRecipe` (to `ctx.recipes`) for every loop-var-dependent leaf.
@@ -148,6 +158,18 @@ function _stencilize(e::VarExpr, ctx::_StencilCtx)
 end
 function _stencilize(e::OpExpr, ctx::_StencilCtx)
     _refs_loop_var(e, ctx.idxset) || return e
+    # A shared subtree stencilizes identically every time it is reached (same
+    # sentinel spine, same lane recipes), so dedupe by identity: the first visit
+    # pushes the recipes and the rest reuse the cached spine node + lane indices.
+    # This is what keeps the spine a DAG; it only removes duplicate work, never
+    # changes a value (the lane VALUES are recipe-evaluated identically per cell).
+    cached = get(ctx.smemo, e, nothing)
+    cached === nothing || return cached
+    out = _stencilize_op(e, ctx)
+    ctx.smemo[e] = out
+    return out
+end
+function _stencilize_op(e::OpExpr, ctx::_StencilCtx)
     op = e.op
     if op == "index"
         return _stencilize_index(e, ctx)
@@ -530,9 +552,14 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
                       ctx_proto.pgather)
     spine = _stencilize(body, ctx)
     vm_ext = _lane_var_map(var_map, rs)
+    # Identity memo so `_resolve_indices` + `_compile` carry the DAG that
+    # `_stencilize` now preserves straight through to the compiled `_Node`
+    # template instead of re-inflating it (the `_BuildMemo` contract: forwarding it
+    # only removes duplicate work, never changes a result).
+    bmemo = _BuildMemo()
     tmpl = _compile(_resolve_indices(spine, ctx.array_var_info, vm_ext,
-                                     ctx.const_arrays, ctx.pgather),
-                    vm_ext, param_sym_set, reg_funcs)
+                                     ctx.const_arrays, ctx.pgather, bmemo),
+                    vm_ext, param_sym_set, reg_funcs, bmemo)
     return (tmpl, rs, Int[k for k in eachindex(rs) if rs[k].kind == LANE_STATE])
 end
 
