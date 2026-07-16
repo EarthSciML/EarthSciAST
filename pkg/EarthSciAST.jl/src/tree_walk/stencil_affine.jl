@@ -193,30 +193,127 @@ function _probe_values(rng::UnitRange{Int})
     unique(Int[lo, (lo + hi) ÷ 2, hi])
 end
 
-# Cut START indices per loop dim: sweep each dim over its range while the OTHER
-# dims are held at every low/mid/high combination, and record where the per-cell
-# signature changes. Axis-aligned region + ghost boundaries fall on these cuts;
-# any that a probe set misses is caught later by per-box corner verification
-# (→ fallback), so correctness never depends on cut completeness, only speed.
+# Structural cut candidates: a per-cell signature changes at a makearray REGION
+# boundary (`_select_region`), and — unlike a ghost transition — that boundary can
+# sit anywhere in the range, including mid-domain, so the edge-inward scan cannot
+# be relied on to reach it. Harvest every region boundary from the body up front
+# (O(#regions), grid-independent) so it is probed explicitly. A boundary is mapped
+# to an output dim only when its makearray is indexed by a BARE loop var there
+# (the region-tiling case, e.g. PPM's seven columns and any hemisphere split);
+# anything fancier is left to the edge scan + per-box corner verification.
+function _collect_makearray_bounds!(cands::Vector{Set{Int}}, mk::OpExpr,
+                                    kargs::Vector{ASTExpr}, idx_names::Vector{String})
+    regions = mk.regions
+    if regions !== nothing
+        for (j, ka) in enumerate(kargs)
+            ka isa VarExpr || continue
+            d = findfirst(==(ka.name), idx_names)
+            d === nothing && continue
+            for region in regions
+                j <= length(region) && length(region[j]) >= 2 || continue
+                push!(cands[d], region[j][1]); push!(cands[d], region[j][2] + 1)
+            end
+        end
+    end
+    # A region's value may itself be a makearray; it inherits the same k-args.
+    if mk.values !== nothing
+        for v in mk.values
+            v isa OpExpr && v.op == "makearray" &&
+                _collect_makearray_bounds!(cands, v, kargs, idx_names)
+        end
+    end
+end
+function _region_cut_candidates(body, idx_names::Vector{String})
+    cands = [Set{Int}() for _ in idx_names]
+    walk(n) = begin
+        n isa OpExpr || return
+        if n.op == "index" && !isempty(n.args) &&
+           n.args[1] isa OpExpr && (n.args[1]::OpExpr).op == "makearray"
+            _collect_makearray_bounds!(cands, n.args[1]::OpExpr,
+                                       ASTExpr[a for a in n.args[2:end]], idx_names)
+        end
+        for a in n.args; walk(a); end
+        n.expr_body !== nothing && walk(n.expr_body)
+        n.values !== nothing && (for v in n.values; walk(v); end)
+    end
+    walk(body)
+    return cands
+end
+
+# How many consecutive identical per-cell signatures certify that the interior of
+# a dimension has stabilized. A finite-volume stencil operator's region + ghost
+# transitions all lie within its half-width of an END (wrap columns, one-sided
+# boundary rows, ghost gathers), so once this many cells in a row share a
+# signature we are safely past every boundary layer. 8 covers the widest operator
+# on the grid (monotone PPM's 7-cell support → ≤3-cell boundary layers) with
+# generous margin; a hypothetical wider layer that slipped past would only produce
+# a box that spans a cut, which per-box corner verification catches → fallback.
+const _AFFINE_STABLE_GUARD = 8
+
+# Cut START indices per loop dim. For each dim, hold the OTHER dims at every
+# low/mid/high probe and record where the per-cell signature changes — but scan
+# INWARD FROM BOTH ENDS rather than across the whole range, stopping once the
+# signature has been stable for `_AFFINE_STABLE_GUARD` cells. Because a stencil
+# operator's transitions are all within its half-width of an end, this finds every
+# real cut in O(boundary width) instead of O(N_d) — the difference between an
+# N-independent build and one that re-walks the body ~N times per dim (fatal at
+# millions of cells). The interior between the two converged fronts is a single
+# uniform segment. Mid-domain makearray REGION boundaries — which need not lie near
+# an end — are harvested structurally up front (`_region_cut_candidates`) and
+# probed explicitly, so they are never missed. Anything neither scan nor candidate
+# reaches is still caught by per-box corner verification (→ fallback), exactly as
+# the old full sweep's misses were: correctness never depends on cut completeness,
+# only speed.
 function _affine_cut_points(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
                             var_map, param_sym_set, reg_funcs)
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
+    region_cands = _region_cut_candidates(body, idx_names)
     for d in 1:D
-        starts = Set{Int}(); push!(starts, first(ranges[d]))
+        rng = ranges[d]; lo, hi = first(rng), last(rng)
+        starts = Set{Int}(); push!(starts, lo)
         otherdims = Int[dd for dd in 1:D if dd != d]
         probesets = isempty(otherdims) ? [()] :
             collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
         loop = Vector{Int}(undef, D)
+        ck(iv) = (loop[d] = iv;
+                  (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
+                               var_map, param_sym_set, reg_funcs))[2])
+        # Region boundaries in this dim, kept only where they open a real segment
+        # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
+        cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
+        # Bound each front at the midpoint so a small range is covered once, not
+        # twice (the two scans meet at `mid`, overlapping on that single cell so
+        # the mid/mid+1 pair is still compared). For a large range each front
+        # stabilizes long before `mid`, so the deep interior is never scanned.
+        mid = (lo + hi) ÷ 2
         for probe in probesets
             for (ii, dd) in enumerate(otherdims); loop[dd] = probe[ii]; end
-            prev = nothing
-            for iv in ranges[d]
-                loop[d] = iv
-                _, ckey, _ = _cell_ckey!(sig, loop, idx_names, body, ctx_proto,
-                                         var_map, param_sym_set, reg_funcs)
-                prev !== nothing && ckey != prev && push!(starts, iv)
-                prev = ckey
+            # Scan up from the low end: a change at `iv` opens a segment there.
+            prev = nothing; stable = 0; iv = lo
+            while iv <= mid
+                cur = ck(iv)
+                if prev !== nothing
+                    if cur != prev; push!(starts, iv); stable = 0
+                    else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+                end
+                prev = cur; iv += 1
+            end
+            # Scan down from the high end: a change between `iv` and `iv+1` opens a
+            # segment at `iv+1`.
+            prev = nothing; stable = 0; iv = hi
+            while iv >= mid
+                cur = ck(iv)
+                if prev !== nothing
+                    if cur != prev; push!(starts, iv + 1); stable = 0
+                    else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+                end
+                prev = cur; iv -= 1
+            end
+            # Mid-domain region boundaries the edge scans cannot reach: confirm each
+            # candidate is a genuine transition (C-1 vs C) before opening a segment.
+            for C in cand_d
+                ck(C - 1) != ck(C) && push!(starts, C)
             end
         end
         cuts[d] = sort!(collect(starts))
