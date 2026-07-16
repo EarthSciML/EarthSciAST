@@ -74,6 +74,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("stencil_affine_fn_test.jl")             # ess-affine interp :fn ≡ per-cell
     include("stencil_affine_pgather_test.jl")        # ess-affine live-forcing ≡ per-cell
     include("stencil_affine_contract_test.jl")       # ess-affine const-bound contraction ≡ per-cell
+    include("stencil_affine_cse_test.jl")            # ess-affine per-cell CSE ≡ per-cell
     include("tree_walk_invariant_hoist_test.jl")
     include("tree_walk_vec_share_test.jl")
     include("tree_walk_oop_test.jl")

@@ -184,14 +184,54 @@ end
 _contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell], 0)
 @inline _is_contig(cs::_CellSet) = isempty(cs.strides)
 
+# ---- Per-cell CSE scratch ----
+# The affine spine is walked as a TREE once per cell (`_build_branch_template`
+# compiles with no memo, so structurally-shared subexpressions are distinct
+# nodes). For a big operator — monotone PPM is a 160k-unique-node DAG that expands
+# to ~2M as a tree — that re-walks each shared subtree many times per cell. The CSE
+# pass (`_build_acc_cse`) slices the shared subtrees into ORDERED recipes; the box
+# loop evaluates each once per cell into this scratch, and every occurrence becomes
+# an `_NK_CACHED` read. Two buffers (Float64 + a lazily-allocated `alt` for the
+# Dual type ForwardDiff drives `f!` with), exactly like `_CSECache`, so it stays
+# zero-alloc and differentiable; the buffer is reused across cells AND calls.
+mutable struct _AccScratch
+    f64::Vector{Float64}
+    alt::Any
+end
+_AccScratch(n::Int) = _AccScratch(Vector{Float64}(undef, n), nothing)
+@inline _acc_scratch_buf(s::_AccScratch, ::Type{Float64}) = s.f64
+@inline function _acc_scratch_buf(s::_AccScratch, ::Type{T}) where {T}
+    b = s.alt
+    b isa Vector{T} && return b
+    nb = Vector{T}(undef, length(s.f64))
+    s.alt = nb
+    return nb
+end
+@inline _acc_scratch_read(s::_AccScratch, i::Int, ::Type{Float64}) = @inbounds s.f64[i]
+@inline _acc_scratch_read(s::_AccScratch, i::Int, ::Type{T}) where {T} =
+    @inbounds (s.alt::Vector{T})[i]
+
+# Recipes (ordered; recipe[i] computes scratch slot i and may `_NK_CACHED`-read any
+# slot < i) plus the scratch they fill. Empty ⇒ the kernel has no CSE.
+struct _AccCSE
+    recipes::Vector{_Node}
+    scratch::_AccScratch
+end
+const _ACC_NO_CSE = _AccCSE(_Node[], _AccScratch(0))
+@inline _has_cse(cse::_AccCSE) = !isempty(cse.recipes)
+
 # ---- One kernel ----
 struct _AccKernel
     cells::_CellSet
-    spine::_Node               # op tree with _NK_ACCESS / _NK_REDUCE leaves
+    spine::_Node               # op tree with _NK_ACCESS / _NK_REDUCE / _NK_CACHED leaves
     acc::Vector{_AccDesc}      # descriptor table (spine `_NK_ACCESS.idx` indexes this)
     bound::_Bound              # reduction bound (for any _NK_REDUCE in the spine)
     zerobar::Float64           # ⊕ identity seed for the reduction (0.0 for sum)
+    cse::_AccCSE               # per-cell common-subexpression recipes + scratch
 end
+# 5-arg convenience: a kernel with no CSE (tests, direct construction).
+_AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound, zerobar::Float64) =
+    _AccKernel(cells, spine, acc, bound, zerobar, _ACC_NO_CSE)
 
 # ---- The evaluator ----
 # ELTYPE-GENERIC in the value type `T`, exactly as the scalar `_eval_node`
@@ -232,6 +272,11 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         return getfield(p, nd.sym)
     elseif k === _NK_TIME
         return t
+    elseif k === _NK_CACHED
+        # A CSE reference: the value was computed once for THIS cell by the box
+        # loop's prelude (`_fill_cse!`) into the per-cell scratch captured in
+        # `payload`; every occurrence reads it here instead of re-walking.
+        return _acc_scratch_read(nd.payload::_AccScratch, nd.idx, T)
     else # _NK_OP
         return _eval_acc_op(nd, u, p, t, c, n, oln, midx, K, T)
     end
@@ -359,6 +404,24 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))
 end
 
+# One cell's output value: fill the per-cell CSE scratch (each shared subtree
+# evaluated ONCE), then evaluate the output spine, whose `_NK_CACHED` leaves read
+# the scratch. With no CSE (`_has_cse` false) this is exactly the bare spine walk —
+# zero extra work, so non-CSE kernels are byte-identical to before. `n = 0`: CSE is
+# only built for reduce-free spines, so the neighbour index never matters here.
+@inline function _eval_cell(K::_AccKernel, u, p, t, c::Int, oln::Int,
+                            midx::NTuple{3,Int}, ::Type{T}) where {T}
+    cse = K.cse
+    if _has_cse(cse)
+        buf = _acc_scratch_buf(cse.scratch, T)
+        rs = cse.recipes
+        @inbounds for i in eachindex(rs)
+            buf[i] = _eval_acc(rs[i], u, p, t, c, 0, oln, midx, K, T)
+        end
+    end
+    return _eval_acc(K.spine, u, p, t, c, 0, oln, midx, K, T)
+end
+
 # ---- Run one kernel into du (in place) ----
 # `T` is the value type (`_rhs_value_type(u, p, t)`); a compile-time constant at
 # the call site, so at `T === Float64` every `_eval_acc` below is the monomorphic
@@ -371,7 +434,7 @@ function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     cs = K.cells
     if _is_contig(cs)                               # contiguous / unstructured
         @inbounds for c in cs.ranges[1]
-            du[c] = _eval_acc(K.spine, u, p, t, c, 0, c, (c, 1, 1), K, T)
+            du[c] = _eval_cell(K, u, p, t, c, c, (c, 1, 1), T)
         end
     else                                            # structured: strided box walk
         _run_box_kernel!(du, u, p, t, K, cs, T)
@@ -390,29 +453,102 @@ function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) w
         s1 = st[1]
         @inbounds for i in rg[1]
             oln = b + i*s1
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, 1, 1), K, T)
+            du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, 1, 1), T)
         end
     elseif nd == 2
         s1 = st[1]; s2 = st[2]
         @inbounds for j in rg[2], i in rg[1]
             oln = b + i*s1 + j*s2
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, 1), K, T)
+            du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, j, 1), T)
         end
     elseif nd == 3
         s1 = st[1]; s2 = st[2]; s3 = st[3]
         @inbounds for k in rg[3], j in rg[2], i in rg[1]
             oln = b + i*s1 + j*s2 + k*s3
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, k), K, T)
+            du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, j, k), T)
         end
     else
         @inbounds for idxs in Iterators.product(rg...)
             oln = b
             for d in 1:nd; oln += idxs[d]*st[d]; end
             mi = (idxs[1], nd >= 2 ? idxs[2] : 1, nd >= 3 ? idxs[3] : 1)
-            du[oln] = _eval_acc(K.spine, u, p, t, oln, 0, oln, mi, K, T)
+            du[oln] = _eval_cell(K, u, p, t, oln, oln, mi, T)
         end
     end
     return du
+end
+
+# ---- Per-cell CSE builder (ess-affine) ----
+# Value-number the access spine structurally; any OP subtree that occurs ≥2 times
+# is sliced into an ordered recipe list and every occurrence replaced by an
+# `_NK_CACHED` read of a per-cell scratch slot. Bit-identity is automatic: the SAME
+# subexpression is computed with the SAME inputs, just once instead of many times.
+# Recipes are emitted in ascending value-number order, and a child's value number
+# is always < its parent's (post-order numbering), so a recipe only ever reads
+# LOWER slots — the box loop fills them front-to-back. Skipped for any spine with a
+# `_NK_REDUCE` (its body reads the neighbour index `n`, which the per-cell prelude —
+# run at n=0 — cannot capture).
+_acc_has_reduce(n::_Node) =
+    n.kind === _NK_REDUCE || any(_acc_has_reduce, n.children)
+
+# Structural key: two nodes share a value number iff their keys are equal. ACCESS
+# keys on descriptor CONTENT (`_desc_key`); an OP with a payload (interp `:fn`)
+# keys on the payload's identity, so distinct specs never merge (conservative).
+function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
+    k = n.kind
+    k === _NK_ACCESS  && return (0x1, _desc_key(acc[n.idx]))
+    k === _NK_LITERAL && return (0x2, reinterpret(UInt64, n.literal))
+    k === _NK_PARAM   && return (0x3, n.sym)
+    k === _NK_TIME    && return (0x4, :t)
+    k === _NK_OP      && return (0x5, n.op,
+                                 n.payload === nothing ? UInt(0) : objectid(n.payload),
+                                 childvns)
+    return (0xff, objectid(n))     # _NK_CACHED / anything else — never merged
+end
+
+function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
+    _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
+    key_to_vn = Dict{Any,Int}()
+    vn_of = IdDict{_Node,Int}()
+    counts = Int[]; is_op = Bool[]; rep = _Node[]
+    function number(n::_Node)
+        childvns = Int[number(c) for c in n.children]
+        key = _acc_vn_key(n, childvns, acc)
+        vn = get(key_to_vn, key, 0)
+        if vn == 0
+            vn = length(counts) + 1
+            key_to_vn[key] = vn
+            push!(counts, 0); push!(is_op, n.kind === _NK_OP); push!(rep, n)
+        end
+        counts[vn] += 1
+        vn_of[n] = vn
+        return vn
+    end
+    number(spine)
+    slot_of_vn = Dict{Int,Int}()
+    for vn in 1:length(counts)
+        if counts[vn] >= 2 && is_op[vn]
+            slot_of_vn[vn] = length(slot_of_vn) + 1
+        end
+    end
+    isempty(slot_of_vn) && return (spine, _ACC_NO_CSE)
+    scratch = _AccScratch(length(slot_of_vn))
+    function rw(n::_Node)
+        s = get(slot_of_vn, vn_of[n], 0)
+        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=scratch)
+        isempty(n.children) && return n
+        return _mknode(kind=n.kind, op=n.op, literal=n.literal, idx=n.idx,
+                       sym=n.sym, payload=n.payload,
+                       children=_Node[rw(c) for c in n.children])
+    end
+    recipes = Vector{_Node}(undef, length(slot_of_vn))
+    for (vn, s) in slot_of_vn
+        r = rep[vn]
+        recipes[s] = _mknode(kind=r.kind, op=r.op, literal=r.literal, idx=r.idx,
+                             sym=r.sym, payload=r.payload,
+                             children=_Node[rw(c) for c in r.children])
+    end
+    return (rw(spine), _AccCSE(recipes, scratch))
 end
 
 # ---- Small builders (used by tests and, later, the polyhedral build) ----

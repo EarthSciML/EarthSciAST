@@ -663,9 +663,12 @@ end
 # correct and matches both the in-place affine path and the per-cell reference.
 function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     cs = K.cells
+    # `_eval_cell` fills the per-cell CSE scratch (an in-place buffer write) then
+    # returns the spine value; on the host / ForwardDiff-over-oop path that mutation
+    # is fine, and a traced call is already refused upstream (acc + traced throws).
     if _is_contig(cs)                               # contiguous / unstructured
         @inbounds for c in cs.ranges[1]
-            du = _oop_store(du, c, _eval_acc(K.spine, u, p, t, c, 0, c, (c, 1, 1), K, T))
+            du = _oop_store(du, c, _eval_cell(K, u, p, t, c, c, (c, 1, 1), T))
         end
         return du
     end
@@ -674,26 +677,26 @@ function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
         s1 = st[1]
         @inbounds for i in rg[1]
             oln = b + i*s1
-            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, 1, 1), K, T))
+            du = _oop_store(du, oln, _eval_cell(K, u, p, t, oln, oln, (i, 1, 1), T))
         end
     elseif nd == 2
         s1 = st[1]; s2 = st[2]
         @inbounds for j in rg[2], i in rg[1]
             oln = b + i*s1 + j*s2
-            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, 1), K, T))
+            du = _oop_store(du, oln, _eval_cell(K, u, p, t, oln, oln, (i, j, 1), T))
         end
     elseif nd == 3
         s1 = st[1]; s2 = st[2]; s3 = st[3]
         @inbounds for k in rg[3], j in rg[2], i in rg[1]
             oln = b + i*s1 + j*s2 + k*s3
-            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, (i, j, k), K, T))
+            du = _oop_store(du, oln, _eval_cell(K, u, p, t, oln, oln, (i, j, k), T))
         end
     else
         @inbounds for idxs in Iterators.product(rg...)
             oln = b
             for d in 1:nd; oln += idxs[d]*st[d]; end
             mi = (idxs[1], nd >= 2 ? idxs[2] : 1, nd >= 3 ? idxs[3] : 1)
-            du = _oop_store(du, oln, _eval_acc(K.spine, u, p, t, oln, 0, oln, mi, K, T))
+            du = _oop_store(du, oln, _eval_cell(K, u, p, t, oln, oln, mi, T))
         end
     end
     return du

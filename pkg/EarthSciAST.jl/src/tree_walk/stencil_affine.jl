@@ -372,12 +372,14 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
                                          const_arrays, flat_cache)
     end
 
-    spine, acc = get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
+    spine, acc, cse = get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
-        (_lower_to_access(tmpl, lane_repl, a), a)
+        raw = _lower_to_access(tmpl, lane_repl, a)
+        cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
+        (cs_spine, a, cse)
     end
     cs = _CellSet(collect(Int, strides), UnitRange{Int}[box[d] for d in 1:D], base)
-    push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0))
+    push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse))
 end
 
 # Mark every output slot a box owns (cheap O(box cells) bit-ops — the sole
@@ -430,7 +432,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                                   var_map, param_sym_set, reg_funcs)
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
         kernels = _AccKernel[]
-        spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc}}}()
+        spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc},_AccCSE}}()
         flat_cache = IdDict{Any,Vector{Float64}}()
         boxes = Vector{UnitRange{Int}}[]
         for segtuple in Iterators.product(segs...)
