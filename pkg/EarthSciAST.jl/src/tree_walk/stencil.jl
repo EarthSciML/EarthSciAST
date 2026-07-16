@@ -509,6 +509,18 @@ function _ghost_key(lane_vals::Vector{Any}, state_ks::Vector{Int})
     return String(take!(io))
 end
 
+# Same ghost key from the STATE-lane slots ALREADY isolated into a Vector{Int}
+# (the affine sweep evaluates only those — `_ghost_key` never reads a non-state
+# lane), so `_cell_ckey!` needs no `Vector{Any}` and no boxing.
+function _ghost_key_states(state_vals::Vector{Int})
+    isempty(state_vals) && return ""
+    io = IOBuffer()
+    @inbounds for v in state_vals
+        print(io, v == 0 ? '1' : '0')
+    end
+    return String(take!(io))
+end
+
 # Lower the sentinel template `_Node` to a `_VecNode` for ONE structural group,
 # reading each lane's per-cell values from `cell_lanes` (`cell_lanes[j][k]` is
 # recipe `k`'s value for the group's lane `j`). Mirrors `_merge_nodes` exactly:
@@ -645,10 +657,16 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
     spine = _stencilize(body, ctx)
     # Attach each state gather's affine slot map (cold, once per branch) so the hot
     # per-cell `_eval_recipe` avoids the `_cell_key` String + index Vector.
+    # Cache by var name: every LANE_STATE recipe for the same var shares one affine
+    # map (its lo/hi are the var's array_var_info bounds), so derive it ONCE per var
+    # rather than once per recipe (the derivation's `_cell_key` probes were the top
+    # allocator otherwise).
+    aff_cache = Dict{String,Union{Nothing,Tuple{Int,Vector{Int}}}}()
     @inbounds for k in eachindex(rs)
         r = rs[k]
         r.kind == LANE_STATE || continue
-        aff = _derive_var_affine(r.var_name, r.lo, r.hi, var_map)
+        aff = get!(() -> _derive_var_affine(r.var_name, r.lo, r.hi, var_map),
+                   aff_cache, r.var_name)
         aff === nothing && continue
         rs[k] = _LaneRecipe(r.kind, r.var_name, r.idx_args, r.lo, r.hi,
                             r.arr, r.loop_name, aff)

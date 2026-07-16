@@ -105,8 +105,9 @@ mutable struct _AffineSig
     branch_cache::Dict{String,_StencilBranch}
     bmemo::IdDict{OpExpr,Bool}
     bio::IOBuffer
+    state_scratch::Vector{Int}   # reused per `_cell_ckey!` for the state-lane slots
 end
-_AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer())
+_AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer(), Int[])
 
 @inline _set_env!(env, idx_names, loop) =
     (for d in eachindex(idx_names); env[idx_names[d]] = loop[d]; end; env)
@@ -180,11 +181,15 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         sig.branch_cache[bkey] = branch
     end
     _tmpl, recipes, state_ks = branch
-    lane_vals = Vector{Any}(undef, length(recipes))
-    @inbounds for k in eachindex(recipes)
-        lane_vals[k] = _eval_recipe(recipes[k], env, var_map, ctx_proto.const_arrays)
+    # Only the STATE lanes feed the ghost key; evaluate just those into a reused
+    # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
+    state_vals = sig.state_scratch
+    resize!(state_vals, length(state_ks))
+    @inbounds for i in eachindex(state_ks)
+        state_vals[i] = _eval_recipe(recipes[state_ks[i]], env, var_map,
+                                     ctx_proto.const_arrays)::Int
     end
-    return bkey, string(bkey, '|', _ghost_key(lane_vals, state_ks)), branch
+    return bkey, string(bkey, '|', _ghost_key_states(state_vals)), branch
 end
 
 # Probe values for a range: low / mid / high (deduplicated).
