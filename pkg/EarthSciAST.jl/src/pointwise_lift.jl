@@ -144,7 +144,7 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
     any(c -> c isa CouplingOperatorCompose &&
              (c.lifting !== nothing && c.lifting == "pointwise"), coupling) || return
 
-    lifted = _pointwise_lifted_species(equations)
+    lifted = _pointwise_lifted_species(equations, states)
     isempty(lifted) && return
     arrayvars = _pointwise_lift_operands(lifted, states, params, observeds)
     size_to_names = _index_sets_by_size(index_sets)
@@ -171,13 +171,36 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
 end
 
 # A species is lifted iff its state ODE's merged RHS carries a spatial-operator
-# makearray (the advection contribution operator_compose added).
-function _pointwise_lifted_species(equations::Vector{Equation})::Set{String}
+# makearray (the advection contribution operator_compose added) AND the state is
+# still SCALAR.
+#
+# The shape test is what keeps a mixed document working. Pointwise lifting is
+# defined (§10.5) as the 0-D ↔ spatial promotion, so a state the author already
+# gave a grid shape is already spatial and must be left alone: its equation is
+# ALREADY an aggregate over the grid, and lifting it again would wrap a second
+# aggregate around it.
+#
+# Without the test, any already-spatial state sharing a document with a lifted
+# reaction network is swept in merely because its own RHS carries a makearray —
+# a prognostic air-mass `D(m,t) = -(D(Mx,lon) + D(My,lat) + D(Mz,lev))` beside a
+# lifted chemistry mechanism is the motivating case. That one cannot be lifted
+# even in principle: `_pointwise_lift_loops` recovers a species' loop variables by
+# finding it INSIDE its own makearray, and `m` never appears inside a flux
+# divergence over `Mx` — so it failed with "could not determine the spatial loop
+# variables", which read as a defect in the author's model rather than as a state
+# that simply needed no lifting.
+function _pointwise_lifted_species(equations::Vector{Equation},
+                                   states::OrderedDict{String,ModelVariable})::Set{String}
     lifted = Set{String}()
     for eq in equations
         species = differential_lhs_variable(eq.lhs)
         species === nothing && continue
         isempty(_collect_makearrays!(OpExpr[], eq.rhs)) && continue
+        # Already carries a grid shape ⇒ already spatial ⇒ nothing to lift.
+        if haskey(states, species)
+            sh = states[species].shape
+            (sh !== nothing && !isempty(sh)) && continue
+        end
         push!(lifted, species)
     end
     return lifted

@@ -172,3 +172,39 @@ end
     flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
     @test_throws E.DimensionPromotionError E.promote_downstream_shapes(flat)
 end
+
+# `_pointwise_lifted_species` must consider ONLY still-scalar states.
+#
+# Regression: it swept in ANY state whose RHS carries a spatial makearray —
+# including one the author already gave a grid shape. The motivating case is a
+# prognostic air-mass `D(m,t) = -(D(Mx,lon) + …)` sharing a document with a
+# pointwise-lifted chemistry mechanism (ReSEACT 3-D): `m` is already spatial, its
+# equation is ALREADY an aggregate over the grid, and lifting it again would wrap a
+# second aggregate around it. It cannot be lifted even in principle —
+# `_pointwise_lift_loops` recovers a species' loop variables by finding it INSIDE
+# its own makearray, and `m` never appears inside a flux divergence over `Mx` — so
+# it died with "could not determine the spatial loop variables for species 'm'",
+# which reads as a defect in the author's model rather than a state that simply
+# needed no lifting.
+@testset "pointwise lift considers only still-scalar states" begin
+    ma = E.OpExpr("makearray", E.ASTExpr[E.VarExpr("Mx")];
+                  regions=[[[1, 4]]], values=E.ASTExpr[E.VarExpr("Mx")])
+    # Two states with a makearray RHS: one scalar (a 0-D species), one already spatial.
+    eqs = E.Equation[
+        E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("O3")]; wrt="t"), ma),
+        E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("m")]; wrt="t"), ma),
+    ]
+    states = E.OrderedDict{String,E.ModelVariable}(
+        "O3" => E.ModelVariable(E.StateVariable),                      # scalar ⇒ liftable
+        "m"  => E.ModelVariable(E.StateVariable; shape=["lon"]),       # already spatial ⇒ not
+    )
+    lifted = E._pointwise_lifted_species(eqs, states)
+    @test "O3" in lifted
+    @test !("m" in lifted)
+
+    # A state with no makearray in its RHS is not a lift candidate either.
+    eqs2 = E.Equation[E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("x")]; wrt="t"),
+                                 E.NumExpr(0.0))]
+    states2 = E.OrderedDict{String,E.ModelVariable}("x" => E.ModelVariable(E.StateVariable))
+    @test isempty(E._pointwise_lifted_species(eqs2, states2))
+end
