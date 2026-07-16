@@ -194,7 +194,8 @@ export
     # PDE inline-test runner (spec §6.6.5) over the tree-walk pathway
     PdeAssertionResult, run_pde_tests, evaluate_cellwise, field_reduce,
     # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
-    evaluate_closed_function, closed_function_names, ClosedFunctionError,
+    evaluate_closed_function, evaluate_closed_function_ad,
+    closed_function_names, ClosedFunctionError,
     lower_enums!,
     # Expression-template expansion (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md)
     lower_expression_templates, reject_expression_templates_pre_v04,

@@ -37,6 +37,30 @@ giving ≤ 1 ulp agreement with the spec reference.
 
 using Dates
 
+# Strip an AD dual number down to its underlying real primal; identity on
+# everything else.
+#
+# `datetime.*` decomposes a UTC scalar through the proleptic-Gregorian calendar.
+# That is an inherently DISCRETE operation: `year`/`month`/`day_of_year`/… are
+# piecewise-constant in their argument, so their derivative w.r.t. it is zero
+# almost everywhere (the jumps sit on the measure-zero calendar boundaries).
+# Taking the primal before the decomposition is therefore not an approximation —
+# it is the exact a.e. derivative, and it is the ONLY thing that can be done:
+# `Dates.unix2datetime` needs a real `Float64`.
+#
+# This matters even for models that never differentiate w.r.t. time, because the
+# tree-walk evaluator is type-stable in its value type `T`: under ForwardDiff
+# EVERY leaf is lifted to `T`, so `t` reaches `datetime.*` as a zero-partial
+# `Dual` and the old `Float64(::Dual)` coercion raised a `MethodError`.
+#
+# Identity here; specialized for `ForwardDiff.Dual` in
+# `ext/EarthSciASTForwardDiffExt.jl`. Kept as a weakdep seam rather than a hard
+# dependency because nothing in the numeric core needs ForwardDiff, and a `Dual`
+# cannot exist in a session that has not loaded ForwardDiff — so the identity
+# method below is COMPLETE whenever the extension is not loaded, and the
+# extension is guaranteed to be loaded before any `Dual` can be constructed.
+@inline _value(x) = x
+
 """
     ClosedFunctionError(code::String, message::String)
 
@@ -113,6 +137,21 @@ Dispatch a closed function call. `name` is the dotted-module spec name
 values. Integer-typed results are returned as `Int32` to make the integer
 contract explicit to callers; float-typed results are `Float64`.
 
+This entry point PINS its float-typed results to `Float64` (it infers as the
+concrete `Union{Float64,Int32}`, which the tree-walk RHS depends on for its
+zero-allocation property). Most of the registry tolerates an AD dual argument
+anyway, because the answer does not depend on the dual part:
+
+- `datetime.year` … `datetime.is_leap_year` — piecewise constant in their
+  argument, so they take the dual's primal (see `_value`) and return `Int32`.
+- `interp.searchsorted` — the query may be a dual; the result is a discrete
+  `Int32` index that carries no derivative.
+
+The three float-RETURNING functions (`interp.linear`, `interp.bilinear`,
+`datetime.julian_day`) cannot honour the `Float64` pin on a dual, so they throw
+here. Differentiating call sites use [`evaluate_closed_function_ad`](@ref)
+instead, which is the same registry without the pin.
+
 For `interp.searchsorted` the second argument must be the table (a
 `Vector{<:Real}`) — the caller is responsible for extracting the array
 from a `const`-op AST node before invoking this function.
@@ -149,41 +188,108 @@ function evaluate_closed_function(name::String, args::AbstractVector)
         return Int32(dayofyear(_to_datetime(args[1])))
     elseif name == "datetime.julian_day"
         _expect_arity(name, args, 1)
-        return _datetime_julian_day(Float64(args[1]))
+        return _datetime_julian_day(Float64(args[1]))::Float64
     elseif name == "datetime.is_leap_year"
         _expect_arity(name, args, 1)
         y = year(_to_datetime(args[1]))
         return isleapyear(y) ? Int32(1) : Int32(0)
     elseif name == "interp.searchsorted"
         _expect_arity(name, args, 2)
-        return _interp_searchsorted(name, Float64(args[1]), args[2])
+        return _interp_searchsorted(name, args[1], args[2])
     elseif name == "interp.linear"
         _expect_arity(name, args, 3)
-        return _interp_linear(name, args[1], args[2], Float64(args[3]))
+        return _interp_linear(name, args[1], args[2], Float64(args[3]))::Float64
     elseif name == "interp.bilinear"
         _expect_arity(name, args, 5)
         return _interp_bilinear(name, args[1], args[2], args[3],
-                                Float64(args[4]), Float64(args[5]))
+                                Float64(args[4]), Float64(args[5]))::Float64
     end
     # Should be unreachable — `name in _CLOSED_FUNCTION_NAMES` covered above.
     throw(ClosedFunctionError("unknown_closed_function",
         "internal: `fn` name `$(name)` is in the registry but has no dispatch arm"))
 end
 
+"""
+    evaluate_closed_function_ad(name::String, args::AbstractVector) -> Any
+
+The eltype-generic twin of [`evaluate_closed_function`](@ref), for callers whose
+argument values may be AD dual numbers (`ForwardDiff.Dual`). Same registry, same
+diagnostics, same values — it only drops the `Float64` pinning.
+
+WHY THIS IS A SEPARATE FUNCTION, and not just a relaxed `evaluate_closed_function`:
+`evaluate_closed_function` must infer as the CONCRETE `Union{Float64,Int32}`. It
+is called from the `:fn` arm of the tree-walk's `_eval_node_op`, and Julia infers
+that function's return type as the union over ALL of its arms — so if this
+registry widened to `Any`, the `:fn` arm would drag `_eval_node_op` (and with it
+the whole recursive RHS walk) down to `Any` and cost EVERY model — even ones with
+no `fn` node at all — its zero-allocation property. Pinning the float-returning
+arms to `::Float64` is what holds that line, and a dual cannot survive the pin.
+
+So the split is deliberate: the `Float64` solve path keeps the pinned registry and
+its inference, and the AD path — which is already boxing duals anyway — takes this
+one. Callers select between them on the COMPILE-TIME value type (`T === Float64`),
+so the branch folds away and the `Float64` path never even compiles this call.
+
+Only the three float-returning functions need generic treatment. Everything else
+is already dual-safe inside the pinned registry: the calendar `datetime.*` fields
+take the dual's primal (see `_value`) and return `Int32`, and
+`interp.searchsorted` returns an `Int32` index — none of which a dual can widen.
+"""
+function evaluate_closed_function_ad(name::String, args::AbstractVector)
+    if name == "datetime.julian_day"
+        _expect_arity(name, args, 1)
+        return _datetime_julian_day(args[1])
+    elseif name == "interp.linear"
+        _expect_arity(name, args, 3)
+        return _interp_linear(name, args[1], args[2], args[3])
+    elseif name == "interp.bilinear"
+        _expect_arity(name, args, 5)
+        return _interp_bilinear(name, args[1], args[2], args[3], args[4], args[5])
+    end
+    # Discrete-valued or already-generic: the pinned registry handles duals.
+    return evaluate_closed_function(name, args)
+end
+
+# Select the registry on the evaluator's COMPILE-TIME value type. At `T ===
+# Float64` this folds to the pinned `evaluate_closed_function` and the AD arm is
+# dead-code-eliminated, so the numeric RHS keeps main's inference and its
+# zero-allocation property exactly; at a dual `T` it folds to the generic twin.
+@inline function _eval_closed_fn(name::String, args::AbstractVector, ::Type{T}) where {T}
+    return T === Float64 ? evaluate_closed_function(name, args) :
+                           evaluate_closed_function_ad(name, args)
+end
+
 # Convert a UTC scalar time (seconds since Unix epoch) to a `Dates.DateTime`
 # at millisecond resolution. The spec pins floor-divmod by 86400 for the
 # (date, time-of-day) split; `Dates.unix2datetime` does this with the
 # proleptic-Gregorian calendar already.
+# `_value` first: the calendar decomposition is discrete (see `_value`), so an AD
+# dual query is stripped to its primal here rather than rejected. On a `Float64`
+# query `_value` is the identity and this is the same call it always was.
 @inline function _to_datetime(t_utc)::DateTime
-    return unix2datetime(Float64(t_utc))
+    return unix2datetime(Float64(_value(t_utc)))
 end
 
 # Fliegel–van Flandern (1968) integer JDN, plus fractional-day offset from
 # noon-UTC. Returns Float64 with ≤ 1 ulp agreement to the spec reference
 # computation — the only floating-point operation is the final divide by
 # 86400 (one rounded operation).
-function _datetime_julian_day(t_utc::Float64)::Float64
-    dt = unix2datetime(t_utc)
+#
+# UNLIKE the rest of `datetime.*`, this one is genuinely CONTINUOUS in `t_utc`
+# (d(julian_day)/d(t_utc) = 1/86400 a.e.), so the query is `Real` and the
+# fractional-day arithmetic stays eltype-generic: hand it a `Dual` and the real
+# derivative comes back out. This is load-bearing for stiff solvers — a
+# Rosenbrock method needs ∂f/∂t, and in models whose photolysis rates are driven
+# by solar geometry that path runs through `julian_day`. Only the DISCRETE
+# integer JDN is taken off the primal (`_value`), which is exactly right: the
+# day-number is piecewise constant, so it contributes no derivative.
+#
+# `mod(t_utc, 86400.0)` is left generic rather than split into
+# `t - 86400*floor(t/86400)`: ForwardDiff differentiates `mod` directly, and on a
+# `Float64` query this is bit-for-bit the same call as before (`_value` is the
+# identity), preserving the spec's pinned ≤1 ulp / cross-binding contract.
+function _datetime_julian_day(t_utc::Real)
+    dt = unix2datetime(Float64(_value(t_utc)))
     y = year(dt); m = month(dt); d = day(dt)
     jdn = (1461 * (y + 4800 + (m - 14) ÷ 12)) ÷ 4 +
           (367 * (m - 2 - 12 * ((m - 14) ÷ 12))) ÷ 12 -
@@ -250,7 +356,12 @@ end
 
 # `interp.searchsorted` per esm-spec §9.2.2 — validate the table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
-function _interp_searchsorted(name::String, x::Float64, xs)::Int32
+#
+# The query is `Real` so an AD dual flows in unchanged: the kernel only ever
+# COMPARES it (`isnan`, `>=`), which `Dual` supports, and the result is a
+# discrete `Int32` index that carries no derivative — so nothing needs stripping
+# here and the search runs on the dual directly.
+function _interp_searchsorted(name::String, x::Real, xs)::Int32
     _validate_searchsorted_table(name, xs)
     return _interp_searchsorted_core(name, x, xs)
 end
@@ -324,6 +435,9 @@ end
         end
         ai   = axis[i];     ai1   = axis[i + 1]
         ti   = Float64(table[i]);    ti1 = Float64(table[i + 1])
+        # The blend weight carries the query's partials — this is where the
+        # derivative of a piecewise-linear table comes from, and it is exact:
+        # d/dx [ti + w*(ti1 - ti)] = (ti1 - ti)/(ai1 - ai), the cell's slope.
         w    = (x - ai) / (ai1 - ai)
         return ti + w * (ti1 - ti)
     end
@@ -331,7 +445,7 @@ end
 
 # `interp.linear` per esm-spec §9.2 — validate the axis/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
-function _interp_linear(name::String, table_raw, axis_raw, x::Float64)::Float64
+function _interp_linear(name::String, table_raw, axis_raw, x::Real)
     if !(table_raw isa AbstractVector)
         throw(ClosedFunctionError("closed_function_arity",
             "$(name): `table` must be an array (got $(typeof(table_raw)))"))
@@ -359,6 +473,9 @@ end
     Ny = length(axis_y)
     # Per-axis extrapolate-flat clamp. NaN x or y propagates through (IEEE-754
     # ≤/≥ on NaN are false → x_q stays NaN → wx is NaN → result is NaN).
+    # A clamped arm yields the bare `Float64` axis endpoint even at a dual query
+    # — correct, and NOT a lost derivative: flat extrapolation has zero slope out
+    # there, which is exactly what a `Float64` contributes downstream.
     x_q = x <= axis_x[1] ? axis_x[1] :
           x >= axis_x[Nx] ? axis_x[Nx] : x
     y_q = y <= axis_y[1] ? axis_y[1] :
@@ -401,7 +518,7 @@ end
 # `interp.bilinear` per esm-spec §9.2 — validate the axes/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
-                          x::Float64, y::Float64)::Float64
+                          x::Real, y::Real)
     if !(table_raw isa AbstractVector)
         throw(ClosedFunctionError("closed_function_arity",
             "$(name): `table` must be an array (got $(typeof(table_raw)))"))

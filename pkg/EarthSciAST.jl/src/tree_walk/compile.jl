@@ -1346,14 +1346,28 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         elseif pl isa Tuple{String,_InterpSearchsortedSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
-            return Float64(_interp_searchsorted_core("interp.searchsorted", x, spec.xs))
+            # `convert(T, …)`, not `Float64(…)`: the index is discrete (no
+            # derivative), but the ARM must still land in the evaluator's value
+            # type or the `:fn` arm infers as a `Union` under ForwardDiff.
+            return convert(T, _interp_searchsorted_core("interp.searchsorted", x, spec.xs))
         elseif pl isa Tuple{String,Nothing}
             # All-scalar closed functions (e.g. `datetime.*`): boxed path. The
             # children are the full spec-order arg list; a cold case off the
             # numeric RHS hot path, so the residual `Vector{Any}` is tolerated.
+            #
+            # This is the site the ForwardDiff Jacobian used to die on. Because
+            # `_eval_node` is type-stable in `T`, the children arrive as `Dual`s
+            # even when the model differentiates only w.r.t. `u` — and the old
+            # `Float64(…)` coercion (here, and inside the registry) rejected them.
+            #
+            # `_eval_closed_fn` picks the registry on `T` at COMPILE time: at
+            # `T === Float64` it folds to the `Float64`-pinned
+            # `evaluate_closed_function`, keeping this arm's inferred type at the
+            # concrete `Union{Float64,Int32}` that `_eval_node_op` — and with it
+            # the zero-allocation RHS — depends on. See `evaluate_closed_function_ad`.
             fname = pl[1]
             args_evaluated = Any[_eval_node(ci, u, p, t, T) for ci in c]
-            return Float64(evaluate_closed_function(fname, args_evaluated))
+            return convert(T, _eval_closed_fn(fname, args_evaluated, T))
         end
         # Unreachable if `_compile_op` and this arm agree (via
         # `_FN_CONST_ARG_SPECS`) on which closed functions carry a typed spec —

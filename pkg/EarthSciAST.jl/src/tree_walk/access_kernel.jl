@@ -401,12 +401,19 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
                                          ev(ch[1]), ev(ch[2]))
         elseif pl isa Tuple{String,_InterpSearchsortedSpec}
             spec = pl[2]
-            return Float64(_interp_searchsorted_core("interp.searchsorted",
-                                                     ev(ch[1]), spec.xs))
+            # `convert(T, …)` not `Float64(…)` — same reasoning as the mirrored
+            # `:fn` arm in compile.jl: keep the arm in the evaluator's value type
+            # so it stays AD-clean and concretely inferred.
+            return convert(T, _interp_searchsorted_core("interp.searchsorted",
+                                                        ev(ch[1]), spec.xs))
         elseif pl isa Tuple{String,Nothing}
+            # `_eval_closed_fn` selects the pinned vs. AD registry on the
+            # compile-time `T` — mirrors compile.jl's `:fn` arm, and keeps this
+            # arm's inference (and the affine kernel's zero-alloc property)
+            # identical at `T === Float64`.
             fname = pl[1]
             args_evaluated = Any[ev(ci) for ci in ch]
-            return Float64(evaluate_closed_function(fname, args_evaluated))
+            return convert(T, _eval_closed_fn(fname, args_evaluated, T))
         end
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
             "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))

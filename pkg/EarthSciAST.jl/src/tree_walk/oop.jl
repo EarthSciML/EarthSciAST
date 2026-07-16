@@ -438,9 +438,11 @@ function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T})::T where 
 end
 
 # Closed functions. `interp.*` carries a build-time-validated typed spec (the
-# `_FN_CONST_ARG_SPECS` protocol); `datetime.*` is all-scalar and boxed, and returns
-# a `Float64` — correct, since those are functions of wall-clock time, which is not
-# a differentiation variable.
+# `_FN_CONST_ARG_SPECS` protocol); `datetime.*` is all-scalar and boxed. The
+# boxed call goes through `_eval_closed_fn`, which selects the `Float64`-pinned
+# registry or its eltype-generic twin on the compile-time `T` — so a `Dual` walk
+# differentiates `datetime.julian_day` (a real function of `t`, which IS a
+# differentiation variable for a Rosenbrock ∂f/∂t term) instead of throwing on it.
 function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
     pl = n.payload
     c = n.children
@@ -453,7 +455,7 @@ function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
         return _oop_interp_searchsorted(pl[2], _oop_eval(c[1], u, p, t, cache), T)
     elseif pl isa Tuple{String,Nothing}
         args = Any[_oop_eval(ci, u, p, t, cache) for ci in c]
-        return convert(T, evaluate_closed_function(pl[1], args))
+        return convert(T, _eval_closed_fn(pl[1], args, T))
     end
     throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
         "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
