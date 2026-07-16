@@ -1641,6 +1641,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     diag = (; n_vec_kernels = length(vec_kernels),
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
+              n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
               n_scalar_entries = length(rhs_list),
               template_node_count =
                   sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),

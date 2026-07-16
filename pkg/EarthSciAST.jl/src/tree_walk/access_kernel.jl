@@ -211,14 +211,24 @@ end
 @inline _acc_scratch_read(s::_AccScratch, i::Int, ::Type{T}) where {T} =
     @inbounds (s.alt::Vector{T})[i]
 
-# Recipes (ordered; recipe[i] computes scratch slot i and may `_NK_CACHED`-read any
-# slot < i) plus the scratch they fill. Empty ⇒ the kernel has no CSE.
+# Two recipe/scratch pairs (each ordered so recipe[i] reads only lower slots):
+#   * `recipes`/`scratch`         — per-CELL CSE: shared cell-varying subtrees,
+#                                    filled once per cell in the box loop.
+#   * `inv_recipes`/`inv_scratch` — loop-INVARIANT hoist: subtrees with no
+#                                    cell-varying access, filled ONCE per call
+#                                    before the box loop (an Arrhenius `exp(-Ea/T)`,
+#                                    `g/h`, `sin(2t)`, a fixed-slot `s*s`).
+# A per-cell recipe may read an invariant slot (already filled); an invariant
+# recipe reads only lower invariant slots. Empty pair ⇒ that tier is absent.
 struct _AccCSE
     recipes::Vector{_Node}
     scratch::_AccScratch
+    inv_recipes::Vector{_Node}
+    inv_scratch::_AccScratch
 end
-const _ACC_NO_CSE = _AccCSE(_Node[], _AccScratch(0))
+const _ACC_NO_CSE = _AccCSE(_Node[], _AccScratch(0), _Node[], _AccScratch(0))
 @inline _has_cse(cse::_AccCSE) = !isempty(cse.recipes)
+@inline _has_inv(cse::_AccCSE) = !isempty(cse.inv_recipes)
 
 # ---- One kernel ----
 struct _AccKernel
@@ -430,7 +440,23 @@ end
 _run_acc_kernel!(du, u, p, t, K::_AccKernel) =
     _run_acc_kernel!(du, u, p, t, K, _rhs_value_type(u, p, t))
 
+# Fill the loop-invariant scratch ONCE per call (before the cell loop). The recipes
+# have no cell-varying access, so the cell context is irrelevant — dummy `(1,0,1,
+# (1,1,1))` is passed. A no-op (compiles away) when the kernel has no invariants.
+@inline function _fill_invariant!(K::_AccKernel, u, p, t, ::Type{T}) where {T}
+    cse = K.cse
+    if _has_inv(cse)
+        buf = _acc_scratch_buf(cse.inv_scratch, T)
+        rs = cse.inv_recipes
+        @inbounds for i in eachindex(rs)
+            buf[i] = _eval_acc(rs[i], u, p, t, 1, 0, 1, (1, 1, 1), K, T)
+        end
+    end
+    return nothing
+end
+
 function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
+    _fill_invariant!(K, u, p, t, T)
     cs = K.cells
     if _is_contig(cs)                               # contiguous / unstructured
         @inbounds for c in cs.ranges[1]
@@ -506,11 +532,18 @@ function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
     return (0xff, objectid(n))     # _NK_CACHED / anything else — never merged
 end
 
+# A descriptor read is CELL-INVARIANT (same for every cell in the box, though it
+# may vary per call) iff it is a fixed state slot, a fixed forcing read, or a
+# scalar. Everything else (STATE_AFFINE, CONST_BOX/CELL/EDGE, FORCING_BOX, LOOP_IDX,
+# STATE_INDIRECT[_COL]) is addressed by the cell.
+@inline _acc_desc_invariant(k::UInt8) =
+    k === _AK_STATE_FIXED || k === _AK_ARR_FIXED || k === _AK_SCALAR
+
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
     key_to_vn = Dict{Any,Int}()
     vn_of = IdDict{_Node,Int}()
-    counts = Int[]; is_op = Bool[]; rep = _Node[]
+    counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     function number(n::_Node)
         childvns = Int[number(c) for c in n.children]
         key = _acc_vn_key(n, childvns, acc)
@@ -518,37 +551,53 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
         if vn == 0
             vn = length(counts) + 1
             key_to_vn[key] = vn
-            push!(counts, 0); push!(is_op, n.kind === _NK_OP); push!(rep, n)
+            k = n.kind
+            inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ?  true :
+                  k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
+                  k === _NK_OP     ? all(v -> is_inv[v], childvns) :
+                  false                       # _NK_REDUCE excluded upstream; be safe
+            push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
         end
         counts[vn] += 1
         vn_of[n] = vn
         return vn
     end
     number(spine)
-    slot_of_vn = Dict{Int,Int}()
+    # Two-tier slot assignment, in value-number order (a child's vn is always below
+    # its parent's, so each tier's recipes end up dependency-ordered): every
+    # invariant OP is hoisted to a per-call slot (once per call beats once per
+    # cell); every remaining SHARED cell-varying OP gets a per-cell CSE slot.
+    inv_slot = Dict{Int,Int}(); cell_slot = Dict{Int,Int}()
     for vn in 1:length(counts)
-        if counts[vn] >= 2 && is_op[vn]
-            slot_of_vn[vn] = length(slot_of_vn) + 1
+        is_op[vn] || continue
+        if is_inv[vn]
+            inv_slot[vn] = length(inv_slot) + 1
+        elseif counts[vn] >= 2
+            cell_slot[vn] = length(cell_slot) + 1
         end
     end
-    isempty(slot_of_vn) && return (spine, _ACC_NO_CSE)
-    scratch = _AccScratch(length(slot_of_vn))
+    (isempty(inv_slot) && isempty(cell_slot)) && return (spine, _ACC_NO_CSE)
+    inv_scratch = _AccScratch(length(inv_slot))
+    cell_scratch = _AccScratch(length(cell_slot))
     function rw(n::_Node)
-        s = get(slot_of_vn, vn_of[n], 0)
-        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=scratch)
+        vn = vn_of[n]
+        s = get(inv_slot, vn, 0)
+        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=inv_scratch)
+        s = get(cell_slot, vn, 0)
+        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=cell_scratch)
         isempty(n.children) && return n
         return _mknode(kind=n.kind, op=n.op, literal=n.literal, idx=n.idx,
                        sym=n.sym, payload=n.payload,
                        children=_Node[rw(c) for c in n.children])
     end
-    recipes = Vector{_Node}(undef, length(slot_of_vn))
-    for (vn, s) in slot_of_vn
-        r = rep[vn]
-        recipes[s] = _mknode(kind=r.kind, op=r.op, literal=r.literal, idx=r.idx,
-                             sym=r.sym, payload=r.payload,
-                             children=_Node[rw(c) for c in r.children])
-    end
-    return (rw(spine), _AccCSE(recipes, scratch))
+    _recipe(vn) = (r = rep[vn];
+        _mknode(kind=r.kind, op=r.op, literal=r.literal, idx=r.idx, sym=r.sym,
+                payload=r.payload, children=_Node[rw(c) for c in r.children]))
+    inv_recipes = Vector{_Node}(undef, length(inv_slot))
+    for (vn, s) in inv_slot; inv_recipes[s] = _recipe(vn); end
+    cell_recipes = Vector{_Node}(undef, length(cell_slot))
+    for (vn, s) in cell_slot; cell_recipes[s] = _recipe(vn); end
+    return (rw(spine), _AccCSE(cell_recipes, cell_scratch, inv_recipes, inv_scratch))
 end
 
 # ---- Small builders (used by tests and, later, the polyhedral build) ----
