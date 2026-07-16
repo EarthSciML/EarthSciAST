@@ -1578,12 +1578,25 @@ function find_top_level_system(esm_file::EsmFile, name::String)
 end
 
 """
-    find_subsystem(system::Union{Model,ReactionSystem}, name::String) -> Union{Model,ReactionSystem,Nothing}
+    find_subsystem(system::Union{Model,ReactionSystem}, name::String) -> Union{Model,ReactionSystem,DataLoader,Nothing}
 
 Find a subsystem by name within a Model or ReactionSystem.
 Returns the subsystem or nothing if not found.
 """
-function find_subsystem(system::Model, name::String)::Union{Model,Nothing}
+function find_subsystem(system::Model, name::String)::Union{Model,ReactionSystem,DataLoader,Nothing}
+    # A Model's `subsystems` is a `Dict{String,Any}` and a subsystem may legitimately
+    # be a DataLoader: that is exactly the loader+regridding-model split the
+    # pure-io-data-loaders RFC prescribes, where the model declares the pure-I/O
+    # loader as a subsystem (era5_single.esm's `sl`, geosfp.esm's `GEOSFP_I3`, …) and
+    # couplings name its fields through the parent (`from: "GEOSFP.GEOSFP_I3.PS"`).
+    # Annotating the return as `Union{Model,Nothing}` made that reference throw a
+    # `MethodError: Cannot convert DataLoader to Model` from the conversion the
+    # annotation itself forces — so `validate()` CRASHED on any assembly wiring a
+    # loader field in through its data model (wildlandfire.esm included).
+    #
+    # Same defect as the one already fixed in `variable_exists_in_system(::DataLoader,
+    # …)` below, which handles the top-level half (`from: "GEOSFP.u"`); this is the
+    # subsystem-traversal half, which that fix missed.
     return get(system.subsystems, name, nothing)
 end
 

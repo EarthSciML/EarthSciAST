@@ -251,6 +251,49 @@ using EarthSciAST
         @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "MetData.some_var")
     end
 
+    @testset "DataLoader as a Model subsystem (loader+regridding-model split)" begin
+        # The pure-io-data-loaders RFC splits a data component into a pure-I/O
+        # DataLoader declared as a SUBSYSTEM of its regridding Model, with couplings
+        # naming loader fields THROUGH the parent — `GEOSFP.GEOSFP_I3.PS`,
+        # `ERA5.sl.t2m`. `Model.subsystems` is a `Dict{String,Any}` precisely so it
+        # can hold one.
+        #
+        # Regression: `find_subsystem(::Model, ::String)` was annotated
+        # `::Union{Model,Nothing}`, so traversing INTO a loader subsystem threw
+        # `MethodError: Cannot convert DataLoader to Model` — from the conversion the
+        # annotation itself forces. `validate()` CRASHED outright on every assembly
+        # using the split, the wildlandfire.esm reference assembly included. The
+        # top-level half of this defect was already fixed in
+        # `variable_exists_in_system(::DataLoader, …)`; this is the traversal half.
+        metadata = Metadata("LoaderSubsystemTest")
+
+        dl_source = DataLoaderSource("file:///GEOSFP.{date:%Y%m%d}.I3.4x5.nc")
+        dl_vars = Dict("PS" => DataLoaderVariable("PS", "Pa"))
+        loader = DataLoader("grid", dl_source, dl_vars)
+
+        # The regridding model: its own variable, plus the loader mounted as `I3`.
+        parent = Model(Dict("w_time" => ModelVariable(StateVariable, units="1")),
+                       Equation[])
+        parent.subsystems["I3"] = loader
+
+        esm_file = EsmFile("0.1.0", metadata, models=Dict("GEOSFP" => parent))
+
+        # The reference that used to crash: traverse the model into its loader
+        # subsystem and land on a loader-exposed field.
+        result = resolve_qualified_reference(esm_file, "GEOSFP.I3.PS")
+        @test result.variable_name == "PS"
+        @test result.resolved_system === loader
+
+        # The parent's own variables still resolve alongside it.
+        result = resolve_qualified_reference(esm_file, "GEOSFP.w_time")
+        @test result.variable_name == "w_time"
+
+        # A field the loader does not expose stays a clean error, not a crash.
+        @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.I3.NOPE")
+        # Loaders have no subsystems, so traversing PAST one terminates cleanly.
+        @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.I3.deeper.PS")
+    end
+
     @testset "Error Handling and Edge Cases" begin
         # Empty ESM file
         metadata = Metadata("EmptyTest")
