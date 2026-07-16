@@ -1531,7 +1531,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
-    scalar_entries, vec_kernels = _compile_derivative_equations(derivative_eqs,
+    scalar_entries, vec_kernels, acc_kernels = _compile_derivative_equations(derivative_eqs,
         resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states)
     # States without a D(...) equation get du=0 (integrator leaves them
@@ -1599,9 +1599,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
         _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_prelude, vec_kernels,
-                  const_slots, dyn_slots)
+                  acc_kernels, const_slots, dyn_slots)
     elseif form === :oop
-        _make_rhs_oop(rhs_list, scalar_prelude, vec_prelude, vec_kernels, n_states)
+        _make_rhs_oop(rhs_list, scalar_prelude, vec_prelude, vec_kernels, acc_kernels, n_states)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
@@ -1639,6 +1639,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     #                         into the prelude, so the two must be read together — the sum
     #                         is what shrinks, and `template_node_count` alone can only fall.
     diag = (; n_vec_kernels = length(vec_kernels),
+              n_acc_kernels = length(acc_kernels),
+              n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
+              n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
               n_scalar_entries = length(rhs_list),
               template_node_count =
                   sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
@@ -1763,6 +1766,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int)
     scalar_entries = Tuple{Int,ASTExpr}[]
     vec_kernels = _VecKernel[]
+    acc_kernels = _AccKernel[]
     covered = falses(n_states)
 
     for eq in derivative_eqs
@@ -1801,12 +1805,12 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_arrayop_D_lhs(eq.lhs)
-            _compile_arrayop_equation!(vec_kernels, covered, eq, resolved_obs,
+            _compile_arrayop_equation!(vec_kernels, acc_kernels, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs)
         end
     end
-    return scalar_entries, vec_kernels
+    return scalar_entries, vec_kernels, acc_kernels
 end
 
 # ---- Stage: one arrayop derivative equation → whole-array kernels ----
@@ -1821,7 +1825,34 @@ end
 # (`_compile_arrayop_percell!`).
 # (`vec_kernels` is a `Vector{_VecKernel}`; the annotation is omitted because
 # `_VecKernel` is defined in section 4b, after this build section.)
-function _compile_arrayop_equation!(vec_kernels,
+
+# ess-affine: unroll a CONSTANT-bound contraction (aggregate reduction) into a
+# plain ⊕-fold AST so the existing affine box processor can lower it — no runtime
+# reduce, no per-cell loop. Output indices stay SYMBOLIC (one fold template shared
+# across every output cell); only the contracted indices are expanded, through the
+# SAME `_foreach_aggregate_term` core the per-cell path uses, so term order and the
+# filter `ifelse`-guard are byte-identical. The fold is seeded with the 0̄ identity
+# FIRST — matching `_eval_contraction`'s in-place fold exactly (signed-zero `+`, the
+# min/max identities) — so the lowered `+`/`min`/`max`/`*` op is bit-identical.
+#
+# Caller guarantees every contracted bound is constant (`contract_const[d] !==
+# nothing`) and there are no join gates (a join can drop terms per output cell,
+# which would break the shared template). A filter is fine: it references the
+# contracted (now concrete) and/or output (still symbolic) indices and lowers to a
+# runtime `ifelse` guard the box processor verifies affine.
+function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{String},
+        contract_const, filt, oplus::String, zerobar::Float64)
+    iters = Vector{Int}[c::Vector{Int} for c in contract_const]
+    terms = ASTExpr[]
+    _foreach_aggregate_term(rhs_body, contract_names, iters, nothing, filt, zerobar,
+                            nothing) do term
+        push!(terms, term)
+    end
+    isempty(terms) && return NumExpr(zerobar)            # empty ⊕-reduction → 0̄ (§5.1)
+    return OpExpr(oplus, ASTExpr[NumExpr(zerobar); terms])
+end
+
+function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
@@ -1871,6 +1902,41 @@ function _compile_arrayop_equation!(vec_kernels,
     end
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+    # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
+    # groups), producing `_AccKernel`s that resolve gathers at runtime. This is the
+    # DEFAULT array-kernel build; it now carries its own eval-time optimization
+    # (per-cell CSE + loop-invariant hoisting on the access spine), so it is a clean
+    # win over the vectorized path it supersedes. Returns `nothing` (covered
+    # untouched) for anything it cannot model, falling through to the symbolic /
+    # per-cell chain. `ESS_STENCIL_DISABLE=1` forces the per-cell reference (the
+    # differential-test escape hatch).
+    #
+    # A CONSTANT-bound contraction with no join gate is UNROLLED into a plain
+    # ⊕-fold body (`_unrolled_contraction_body`) and lowered by the SAME box
+    # processor — no runtime reduce, no per-cell loop. A variable-valence bound or
+    # a join gate (either can vary the term set per output cell) is left to the
+    # per-cell path.
+    affine_kernels = nothing
+    if !_stencil_disabled()
+        affine_body =
+            isempty(contract_names) ? rhs_body :
+            (agg_gates === nothing && all(c -> c !== nothing, contract_const)) ?
+                _unrolled_contraction_body(rhs_body, contract_names, contract_const,
+                                           agg_filter, rhs_oplus, rhs_zerobar) :
+            nothing
+        affine_kernels = affine_body === nothing ? nothing :
+            _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
+                                resolved_obs, array_var_info, var_map,
+                                const_registry, pgather, param_sym_set, reg_funcs,
+                                covered)
+    end
+    if affine_kernels !== nothing
+        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
+            (println(stderr, "[ess-affine] FIRED: ", length(affine_kernels),
+                     " access kernels for ", _output_idx_strings(lhs_op)); flush(stderr))
+        append!(acc_kernels, affine_kernels)
+        return nothing
+    end
     # Fast path (ess-perf §4c): compile the stencil spine ONCE symbolically
     # and derive each cell's gather slots by evaluating the index expressions
     # per lane, instead of running sub→resolve→compile for every cell. Only
