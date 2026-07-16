@@ -127,6 +127,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_observed_param_rank2_test.jl")
     include("closed_functions_test.jl")
+    include("closed_functions_autodiff_test.jl")
     include("closed_functions_mtk_test.jl")
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
