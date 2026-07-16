@@ -103,10 +103,10 @@ end
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
 mutable struct _AffineSig
     branch_cache::Dict{String,_StencilBranch}
-    bmemo::IdDict{OpExpr,Set{String}}
+    bmemo::IdDict{OpExpr,Bool}
     bio::IOBuffer
 end
-_AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Set{String}}(), IOBuffer())
+_AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer())
 
 @inline _set_env!(env, idx_names, loop) =
     (for d in eachindex(idx_names); env[idx_names[d]] = loop[d]; end; env)
