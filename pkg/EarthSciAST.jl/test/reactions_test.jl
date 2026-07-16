@@ -1,6 +1,8 @@
 using Test
 using EarthSciAST
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
 @testset "Reaction System ODE Derivation Tests" begin
 
     @testset "Stoichiometric Matrix Tests" begin
@@ -389,5 +391,65 @@ using EarthSciAST
         main_model = derive_odes(main)
         @test main_model.variables["M"].default == 2.0
         @test main_model.subsystems["sub"].variables["S"].default == 7.5
+    end
+
+    @testset "Reservoir species (constant: true) get no ODE" begin
+        # esm-spec §7.4: "A species declared with `constant: true` is a
+        # reservoir: it appears in rate laws as a concentration but no dX/dt
+        # equation is generated for it. […] other bindings skip the ODE for that
+        # species while still evaluating mass-action contributions from it."
+        # R:  CH4 + OH -> HO2,  with CH4 a held-fixed reservoir.
+        species = [Species("CH4", default=1700.0, constant=true),
+                   Species("OH", default=1.0e-4),
+                   Species("HO2", default=0.0)]
+        rxn = Reaction(Dict("CH4" => 1, "OH" => 1), Dict("HO2" => 1), VarExpr("k"))
+        rxn_sys = ReactionSystem(species, [rxn], parameters=[Parameter("k", 6.3e-15)])
+
+        eqs = lower_reactions_to_equations(rxn_sys.reactions, rxn_sys.species)
+        targets = Set(String(EarthSciAST.differential_lhs_variable(e.lhs)) for e in eqs)
+        @test targets == Set(["OH", "HO2"])      # the reservoir is NOT a target
+        @test !("CH4" in targets)
+
+        # …but it still contributes its concentration to the rates it appears in:
+        # dOH/dt must retain a CH4 factor, or the reservoir has been dropped from
+        # the kinetics entirely rather than merely held fixed.
+        oh_eq = only(e for e in eqs
+                     if String(EarthSciAST.differential_lhs_variable(e.lhs)) == "OH")
+        @test "CH4" in EarthSciAST._referenced_var_names(oh_eq.rhs)
+
+        # A reservoir lowers to a PARAMETER, not to a state with a dead equation —
+        # the latter would sit in `u` with a permanently-zero derivative.
+        model = derive_odes(rxn_sys)
+        @test model.variables["CH4"].type == ParameterVariable
+        @test model.variables["CH4"].default == 1700.0
+        @test model.variables["OH"].type == StateVariable
+        @test model.variables["HO2"].type == StateVariable
+    end
+
+    @testset "Reservoir species stay fixed through flatten (shared fixture)" begin
+        # The flatten path (namespacing.jl `_collect_reaction_system!`) must agree
+        # with `derive_odes`. Asserted against the SHARED cross-binding fixture, so
+        # this pins the semantics the other bindings round-trip: O2/CH4/H2O are
+        # reservoirs; O3/OH/HO2 are ordinary states. Note reaction R3 PRODUCES O2 —
+        # before the §7.4 fix that gave the reservoir a live, growing ODE.
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
+                        "reservoir_species_constant.esm")
+        flat = flatten(load(path))
+
+        for r in ("O2", "CH4", "H2O")
+            @test haskey(flat.parameters, "SuperFastSubset.$r")
+            @test !haskey(flat.state_variables, "SuperFastSubset.$r")
+        end
+        for s in ("O3", "OH", "HO2")
+            @test haskey(flat.state_variables, "SuperFastSubset.$s")
+        end
+
+        targets = Set{String}()
+        for eq in flat.equations
+            nm = EarthSciAST.differential_lhs_variable(eq.lhs)
+            nm === nothing || push!(targets, String(nm))
+        end
+        @test targets == Set(["SuperFastSubset.O3", "SuperFastSubset.OH",
+                              "SuperFastSubset.HO2"])
     end
 end

@@ -280,6 +280,14 @@ Lower a ReactionSystem into the flattener accumulators. Species become state
 variables, rate constants become parameters, and reactions are converted to
 ODE equations via `lower_reactions_to_equations`. Both species and equation
 variables are then namespaced by `prefix`.
+
+EXCEPT a reservoir species (`constant: true`, §7.4), which becomes a
+PARAMETER: the spec holds its concentration fixed and emits no ODE for it, so
+it is not a state — exactly the treatment `codegen.jl` already gives it on the
+Catalyst path (`[isconstantspecies=true]`). Its `default` carries over as the
+parameter's fixed value, so it still reads as a concentration in every rate
+law. Were it left a state with no equation instead, it would sit in `u` with a
+permanently-zero derivative — a zero row in the chemistry Jacobian block.
 """
 function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
                                    params::OrderedDict{String, ModelVariable},
@@ -298,7 +306,9 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
 
     for sp in rsys.species
         namespaced = "$(prefix).$(sp.name)"
-        states[namespaced] = ModelVariable(StateVariable;
+        target = sp.constant === true ? params : states
+        target[namespaced] = ModelVariable(
+            sp.constant === true ? ParameterVariable : StateVariable;
             default=sp.default, description=sp.description, units=sp.units)
     end
     for p in rsys.parameters

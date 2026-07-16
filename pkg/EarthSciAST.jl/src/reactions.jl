@@ -58,11 +58,13 @@ substrates), sink reactions (null products), and constraint equations.
 - `Model`: ODE model with variables, equations, and optional events/subsystems
 
 # Algorithm (Libraries Spec Section 7.4)
-1. Create state variables for all species in the reaction system
+1. Create state variables for all species in the reaction system, except
+   reservoir species (`constant: true`), which become parameters
 2. Create parameter variables for all parameters (rate constants)
 3. For each reaction, compute the mass action rate expression
 4. For each species, compute the net rate of change from all reactions
-5. Create differential equations d[species]/dt = net_rate
+5. Create differential equations d[species]/dt = net_rate, except for
+   reservoir species, which are held fixed and get none
 
 # Examples
 ```julia
@@ -80,11 +82,15 @@ model = derive_odes(rxn_sys)
 ```
 """
 function derive_odes(rxn_sys::ReactionSystem)::Model
-    # Create state variables for all species
+    # Create state variables for all species -- except reservoirs (`constant:
+    # true`, §7.4), which are held fixed and get no ODE, so they lower to
+    # PARAMETERS: the same treatment as the flatten path
+    # (namespacing.jl `_collect_reaction_system!`) and the Catalyst path
+    # (codegen.jl `[isconstantspecies=true]`).
     variables = Dict{String,ModelVariable}()
     for species in rxn_sys.species
         variables[species.name] = ModelVariable(
-            StateVariable,
+            species.constant === true ? ParameterVariable : StateVariable,
             # Honor the species' declared scalar `default` (matching the main
             # flatten path in flatten.jl `_collect_reaction_system!`); fall back
             # to the library convention only when no default is declared.

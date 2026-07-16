@@ -158,6 +158,12 @@ so there is exactly one place that turns stoichiometry into equations.
 The LHS is always `D(X, t)` symbolically, regardless of the document's
 domain — dimension promotion (§4.7.6) is applied by `flatten`, not here.
 Spatial operators are added downstream when coupling adds them.
+
+A species with `constant: true` is a RESERVOIR (§7.4): it is held fixed, so no
+`D(X, t)` equation is emitted for it, while it still contributes its
+concentration to every rate law it appears in. It is therefore skipped as an
+equation TARGET only — it stays in `species` so `mass_action_rate` keeps
+reading it as a substrate/product factor.
 """
 function lower_reactions_to_equations(reactions::Vector{Reaction},
                                       species::Vector{Species})::Vector{Equation}
@@ -182,6 +188,10 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
     end
 
     for (i, name) in enumerate(species_names)
+        # Reservoir species (§7.4): held fixed, so it gets no ODE. Its
+        # mass-action contribution to the OTHER species' rates is untouched —
+        # `mass_action_rate` reads it from `species` either way.
+        species[i].constant === true && continue
         lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt="t")
         terms = ASTExpr[]
         for (j, rxn) in enumerate(reactions)
