@@ -433,12 +433,17 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         end
     end
 
-    # Step 1+2: Lower reaction systems to ODEs and collect.
+    # Step 1+2: Lower reaction systems to ODEs and collect. Any rate-law expression-
+    # template references are expanded eagerly against the reaction system's own
+    # `expression_templates` block (captured on `EsmFile.component_templates` under
+    # the `reaction_systems.<name>` key) — see `_collect_reaction_system!`.
     if file.reaction_systems !== nothing
         for (name, rsys) in file.reaction_systems
             push!(source_systems, name)
+            rs_templates = file.component_templates === nothing ? nothing :
+                get(file.component_templates, "reaction_systems.$(name)", nothing)
             _collect_reaction_system!(states, params, equations,
-                                      rsys, name)
+                                      rsys, name; templates=rs_templates)
         end
     end
 

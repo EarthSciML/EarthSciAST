@@ -303,7 +303,8 @@ permanently-zero derivative — a zero row in the chemistry Jacobian block.
 function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
                                    params::OrderedDict{String, ModelVariable},
                                    equations::Vector{Equation},
-                                   rsys::ReactionSystem, prefix::String)
+                                   rsys::ReactionSystem, prefix::String;
+                                   templates=nothing)
     local_names = Set{String}()
     for sp in rsys.species
         push!(local_names, sp.name)
@@ -330,15 +331,30 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
 
     # v0.8.0: every component shares the document's single `domain`; a system
     # is spatial iff its variables are shaped over index sets, 0-D otherwise.
+    # esm-spec §9.6.4: a rate-law `apply_expression_template` reference is expanded
+    # EAGERLY here — BEFORE namespacing — so a template body's free variables that
+    # name the reaction system's own scalar parameters (e.g. Arrhenius `P`/`T` in
+    # `arrh_per_molecule = A*P*exp(B/T)/(8314e3*T)`) are renamed to the component
+    # scope (`SuperFast.P`/`SuperFast.T`) by the same `namespace_expr` pass that
+    # renames the rest of the rate. That renaming is what makes them reachable by a
+    # later `param_to_var` coupling (`Transport3D.Pc -> SuperFast.P`) and the
+    # pointwise lift: if the reference instead SURVIVED to the build boundary, the
+    # coupling would have already run over the equations while the body's `P`/`T`
+    # were still hidden in the registry, and expansion there would surface bare,
+    # unbound `P`/`T` (`E_TREEWALK_UNBOUND_VARIABLE`). Model/import (discretization)
+    # templates do NOT take this path — they are component-scoped in the flat
+    # registry and legitimately survive to the compile-once tier. A no-op when the
+    # reaction system carries no template registry or its rates hold no references.
     raw_eqs = lower_reactions_to_equations(rsys.reactions, rsys.species)
     for eq in raw_eqs
+        rhs0 = templates === nothing ? eq.rhs : _expand_expr_refs(eq.rhs, templates)
         lhs = namespace_expr(eq.lhs, prefix, local_names)
-        rhs = namespace_expr(eq.rhs, prefix, local_names)
+        rhs = namespace_expr(rhs0, prefix, local_names)
         push!(equations, Equation(lhs, rhs; _comment=eq._comment))
     end
 
     for (sub_name, sub_rsys) in rsys.subsystems
         _collect_reaction_system!(states, params, equations,
-                                  sub_rsys, "$(prefix).$(sub_name)")
+                                  sub_rsys, "$(prefix).$(sub_name)"; templates=templates)
     end
 end

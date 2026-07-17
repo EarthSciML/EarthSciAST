@@ -216,4 +216,67 @@ using EarthSciAST: load, flatten, build_evaluator, coerce_esm_file, TreeWalkErro
         @test err isa TreeWalkError
         @test err.code == "E_TREEWALK_UNRESOLVED_TEMPLATE_REF"
     end
+
+    @testset "reaction-rate template + param_to_var (regression: unbound P/T)" begin
+        # A reaction-system rate written as an `apply_expression_template` whose
+        # body references the system's OWN scalar parameter (`T`), with that param
+        # driven by a `param_to_var` coupling from another component's observed.
+        # This is exactly the SuperFast + gridded-Tc/Pc shape that broke the 3-D
+        # chemistry build (`E_TREEWALK_UNBOUND_VARIABLE: P`): under the
+        # reference-preserving path the coupling substituted `Chem.T` in the
+        # equations while the template body's `T` was still hidden in the registry,
+        # and a later expansion surfaced a bare, unbound `T`. Reaction-system rate
+        # templates are now expanded EAGERLY during reaction lowering (before
+        # namespacing), so `T -> Chem.T -> Src.Tsrc` like a bare-in-rate param.
+        # (probe7 missed this because its toy rate used a BARE param, not a
+        # templated one.)
+        doc = Dict(
+            "esm" => "0.9.0",
+            "metadata" => Dict("name" => "rtmpl_param_to_var"),
+            "reaction_systems" => Dict("Chem" => Dict(
+                "parameters" => Dict(
+                    "k" => Dict("units" => "1/s", "default" => 1.0),
+                    "T" => Dict("units" => "K", "default" => 300.0)),
+                "species" => Dict(
+                    "A" => Dict("units" => "1", "default" => 1.0),
+                    "B" => Dict("units" => "1", "default" => 0.0)),
+                "expression_templates" => Dict("krate" => Dict(
+                    "params" => ["kk"],
+                    # kk * (T / 300): kk is the template param (bound to Chem.k),
+                    # T is the reaction system's own free scalar param.
+                    "body" => Dict("op" => "*", "args" => ["kk",
+                        Dict("op" => "/", "args" => ["T", 300.0])]))),
+                "reactions" => [Dict(
+                    "id" => "R1",
+                    "substrates" => [Dict("stoichiometry" => 1, "species" => "A")],
+                    "products" => [Dict("stoichiometry" => 1, "species" => "B")],
+                    "rate" => Dict("op" => "apply_expression_template", "args" => [],
+                                   "name" => "krate", "bindings" => Dict("kk" => "k")))],
+            )),
+            "models" => Dict("Src" => Dict(
+                "variables" => Dict("Tsrc" => Dict(
+                    "type" => "observed", "units" => "K",
+                    "expression" => Dict("op" => "+", "args" => [290.0, 10.0]))),
+                "equations" => Any[])),
+            "coupling" => [Dict("type" => "variable_map",
+                                "from" => "Src.Tsrc", "to" => "Chem.T",
+                                "transform" => "param_to_var")],
+        )
+        mktempdir() do dir
+            fix = joinpath(dir, "rtmpl_param_to_var.esm")
+            open(fix, "w") do io
+                JSON3.write(io, doc)
+            end
+            # The reference-preserving build (default) and the expand-at-load build
+            # must BOTH succeed and agree bit-for-bit. Before the fix the default
+            # build threw E_TREEWALK_UNBOUND_VARIABLE: T.
+            refbuild, u0, _ = build_and_probe(fix)
+            atload, _, _ = build_and_probe(fix; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
+            @test length(u0) == 2                       # Chem.A, Chem.B (0-D)
+            for k in 1:3
+                @test refbuild[k] == atload[k]
+                @test all(isfinite, refbuild[k])
+            end
+        end
+    end
 end
