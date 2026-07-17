@@ -1977,7 +1977,21 @@ fallback the tree-walk build uses and the Expand-at-entry the MTK build uses.
 _expand_expr_refs(e::VarExpr, reg) = e
 _expand_expr_refs(e::NumExpr, reg) = e
 _expand_expr_refs(e::IntExpr, reg) = e
-function _expand_expr_refs(e::OpExpr, reg)
+_expand_expr_refs(e::OpExpr, reg) = _expand_expr_refs(e, reg, nothing)
+
+# `sites`-recording variants (compile-once template tier, RFC out-of-line-
+# expression-templates §7.7): when `sites` is an `IdDict`, every apply node's
+# EXPANSION ROOT — the freshly parsed, fully expanded subtree that replaces it —
+# is recorded `root => apply node`, at every nesting level. The tree-walk build's
+# affine stencil compiler treats each recorded root as a compilation boundary
+# (one compiled body per use site × region class) while every other consumer
+# sees the plain Option-A expanded tree. `sites === nothing` is the plain
+# expansion (byte-identical to the pre-tier behavior).
+const _TemplateSites = Union{Nothing,IdDict{OpExpr,OpExpr}}
+_expand_expr_refs(e::VarExpr, reg, ::_TemplateSites) = e
+_expand_expr_refs(e::NumExpr, reg, ::_TemplateSites) = e
+_expand_expr_refs(e::IntExpr, reg, ::_TemplateSites) = e
+function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites)
     if e.op == APPLY_EXPRESSION_TEMPLATE_OP
         name = e.name
         (name !== nothing && reg !== nothing && haskey(reg, name)) || throw(
@@ -1992,9 +2006,13 @@ function _expand_expr_refs(e::OpExpr, reg)
             end
         end
         substituted = _substitute(body_raw, bindings_raw)
-        return _expand_expr_refs(parse_expression(substituted), reg)
+        ex = _expand_expr_refs(parse_expression(substituted), reg, sites)
+        if sites !== nothing && ex isa OpExpr
+            sites[ex] = e
+        end
+        return ex
     end
-    return map_children(c -> _expand_expr_refs(c, reg), e)
+    return map_children(c -> _expand_expr_refs(c, reg, sites), e)
 end
 
 """
@@ -2027,25 +2045,25 @@ function _expand_refs!(file::EsmFile)::EsmFile
     return file
 end
 
-function _expand_model_refs!(model::Model, reg)
+function _expand_model_refs!(model::Model, reg; sites::_TemplateSites=nothing)
     for (name, var) in model.variables
         if var.expression !== nothing
-            lowered = _expand_expr_refs(var.expression, reg)
+            lowered = _expand_expr_refs(var.expression, reg, sites)
             lowered === var.expression || _replace_var_expression!(model.variables, name, var, lowered)
         end
     end
-    _expand_equations_refs!(model.equations, reg)
-    _expand_equations_refs!(model.initialization_equations, reg)
+    _expand_equations_refs!(model.equations, reg; sites=sites)
+    _expand_equations_refs!(model.initialization_equations, reg; sites=sites)
     for (_, sub) in model.subsystems
-        sub isa Model && _expand_model_refs!(sub, reg)
+        sub isa Model && _expand_model_refs!(sub, reg; sites=sites)
     end
     return
 end
 
-function _expand_equations_refs!(eqs::Vector{Equation}, reg)
+function _expand_equations_refs!(eqs::Vector{Equation}, reg; sites::_TemplateSites=nothing)
     isempty(eqs) && return
-    new_eqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg),
-                                _expand_expr_refs(eq.rhs, reg); _comment=eq._comment)
+    new_eqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg, sites),
+                                _expand_expr_refs(eq.rhs, reg, sites); _comment=eq._comment)
                        for eq in eqs]
     empty!(eqs); append!(eqs, new_eqs)
     return

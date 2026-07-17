@@ -1,0 +1,2154 @@
+{
+ "esm": "0.9.0",
+ "metadata": {
+  "name": "transport_3axis_7cubed_fullrank",
+  "description": "RFC out-of-line-expression-templates compile-once measurement fixture. A 7x7x7 single-tracer transport, rhs -(Dx(q)+Dy(q)+Dz(q)); each spatial derivative lowers by a match rule to a per-axis makearray with FIVE full-rank boundary-class regions (two one-sided faces, two near-face centered classes, a wide-stencil interior), every region value an apply_expression_template reference to a shared per-class stencil template. All region bodies are rank-3 aggregates, so the affine box processor fires: fused (expanded) builds compile one spine per (x-class, y-class, z-class) = 5*5*5 = 125 branch keys, while the compile-once tier compiles 5+5+5 = 15 body variants plus 125 tiny parent spines and calls the bodies as sub-kernels."
+ },
+ "index_sets": {
+  "x": {
+   "kind": "interval",
+   "size": 7
+  },
+  "y": {
+   "kind": "interval",
+   "size": 7
+  },
+  "z": {
+   "kind": "interval",
+   "size": 7
+  }
+ },
+ "models": {
+  "Transport": {
+   "expression_templates": {
+    "sx_int": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": [
+        3,
+        5
+       ],
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          0.6666666666666666,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              {
+               "op": "+",
+               "args": [
+                "i",
+                1
+               ]
+              },
+              "j",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              {
+               "op": "-",
+               "args": [
+                "i",
+                1
+               ]
+              },
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          -0.08333333333333333,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              {
+               "op": "+",
+               "args": [
+                "i",
+                2
+               ]
+              },
+              "j",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              {
+               "op": "-",
+               "args": [
+                "i",
+                2
+               ]
+              },
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.05,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                {
+                 "op": "+",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.025,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                {
+                 "op": "+",
+                 "args": [
+                  "i",
+                  2
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                {
+                 "op": "+",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  2
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sx_c1": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": [
+        1,
+        1
+       ],
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          1.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              2,
+              "j",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              1,
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              3,
+              "j",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              2,
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sx_c2": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": [
+        2,
+        2
+       ],
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.5,
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            3,
+            "j",
+            "k"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "f",
+            1,
+            "j",
+            "k"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sx_c6": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": [
+        6,
+        6
+       ],
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.5,
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            7,
+            "j",
+            "k"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "f",
+            5,
+            "j",
+            "k"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sx_c7": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": [
+        7,
+        7
+       ],
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          1.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              7,
+              "j",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              6,
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              6,
+              "j",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              5,
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "Dx": {
+     "params": [
+      "f"
+     ],
+     "match": {
+      "op": "D",
+      "args": [
+       "f"
+      ],
+      "wrt": "x"
+     },
+     "body": {
+      "op": "makearray",
+      "args": [],
+      "regions": [
+       [
+        [
+         3,
+         5
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         1,
+         1
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         2,
+         2
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         6,
+         6
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         7,
+         7
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ]
+       ]
+      ],
+      "values": [
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sx_int",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sx_c1",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sx_c2",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sx_c6",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sx_c7",
+        "bindings": {
+         "f": "f"
+        }
+       }
+      ]
+     }
+    },
+    "sy_int": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": [
+        3,
+        5
+       ],
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          0.6666666666666666,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              {
+               "op": "+",
+               "args": [
+                "j",
+                1
+               ]
+              },
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              {
+               "op": "-",
+               "args": [
+                "j",
+                1
+               ]
+              },
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          -0.08333333333333333,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              {
+               "op": "+",
+               "args": [
+                "j",
+                2
+               ]
+              },
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              {
+               "op": "-",
+               "args": [
+                "j",
+                2
+               ]
+              },
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.05,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                {
+                 "op": "+",
+                 "args": [
+                  "j",
+                  1
+                 ]
+                },
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                {
+                 "op": "-",
+                 "args": [
+                  "j",
+                  1
+                 ]
+                },
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.025,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                {
+                 "op": "+",
+                 "args": [
+                  "j",
+                  2
+                 ]
+                },
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                {
+                 "op": "+",
+                 "args": [
+                  "j",
+                  1
+                 ]
+                },
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                {
+                 "op": "-",
+                 "args": [
+                  "j",
+                  2
+                 ]
+                },
+                "k"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                {
+                 "op": "-",
+                 "args": [
+                  "j",
+                  1
+                 ]
+                },
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sy_c1": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": [
+        1,
+        1
+       ],
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          1.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              2,
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              1,
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              3,
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              2,
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sy_c2": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": [
+        2,
+        2
+       ],
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.5,
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            3,
+            "k"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            1,
+            "k"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sy_c6": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": [
+        6,
+        6
+       ],
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.5,
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            7,
+            "k"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            5,
+            "k"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sy_c7": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": [
+        7,
+        7
+       ],
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          1.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              7,
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              6,
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              6,
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              5,
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "Dy": {
+     "params": [
+      "f"
+     ],
+     "match": {
+      "op": "D",
+      "args": [
+       "f"
+      ],
+      "wrt": "y"
+     },
+     "body": {
+      "op": "makearray",
+      "args": [],
+      "regions": [
+       [
+        [
+         1,
+         7
+        ],
+        [
+         3,
+         5
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         1
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         2,
+         2
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         6,
+         6
+        ],
+        [
+         1,
+         7
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         7,
+         7
+        ],
+        [
+         1,
+         7
+        ]
+       ]
+      ],
+      "values": [
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sy_int",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sy_c1",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sy_c2",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sy_c6",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sy_c7",
+        "bindings": {
+         "f": "f"
+        }
+       }
+      ]
+     }
+    },
+    "sz_int": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": [
+        3,
+        5
+       ]
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          0.6666666666666666,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              {
+               "op": "+",
+               "args": [
+                "k",
+                1
+               ]
+              }
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              {
+               "op": "-",
+               "args": [
+                "k",
+                1
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          -0.08333333333333333,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              {
+               "op": "+",
+               "args": [
+                "k",
+                2
+               ]
+              }
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              {
+               "op": "-",
+               "args": [
+                "k",
+                2
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.05,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                {
+                 "op": "+",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                {
+                 "op": "-",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.025,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                {
+                 "op": "+",
+                 "args": [
+                  "k",
+                  2
+                 ]
+                }
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                {
+                 "op": "+",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                {
+                 "op": "-",
+                 "args": [
+                  "k",
+                  2
+                 ]
+                }
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "f",
+                "i",
+                "j",
+                {
+                 "op": "-",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sz_c1": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": [
+        1,
+        1
+       ]
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          1.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              2
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              1
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              3
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              2
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sz_c2": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": [
+        2,
+        2
+       ]
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.5,
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            "j",
+            3
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            "j",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sz_c6": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": [
+        6,
+        6
+       ]
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.5,
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            "j",
+            7
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "i",
+            "j",
+            5
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "sz_c7": {
+     "params": [
+      "f"
+     ],
+     "body": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "args": [
+       "f"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": [
+        7,
+        7
+       ]
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          1.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              7
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              6
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          0.5,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              6
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "f",
+              "i",
+              "j",
+              5
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "Dz": {
+     "params": [
+      "f"
+     ],
+     "match": {
+      "op": "D",
+      "args": [
+       "f"
+      ],
+      "wrt": "z"
+     },
+     "body": {
+      "op": "makearray",
+      "args": [],
+      "regions": [
+       [
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         3,
+         5
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         1
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         2,
+         2
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         6,
+         6
+        ]
+       ],
+       [
+        [
+         1,
+         7
+        ],
+        [
+         1,
+         7
+        ],
+        [
+         7,
+         7
+        ]
+       ]
+      ],
+      "values": [
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sz_int",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sz_c1",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sz_c2",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sz_c6",
+        "bindings": {
+         "f": "f"
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "sz_c7",
+        "bindings": {
+         "f": "f"
+        }
+       }
+      ]
+     }
+    }
+   },
+   "variables": {
+    "q": {
+     "type": "state",
+     "units": "1",
+     "shape": [
+      "x",
+      "y",
+      "z"
+     ],
+     "default": 1.5
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "q"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "-",
+      "args": [
+       {
+        "op": "+",
+        "args": [
+         {
+          "op": "D",
+          "args": [
+           "q"
+          ],
+          "wrt": "x"
+         },
+         {
+          "op": "D",
+          "args": [
+           "q"
+          ],
+          "wrt": "y"
+         },
+         {
+          "op": "D",
+          "args": [
+           "q"
+          ],
+          "wrt": "z"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

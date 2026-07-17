@@ -47,6 +47,14 @@
 # New spine kinds (disjoint from _NK_LITERAL..._NK_PARAM_GATHER = 1..8).
 const _NK_ACCESS = UInt8(20)   # gather/const via access descriptor (idx = table slot)
 const _NK_REDUCE = UInt8(21)   # ⊕-reduction over the neighbour index (payload = _Bound)
+# Out-of-line template sub-kernel call (esm-spec §9.6.4 Option B / RFC
+# out-of-line-expression-templates §7.7 "compile references natively"). `payload`
+# is a SHARED `_AccKernel` holding the template body's access spine, descriptor
+# table, and CSE — compiled once per (use site, region class) and referenced from
+# every box/kernel whose lanes lower to the same descriptors. The evaluator arm
+# recurses into it with the SAME (u, p, t, c, n, oln, midx) cell context, so the
+# body computes exactly the scalar sequence the fused (expanded) spine would.
+const _NK_SUBCALL = UInt8(22)  # template-body sub-kernel (payload = _AccKernel)
 
 # ---- Access descriptors: how one leaf resolves to a value at (cell c, nbr n) ----
 #
@@ -238,10 +246,21 @@ struct _AccKernel
     bound::_Bound              # reduction bound (for any _NK_REDUCE in the spine)
     zerobar::Float64           # ⊕ identity seed for the reduction (0.0 for sum)
     cse::_AccCSE               # per-cell common-subexpression recipes + scratch
+    # Distinct template-body sub-kernels reachable from `spine`/`cse` (through
+    # `_NK_SUBCALL` payloads, transitively, nested-first). The kernel runners fill
+    # each sub-kernel's loop-invariant CSE tier once per call here, so the subcall
+    # arm only fills the per-cell tier. A sub-kernel shared by several parent
+    # kernels is prepped once per parent — recomputing an invariant is the same
+    # value, never a different one. Empty for every reference-free kernel.
+    subs::Vector{_AccKernel}
 end
-# 5-arg convenience: a kernel with no CSE (tests, direct construction).
+# 5-/6-arg convenience: a kernel with no CSE / no sub-kernels (tests, direct
+# construction, and every reference-free build).
 _AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound, zerobar::Float64) =
-    _AccKernel(cells, spine, acc, bound, zerobar, _ACC_NO_CSE)
+    _AccKernel(cells, spine, acc, bound, zerobar, _ACC_NO_CSE, _AccKernel[])
+_AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound,
+           zerobar::Float64, cse::_AccCSE) =
+    _AccKernel(cells, spine, acc, bound, zerobar, cse, _AccKernel[])
 
 # ---- The evaluator ----
 # ELTYPE-GENERIC in the value type `T`, exactly as the scalar `_eval_node`
@@ -287,6 +306,23 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         # loop's prelude (`_fill_cse!`) into the per-cell scratch captured in
         # `payload`; every occurrence reads it here instead of re-walking.
         return _acc_scratch_read(nd.payload::_AccScratch, nd.idx, T)
+    elseif k === _NK_SUBCALL
+        # Template-body sub-kernel (RFC out-of-line-expression-templates): fill the
+        # body's per-cell CSE scratch for THIS cell, then evaluate its spine
+        # against its OWN descriptor table. The invariant tier was filled once per
+        # call by the runner prologue (`K.subs`). Evaluation is single-threaded and
+        # the template DAG is acyclic (esm-spec §9.7.3), so a body is never
+        # re-entered mid-evaluation and its scratch buffers are race-free.
+        S = nd.payload::_AccKernel
+        cse = S.cse
+        if _has_cse(cse)
+            buf = _acc_scratch_buf(cse.scratch, T)
+            rs = cse.recipes
+            @inbounds for i in eachindex(rs)
+                buf[i] = _eval_acc(rs[i], u, p, t, c, n, oln, midx, S, T)
+            end
+        end
+        return _eval_acc(S.spine, u, p, t, c, n, oln, midx, S, T)
     else # _NK_OP
         return _eval_acc_op(nd, u, p, t, c, n, oln, midx, K, T)
     end
@@ -463,6 +499,11 @@ _run_acc_kernel!(du, u, p, t, K::_AccKernel) =
 end
 
 function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
+    # Sub-kernel prologue (nested-first): each template body's loop-invariant tier
+    # is filled once per call, exactly as the parent's is below.
+    for S in K.subs
+        _fill_invariant!(S, u, p, t, T)
+    end
     _fill_invariant!(K, u, p, t, T)
     cs = K.cells
     if _is_contig(cs)                               # contiguous / unstructured

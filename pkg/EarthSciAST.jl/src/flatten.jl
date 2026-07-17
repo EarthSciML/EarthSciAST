@@ -469,11 +469,23 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         end
     end
 
+    # esm-spec §9.6.4 rule 7 / §10.7: the MERGED template registry (union of the
+    # component registries, deep-equal dedup + deterministic collision rename),
+    # with each body's free variable references COMPONENT-SCOPED first (see
+    # `_scope_component_templates`) so a body spliced after flatten resolves the
+    # same names the expand-at-load image does. Computed BEFORE the pointwise
+    # lift so the lift's loop-variable detection can peek through surviving
+    # references (analysis only); carried on the FlattenedSystem below. Empty
+    # when no references survived load.
+    template_registry = _merge_flat_registry(_scope_component_templates(file))
+
     # Step 3b: Pointwise spatial lift (§10.5). operator_compose has merged each
     # reaction/model state ODE with the spatial operator's advection; array-ify
     # those merged equations (promote the species to the grid shape and wrap in an
     # `aggregate` over the grid) so the lifted reaction network runs pointwise.
-    _apply_pointwise_lift!(equations, states, params, observeds, index_sets, file.coupling)
+    _apply_pointwise_lift!(equations, states, params, observeds, index_sets, file.coupling;
+                           template_registry=(isempty(template_registry) ? nothing :
+                                              template_registry))
 
     # Step 4: Compute independent variables.
     ivs = _compute_independent_variables(equations)
@@ -494,12 +506,6 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # flattened system can round-trip into a runnable EsmFile (`flattened_to_esm`).
     function_tables = file.function_tables === nothing ?
         Dict{String, FunctionTable}() : copy(file.function_tables)
-
-    # esm-spec §9.6.4 rule 7 / §10.7: the flattened representation carries the
-    # MERGED template registry (union of the component registries, deep-equal
-    # dedup + deterministic `<ComponentPath>.<name>` collision rename). Empty when
-    # no references survived load (`file.component_templates === nothing`).
-    template_registry = _merge_flat_registry(file.component_templates)
 
     return FlattenedSystem(
         ivs, states, params, observeds,
@@ -564,6 +570,67 @@ because a lossy `flatten` dropped the geometry `manifold` / `table` data and the
 index-set registry. With those preserved (canonical `reconstruct` + the registry
 fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
 """
+# esm-spec §9.6.4 rule 7 / §10.7: registry bodies are COMPONENT-SCOPED source —
+# their free variable references resolve in the owning component's namespace,
+# exactly as the expand-at-load image does (load-time expansion splices the body
+# into the component's equations BEFORE flatten renames them). The flattened
+# registry must therefore carry bodies whose free variables are renamed with the
+# SAME (prefix, local-name) map `_collect_model!` applies to the component's
+# equations — otherwise a body spliced at the BUILD boundary (the
+# reference-preserving fast path, or `expand_flattened_refs`) references bare
+# names the flat var_map no longer contains (an ESD grid parameter like
+# `dphi_lat` was the motivating failure). Template formal params are EXCLUDED
+# from the rename set: they are the template's own scope, substituted at
+# expansion, never component variables. Nested reference BINDINGS inside a body
+# are scoped by `namespace_expr`'s apply arm; body-local aggregate loop names
+# are not component variables, so the map never touches them. The caller's
+# `EsmFile` registry is untouched (emit still produces the authored bodies) —
+# this scopes a COPY for the flat registry only. Reaction-system blocks pass
+# through unscoped for now (their rate templates are expanded eagerly or carry
+# no free component names in the current corpus; a violation fails loudly at
+# build as an unbound variable).
+function _scope_component_templates(file::EsmFile)
+    ct = file.component_templates
+    ct === nothing && return nothing
+    out = Dict{String,Any}()
+    for (compkey, block) in ct
+        parts = split(String(compkey), "."; limit=2)
+        model = length(parts) == 2 && parts[1] == "models" && file.models !== nothing ?
+                get(file.models, String(parts[2]), nothing) : nothing
+        if !(model isa Model) || !_is_object(block)
+            out[String(compkey)] = block
+            continue
+        end
+        cname = String(parts[2])
+        local_names = Set{String}(keys(model.variables))
+        for (sub_name, _) in model.subsystems
+            push!(local_names, sub_name)
+        end
+        newblock = Dict{String,Any}()
+        for (tname, decl) in pairs(block)
+            body_raw = _raw_get(decl, "body")
+            if body_raw === nothing
+                newblock[string(tname)] = decl
+                continue
+            end
+            pnames = Set{String}()
+            params_raw = _raw_get(decl, "params")
+            if params_raw isa AbstractVector
+                for p in params_raw
+                    p isa AbstractString && push!(pnames, String(p))
+                end
+            end
+            scoped = namespace_expr(parse_expression(body_raw), cname,
+                                    setdiff(local_names, pnames))
+            nd = Dict{String,Any}(string(k) => v for (k, v) in pairs(decl))
+            nd["body"] = serialize_expression(scoped)
+            newblock[string(tname)] = nd
+        end
+        out[String(compkey)] = newblock
+    end
+    return out
+end
+
 function flattened_to_esm(flat::FlattenedSystem;
                           name::AbstractString="Flattened",
                           esm_version::AbstractString=ESM_FORMAT_VERSION)::Dict{String,Any}
@@ -582,6 +649,16 @@ function flattened_to_esm(flat::FlattenedSystem;
         "variables" => variables,
         "equations" => Any[serialize_equation(eq) for eq in flat.equations],
     )
+    # esm-spec §9.6.4 Option B: surviving `apply_expression_template` references
+    # in the equations resolve against the merged registry — emit it as the
+    # model's `expression_templates` block so the reconstituted document is
+    # self-contained (the tree-walk front-door re-parses it into
+    # `EsmFile.component_templates` and the impl entry expands with site
+    # recording). Absent for every reference-free system.
+    if !isempty(flat.template_registry)
+        model["expression_templates"] =
+            Dict{String,Any}(String(k) => v for (k, v) in flat.template_registry)
+    end
 
     doc = Dict{String,Any}(
         "esm" => String(esm_version),

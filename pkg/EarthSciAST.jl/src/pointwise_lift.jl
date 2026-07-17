@@ -54,11 +54,34 @@ end
 # reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` whose
 # every position carries a loop variable (the interior stencil). Returns the loop
 # names in index-position (dim) order, or `nothing` if none is found.
-function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int)
+#
+# `reg` (the merged flat template registry, esm-spec §9.6.4 Option B) makes the
+# search see THROUGH surviving `apply_expression_template` region values: the
+# interior gather lives inside the referenced template body, so the walk peeks
+# at the body's expansion — ANALYSIS ONLY, the equation tree is never rewritten,
+# and the compile-once build still receives the reference-preserving form. With
+# `reg === nothing` (no surviving references) the walk is exactly the old one.
+function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int,
+                            reg=nothing)
     result = Ref{Union{Vector{String},Nothing}}(nothing)
+    peek = IdDict{OpExpr,Any}()
     function walk(e)
         result[] === nothing || return
         e isa OpExpr || return
+        if e.op == APPLY_EXPRESSION_TEMPLATE_OP
+            reg === nothing && return
+            body = get!(peek, e) do
+                try
+                    _expand_expr_refs(e, reg)
+                catch
+                    # Unknown template / bad bindings: leave detection to fail
+                    # as before; the build path raises the real diagnostic.
+                    nothing
+                end
+            end
+            body === nothing || walk(body)
+            return
+        end
         if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr &&
            ((e.args[1]::VarExpr).name in lifted) && length(e.args) - 1 == rank
             loops = String[]
@@ -140,7 +163,8 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
                                 params::OrderedDict{String,ModelVariable},
                                 observeds::OrderedDict{String,ModelVariable},
                                 index_sets::OrderedDict{String,IndexSet},
-                                coupling)
+                                coupling;
+                                template_registry=nothing)
     any(c -> c isa CouplingOperatorCompose &&
              (c.lifting !== nothing && c.lifting == "pointwise"), coupling) || return
 
@@ -157,7 +181,7 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
         mas = _collect_makearrays!(OpExpr[], eq.rhs)
         (isempty(mas) || mas[1].regions === nothing || isempty(mas[1].regions)) && continue
         rank = length(mas[1].regions[1])
-        loops = _pointwise_lift_loops(mas, lifted, rank, species)
+        loops = _pointwise_lift_loops(mas, lifted, rank, species, template_registry)
         gaxes, ranges = _pointwise_lift_axes(mas[1], loops, size_to_names,
                                              species, rank)
 
@@ -237,9 +261,10 @@ end
 # or throw `DimensionPromotionError` when no makearray carries a full-rank
 # interior-stencil gather.
 function _pointwise_lift_loops(mas::Vector{OpExpr}, lifted::Set{String},
-                               rank::Int, species::String)::Vector{String}
+                               rank::Int, species::String,
+                               reg=nothing)::Vector{String}
     for ma in mas
-        loops = _detect_lift_loops(ma, lifted, rank)
+        loops = _detect_lift_loops(ma, lifted, rank, reg)
         loops === nothing || return loops
     end
     throw(DimensionPromotionError(

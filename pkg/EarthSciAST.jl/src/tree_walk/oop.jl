@@ -664,6 +664,9 @@ end
 # that scalar-indexes a traced value. On host (Float64 / ForwardDiff `Dual`) it is
 # correct and matches both the in-place affine path and the per-cell reference.
 function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
+    for S in K.subs                                 # template-body sub-kernels:
+        _fill_invariant!(S, u, p, t, T)             # invariant tier once per call
+    end
     _fill_invariant!(K, u, p, t, T)                 # once per call, before the loop
     cs = K.cells
     # `_eval_cell` fills the per-cell CSE scratch (an in-place buffer write) then

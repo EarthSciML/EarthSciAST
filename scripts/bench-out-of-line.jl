@@ -16,12 +16,16 @@
 
 using EarthSciAST
 using EarthSciAST: resolve_template_machinery, lower_expression_templates, Expand,
-    JSONLikeDict, _BENCH_ON, _BENCH_COMPILE_CALLS, _BENCH_BRANCH_TEMPLATES, _bench_reset!,
+    JSONLikeDict, _BENCH_ON, _BENCH_COMPILE_CALLS, _BENCH_BRANCH_TEMPLATES,
+    _BENCH_BODY_VARIANTS, _bench_reset!,
     build_evaluator, load, flatten
 using JSON3
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 const FIX = joinpath(ROOT, "tests", "bench", "transport_3axis_7cubed.esm")
+# The compile-once measurement fixture (RFC step c): full-rank region bodies, so
+# the affine box processor fires and the 5×5×5 branch-key cross-product is real.
+const FIX_FULLRANK = joinpath(ROOT, "tests", "bench", "transport_3axis_7cubed_fullrank.esm")
 
 _count_distinct(x, seen=Base.IdSet{Any}()) = begin
     (x isa AbstractDict || x isa AbstractVector) || return 0
@@ -48,41 +52,55 @@ function representation()
             _count_distinct(expA), " / ", _count_distinct(dB))
 end
 
-function build_once(disable::Bool)
+function build_once(fix::AbstractString, disable::Bool)
     withenv("ESS_TEMPLATE_REF_DISABLE" => (disable ? "1" : nothing)) do
         # Fast path (default): references survive load and are CARRIED into the
-        # FlattenedSystem (`expand_refs=false`), then Expanded at the build
-        # boundary — the sound per-node `Expand` fallback (RFC §7.7). Under
-        # `ESS_TEMPLATE_REF_DISABLE=1` load already expanded, so `expand_refs`
-        # is moot. Both are bit-identical (gate d); this measures the build cost.
-        build_evaluator(flatten(load(FIX); expand_refs = !disable))
+        # FlattenedSystem (`expand_refs=false`), then compiled once per (use
+        # site, region class) as sub-kernels by the affine build (RFC §7.7
+        # "compile references natively"). Under `ESS_TEMPLATE_REF_DISABLE=1`
+        # load already expanded, so `expand_refs` is moot and the build fuses
+        # the expanded spine. Both are bit-identical (gate 3); this measures the
+        # build cost. (An earlier revision passed `expand_refs = !disable`,
+        # which expanded at flatten on BOTH columns — the fast column never
+        # carried a reference.)
+        build_evaluator(flatten(load(fix); expand_refs = false))
     end
 end
 
-function build_measure(label; disable::Bool)
+function build_measure(fix::AbstractString, label; disable::Bool)
     _BENCH_ON[] = true
     _bench_reset!()
-    t = @elapsed build_once(disable)
+    t = @elapsed build_once(fix, disable)
     branches = _BENCH_BRANCH_TEMPLATES[]
     compiles = _BENCH_COMPILE_CALLS[]
+    variants = _BENCH_BODY_VARIANTS[]
     _BENCH_ON[] = false
     println("── build ($label) ──")
     println("  _build_branch_template calls (spine templates): ", branches)
+    println("  compiled template-body variants (sub-kernels):  ", variants)
     println("  _compile calls (node-lowerings):                ", compiles)
     println("  wall-clock (build, warm):                       ", round(t; digits = 3), " s")
     return (branches, compiles, t)
 end
 
 representation()
-# Warm JIT once (uncounted) so the reported build numbers are lowering counts,
-# not first-call compilation of the runner itself.
-try
-    build_once(false)
-catch e
-    println("NOTE: warm build threw: ", sprint(showerror, e))
+# Warm JIT once per fixture (uncounted) so the reported build numbers are
+# lowering counts, not first-call compilation of the runner itself.
+for fix in (FIX, FIX_FULLRANK)
+    try
+        build_once(fix, false)
+    catch e
+        println("NOTE: warm build threw: ", sprint(showerror, e))
+    end
 end
-fast = build_measure("fast path (default)"; disable = false)
-slow = build_measure("ESS_TEMPLATE_REF_DISABLE=1 (Expand-at-build)"; disable = true)
-println("── summary ──")
-println("  branch templates fast / disabled: ", fast[1], " / ", slow[1])
-println("  node-lowerings   fast / disabled: ", fast[2], " / ", slow[2])
+println()
+println("═══ ", basename(FIX), " (reduced-rank faces → per-cell path; representation fixture) ═══")
+build_measure(FIX, "fast path (default)"; disable = false)
+build_measure(FIX, "ESS_TEMPLATE_REF_DISABLE=1 (fused)"; disable = true)
+println()
+println("═══ ", basename(FIX_FULLRANK), " (full-rank bodies → affine path; compile-once fixture) ═══")
+fast = build_measure(FIX_FULLRANK, "fast path (compile-once)"; disable = false)
+slow = build_measure(FIX_FULLRANK, "ESS_TEMPLATE_REF_DISABLE=1 (fused)"; disable = true)
+println("── summary (", basename(FIX_FULLRANK), ") ──")
+println("  branch templates fast / fused: ", fast[1], " / ", slow[1])
+println("  node-lowerings   fast / fused: ", fast[2], " / ", slow[2])

@@ -1228,6 +1228,7 @@ end
 # join-gate resolution, index-set range resolution, value-invention drop,
 # discrete-cadence def extraction, and the `ic` fold.
 function _build_partition_and_materialize(model::Model, cls;
+        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
         index_sets::AbstractDict, const_arrays::AbstractDict,
         param_arrays::AbstractDict, parameter_overrides::AbstractDict,
         registered_functions::AbstractDict, vi_vars, vi_extents::AbstractDict,
@@ -1296,6 +1297,7 @@ function _build_partition_and_materialize(model::Model, cls;
     # resolved away — categorical members are read from the still-present
     # `{from}` references here. No-op (byte-identical) for files without a join.
     equations = _resolve_join_gates(ode_equations, index_sets, vi_maps)
+    _translate_equation_sites!(template_sites, ode_equations, equations)
     init_equations = _resolve_join_gates(model.initialization_equations,
                                          index_sets, vi_maps)
 
@@ -1329,8 +1331,11 @@ function _build_partition_and_materialize(model::Model, cls;
             length(best) == 1 && (factor_scope[fname] = best[1])
         end
     end
-    equations = _resolve_index_set_ranges(equations, index_sets, derived_extents,
-                                          factor_scope)
+    let pre = equations
+        equations = _resolve_index_set_ranges(equations, index_sets, derived_extents,
+                                              factor_scope)
+        _translate_equation_sites!(template_sites, pre, equations)
+    end
     init_equations = _resolve_index_set_ranges(init_equations,
                                                index_sets, derived_extents,
                                                factor_scope)
@@ -1466,7 +1471,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         registered_functions::AbstractDict, const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan, inspect, materialize_out,
-        form::Symbol)
+        form::Symbol,
+        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing)
     u0 = layout.u0
     p = layout.p
     var_map = layout.var_map
@@ -1533,7 +1539,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
     scalar_entries, vec_kernels, acc_kernels = _compile_derivative_equations(derivative_eqs,
         resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
-        param_sym_set, reg_funcs, n_states)
+        param_sym_set, reg_funcs, n_states; template_sites=template_sites)
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
@@ -1722,7 +1728,40 @@ function _build_evaluator_impl(model::Model;
                          # `:oop` → the eltype-generic `f(u, p, t) → du` that
                          # ForwardDiff/Enzyme can differentiate. Same IR, same
                          # evaluation order, so a Float64 `:oop` run is bit-identical.
-                         form::Symbol=:inplace)
+                         form::Symbol=:inplace,
+                         # Surviving `apply_expression_template` registry for the
+                         # selected model (esm-spec §9.6.4 Option B; name → raw
+                         # decl). Supplied by the `EsmFile` front-door when the
+                         # document carries references; `nothing` everywhere else.
+                         _template_reg=nothing)
+    # ---- Compile-once template tier: expand references at the entry, keeping
+    # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
+    # every fallback path below sees exactly the fused expanded tree Option A
+    # produced — variable discovery, layout, validation, and the per-cell /
+    # symbolic paths are byte-identical to a pre-expanded build. The recorded
+    # expansion roots are consumed ONLY by the affine stencil build, which
+    # compiles each (use site, region class) body once and calls it as a
+    # sub-kernel. Expansion works on a deep copy: the caller's typed model must
+    # keep its references (`serialize_esm_file` emits them verbatim — R1).
+    _template_sites = nothing
+    if _template_reg !== nothing
+        model = deepcopy(model)
+        sites = IdDict{OpExpr,OpExpr}()
+        _expand_model_refs!(model, _template_reg;
+                            sites=_template_compile_once_disabled() ? nothing : sites)
+        isempty(sites) || (_template_sites = sites)
+    elseif _model_has_surviving_refs(model)
+        # A surviving reference with no registry in reach would compile into an
+        # opaque op node and only fail at RHS evaluation time — fail loudly at
+        # build time instead. Reached only by callers that hand a
+        # reference-preserving `Model` directly to the evaluator without its
+        # document's `expression_templates`; every document front-door threads
+        # the registry.
+        throw(TreeWalkError("E_TREEWALK_UNRESOLVED_TEMPLATE_REF",
+            "model carries apply_expression_template references but no " *
+            "expression_templates registry reached the build; construct via " *
+            "an EsmFile/document front-door (esm-spec §9.6.4 Option B)"))
+    end
     _has_value_invention = !isempty(_vi_vars)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
@@ -1731,6 +1770,7 @@ function _build_evaluator_impl(model::Model;
 
     # ---- Phase 2: ODE partition + setup materialization + equation rewrites ----
     parts = _build_partition_and_materialize(model, cls;
+        template_sites=_template_sites,
         index_sets=index_sets, const_arrays=const_arrays,
         param_arrays=param_arrays, parameter_overrides=parameter_overrides,
         registered_functions=registered_functions, vi_vars=_vi_vars,
@@ -1748,7 +1788,8 @@ function _build_evaluator_impl(model::Model;
         registered_functions=registered_functions, const_arrays=const_arrays,
         const_array_boundaries=const_array_boundaries, param_arrays=param_arrays,
         initial_conditions=initial_conditions, tspan=tspan, inspect=inspect,
-        materialize_out=materialize_out, form=form)
+        materialize_out=materialize_out, form=form,
+        template_sites=_template_sites)
 end
 
 # ---- Stage: per-derivative compiled-IR list ----
@@ -1763,7 +1804,8 @@ end
 function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int)
+        pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int;
+        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing)
     scalar_entries = Tuple{Int,ASTExpr}[]
     vec_kernels = _VecKernel[]
     acc_kernels = _AccKernel[]
@@ -1807,7 +1849,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         elseif _is_arrayop_D_lhs(eq.lhs)
             _compile_arrayop_equation!(vec_kernels, acc_kernels, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
-                                       pgather, param_sym_set, reg_funcs)
+                                       pgather, param_sym_set, reg_funcs;
+                                       template_sites=template_sites)
         end
     end
     return scalar_entries, vec_kernels, acc_kernels
@@ -1856,7 +1899,8 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
-        param_sym_set, reg_funcs)
+        param_sym_set, reg_funcs;
+        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing)
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -1928,7 +1972,17 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
             _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
                                 resolved_obs, array_var_info, var_map,
                                 const_registry, pgather, param_sym_set, reg_funcs,
-                                covered)
+                                covered; template_sites=template_sites)
+        # Compile-once tier declined (a body construct the sub-kernel split cannot
+        # model): retry the SAME expanded body fused — exactly the pre-tier build.
+        # Rarely taken; `covered` is untouched on a `nothing` return.
+        if affine_kernels === nothing && template_sites !== nothing && affine_body !== nothing
+            affine_kernels =
+                _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
+                                    resolved_obs, array_var_info, var_map,
+                                    const_registry, pgather, param_sym_set,
+                                    reg_funcs, covered)
+        end
     end
     if affine_kernels !== nothing
         get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
@@ -2144,7 +2198,23 @@ function build_evaluator(file::EsmFile;
     model = _select_model(file, model_name)
     # Thread the document-scoped index-set registry (esm-spec v0.8.0) into the
     # typed evaluator, which no longer reads it off the `Model`.
-    return build_evaluator(model; index_sets=file.index_sets, kwargs...)
+    return build_evaluator(model; index_sets=file.index_sets,
+                           _template_reg=_component_template_reg(file, model_name),
+                           kwargs...)
+end
+
+# The selected model's surviving-reference registry ("models.<name>" in
+# `EsmFile.component_templates`, esm-spec §9.6.4 Option B), or `nothing` when the
+# document carries none. Mirrors `_select_model`'s name resolution; a selection
+# `_select_model` would reject returns `nothing` here and lets it throw.
+function _component_template_reg(file::EsmFile, model_name)
+    ct = file.component_templates
+    ct === nothing && return nothing
+    name = model_name !== nothing ? String(model_name) :
+           (file.models !== nothing && length(file.models) == 1 ?
+                String(first(keys(file.models))) : nothing)
+    name === nothing && return nothing
+    return get(ct, "models.$name", nothing)
 end
 
 # Direct EsmFile/Model entry points carry no raw JSON, so value-invention
@@ -2225,12 +2295,47 @@ spatial PDE, `discretize(flat; …)` first.
 function build_evaluator(flat::FlattenedSystem; kwargs...)
     # esm-spec §9.6.4 Option B / RFC §7.7: when the fast-path flatten carried
     # surviving `apply_expression_template` references into the FlattenedSystem
-    # (a non-empty `template_registry`), Expand them against that registry here —
-    # the sound per-node `Expand` fallback at the tree-walk build boundary. The
-    # result is bit-identical to the `ESS_TEMPLATE_REF_DISABLE=1` Expand-at-load
-    # image (gate d). A no-op for a reference-free system.
-    flat = expand_flattened_refs(flat)
+    # (a non-empty `template_registry`), they now ride the reconstituted document
+    # (`flattened_to_esm` emits the registry as the model's
+    # `expression_templates` block), and the tree-walk impl entry expands them
+    # with SITE RECORDING so the affine build can compile each body once and call
+    # it as a sub-kernel (the RFC's compile-once tier). Under
+    # `ESS_TEMPLATE_COMPILE_ONCE_DISABLE=1` the references are instead expanded
+    # HERE — the sound per-node `Expand` fallback, bit-identical to the
+    # `ESS_TEMPLATE_REF_DISABLE=1` Expand-at-load image (gate d) and the
+    # differential reference for the fast path. A no-op either way for a
+    # reference-free system.
+    if !isempty(flat.template_registry) && _template_compile_once_disabled()
+        flat = expand_flattened_refs(flat)
+        flat = FlattenedSystem(flat; template_registry=Dict{String,Any}())
+    end
     return build_evaluator(flattened_to_esm(flat); kwargs...)
+end
+
+# Does any equation / variable expression of `model` (or a subsystem) carry a
+# surviving `apply_expression_template` node? Build-time guard input; one cheap
+# whole-model walk (`foreach_subexpr` does not descend `bindings`, but the apply
+# node itself is what is being detected).
+function _model_has_surviving_refs(model::Model)
+    found = false
+    check(e) = e === nothing || found ? nothing : foreach_subexpr(e) do x
+        x isa OpExpr && x.op == "apply_expression_template" && (found = true)
+        nothing
+    end
+    for eqs in (model.equations, model.initialization_equations)
+        for eq in eqs
+            check(eq.lhs); check(eq.rhs)
+        end
+    end
+    for (_, var) in model.variables
+        check(var.expression)
+    end
+    if !found
+        for (_, sub) in model.subsystems
+            sub isa Model && _model_has_surviving_refs(sub) && (found = true)
+        end
+    end
+    return found
 end
 
 # Select one raw model document (native dict) from a raw ESM dict, mirroring

@@ -1,6 +1,6 @@
 # RFC — Out-of-line expression templates
 
-**Status:** Draft v3 (measurements reproducible; design pinned to R1/R2 in §6; §7.3 audit re-run under the corrected predicate with `tools/opacity_audit.py`; version-gate/emit-stamp semantics pinned in §7.8 rules; not yet prototyped)
+**Status:** Implemented (v3 design; Option B mandatory surface in all five bindings; §7.7's optional compile-once tier implemented in the Julia affine stencil build — one compiled body per (OUTERMOST use site, region class), called as a runtime sub-kernel with lane re-basing; gate 3 bit-identity pinned by `test/compile_once_templates_test.jl` on `tests/bench/transport_3axis_7cubed_fullrank.esm`, where 5+5+5 body variants replace the 5×5×5 fused branch cross-product. Measured on the real ESD PPM + pointwise-lift stack (reseact.esm probe6, 2 species, 7×7×7): 33,881,439 fused node-lowerings → 695,139 with the tier, 48.7× fewer, bit-identical solutions — §3's blowup confirmed at 33.9M and removed)
 **Bead:** (unassigned)
 **Affects spec version:** §9.6.3 substitution, §9.6.4 (**replaced**: Option A → Option B), §9.7.3 (composition → checking), §10.7 flatten **and esm-libraries-spec §4.7.5** (FlattenedSystem carries a template registry), schema description strings (no shape change — see §7.5.6). Gated at `esm: 0.9.0`.
 **Scope:** The *authored* wire vocabulary is unchanged — no new op, no rule-authoring change, no edits to any authored `.esm`. The *emitted* form changes: template references survive `parse → emit`, and emit materializes the referenced templates into the document (§7.5).

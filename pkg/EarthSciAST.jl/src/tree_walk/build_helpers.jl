@@ -19,7 +19,53 @@
 const _BENCH_ON = Ref(false)
 const _BENCH_COMPILE_CALLS = Ref(0)
 const _BENCH_BRANCH_TEMPLATES = Ref(0)
-_bench_reset!() = (_BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0; nothing)
+# Compile-once tier (RFC §7.7 "compile references natively"): distinct template-
+# body variants compiled — one per (use site, region class). The RFC's ~21.
+const _BENCH_BODY_VARIANTS = Ref(0)
+_bench_reset!() = (_BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0;
+                   _BENCH_BODY_VARIANTS[] = 0; nothing)
+
+# Escape hatch for the compile-once template tier (RFC out-of-line-expression-
+# templates §12 gate 3; the analogue of `ESS_STENCIL_DISABLE`). When set, the
+# tree-walk build boundary expands every surviving `apply_expression_template`
+# reference up front (`expand_flattened_refs` / plain `_expand_model_refs!`) and
+# the affine build compiles the fused expanded spine exactly as before this
+# feature — the differential-test reference for the sub-kernel fast path.
+_template_compile_once_disabled() = get(ENV, "ESS_TEMPLATE_COMPILE_ONCE_DISABLE", "") == "1"
+
+# Lockstep site translation (compile-once template tier): a SHAPE-PRESERVING
+# equation rewrite — join-gate or index-set-range resolution rebuilds a node's
+# non-expression fields (`ranges`, `join_gates`) and every ancestor — detaches
+# recorded expansion roots from the tree by identity. Walk the old and new trees
+# in parallel (`child_exprs` yields the same expression slots in the same order
+# when only non-expression fields changed) and map each recorded root to its
+# rebuilt counterpart. Old keys are kept (harmless — they no longer appear in
+# any tree); a subtree whose expression-slot count changed is skipped, so its
+# sites degrade to the fused build — slower, never wrong.
+function _translate_sites_lockstep!(sites::IdDict{OpExpr,OpExpr},
+                                    old::ASTExpr, new::ASTExpr)
+    old === new && return nothing
+    (old isa OpExpr && new isa OpExpr) || return nothing
+    ap = get(sites, old, nothing)
+    ap === nothing || (sites[new] = ap)
+    co = child_exprs(old)
+    cn = child_exprs(new)
+    length(co) == length(cn) || return nothing
+    for i in eachindex(co)
+        _translate_sites_lockstep!(sites, co[i], cn[i])
+    end
+    return nothing
+end
+function _translate_equation_sites!(sites::Union{Nothing,IdDict{OpExpr,OpExpr}},
+                                    old_eqs::Vector{Equation}, new_eqs::Vector{Equation})
+    (sites === nothing || old_eqs === new_eqs) && return nothing
+    length(old_eqs) == length(new_eqs) || return nothing
+    for i in eachindex(old_eqs)
+        _translate_sites_lockstep!(sites, old_eqs[i].lhs, new_eqs[i].lhs)
+        _translate_sites_lockstep!(sites, old_eqs[i].rhs, new_eqs[i].rhs)
+    end
+    return nothing
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SHARED READ-ONLY `_EMPTY_*` SENTINELS — invariant: NEVER MUTATED.

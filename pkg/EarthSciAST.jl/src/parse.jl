@@ -621,6 +621,33 @@ function coerce_esm_file(data::Any)::EsmFile
     # are not read here. By this point the lowering has rewritten and stripped
     # them; `_lower_and_coerce` snapshots them verbatim off the RAW document and
     # attaches them to the returned `EsmFile` (§9.6.4 rule 5).
+    #
+    # PER-COMPONENT `expression_templates` blocks are a different matter: on the
+    # ordinary load path `_lower_and_coerce` strips them before coercion (and
+    # attaches the materialized registries itself), so seeing one here means the
+    # document came through a path that carries surviving references WITHOUT the
+    # load pipeline — the tree-walk front-door's `flattened_to_esm`
+    # reconstitution (esm-spec §9.6.4 Option B), or a direct
+    # `coerce_esm_file`/`build_evaluator(dict)` call on a lowered 0.9.0 emit.
+    # Capture them as `component_templates` so `apply_expression_template` nodes
+    # in the coerced expressions stay resolvable; without this the references
+    # compile into opaque op nodes that only fail at RHS evaluation time.
+    component_templates = nothing
+    let ct = Dict{String,Any}()
+        for (compkind, comps_raw) in (("models", _get_field(data, :models, nothing)),
+                                      ("reaction_systems", _get_field(data, :reaction_systems, nothing)))
+            comps_raw === nothing && continue
+            for (k, v) in pairs(comps_raw)
+                tpl = _get_field(v, :expression_templates, nothing)
+                tpl === nothing && continue
+                # Native String-keyed form: the registry is probed with String
+                # names (`haskey(reg, name)`) and read with `_raw_get`, and the
+                # load path's `_materialize_components!` blocks are native too.
+                ct["$compkind.$(string(k))"] = _to_native_json(tpl)
+            end
+        end
+        isempty(ct) || (component_templates = ct)
+    end
     file = EsmFile(esm, metadata,
                   models=models,
                   reaction_systems=reaction_systems,
@@ -629,7 +656,8 @@ function coerce_esm_file(data::Any)::EsmFile
                   domain=domain,
                   enums=enums,
                   function_tables=function_tables,
-                  index_sets=index_sets)
+                  index_sets=index_sets,
+                  component_templates=component_templates)
     # Lower every `enum` op to a `const` integer using the file-local map.
     # This runs once at load time so downstream consumers (evaluators,
     # canonicalize, codegen) never see enum strings in expression trees.
