@@ -1898,13 +1898,56 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     machinery_input = injected_root === nothing ? raw_data : injected_root
     resolved = resolve_template_machinery(machinery_input, String(base_path);
                                           metaparameters=metaparameters)
-    expanded = lower_expression_templates(resolved === nothing ? machinery_input : resolved)
-    if resolved !== nothing && !(expanded isa JSONLikeDict)
-        # The lowering pass fast-paths files without component templates
-        # (e.g. a directly-loaded library file, or a metaparameters-only
-        # problem file); wrap the native tree so `coerce_esm_file` sees
-        # the JSON3-compatible property surface.
-        expanded = JSONLikeDict(_to_dict(expanded))
+    loaded = lower_expression_templates(resolved === nothing ? machinery_input : resolved)
+    # esm-spec §9.6.4 Option B: `lower_expression_templates` PRESERVES surviving
+    # `apply_expression_template` references and per-component registries.
+    #   * Default (fast path): references survive into the typed IR. The
+    #     per-component registries are MATERIALIZED (`_materialize_components!`) and
+    #     carried on the EsmFile so `save` emits the reference-preserving form
+    #     (R1 / §9.6.4 rule 5). The build paths handle references (tree-walk via a
+    #     per-node `Expand` fallback; MTK Expands-at-entry).
+    #   * `ESS_TEMPLATE_REF_DISABLE=1`: Expand at load (Option-A image), references
+    #     never reach the build. This is the escape hatch analogous to
+    #     `ESS_STENCIL_DISABLE` and the differential-test baseline (gate d).
+    comp_tpls = nothing
+    esm_stamp = nothing
+    if loaded isa JSONLikeDict
+        if _template_ref_disabled()
+            expanded = JSONLikeDict(expand_document(loaded))
+        else
+            root = _to_dict(getfield(loaded, :data))::Dict{String,Any}
+            authored = _authored_template_names(machinery_input)
+            # Coupling `variable_map` transform references can't be per-component
+            # materialized (coupling is not a component), so expand them against
+            # the receiving component's registry BEFORE it is stripped below.
+            _expand_coupling_transform_refs!(root)
+            blocks, bump = _materialize_components!(root, authored)
+            # The materialized blocks travel on the EsmFile (for emit); strip them
+            # from the coerce tree so `coerce_esm_file` only sees the surviving
+            # references in expression positions.
+            for compkind in ("models", "reaction_systems")
+                comps = get(root, compkind, nothing)
+                (comps isa AbstractDict) || continue
+                for (_, comp) in comps
+                    comp isa AbstractDict && haskey(comp, "expression_templates") &&
+                        delete!(comp, "expression_templates")
+                end
+            end
+            if !isempty(blocks)
+                comp_tpls = Dict{String,Any}(k => v for (k, v) in blocks)
+            end
+            bump && (esm_stamp = "0.9.0")
+            expanded = JSONLikeDict(root)
+        end
+    else
+        expanded = loaded
+        if resolved !== nothing
+            # The lowering pass fast-paths files without component templates
+            # (e.g. a directly-loaded library file, or a metaparameters-only
+            # problem file); wrap the native tree so `coerce_esm_file` sees
+            # the JSON3-compatible property surface.
+            expanded = JSONLikeDict(_to_dict(expanded))
+        end
     end
     # Coerce under an identity parse memo (see `_PARSE_EXPR_MEMO_KEY`) so the
     # structural sharing the template-expansion passes built in the raw tree
@@ -1913,8 +1956,20 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     file = task_local_storage(_PARSE_EXPR_MEMO_KEY, IdDict{Any,ASTExpr}()) do
         coerce_esm_file(expanded)
     end
-    return _with_declarations(file, raw_templates, raw_metaparams)
+    return _with_declarations(file, raw_templates, raw_metaparams;
+                              component_templates=comp_tpls, esm=esm_stamp)
 end
+
+"""
+    _template_ref_disabled() -> Bool
+
+The `ESS_TEMPLATE_REF_DISABLE=1` escape hatch (analogous to `ESS_STENCIL_DISABLE`,
+RFC out-of-line-expression-templates §7.7 / §12): when set, expression-template
+references are Expanded at load (the Option-A image) and never reach the build;
+when unset (default), references survive into the typed IR and the build handles
+them. Gate (d)'s differential builds a fixture both ways and compares exactly.
+"""
+_template_ref_disabled() = get(ENV, "ESS_TEMPLATE_REF_DISABLE", "") == "1"
 
 # A deep, plain-`Dict` copy of a top-level declaration block, or `nothing`.
 # Plain `Dict`/`Vector`/scalars only — a JSON3 view or a `JSONLikeDict` would
@@ -1932,10 +1987,14 @@ _plain_json(x::AbstractDict) = Dict{String,Any}(string(k) => _plain_json(v) for 
 _plain_json(x::AbstractVector) = Any[_plain_json(v) for v in x]
 _plain_json(x) = x
 
-# Rebuild `file` carrying the verbatim declaration blocks. `EsmFile` is immutable.
-_with_declarations(file::EsmFile, templates, metaparams) =
-    (templates === nothing && metaparams === nothing) ? file :
-    EsmFile(file.esm, file.metadata;
+# Rebuild `file` carrying the verbatim declaration blocks and, from esm 0.9.0
+# (Option B), the per-component MATERIALIZED template registries + a possibly
+# version-stamped `esm`. `EsmFile` is immutable.
+_with_declarations(file::EsmFile, templates, metaparams;
+                   component_templates=nothing, esm=nothing) =
+    (templates === nothing && metaparams === nothing &&
+     component_templates === nothing && esm === nothing) ? file :
+    EsmFile(esm === nothing ? file.esm : esm, file.metadata;
             models=file.models,
             reaction_systems=file.reaction_systems,
             data_loaders=file.data_loaders,
@@ -1945,7 +2004,8 @@ _with_declarations(file::EsmFile, templates, metaparams) =
             function_tables=file.function_tables,
             index_sets=file.index_sets,
             expression_templates=templates,
-            metaparameters=metaparams)
+            metaparameters=metaparams,
+            component_templates=component_templates)
 
 # ========================================
 # Top-level model {ref} resolution (schema §4.7: models.* = oneOf [Model, {ref}])

@@ -13,6 +13,7 @@ import { validateUnits, type UnitWarning } from './units.js'
 import { losslessJsonParse, stripNumericLiterals } from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
 import {
+  expandDocument,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
 } from './lower-expression-templates.js'
@@ -426,12 +427,15 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
     validateSchema,
   })
   data = resolved ?? machineryInput
-  // `lowerExpressionTemplates` returns a fresh tree (it deep-clones), so `data`
-  // is already independent of the caller's input here; no separate defensive
-  // copy is needed. (The former `coerceTypes` pass was a second, no-op identity
-  // deep-copy that transformed nothing — it is removed and the value cast
-  // directly.)
-  const typedData = lowerExpressionTemplates(data as object) as EsmFile
+  // esm-spec §9.6.4 (Option B): `lowerExpressionTemplates` resolves the document
+  // to the REFERENCE-PRESERVING form (surviving references, retained registries).
+  // The TS binding uses the RFC §7.7 "Expand at build" evaluation strategy: call
+  // `Expand` (`expandDocument`) once here at typed-coercion time, so every
+  // downstream consumer (codegen, units, graph, …) sees the Option-A expanded
+  // image and remains numerically bit-identical to pre-0.9.0 behavior. The
+  // reference-preserving form is what `emitDocument` re-derives from source.
+  const loweredTemplates = lowerExpressionTemplates(data as object)
+  const typedData = expandDocument(loweredTemplates) as EsmFile
 
   // Step 4: Lower `enum` ops to `const` integer nodes against the
   // file-local `enums` block (esm-spec §9.3). After this pass, the

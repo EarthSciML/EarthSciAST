@@ -1,0 +1,289 @@
+{
+  "esm": "0.9.0",
+  "index_sets": {
+    "lat": {
+      "kind": "interval",
+      "size": 181
+    },
+    "lon": {
+      "kind": "interval",
+      "size": 288
+    }
+  },
+  "metadata": {
+    "name": "advection_lon"
+  },
+  "models": {
+    "Advection": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  "u"
+                ],
+                "op": "-"
+              },
+              {
+                "args": [],
+                "op": "makearray",
+                "regions": [
+                  [
+                    [
+                      2,
+                      287
+                    ],
+                    [
+                      1,
+                      181
+                    ]
+                  ],
+                  [
+                    [
+                      1,
+                      1
+                    ],
+                    [
+                      1,
+                      181
+                    ]
+                  ],
+                  [
+                    [
+                      288,
+                      288
+                    ],
+                    [
+                      1,
+                      181
+                    ]
+                  ]
+                ],
+                "values": [
+                  {
+                    "args": [],
+                    "bindings": {
+                      "f": "c"
+                    },
+                    "name": "central_D_lon_interior",
+                    "op": "apply_expression_template"
+                  },
+                  {
+                    "args": [
+                      "c"
+                    ],
+                    "expr": {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "c",
+                                2,
+                                "j"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "c",
+                                1,
+                                "j"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [],
+                          "bindings": {},
+                          "name": "dlon_deg",
+                          "op": "apply_expression_template"
+                        }
+                      ],
+                      "op": "/"
+                    },
+                    "op": "aggregate",
+                    "output_idx": [
+                      "j"
+                    ],
+                    "ranges": {
+                      "j": {
+                        "from": "lat"
+                      }
+                    }
+                  },
+                  {
+                    "args": [
+                      "c"
+                    ],
+                    "expr": {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "c",
+                                288,
+                                "j"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "c",
+                                {
+                                  "args": [
+                                    288,
+                                    1
+                                  ],
+                                  "op": "-"
+                                },
+                                "j"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [],
+                          "bindings": {},
+                          "name": "dlon_deg",
+                          "op": "apply_expression_template"
+                        }
+                      ],
+                      "op": "/"
+                    },
+                    "op": "aggregate",
+                    "output_idx": [
+                      "j"
+                    ],
+                    "ranges": {
+                      "j": {
+                        "from": "lat"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            "op": "*"
+          }
+        }
+      ],
+      "expression_templates": {
+        "central_D_lon_interior": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "f",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "+"
+                        },
+                        "j"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "f",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "-"
+                        },
+                        "j"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "-"
+                },
+                {
+                  "args": [
+                    2,
+                    {
+                      "args": [],
+                      "bindings": {},
+                      "name": "dlon_deg",
+                      "op": "apply_expression_template"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "/"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                287
+              ],
+              "j": {
+                "from": "lat"
+              }
+            }
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "dlon_deg": {
+          "body": {
+            "args": [
+              360,
+              288
+            ],
+            "op": "/"
+          },
+          "params": []
+        }
+      },
+      "variables": {
+        "c": {
+          "description": "tracer",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "type": "state",
+          "units": "kg/m^3"
+        },
+        "u": {
+          "default": 5.5,
+          "description": "zonal wind",
+          "type": "parameter",
+          "units": "m/s"
+        }
+      }
+    }
+  }
+}

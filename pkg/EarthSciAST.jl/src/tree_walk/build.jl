@@ -2223,6 +2223,13 @@ materialized. Use this for a 0-D / array flattened system; for one carrying a
 spatial PDE, `discretize(flat; …)` first.
 """
 function build_evaluator(flat::FlattenedSystem; kwargs...)
+    # esm-spec §9.6.4 Option B / RFC §7.7: when the fast-path flatten carried
+    # surviving `apply_expression_template` references into the FlattenedSystem
+    # (a non-empty `template_registry`), Expand them against that registry here —
+    # the sound per-node `Expand` fallback at the tree-walk build boundary. The
+    # result is bit-identical to the `ESS_TEMPLATE_REF_DISABLE=1` Expand-at-load
+    # image (gate d). A no-op for a reference-free system.
+    flat = expand_flattened_refs(flat)
     return build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 

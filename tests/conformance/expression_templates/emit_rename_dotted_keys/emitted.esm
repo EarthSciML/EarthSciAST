@@ -1,0 +1,207 @@
+{
+  "esm": "0.9.0",
+  "index_sets": {
+    "coarse.x": {
+      "kind": "interval",
+      "size": 8
+    },
+    "fine.x": {
+      "kind": "interval",
+      "size": 16
+    }
+  },
+  "metadata": {
+    "description": "One grid-family library instantiated twice in one model (esm-spec 9.7.7): a fine instance (prefix fine, N = 16) and a coarse instance (prefix coarse, N = 8). Renaming is transitive: each instance's index set arrives as fine.x / coarse.x, the rule instance's match wrt follows it (so each rule fires only on its own axis), the metaparameter occurrences inside ranges and dx were instantiated per edge, and the library file itself is never edited. The edge's bindings speak the target's own (pre-rename) names",
+    "name": "import_rename_two_instances"
+  },
+  "models": {
+    "TwoGrids": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "cf"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "cf"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "cf",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "+"
+                        }
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "cf",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "-"
+                        }
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "-"
+                },
+                {
+                  "args": [
+                    2,
+                    {
+                      "args": [],
+                      "bindings": {},
+                      "name": "fine.dx",
+                      "op": "apply_expression_template"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "/"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                15
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "cc"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "cc"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "cc",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "+"
+                        }
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "cc",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "-"
+                        }
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "-"
+                },
+                {
+                  "args": [
+                    2,
+                    {
+                      "args": [],
+                      "bindings": {},
+                      "name": "coarse.dx",
+                      "op": "apply_expression_template"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "/"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                7
+              ]
+            }
+          }
+        }
+      ],
+      "expression_templates": {
+        "coarse.dx": {
+          "body": {
+            "args": [
+              1,
+              8
+            ],
+            "op": "/"
+          },
+          "params": []
+        },
+        "fine.dx": {
+          "body": {
+            "args": [
+              1,
+              16
+            ],
+            "op": "/"
+          },
+          "params": []
+        }
+      },
+      "variables": {
+        "cc": {
+          "description": "tracer on the coarse instance",
+          "shape": [
+            "coarse.x"
+          ],
+          "type": "state",
+          "units": "1"
+        },
+        "cf": {
+          "description": "tracer on the fine instance",
+          "shape": [
+            "fine.x"
+          ],
+          "type": "state",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { load } from './parse.js'
 import {
   lowerExpressionTemplates,
+  expandDocument,
   EsmMachineryError,
   // Deprecated same-class alias — imported to assert backward compatibility below.
   ExpressionTemplateError,
@@ -248,7 +249,8 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       { op: 'grad', args: ['c'], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
-    expect('expression_templates' in out.models.M).toBe(false)
+    // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at load.
+    expect('expression_templates' in out.models.M).toBe(true)
     // f → "c" (operand); dx unbound by `match`, so it stays a bare ref.
     expect(out.models.M.equations[0].rhs).toEqual({
       op: '/',
@@ -580,7 +582,8 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     }
     const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
     expect(out.models.m.variables.y.expression).toEqual({ op: '*', args: [1.4, 'u'] })
-    expect('expression_templates' in out.models.m).toBe(false)
+    // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at load.
+    expect('expression_templates' in out.models.m).toBe(true)
   })
 })
 
@@ -633,7 +636,11 @@ describe('coupling variable_map expression transforms (receiving-component rewri
   })
 
   it('expands the transform in the receiving component scope (lowering pass)', () => {
-    const out = lowerExpressionTemplates(couplingFixture()) as any
+    // Option B: the target-free reference survives the lowering pass; Expand
+    // (the Expand-at-build load strategy, §9.6.4 rule 2) inlines it.
+    const lowered = lowerExpressionTemplates(couplingFixture()) as any
+    expect(lowered.coupling[0].transform.op).toBe('apply_expression_template')
+    const out = expandDocument(lowered) as any
     expect(out.coupling[0].transform).toEqual(expandedTransform)
     // Everything else on the entry is untouched.
     expect(out.coupling[0].from).toBe('Src.F')
@@ -705,21 +712,24 @@ describe('coupling variable_map expression transforms (receiving-component rewri
         },
       ],
     }
-    const out = lowerExpressionTemplates(src) as any
+    const out = expandDocument(lowerExpressionTemplates(src)) as any
     expect(out.coupling[0].transform).toEqual({ op: '*', args: [3.0, 'Src.F'] })
   })
 
-  it('leaves the transform unrewritten when the receiver lacks templates (stray apply rejected)', () => {
+  it('leaves the transform unrewritten when the receiver lacks templates (Expand rejects the dangling ref)', () => {
     const src = couplingFixture() as any
     // Move the template block from the receiver (Sink) to the sender (Src):
     // coupling transforms expand in the RECEIVING component's scope only, so
-    // the apply op survives lowering and trips the leftover gate.
+    // the apply op survives the lowering pass (Option B, §9.6.4 rule 1) and the
+    // dangling reference is rejected when Expand resolves it against the (empty)
+    // receiver registry.
     src.models.Src.expression_templates = src.models.Sink.expression_templates
     delete src.models.Sink.expression_templates
-    expect(() => lowerExpressionTemplates(src)).toThrow(EsmMachineryError)
-    expect(() => lowerExpressionTemplates(src)).toThrow(
-      /remain after expansion at: \/coupling\/0\/transform/,
-    )
+    const lowered = lowerExpressionTemplates(src) as any
+    expect(lowered.coupling[0].transform.op).toBe('apply_expression_template')
+    expect(() => expandDocument(lowered)).toThrow(EsmMachineryError)
+    expect(() => expandDocument(lowered)).toThrow(/apply_expression_template_unknown_template/)
+    expect(() => expandDocument(lowered)).toThrow(/coupling\[0\]\.transform/)
   })
 
   it('reports the coupling[<idx>].transform scope for an unknown template name', () => {
@@ -790,7 +800,9 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
       },
       { K_manifold: 'planar', a: 'pa', b: 'pb' },
     )
-    const out = lowerExpressionTemplates(src) as any
+    // Option B: `polygon_intersection_area` is evaluable-core (not a T-op), so
+    // the reference survives lowering; Expand instantiates the scalar-field param.
+    const out = expandDocument(lowerExpressionTemplates(src)) as any
     expect(out.models.M.variables.area.expression).toEqual({
       op: 'polygon_intersection_area',
       manifold: 'planar',
@@ -828,7 +840,9 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
       { K: 'spherical', p: 'pa', q: 'pb' },
       'outer',
     )
-    const out = lowerExpressionTemplates(src) as any
+    // Option B: the `outer`→`inner` DAG is checked (not inlined) at registration
+    // and both references survive lowering; Expand inlines the whole chain.
+    const out = expandDocument(lowerExpressionTemplates(src)) as any
     expect(out.models.M.variables.area.expression).toEqual({
       op: '*',
       args: [
@@ -878,7 +892,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
       { planar: 'spherical', x: 'pa', y: 'pb' },
       'shadowed',
     )
-    const out = lowerExpressionTemplates(src) as any
+    const out = expandDocument(lowerExpressionTemplates(src)) as any
     expect(out.models.M.variables.area.expression.manifold).toBe('spherical')
   })
 })
@@ -892,7 +906,8 @@ describe('scalar_field_param conformance fixture', () => {
   it('matches the canonical expanded form', () => {
     const fixture = JSON.parse(fs.readFileSync(path.join(caseDir, 'fixture.esm'), 'utf8'))
     const expanded = JSON.parse(fs.readFileSync(path.join(caseDir, 'expanded.esm'), 'utf8'))
-    const out = lowerExpressionTemplates(fixture) as any
+    // Option B: Expand reproduces the pinned Option-A expanded form (RFC bridge).
+    const out = expandDocument(lowerExpressionTemplates(fixture)) as any
     expect(out.models).toEqual(expanded.models)
     const vars = out.models.Overlap.variables
     expect(vars.area_planar.expression.manifold).toBe('planar')
@@ -912,7 +927,10 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8'))
   const golden = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'expanded.esm'), 'utf8'))
-  const lower = (name: string) => lowerExpressionTemplates(fixture(name)) as any
+  // Option B: Expand the reference-preserving load to the Option-A image the
+  // `expanded.esm` goldens pin (the match-only `where` fixtures carry no
+  // surviving references, so Expand only strips the retained registry block).
+  const lower = (name: string) => expandDocument(lowerExpressionTemplates(fixture(name))) as any
 
   it('constrained_match_scope: fires only where the shape constraint holds', () => {
     // div(F_edge) rewritten (F over [edges]); div(F_cell) constraint-excluded,

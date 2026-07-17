@@ -650,6 +650,7 @@ end
 function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
                                 var_map::Dict{String,Int},
                                 param_sym_set, reg_funcs)::_StencilBranch
+    _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
     rs = _LaneRecipe[]
     ctx = _StencilCtx(ctx_proto.idxset, rs, ctx_proto.idx_env,
                       ctx_proto.array_var_info, ctx_proto.const_arrays,

@@ -1522,6 +1522,7 @@ def _load_ref_data(
     """
     from .lower_expression_templates import (
         ExpressionTemplateError,
+        expand_document,
         lower_expression_templates,
         reject_expression_templates_pre_v04,
     )
@@ -1617,7 +1618,11 @@ def _load_ref_data(
     resolved = resolve_template_machinery(ref_data, new_base, metaparameters=effective_bindings)
     if resolved is not None:
         ref_data = resolved
+    # Option B (esm-spec §9.6.4): lower preserves references; the mounted
+    # subsystem feeds the typed IR via `_parse_esm_data`, so Expand-at-build here
+    # (RFC §7.7) yields the fully-expanded Option-A image — numerics identical.
     ref_data = lower_expression_templates(ref_data)
+    ref_data = expand_document(ref_data)
 
     return ref_data, new_base
 
@@ -2124,6 +2129,7 @@ def load(
     # Surfaced before schema validation so the user sees the version hint
     # instead of a generic schema error.
     from .lower_expression_templates import (
+        expand_document,
         lower_expression_templates,
         reject_expression_templates_pre_v04,
     )
@@ -2238,12 +2244,18 @@ def load(
     # Structural validation (runs on the resolved, folded form — §9.6.4)
     _validate_structural(data, file_path=file_path)
 
-    # Expand `apply_expression_template` ops at load time (esm-spec §9.6 /
-    # docs/rfcs/ast-expression-templates.md). After this pass, the data dict
-    # carries no apply_expression_template nodes and no expression_templates
-    # blocks — _parse_esm_data sees only normal Expression ASTs (Option A
-    # round-trip).
+    # Run the §9.6.3 rewrite fixpoint under Option B (esm-spec §9.6.4): explicit
+    # target-bearing references are eagerly expanded and `match` rules fired, but
+    # NON-eager `apply_expression_template` references and the per-component
+    # `expression_templates` registries SURVIVE on the returned tree.
     data = lower_expression_templates(data)
+    # esm-spec §9.6.4 Option B: the typed IR / build path (simulate, flatten,
+    # codegen) is Expand-at-build (RFC out-of-line-expression-templates §7.7) —
+    # call `Expand` once here so `_parse_esm_data` sees the fully-expanded
+    # Option-A image (no surviving references, no `expression_templates`
+    # blocks); numeric results stay bit-identical. The reference-preserving form
+    # travels only into emit (§9.6.4 rule 5, `emit_document`).
+    data = expand_document(data)
 
     # Parse into ESM objects
     esm_file = _parse_esm_data(data)

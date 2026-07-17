@@ -4,7 +4,9 @@ import { VERSION } from './index.js'
 
 describe('ESM Format Types', () => {
   it('should have correct package version', () => {
-    expect(VERSION).toBe('0.8.0')
+    // esm-spec §9.6.5: the reference-preserving (Option B) surface arrives at
+    // esm 0.9.0; the embedded schema `$id` (and therefore VERSION) tracks it.
+    expect(VERSION).toBe('0.9.0')
   })
 
   it('should handle Expr type correctly', () => {

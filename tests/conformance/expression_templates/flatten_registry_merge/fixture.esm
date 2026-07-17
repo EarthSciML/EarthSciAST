@@ -1,0 +1,57 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "flatten_registry_merge",
+    "description": "esm-spec §9.6.4 rule 7 / §10.7 / esm-libraries-spec §4.7.5 step 4: flatten merges component template registries. Models A and B each carry an identical match-less stencil `sten` (deep-equal → DEDUP at first occurrence) and a same-name template `s` with DIFFERENT bodies (non-deep-equal collision → BOTH renamed to `<ComponentPath>.s`, i.e. `A.s` / `B.s`, with references rewritten in lockstep). Each component references both templates.",
+    "authors": ["out-of-line-expression-templates conformance"]
+  },
+  "index_sets": { "x": { "kind": "interval", "size": 4 } },
+  "models": {
+    "A": {
+      "expression_templates": {
+        "sten": { "params": ["f"], "body": { "op": "*", "args": [2, "f"] } },
+        "s": { "params": ["f"], "body": { "op": "+", "args": ["f", 1] } }
+      },
+      "variables": {
+        "xa": { "type": "state", "units": "1", "default": 1.0 },
+        "ya": {
+          "type": "observed", "units": "1",
+          "expression": { "op": "apply_expression_template", "args": [],
+            "name": "sten", "bindings": { "f": "xa" } }
+        },
+        "za": {
+          "type": "observed", "units": "1",
+          "expression": { "op": "apply_expression_template", "args": [],
+            "name": "s", "bindings": { "f": "xa" } }
+        }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["xa"], "wrt": "t" },
+          "rhs": { "op": "-", "args": ["xa"] } }
+      ]
+    },
+    "B": {
+      "expression_templates": {
+        "sten": { "params": ["f"], "body": { "op": "*", "args": [2, "f"] } },
+        "s": { "params": ["f"], "body": { "op": "+", "args": ["f", 2] } }
+      },
+      "variables": {
+        "xb": { "type": "state", "units": "1", "default": 1.0 },
+        "yb": {
+          "type": "observed", "units": "1",
+          "expression": { "op": "apply_expression_template", "args": [],
+            "name": "sten", "bindings": { "f": "xb" } }
+        },
+        "zb": {
+          "type": "observed", "units": "1",
+          "expression": { "op": "apply_expression_template", "args": [],
+            "name": "s", "bindings": { "f": "xb" } }
+        }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["xb"], "wrt": "t" },
+          "rhs": { "op": "-", "args": ["xb"] } }
+      ]
+    }
+  }
+}

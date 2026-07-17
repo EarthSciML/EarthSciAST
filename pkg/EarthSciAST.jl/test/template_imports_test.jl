@@ -21,8 +21,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                               "expression_templates", parts...)
     invalid_dir = joinpath(repo_root, "tests", "invalid", "template_imports")
 
-    # Raw §9.7 pipeline (resolve → lower), mirroring the golden generator.
+    # Raw §9.7 pipeline (resolve → lower → Expand). esm-spec §9.6.4 Option B:
+    # `lower_expression_templates` now PRESERVES surviving references; the
+    # Option-A expanded image (the `expanded*.esm` oracle, §9.6.4 rule 2 / §9.6.7
+    # bridge gate) is `Expand ∘ lower`.
     function _expand_raw(path)
+        raw = JSON3.read(read(path, String))
+        resolved = resolve_template_machinery(raw, dirname(path))
+        out = lower_expression_templates(resolved === nothing ? raw : resolved)
+        return _normj(EarthSciAST.Expand(out))
+    end
+    # The reference-PRESERVING loaded form (no Expand) — for asserting Option-B
+    # surviving-reference / registry behavior directly.
+    function _load_raw(path)
         raw = JSON3.read(read(path, String))
         resolved = resolve_template_machinery(raw, dirname(path))
         out = lower_expression_templates(resolved === nothing ? raw : resolved)
@@ -129,8 +140,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             metaparameters=Dict("N" => 12))
         @test lib12.index_sets["cells"].size == 12
 
-        m = EarthSciAST.load(joinpath(repo_root, "tests", "valid",
-                                                "template_import_minimal.esm"))
+        # esm-spec §9.6.4 Option B: references survive by default; pin the
+        # Option-A expanded image via the `ESS_TEMPLATE_REF_DISABLE=1` hatch.
+        m = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
+            EarthSciAST.load(joinpath(repo_root, "tests", "valid",
+                                      "template_import_minimal.esm"))
+        end
         @test m.index_sets["cells"].size == 8     # §9.7.5 merge into consumer
         y = m.models["M"].variables["y"].expression
         @test y isa OpExpr && y.op == "*"
@@ -269,9 +284,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         try
             EarthSciAST.save(f, tmp)
             text = read(tmp, String)
-            # CALL SITES are expanded away — this part was always right.
+            # esm-spec §9.6.4 Option B rule 5: the import EDGE is consumed, but the
+            # CALL SITES survive verbatim and the referenced (match-less) templates
+            # are MATERIALIZED into the component's `expression_templates` registry.
             @test !occursin("expression_template_imports", text)
-            @test !occursin("apply_expression_template", text)
+            @test occursin("apply_expression_template", text)     # call sites survive
+            @test occursin("central_D_lon_interior", text)         # stencil materialized
             reloaded = EarthSciAST.load(tmp)
             @test reloaded.index_sets["lon"].size == 288
             @test reloaded.models["Advection"].equations[1].rhs.args[2].op == "makearray"
@@ -456,8 +474,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
               }
             }
             """)
-            # t_keep's body reference to t_inner resolved in the LIBRARY's own
-            # scope, so importing only t_keep still yields 2 * 7.
+            # esm-spec §9.6.4 Option B: t_keep's body reference to t_inner
+            # resolved in the LIBRARY's own scope. Bodies are no longer inlined
+            # (§9.7.3), so importing `only: [t_keep]` carries the internal-wiring
+            # reference-closure (t_inner) along and the reference SURVIVES;
+            # `Expand` yields 2 * 7 (the Option-A image, §9.6.4 rule 2).
             p = joinpath(dir, "m.esm")
             write(p, _model_json(
                 """
@@ -465,9 +486,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             raw = JSON3.read(read(p, String))
             resolved = resolve_template_machinery(raw, dir)
             tpl = resolved["models"]["M"]["expression_templates"]
-            @test collect(keys(tpl)) == ["t_keep"]
-            @test _normj(tpl["t_keep"]["body"]) ==
-                  Dict{String,Any}("op" => "*", "args" => Any[2, 7])
+            # t_keep kept explicitly; t_inner carried by the reference closure;
+            # t_drop (unreferenced, filtered) is gone.
+            @test Set(keys(tpl)) == Set(["t_keep", "t_inner"])
+            @test _normj(tpl["t_keep"]["body"]) == Dict{String,Any}(
+                "op" => "*", "args" => Any[2, Dict{String,Any}(
+                    "op" => "apply_expression_template", "args" => Any[],
+                    "name" => "t_inner", "bindings" => Dict{String,Any}())])
+            @test _normj(tpl["t_inner"]["body"]) == 7
+            # The surviving reference expands to the inlined value.
+            loaded = lower_expression_templates(resolved)
+            @test _normj(EarthSciAST.Expand(loaded)["models"]["M"]) !== nothing
             # Referencing a filtered-out name from an expression position fails.
             p2 = joinpath(dir, "m2.esm")
             write(p2, _model_json(
@@ -739,7 +768,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     end
 
     @testset "body composition: acyclic DAG inlines; depth bound is exact" begin
-        # A 3-deep local chain inlines through the §9.6.3 fixpoint untouched.
+        # esm-spec §9.6.4 Option B: a 3-deep local chain is CHECKED (acyclic,
+        # depth-bounded) but NOT inlined; the references survive and `Expand`
+        # denotes the fully-inlined value (§9.6.4 rule 2).
         doc = JSON3.read("""
         {
           "esm": "0.8.0",
@@ -763,8 +794,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
           }
         }
         """)
-        out = lower_expression_templates(doc)
-        y = _normj(out.data["models"]["M"]["variables"]["y"]["expression"])
+        out = EarthSciAST.Expand(lower_expression_templates(doc))
+        y = _normj(out["models"]["M"]["variables"]["y"]["expression"])
         @test y == Dict{String,Any}("op" => "+", "args" => Any[1,
                      Dict{String,Any}("op" => "+", "args" => Any[2, 3])])
 

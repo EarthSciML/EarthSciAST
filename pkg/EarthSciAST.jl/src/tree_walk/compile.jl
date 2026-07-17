@@ -221,6 +221,7 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
     throw(TreeWalkError("E_TREEWALK_UNBOUND_VARIABLE", name))
 end
 function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
+    _BENCH_ON[] && (_BENCH_COMPILE_CALLS[] += 1)   # §12 node-lowering counter (off by default)
     memo === nothing && return _compile_op(expr, var_map, param_syms, reg_funcs, nothing)
     m = memo.compile
     r = get(m, expr, nothing)

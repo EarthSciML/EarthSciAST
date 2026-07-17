@@ -541,6 +541,10 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - Prefix every variable, parameter, and species name with the system name and a dot.
    - Rewrite all equations so that variable references use the dot-namespaced names.
    - For nested subsystems, the prefix is the full path: `Parent.Child.variable`.
+   - **From `esm: 0.9.0` (reference-preserving round-trip, esm-spec §9.6.4):** apply the same
+     renaming map to free variable references inside the component's carried
+     `expression_templates` bodies and inside surviving `apply_expression_template`
+     references' `bindings` (template `params` shadow, exactly as in esm-spec §9.6.1).
 
    **Between steps 2 and 3 — Expand coupling imports (esm-spec §10.10).** Before applying coupling
    rules, replace each `coupling_import` entry in the coupling sequence with the concrete edges its
@@ -579,6 +583,14 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - **All events** from all component systems, with variable references rewritten to dot-namespaced form.
    - **Domain** from the file's `domain` section (if present).
    - **Metadata** recording which component systems were flattened and which coupling rules were applied.
+   - **The merged template registry** (from `esm: 0.9.0`; esm-spec §9.6.4 rule 7, §10.7) as a
+     first-class field of the flattened representation: the union of the component registries
+     (post-step-2 scoping), with deep-equal same-name entries deduplicated at first occurrence
+     and any non-deep-equal same-name collision resolved by deterministically renaming **both**
+     entries to `<ComponentPath>.<name>` and rewriting their references in lockstep. Downstream
+     consumers — graph construction, simulation backends, emit — resolve surviving
+     `apply_expression_template` references against this registry; a consumer MAY evaluate them
+     natively or via `Expand` (esm-spec §9.6.4 rule 2), whose observable behavior is identical.
 
 **Example:** Given an ESM file with `SimpleOzone` (reaction system with O₃, NO, NO₂), `Advection` (model with `_var` placeholder), and `GEOSFP` (data loader providing T, u, v), coupled via `operator_compose` and `variable_map`, the flattened system contains:
 

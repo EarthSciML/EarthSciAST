@@ -574,7 +574,7 @@ export function validateTemplates(
 export const MAX_TEMPLATE_EXPANSION_DEPTH = 32
 
 /** Collect the `name`s of every `apply_expression_template` node in a tree. */
-function collectApplyNames(x: Json, out: string[]): string[] {
+export function collectApplyNames(x: Json, out: string[]): string[] {
   if (Array.isArray(x)) {
     for (const c of x) collectApplyNames(c, out)
     return out
@@ -587,37 +587,20 @@ function collectApplyNames(x: Json, out: string[]): string[] {
 }
 
 /**
- * Inline every `apply_expression_template` node in `node` against
- * `templates`, post-order (so the bindings' own sub-ASTs are inlined first).
- * Referenced bodies are already closed when this runs in topological order,
- * so a single `expandApply` produces an apply-free subtree.
- */
-function inlineApplies(node: Json, templates: Templates, scope: string): Json {
-  if (Array.isArray(node)) {
-    return node.map((c) => inlineApplies(c, templates, scope))
-  }
-  if (!isObject(node)) return node
-  const out: Record<string, unknown> = {}
-  for (const k of Object.keys(node)) {
-    out[k] = inlineApplies(node[k], templates, scope)
-  }
-  if (out.op === APPLY_OP) {
-    return expandApply(out, templates, scope)
-  }
-  return out
-}
-
-/**
- * Registration-time body composition (esm-spec §9.7.3): template bodies MAY
- * reference other in-scope MATCH-LESS templates via `apply_expression_template`
- * nodes. Builds the body-reference graph, rejects cycles
- * (`apply_expression_template_recursive_body`) and chains deeper than
- * `MAX_TEMPLATE_EXPANSION_DEPTH` templates (`template_body_expansion_too_deep`),
- * then inlines dependencies-first by pure substitution — confluent, so
- * topological order cannot affect the result. Afterwards every `body` is a
- * closed Expression AST with zero `apply_expression_template` nodes; runs
- * BEFORE the §9.6.3 fixpoint ever consults a `match` rule. Mutates the decl
- * objects in `templates` in place.
+ * Registration-time body **checking** (esm-spec §9.7.3, Option B / esm 0.9.0):
+ * template bodies MAY reference other in-scope MATCH-LESS templates via
+ * `apply_expression_template` nodes. Builds the body-reference graph, rejects
+ * cycles (`apply_expression_template_recursive_body`), references to undeclared
+ * or `match`-bearing templates (`apply_expression_template_unknown_template`),
+ * and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
+ * (`template_body_expansion_too_deep`).
+ *
+ * From `esm: 0.9.0` (RFC out-of-line-expression-templates §7.1 step 4) bodies
+ * are **NOT inlined** — the references are preserved uninlined and denote their
+ * expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
+ * separately by {@link templateTargetBearing}. Runs BEFORE the §9.6.3 fixpoint
+ * ever consults a `match` rule; it now only validates the DAG. Mirrors the
+ * Julia reference `_compose_template_bodies!`.
  *
  * Accepts the pre-coercion `Record<string, unknown>` view (the §9.7 resolver
  * calls this on a raw `JsonObject`); the decls are assumed structurally valid
@@ -652,11 +635,10 @@ export function composeTemplateBodies(templates: Record<string, unknown>, scope:
     }
   }
 
-  // DFS over the reference graph: cycle detection, chain-depth bound, and a
-  // dependencies-first (post-) order for inlining.
+  // DFS over the reference graph: cycle detection + chain-depth bound. Bodies
+  // are NOT inlined (Option B); the checked DAG is left intact.
   const state: Record<string, number> = {} // 1 = on stack, 2 = done
   const depth: Record<string, number> = {} // templates on the longest chain
-  const order: string[] = []
   const chain: string[] = []
   const visit = (name: string): number => {
     const st = state[name] ?? 0
@@ -683,20 +665,9 @@ export function composeTemplateBodies(templates: Record<string, unknown>, scope:
         `${scope}.expression_templates.${name}: body-reference chain of ${d} templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH=${MAX_TEMPLATE_EXPANSION_DEPTH} (esm-spec §9.7.3)`,
       )
     }
-    order.push(name)
     return d
   }
   for (const name of [...names].sort()) visit(name)
-
-  for (const name of order) {
-    if (refs[name]!.length === 0) continue
-    const decl = templates[name] as { body: Json }
-    decl.body = inlineApplies(
-      decl.body,
-      templates as Templates,
-      `${scope}.expression_templates.${name}`,
-    )
-  }
 }
 
 /**
@@ -754,6 +725,421 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
   return substitute(decl.body, bindings)
 }
 
+// ---------------------------------------------------------------------------
+// Eager-expansion carve-out: the rewrite-target op tier T (esm-spec §9.6.4
+// rule 3 / RFC out-of-line-expression-templates §7.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The rewrite-target ops explicitly named by §4.2 as the open rewrite-target
+ * tier plus the two load-eliminated forms — the members of **T** that carry a
+ * recognized op name. Any op NOT in the evaluable-core registry
+ * ({@link EVALUABLE_CORE_OPS}) is ALSO in T (an open-namespace custom op no
+ * evaluator implements); `apply_expression_template` itself is excluded.
+ */
+const REWRITE_TARGET_OPS = new Set<string>([
+  'D',
+  'grad',
+  'div',
+  'laplacian',
+  'integral',
+  'table_lookup',
+  'enum',
+])
+
+/**
+ * The evaluable-core op registry — every op name the format defines an
+ * evaluator/structural meaning for (mirrors the Julia reference
+ * `op_registry.jl` `_OP_INDEX`). An op absent from this set (and not
+ * `apply_expression_template`) is an open-namespace custom op no evaluator
+ * implements, hence a member of **T**. Pinned identically across bindings so
+ * target-bearing classification — and therefore which references survive — is
+ * byte-identical everywhere.
+ */
+const EVALUABLE_CORE_OPS = new Set<string>([
+  '+',
+  '-',
+  '*',
+  '/',
+  '^',
+  'pow',
+  'neg',
+  '<',
+  '<=',
+  '>',
+  '>=',
+  '==',
+  '!=',
+  'and',
+  'or',
+  'not',
+  'ifelse',
+  'Pre',
+  'sin',
+  'cos',
+  'tan',
+  'asin',
+  'acos',
+  'atan',
+  'atan2',
+  'sinh',
+  'cosh',
+  'tanh',
+  'asinh',
+  'acosh',
+  'atanh',
+  'exp',
+  'log',
+  'log10',
+  'sqrt',
+  'abs',
+  'sign',
+  'floor',
+  'ceil',
+  'min',
+  'max',
+  'pi',
+  'π',
+  'e',
+  'true',
+  'false',
+  'fn',
+  'call',
+  'const',
+  'enum',
+  'D',
+  'ic',
+  'grad',
+  'div',
+  'laplacian',
+  'index',
+  'makearray',
+  'broadcast',
+  'reshape',
+  'transpose',
+  'concat',
+  'arrayop',
+  'aggregate',
+  'intersect_polygon',
+  'polygon_intersection_area',
+  'skolem',
+])
+
+/**
+ * True iff op string `op` is a member of the rewrite-target tier **T**
+ * (esm-spec §9.6.4 rule 3): one of the named rewrite-target ops, or an op with
+ * no evaluable-core registry entry (an open-namespace custom op). The template
+ * reference op itself is never in T.
+ */
+function opInT(op: string): boolean {
+  if (op === APPLY_OP) return false
+  if (REWRITE_TARGET_OPS.has(op)) return true
+  return !EVALUABLE_CORE_OPS.has(op)
+}
+
+/**
+ * True iff `node` contains, ANYWHERE within it (descending through every field,
+ * including the `bindings` of nested `apply_expression_template` nodes), an
+ * object whose `op` is in **T** ({@link opInT}). Does NOT follow references to
+ * other templates — that transitive step is {@link templateTargetBearing}.
+ */
+function directTOp(node: Json, seen: Set<object> = new Set()): boolean {
+  if (Array.isArray(node)) {
+    if (seen.has(node)) return false
+    seen.add(node)
+    for (const c of node) if (directTOp(c, seen)) return true
+    return false
+  }
+  if (isObject(node)) {
+    if (seen.has(node)) return false
+    seen.add(node)
+    if (typeof node.op === 'string' && opInT(node.op)) return true
+    for (const k of Object.keys(node)) if (directTOp(node[k], seen)) return true
+    return false
+  }
+  return false
+}
+
+/**
+ * Compute, for every template in `templates`, its **target-bearing** flag
+ * (esm-spec §9.6.4 rule 3): a template is target-bearing iff its body contains
+ * an op in **T** anywhere (including inside nested references' `bindings`), OR
+ * it references — transitively through the §9.7.3-checked acyclic DAG — a
+ * target-bearing template. The DAG is acyclic (checked by
+ * {@link composeTemplateBodies}), so a memoized DFS terminates. Cached per
+ * component registry.
+ */
+export function templateTargetBearing(templates: Record<string, unknown>): Record<string, boolean> {
+  const tb: Record<string, boolean> = {}
+  const inProgress = new Set<string>()
+  const visit = (name: string): boolean => {
+    if (Object.prototype.hasOwnProperty.call(tb, name)) return tb[name]!
+    // Defensive against a cycle the checker somehow missed.
+    if (inProgress.has(name)) return false
+    const decl = templates[name]
+    if (!isObject(decl)) {
+      tb[name] = false
+      return false
+    }
+    inProgress.add(name)
+    const body = decl.body
+    let res = body !== undefined && directTOp(body)
+    if (!res) {
+      for (const r of collectApplyNames(body, [])) {
+        if (!Object.prototype.hasOwnProperty.call(templates, r)) continue
+        if (visit(r)) {
+          res = true
+          break
+        }
+      }
+    }
+    inProgress.delete(name)
+    tb[name] = res
+    return res
+  }
+  for (const name of Object.keys(templates)) visit(name)
+  return tb
+}
+
+/**
+ * Whether an `apply_expression_template` `node` is **eager** (esm-spec §9.6.4
+ * rule 3): its referenced template is target-bearing, OR any of its `bindings`
+ * values contains an op in **T**. (After innermost-first eager expansion of the
+ * bindings, a "nested eager reference" always manifests as a T-op in the
+ * bindings, so this predicate subsumes that clause — see {@link expandEager}.)
+ */
+function refIsEager(
+  node: Record<string, unknown>,
+  targetBearing: Record<string, boolean>,
+): boolean {
+  const name = node.name
+  if (typeof name !== 'string') return false
+  if (targetBearing[name]) return true
+  const b = node.bindings
+  if (b === undefined) return false
+  return directTOp(b)
+}
+
+/**
+ * The eager-expansion pre-pass (esm-spec §9.6.4 rule 3): expand — by pure
+ * substitution, innermost-first — every EAGER `apply_expression_template` node,
+ * and only eager nodes. Non-eager (surviving) references are returned intact.
+ * Consumes no `MAX_REWRITE_PASSES` budget (it is a separate pre-pass). Sharing
+ * is preserved via an identity memo. Mirrors the Julia reference `_expand_eager`.
+ */
+function expandEager(
+  node: Json,
+  templates: Templates,
+  targetBearing: Record<string, boolean>,
+  scope: string,
+  memo: Map<object, Json> = new Map(),
+): Json {
+  if (isObject(node)) {
+    const hit = memo.get(node)
+    if (hit !== undefined) return hit
+    let res: Json
+    if (node.op === APPLY_OP) {
+      // Innermost-first: expand eager references inside the bindings first.
+      const b = node.bindings
+      let newnode: Record<string, unknown> = node
+      if (isObject(b)) {
+        const nb: Record<string, unknown> = {}
+        let changed = false
+        for (const k of Object.keys(b)) {
+          const rv = expandEager(b[k], templates, targetBearing, scope, memo)
+          if (rv !== b[k]) changed = true
+          nb[k] = rv
+        }
+        if (changed) {
+          newnode = {}
+          for (const k of Object.keys(node)) newnode[k] = k === 'bindings' ? nb : node[k]
+        }
+      }
+      if (refIsEager(newnode, targetBearing)) {
+        const body = expandApply(newnode, templates, scope)
+        res = expandEager(body, templates, targetBearing, scope, memo)
+      } else {
+        res = newnode
+      }
+    } else {
+      let changed = false
+      const out: Record<string, unknown> = {}
+      for (const k of Object.keys(node)) {
+        const rv = expandEager(node[k], templates, targetBearing, scope, memo)
+        if (rv !== node[k]) changed = true
+        out[k] = rv
+      }
+      res = changed ? out : node
+    }
+    memo.set(node, res)
+    return res
+  }
+  if (Array.isArray(node)) {
+    const hit = memo.get(node)
+    if (hit !== undefined) return hit
+    let changed = false
+    const out = node.map((v) => {
+      const rv = expandEager(v, templates, targetBearing, scope, memo)
+      if (rv !== v) changed = true
+      return rv
+    })
+    const res = changed ? out : node
+    memo.set(node, res)
+    return res
+  }
+  return node
+}
+
+/**
+ * Fully expand EVERY `apply_expression_template` node in `node` by pure
+ * substitution to a fixpoint (innermost-first: bindings are expanded before the
+ * body is instantiated, and the instantiated body is re-expanded). The
+ * per-registry kernel of the public {@link expandDocument} function (esm-spec
+ * §9.6.4 rule 2). Deterministic and sharing-preserving. Mirrors the Julia
+ * reference `_expand_all`.
+ */
+function expandAllNode(
+  node: Json,
+  templates: Templates,
+  scope: string,
+  memo: Map<object, Json> = new Map(),
+): Json {
+  if (isObject(node)) {
+    const hit = memo.get(node)
+    if (hit !== undefined) return hit
+    let res: Json
+    if (node.op === APPLY_OP) {
+      const b = node.bindings
+      let newnode: Record<string, unknown> = node
+      if (isObject(b)) {
+        const nb: Record<string, unknown> = {}
+        let changed = false
+        for (const k of Object.keys(b)) {
+          const rv = expandAllNode(b[k], templates, scope, memo)
+          if (rv !== b[k]) changed = true
+          nb[k] = rv
+        }
+        if (changed) {
+          newnode = {}
+          for (const k of Object.keys(node)) newnode[k] = k === 'bindings' ? nb : node[k]
+        }
+      }
+      const body = expandApply(newnode, templates, scope)
+      res = expandAllNode(body, templates, scope, memo)
+    } else {
+      let changed = false
+      const out: Record<string, unknown> = {}
+      for (const k of Object.keys(node)) {
+        const rv = expandAllNode(node[k], templates, scope, memo)
+        if (rv !== node[k]) changed = true
+        out[k] = rv
+      }
+      res = changed ? out : node
+    }
+    memo.set(node, res)
+    return res
+  }
+  if (Array.isArray(node)) {
+    const hit = memo.get(node)
+    if (hit !== undefined) return hit
+    let changed = false
+    const out = node.map((v) => {
+      const rv = expandAllNode(v, templates, scope, memo)
+      if (rv !== v) changed = true
+      return rv
+    })
+    const res = changed ? out : node
+    memo.set(node, res)
+    return res
+  }
+  return node
+}
+
+/**
+ * Call-site check for a SURVIVING (non-expanded) `apply_expression_template`
+ * reference (esm-spec §9.6.9): the referenced `name` must resolve to an
+ * in-scope MATCH-LESS template and `bindings` must cover its `params` exactly.
+ * Same diagnostics as {@link expandApply}, but WITHOUT expanding — the
+ * reference is preserved (§9.6.4 rule 1).
+ */
+function validateApplyRef(
+  node: Record<string, unknown>,
+  templates: Templates,
+  scope: string,
+): void {
+  const name = node.name
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new EsmMachineryError(
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+      `${scope}: apply_expression_template node missing or empty 'name'`,
+    )
+  }
+  const decl = templates[name]
+  if (!decl) {
+    throw new EsmMachineryError(
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+      `${scope}: apply_expression_template references undeclared template '${name}'`,
+    )
+  }
+  if ((decl as { match?: Json }).match !== undefined) {
+    throw new EsmMachineryError(
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+      `${scope}: apply_expression_template references '${name}', a \`match\` rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)`,
+    )
+  }
+  const bindings = node.bindings
+  if (!isObject(bindings)) {
+    throw new EsmMachineryError(
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+      `${scope}: apply_expression_template '${name}' missing 'bindings' object`,
+    )
+  }
+  const provided = new Set(Object.keys(bindings))
+  const declared = new Set(decl.params)
+  for (const p of decl.params) {
+    if (!provided.has(p)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+        `${scope}: apply_expression_template '${name}' missing binding for param '${p}'`,
+      )
+    }
+  }
+  for (const p of provided) {
+    if (!declared.has(p)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+        `${scope}: apply_expression_template '${name}' supplies unknown param '${p}'`,
+      )
+    }
+  }
+}
+
+/**
+ * Walk `node` and run {@link validateApplyRef} on every surviving
+ * `apply_expression_template` reference it carries (esm-spec §9.6.9 call-site
+ * checks). Descends into references' `bindings` too — a binding value MAY itself
+ * be a surviving reference. Mirrors the Julia reference `_check_surviving_refs`.
+ */
+function checkSurvivingRefs(
+  node: Json,
+  templates: Templates,
+  scope: string,
+  seen: Set<object> = new Set(),
+): void {
+  if (Array.isArray(node)) {
+    if (seen.has(node)) return
+    seen.add(node)
+    for (const c of node) checkSurvivingRefs(c, templates, scope, seen)
+    return
+  }
+  if (isObject(node)) {
+    if (seen.has(node)) return
+    seen.add(node)
+    if (node.op === APPLY_OP) validateApplyRef(node, templates, scope)
+    for (const k of Object.keys(node)) checkSurvivingRefs(node[k], templates, scope, seen)
+  }
+}
+
 interface PassResult {
   node: Json
   changed: boolean
@@ -793,6 +1179,7 @@ function onePass(
   scope: string,
   last: { op: string },
   shapeEnv: ShapeEnv,
+  targetBearing: Record<string, boolean>,
   memo: Map<object, PassResult>,
 ): PassResult {
   if (Array.isArray(node)) {
@@ -800,7 +1187,7 @@ function onePass(
     if (hit !== undefined) return hit
     let changed = false
     const out = node.map((c) => {
-      const r = onePass(c, templates, sortedRules, scope, last, shapeEnv, memo)
+      const r = onePass(c, templates, sortedRules, scope, last, shapeEnv, targetBearing, memo)
       changed = changed || r.changed
       return r.node
     })
@@ -813,7 +1200,16 @@ function onePass(
   }
   const hit = memo.get(node)
   if (hit !== undefined) return hit
-  const res = onePassObject(node, templates, sortedRules, scope, last, shapeEnv, memo)
+  const res = onePassObject(
+    node,
+    templates,
+    sortedRules,
+    scope,
+    last,
+    shapeEnv,
+    targetBearing,
+    memo,
+  )
   memo.set(node, res)
   return res
 }
@@ -826,12 +1222,21 @@ function onePassObject(
   scope: string,
   last: { op: string },
   shapeEnv: ShapeEnv,
+  targetBearing: Record<string, boolean>,
   memo: Map<object, PassResult>,
 ): PassResult {
   // (1) Outermost-first: fire a rule AT this node before descending.
   if (node.op === APPLY_OP) {
-    last.op = APPLY_OP
-    return { node: expandApply(node, templates, scope), changed: true }
+    // esm-spec §9.6.4 rule 4 (Option B): the engine treats a surviving
+    // (non-eager) reference as a LEAF — it does not descend into its
+    // `bindings`, no rule fires inside it, and it survives the fixpoint.
+    // Eager references were already removed by the pre-pass (`expandEager`);
+    // a defensive check keeps any eager node passed in unexpanded correct.
+    if (refIsEager(node, targetBearing)) {
+      last.op = APPLY_OP
+      return { node: expandEager(node, templates, targetBearing, scope), changed: true }
+    }
+    return { node, changed: false }
   }
   for (const rule of sortedRules) {
     const bindings: Record<string, Json> = {}
@@ -844,14 +1249,21 @@ function onePassObject(
       whereSatisfied(rule.whereConstraint, bindings, shapeEnv)
     ) {
       last.op = typeof node.op === 'string' ? node.op : ''
-      return { node: substitute(rule.body, bindings), changed: true }
+      // Instantiate by pure substitution (through nested references' `bindings`;
+      // `name` is never a site). An eager reference introduced by the
+      // instantiation expands as part of the same rewrite (§9.6.4 rule 4).
+      const body = substitute(rule.body, bindings)
+      return {
+        node: expandEager(body, templates, targetBearing, scope),
+        changed: true,
+      }
     }
   }
   // (2) No rule fired here — descend into children.
   let changed = false
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(node)) {
-    const r = onePass(node[k], templates, sortedRules, scope, last, shapeEnv, memo)
+    const r = onePass(node[k], templates, sortedRules, scope, last, shapeEnv, targetBearing, memo)
     out[k] = r.node
     changed = changed || r.changed
   }
@@ -872,9 +1284,15 @@ function rewriteToFixpoint(
   sortedRules: MatchRule[],
   scope: string,
   shapeEnv: ShapeEnv = EMPTY_SHAPE_ENV,
+  targetBearing: Record<string, boolean> = {},
 ): Json {
   const last = { op: '' }
-  let current = node
+  // esm-spec §9.6.4 rule 3 / §7.1 step 5: the eager-expansion pre-pass runs
+  // BEFORE the fixpoint and consumes no `MAX_REWRITE_PASSES` budget. It removes
+  // every eager reference (target-bearing, or T-op in bindings) so the fixpoint
+  // and the later `unlowered_operator` gate walk a tree in which no
+  // rewrite-target op hides inside a surviving reference.
+  let current = expandEager(node, templates, targetBearing, scope)
   for (let pass = 0; pass < MAX_REWRITE_PASSES; pass++) {
     // Fresh identity-memo per pass: rule context is fixed within a pass, so a
     // shared subtree is rewritten once per pass and stays shared.
@@ -886,6 +1304,7 @@ function rewriteToFixpoint(
       scope,
       last,
       shapeEnv,
+      targetBearing,
       memo,
     )
     current = next
@@ -1013,6 +1432,8 @@ interface RewriteContext {
   matchRules: MatchRule[]
   /** The enclosing component's static shape environment for `where` (esm-spec §9.6.1). */
   shapeEnv: ShapeEnv
+  /** Per-template target-bearing flags (esm-spec §9.6.4 rule 3). */
+  targetBearing: Record<string, boolean>
 }
 
 /**
@@ -1061,7 +1482,10 @@ function buildRewriteContext(
   // Deterministic selection order (esm-spec §9.6.3): highest `priority`
   // first, ties broken by declaration order (earliest wins).
   matchRules.sort((a, b) => b.priority - a.priority || a.declIndex - b.declIndex)
-  return { templates, matchRules, shapeEnv }
+  // Target-bearing flags (esm-spec §9.6.4 rule 3) drive the eager pre-pass and
+  // the surviving-reference leaf semantics.
+  const targetBearing = templateTargetBearing(templates)
+  return { templates, matchRules, shapeEnv, targetBearing }
 }
 
 /** True if any model / reaction_system declares an expression_templates block. */
@@ -1200,12 +1624,175 @@ function intBound(v: unknown): number | undefined {
   return undefined
 }
 
+// ---------------------------------------------------------------------------
+// Reference-aware validation discharge (esm-spec §9.6.9, Option B)
+// ---------------------------------------------------------------------------
+
 /**
- * Rewrite all `expression_templates` in the given file: expand explicit
- * `apply_expression_template` nodes AND auto-apply `match` rules to a fixpoint
- * per component (outermost-first, priority-ordered, bounded — esm-spec §9.6.3).
- * Returns a new file object with templates applied and `expression_templates`
- * blocks removed.
+ * esm-spec §9.6.9: `makearray_region_inverted` is discharged at registration on
+ * the composed, metaparameter-folded template bodies — region bounds cannot
+ * carry template params (they are metaparameter expressions, §9.7.6), so the
+ * check is instantiation-independent. Every retained template body (match and
+ * match-less) is validated directly. Mirrors the Julia reference
+ * `_validate_makearray_regions_in_registries`.
+ */
+function validateMakearrayRegionsInRegistries(
+  contextsByKind: Record<'models' | 'reaction_systems', Map<string, RewriteContext>>,
+): void {
+  for (const kind of ['models', 'reaction_systems'] as const) {
+    for (const ctx of contextsByKind[kind].values()) {
+      for (const [tname, decl] of Object.entries(ctx.templates)) {
+        const body = (decl as { body?: unknown }).body
+        if (body === undefined) continue
+        validateMakearrayRegions(body, `expression_templates.${tname}/body`)
+      }
+    }
+  }
+}
+
+/**
+ * Which templates can produce a geometry-kernel node (`GEOMETRY_MANIFOLD_OPS`)
+ * — directly in the body or transitively through a referenced template. Only
+ * references to these templates need per-instantiation manifold validation
+ * (§9.6.9). Mirrors the Julia reference `_template_manifold_bearing`.
+ */
+function templateManifoldBearing(templates: Templates): Record<string, boolean> {
+  const direct = (node: Json, seen: Set<object> = new Set()): boolean => {
+    if (Array.isArray(node)) {
+      if (seen.has(node)) return false
+      seen.add(node)
+      for (const c of node) if (direct(c, seen)) return true
+      return false
+    }
+    if (isObject(node)) {
+      if (seen.has(node)) return false
+      seen.add(node)
+      if (typeof node.op === 'string' && GEOMETRY_MANIFOLD_OPS.has(node.op)) return true
+      for (const k of Object.keys(node)) if (direct(node[k], seen)) return true
+      return false
+    }
+    return false
+  }
+  const mb: Record<string, boolean> = {}
+  const inProgress = new Set<string>()
+  const visit = (name: string): boolean => {
+    if (Object.prototype.hasOwnProperty.call(mb, name)) return mb[name]!
+    if (inProgress.has(name)) return false
+    const decl = templates[name]
+    if (!isObject(decl)) {
+      mb[name] = false
+      return false
+    }
+    inProgress.add(name)
+    const body = decl.body
+    let res = body !== undefined && direct(body)
+    if (!res) {
+      for (const r of collectApplyNames(body, [])) {
+        if (Object.prototype.hasOwnProperty.call(templates, r) && visit(r)) {
+          res = true
+          break
+        }
+      }
+    }
+    inProgress.delete(name)
+    mb[name] = res
+    return res
+  }
+  for (const name of Object.keys(templates)) visit(name)
+  return mb
+}
+
+/**
+ * esm-spec §9.6.9: `geometry_manifold_invalid` is discharged per-instantiation
+ * (a `manifold` may be a template param), memoized. Direct geometry nodes in
+ * the reference-preserving tree are checked as before; every surviving
+ * `apply_expression_template` reference whose template can produce a geometry
+ * kernel is additionally expanded ONCE (memoized) and its expansion validated.
+ * The diagnostic reports (call-site path, template name, intra-body path).
+ * Mirrors the Julia reference `_validate_geometry_manifolds_refaware`.
+ */
+function validateGeometryManifoldsRefAware(
+  root: Record<string, unknown>,
+  contextsByKind: Record<'models' | 'reaction_systems', Map<string, RewriteContext>>,
+): void {
+  // Direct nodes on the reference-preserving tree (skips template blocks; does
+  // not see manifold params hidden behind references).
+  validateGeometryManifolds(root)
+  for (const kind of ['models', 'reaction_systems'] as const) {
+    const comps = root[kind]
+    if (!isObject(comps)) continue
+    for (const [cname, ctx] of contextsByKind[kind]) {
+      const comp = comps[cname]
+      if (!isObject(comp)) continue
+      const manifoldBearing = templateManifoldBearing(ctx.templates)
+      if (!Object.values(manifoldBearing).some(Boolean)) continue // no geometry
+      const memo = new Set<object>()
+      for (const [k, v] of Object.entries(comp)) {
+        if (k === 'expression_templates') continue
+        validateManifoldsInRefs(v, ctx.templates, manifoldBearing, `${kind}.${cname}.${k}`, memo)
+      }
+    }
+  }
+}
+
+function validateManifoldsInRefs(
+  node: Json,
+  templates: Templates,
+  manifoldBearing: Record<string, boolean>,
+  path: string,
+  memo: Set<object>,
+): void {
+  if (Array.isArray(node)) {
+    if (memo.has(node)) return
+    memo.add(node)
+    for (let i = 0; i < node.length; i++)
+      validateManifoldsInRefs(node[i], templates, manifoldBearing, `${path}/${i}`, memo)
+    return
+  }
+  if (!isObject(node)) return
+  if (memo.has(node)) return
+  memo.add(node)
+  const name = node.op === APPLY_OP ? String(node.name ?? '') : ''
+  // Per-instantiation manifold check (§9.6.9): expand ONLY references whose
+  // template can produce a geometry-kernel node; everything else is cheap.
+  if (name !== '' && manifoldBearing[name]) {
+    let expansion: Json
+    try {
+      expansion = expandAllNode(node, templates, path)
+    } catch {
+      expansion = undefined
+    }
+    if (expansion !== undefined) {
+      try {
+        validateGeometryManifolds(expansion)
+      } catch (e) {
+        if (e instanceof EsmMachineryError && e.code === ERROR_CODES.GEOMETRY_MANIFOLD_INVALID) {
+          throw new EsmMachineryError(
+            ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
+            `${path}: instantiation of template '${name}' — ${e.message} (esm-spec §9.6.9; per-instantiation manifold check)`,
+          )
+        }
+        throw e
+      }
+    }
+  }
+  for (const k of Object.keys(node)) {
+    validateManifoldsInRefs(node[k], templates, manifoldBearing, `${path}/${k}`, memo)
+  }
+}
+
+/**
+ * Load the file under Option B (reference preservation, esm-spec §9.6.4): fire
+ * auto-applied `match` rules and eagerly expand target-bearing references to a
+ * fixpoint per component (outermost-first, priority-ordered, bounded — §9.6.3),
+ * but leave NON-eager `apply_expression_template` references intact (they
+ * denote their expansion, §9.6.4 rule 2). The per-component
+ * `expression_templates` registries are RETAINED — they are what {@link
+ * expandDocument} consumes (rule 2) and emit materializes (rule 5). Call-site
+ * checks (§9.6.9), the reference-aware geometry-manifold check, and the
+ * registration-time makearray-region check run on the reference-preserving form.
+ *
+ * Returns a new file object; the input is not mutated.
  *
  * Pre-condition: the input has been schema-validated.
  */
@@ -1215,17 +1802,17 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   if (!isObject(file)) return file
   const root = file as Record<string, unknown>
 
-  // Scan globally for apply ops (orphan-op detection) and for any
-  // expression_templates block (a component may carry `match` rules that
-  // must run even when there are no apply ops).
+  // Scan globally for apply ops and for any expression_templates block (a
+  // component may carry `match` rules or surviving references even when there
+  // are no eager apply ops).
   const strayApplyPaths = findStrayApplyOps(file)
   if (strayApplyPaths.length === 0 && !hasExpressionTemplatesBlock(root)) {
-    // Nothing to expand and no rules to apply; the §9.6.4 expanded-form
-    // validators still run — the raw tree IS the expanded form. Then strip
-    // empty expression_templates blocks for canonical-form invariance.
+    // No template machinery at all; the §9.6.4 expanded-form validators still
+    // run — the raw tree IS the expanded form. Return a fresh tree (the "returns
+    // a fresh clone" contract callers rely on).
     validateGeometryManifolds(root)
     validateMakearrayRegions(root)
-    return stripExpressionTemplates(file)
+    return deepClone(root) as T
   }
 
   // The consuming document's merged index_sets registry (post-§9.7.5): the
@@ -1238,9 +1825,8 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   }
 
   // Walk both component families. Contexts of components that DECLARE an
-  // expression_templates block are retained per family so the top-level
-  // coupling walk below can rewrite variable_map expression transforms in
-  // the receiving component's scope (esm-spec §9.6.4).
+  // expression_templates block are retained per family for the coupling walk
+  // and the reference-aware validators below (esm-spec §9.6.4 / §9.6.9).
   const out = deepClone(root)
   const contextsByKind = {
     models: new Map<string, RewriteContext>(),
@@ -1249,24 +1835,20 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   forEachRawComponent(out, (compKind, compName, compRaw) => {
     const comp = compRaw as Component
     const tplRaw = comp.expression_templates
-    // Static shape environment for `where` constraint evaluation
-    // (esm-spec §9.6.1): declared variable shapes only.
     const shapeEnv = componentShapeEnv(comp)
-    // `templates`  — every template keyed by name, consulted by
-    //                `apply_expression_template` (order-independent).
-    // `matchRules` — the auto-applied `match` rules, pre-sorted by
-    //                (−priority, declarationIndex) so `onePass` takes the
-    //                FIRST matching rule (esm-spec §9.6.3).
     let templates: Templates = {}
     let matchRules: MatchRule[] = []
+    let targetBearing: Record<string, boolean> = {}
     if (isObject(tplRaw)) {
       const ctx = buildRewriteContext(tplRaw, isetNames, shapeEnv, `${compKind}.${compName}`)
       templates = ctx.templates
       matchRules = ctx.matchRules
+      targetBearing = ctx.targetBearing
       contextsByKind[compKind].set(compName, ctx)
     }
-    // Rewrite every property except expression_templates (we don't expand
-    // inside template bodies — those are validated above) to a fixpoint.
+    // Rewrite every property except expression_templates to a fixpoint, then
+    // run call-site checks on surviving (non-eager) references (§9.6.9). The
+    // registry block is RETAINED (Option B, §9.6.4 rule 1).
     for (const k of Object.keys(comp)) {
       if (k === 'expression_templates') continue
       comp[k] = rewriteToFixpoint(
@@ -1275,18 +1857,18 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
         matchRules,
         `${compKind}.${compName}.${k}`,
         shapeEnv,
+        targetBearing,
       )
+      checkSurvivingRefs(comp[k], templates, `${compKind}.${compName}.${k}`)
     }
-    delete comp.expression_templates
   })
 
   // Top-level coupling: a `variable_map` entry may carry an object-valued
-  // Expression `transform` (esm-spec §8.6). It is rewritten to fixpoint in
-  // the SAME rewrite context (named templates + match rules) as a field of
-  // the RECEIVING component — the first dot-segment of the entry's `to`,
-  // looked up under models then reaction_systems. A receiving component
-  // that is absent or declares no templates leaves the transform
-  // unrewritten (a stray apply op is then caught by the stray-apply check).
+  // Expression `transform` (esm-spec §8.6). It is rewritten to fixpoint in the
+  // SAME rewrite context as a field of the RECEIVING component — the first
+  // dot-segment of the entry's `to`, looked up under models then
+  // reaction_systems. A receiving component that is absent or declares no
+  // templates leaves the transform unrewritten.
   const coupling = out.coupling
   if (Array.isArray(coupling)) {
     for (let i = 0; i < coupling.length; i++) {
@@ -1305,37 +1887,407 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
         ctx.matchRules,
         `coupling[${i}].transform`,
         ctx.shapeEnv,
+        ctx.targetBearing,
       )
+      checkSurvivingRefs(entry.transform, ctx.templates, `coupling[${i}].transform`)
     }
   }
 
-  // After expansion, there must be no apply_expression_template ops left
-  // anywhere in the file.
-  const strayApplyPathsPostExpansion = findStrayApplyOps(out)
-  if (strayApplyPathsPostExpansion.length > 0) {
-    throw new EsmMachineryError(
-      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-      `apply_expression_template ops remain after expansion at: ${strayApplyPathsPostExpansion.join(', ')} — likely referenced from a component lacking an expression_templates block`,
-    )
-  }
+  // esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
+  // references are the NEW NORMAL. Only unknown-name / bindings-mismatch
+  // references are errors — already checked per component / per transform by
+  // `checkSurvivingRefs`. No global "no apply ops remain" gate.
 
-  // Validators run on the expanded form (esm-spec §9.6.4): reject any
-  // geometry-kernel node whose (possibly just-substituted) `manifold` is
-  // outside the closed set, and any makearray region whose folded bound pair
-  // is inverted (stop < start - 1; esm-spec §4.3.2).
-  validateGeometryManifolds(out)
+  // Validation discharge (esm-spec §9.6.9): geometry-manifold and
+  // makearray-region checks on the reference-preserving form. The manifold
+  // check is per-instantiation (a `manifold` may be a template param), so it
+  // descends through surviving references' single-instantiation expansions,
+  // memoized. Region bounds cannot carry template params, so the makearray
+  // check runs on the reference-preserving tree AND the retained folded
+  // template bodies directly.
+  validateGeometryManifoldsRefAware(out, contextsByKind)
   validateMakearrayRegions(out)
+  validateMakearrayRegionsInRegistries(contextsByKind)
 
   return out as T
 }
 
-function stripExpressionTemplates<T extends object>(file: T): T {
-  if (!isObject(file)) return file
-  const out = deepClone(file as Record<string, unknown>)
-  forEachRawComponent(out, (_kind, _name, comp) => {
-    if ('expression_templates' in comp) {
+// ===========================================================================
+// `Expand` — the public full-expansion function (esm-spec §9.6.4 rule 2)
+// ===========================================================================
+
+const COMP_KINDS = ['models', 'reaction_systems'] as const
+
+/** Collect the named registry of one component (match + match-less templates). */
+function namedRegistry(comp: Record<string, unknown>): Templates {
+  const named: Templates = {}
+  const tpl = comp.expression_templates
+  if (isObject(tpl)) {
+    for (const [n, d] of Object.entries(tpl)) named[n] = d as TemplateDecl
+  }
+  return named
+}
+
+/**
+ * Fully expand every surviving `apply_expression_template` reference in a
+ * document `loaded` by {@link lowerExpressionTemplates} (Option B), producing
+ * the Option-A image: every reference replaced by its expansion (pure
+ * substitution to the acyclic fixpoint, §9.6.4 rule 2) and every per-component
+ * `expression_templates` block stripped. Deterministic — the §9.7.3 DAG is
+ * acyclic and substitution confluent, so `expandDocument(load(f))` is
+ * structurally equal to the pre-0.9.0 expanded form (the `expanded*.esm`
+ * conformance oracle). Non-destructive: `loaded` is deep-cloned first. Mirrors
+ * the Julia reference `expand_document` / `Expand`.
+ */
+export function expandDocument<T extends object>(loaded: T): T {
+  if (!isObject(loaded)) return loaded
+  const root = deepClone(loaded) as Record<string, unknown>
+
+  // Capture each component's named registry BEFORE stripping the blocks.
+  const compNamed = new Map<string, Templates>()
+  for (const compKind of COMP_KINDS) {
+    const comps = root[compKind]
+    if (!isObject(comps)) continue
+    for (const [cname, comp] of Object.entries(comps)) {
+      if (!isObject(comp)) continue
+      compNamed.set(`${compKind} ${cname}`, namedRegistry(comp))
+    }
+  }
+
+  for (const compKind of COMP_KINDS) {
+    const comps = root[compKind]
+    if (!isObject(comps)) continue
+    for (const [cname, comp] of Object.entries(comps)) {
+      if (!isObject(comp)) continue
+      const named = compNamed.get(`${compKind} ${cname}`)!
+      const scope = `${compKind}.${cname}`
+      for (const k of Object.keys(comp)) {
+        if (k === 'expression_templates' || k === 'expression_template_imports') continue
+        comp[k] = expandAllNode(comp[k], named, `${scope}.${k}`)
+      }
       delete comp.expression_templates
     }
-  })
-  return out as T
+  }
+
+  const coupling = root.coupling
+  if (Array.isArray(coupling)) {
+    for (let i = 0; i < coupling.length; i++) {
+      const entry = coupling[i]
+      if (!isObject(entry) || entry.type !== 'variable_map') continue
+      if (!isObject(entry.transform)) continue
+      const to = entry.to
+      if (typeof to !== 'string') continue
+      const receiver = to.split('.')[0] ?? ''
+      const named =
+        compNamed.get(`models ${receiver}`) ?? compNamed.get(`reaction_systems ${receiver}`)
+      if (!named) continue
+      entry.transform = expandAllNode(entry.transform, named, `coupling[${i}].transform`)
+    }
+  }
+
+  return root as T
+}
+
+/** Public alias for {@link expandDocument} using the spec's spelling (§9.6.4 rule 2). */
+export { expandDocument as Expand }
+
+// ===========================================================================
+// Reference-preserving emit (esm-spec §9.6.4 rule 5, §9.6.7)
+// ===========================================================================
+
+/**
+ * The transitive closure of the templates named by `refnames` (surviving-
+ * reference names), following references inside materialized bodies, keeping
+ * only MATCH-LESS entries (match rules are never materialized, §9.6.4 rule 5).
+ * Mirrors the Julia reference `_ref_closure`.
+ */
+function refClosure(refnames: Iterable<string>, named: Record<string, unknown>): Set<string> {
+  const out = new Set<string>()
+  const stack = [...refnames]
+  while (stack.length > 0) {
+    const n = stack.pop()!
+    if (out.has(n) || !Object.prototype.hasOwnProperty.call(named, n)) continue
+    const decl = named[n]
+    if (isObject(decl) && decl.match !== undefined) continue // match rules not materialized
+    out.add(n)
+    for (const r of collectApplyNames(isObject(decl) ? decl.body : undefined, [])) stack.push(r)
+  }
+  return out
+}
+
+/**
+ * Per-component MATCH-LESS template names authored in-file in `rawSource`
+ * (`compKind.cname` → ordered names). Emit keeps these verbatim as authored
+ * entries (esm-spec §9.6.4 rule 5); imported/derived templates are materialized
+ * instead. Mirrors the Julia reference `_authored_template_names`.
+ */
+export function authoredTemplateNames(rawSource: unknown): Record<string, string[]> {
+  const authored: Record<string, string[]> = {}
+  if (!isObject(rawSource)) return authored
+  for (const compKind of COMP_KINDS) {
+    const comps = rawSource[compKind]
+    if (!isObject(comps)) continue
+    for (const [cname, comp] of Object.entries(comps)) {
+      if (!isObject(comp)) continue
+      const tpl = comp.expression_templates
+      if (!isObject(tpl)) continue
+      const names: string[] = []
+      for (const [n, d] of Object.entries(tpl)) {
+        if (!isObject(d)) continue
+        if (d.match !== undefined) continue // only match-less are referenceable
+        names.push(n)
+      }
+      authored[`${compKind}.${cname}`] = names
+    }
+  }
+  return authored
+}
+
+/**
+ * Build the reference-preserving, self-contained emitted document (esm-spec
+ * §9.6.4 rule 5, §7.5) from an already Option-B-loaded document `loaded` and
+ * the authored-name map from the pristine source. For every component builds
+ * its emitted `expression_templates` block — authored match-less entries first
+ * in authored order, then the materialized transitive closure of its surviving
+ * references (match-less), lexicographically sorted — drops consumed
+ * `expression_template_imports`, and version-stamps `esm: 0.9.0` when any
+ * surviving reference or materialized entry remains (§9.6.4 rule 8). Mutates
+ * and returns `loaded`. Mirrors the Julia reference `emit_document` tail.
+ */
+export function buildEmittedDocument(
+  loaded: Record<string, unknown>,
+  authored: Record<string, string[]>,
+): Record<string, unknown> {
+  const root = loaded
+  let bump = false
+
+  for (const compKind of COMP_KINDS) {
+    const comps = root[compKind]
+    if (!isObject(comps)) continue
+    for (const [cname, comp] of Object.entries(comps)) {
+      if (!isObject(comp)) continue
+      const key = `${compKind}.${cname}`
+      const named = namedRegistry(comp)
+      const refnames = new Set<string>()
+      for (const [k, v] of Object.entries(comp)) {
+        if (k === 'expression_templates' || k === 'expression_template_imports') continue
+        for (const r of collectApplyNames(v, [])) refnames.add(r)
+      }
+      if (refnames.size > 0) bump = true
+      const materialized = refClosure(refnames, named)
+      const authoredHere = authored[key] ?? []
+      const authoredSet = new Set(authoredHere)
+
+      const emitBlock: Record<string, unknown> = {}
+      for (const n of authoredHere) {
+        if (Object.prototype.hasOwnProperty.call(named, n)) emitBlock[n] = named[n]
+      }
+      for (const n of [...materialized].filter((n) => !authoredSet.has(n)).sort()) {
+        emitBlock[n] = named[n]
+        bump = true
+      }
+
+      if (Object.keys(emitBlock).length === 0) {
+        delete comp.expression_templates
+      } else {
+        comp.expression_templates = emitBlock
+      }
+      delete comp.expression_template_imports
+    }
+  }
+
+  delete root.expression_template_imports
+  if (bump) root.esm = '0.9.0'
+  return root
+}
+
+// --- Canonical byte writer (2-space indent, keys sorted except the ordered
+//     `expression_templates` block) — the cross-binding byte-identity surface. ---
+
+/** Format a scalar leaf for the canonical emit writer. */
+function emitScalar(x: unknown): string {
+  if (x === undefined || x === null) return 'null'
+  if (isNumericLiteral(x)) {
+    const v = numericValue(x)
+    return v === undefined ? 'null' : JSON.stringify(v)
+  }
+  return JSON.stringify(x)
+}
+
+function emitWrite(out: string[], x: unknown, indent: number, preserve: boolean): void {
+  const pad = '  '.repeat(indent)
+  const pad1 = '  '.repeat(indent + 1)
+  if (isObject(x)) {
+    const rawKeys = Object.keys(x)
+    if (rawKeys.length === 0) {
+      out.push('{}')
+      return
+    }
+    const ks = preserve ? rawKeys : [...rawKeys].sort()
+    out.push('{\n')
+    ks.forEach((k, i) => {
+      out.push(pad1, JSON.stringify(k), ': ')
+      emitWrite(out, (x as Record<string, unknown>)[k], indent + 1, k === 'expression_templates')
+      if (i < ks.length - 1) out.push(',')
+      out.push('\n')
+    })
+    out.push(pad, '}')
+  } else if (Array.isArray(x)) {
+    if (x.length === 0) {
+      out.push('[]')
+      return
+    }
+    out.push('[\n')
+    x.forEach((v, i) => {
+      out.push(pad1)
+      emitWrite(out, v, indent + 1, false)
+      if (i < x.length - 1) out.push(',')
+      out.push('\n')
+    })
+    out.push(pad, ']')
+  } else {
+    out.push(emitScalar(x))
+  }
+}
+
+/**
+ * Canonical byte serialization of an emitted document (esm-spec §9.6.4 rule 5):
+ * 2-space indent, object keys sorted lexicographically (UTF-8 byte order)
+ * EXCEPT the entries of an `expression_templates` object, which preserve their
+ * authored-first / materialized-sorted order. The cross-binding byte-identity
+ * surface for the Option-B emitted form and the target of the `emitted.esm`
+ * goldens. Mirrors the Julia reference `emit_esm_string`.
+ */
+export function emitEsmString(doc: unknown): string {
+  const out: string[] = []
+  emitWrite(out, doc, 0, false)
+  out.push('\n')
+  return out.join('')
+}
+
+// ===========================================================================
+// Flatten: template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
+// esm-libraries-spec §4.7.5)
+// ===========================================================================
+
+/**
+ * Rewrite the `name` of every `apply_expression_template` reference in `node`
+ * according to `rename` (old name → new name), in lockstep with a registry
+ * rename. Mirrors the Julia reference `_rename_apply_refs`.
+ */
+function renameApplyRefs(node: Json, rename: Record<string, string>): Json {
+  if (Array.isArray(node)) {
+    return node.map((v) => renameApplyRefs(v, rename))
+  }
+  if (isObject(node)) {
+    const isApply = node.op === APPLY_OP
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(node)) {
+      if (
+        isApply &&
+        k === 'name' &&
+        typeof node[k] === 'string' &&
+        Object.prototype.hasOwnProperty.call(rename, node[k] as string)
+      ) {
+        out[k] = rename[node[k] as string]
+      } else {
+        out[k] = renameApplyRefs(node[k], rename)
+      }
+    }
+    return out
+  }
+  return node
+}
+
+/** Result of {@link flattenTemplateRegistries}: the rewritten document + merged registry. */
+export interface FlattenedTemplateRegistries {
+  root: Record<string, unknown>
+  merged: Record<string, unknown>
+}
+
+/**
+ * The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
+ * esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
+ * document `loaded`, merge every component's match-less `expression_templates`
+ * registry into a single document-scoped merged registry:
+ *
+ *  - **Deep-equal dedup at first occurrence** — two components importing one
+ *    stencil produce identical folded bodies, kept once under the bare name.
+ *  - **Non-deep-equal same-name collision** — both entries are renamed
+ *    deterministically to `<ComponentPath>.<name>` and their
+ *    `apply_expression_template` references are rewritten in lockstep.
+ *
+ * Returns the rewritten document `root` (component reference sites updated) and
+ * the merged registry (the FlattenedSystem's first-class registry field).
+ * `match` rules are not merged (only match-less templates are referenceable).
+ * Mirrors the Julia reference `flatten_template_registries`.
+ */
+export function flattenTemplateRegistries(loaded: object): FlattenedTemplateRegistries {
+  const root = deepClone(loaded) as Record<string, unknown>
+  // (path, comp, named)
+  const comps: { path: string; comp: Record<string, unknown>; named: Record<string, unknown> }[] =
+    []
+  for (const compKind of COMP_KINDS) {
+    const cs = root[compKind]
+    if (!isObject(cs)) continue
+    for (const [cname, comp] of Object.entries(cs)) {
+      if (!isObject(comp)) continue
+      const named: Record<string, unknown> = {}
+      const tpl = comp.expression_templates
+      if (isObject(tpl)) {
+        for (const [n, d] of Object.entries(tpl)) {
+          if (isObject(d) && d.match !== undefined) continue // match rules not merged
+          named[n] = d
+        }
+      }
+      comps.push({ path: cname, comp, named })
+    }
+  }
+
+  // Group each template name across components (preserving first-seen path).
+  const byname = new Map<string, { path: string; decl: unknown }[]>()
+  for (const { path, named } of comps) {
+    for (const n of Object.keys(named).sort()) {
+      if (!byname.has(n)) byname.set(n, [])
+      byname.get(n)!.push({ path, decl: named[n] })
+    }
+  }
+
+  const merged: Record<string, unknown> = {}
+  const rename: Record<string, Record<string, string>> = {} // path => (old => new)
+  for (const name of [...byname.keys()].sort()) {
+    const occ = byname.get(name)!
+    const allEq = occ.every((o) => deepEqual(occ[0]!.decl, o.decl))
+    if (allEq) {
+      merged[name] = occ[0]!.decl // deep-equal dedup
+    } else {
+      for (const { path, decl } of occ) {
+        // collision: owner-path rename
+        const newname = `${path}.${name}`
+        merged[newname] = decl
+        ;(rename[path] ??= {})[name] = newname
+      }
+    }
+  }
+
+  // Rewrite reference sites in lockstep (component expression positions and the
+  // carried bodies of the renamed entries).
+  for (const { path, comp } of comps) {
+    const rn = rename[path]
+    if (rn) {
+      for (const k of Object.keys(comp)) {
+        if (k === 'expression_templates') continue
+        comp[k] = renameApplyRefs(comp[k], rn)
+      }
+      for (const newname of Object.values(rn)) {
+        if (Object.prototype.hasOwnProperty.call(merged, newname)) {
+          merged[newname] = renameApplyRefs(merged[newname], rn)
+        }
+      }
+    }
+    // Drop the now-merged per-component block from the flattened form.
+    if ('expression_templates' in comp) delete comp.expression_templates
+  }
+
+  return { root, merged }
 }

@@ -553,15 +553,19 @@ end
 """
     _compose_template_bodies!(templates, scope)
 
-Registration-time body composition (esm-spec §9.7.3): template bodies MAY
-reference other in-scope MATCH-LESS templates via `apply_expression_template`
-nodes. Builds the body-reference graph, rejects cycles
-(`apply_expression_template_recursive_body`) and chains deeper than
-`MAX_TEMPLATE_EXPANSION_DEPTH` templates (`template_body_expansion_too_deep`),
-then inlines dependencies-first by pure substitution — confluent, so
-topological order cannot affect the result. Afterwards every `body` is a
-closed Expression AST with zero `apply_expression_template` nodes; runs
-BEFORE the §9.6.3 fixpoint ever consults a `match` rule.
+Registration-time body **checking** (esm-spec §9.7.3, Option B / esm 0.9.0):
+template bodies MAY reference other in-scope MATCH-LESS templates via
+`apply_expression_template` nodes. Builds the body-reference graph, rejects
+cycles (`apply_expression_template_recursive_body`), references to undeclared
+or `match`-bearing templates (`apply_expression_template_unknown_template`),
+and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
+(`template_body_expansion_too_deep`).
+
+From `esm: 0.9.0` (RFC out-of-line-expression-templates §7.1 step 4) bodies are
+**NOT inlined** — the references are preserved uninlined and denote their
+expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
+separately by [`_template_target_bearing`](@ref). This runs BEFORE the §9.6.3
+fixpoint ever consults a `match` rule; it now only validates the DAG.
 """
 function _compose_template_bodies!(templates::AbstractDict{String,Any}, scope::String)
     isempty(templates) && return
@@ -623,12 +627,10 @@ function _compose_template_bodies!(templates::AbstractDict{String,Any}, scope::S
         visit(name)
     end
 
-    for name in order
-        isempty(refs[name]) && continue
-        decl = templates[name]
-        decl["body"] = _inline_applies(_raw_get(decl, "body"), templates,
-                                       "$scope.expression_templates.$name")
-    end
+    # esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
+    # depth-bounded, references resolve to match-less templates); the bodies are
+    # left with their `apply_expression_template` references intact. `Expand`
+    # (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
     return
 end
 
@@ -1279,9 +1281,28 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
                 "$origin: `only` names template '$n', which '$ref' does not declare (esm-spec §9.7.2)"))
         end
         keepset = Set(keep)
+        # esm-spec §9.7.2 / §9.6.4 rule 5 (Option B): `only` filters the
+        # importer's EXPLICIT visibility, but the kept templates' bodies may
+        # reference other "internal-wiring" templates that resolved in the
+        # target's own scope (a BC rule referencing an interior stencil). With
+        # bodies no longer inlined (§9.7.3), those referenced templates must be
+        # carried along as the transitive reference closure, or the surviving
+        # references would dangle. `only` is respected automatically —
+        # materialization is by reference closure.
+        closure = Set{String}()
+        wstack = String[]
+        for n in keep
+            append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[n], "body")))
+        end
+        while !isempty(wstack)
+            r = pop!(wstack)
+            (r in keepset || r in closure || !haskey(scope.templates, r)) && continue
+            push!(closure, r)
+            append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[r], "body")))
+        end
         filtered = OrderedDict{String,Any}()
         for (n, d) in scope.templates
-            n in keepset && (filtered[n] = d)
+            (n in keepset || n in closure) && (filtered[n] = d)
         end
         scope.templates = filtered
     end

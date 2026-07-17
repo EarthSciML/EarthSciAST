@@ -107,14 +107,25 @@ struct FlattenedSystem
     metadata::FlattenMetadata
     index_sets::OrderedDict{String, IndexSet}
     function_tables::Dict{String, FunctionTable}
+    # esm-spec §9.6.4 rule 7 / §10.7 / esm-libraries-spec §4.7.5 step 4 (Option B):
+    # the MERGED template registry — the union of the component registries
+    # (deep-equal dedup, deterministic `<ComponentPath>.<name>` collision rename).
+    # Downstream consumers resolve surviving `apply_expression_template`
+    # references against it (or `Expand` them; §9.6.4 rule 2). Empty when no
+    # references survived (or `ESS_TEMPLATE_REF_DISABLE=1`).
+    template_registry::Dict{String, Any}
 end
 
-# Backward-compatible 9-arg constructor: callers that predate the index-set /
-# function-table registry (e.g. hand-built MTK PDESystem fixtures) get empty
-# registries. The full flattener always passes all 11.
+# Backward-compatible constructors: callers that predate the index-set /
+# function-table / template registries (e.g. hand-built MTK PDESystem fixtures)
+# get empty registries. The full flattener always passes all fields.
 FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta) =
     FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta,
-                    OrderedDict{String, IndexSet}(), Dict{String, FunctionTable}())
+                    OrderedDict{String, IndexSet}(), Dict{String, FunctionTable}(),
+                    Dict{String, Any}())
+FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs) =
+    FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs,
+                    Dict{String, Any}())
 
 """
     FlattenedSystem(flat::FlattenedSystem; kwargs...) -> FlattenedSystem
@@ -136,11 +147,12 @@ FlattenedSystem(flat::FlattenedSystem;
         domain = flat.domain,
         metadata = flat.metadata,
         index_sets = flat.index_sets,
-        function_tables = flat.function_tables) =
+        function_tables = flat.function_tables,
+        template_registry = flat.template_registry) =
     FlattenedSystem(independent_variables, state_variables, parameters,
                     observed_variables, equations, continuous_events,
                     discrete_events, domain, metadata, index_sets,
-                    function_tables)
+                    function_tables, template_registry)
 
 # ========================================
 # Reaction Lowering Helper (§4.6 + §4.7.6)
@@ -358,7 +370,24 @@ explicit `D(X, t) = ...` equation and a reactant/product of a reaction — such
 a system is over-determined.
 """
 function flatten(file::EsmFile; base_path::AbstractString=".",
-                 load_ref=nothing)::FlattenedSystem
+                 load_ref=nothing, expand_refs::Bool=true)::FlattenedSystem
+    # esm-spec §9.6.4 Option B: when `apply_expression_template` references
+    # survived load (`file.component_templates !== nothing`):
+    #   * `expand_refs=true` (default) — Expand a COPY before flattening, so the
+    #     equations are the Option-A image (MTK and every general caller build the
+    #     expanded form). The caller's reference-preserving `EsmFile` is untouched,
+    #     so `serialize_esm_file` still emits it verbatim (R1 / §9.6.4 rule 5).
+    #   * `expand_refs=false` — CARRY the references into the FlattenedSystem
+    #     (namespacing now scopes their `bindings`); the tree-walk build entry
+    #     handles them via a sound per-node `Expand` fallback against the merged
+    #     `template_registry`. This is the fast-path flatten used by `simulate`
+    #     when `ESS_TEMPLATE_REF_DISABLE` is unset.
+    # Under `ESS_TEMPLATE_REF_DISABLE=1` load already expanded, so
+    # `component_templates` is `nothing` and this is a no-op either way.
+    if expand_refs && file.component_templates !== nothing
+        file = _expand_refs!(deepcopy(file))
+    end
+
     # Step 0a: Expand `coupling_import` entries (esm-spec §10.10.3) into concrete
     # edges BEFORE any coupling-consuming step, so imported edges participate in
     # conflict detection, unit checks, the coupling-rule loop, and the pointwise
@@ -466,10 +495,16 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     function_tables = file.function_tables === nothing ?
         Dict{String, FunctionTable}() : copy(file.function_tables)
 
+    # esm-spec §9.6.4 rule 7 / §10.7: the flattened representation carries the
+    # MERGED template registry (union of the component registries, deep-equal
+    # dedup + deterministic `<ComponentPath>.<name>` collision rename). Empty when
+    # no references survived load (`file.component_templates === nothing`).
+    template_registry = _merge_flat_registry(file.component_templates)
+
     return FlattenedSystem(
         ivs, states, params, observeds,
         equations, continuous_events, discrete_events,
-        target_domain, metadata, index_sets, function_tables,
+        target_domain, metadata, index_sets, function_tables, template_registry,
     )
 end
 

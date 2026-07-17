@@ -62,7 +62,12 @@ from .serialize import save
 # + load-time metaparameters (esm-spec §9.7 /
 # docs/content/rfcs/template-library-imports.md).
 from .lower_expression_templates import (
+    Expand,
     ExpressionTemplateError,
+    emit_document,
+    emit_esm_string,
+    expand_document,
+    flatten_template_registries,
     lower_expression_templates,
     reject_expression_templates_pre_v04,
 )
@@ -355,6 +360,11 @@ __all__ = [
     # load-time metaparameters (esm-spec §9.7)
     "ExpressionTemplateError",
     "lower_expression_templates",
+    "expand_document",
+    "Expand",
+    "emit_document",
+    "emit_esm_string",
+    "flatten_template_registries",
     "reject_expression_templates_pre_v04",
     "MAX_TEMPLATE_EXPANSION_DEPTH",
     "reject_template_imports_pre_v08",

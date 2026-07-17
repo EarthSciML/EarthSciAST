@@ -24,7 +24,7 @@
 
 using EarthSciAST
 using EarthSciAST: resolve_template_machinery, lower_expression_templates,
-    serialize_esm_file, JSONLikeDict
+    serialize_esm_file, JSONLikeDict, Expand
 using JSON3
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
@@ -73,12 +73,14 @@ function _write_golden(path::String, doc)
     println("wrote ", relpath(path, ROOT))
 end
 
-# Raw §9.7 pipeline: fixture → resolved → lowered document view.
+# Raw §9.7 pipeline: fixture → resolved → lowered → Expand. esm-spec §9.6.4
+# Option B: `lower_expression_templates` PRESERVES surviving references; the
+# `expanded*.esm` oracle is the Option-A image `Expand ∘ lower` (§9.6.4 rule 2).
 function _expand_raw(fixture_path::String)
     raw = JSON3.read(read(fixture_path, String))
     resolved = resolve_template_machinery(raw, dirname(fixture_path))
     out = lower_expression_templates(resolved === nothing ? raw : resolved)
-    return out isa JSONLikeDict ? getfield(out, :data) : out
+    return Expand(out)
 end
 
 for (dir, fixture, golden) in [

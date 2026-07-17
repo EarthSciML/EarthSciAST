@@ -586,8 +586,10 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
         "t_drop": {"params": [], "body": 9}
       }
     }`)
-	// t_keep's body reference to t_inner resolved in the LIBRARY's own scope,
-	// so importing only t_keep still yields 2 * 7.
+	// esm-spec §9.6.4 Option B: t_keep's body reference to t_inner resolved in
+	// the LIBRARY's own scope. Bodies are no longer inlined (§9.7.3), so
+	// importing `only: [t_keep]` carries the internal-wiring reference-closure
+	// (t_inner) along and the reference SURVIVES; `Expand` yields 2 * 7.
 	src := tiModelJSON(
 		`"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],`, "")
 	view := decodeFixture(t, src)
@@ -596,12 +598,19 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	tpl := view["models"].(map[string]any)["M"].(map[string]any)["expression_templates"].(map[string]any)
-	if len(tpl) != 1 {
-		t.Fatalf("expected only t_keep in scope, got %v", sortedKeys(tpl))
+	// t_keep kept explicitly; t_inner carried by the reference closure;
+	// t_drop (unreferenced, filtered) is gone.
+	if len(tpl) != 2 || tpl["t_keep"] == nil || tpl["t_inner"] == nil {
+		t.Fatalf("expected {t_keep, t_inner} (closure carry) in scope, got %v", sortedKeys(tpl))
 	}
 	body := tpl["t_keep"].(map[string]any)["body"]
-	if got := mustJSON(t, body); got != `{"args":[2,7],"op":"*"}` {
-		t.Errorf("composed body = %s; want {\"args\":[2,7],\"op\":\"*\"}", got)
+	// The reference to t_inner SURVIVES (Option B; not inlined to `7`).
+	const wantBody = `{"args":[2,{"args":[],"bindings":{},"name":"t_inner","op":"apply_expression_template"}],"op":"*"}`
+	if got := mustJSON(t, body); got != wantBody {
+		t.Errorf("composed body = %s; want %s", got, wantBody)
+	}
+	if got := mustJSON(t, tpl["t_inner"].(map[string]any)["body"]); got != `7` {
+		t.Errorf("t_inner body = %s; want 7", got)
 	}
 	// Referencing a filtered-out name from an expression position fails.
 	p2 := filepath.Join(dir, "m2.esm")
@@ -877,12 +886,14 @@ func TestTemplateImports_VersionGateFlagsEveryConstruct(t *testing.T) {
 	}
 }
 
-func TestTemplateImports_CrossFileChainsDoNotAccumulateDepth(t *testing.T) {
-	// The 32-template depth bound applies per composition scope: an imported
-	// library's bodies arrive already CLOSED (composed in the library's own
-	// scope, §9.7.3), so they count as depth-1 leaves in the importer — a
-	// 32-deep chain in a library plus a consumer template referencing its
-	// head is legal, not a 33-deep chain.
+func TestTemplateImports_CrossFileChainsAccumulateDepth(t *testing.T) {
+	// esm-spec §9.6.4 Option B (§9.7.3): template bodies are no longer inlined
+	// at the library boundary — the references survive and merge into the
+	// importer's scope, so the depth bound is checked on the FULL merged
+	// reference graph. A 32-deep chain in a library PLUS a consumer template
+	// referencing its head is a 33-deep chain across files, which exceeds
+	// MAX_TEMPLATE_EXPANSION_DEPTH=32 and is rejected (mirroring the Julia
+	// reference: the importer re-composes the merged 33-template graph).
 	dir := t.TempDir()
 	chain := tiChainDoc(MaxTemplateExpansionDepth)
 	var chainView map[string]any
@@ -905,8 +916,9 @@ func TestTemplateImports_CrossFileChainsDoNotAccumulateDepth(t *testing.T) {
 		`"expression_template_imports": [{"ref": "./chainlib.esm"}],
          "expression_templates": {"uses_head": {"params": [],
            "body": {"op": "apply_expression_template", "args": [], "name": "c_01", "bindings": {}}}},`, ""))
-	if _, err := Load(p); err != nil {
-		t.Errorf("cross-file chain must not accumulate depth, got: %v", err)
+	_, err = Load(p)
+	if code := tiErrCode(t, err); code != "template_body_expansion_too_deep" {
+		t.Errorf("33-deep cross-file chain code = %s; want template_body_expansion_too_deep", code)
 	}
 }
 

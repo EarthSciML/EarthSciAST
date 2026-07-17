@@ -1,0 +1,154 @@
+{
+  "esm": "0.9.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "out-of-line-expression-templates conformance"
+    ],
+    "description": "esm-spec §9.6.4 rule 3 (RFC out-of-line-expression-templates §9.2). Two match-less templates: `deriv_c` carries a spatial `D` in its body (TARGET-BEARING), so its reference is EAGER — expanded innermost-first in the pre-pass, surfacing the `D`, which the `central` match rule then lowers at load. `scale_c` is target-free, so its reference SURVIVES load and is materialized into the emitted registry. Positive (eager, lowered) + negative (surviving) in one document.",
+    "name": "eager_target_bearing"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "c"
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "expression_templates": {
+        "deriv_c": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "x"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "scale_c": {
+          "body": {
+            "args": [
+              "k",
+              "f"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "f",
+            "k"
+          ]
+        }
+      },
+      "variables": {
+        "c": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "state",
+          "units": "1"
+        },
+        "d_eager": {
+          "expression": {
+            "args": [
+              {
+                "args": [
+                  "c"
+                ],
+                "expr": {
+                  "args": [
+                    {
+                      "args": [
+                        "c",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "+"
+                        }
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "c",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "-"
+                        }
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "-"
+                },
+                "op": "aggregate",
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": {
+                    "from": "x"
+                  }
+                }
+              },
+              "i"
+            ],
+            "op": "index"
+          },
+          "shape": [
+            "x"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "d_survive": {
+          "expression": {
+            "args": [
+              {
+                "args": [],
+                "bindings": {
+                  "f": "c",
+                  "k": 2
+                },
+                "name": "scale_c",
+                "op": "apply_expression_template"
+              },
+              "i"
+            ],
+            "op": "index"
+          },
+          "shape": [
+            "x"
+          ],
+          "type": "observed",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

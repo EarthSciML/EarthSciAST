@@ -32,93 +32,21 @@ func collectApplyNames(out *[]string, x any) {
 	}
 }
 
-// inlineApplies replaces every `apply_expression_template` node in node with the
-// referenced template's (already-closed) body by post-order expandApply
-// (esm-spec §9.7.3 registration-time body composition). Because referenced
-// bodies are inlined dependencies-first, one pass yields an apply-free subtree.
-// node is never mutated; subtrees without an apply are returned AS-IS
-// (identity-preserving), and expandApply splices referenced bodies by
-// reference, so a composed body is a shared DAG: a chain of templates that
-// each reference the previous one twice composes in O(chain) unique nodes
-// instead of 2^chain materialized copies (representation-only — the denoted
-// expansion, and its serialized bytes, are unchanged).
-func inlineApplies(node any, templates map[string]any, scope string) (any, error) {
-	out, _, err := inlineAppliesShared(node, templates, scope)
-	return out, err
-}
-
-// inlineAppliesShared upholds the identity-preservation invariant:
-// changed == false ⟹ the returned value IS `node` (the same object).
-func inlineAppliesShared(node any, templates map[string]any, scope string) (any, bool, error) {
-	switch v := node.(type) {
-	case []any:
-		var out []any
-		for i, c := range v {
-			nc, ch, err := inlineAppliesShared(c, templates, scope)
-			if err != nil {
-				return nil, false, err
-			}
-			if ch && out == nil {
-				out = make([]any, len(v))
-				copy(out, v[:i])
-			}
-			if out != nil {
-				out[i] = nc
-			}
-		}
-		if out == nil {
-			return v, false, nil
-		}
-		return out, true, nil
-	case map[string]any:
-		var out map[string]any
-		for k, c := range v {
-			nc, ch, err := inlineAppliesShared(c, templates, scope)
-			if err != nil {
-				return nil, false, err
-			}
-			if ch {
-				if out == nil {
-					out = make(map[string]any, len(v))
-					for k2, v2 := range v {
-						out[k2] = v2
-					}
-				}
-				out[k] = nc
-			}
-		}
-		nodeMap := v
-		if out != nil {
-			nodeMap = out
-		}
-		if op, ok := nodeMap["op"].(string); ok && op == applyExpressionTemplateOp {
-			// Referenced bodies are already closed (topological order), so a
-			// single expandApply produces an apply-free subtree; the bindings'
-			// own sub-ASTs were inlined by the post-order walk above.
-			expanded, err := expandApply(nodeMap, templates, scope)
-			if err != nil {
-				return nil, false, err
-			}
-			return expanded, true, nil
-		}
-		if out == nil {
-			return v, false, nil
-		}
-		return out, true, nil
-	}
-	return node, false, nil
-}
-
-// composeTemplateBodies performs registration-time body composition (esm-spec
-// §9.7.3): template bodies MAY reference other in-scope MATCH-LESS templates
-// via `apply_expression_template` nodes. Builds the body-reference graph,
-// rejects cycles (`apply_expression_template_recursive_body`) and chains
-// deeper than MaxTemplateExpansionDepth templates
-// (`template_body_expansion_too_deep`), then inlines dependencies-first by
-// pure substitution — confluent, so topological order cannot affect the
-// result. Afterwards every `body` is a closed Expression AST with zero
-// `apply_expression_template` nodes; runs BEFORE the §9.6.3 fixpoint ever
-// consults a `match` rule. Mutates the template declarations in place.
+// composeTemplateBodies performs registration-time body CHECKING (esm-spec
+// §9.7.3, Option B / esm 0.9.0): template bodies MAY reference other in-scope
+// MATCH-LESS templates via `apply_expression_template` nodes. Builds the
+// body-reference graph, rejects cycles
+// (`apply_expression_template_recursive_body`), references to undeclared or
+// `match`-bearing templates (`apply_expression_template_unknown_template`), and
+// chains deeper than MaxTemplateExpansionDepth templates
+// (`template_body_expansion_too_deep`).
+//
+// From esm 0.9.0 (RFC out-of-line-expression-templates §7.1 step 4) bodies are
+// **NOT inlined** — the references are preserved uninlined and denote their
+// expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
+// separately by templateTargetBearing. This runs BEFORE the §9.6.3 fixpoint
+// ever consults a `match` rule; it now only validates the DAG. Mirrors the
+// Julia reference `_compose_template_bodies!`.
 func composeTemplateBodies(templates map[string]any, scope string) error {
 	if len(templates) == 0 {
 		return nil
@@ -212,20 +140,10 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 		}
 	}
 
-	for _, name := range order {
-		if len(refs[name]) == 0 {
-			continue
-		}
-		decl, ok := templates[name].(map[string]any)
-		if !ok {
-			continue
-		}
-		body, err := inlineApplies(decl["body"], templates,
-			fmt.Sprintf("%s.expression_templates.%s", scope, name))
-		if err != nil {
-			return err
-		}
-		decl["body"] = body
-	}
+	// esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
+	// depth-bounded, references resolve to match-less templates); the bodies are
+	// left with their `apply_expression_template` references intact. Expand
+	// (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
+	_ = order
 	return nil
 }

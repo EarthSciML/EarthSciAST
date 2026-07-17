@@ -1,0 +1,116 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "transport_3axis_7cubed",
+    "description": "RFC out-of-line-expression-templates §12 measurement stack (in-repo, no external data). A 7x7x7 single-tracer transport whose right-hand side is -(Dx(q)+Dy(q)+Dz(q)); each spatial derivative is lowered by a match rule to a per-axis `makearray` with three boundary-class regions (two one-sided faces + a centered interior), and every region value is an `apply_expression_template` reference to a shared per-class stencil template. Under Option A (expand-at-load) the three makearrays' region bodies inline into one fused per-cell tree whose distinct-structure count is the cross-product of boundary classes across axes (the §3-§5 blowup); under Option B the references survive and each stencil body is a single factored declaration. Measured by scripts/bench-out-of-line.jl (node-lowerings: Expand image vs reference-preserving load).",
+    "authors": ["out-of-line-expression-templates conformance"]
+  },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 7, "description": "cells per axis" }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "N" },
+    "y": { "kind": "interval", "size": "N" },
+    "z": { "kind": "interval", "size": "N" }
+  },
+  "models": {
+    "Transport": {
+      "expression_templates": {
+        "sx_int": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["i", "j", "k"], "args": ["f"],
+          "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }], "j": { "from": "y" }, "k": { "from": "z" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", { "op": "+", "args": ["i", 1] }, "j", "k"] },
+            { "op": "index", "args": ["f", { "op": "-", "args": ["i", 1] }, "j", "k"] } ] } } },
+        "sx_lo": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["j", "k"], "args": ["f"],
+          "ranges": { "j": { "from": "y" }, "k": { "from": "z" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", 2, "j", "k"] },
+            { "op": "index", "args": ["f", 1, "j", "k"] } ] } } },
+        "sx_hi": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["j", "k"], "args": ["f"],
+          "ranges": { "j": { "from": "y" }, "k": { "from": "z" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", "N", "j", "k"] },
+            { "op": "index", "args": ["f", { "op": "-", "args": ["N", 1] }, "j", "k"] } ] } } },
+        "sy_int": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["i", "j", "k"], "args": ["f"],
+          "ranges": { "i": { "from": "x" }, "j": [2, { "op": "-", "args": ["N", 1] }], "k": { "from": "z" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", "i", { "op": "+", "args": ["j", 1] }, "k"] },
+            { "op": "index", "args": ["f", "i", { "op": "-", "args": ["j", 1] }, "k"] } ] } } },
+        "sy_lo": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["i", "k"], "args": ["f"],
+          "ranges": { "i": { "from": "x" }, "k": { "from": "z" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", "i", 2, "k"] },
+            { "op": "index", "args": ["f", "i", 1, "k"] } ] } } },
+        "sy_hi": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["i", "k"], "args": ["f"],
+          "ranges": { "i": { "from": "x" }, "k": { "from": "z" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", "i", "N", "k"] },
+            { "op": "index", "args": ["f", "i", { "op": "-", "args": ["N", 1] }, "k"] } ] } } },
+        "sz_int": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["i", "j", "k"], "args": ["f"],
+          "ranges": { "i": { "from": "x" }, "j": { "from": "y" }, "k": [2, { "op": "-", "args": ["N", 1] }] },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", "i", "j", { "op": "+", "args": ["k", 1] }] },
+            { "op": "index", "args": ["f", "i", "j", { "op": "-", "args": ["k", 1] }] } ] } } },
+        "sz_lo": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["i", "j"], "args": ["f"],
+          "ranges": { "i": { "from": "x" }, "j": { "from": "y" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", "i", "j", 2] },
+            { "op": "index", "args": ["f", "i", "j", 1] } ] } } },
+        "sz_hi": { "params": ["f"], "body": {
+          "op": "aggregate", "output_idx": ["i", "j"], "args": ["f"],
+          "ranges": { "i": { "from": "x" }, "j": { "from": "y" } },
+          "expr": { "op": "-", "args": [
+            { "op": "index", "args": ["f", "i", "j", "N"] },
+            { "op": "index", "args": ["f", "i", "j", { "op": "-", "args": ["N", 1] }] } ] } } },
+        "Dx": { "params": ["f"], "match": { "op": "D", "args": ["f"], "wrt": "x" }, "body": {
+          "op": "makearray", "args": [],
+          "regions": [
+            [[2, { "op": "-", "args": ["N", 1] }], [1, "N"], [1, "N"]],
+            [[1, 1], [1, "N"], [1, "N"]],
+            [["N", "N"], [1, "N"], [1, "N"]] ],
+          "values": [
+            { "op": "apply_expression_template", "args": [], "name": "sx_int", "bindings": { "f": "f" } },
+            { "op": "apply_expression_template", "args": [], "name": "sx_lo", "bindings": { "f": "f" } },
+            { "op": "apply_expression_template", "args": [], "name": "sx_hi", "bindings": { "f": "f" } } ] } },
+        "Dy": { "params": ["f"], "match": { "op": "D", "args": ["f"], "wrt": "y" }, "body": {
+          "op": "makearray", "args": [],
+          "regions": [
+            [[1, "N"], [2, { "op": "-", "args": ["N", 1] }], [1, "N"]],
+            [[1, "N"], [1, 1], [1, "N"]],
+            [[1, "N"], ["N", "N"], [1, "N"]] ],
+          "values": [
+            { "op": "apply_expression_template", "args": [], "name": "sy_int", "bindings": { "f": "f" } },
+            { "op": "apply_expression_template", "args": [], "name": "sy_lo", "bindings": { "f": "f" } },
+            { "op": "apply_expression_template", "args": [], "name": "sy_hi", "bindings": { "f": "f" } } ] } },
+        "Dz": { "params": ["f"], "match": { "op": "D", "args": ["f"], "wrt": "z" }, "body": {
+          "op": "makearray", "args": [],
+          "regions": [
+            [[1, "N"], [1, "N"], [2, { "op": "-", "args": ["N", 1] }]],
+            [[1, "N"], [1, "N"], [1, 1]],
+            [[1, "N"], [1, "N"], ["N", "N"]] ],
+          "values": [
+            { "op": "apply_expression_template", "args": [], "name": "sz_int", "bindings": { "f": "f" } },
+            { "op": "apply_expression_template", "args": [], "name": "sz_lo", "bindings": { "f": "f" } },
+            { "op": "apply_expression_template", "args": [], "name": "sz_hi", "bindings": { "f": "f" } } ] } }
+      },
+      "variables": {
+        "q": { "type": "state", "units": "1", "shape": ["x", "y", "z"], "default": 1.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["q"], "wrt": "t" },
+          "rhs": { "op": "-", "args": [ { "op": "+", "args": [
+            { "op": "D", "args": ["q"], "wrt": "x" },
+            { "op": "D", "args": ["q"], "wrt": "y" },
+            { "op": "D", "args": ["q"], "wrt": "z" } ] } ] } }
+      ]
+    }
+  }
+}

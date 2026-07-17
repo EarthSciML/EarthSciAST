@@ -43,9 +43,12 @@ schema validation but before ``_parse_esm_data``.
 from __future__ import annotations
 
 import copy
+import json
+import math
 import re
 from typing import Any
 
+from . import op_registry
 from .diagnostics import (
     APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
     APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
@@ -71,7 +74,7 @@ from .json_walk import (  # noqa: F401 — re-exported for the historical import
     _is_object,
     _walk_json,
 )
-from .template_imports import _compose_template_bodies
+from .template_imports import _collect_apply_names, _compose_template_bodies
 
 # Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
 # manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema admits any
@@ -260,7 +263,13 @@ def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
             hit = memo.get(id(node))
             if hit is not None:
                 return hit[1]
-            out = {k: sub(v) for k, v in node.items()}
+            # esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4 (Option B):
+            # parameter substitution applies inside a nested
+            # ``apply_expression_template`` reference's ``bindings`` values
+            # exactly as any other Expression position, but the ``name`` field
+            # is NEVER a substitution site.
+            is_apply = node.get("op") == APPLY_OP
+            out = {k: (v if (is_apply and k == "name") else sub(v)) for k, v in node.items()}
             if all(out[k] is v for k, v in node.items()):
                 out = node
             memo[id(node)] = (node, out)
@@ -532,6 +541,291 @@ def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
     return _substitute(decl["body"], resolved)
 
 
+def _validate_apply_ref(node: dict, templates: dict, scope: str) -> None:
+    """Call-site check for a SURVIVING (non-expanded) ``apply_expression_template``
+    reference (esm-spec §9.6.9): the referenced ``name`` must resolve to an
+    in-scope MATCH-LESS template and ``bindings`` must cover its ``params``
+    exactly. Same diagnostics as :func:`_expand_apply`
+    (``apply_expression_template_unknown_template`` /
+    ``apply_expression_template_bindings_mismatch``), but WITHOUT expanding — the
+    reference is preserved (§9.6.4 rule 1)."""
+    name = node.get("name")
+    if not isinstance(name, str) or not name:
+        raise ExpressionTemplateError(
+            APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            f"{scope}: apply_expression_template node missing or empty 'name'",
+        )
+    decl = templates.get(name)
+    if decl is None:
+        raise ExpressionTemplateError(
+            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+            f"{scope}: apply_expression_template references undeclared template '{name}'",
+        )
+    if _is_object(decl) and decl.get("match") is not None:
+        raise ExpressionTemplateError(
+            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+            f"{scope}: apply_expression_template references '{name}', a `match` "
+            "rewrite rule — only match-less templates are invocable by name "
+            "(esm-spec §9.6.2)",
+        )
+    bindings = node.get("bindings")
+    if not _is_object(bindings):
+        raise ExpressionTemplateError(
+            APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+            f"{scope}: apply_expression_template '{name}' missing 'bindings' object",
+        )
+    declared = set(decl.get("params", []))
+    provided = set(bindings.keys())
+    for p in decl.get("params", []):
+        if p not in provided:
+            raise ExpressionTemplateError(
+                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                f"{scope}: apply_expression_template '{name}' missing binding for param '{p}'",
+            )
+    for p in provided:
+        if p not in declared:
+            raise ExpressionTemplateError(
+                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                f"{scope}: apply_expression_template '{name}' supplies unknown param '{p}'",
+            )
+
+
+def _check_surviving_refs(node: Any, templates: dict, scope: str) -> None:
+    """Walk ``node`` and run :func:`_validate_apply_ref` on every surviving
+    ``apply_expression_template`` reference it carries (esm-spec §9.6.9 call-site
+    checks). Descends into references' ``bindings`` too — a binding value MAY
+    itself be a surviving reference. Deduped for a shared DAG."""
+
+    def _visit(obj: dict, _path: str) -> None:
+        if obj.get("op") == APPLY_OP:
+            _validate_apply_ref(obj, templates, scope)
+
+    _walk_json(node, on_obj=_visit, dedup=True)
+
+
+# ---------------------------------------------------------------------------
+# Eager-expansion carve-out: the rewrite-target op tier T (esm-spec §9.6.4
+# rule 3 / RFC out-of-line-expression-templates §7.2)
+# ---------------------------------------------------------------------------
+
+#: The rewrite-target ops explicitly named by §4.2 as the open rewrite-target
+#: tier plus the two load-eliminated forms — the members of **T** that carry a
+#: recognized op name. Any op that is NOT in the evaluable-core registry
+#: (:mod:`earthsci_ast.op_registry`) is ALSO in T (an open-namespace custom op
+#: no evaluator implements); ``apply_expression_template`` itself is excluded.
+_REWRITE_TARGET_OPS = frozenset(
+    {"D", "grad", "div", "laplacian", "integral", "table_lookup", "enum"}
+)
+
+
+def _op_in_T(op: str) -> bool:
+    """True iff op string ``op`` is a member of the rewrite-target tier **T**
+    (esm-spec §9.6.4 rule 3): one of the named rewrite-target ops, or an op with
+    no evaluable-core registry entry (an open-namespace custom op). The template
+    reference op itself is never in T."""
+    if op == APPLY_OP:
+        return False
+    if op in _REWRITE_TARGET_OPS:
+        return True
+    return not op_registry.is_known(op)
+
+
+def _direct_T_op(node: Any) -> bool:
+    """True iff ``node`` contains, ANYWHERE within it (descending through every
+    field, including the ``bindings`` of nested ``apply_expression_template``
+    nodes), an object whose ``op`` is in **T** (:func:`_op_in_T`). Does NOT
+    follow references to other templates — that transitive step is
+    :func:`_template_target_bearing`."""
+    found = [False]
+
+    def _visit(obj: dict, _path: str) -> None:
+        if found[0]:
+            return
+        op = obj.get("op")
+        if isinstance(op, str) and _op_in_T(op):
+            found[0] = True
+
+    _walk_json(node, on_obj=_visit, dedup=True)
+    return found[0]
+
+
+def _template_target_bearing(templates: dict) -> dict[str, bool]:
+    """Compute, for every template in ``templates``, its **target-bearing** flag
+    (esm-spec §9.6.4 rule 3): a template is target-bearing iff its body contains
+    an op in **T** anywhere (including inside nested references' ``bindings``),
+    OR it references — transitively through the §9.7.3-checked acyclic DAG — a
+    target-bearing template. The DAG is acyclic (checked by
+    :func:`_compose_template_bodies`), so a memoized DFS terminates."""
+    tb: dict[str, bool] = {}
+    inprogress: set[str] = set()
+
+    def visit(name: str) -> bool:
+        if name in tb:
+            return tb[name]
+        # Defensive against a cycle the checker somehow missed: treat an
+        # in-progress node as non-contributing (acyclicity is enforced earlier).
+        if name in inprogress:
+            return False
+        decl = templates.get(name)
+        if decl is None:
+            tb[name] = False
+            return False
+        inprogress.add(name)
+        body = decl.get("body") if _is_object(decl) else None
+        res = body is not None and _direct_T_op(body)
+        if not res:
+            for r in _collect_apply_names([], body):
+                if r in templates and visit(r):
+                    res = True
+                    break
+        inprogress.discard(name)
+        tb[name] = res
+        return res
+
+    for name in templates:
+        visit(name)
+    return tb
+
+
+def _ref_is_eager(node: dict, target_bearing: dict[str, bool]) -> bool:
+    """Whether an ``apply_expression_template`` ``node`` is **eager** (esm-spec
+    §9.6.4 rule 3): its referenced template is target-bearing, OR any of its
+    ``bindings`` values contains an op in **T**. (After innermost-first eager
+    expansion of the bindings, a "nested eager reference" always manifests as a
+    T-op in the bindings, so this predicate subsumes that clause — see
+    :func:`_expand_eager`.)"""
+    name = node.get("name")
+    if not isinstance(name, str):
+        return False
+    if target_bearing.get(name, False):
+        return True
+    b = node.get("bindings")
+    if not _is_object(b):
+        return False
+    return _direct_T_op(b)
+
+
+def _expand_eager(
+    node: Any,
+    templates: dict,
+    target_bearing: dict[str, bool],
+    scope: str,
+    memo: dict[int, tuple] | None = None,
+) -> Any:
+    """The eager-expansion pre-pass (esm-spec §9.6.4 rule 3): expand — by pure
+    substitution, innermost-first — every EAGER ``apply_expression_template``
+    node, and only eager nodes. Non-eager (surviving) references are returned
+    intact. Consumes no ``MAX_REWRITE_PASSES`` budget (a separate pre-pass).
+    Sharing is preserved via an identity memo."""
+    if memo is None:
+        memo = {}
+    if _is_object(node):
+        hit = memo.get(id(node))
+        if hit is not None:
+            return hit[1]
+        if node.get("op") == APPLY_OP:
+            # Innermost-first: expand eager references inside the bindings first.
+            b = node.get("bindings")
+            newnode = node
+            if _is_object(b):
+                nb = {}
+                changed = False
+                for k, v in b.items():
+                    rv = _expand_eager(v, templates, target_bearing, scope, memo)
+                    if rv is not v:
+                        changed = True
+                    nb[k] = rv
+                if changed:
+                    newnode = {k: (nb if k == "bindings" else v) for k, v in node.items()}
+            if _ref_is_eager(newnode, target_bearing):
+                body = _expand_apply(newnode, templates, scope)
+                res = _expand_eager(body, templates, target_bearing, scope, memo)
+            else:
+                res = newnode
+        else:
+            changed = False
+            out = {}
+            for k, v in node.items():
+                rv = _expand_eager(v, templates, target_bearing, scope, memo)
+                if rv is not v:
+                    changed = True
+                out[k] = rv
+            res = out if changed else node
+        memo[id(node)] = (node, res)
+        return res
+    if _is_array(node):
+        hit = memo.get(id(node))
+        if hit is not None:
+            return hit[1]
+        changed = False
+        out = []
+        for v in node:
+            rv = _expand_eager(v, templates, target_bearing, scope, memo)
+            if rv is not v:
+                changed = True
+            out.append(rv)
+        res = out if changed else node
+        memo[id(node)] = (node, res)
+        return res
+    return node
+
+
+def _expand_all(node: Any, templates: dict, scope: str, memo: dict[int, tuple] | None = None) -> Any:
+    """Fully expand EVERY ``apply_expression_template`` node in ``node`` by pure
+    substitution to a fixpoint (innermost-first: bindings are expanded before
+    the body is instantiated, and the instantiated body is re-expanded). This is
+    the per-registry kernel of the public :func:`expand_document` /
+    :func:`Expand` function (esm-spec §9.6.4 rule 2). Deterministic and
+    sharing-preserving."""
+    if memo is None:
+        memo = {}
+    if _is_object(node):
+        hit = memo.get(id(node))
+        if hit is not None:
+            return hit[1]
+        if node.get("op") == APPLY_OP:
+            b = node.get("bindings")
+            newnode = node
+            if _is_object(b):
+                nb = {}
+                changed = False
+                for k, v in b.items():
+                    rv = _expand_all(v, templates, scope, memo)
+                    if rv is not v:
+                        changed = True
+                    nb[k] = rv
+                if changed:
+                    newnode = {k: (nb if k == "bindings" else v) for k, v in node.items()}
+            body = _expand_apply(newnode, templates, scope)
+            res = _expand_all(body, templates, scope, memo)
+        else:
+            changed = False
+            out = {}
+            for k, v in node.items():
+                rv = _expand_all(v, templates, scope, memo)
+                if rv is not v:
+                    changed = True
+                out[k] = rv
+            res = out if changed else node
+        memo[id(node)] = (node, res)
+        return res
+    if _is_array(node):
+        hit = memo.get(id(node))
+        if hit is not None:
+            return hit[1]
+        changed = False
+        out = []
+        for v in node:
+            rv = _expand_all(v, templates, scope, memo)
+            if rv is not v:
+                changed = True
+            out.append(rv)
+        res = out if changed else node
+        memo[id(node)] = (node, res)
+        return res
+    return node
+
+
 # Maximum number of productive rewrite passes before a file is rejected as
 # non-converging (esm-spec §9.6.3, diagnostic ``rewrite_rule_nonterminating``).
 # Pinned identically across all bindings so the accept/reject decision — and the
@@ -546,6 +840,7 @@ def _rewrite_pass(
     scope: str,
     last: list,
     shape_env: dict[str, list],
+    target_bearing: dict[str, bool],
     memo: dict[int, tuple] | None = None,
 ) -> tuple:
     """One pre-order (outermost-first) rewrite pass over ``node`` (esm-spec
@@ -588,7 +883,9 @@ def _rewrite_pass(
         changed = False
         out: Any = []
         for c in node:
-            nc, ch = _rewrite_pass(c, templates, sorted_rules, scope, last, shape_env, memo)
+            nc, ch = _rewrite_pass(
+                c, templates, sorted_rules, scope, last, shape_env, target_bearing, memo
+            )
             out.append(nc)
             changed = changed or ch
         if not changed:
@@ -602,23 +899,40 @@ def _rewrite_pass(
         return hit[1], hit[2]
     # (1) Outermost-first: fire a rule AT this node before descending.
     if node.get("op") == APPLY_OP:
-        last[0] = APPLY_OP
-        expanded = _expand_apply(node, templates, scope)
-        memo[id(node)] = (node, expanded, True)
-        return expanded, True
+        # esm-spec §9.6.4 rule 4 (Option B): the engine treats a surviving
+        # (non-eager) reference as a LEAF — it does not descend into its
+        # ``bindings``, no rule fires inside it, and it survives the fixpoint.
+        # Eager references were already removed by the pre-pass
+        # (:func:`_expand_eager`); a defensive check keeps any eager node that a
+        # caller passed in unexpanded correct.
+        if _ref_is_eager(node, target_bearing):
+            last[0] = APPLY_OP
+            expanded = _expand_eager(node, templates, target_bearing, scope)
+            memo[id(node)] = (node, expanded, True)
+            return expanded, True
+        memo[id(node)] = (node, node, False)
+        return node, False
     for rule in sorted_rules:
         binds = _match(rule.pattern, node, rule.params)
         if binds is not None and _where_satisfied(rule.where_c, binds, shape_env):
             op = node.get("op")
             last[0] = op if isinstance(op, str) else ""
-            replaced = _substitute(rule.body, binds)
+            # Instantiate by pure substitution (through nested references'
+            # ``bindings``; ``name`` is never a site). An eager reference
+            # introduced by the instantiation expands as part of the same
+            # rewrite (§9.6.4 rule 4) via the pre-pass.
+            replaced = _expand_eager(
+                _substitute(rule.body, binds), templates, target_bearing, scope
+            )
             memo[id(node)] = (node, replaced, True)
             return replaced, True
     # (2) No rule fired here — descend into children.
     changed = False
     out = {}
     for k, v in node.items():
-        nv, ch = _rewrite_pass(v, templates, sorted_rules, scope, last, shape_env, memo)
+        nv, ch = _rewrite_pass(
+            v, templates, sorted_rules, scope, last, shape_env, target_bearing, memo
+        )
         out[k] = nv
         changed = changed or ch
     if not changed:
@@ -633,6 +947,7 @@ def _rewrite_to_fixpoint(
     sorted_rules: list,
     scope: str,
     shape_env: dict[str, list] | None = None,
+    target_bearing: dict[str, bool] | None = None,
 ) -> Any:
     """Drive :func:`_rewrite_pass` to a fixpoint (esm-spec §9.6.3): repeat
     pre-order passes until a pass performs zero rewrites, or reject the file with
@@ -644,14 +959,21 @@ def _rewrite_to_fixpoint(
     (esm-spec §9.6.1); an empty environment when omitted."""
     if shape_env is None:
         shape_env = {}
+    if target_bearing is None:
+        target_bearing = _template_target_bearing(templates)
     last = [""]
-    current = node
+    # esm-spec §9.6.4 rule 3 / §7.1 step 5: the eager-expansion pre-pass runs
+    # BEFORE the fixpoint and consumes no ``MAX_REWRITE_PASSES`` budget. It
+    # removes every eager reference (target-bearing, or T-op in bindings) so the
+    # fixpoint and the later ``unlowered_operator`` gate walk a tree in which no
+    # rewrite-target op hides inside a surviving reference.
+    current = _expand_eager(node, templates, target_bearing, scope)
     for _pass in range(MAX_REWRITE_PASSES):
         # Fresh identity memo per pass: rewriting is pure within one pass, but a
         # node's fate can change between passes (outermost-first re-visits
         # freshly produced bodies only on the NEXT pass).
         current, changed = _rewrite_pass(
-            current, templates, sorted_rules, scope, last, shape_env, {}
+            current, templates, sorted_rules, scope, last, shape_env, target_bearing, {}
         )
         if not changed:
             return current  # fixpoint reached
@@ -733,12 +1055,14 @@ def _has_template_machinery(file: dict) -> bool:
     return bool(_find_apply_paths(file))
 
 
-def _component_registry(comp: dict, scope: str, iset_names: set) -> tuple[dict, list, dict]:
+def _component_registry(comp: dict, scope: str, iset_names: set) -> tuple[dict, list, dict, dict]:
     """Build one component's rewrite registry from its ``expression_templates``
-    block: the validated + body-composed named-template dict, the pre-sorted
+    block: the validated + body-CHECKED named-template dict, the pre-sorted
     ``match``-rule list (with registered ``where`` constraints resolved against
-    ``iset_names``), and the static shape environment for ``where`` evaluation
-    (esm-spec §9.6.1). A component without a block yields ``({}, [], shape_env)``.
+    ``iset_names``), the static shape environment for ``where`` evaluation
+    (esm-spec §9.6.1), and the per-template target-bearing flags (§9.6.4 rule 3)
+    driving the eager pre-pass and the surviving-reference leaf semantics. A
+    component without a block yields ``({}, [], shape_env, {})``.
     """
     shape_env = _component_shape_env(comp)
     tplraw = comp.get("expression_templates")
@@ -748,19 +1072,20 @@ def _component_registry(comp: dict, scope: str, iset_names: set) -> tuple[dict, 
         for tname, tdecl in tplraw.items():
             templates[tname] = tdecl
         _validate_templates(templates, scope)
-        # Registration-time body composition (esm-spec §9.7.3): inline
-        # body references to match-less in-scope templates as a
-        # statically-checked acyclic DAG, so every rule body the
-        # fixpoint sees is a closed AST (imported at module level — the
-        # shared primitives now live in the json_walk leaf, so no cycle).
+        # Registration-time body CHECKING (esm-spec §9.7.3, Option B): validate
+        # the body-reference DAG (acyclic, depth-bounded, references resolve to
+        # match-less templates). Bodies are NOT inlined — references are
+        # preserved (§9.6.4). Imported at module level — the shared primitives
+        # live in the json_walk leaf, so no cycle.
         _compose_template_bodies(templates, scope)
         match_rules = _build_match_rules(templates, scope, iset_names)
-    return templates, match_rules, shape_env
+    target_bearing = _template_target_bearing(templates)
+    return templates, match_rules, shape_env, target_bearing
 
 
 def _rewrite_coupling_transforms(
     out: dict,
-    registries: dict[str, dict[str, tuple[dict, list, dict]]],
+    registries: dict[str, dict[str, tuple[dict, list, dict, dict]]],
 ) -> None:
     """Rewrite dict-valued ``variable_map`` coupling transforms to fixpoint.
 
@@ -793,7 +1118,7 @@ def _rewrite_coupling_transforms(
                 break
         if reg is None:
             continue
-        templates, match_rules, shape_env = reg
+        templates, match_rules, shape_env, target_bearing = reg
         if not templates:
             continue
         entry["transform"] = _rewrite_to_fixpoint(
@@ -802,7 +1127,9 @@ def _rewrite_coupling_transforms(
             match_rules,
             f"coupling[{idx}].transform",
             shape_env,
+            target_bearing,
         )
+        _check_surviving_refs(entry["transform"], templates, f"coupling[{idx}].transform")
 
 
 #: The two post-expansion validators skip ``expression_templates`` blocks:
@@ -896,16 +1223,171 @@ def _validate_makearray_regions(x: Any, path: str = "") -> None:
     _walk_json(x, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path, dedup=True)
 
 
+# ---------------------------------------------------------------------------
+# Reference-aware validation discharge (esm-spec §9.6.9, Option B)
+# ---------------------------------------------------------------------------
+
+
+def _validate_makearray_regions_in_registries(
+    registries: dict[str, dict[str, tuple[dict, list, dict, dict]]],
+) -> None:
+    """esm-spec §9.6.9: ``makearray_region_inverted`` is discharged at
+    registration on the composed, metaparameter-folded template bodies — region
+    bounds cannot carry template params (they are metaparameter expressions,
+    §9.7.6), so the check is instantiation-independent. Every retained template
+    body (match and match-less) is validated directly; its region bounds are
+    already concrete integers."""
+    for compkind in ("models", "reaction_systems"):
+        for reg in registries.get(compkind, {}).values():
+            templates = reg[0]
+            for tname, decl in templates.items():
+                body = decl.get("body") if _is_object(decl) else None
+                if body is not None:
+                    _validate_makearray_regions(body, f"expression_templates.{tname}/body")
+
+
+def _template_manifold_bearing(named: dict) -> dict[str, bool]:
+    """Which templates can produce a geometry-kernel node
+    (:data:`_GEOMETRY_MANIFOLD_OPS`) — directly in the body or transitively
+    through a referenced template. Only references to these templates need
+    per-instantiation manifold validation (§9.6.9); everything else is skipped,
+    so a geometry-free document pays nothing."""
+
+    def direct(node: Any) -> bool:
+        found = [False]
+
+        def _visit(obj: dict, _path: str) -> None:
+            if found[0]:
+                return
+            if obj.get("op") in _GEOMETRY_MANIFOLD_OPS:
+                found[0] = True
+
+        _walk_json(node, on_obj=_visit, dedup=True)
+        return found[0]
+
+    mb: dict[str, bool] = {}
+    inprog: set[str] = set()
+
+    def visit(name: str) -> bool:
+        if name in mb:
+            return mb[name]
+        if name in inprog:
+            return False
+        decl = named.get(name)
+        if decl is None:
+            mb[name] = False
+            return False
+        inprog.add(name)
+        body = decl.get("body") if _is_object(decl) else None
+        res = body is not None and direct(body)
+        if not res:
+            for r in _collect_apply_names([], body):
+                if r in named and visit(r):
+                    res = True
+                    break
+        inprog.discard(name)
+        mb[name] = res
+        return res
+
+    for n in named:
+        visit(n)
+    return mb
+
+
+def _validate_manifolds_in_refs(
+    node: Any,
+    named: dict,
+    manifold_bearing: dict[str, bool],
+    path: str,
+    seen: dict[int, Any],
+) -> None:
+    if _is_array(node):
+        if id(node) in seen:
+            return
+        seen[id(node)] = node
+        for i, c in enumerate(node):
+            _validate_manifolds_in_refs(c, named, manifold_bearing, f"{path}/{i}", seen)
+        return
+    if not _is_object(node):
+        return
+    if id(node) in seen:
+        return
+    seen[id(node)] = node
+    name = node.get("name") if node.get("op") == APPLY_OP else None
+    # Per-instantiation manifold check (§9.6.9): expand ONLY references whose
+    # template can produce a geometry-kernel node; everything else is cheap.
+    if isinstance(name, str) and manifold_bearing.get(name, False):
+        try:
+            expansion = _expand_all(node, named, path)
+        except ExpressionTemplateError:
+            expansion = None
+        if expansion is not None:
+            try:
+                _validate_geometry_manifolds(expansion)
+            except ExpressionTemplateError as e:
+                if e.code != GEOMETRY_MANIFOLD_INVALID:
+                    raise
+                raise ExpressionTemplateError(
+                    GEOMETRY_MANIFOLD_INVALID,
+                    f"{path}: instantiation of template '{name}' — {e} "
+                    "(esm-spec §9.6.9; per-instantiation manifold check)",
+                ) from e
+    for k, v in node.items():
+        _validate_manifolds_in_refs(v, named, manifold_bearing, f"{path}/{k}", seen)
+
+
+def _validate_geometry_manifolds_refaware(
+    root: dict,
+    registries: dict[str, dict[str, tuple[dict, list, dict, dict]]],
+) -> None:
+    """esm-spec §9.6.9: ``geometry_manifold_invalid`` is discharged
+    per-instantiation (a ``manifold`` may be a template param), memoized. Direct
+    geometry nodes in the reference-preserving tree are checked as before; every
+    surviving ``apply_expression_template`` reference whose template can produce
+    a geometry kernel is additionally expanded ONCE (memoized) and its expansion
+    validated, so an inadmissible manifold bound at a call site is caught. The
+    diagnostic reports (call-site path, template name, intra-body path)."""
+    # Direct nodes on the reference-preserving tree (skips template blocks and
+    # does not see manifold params hidden behind references).
+    _validate_geometry_manifolds(root)
+    for compkind in ("models", "reaction_systems"):
+        comps = root.get(compkind)
+        if not _is_object(comps):
+            continue
+        for cname, comp in comps.items():
+            if not _is_object(comp):
+                continue
+            reg = registries.get(compkind, {}).get(cname)
+            if reg is None:
+                continue
+            named = reg[0]
+            manifold_bearing = _template_manifold_bearing(named)
+            if not any(manifold_bearing.values()):
+                continue  # no geometry: nothing to check
+            seen: dict[int, Any] = {}
+            for k, v in comp.items():
+                if k == "expression_templates":
+                    continue
+                _validate_manifolds_in_refs(
+                    v, named, manifold_bearing, f"{compkind}.{cname}.{k}", seen
+                )
+
+
 def lower_expression_templates(file: dict) -> dict:
-    """Run the load-time rewrite fixpoint (esm-spec §9.6.3) over `file`.
+    """Run the load-time rewrite fixpoint (esm-spec §9.6.3) over `file`,
+    Option B (reference-preserving, esm-spec §9.6.4).
 
     Per component, an outermost-first / priority-ordered / bounded-fixpoint
-    rewrite (:func:`_rewrite_to_fixpoint`) expands explicit
-    ``apply_expression_template`` ops AND fires the component's ``match`` rewrite
-    rules until no rule applies; the ``expression_templates`` blocks are then
-    stripped. Returns a new dict (does not mutate input). Rejects a file whose
-    rewriting does not converge within ``MAX_REWRITE_PASSES`` passes with
-    ``rewrite_rule_nonterminating``.
+    rewrite (:func:`_rewrite_to_fixpoint`) fires the component's ``match``
+    rewrite rules and EAGERLY expands target-bearing
+    ``apply_expression_template`` references (§9.6.4 rule 3), while NON-eager
+    references SURVIVE the fixpoint (§9.6.4 rule 4). The per-component
+    ``expression_templates`` blocks are RETAINED — emit materializes them
+    (§9.6.4 rule 5) and :func:`expand_document` consumes them. Returns a new
+    dict (does not mutate input). Rejects a file whose rewriting does not
+    converge within ``MAX_REWRITE_PASSES`` passes with
+    ``rewrite_rule_nonterminating``; call sites are checked for unknown template
+    / bindings mismatch (§9.6.9).
 
     Pre-condition: the input has been schema-validated.
     """
@@ -918,13 +1400,13 @@ def lower_expression_templates(file: dict) -> dict:
     # Nothing to do unless something triggers the engine: an explicit apply op
     # somewhere, or a component declaring a non-empty ``expression_templates``
     # block (so a match-less fragment or a `where`-carrying rule is still
-    # validated / body-composed at load — mirrors the Julia reference gate).
+    # validated / body-checked at load — mirrors the Julia reference gate).
     if not _has_template_machinery(out):
         # No expansion to run, but the §9.6.4 expanded-form validators still
         # apply — the raw tree IS the expanded form.
         _validate_geometry_manifolds(out)
         _validate_makearray_regions(out)
-        return _strip_expression_templates(out)
+        return out
 
     # The consuming document's merged index_sets registry (post-§9.7.5): the
     # namespace `where` shape constraints resolve against at registration
@@ -936,11 +1418,11 @@ def lower_expression_templates(file: dict) -> dict:
         iset_names = {str(k) for k in isets_raw.keys()}
 
     # Per-component rewrite registries (named templates + sorted match rules +
-    # static shape environment), kept so top-level coupling transforms can be
-    # rewritten in the RECEIVING component's context after the per-component loop
-    # (see below). Keyed compkind -> component name; lookup order is "models"
-    # then "reaction_systems".
-    registries: dict[str, dict[str, tuple[dict, list, dict]]] = {
+    # static shape environment + target-bearing flags), kept so top-level
+    # coupling transforms can be rewritten in the RECEIVING component's context
+    # after the per-component loop (see below). Keyed compkind -> component name;
+    # lookup order is "models" then "reaction_systems".
+    registries: dict[str, dict[str, tuple[dict, list, dict, dict]]] = {
         "models": {},
         "reaction_systems": {},
     }
@@ -951,10 +1433,10 @@ def lower_expression_templates(file: dict) -> dict:
         for cname, comp in comps.items():
             if not _is_object(comp):
                 continue
-            templates, match_rules, shape_env = _component_registry(
+            templates, match_rules, shape_env, target_bearing = _component_registry(
                 comp, f"{compkind}.{cname}", iset_names
             )
-            registries[compkind][cname] = (templates, match_rules, shape_env)
+            registries[compkind][cname] = (templates, match_rules, shape_env, target_bearing)
             for k in list(comp.keys()):
                 if k == "expression_templates":
                     continue
@@ -964,34 +1446,432 @@ def lower_expression_templates(file: dict) -> dict:
                     match_rules,
                     f"{compkind}.{cname}.{k}",
                     shape_env,
+                    target_bearing,
                 )
-            comp.pop("expression_templates", None)
+                # Call-site checks on surviving references (§9.6.9): unknown
+                # name / bindings mismatch. Known surviving references are the
+                # new normal (Option B) — no longer an error.
+                _check_surviving_refs(comp[k], templates, f"{compkind}.{cname}.{k}")
+            # esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
+            # ``expression_templates`` block — it is the retained registered
+            # registry that emit materializes (§9.6.4 rule 5) and
+            # :func:`expand_document` consumes (§9.6.4 rule 2).
 
     _rewrite_coupling_transforms(out, registries)
 
-    leftover = _find_apply_paths(out)
-    if leftover:
-        raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            f"apply_expression_template ops remain after expansion at: "
-            f"{', '.join(leftover)} — likely referenced from a component lacking "
-            "an expression_templates block",
-        )
-    # Validators run on the expanded form (esm-spec §9.6.4): reject any
-    # geometry-kernel node whose (possibly just-substituted) `manifold` is
-    # outside the closed set, and any makearray region whose folded bound pair
-    # is inverted (stop < start - 1; esm-spec §4.3.2).
-    _validate_geometry_manifolds(out)
+    # esm-spec §9.6.4 rule 1 (Option B): surviving ``apply_expression_template``
+    # references are the NEW NORMAL. Only UNKNOWN-name / bindings-mismatch
+    # references are errors — already checked per component / per transform by
+    # ``_check_surviving_refs``. No global "no apply ops remain" gate.
+
+    # Validation discharge (esm-spec §9.6.9): geometry-manifold and
+    # makearray-region checks on the reference-preserving form. The manifold
+    # check is per-instantiation (a ``manifold`` may be a template param), so it
+    # descends through surviving references' single-instantiation expansions,
+    # memoized. Region bounds cannot carry template params, so the makearray
+    # check runs on the reference-preserving tree AND the retained folded
+    # template bodies directly.
+    _validate_geometry_manifolds_refaware(out, registries)
     _validate_makearray_regions(out)
+    _validate_makearray_regions_in_registries(registries)
     return out
 
 
-def _strip_expression_templates(file: dict) -> dict:
+# ===========================================================================
+# `Expand` — the public full-expansion function (esm-spec §9.6.4 rule 2)
+# ===========================================================================
+
+
+def expand_document(loaded: Any) -> Any:
+    """Fully expand every surviving ``apply_expression_template`` reference in a
+    document ``loaded`` by :func:`lower_expression_templates` (Option B),
+    producing the Option-A image: every reference replaced by its expansion
+    (pure substitution to the acyclic fixpoint, §9.6.4 rule 2) and every
+    per-component ``expression_templates`` block stripped. Deterministic — the
+    DAG is acyclic and substitution confluent, so ``expand_document(load(f))``
+    is structurally equal to the pre-0.9.0 expanded form (the ``expanded*.esm``
+    conformance oracle, §9.6.7). Non-destructive: ``loaded`` is deep copied
+    first."""
+    if not _is_object(loaded):
+        return loaded
+    root = copy.deepcopy(loaded)
+
+    # Capture each component's named registry BEFORE stripping the blocks.
+    comp_named: dict[tuple[str, str], dict] = {}
     for compkind in ("models", "reaction_systems"):
-        comps = file.get(compkind)
+        comps = root.get(compkind)
         if not _is_object(comps):
             continue
-        for comp in comps.values():
-            if _is_object(comp):
+        for cname, comp in comps.items():
+            if not _is_object(comp):
+                continue
+            named: dict[str, Any] = {}
+            tpl = comp.get("expression_templates")
+            if _is_object(tpl):
+                for n, d in tpl.items():
+                    named[str(n)] = d
+            comp_named[(compkind, cname)] = named
+
+    for compkind in ("models", "reaction_systems"):
+        comps = root.get(compkind)
+        if not _is_object(comps):
+            continue
+        for cname, comp in comps.items():
+            if not _is_object(comp):
+                continue
+            named = comp_named[(compkind, cname)]
+            scope = f"{compkind}.{cname}"
+            for k in list(comp.keys()):
+                if k in ("expression_templates", "expression_template_imports"):
+                    continue
+                comp[k] = _expand_all(comp[k], named, f"{scope}.{k}")
+            comp.pop("expression_templates", None)
+
+    coupling = root.get("coupling")
+    if _is_array(coupling):
+        for i, entry in enumerate(coupling):
+            if not _is_object(entry) or entry.get("type") != "variable_map":
+                continue
+            tr = entry.get("transform")
+            if not _is_object(tr):
+                continue
+            target = entry.get("to")
+            if not isinstance(target, str):
+                continue
+            comp_name = target.split(".", 1)[0]
+            named = comp_named.get(("models", comp_name)) or comp_named.get(
+                ("reaction_systems", comp_name)
+            )
+            if named is None:
+                continue
+            entry["transform"] = _expand_all(tr, named, f"coupling[{i}].transform")
+
+    return root
+
+
+#: Public alias for :func:`expand_document` using the spec's spelling
+#: (esm-spec §9.6.4 rule 2). ``Expand ∘ load`` reproduces the Option-A form.
+Expand = expand_document
+
+
+# ===========================================================================
+# Reference-preserving emit (esm-spec §9.6.4 rule 5, §9.6.7)
+# ===========================================================================
+
+
+def _ref_closure(refnames: Any, named: dict) -> set[str]:
+    """The transitive closure of the templates named by ``refnames``
+    (surviving-reference names), following references inside materialized bodies,
+    keeping only MATCH-LESS entries (esm-spec §9.6.4 rule 5: match rules are
+    never materialized)."""
+    out: set[str] = set()
+    stack = list(refnames)
+    while stack:
+        n = stack.pop()
+        if n in out or n not in named:
+            continue
+        decl = named[n]
+        if _is_object(decl) and decl.get("match") is not None:
+            continue  # match rules not materialized
+        out.add(n)
+        body = decl.get("body") if _is_object(decl) else None
+        stack.extend(_collect_apply_names([], body))
+    return out
+
+
+def _authored_template_names(raw_source: Any) -> dict[str, list[str]]:
+    """Per-component MATCH-LESS template names authored in-file in ``raw_source``
+    (``compkind.cname`` → ordered names). Emit keeps these verbatim as authored
+    entries (esm-spec §9.6.4 rule 5); imported/derived templates are materialized
+    instead."""
+    authored: dict[str, list[str]] = {}
+    if not _is_object(raw_source):
+        return authored
+    for compkind in ("models", "reaction_systems"):
+        comps = raw_source.get(compkind)
+        if not _is_object(comps):
+            continue
+        for cname, comp in comps.items():
+            if not _is_object(comp):
+                continue
+            tpl = comp.get("expression_templates")
+            if not _is_object(tpl):
+                continue
+            names: list[str] = []
+            for n, d in tpl.items():
+                if not _is_object(d):
+                    continue
+                if d.get("match") is not None:
+                    continue
+                names.append(str(n))
+            authored[f"{compkind}.{cname}"] = names
+    return authored
+
+
+def emit_document(raw_source: Any, base_path: str) -> dict:
+    """Produce the reference-preserving, self-contained emitted document
+    (esm-spec §9.6.4 rule 5, RFC out-of-line-expression-templates §7.5) from a
+    source document (a fixture, or an already-emitted document for the
+    idempotency property). Loads ``raw_source`` under Option B, then for every
+    component builds its emitted ``expression_templates`` block — authored
+    match-less entries first in authored order, then the materialized transitive
+    closure of its surviving references (match-less), lexicographically sorted —
+    drops consumed ``expression_template_imports``, and version-stamps
+    ``esm: 0.9.0`` when any surviving reference or materialized entry remains
+    (§9.6.4 rule 8). ``emit_esm_string ∘ emit_document`` is a byte-wise fixed
+    point under reload."""
+    from .template_imports import resolve_template_machinery
+
+    authored = _authored_template_names(raw_source)
+    resolved = resolve_template_machinery(raw_source, base_path)
+    loaded = lower_expression_templates(raw_source if resolved is None else resolved)
+    root = loaded
+    bump = False
+
+    for compkind in ("models", "reaction_systems"):
+        comps = root.get(compkind)
+        if not _is_object(comps):
+            continue
+        for cname, comp in comps.items():
+            if not _is_object(comp):
+                continue
+            key = f"{compkind}.{cname}"
+            tpl = comp.get("expression_templates")
+            named: dict[str, Any] = {}
+            if _is_object(tpl):
+                for n, d in tpl.items():
+                    named[str(n)] = d
+            refnames: set[str] = set()
+            for k, v in comp.items():
+                if k in ("expression_templates", "expression_template_imports"):
+                    continue
+                for r in _collect_apply_names([], v):
+                    refnames.add(r)
+            if refnames:
+                bump = True
+            materialized = _ref_closure(refnames, named)
+            authored_here = authored.get(key, [])
+            authored_set = set(authored_here)
+
+            emit_block: dict[str, Any] = {}
+            for n in authored_here:
+                if n in named:
+                    emit_block[n] = named[n]
+            for n in sorted(materialized - authored_set):
+                emit_block[n] = named[n]
+                bump = True
+
+            if emit_block:
+                comp["expression_templates"] = emit_block
+            else:
                 comp.pop("expression_templates", None)
-    return file
+            comp.pop("expression_template_imports", None)
+
+    root.pop("expression_template_imports", None)
+    if bump:
+        root["esm"] = "0.9.0"
+    return root
+
+
+# --- Canonical byte writer (2-space indent, keys sorted except the ordered
+#     `expression_templates` block) — the cross-binding byte-identity surface. ---
+
+
+def _emit_scalar(x: Any) -> str:
+    """Render one JSON scalar for the canonical emit form. Integral finite
+    floats render as integer literals (mirroring JSON3's read-normalization in
+    the Julia reference: an integral number is written without a decimal point,
+    uniformly), so the emitted bytes are cross-binding-identical; non-integral
+    floats and strings render via ``json.dumps`` (``ensure_ascii=False`` keeps
+    UTF-8 literals, matching JSON3's writer)."""
+    if isinstance(x, bool):
+        return "true" if x else "false"
+    if isinstance(x, int):
+        return str(x)
+    if isinstance(x, float):
+        if math.isfinite(x) and x.is_integer():
+            return str(int(x))
+        return json.dumps(x, ensure_ascii=False)
+    return json.dumps(x, ensure_ascii=False)
+
+
+def _emit_write(buf: list[str], x: Any, indent: int, preserve: bool = False) -> None:
+    pad = "  " * indent
+    pad1 = "  " * (indent + 1)
+    if _is_object(x):
+        if not x:
+            buf.append("{}")
+            return
+        keys = list(x.keys()) if preserve else sorted(x.keys())
+        buf.append("{\n")
+        for i, k in enumerate(keys):
+            buf.append(pad1)
+            buf.append(json.dumps(str(k), ensure_ascii=False))
+            buf.append(": ")
+            _emit_write(buf, x[k], indent + 1, preserve=(str(k) == "expression_templates"))
+            if i < len(keys) - 1:
+                buf.append(",")
+            buf.append("\n")
+        buf.append(pad)
+        buf.append("}")
+    elif _is_array(x):
+        if not x:
+            buf.append("[]")
+            return
+        buf.append("[\n")
+        for i, v in enumerate(x):
+            buf.append(pad1)
+            _emit_write(buf, v, indent + 1)
+            if i < len(x) - 1:
+                buf.append(",")
+            buf.append("\n")
+        buf.append(pad)
+        buf.append("]")
+    else:
+        buf.append(_emit_scalar(x))
+
+
+def emit_esm_string(doc: Any) -> str:
+    """Canonical byte serialization of an emitted document (esm-spec §9.6.4
+    rule 5): 2-space indent, object keys sorted lexicographically EXCEPT the
+    entries of an ``expression_templates`` object, which preserve their
+    authored-first / materialized-sorted order. The cross-binding byte-identity
+    surface for the Option-B emitted form and the target of the ``emitted.esm``
+    goldens."""
+    buf: list[str] = []
+    _emit_write(buf, doc, 0)
+    buf.append("\n")
+    return "".join(buf)
+
+
+# ===========================================================================
+# Flatten: template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
+# esm-libraries-spec §4.7.5)
+# ===========================================================================
+
+
+def _json_equal(a: Any, b: Any) -> bool:
+    """Structural equality over the JSON view (dict / list / scalar / str),
+    keeping ``bool`` distinct from numbers and int/float compared by value —
+    mirroring the Julia reference ``_json_equal`` used by the flatten dedup."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, (int, float)):
+        return isinstance(b, (int, float)) and a == b
+    if isinstance(a, str):
+        return isinstance(b, str) and a == b
+    if _is_array(a):
+        if not _is_array(b) or len(a) != len(b):
+            return False
+        return all(_json_equal(x, y) for x, y in zip(a, b))
+    if _is_object(a):
+        if not _is_object(b) or set(a.keys()) != set(b.keys()):
+            return False
+        return all(_json_equal(a[k], b[k]) for k in a)
+    return a is b or a == b
+
+
+def _rename_apply_refs(node: Any, rename: dict[str, str]) -> Any:
+    """Rewrite the ``name`` of every ``apply_expression_template`` reference in
+    ``node`` according to ``rename`` (old name → new name), in lockstep with a
+    registry rename. Sharing-preserving."""
+    if _is_array(node):
+        changed = False
+        out = []
+        for v in node:
+            rv = _rename_apply_refs(v, rename)
+            if rv is not v:
+                changed = True
+            out.append(rv)
+        return out if changed else node
+    if _is_object(node):
+        is_apply = node.get("op") == APPLY_OP
+        changed = False
+        out = {}
+        for k, v in node.items():
+            if is_apply and k == "name" and isinstance(v, str) and v in rename:
+                out[k] = rename[v]
+                changed = True
+            else:
+                rv = _rename_apply_refs(v, rename)
+                if rv is not v:
+                    changed = True
+                out[k] = rv
+        return out if changed else node
+    return node
+
+
+def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
+    """The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
+    esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
+    document ``loaded``, merge every component's ``expression_templates``
+    registry into a single document-scoped merged registry:
+
+    - **Deep-equal dedup at first occurrence** — two components importing one
+      stencil produce identical folded bodies, kept once under the bare name.
+    - **Non-deep-equal same-name collision** — both entries are renamed
+      deterministically to ``<ComponentPath>.<name>`` and their
+      ``apply_expression_template`` references are rewritten in lockstep (total,
+      deterministic; no new diagnostic).
+
+    Returns the rewritten document ``root`` (component reference sites updated)
+    and the merged registry as a dict (the FlattenedSystem's first-class
+    registry field). ``match`` rules are not merged (only match-less templates
+    are referenceable, §9.6.2)."""
+    root = copy.deepcopy(loaded)
+    # (path, compkind, cname, comp, named)
+    comps: list[tuple[str, str, str, dict, dict]] = []
+    for compkind in ("models", "reaction_systems"):
+        cs = root.get(compkind)
+        if not _is_object(cs):
+            continue
+        for cname, comp in cs.items():
+            if not _is_object(comp):
+                continue
+            named: dict[str, Any] = {}
+            tpl = comp.get("expression_templates")
+            if _is_object(tpl):
+                for n, d in tpl.items():
+                    if _is_object(d) and d.get("match") is not None:
+                        continue  # match rules not merged
+                    named[str(n)] = d
+            comps.append((cname, compkind, cname, comp, named))
+
+    # Group each template name across components (preserving first-seen path).
+    byname: dict[str, list[tuple[str, Any]]] = {}
+    for path, _ck, _cn, _comp, named in comps:
+        for n in sorted(named.keys()):
+            byname.setdefault(n, []).append((path, named[n]))
+
+    merged: dict[str, Any] = {}
+    rename: dict[str, dict[str, str]] = {}  # path => (old => new)
+    for name in sorted(byname.keys()):
+        occ = byname[name]
+        alleq = all(_json_equal(occ[0][1], o[1]) for o in occ)
+        if alleq:
+            merged[name] = occ[0][1]  # deep-equal dedup
+        else:
+            for path, decl in occ:  # collision: owner-path rename
+                newname = f"{path}.{name}"
+                merged[newname] = decl
+                rename.setdefault(path, {})[name] = newname
+
+    # Rewrite reference sites in lockstep (component expression positions and the
+    # carried bodies of the renamed entries).
+    for path, _ck, _cn, comp, _named in comps:
+        rn = rename.get(path)
+        if rn is not None:
+            for k in list(comp.keys()):
+                if k == "expression_templates":
+                    continue
+                comp[k] = _rename_apply_refs(comp[k], rn)
+            # The merged (renamed) bodies owned by this path get their nested
+            # references rewritten too.
+            for _old, new in rn.items():
+                if new in merged:
+                    merged[new] = _rename_apply_refs(merged[new], rn)
+        # Every component surrenders its per-component block to the merged
+        # registry in the flattened form.
+        comp.pop("expression_templates", None)
+
+    return root, merged

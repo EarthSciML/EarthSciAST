@@ -1,0 +1,44 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "opacity_negative",
+    "description": "esm-spec §9.6.4 rule 4 (RFC out-of-line-expression-templates §7.3, §9.2): the pinned pattern-opacity divergence. A high-priority compound rule matches D(*(U,Q)); the use site factors *(U,Q) into the target-free template `flux_prod` and references it. The rewrite engine treats the surviving reference as a LEAF, so the compound pattern MUST NOT match across the reference boundary. No other rule fires, so the spatial D survives lowering (rejected only at build by the unlowered_operator gate).",
+    "authors": ["out-of-line-expression-templates conformance"]
+  },
+  "index_sets": { "x": { "kind": "interval", "size": 4 } },
+  "models": {
+    "m": {
+      "expression_templates": {
+        "flux_prod": {
+          "params": ["u", "w"],
+          "body": { "op": "*", "args": ["u", "w"] }
+        },
+        "godunov": {
+          "params": ["U", "Q"],
+          "priority": 10,
+          "match": { "op": "D", "args": [{ "op": "*", "args": ["U", "Q"] }], "wrt": "x" },
+          "body": { "op": "*", "args": [999, "U"] }
+        }
+      },
+      "variables": {
+        "U": { "type": "state", "units": "1", "shape": ["x"], "default": 1.5 },
+        "q": { "type": "state", "units": "1", "shape": ["x"], "default": 0.5 },
+        "flux": {
+          "type": "observed", "units": "1",
+          "expression": {
+            "op": "D",
+            "args": [
+              { "op": "apply_expression_template", "args": [], "name": "flux_prod",
+                "bindings": { "u": "U", "w": "q" } }
+            ],
+            "wrt": "x"
+          }
+        }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["U"], "wrt": "t" },
+          "rhs": { "op": "-", "args": ["U"] } }
+      ]
+    }
+  }
+}

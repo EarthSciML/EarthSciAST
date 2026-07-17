@@ -107,6 +107,17 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # table_axes/output.
     result = map_children(
         x -> _namespace_expr(x, prefix, local_names, memo), expr)::OpExpr
+    # esm-spec §9.6.4 rule 7 / §10.7: a surviving `apply_expression_template`
+    # reference carries free variable references in its `bindings` (which
+    # `map_children` does not traverse). The same component-scoping map applies
+    # to them (template `params` never namespace — they are the template's formal
+    # parameters, not component variables — but the values bound TO them do).
+    if expr.op == APPLY_EXPRESSION_TEMPLATE_OP && expr.bindings !== nothing
+        nb = Dict{String,ASTExpr}(
+            k => namespace_expr(v, prefix, local_names)
+            for (k, v) in expr.bindings)
+        result = reconstruct(result; bindings=nb)
+    end
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
     # column may name a component-local bin buffer (see `_namespace_join`).

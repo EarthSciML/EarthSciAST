@@ -13,7 +13,7 @@
 //! diamond bindings, the 0.8.0 version gate).
 
 use earthsci_ast::lower_expression_templates::{
-    MAX_TEMPLATE_EXPANSION_DEPTH, lower_expression_templates,
+    MAX_TEMPLATE_EXPANSION_DEPTH, expand, lower_expression_templates,
 };
 use earthsci_ast::template_imports::{reject_template_imports_pre_v08, resolve_template_machinery};
 use earthsci_ast::types::Expr;
@@ -38,8 +38,10 @@ fn conf(parts: &[&str]) -> PathBuf {
     p
 }
 
-/// Raw §9.7 pipeline (resolve → lower), mirroring the Julia golden
-/// generator (`scripts/generate-template-import-goldens.jl`).
+/// Raw §9.7 pipeline (resolve → lower → Expand), mirroring the Julia bridge
+/// oracle `Expand(load(fixture))`: Option-B load preserves references, then
+/// `expand` reproduces the Option-A `expanded*.esm` golden the fixtures are
+/// pinned against (RFC out-of-line-expression-templates §12 gate 1).
 fn expand_raw(fixture_path: &Path) -> Value {
     let src = std::fs::read_to_string(fixture_path).expect("read fixture");
     let raw: Value = serde_json::from_str(&src).expect("parse fixture");
@@ -48,6 +50,7 @@ fn expand_raw(fixture_path: &Path) -> Value {
         .expect("resolve template machinery");
     let mut out = resolved.unwrap_or(raw);
     lower_expression_templates(&mut out).expect("lower to fixpoint");
+    expand(&mut out).expect("expand surviving references");
     out
 }
 
@@ -679,8 +682,11 @@ fn only_filters_visibility_not_internal_wiring() {
     )
     .unwrap();
 
-    // t_keep's body reference to t_inner resolved in the LIBRARY's own
-    // scope, so importing only t_keep still yields 2 * 7.
+    // Option B (esm-spec §9.7.2): `only` filters explicit visibility, but with
+    // bodies no longer inlined the kept template's transitive body-reference
+    // closure is CARRIED into the importer's registry (or the surviving
+    // reference would dangle). Importing only `t_keep` also carries `t_inner`,
+    // and `t_keep`'s body keeps its uninlined reference to it.
     let raw: Value = serde_json::from_str(&model_json(
         r#"
       "expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],"#,
@@ -692,8 +698,12 @@ fn only_filters_visibility_not_internal_wiring() {
         .expect("machinery present");
     let tpl = &resolved["models"]["M"]["expression_templates"];
     let names: Vec<&String> = tpl.as_object().unwrap().keys().collect();
-    assert_eq!(names, vec!["t_keep"]);
-    assert_eq!(tpl["t_keep"]["body"], json!({"op": "*", "args": [2, 7]}));
+    assert_eq!(names, vec!["t_inner", "t_keep"]);
+    assert_eq!(
+        tpl["t_keep"]["body"],
+        json!({"op": "*", "args": [2,
+            {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}}]})
+    );
 
     // Referencing a filtered-out name from an expression position fails.
     let msg = load_err_code(
@@ -951,7 +961,10 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
                            "rhs": {"op": "-", "args": ["x"]}}]
         }}
     });
+    // Option B: the c1 reference survives load (pure evaluable-core chain, no
+    // rewrite-target op); `expand` reproduces the fully-inlined image.
     lower_expression_templates(&mut doc).expect("lower");
+    expand(&mut doc).expect("expand");
     assert_eq!(
         doc["models"]["M"]["variables"]["y"]["expression"],
         json!({"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]})

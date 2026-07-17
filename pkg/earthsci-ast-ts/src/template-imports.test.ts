@@ -17,6 +17,7 @@ import { save } from './serialize.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import {
   MAX_TEMPLATE_EXPANSION_DEPTH,
+  expandDocument,
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
 import {
@@ -31,11 +32,17 @@ const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_temp
 const invalidDir = fixturesDir('invalid', 'template_imports')
 const validDir = fixturesDir('valid')
 
-/** Raw §9.7 pipeline (resolve → lower), mirroring the Julia golden generator. */
+/**
+ * Raw §9.7 pipeline producing the Option-A expanded image (resolve → lower →
+ * Expand), the oracle the `expanded*.esm` goldens pin. Under Option B (esm-spec
+ * §9.6.4) `lowerExpressionTemplates` returns the reference-preserving form, so
+ * `expandDocument` is applied to reproduce the fully-expanded golden (RFC §12
+ * gate 1, the bridge).
+ */
 function expandRaw(fixturePath: string): unknown {
   const raw = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
   const resolved = resolveTemplateMachinery(raw, path.dirname(fixturePath), { validateSchema })
-  return lowerExpressionTemplates(resolved ?? raw)
+  return expandDocument(lowerExpressionTemplates(resolved ?? raw))
 }
 
 const golden = (goldenPath: string): unknown => JSON.parse(fs.readFileSync(goldenPath, 'utf8'))
@@ -369,16 +376,23 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
         },
       }),
     )
-    // t_keep's body reference to t_inner resolved in the LIBRARY's own
-    // scope, so importing only t_keep still yields 2 * 7.
+    // t_keep's body reference to t_inner resolved in the LIBRARY's own scope,
+    // so importing only t_keep still yields 2 * 7. Under Option B (esm-spec
+    // §9.6.4 rule 5 / §9.7.2) `only` keeps t_keep AND carries its transitive
+    // body-reference closure (t_inner) so the surviving reference does not
+    // dangle; bodies are NOT inlined — Expand reproduces 2 * 7.
     const raw = JSON.parse(
       modelJson(`
         "expression_template_imports": [{"ref": "./lib_only.esm", "only": ["t_keep"]}],`),
     )
     const resolved = resolveTemplateMachinery(raw, tmpDir, { validateSchema }) as any
     const tpl = resolved.models.M.expression_templates
-    expect(Object.keys(tpl)).toEqual(['t_keep'])
-    expect(tpl.t_keep.body).toEqual({ op: '*', args: [2, 7] })
+    expect(new Set(Object.keys(tpl))).toEqual(new Set(['t_keep', 't_inner']))
+    expect(tpl.t_keep.body).toEqual({
+      op: '*',
+      args: [2, { op: 'apply_expression_template', args: [], name: 't_inner', bindings: {} }],
+    })
+    expect(tpl.t_inner.body).toEqual(7)
     // Referencing a filtered-out name from an expression position fails.
     expect(
       errCode(() =>
@@ -583,8 +597,9 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     }
   }
 
-  it('body composition: acyclic DAG inlines; depth bound is exact', () => {
-    // A 3-deep local chain inlines through the §9.6.3 fixpoint untouched.
+  it('body composition: acyclic DAG survives load, Expand inlines; depth bound is exact', () => {
+    // A 3-deep local chain: under Option B (esm-spec §9.6.4) the target-free
+    // references survive load and `Expand` reproduces the inlined chain.
     const doc = {
       esm: '0.8.0',
       metadata: { name: 'chain3' },
@@ -620,7 +635,14 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
       },
     }
     const out = lowerExpressionTemplates(doc) as any
+    // Option B: the target-free reference survives load (leaf); Expand inlines.
     expect(out.models.M.variables.y.expression).toEqual({
+      op: 'apply_expression_template',
+      args: [],
+      name: 'c1',
+      bindings: {},
+    })
+    expect((expandDocument(out) as any).models.M.variables.y.expression).toEqual({
       op: '+',
       args: [1, { op: '+', args: [2, 3] }],
     })

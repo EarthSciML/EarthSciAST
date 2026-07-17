@@ -1,0 +1,22 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_rename_two_instances", "description": "One grid-family library instantiated twice in one model (esm-spec 9.7.7): a fine instance (prefix fine, N = 16) and a coarse instance (prefix coarse, N = 8). Renaming is transitive: each instance's index set arrives as fine.x / coarse.x, the rule instance's match wrt follows it (so each rule fires only on its own axis), the metaparameter occurrences inside ranges and dx were instantiated per edge, and the library file itself is never edited. The edge's bindings speak the target's own (pre-rename) names" },
+  "models": {
+    "TwoGrids": {
+      "expression_template_imports": [
+        { "ref": "./grid_uniform_1d.esm", "prefix": "fine", "bindings": { "N": 16 } },
+        { "ref": "./grid_uniform_1d.esm", "prefix": "coarse", "bindings": { "N": 8 } }
+      ],
+      "variables": {
+        "cf": { "type": "state", "units": "1", "shape": ["fine.x"], "description": "tracer on the fine instance" },
+        "cc": { "type": "state", "units": "1", "shape": ["coarse.x"], "description": "tracer on the coarse instance" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["cf"], "wrt": "t" },
+          "rhs": { "op": "D", "args": ["cf"], "wrt": "fine.x" } },
+        { "lhs": { "op": "D", "args": ["cc"], "wrt": "t" },
+          "rhs": { "op": "D", "args": ["cc"], "wrt": "coarse.x" } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "eager_target_bearing",
+    "description": "esm-spec §9.6.4 rule 3 (RFC out-of-line-expression-templates §9.2). Two match-less templates: `deriv_c` carries a spatial `D` in its body (TARGET-BEARING), so its reference is EAGER — expanded innermost-first in the pre-pass, surfacing the `D`, which the `central` match rule then lowers at load. `scale_c` is target-free, so its reference SURVIVES load and is materialized into the emitted registry. Positive (eager, lowered) + negative (surviving) in one document.",
+    "authors": ["out-of-line-expression-templates conformance"]
+  },
+  "index_sets": { "x": { "kind": "interval", "size": 4 } },
+  "models": {
+    "m": {
+      "expression_templates": {
+        "central": {
+          "params": ["f"],
+          "match": { "op": "D", "args": ["f"], "wrt": "x" },
+          "body": {
+            "op": "aggregate", "output_idx": ["i"], "args": ["f"],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "-", "args": [
+                { "op": "index", "args": ["f", { "op": "+", "args": ["i", 1] }] },
+                { "op": "index", "args": ["f", { "op": "-", "args": ["i", 1] }] }
+              ]
+            }
+          }
+        },
+        "deriv_c": {
+          "params": ["f"],
+          "body": { "op": "D", "args": ["f"], "wrt": "x" }
+        },
+        "scale_c": {
+          "params": ["f", "k"],
+          "body": { "op": "*", "args": ["k", "f"] }
+        }
+      },
+      "variables": {
+        "c": { "type": "state", "units": "1", "shape": ["x"], "default": 0.5 },
+        "d_eager": {
+          "type": "observed", "units": "1", "shape": ["x"],
+          "expression": {
+            "op": "index",
+            "args": [
+              { "op": "apply_expression_template", "args": [], "name": "deriv_c",
+                "bindings": { "f": "c" } },
+              "i"
+            ]
+          }
+        },
+        "d_survive": {
+          "type": "observed", "units": "1", "shape": ["x"],
+          "expression": {
+            "op": "index",
+            "args": [
+              { "op": "apply_expression_template", "args": [], "name": "scale_c",
+                "bindings": { "f": "c", "k": 2 } },
+              "i"
+            ]
+          }
+        }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "-", "args": ["c"] } }
+      ]
+    }
+  }
+}

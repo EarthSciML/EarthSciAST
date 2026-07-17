@@ -519,16 +519,22 @@ def _inline_applies(node: Any, templates: dict[str, Any], scope: str) -> Any:
 
 
 def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
-    """Registration-time body composition (esm-spec §9.7.3): template bodies
-    MAY reference other in-scope MATCH-LESS templates via
-    ``apply_expression_template`` nodes. Builds the body-reference graph,
-    rejects cycles (``apply_expression_template_recursive_body``) and chains
-    deeper than :data:`MAX_TEMPLATE_EXPANSION_DEPTH` templates
-    (``template_body_expansion_too_deep``), then inlines dependencies-first by
-    pure substitution — confluent, so topological order cannot affect the
-    result. Afterwards every ``body`` is a closed Expression AST with zero
-    ``apply_expression_template`` nodes; runs BEFORE the §9.6.3 fixpoint ever
-    consults a ``match`` rule."""
+    """Registration-time body **checking** (esm-spec §9.7.3, Option B /
+    esm 0.9.0): template bodies MAY reference other in-scope MATCH-LESS
+    templates via ``apply_expression_template`` nodes. Builds the
+    body-reference graph, rejects cycles
+    (``apply_expression_template_recursive_body``), references to undeclared or
+    ``match``-bearing templates (``apply_expression_template_unknown_template``),
+    and chains deeper than :data:`MAX_TEMPLATE_EXPANSION_DEPTH` templates
+    (``template_body_expansion_too_deep``).
+
+    From ``esm: 0.9.0`` (RFC out-of-line-expression-templates §7.1 step 4)
+    bodies are **NOT inlined** — the references are preserved uninlined and
+    denote their expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3)
+    are computed separately by
+    :func:`earthsci_ast.lower_expression_templates._template_target_bearing`.
+    This runs BEFORE the §9.6.3 fixpoint ever consults a ``match`` rule; it now
+    only validates the DAG."""
     if not templates:
         return
     refs: dict[str, list[str]] = {}
@@ -594,15 +600,11 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
     for name in sorted(refs):
         visit(name)
 
-    for name in order:
-        if not refs[name]:
-            continue
-        decl = templates[name]
-        decl["body"] = _inline_applies(
-            decl.get("body"),
-            templates,
-            f"{scope}.expression_templates.{name}",
-        )
+    # esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
+    # depth-bounded, references resolve to match-less templates); the bodies are
+    # left with their ``apply_expression_template`` references intact. ``Expand``
+    # (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
+    _ = order  # topological order retained for readers; no inlining performed.
 
 
 # ---------------------------------------------------------------------------
@@ -1175,7 +1177,30 @@ def _resolve_import_entry(
                     "does not declare (esm-spec §9.7.2)",
                 )
         keepset = set(keep)
-        scope.templates = {n: d for n, d in scope.templates.items() if n in keepset}
+        # esm-spec §9.7.2 / §9.6.4 rule 5 (Option B): `only` filters the
+        # importer's EXPLICIT visibility, but the kept templates' bodies may
+        # reference other "internal-wiring" templates that resolved in the
+        # target's own scope (a BC rule referencing an interior stencil). With
+        # bodies no longer inlined (§9.7.3), those referenced templates must be
+        # carried along as the transitive reference closure, or the surviving
+        # references would dangle. `only` is respected automatically —
+        # materialization is by reference closure. Carried entries participate
+        # in §9.7.4 dedup/conflict checks like any import.
+        closure: set[str] = set()
+        wstack: list[str] = []
+        for n in keep:
+            body = scope.templates[n].get("body") if _is_object(scope.templates[n]) else None
+            wstack.extend(_collect_apply_names([], body))
+        while wstack:
+            r = wstack.pop()
+            if r in keepset or r in closure or r not in scope.templates:
+                continue
+            closure.add(r)
+            rbody = scope.templates[r].get("body") if _is_object(scope.templates[r]) else None
+            wstack.extend(_collect_apply_names([], rbody))
+        scope.templates = {
+            n: d for n, d in scope.templates.items() if n in keepset or n in closure
+        }
 
     # Import-edge renaming / namespacing / free-name rebinding (esm-spec
     # §9.7.7): after `bindings` instantiation and `only` filtering, before the

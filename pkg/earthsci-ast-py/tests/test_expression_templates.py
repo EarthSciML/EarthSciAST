@@ -16,6 +16,7 @@ from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.parse import load
 from earthsci_ast.lower_expression_templates import (
     ExpressionTemplateError,
+    expand_document,
     lower_expression_templates,
     reject_expression_templates_pre_v04,
 )
@@ -104,7 +105,9 @@ def _inline_arrhenius(A: float, Ea: float) -> dict:
 
 
 def test_expansion_at_load_strips_templates_and_produces_inline_ast():
-    expanded = lower_expression_templates(copy.deepcopy(ARRHENIUS_FIXTURE))
+    # Option B (esm-spec §9.6.4): lower PRESERVES references + registries;
+    # expand_document produces the Option-A image (blocks stripped, inline AST).
+    expanded = expand_document(lower_expression_templates(copy.deepcopy(ARRHENIUS_FIXTURE)))
     chem = expanded["reaction_systems"]["chem"]
     assert "expression_templates" not in chem
     assert chem["reactions"][0]["rate"] == _inline_arrhenius(1.8e-12, 1500)
@@ -193,7 +196,9 @@ def test_ast_valued_bindings_are_substituted():
         "op": "*",
         "args": [3, "T"],
     }
-    out = lower_expression_templates(fixture)
+    # Option B: the arrhenius reference is target-free, so it survives lower;
+    # expand_document yields the Option-A substituted image.
+    out = expand_document(lower_expression_templates(fixture))
     rate = out["reaction_systems"]["chem"]["reactions"][0]["rate"]
     assert rate["op"] == "*"
     # The exp's argument (-Ea/T) should now contain the (3*T) sub-AST.
@@ -219,7 +224,7 @@ def test_conformance_fixture_matches_expanded_form():
         fixture_src = fp.read()
     with open(expanded_path) as fp:
         expanded_dict = json.load(fp)
-    expanded_via_pass = lower_expression_templates(json.loads(fixture_src))
+    expanded_via_pass = expand_document(lower_expression_templates(json.loads(fixture_src)))
     assert (
         expanded_via_pass["reaction_systems"]["chem"]["reactions"]
         == expanded_dict["reaction_systems"]["chem"]["reactions"]
@@ -238,7 +243,7 @@ def test_coupling_transform_expression_conformance_fixture_matches_expanded_form
         fixture_src = fp.read()
     with open(case / "expanded.esm") as fp:
         expanded_dict = json.load(fp)
-    expanded_via_pass = lower_expression_templates(json.loads(fixture_src))
+    expanded_via_pass = expand_document(lower_expression_templates(json.loads(fixture_src)))
     assert expanded_via_pass["coupling"] == expanded_dict["coupling"]
     assert expanded_via_pass["models"] == expanded_dict["models"]
 
@@ -448,7 +453,9 @@ def test_scalar_field_substitution_happy_path():
         },
         {"K_manifold": "planar", "a": "pa", "b": "pb"},
     )
-    out = lower_expression_templates(src)
+    # Option B: polygon_intersection_area is target-free → the reference
+    # survives lower; expand_document yields the substituted Option-A image.
+    out = expand_document(lower_expression_templates(src))
     assert out["models"]["M"]["variables"]["area"]["expression"] == {
         "op": "polygon_intersection_area",
         "manifold": "planar",
@@ -485,7 +492,7 @@ def test_scalar_field_param_threads_through_body_composition():
         {"K": "spherical", "p": "pa", "q": "pb"},
         name="outer",
     )
-    out = lower_expression_templates(src)
+    out = expand_document(lower_expression_templates(src))
     assert out["models"]["M"]["variables"]["area"]["expression"] == {
         "op": "*",
         "args": [
@@ -535,7 +542,7 @@ def test_params_shadow_literals_in_scalar_fields():
         {"planar": "spherical", "x": "pa", "y": "pb"},
         name="shadowed",
     )
-    out = lower_expression_templates(src)
+    out = expand_document(lower_expression_templates(src))
     expr = out["models"]["M"]["variables"]["area"]["expression"]
     assert expr["manifold"] == "spherical"
 
@@ -546,7 +553,7 @@ def test_scalar_field_param_conformance_fixture_matches_expanded():
     (planar / spherical) — against its pinned Julia-generated expanded.esm."""
     fixture = _conf_fixture("scalar_field_param")
     expanded = _conf_fixture("scalar_field_param", "expanded.esm")
-    out = lower_expression_templates(fixture)
+    out = expand_document(lower_expression_templates(fixture))
     assert out["models"] == expanded["models"]
     variables = out["models"]["Overlap"]["variables"]
     assert variables["area_planar"]["expression"]["manifold"] == "planar"
@@ -560,10 +567,11 @@ def test_scalar_field_param_conformance_fixture_matches_expanded():
 
 
 def _expand_conf(fix: str) -> dict:
-    """Raw §9.7 pipeline (resolve → lower) over a conformance fixture."""
+    """Raw §9.7 pipeline (resolve → lower) over a conformance fixture, then
+    Expand (Option B, esm-spec §9.6.4) to the Option-A image the goldens pin."""
     raw = _conf_fixture(fix)
     resolved = resolve_template_machinery(raw, _conf_dir(fix))
-    return lower_expression_templates(resolved if resolved is not None else raw)
+    return expand_document(lower_expression_templates(resolved if resolved is not None else raw))
 
 
 @pytest.mark.parametrize(

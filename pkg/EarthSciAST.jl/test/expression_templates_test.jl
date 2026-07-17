@@ -6,9 +6,16 @@ using JSON3
 using EarthSciAST
 using EarthSciAST: lower_expression_templates,
     reject_expression_templates_pre_v04, ExpressionTemplateError, OpExpr,
-    NumExpr, IntExpr, VarExpr
+    NumExpr, IntExpr, VarExpr, Expand, JSONLikeDict
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
+
+# esm-spec §9.6.4 Option B: `lower_expression_templates` PRESERVES surviving
+# `apply_expression_template` references; the Option-A expanded image (the
+# `expanded*.esm` oracle, §9.6.4 rule 2 / §9.6.7 bridge gate) is `Expand ∘
+# lower`. `_lowerx` reproduces that expanded image with a `.data` surface so the
+# raw-path comparison sites below read exactly as before.
+_lowerx(x) = JSONLikeDict(Expand(lower_expression_templates(x)))
 
 const ARRHENIUS_FIXTURE_JSON = """
 {
@@ -54,8 +61,13 @@ const ARRHENIUS_FIXTURE_JSON = """
 
 @testset "expression_templates / apply_expression_template (esm-giy)" begin
     @testset "expansion at load time strips templates and produces inline AST" begin
-        io = IOBuffer(ARRHENIUS_FIXTURE_JSON)
-        file = EarthSciAST.load(io)
+        # esm-spec §9.6.4 Option B: by DEFAULT references survive into the typed
+        # IR (see the reference-preserving assertions elsewhere). This test pins
+        # the Option-A image, so it loads under `ESS_TEMPLATE_REF_DISABLE=1` —
+        # the escape hatch that Expands at load — where the rate is the inline `*`.
+        file = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
+            EarthSciAST.load(IOBuffer(ARRHENIUS_FIXTURE_JSON))
+        end
         rs = file.reaction_systems["chem"]
         # Sanity: expanded rate is a `*` with three args.
         rate1 = rs.reactions[1].rate
@@ -200,7 +212,7 @@ const ARRHENIUS_FIXTURE_JSON = """
         expanded_path = joinpath(repo_root, "tests", "conformance",
             "expression_templates", "arrhenius_smoke", "expanded.esm")
         raw = JSON3.read(read(fixture_path, String))
-        expanded_via_pass = lower_expression_templates(raw)
+        expanded_via_pass = _lowerx(raw)
         expanded_dict = JSON3.read(read(expanded_path, String))
         # Compare reactions arrays in JSON-normalised (testutils.jl _normj) form.
         got = _normj(expanded_via_pass.data["reaction_systems"]["chem"]["reactions"])
@@ -217,7 +229,7 @@ const ARRHENIUS_FIXTURE_JSON = """
         case = joinpath(repo_root, "tests", "conformance",
             "expression_templates", "coupling_transform_expression")
         raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
-        expanded_via_pass = lower_expression_templates(raw)
+        expanded_via_pass = _lowerx(raw)
         expanded_dict = JSON3.read(read(joinpath(case, "expanded.esm"), String))
         @test _normj(expanded_via_pass.data["coupling"]) ==
               _normj(expanded_dict.coupling)
@@ -236,8 +248,11 @@ const ARRHENIUS_FIXTURE_JSON = """
         ast_bound = replace(ARRHENIUS_FIXTURE_JSON,
             "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500}" =>
             "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": {\"op\": \"*\", \"args\": [3, \"T\"]}}")
-        io = IOBuffer(ast_bound)
-        file = EarthSciAST.load(io)
+        # Option B: references survive by default; pin the Option-A expanded image
+        # via the `ESS_TEMPLATE_REF_DISABLE=1` hatch.
+        file = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
+            EarthSciAST.load(IOBuffer(ast_bound))
+        end
         rate = file.reaction_systems["chem"].reactions[1].rate
         @test rate isa OpExpr
         @test rate.op == "*"
@@ -261,7 +276,7 @@ end
 
     function _lower_conf(fix)
         raw = JSON3.read(read(joinpath(_conf(fix), "fixture.esm"), String))
-        return lower_expression_templates(raw)
+        return _lowerx(raw)
     end
     function _expanded_vars(fix)
         exp = JSON3.read(read(joinpath(_conf(fix), "expanded.esm"), String))
@@ -346,7 +361,7 @@ end
           }}
         }
         """
-        out = lower_expression_templates(JSON3.read(src))
+        out = _lowerx(JSON3.read(src))
         expr = _normj(out.data["models"]["m"]["variables"]["y"]["expression"])
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[1.4, "u"])
     end
@@ -383,7 +398,7 @@ end
           }}
         }
         """
-        out = lower_expression_templates(JSON3.read(src))
+        out = _lowerx(JSON3.read(src))
         expr = _normj(out.data["models"]["M"]["variables"]["area"]["expression"])
         @test expr == Dict{String,Any}(
             "op" => "polygon_intersection_area",
@@ -423,7 +438,7 @@ end
           }}
         }
         """
-        out = lower_expression_templates(JSON3.read(src))
+        out = _lowerx(JSON3.read(src))
         expr = _normj(out.data["models"]["M"]["variables"]["scaled"]["expression"])
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[
             Dict{String,Any}("op" => "polygon_intersection_area",
@@ -495,7 +510,7 @@ end
           }}
         }
         """
-        out = lower_expression_templates(JSON3.read(src))
+        out = _lowerx(JSON3.read(src))
         expr = _normj(out.data["models"]["M"]["variables"]["area"]["expression"])
         @test expr["manifold"] == "spherical"
     end
@@ -508,7 +523,7 @@ end
     case = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
         "expression_templates", "scalar_field_param")
     raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
-    out = lower_expression_templates(raw)
+    out = _lowerx(raw)
     expanded = JSON3.read(read(joinpath(case, "expanded.esm"), String))
     @test _normj(out.data["models"]) == _normj(expanded.models)
     vars = _normj(out.data["models"]["Overlap"]["variables"])
@@ -530,7 +545,7 @@ end
             Any[_nw(v) for v in x] : x
     function _lower2(fix)
         raw = JSON3.read(read(joinpath(_conf2(fix), "fixture.esm"), String))
-        return lower_expression_templates(raw)
+        return _lowerx(raw)
     end
     _golden_vars(fix) = _nw(JSON3.read(read(joinpath(_conf2(fix), "expanded.esm"),
                                             String)).models.m.variables)
@@ -616,7 +631,7 @@ end
           }
         }
         """)
-        out = lower_expression_templates(JSON3.read(src))
+        out = _lowerx(JSON3.read(src))
         expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
         @test expr["op"] == "*"
         @test expr["args"][1] == "s"   # plain rule fired, not the fancy one
@@ -636,7 +651,7 @@ end
         }
         """), "{\"op\": \"div\", \"args\": [\"F_cell\"]}" =>
               "{\"op\": \"div\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}")
-        out = lower_expression_templates(JSON3.read(src))
+        out = _lowerx(JSON3.read(src))
         expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
         @test expr["op"] == "div"   # never rewritten; not an error
     end
@@ -700,7 +715,7 @@ end
           }
         }
         """)
-        out = lower_expression_templates(JSON3.read(src))
+        out = _lowerx(JSON3.read(src))
         expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
         @test expr["op"] == "div"   # constraint unsatisfied; rule never fires
     end

@@ -38,8 +38,8 @@
 //! rejected as `template_import_unresolved`.
 
 use crate::lower_expression_templates::{
-    ExpressionTemplateError, compose_template_bodies, reject_expression_templates_pre_v04,
-    validate_templates,
+    ExpressionTemplateError, collect_apply_names as compose_collect_apply_names,
+    compose_template_bodies, reject_expression_templates_pre_v04, validate_templates,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -1656,9 +1656,40 @@ fn resolve_import_entry(
             }
         }
         let keep_set: std::collections::HashSet<&str> = keep.iter().map(String::as_str).collect();
+        // esm-spec §9.7.2 / §9.6.4 rule 5 (Option B): `only` filters the
+        // importer's EXPLICIT visibility, but the kept templates' bodies may
+        // reference other "internal-wiring" templates that resolved in the
+        // target's own scope (a BC rule referencing an interior stencil). With
+        // bodies no longer inlined (§9.7.3), those referenced templates must be
+        // carried along as the transitive reference closure, or the surviving
+        // references would dangle. `only` is respected automatically —
+        // materialization is by reference closure.
+        let mut closure: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut wstack: Vec<String> = Vec::new();
+        for n in &keep {
+            if let Some(d) = scope.templates.get(n)
+                && let Some(body) = d.get("body")
+            {
+                compose_collect_apply_names(body, &mut wstack);
+            }
+        }
+        while let Some(r) = wstack.pop() {
+            if keep_set.contains(r.as_str())
+                || closure.contains(&r)
+                || !scope.templates.contains_key(&r)
+            {
+                continue;
+            }
+            closure.insert(r.clone());
+            if let Some(d) = scope.templates.get(&r)
+                && let Some(body) = d.get("body")
+            {
+                compose_collect_apply_names(body, &mut wstack);
+            }
+        }
         let mut filtered = Map::new();
         for (n, d) in &scope.templates {
-            if keep_set.contains(n.as_str()) {
+            if keep_set.contains(n.as_str()) || closure.contains(n) {
                 filtered.insert(n.clone(), d.clone());
             }
         }

@@ -33,8 +33,12 @@
 
 import {
   EsmMachineryError,
+  authoredTemplateNames,
+  buildEmittedDocument,
+  collectApplyNames,
   composeTemplateBodies,
   deepEqual,
+  lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
   validateTemplates,
 } from './lower-expression-templates.js'
@@ -1325,9 +1329,30 @@ function resolveImportEntry(
       }
     }
     const keepSet = new Set(keep)
+    // esm-spec §9.7.2 / §9.6.4 rule 5 (Option B): `only` filters the importer's
+    // EXPLICIT visibility, but the kept templates' bodies may reference other
+    // "internal-wiring" templates that resolved in the target's own scope (a BC
+    // rule referencing an interior stencil). With bodies no longer inlined
+    // (§9.7.3), those referenced templates must be carried along as the
+    // transitive reference closure, or the surviving references would dangle.
+    // `only` is respected automatically — materialization is by reference closure.
+    const closure = new Set<string>()
+    const wstack: string[] = []
+    for (const n of keep) {
+      const d = scope.templates[n]
+      wstack.push(...collectApplyNames(isObject(d) ? d.body : undefined, []))
+    }
+    while (wstack.length > 0) {
+      const r = wstack.pop()!
+      if (keepSet.has(r) || closure.has(r)) continue
+      if (!Object.prototype.hasOwnProperty.call(scope.templates, r)) continue
+      closure.add(r)
+      const d = scope.templates[r]
+      wstack.push(...collectApplyNames(isObject(d) ? d.body : undefined, []))
+    }
     const filtered: JsonObject = {}
     for (const [n, d] of Object.entries(scope.templates)) {
-      if (keepSet.has(n)) filtered[n] = d
+      if (keepSet.has(n) || closure.has(n)) filtered[n] = d
     }
     scope.templates = filtered
   }
@@ -1531,6 +1556,28 @@ export function resolveTemplateMachinery(
     declaredTemplates,
     declaredMetaparams,
   )
+}
+
+/**
+ * Produce the reference-preserving, self-contained emitted document (esm-spec
+ * §9.6.4 rule 5, RFC out-of-line-expression-templates §7.5) from a source
+ * document `rawSource` (a fixture, or an already-emitted document for the
+ * idempotency property; relative import refs resolve against `basePath`). Loads
+ * `rawSource` under Option B, then materializes each component's surviving
+ * reference closure into its `expression_templates` block, drops consumed
+ * imports, and version-stamps `esm: 0.9.0` when any reference/materialized entry
+ * remains (§9.6.4 rule 8). `emitEsmString ∘ emitDocument` is a byte-wise fixed
+ * point under reload. Mirrors the Julia reference `emit_document`.
+ */
+export function emitDocument(
+  rawSource: unknown,
+  basePath: string,
+  options: TemplateResolveOptions = {},
+): JsonObject {
+  const authored = authoredTemplateNames(rawSource)
+  const resolved = resolveTemplateMachinery(rawSource, basePath, options)
+  const loaded = lowerExpressionTemplates((resolved ?? rawSource) as object) as JsonObject
+  return buildEmittedDocument(loaded, authored)
 }
 
 /** Phase 0 — validate + collect the loader-API metaparameter bindings (site 4). */

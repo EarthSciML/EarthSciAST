@@ -237,7 +237,16 @@ export {
   // @deprecated Same-class alias for `EsmMachineryError`; kept for external consumers.
   ExpressionTemplateError,
   MAX_TEMPLATE_EXPANSION_DEPTH,
+  // Out-of-line expression templates (Option B, esm-spec §9.6.4):
+  // full expansion (`Expand`), reference-preserving emit, and flatten merge.
+  expandDocument,
+  Expand,
+  buildEmittedDocument,
+  authoredTemplateNames,
+  emitEsmString,
+  flattenTemplateRegistries,
 } from './lower-expression-templates.js'
+export type { FlattenedTemplateRegistries } from './lower-expression-templates.js'
 
 // Template-library imports + load-time metaparameters (esm-spec §9.7 /
 // docs/content/rfcs/template-library-imports.md).
@@ -246,6 +255,8 @@ export {
   rejectTemplateImportsPreV08,
   isTemplateLibraryDoc,
   applyScopeInjections,
+  // Reference-preserving emit orchestration (esm-spec §9.6.4 rule 5).
+  emitDocument,
 } from './template-imports.js'
 export type { TemplateResolveOptions, TemplateSchemaError } from './template-imports.js'
 

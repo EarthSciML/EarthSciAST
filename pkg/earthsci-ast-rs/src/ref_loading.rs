@@ -695,7 +695,14 @@ fn resolve_value(
                 &parent_dir,
                 &bindings,
             )? {
+                // A referenced subsystem is a self-contained build boundary
+                // (mirrors Julia `_load_ref` → `_lower_and_coerce`): lower under
+                // Option B, then `expand` so the inlined component carries the
+                // fully-expanded Option-A image with no surviving references —
+                // the parent document's lowering must not resolve the
+                // subsystem's own template names against the parent registry.
                 crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
+                crate::lower_expression_templates::expand(&mut resolved)?;
                 parsed = resolved;
             }
             Ok(())

@@ -394,7 +394,7 @@ pub(crate) fn validate_templates(
 pub const MAX_TEMPLATE_EXPANSION_DEPTH: usize = 32;
 
 /// Collect the `name`s of every `apply_expression_template` node in a tree.
-fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
+pub(crate) fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
     match x {
         Value::Array(arr) => {
             for c in arr {
@@ -415,121 +415,42 @@ fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// Inline every `apply_expression_template` node in `node` against the
-/// composed `bodies`, post-order (so the bindings' own sub-ASTs are inlined
-/// first). Referenced bodies are already closed when this runs in
-/// topological order, so a single `expand_apply` produces an apply-free
-/// subtree. Identity-memoized and sharing-preserving: a subtree shared
-/// under many parents is inlined once and the shared result respliced, so
-/// composed bodies stay DAGs instead of exploding into trees.
-fn inline_applies(
-    node: &Sv,
-    decls: &Map<String, Value>,
-    bodies: &std::collections::HashMap<String, Sv>,
-    scope: &str,
-    memo: &mut PtrMemo<Sv>,
-) -> Result<Sv, ExpressionTemplateError> {
-    match &**node {
-        SNode::Arr(items) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
-                return Ok(hit.clone());
-            }
-            let mut changed = false;
-            let mut out = Vec::with_capacity(items.len());
-            for c in items {
-                let nc = inline_applies(c, decls, bodies, scope, memo)?;
-                changed |= !Rc::ptr_eq(&nc, c);
-                out.push(nc);
-            }
-            let res = if changed {
-                Rc::new(SNode::Arr(out))
-            } else {
-                node.clone()
-            };
-            memo.insert(key, res.clone());
-            Ok(res)
-        }
-        SNode::Obj(fields) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
-                return Ok(hit.clone());
-            }
-            let mut changed = false;
-            let mut out: Vec<(String, Sv)> = Vec::with_capacity(fields.len());
-            for (k, v) in fields {
-                let nv = inline_applies(v, decls, bodies, scope, memo)?;
-                changed |= !Rc::ptr_eq(&nv, v);
-                out.push((k.clone(), nv));
-            }
-            let res = if obj_op(&out) == Some(APPLY_OP) {
-                expand_apply(&out, decls, bodies, scope)?
-            } else if changed {
-                Rc::new(SNode::Obj(out))
-            } else {
-                node.clone()
-            };
-            memo.insert(key, res.clone());
-            Ok(res)
-        }
-        _ => Ok(node.clone()),
-    }
-}
-
-/// The result of §9.7.3 registration-time body composition in the shared
-/// representation: every template's closed (apply-free) body as a shared
-/// DAG, plus the body-reference graph (used by the owned wrapper to decide
-/// which decls to materialize back).
-struct ComposedBodies {
-    /// name -> closed body as a shared DAG (ALL templates, including those
-    /// that referenced nothing).
-    bodies: std::collections::HashMap<String, Sv>,
-    /// name -> referenced template names (empty = body was already closed).
-    refs: std::collections::BTreeMap<String, Vec<String>>,
-}
-
-/// Registration-time body composition (esm-spec §9.7.3): template bodies MAY
-/// reference other in-scope MATCH-LESS templates via
-/// `apply_expression_template` nodes. Builds the body-reference graph,
-/// rejects cycles (`apply_expression_template_recursive_body`) and chains
-/// deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
-/// (`template_body_expansion_too_deep`), then inlines dependencies-first by
-/// pure substitution — confluent, so topological order cannot affect the
-/// result. Afterwards every returned `body` is a closed Expression AST with
-/// zero `apply_expression_template` nodes; runs BEFORE the §9.6.3 fixpoint
-/// ever consults a `match` rule.
+/// Registration-time body **checking** (esm-spec §9.7.3, Option B / esm
+/// 0.9.0): template bodies MAY reference other in-scope MATCH-LESS templates
+/// via `apply_expression_template` nodes. Builds the body-reference graph,
+/// rejects cycles (`apply_expression_template_recursive_body`), references to
+/// undeclared or `match`-bearing templates
+/// (`apply_expression_template_unknown_template`), and chains deeper than
+/// `MAX_TEMPLATE_EXPANSION_DEPTH` templates (`template_body_expansion_too_deep`).
 ///
-/// Bodies are composed as shared DAGs (`Sv`): a referenced body is spliced
-/// in BY REFERENCE, so a chain of templates that each reference their
-/// predecessor k times costs O(chain) memory here instead of O(k^chain).
-/// `templates` itself is not mutated.
-fn compose_template_bodies_shared(
-    templates: &Map<String, Value>,
+/// From `esm: 0.9.0` (RFC out-of-line-expression-templates §7.1 step 4) bodies
+/// are **NOT inlined** — the references are preserved uninlined and denote
+/// their expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are
+/// computed separately by [`template_target_bearing`]. This runs BEFORE the
+/// §9.6.3 fixpoint ever consults a `match` rule; it now only validates the DAG.
+/// `templates` is not mutated (the `&mut` is retained for call-site
+/// compatibility with the import machinery). Mirrors the Julia reference
+/// `_compose_template_bodies!`.
+pub(crate) fn compose_template_bodies(
+    templates: &mut Map<String, Value>,
     scope: &str,
-) -> Result<ComposedBodies, ExpressionTemplateError> {
-    let mut bodies: std::collections::HashMap<String, Sv> = std::collections::HashMap::new();
+) -> Result<(), ExpressionTemplateError> {
+    if templates.is_empty() {
+        return Ok(());
+    }
     let mut refs: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
-    if templates.is_empty() {
-        return Ok(ComposedBodies { bodies, refs });
-    }
     let mut any_refs = false;
     for (name, decl) in templates.iter() {
         let mut names = Vec::new();
-        match decl.get("body") {
-            Some(body) => {
-                collect_apply_names(body, &mut names);
-                bodies.insert(name.clone(), to_shared(body));
-            }
-            None => {
-                bodies.insert(name.clone(), Rc::new(SNode::Null));
-            }
+        if let Some(body) = decl.get("body") {
+            collect_apply_names(body, &mut names);
         }
         any_refs = any_refs || !names.is_empty();
         refs.insert(name.clone(), names);
     }
     if !any_refs {
-        return Ok(ComposedBodies { bodies, refs });
+        return Ok(());
     }
 
     for (name, rs) in &refs {
@@ -556,15 +477,12 @@ fn compose_template_bodies_shared(
         }
     }
 
-    // DFS over the reference graph: cycle detection, chain-depth bound, and
-    // a dependencies-first (post-) order for inlining.
-    #[allow(clippy::too_many_arguments)]
+    // DFS over the reference graph: cycle detection and chain-depth bound.
     fn visit(
         name: &str,
         refs: &std::collections::BTreeMap<String, Vec<String>>,
         state: &mut std::collections::HashMap<String, u8>, // 1 = on stack, 2 = done
         depth: &mut std::collections::HashMap<String, usize>,
-        order: &mut Vec<String>,
         chain: &mut Vec<String>,
         scope: &str,
     ) -> Result<usize, ExpressionTemplateError> {
@@ -589,7 +507,7 @@ fn compose_template_bodies_shared(
                 let mut d = 1usize;
                 if let Some(rs) = refs.get(name) {
                     for r in rs.clone() {
-                        d = d.max(1 + visit(&r, refs, state, depth, order, chain, scope)?);
+                        d = d.max(1 + visit(&r, refs, state, depth, chain, scope)?);
                     }
                 }
                 chain.pop();
@@ -606,7 +524,6 @@ fn compose_template_bodies_shared(
                         ),
                     ));
                 }
-                order.push(name.to_string());
                 Ok(d)
             }
         }
@@ -614,65 +531,9 @@ fn compose_template_bodies_shared(
 
     let mut state = std::collections::HashMap::new();
     let mut depth = std::collections::HashMap::new();
-    let mut order: Vec<String> = Vec::new();
     let mut chain: Vec<String> = Vec::new();
     for name in refs.keys() {
-        visit(
-            name, &refs, &mut state, &mut depth, &mut order, &mut chain, scope,
-        )?;
-    }
-
-    for name in order {
-        let Some(rs) = refs.get(&name) else { continue };
-        if rs.is_empty() {
-            continue;
-        }
-        let body = bodies
-            .get(&name)
-            .cloned()
-            .unwrap_or_else(|| Rc::new(SNode::Null));
-        let mut memo = PtrMemo::default();
-        let inlined = inline_applies(
-            &body,
-            templates,
-            &bodies,
-            &format!("{scope}.expression_templates.{name}"),
-            &mut memo,
-        )?;
-        bodies.insert(name.clone(), inlined);
-    }
-    Ok(ComposedBodies { bodies, refs })
-}
-
-/// Owned-view wrapper over [`compose_template_bodies_shared`] for callers
-/// that keep templates as `serde_json::Value` decls (the §9.7 import
-/// machinery): composes with structural sharing, then materializes the
-/// closed bodies back into the decl objects in place — only for templates
-/// that actually referenced others, exactly as before. NOTE: this owned
-/// materialization is inherently proportional to the COMPOSED size (an
-/// owned `Value` cannot alias subtrees), so a deep multi-reference chain in
-/// an imported library still materializes exponentially here; the load-time
-/// component fixpoint itself uses the shared form and does not pay this.
-pub(crate) fn compose_template_bodies(
-    templates: &mut Map<String, Value>,
-    scope: &str,
-) -> Result<(), ExpressionTemplateError> {
-    if templates.is_empty() {
-        return Ok(());
-    }
-    let composed = compose_template_bodies_shared(templates, scope)?;
-    for (name, rs) in &composed.refs {
-        if rs.is_empty() {
-            continue;
-        }
-        let inlined = composed
-            .bodies
-            .get(name)
-            .map(|b| to_value(b))
-            .unwrap_or(Value::Null);
-        if let Some(Value::Object(decl)) = templates.get_mut(name) {
-            decl.insert("body".to_string(), inlined);
-        }
+        visit(name, &refs, &mut state, &mut depth, &mut chain, scope)?;
     }
     Ok(())
 }
@@ -723,9 +584,18 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
             if let Some(hit) = memo.get(&key) {
                 return hit.clone();
             }
+            // esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4: parameter
+            // substitution applies inside a nested `apply_expression_template`
+            // reference's `bindings` values exactly as any other Expression
+            // position, but the `name` field is NEVER a substitution site.
+            let is_apply = obj_op(fields) == Some(APPLY_OP);
             let mut changed = false;
             let mut out = Vec::with_capacity(fields.len());
             for (k, v) in fields {
+                if is_apply && k == "name" {
+                    out.push((k.clone(), v.clone()));
+                    continue;
+                }
                 let nv = subst_shared(v, bindings, memo);
                 changed |= !Rc::ptr_eq(&nv, v);
                 out.push((k.clone(), nv));
@@ -739,6 +609,188 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
             res
         }
         _ => node.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Eager-expansion carve-out: the rewrite-target op tier T (esm-spec §9.6.4
+// rule 3 / RFC out-of-line-expression-templates §7.2)
+// ---------------------------------------------------------------------------
+
+/// The rewrite-target ops explicitly named by §4.2 as the open rewrite-target
+/// tier plus the two load-eliminated forms — the members of **T** that carry a
+/// recognized op name. Any op NOT in the evaluable-core registry
+/// (`op_registry`) is ALSO in T (an open-namespace custom op no evaluator
+/// implements); `apply_expression_template` itself is excluded.
+const REWRITE_TARGET_OPS: [&str; 7] = [
+    "D",
+    "grad",
+    "div",
+    "laplacian",
+    "integral",
+    "table_lookup",
+    "enum",
+];
+
+/// True iff op string `op` is a member of the rewrite-target tier **T**
+/// (esm-spec §9.6.4 rule 3): one of the named rewrite-target ops, or an op with
+/// no evaluable-core registry entry (an open-namespace custom op). The template
+/// reference op itself is never in T. Mirrors the Julia reference `_op_in_T`.
+fn op_in_t(op: &str) -> bool {
+    if op == APPLY_OP {
+        return false;
+    }
+    if REWRITE_TARGET_OPS.contains(&op) {
+        return true;
+    }
+    !crate::op_registry::is_core_op(op)
+}
+
+/// Pointer-keyed identity set for seen-pruned walks over shared DAGs.
+type PtrSet = std::collections::HashSet<*const SNode>;
+
+/// True iff `node` contains, ANYWHERE within it (descending through every
+/// field, including the `bindings` of nested `apply_expression_template`
+/// nodes), an object whose `op` is in **T** (`op_in_t`). Does NOT follow
+/// references to other templates — that transitive step is
+/// `template_target_bearing`. Mirrors the Julia reference `_direct_T_op`.
+fn direct_t_op(node: &Sv, seen: &mut PtrSet) -> bool {
+    match &**node {
+        SNode::Arr(items) => {
+            if !seen.insert(Rc::as_ptr(node)) {
+                return false;
+            }
+            items.iter().any(|c| direct_t_op(c, seen))
+        }
+        SNode::Obj(fields) => {
+            if !seen.insert(Rc::as_ptr(node)) {
+                return false;
+            }
+            if let Some(op) = obj_op(fields)
+                && op_in_t(op)
+            {
+                return true;
+            }
+            fields.iter().any(|(_, v)| direct_t_op(v, seen))
+        }
+        _ => false,
+    }
+}
+
+/// Collect the `name`s of every `apply_expression_template` node in a shared
+/// DAG (document order), seen-pruned.
+fn collect_apply_names_sv(node: &Sv, out: &mut Vec<String>, seen: &mut PtrSet) {
+    match &**node {
+        SNode::Arr(items) => {
+            if !seen.insert(Rc::as_ptr(node)) {
+                return;
+            }
+            for c in items {
+                collect_apply_names_sv(c, out, seen);
+            }
+        }
+        SNode::Obj(fields) => {
+            if !seen.insert(Rc::as_ptr(node)) {
+                return;
+            }
+            if obj_op(fields) == Some(APPLY_OP)
+                && let Some(SNode::Str(nm)) = obj_get(fields, "name").map(|v| &**v)
+            {
+                out.push(nm.clone());
+            }
+            for (_, v) in fields {
+                collect_apply_names_sv(v, out, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Template name → decl object (shared node) registry.
+type Named = std::collections::HashMap<String, Sv>;
+
+/// The `body` field of a template decl, or `Null` when absent.
+fn decl_body(decl: &Sv) -> Sv {
+    match &**decl {
+        SNode::Obj(fields) => obj_get(fields, "body")
+            .cloned()
+            .unwrap_or_else(|| Rc::new(SNode::Null)),
+        _ => Rc::new(SNode::Null),
+    }
+}
+
+/// True iff `decl` (a template decl node) carries a `match` field.
+fn decl_has_match(decl: &Sv) -> bool {
+    matches!(&**decl, SNode::Obj(fields) if obj_get(fields, "match").is_some())
+}
+
+/// Compute, for every template in `named`, its **target-bearing** flag
+/// (esm-spec §9.6.4 rule 3): a template is target-bearing iff its body contains
+/// an op in **T** anywhere (including inside nested references' `bindings`), OR
+/// it references — transitively through the §9.7.3-checked acyclic DAG — a
+/// target-bearing template. The DAG is acyclic (checked by
+/// `compose_template_bodies`), so a memoized DFS terminates. Mirrors the Julia
+/// reference `_template_target_bearing`.
+fn template_target_bearing(named: &Named) -> std::collections::HashMap<String, bool> {
+    let mut tb: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut inprogress: std::collections::HashSet<String> = std::collections::HashSet::new();
+    fn visit(
+        name: &str,
+        named: &Named,
+        tb: &mut std::collections::HashMap<String, bool>,
+        inprogress: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        if let Some(v) = tb.get(name) {
+            return *v;
+        }
+        // Defensive against a cycle the checker somehow missed.
+        if inprogress.contains(name) {
+            return false;
+        }
+        let Some(decl) = named.get(name) else {
+            tb.insert(name.to_string(), false);
+            return false;
+        };
+        inprogress.insert(name.to_string());
+        let body = decl_body(decl);
+        let mut res = direct_t_op(&body, &mut PtrSet::default());
+        if !res {
+            let mut refs = Vec::new();
+            collect_apply_names_sv(&body, &mut refs, &mut PtrSet::default());
+            for r in refs {
+                if named.contains_key(&r) && visit(&r, named, tb, inprogress) {
+                    res = true;
+                    break;
+                }
+            }
+        }
+        inprogress.remove(name);
+        tb.insert(name.to_string(), res);
+        res
+    }
+    for name in named.keys() {
+        visit(name, named, &mut tb, &mut inprogress);
+    }
+    tb
+}
+
+/// Whether an `apply_expression_template` node (given its object `fields`) is
+/// **eager** (esm-spec §9.6.4 rule 3): its referenced template is
+/// target-bearing, OR any of its `bindings` values contains an op in **T**.
+/// Mirrors the Julia reference `_ref_is_eager`.
+fn ref_is_eager(
+    fields: &[(String, Sv)],
+    target_bearing: &std::collections::HashMap<String, bool>,
+) -> bool {
+    let Some(SNode::Str(name)) = obj_get(fields, "name").map(|v| &**v) else {
+        return false;
+    };
+    if target_bearing.get(name).copied().unwrap_or(false) {
+        return true;
+    }
+    match obj_get(fields, "bindings") {
+        Some(b) => direct_t_op(b, &mut PtrSet::default()),
+        None => false,
     }
 }
 
@@ -764,7 +816,7 @@ struct MatchRule {
     /// and never composed, so the owned view is kept.
     pattern: Value,
     /// The replacement Expression instantiated with the bound metavariables
-    /// — the §9.7.3-composed body as a shared DAG.
+    /// — the RAW (uninlined, Option B) body as a shared DAG.
     body: Sv,
     /// Selection precedence (esm-spec §9.6.3): higher fires first; ties break by
     /// declaration order. Absent ⇒ `0`.
@@ -777,12 +829,9 @@ struct MatchRule {
 
 /// Bundles the per-component rewrite inputs threaded through each pass.
 struct RewriteCtx<'a> {
-    /// All template declarations in the component (params / bindings
-    /// validation for named expansion; bodies live in `bodies`).
-    decls: &'a Map<String, Value>,
-    /// The §9.7.3-composed closed bodies as shared DAGs, keyed by template
-    /// name (named-expansion lookup table).
-    bodies: &'a std::collections::HashMap<String, Sv>,
+    /// Template name → decl object (shared node): the named-expansion lookup
+    /// table for eager references and surviving-reference leaf semantics.
+    named: &'a Named,
     /// Auto-applied `match` rules, **pre-sorted** highest-`priority`-first with
     /// ties broken by declaration order (esm-spec §9.6.3). `rewrite_pass` fires
     /// the first rule in this order whose pattern matches a node.
@@ -792,6 +841,9 @@ struct RewriteCtx<'a> {
     /// (esm-spec §9.6.1). Empty when no component context (coupling transforms
     /// use the receiving component's environment).
     shape_env: &'a std::collections::BTreeMap<String, Vec<String>>,
+    /// Per-template target-bearing flags (esm-spec §9.6.4 rule 3): drive the
+    /// eager pre-pass and the surviving-reference leaf semantics.
+    target_bearing: &'a std::collections::HashMap<String, bool>,
 }
 
 /// The `priority` of a `match` rule (esm-spec §9.6.3): higher fires first, ties
@@ -931,7 +983,7 @@ fn registered_where(
 /// sole termination guard (esm-spec §9.6.3).
 fn collect_match_rules(
     templates: &Map<String, Value>,
-    bodies: &std::collections::HashMap<String, Sv>,
+    named: &Named,
     iset_names: &std::collections::HashSet<String>,
     scope: &str,
 ) -> Result<Vec<MatchRule>, ExpressionTemplateError> {
@@ -952,11 +1004,12 @@ fn collect_match_rules(
                     .collect()
             })
             .unwrap_or_default();
-        // The §9.7.3-composed closed body (shared DAG); `bodies` covers every
-        // declared template, so a miss only happens for a body-less decl.
-        let body = bodies
+        // The RAW (uninlined, Option B) body as a shared DAG. On a fired rule
+        // it is instantiated by pure substitution, then the eager pre-pass
+        // expands any target-bearing reference it introduces (§9.6.4 rule 4).
+        let body = named
             .get(name)
-            .cloned()
+            .map(decl_body)
             .unwrap_or_else(|| Rc::new(SNode::Null));
         let where_c = registered_where(obj, iset_names, scope, name)?;
         rules.push(MatchRule {
@@ -1025,10 +1078,14 @@ fn try_match(
     }
 }
 
+/// Instantiate an `apply_expression_template` node (given its object `fields`)
+/// by pure structural substitution of its `bindings` into the referenced
+/// template's `body` (esm-spec §9.6.3). The body is NOT re-scanned here — the
+/// caller (`expand_eager` / `expand_all`) recursively expands the result.
+/// Mirrors the Julia reference `_expand_apply`.
 fn expand_apply(
     node: &[(String, Sv)],
-    decls: &Map<String, Value>,
-    bodies: &std::collections::HashMap<String, Sv>,
+    named: &Named,
     scope: &str,
 ) -> Result<Sv, ExpressionTemplateError> {
     let name = match obj_get(node, "name").map(|v| &**v) {
@@ -1047,18 +1104,18 @@ fn expand_apply(
             format!("{scope}: apply_expression_template 'name' must be non-empty"),
         ));
     }
-    let decl = decls.get(name).ok_or_else(|| {
+    let decl = named.get(name).ok_or_else(|| {
         err(
             "apply_expression_template_unknown_template",
             format!("{scope}: apply_expression_template references undeclared template '{name}'"),
         )
     })?;
-    let decl_obj = decl.as_object().ok_or_else(|| {
-        err(
+    let SNode::Obj(decl_fields) = &**decl else {
+        return Err(err(
             "apply_expression_template_invalid_declaration",
             format!("{scope}: template '{name}' declaration is not an object"),
-        )
-    })?;
+        ));
+    };
     let bindings: &[(String, Sv)] = match obj_get(node, "bindings").map(|v| &**v) {
         Some(SNode::Obj(fields)) => fields,
         _ => {
@@ -1069,11 +1126,16 @@ fn expand_apply(
         }
     };
 
-    let params: Vec<&str> = decl_obj
-        .get("params")
-        .and_then(|p| p.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+    let params: Vec<&str> = match obj_get(decl_fields, "params").map(|v| &**v) {
+        Some(SNode::Arr(items)) => items
+            .iter()
+            .filter_map(|v| match &**v {
+                SNode::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let declared: std::collections::HashSet<&str> = params.iter().copied().collect();
     let provided: std::collections::HashSet<&str> =
         bindings.iter().map(|(k, _)| k.as_str()).collect();
@@ -1096,19 +1158,296 @@ fn expand_apply(
         }
     }
 
-    // Splice the bindings' sub-ASTs into the body AS-IS (esm-spec §9.6.3): the
-    // substituted body is re-scanned in a SUBSEQUENT pass, so any
-    // `apply_expression_template` op or `match`-eligible sub-AST inside a
-    // binding is rewritten then — not here. Bindings are spliced BY
-    // REFERENCE: a binding used at several substitution sites is shared, not
-    // copied. A body itself may not contain `apply_expression_template`
-    // call sites by this point (composed at registration, §9.7.3).
+    // The bindings have already been expanded innermost-first by the caller,
+    // so they are consumed as-is. The body is instantiated by pure structural
+    // substitution and is NOT re-scanned here (esm-spec §9.6.3 rule 2).
     let resolved: Binds = bindings.to_vec();
-    let body = bodies
-        .get(name)
-        .cloned()
-        .unwrap_or_else(|| Rc::new(SNode::Null));
+    let body = decl_body(decl);
     Ok(substitute(&body, &resolved))
+}
+
+/// The eager-expansion pre-pass (esm-spec §9.6.4 rule 3): expand — by pure
+/// substitution, innermost-first — every EAGER `apply_expression_template`
+/// node, and only eager nodes. Non-eager (surviving) references are returned
+/// intact. Consumes no `MAX_REWRITE_PASSES` budget. Mirrors the Julia
+/// reference `_expand_eager`.
+fn expand_eager(
+    node: &Sv,
+    named: &Named,
+    target_bearing: &std::collections::HashMap<String, bool>,
+    scope: &str,
+    memo: &mut PtrMemo<Sv>,
+) -> Result<Sv, ExpressionTemplateError> {
+    match &**node {
+        SNode::Obj(fields) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return Ok(hit.clone());
+            }
+            let res = if obj_op(fields) == Some(APPLY_OP) {
+                // Innermost-first: expand eager references inside the bindings.
+                let mut newfields = fields.clone();
+                let mut b_changed = false;
+                if let Some(b_idx) = newfields.iter().position(|(k, _)| k == "bindings")
+                    && let SNode::Obj(b) = &*newfields[b_idx].1.clone()
+                {
+                    let mut nb = Vec::with_capacity(b.len());
+                    for (k, v) in b {
+                        let rv = expand_eager(v, named, target_bearing, scope, memo)?;
+                        b_changed |= !Rc::ptr_eq(&rv, v);
+                        nb.push((k.clone(), rv));
+                    }
+                    if b_changed {
+                        newfields[b_idx].1 = Rc::new(SNode::Obj(nb));
+                    }
+                }
+                if ref_is_eager(&newfields, target_bearing) {
+                    let body = expand_apply(&newfields, named, scope)?;
+                    expand_eager(&body, named, target_bearing, scope, memo)?
+                } else if b_changed {
+                    Rc::new(SNode::Obj(newfields))
+                } else {
+                    node.clone()
+                }
+            } else {
+                let mut changed = false;
+                let mut out = Vec::with_capacity(fields.len());
+                for (k, v) in fields {
+                    let rv = expand_eager(v, named, target_bearing, scope, memo)?;
+                    changed |= !Rc::ptr_eq(&rv, v);
+                    out.push((k.clone(), rv));
+                }
+                if changed {
+                    Rc::new(SNode::Obj(out))
+                } else {
+                    node.clone()
+                }
+            };
+            memo.insert(key, res.clone());
+            Ok(res)
+        }
+        SNode::Arr(items) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return Ok(hit.clone());
+            }
+            let mut changed = false;
+            let mut out = Vec::with_capacity(items.len());
+            for v in items {
+                let rv = expand_eager(v, named, target_bearing, scope, memo)?;
+                changed |= !Rc::ptr_eq(&rv, v);
+                out.push(rv);
+            }
+            let res = if changed {
+                Rc::new(SNode::Arr(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(key, res.clone());
+            Ok(res)
+        }
+        _ => Ok(node.clone()),
+    }
+}
+
+/// Convenience wrapper: run [`expand_eager`] with a fresh memo.
+fn expand_eager_root(
+    node: &Sv,
+    named: &Named,
+    target_bearing: &std::collections::HashMap<String, bool>,
+    scope: &str,
+) -> Result<Sv, ExpressionTemplateError> {
+    let mut memo = PtrMemo::default();
+    expand_eager(node, named, target_bearing, scope, &mut memo)
+}
+
+/// Fully expand EVERY `apply_expression_template` node in `node` by pure
+/// substitution to a fixpoint (innermost-first). The per-registry kernel of
+/// the public [`expand`] function (esm-spec §9.6.4 rule 2). Mirrors the Julia
+/// reference `_expand_all`.
+fn expand_all(
+    node: &Sv,
+    named: &Named,
+    scope: &str,
+    memo: &mut PtrMemo<Sv>,
+) -> Result<Sv, ExpressionTemplateError> {
+    match &**node {
+        SNode::Obj(fields) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return Ok(hit.clone());
+            }
+            let res = if obj_op(fields) == Some(APPLY_OP) {
+                let mut newfields = fields.clone();
+                if let Some(b_idx) = newfields.iter().position(|(k, _)| k == "bindings")
+                    && let SNode::Obj(b) = &*newfields[b_idx].1.clone()
+                {
+                    let mut nb = Vec::with_capacity(b.len());
+                    let mut b_changed = false;
+                    for (k, v) in b {
+                        let rv = expand_all(v, named, scope, memo)?;
+                        b_changed |= !Rc::ptr_eq(&rv, v);
+                        nb.push((k.clone(), rv));
+                    }
+                    if b_changed {
+                        newfields[b_idx].1 = Rc::new(SNode::Obj(nb));
+                    }
+                }
+                let body = expand_apply(&newfields, named, scope)?;
+                expand_all(&body, named, scope, memo)?
+            } else {
+                let mut changed = false;
+                let mut out = Vec::with_capacity(fields.len());
+                for (k, v) in fields {
+                    let rv = expand_all(v, named, scope, memo)?;
+                    changed |= !Rc::ptr_eq(&rv, v);
+                    out.push((k.clone(), rv));
+                }
+                if changed {
+                    Rc::new(SNode::Obj(out))
+                } else {
+                    node.clone()
+                }
+            };
+            memo.insert(key, res.clone());
+            Ok(res)
+        }
+        SNode::Arr(items) => {
+            let key = Rc::as_ptr(node);
+            if let Some(hit) = memo.get(&key) {
+                return Ok(hit.clone());
+            }
+            let mut changed = false;
+            let mut out = Vec::with_capacity(items.len());
+            for v in items {
+                let rv = expand_all(v, named, scope, memo)?;
+                changed |= !Rc::ptr_eq(&rv, v);
+                out.push(rv);
+            }
+            let res = if changed {
+                Rc::new(SNode::Arr(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(key, res.clone());
+            Ok(res)
+        }
+        _ => Ok(node.clone()),
+    }
+}
+
+/// Call-site check for a SURVIVING (non-expanded) `apply_expression_template`
+/// reference (esm-spec §9.6.9): the referenced `name` must resolve to an
+/// in-scope MATCH-LESS template and `bindings` must cover its `params`
+/// exactly. Same diagnostics as [`expand_apply`], but WITHOUT expanding — the
+/// reference is preserved (§9.6.4 rule 1). Mirrors `_validate_apply_ref`.
+fn validate_apply_ref(
+    fields: &[(String, Sv)],
+    named: &Named,
+    scope: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let name = match obj_get(fields, "name").map(|v| &**v) {
+        Some(SNode::Str(s)) => s.as_str(),
+        _ => {
+            return Err(err(
+                "apply_expression_template_invalid_declaration",
+                format!("{scope}: apply_expression_template node missing 'name'"),
+            ));
+        }
+    };
+    let decl = named.get(name).ok_or_else(|| {
+        err(
+            "apply_expression_template_unknown_template",
+            format!("{scope}: apply_expression_template references undeclared template '{name}'"),
+        )
+    })?;
+    if decl_has_match(decl) {
+        return Err(err(
+            "apply_expression_template_unknown_template",
+            format!(
+                "{scope}: apply_expression_template references '{name}', a `match` rewrite rule — \
+                 only match-less templates are invocable by name (esm-spec §9.6.2)"
+            ),
+        ));
+    }
+    let bindings: &[(String, Sv)] = match obj_get(fields, "bindings").map(|v| &**v) {
+        Some(SNode::Obj(b)) => b,
+        _ => {
+            return Err(err(
+                "apply_expression_template_bindings_mismatch",
+                format!("{scope}: apply_expression_template '{name}' missing 'bindings' object"),
+            ));
+        }
+    };
+    let SNode::Obj(decl_fields) = &**decl else {
+        return Ok(());
+    };
+    let params: Vec<&str> = match obj_get(decl_fields, "params").map(|v| &**v) {
+        Some(SNode::Arr(items)) => items
+            .iter()
+            .filter_map(|v| match &**v {
+                SNode::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let declared: std::collections::HashSet<&str> = params.iter().copied().collect();
+    let provided: std::collections::HashSet<&str> =
+        bindings.iter().map(|(k, _)| k.as_str()).collect();
+    for p in &params {
+        if !provided.contains(p) {
+            return Err(err(
+                "apply_expression_template_bindings_mismatch",
+                format!(
+                    "{scope}: apply_expression_template '{name}' missing binding for param '{p}'"
+                ),
+            ));
+        }
+    }
+    for (p, _) in bindings {
+        if !declared.contains(p.as_str()) {
+            return Err(err(
+                "apply_expression_template_bindings_mismatch",
+                format!("{scope}: apply_expression_template '{name}' supplies unknown param '{p}'"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Walk `node` and run [`validate_apply_ref`] on every surviving
+/// `apply_expression_template` reference it carries (esm-spec §9.6.9). Descends
+/// into references' `bindings` too. Mirrors `_check_surviving_refs`.
+fn check_surviving_refs(
+    node: &Sv,
+    named: &Named,
+    scope: &str,
+    seen: &mut PtrSet,
+) -> Result<(), ExpressionTemplateError> {
+    match &**node {
+        SNode::Arr(items) => {
+            if !seen.insert(Rc::as_ptr(node)) {
+                return Ok(());
+            }
+            for c in items {
+                check_surviving_refs(c, named, scope, seen)?;
+            }
+        }
+        SNode::Obj(fields) => {
+            if !seen.insert(Rc::as_ptr(node)) {
+                return Ok(());
+            }
+            if obj_op(fields) == Some(APPLY_OP) {
+                validate_apply_ref(fields, named, scope)?;
+            }
+            for (_, v) in fields {
+                check_surviving_refs(v, named, scope, seen)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3).
@@ -1179,10 +1518,20 @@ fn rewrite_pass(
             let op = obj_op(fields);
             // (1) Outermost-first: fire a rule AT this node before descending.
             if op == Some(APPLY_OP) {
-                *last = APPLY_OP.to_string();
-                let res = expand_apply(fields, ctx.decls, ctx.bodies, scope)?;
-                memo.insert(key, (res.clone(), true, Some(last.clone())));
-                return Ok((res, true));
+                // esm-spec §9.6.4 rule 4 (Option B): the engine treats a
+                // surviving (non-eager) reference as a LEAF — it does not
+                // descend into its `bindings`, no rule fires inside it, and it
+                // survives the fixpoint. Eager references were removed by the
+                // pre-pass; a defensive check keeps any eager node a caller
+                // passed in unexpanded correct.
+                if ref_is_eager(fields, ctx.target_bearing) {
+                    *last = APPLY_OP.to_string();
+                    let res = expand_eager_root(node, ctx.named, ctx.target_bearing, scope)?;
+                    memo.insert(key, (res.clone(), true, Some(last.clone())));
+                    return Ok((res, true));
+                }
+                memo.insert(key, (node.clone(), false, None));
+                return Ok((node.clone(), false));
             }
             for rule in ctx.rules {
                 let mut binds = Binds::new();
@@ -1194,7 +1543,12 @@ fn rewrite_pass(
                     && where_satisfied(&rule.where_c, &binds, ctx.shape_env)
                 {
                     *last = format!("{} (rule '{}')", op.unwrap_or(""), rule.name);
-                    let res = substitute(&rule.body, &binds);
+                    // Instantiate by pure substitution (through nested
+                    // references' `bindings`; `name` is never a site). An eager
+                    // reference introduced by the instantiation expands as part
+                    // of the same rewrite (§9.6.4 rule 4).
+                    let body = substitute(&rule.body, &binds);
+                    let res = expand_eager_root(&body, ctx.named, ctx.target_bearing, scope)?;
                     memo.insert(key, (res.clone(), true, Some(last.clone())));
                     return Ok((res, true));
                 }
@@ -1231,7 +1585,12 @@ fn rewrite_to_fixpoint(
     ctx: &RewriteCtx,
     scope: &str,
 ) -> Result<Sv, ExpressionTemplateError> {
-    let mut current = node.clone();
+    // esm-spec §9.6.4 rule 3 / §7.1 step 5: the eager-expansion pre-pass runs
+    // BEFORE the fixpoint and consumes no `MAX_REWRITE_PASSES` budget. It
+    // removes every eager reference (target-bearing, or T-op in bindings) so
+    // the fixpoint and the later `unlowered_operator` gate walk a tree in which
+    // no rewrite-target op hides inside a surviving reference.
+    let mut current = expand_eager_root(node, ctx.named, ctx.target_bearing, scope)?;
     let mut last = String::new();
     for _ in 0..MAX_REWRITE_PASSES {
         // Fresh memo each pass: a pass's rewrite of a node is pass-local
@@ -1320,33 +1679,86 @@ pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), Expressio
 }
 
 /// A per-component rewrite registry captured during model / reaction-system
-/// lowering and reused by coupling `variable_map` transforms (esm-spec §10.4):
-/// the named-template lookup table, the pre-sorted auto `match` rules (with
-/// their registered `where` constraints), and the static shape environment the
-/// constraints consult.
+/// lowering and reused by coupling `variable_map` transforms (esm-spec §10.4)
+/// and by the reference-aware validators (§9.6.9): the named-template lookup
+/// table (decl nodes as shared DAGs), the pre-sorted auto `match` rules (with
+/// their registered `where` constraints), the static shape environment the
+/// constraints consult, and the per-template target-bearing flags.
 struct CompRegistry {
-    /// Template declarations (params / bindings validation).
-    decls: Map<String, Value>,
-    /// §9.7.3-composed closed bodies as shared DAGs (`Rc` clones — cheap).
-    bodies: std::collections::HashMap<String, Sv>,
+    named: Named,
     rules: Vec<MatchRule>,
     shape_env: std::collections::BTreeMap<String, Vec<String>>,
+    target_bearing: std::collections::HashMap<String, bool>,
 }
 
-/// Run the single load-time rewrite pass (esm-spec §9.6): expand every
-/// `apply_expression_template` op, auto-apply each component's `match` rules in
-/// declaration order, and strip the `expression_templates` blocks. Mutates
-/// `value` in place. This is the format's one structural-substitution engine —
-/// variable substitution, named-template expansion, and PDE-operator / `bc`
-/// lowering all flow through [`rewrite`].
+/// Build the `named` registry (template name → decl object as a shared DAG)
+/// from a component's `expression_templates` block.
+fn build_named(templates: &Map<String, Value>) -> Named {
+    templates
+        .iter()
+        .map(|(n, d)| (n.clone(), to_shared(d)))
+        .collect()
+}
+
+/// True if `value` either declares any non-empty `expression_templates` block
+/// (component-level or top-level) or contains any `apply_expression_template`
+/// op anywhere. Mirrors the Julia reference `_has_template_machinery`.
+fn has_template_machinery(value: &Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    if obj
+        .get("expression_templates")
+        .and_then(|v| v.as_object())
+        .is_some_and(|t| !t.is_empty())
+    {
+        return true;
+    }
+    for compkind in ["models", "reaction_systems"] {
+        if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) {
+            for (_, comp) in comps {
+                if comp
+                    .get("expression_templates")
+                    .and_then(|v| v.as_object())
+                    .is_some_and(|t| !t.is_empty())
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    find_apply_paths(value, "", &mut hits);
+    !hits.is_empty()
+}
+
+/// Run the load-time rewrite pass (esm-spec §9.6, Option B / esm 0.9.0):
+/// eagerly expand target-bearing `apply_expression_template` references,
+/// auto-apply each component's `match` rules to a fixpoint, PRESERVE surviving
+/// (non-eager) references and each component's `expression_templates` block,
+/// and discharge the §9.6.9 reference-aware validators. Mutates `value` in
+/// place. Surviving references denote their expansion ([`expand`]); the
+/// reference-preserving form travels into emit (§9.6.4 rule 5).
 ///
 /// Pre-condition: the input has been schema-validated.
 pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTemplateError> {
     reject_expression_templates_pre_v04(value)?;
 
-    let Some(root) = value.as_object_mut() else {
+    if value.as_object().is_none() {
         return Ok(());
-    };
+    }
+
+    // Fast path: files that neither declare `expression_templates` blocks nor
+    // use any `apply_expression_template` op need no expansion at all. The
+    // §9.6.4 expanded-form validators still apply — the raw tree IS the
+    // expanded form.
+    if !has_template_machinery(value) {
+        validate_geometry_manifolds(value, "")?;
+        validate_makearray_regions(value, "")?;
+        return Ok(());
+    }
+
+    let root = value.as_object_mut().expect("checked object above");
 
     // The consuming document's merged index_sets registry (post-§9.7.5): the
     // namespace `where` shape constraints resolve against at registration
@@ -1358,11 +1770,11 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
         .map(|o| o.keys().cloned().collect())
         .unwrap_or_default();
 
-    // Per-component rewrite registries (templates + ordered match rules + static
-    // shape environment), captured so coupling `variable_map` expression
-    // transforms (esm-spec §10.4) can be rewritten against the RECEIVING
-    // component's registry below. Models are registered first; a reaction
-    // system never overwrites a same-named model.
+    // Per-component rewrite registries, captured so coupling `variable_map`
+    // expression transforms (esm-spec §10.4) can be rewritten against the
+    // RECEIVING component's registry below and the §9.6.9 validators can expand
+    // surviving references per-instantiation. Models are registered first; a
+    // reaction system never overwrites a same-named model.
     let mut registries: std::collections::HashMap<String, CompRegistry> =
         std::collections::HashMap::new();
 
@@ -1376,58 +1788,60 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             };
             let scope_base = format!("{compkind}.{cname}");
             // Static shape environment for `where` constraint evaluation
-            // (esm-spec §9.6.1): declared variable shapes only. Computed before
-            // the templates block is removed (it reads only `variables`).
+            // (esm-spec §9.6.1): declared variable shapes only.
             let shape_env = component_shape_env(comp);
-            // Take the templates block (if any) so we can borrow comp mutably.
-            let templates: Map<String, Value> = match comp.remove("expression_templates") {
-                Some(Value::Object(t)) => t,
-                _ => Map::new(),
-            };
-            // A template-less component has nothing to expand or auto-apply.
-            // Stray `apply_expression_template` nodes (if any) are caught by
-            // the post-pass leftover scan below as `unknown_template`.
-            if templates.is_empty() {
-                continue;
-            }
+            // esm-spec §9.6.4 rule 1 (Option B): DO NOT remove the block — it is
+            // the retained registered registry that emit materializes (rule 5)
+            // and Expand consumes (rule 2). CLONE it to build the registries.
+            let templates: Map<String, Value> = comp
+                .get("expression_templates")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
             validate_templates(&templates, &scope_base)?;
-            // Registration-time body composition (esm-spec §9.7.3): inline
-            // body references to match-less in-scope templates as a
-            // statically-checked acyclic DAG, so every rule body the
-            // fixpoint sees is a closed AST. Composed bodies are shared
-            // DAGs — a referenced body is spliced by reference, never
-            // copied — so a deep multi-reference chain stays linear here.
-            let composed = compose_template_bodies_shared(&templates, &scope_base)?;
-            let rules = collect_match_rules(&templates, &composed.bodies, &iset_names, &scope_base)?;
+            // Registration-time body CHECKING (esm-spec §9.7.3, Option B):
+            // validate the body-reference DAG (acyclic, depth-bounded,
+            // references resolve to match-less templates). Bodies are NOT
+            // inlined — references are preserved (§9.6.4).
+            {
+                let mut chk = templates.clone();
+                compose_template_bodies(&mut chk, &scope_base)?;
+            }
+            let named = build_named(&templates);
+            let rules = collect_match_rules(&templates, &named, &iset_names, &scope_base)?;
+            let target_bearing = template_target_bearing(&named);
             let ctx = RewriteCtx {
-                decls: &templates,
-                bodies: &composed.bodies,
+                named: &named,
                 rules: &rules,
                 shape_env: &shape_env,
+                target_bearing: &target_bearing,
             };
             // Outermost-first, priority-ordered, bounded-fixpoint rewrite per
-            // non-template field (esm-spec §9.6.3): expands
-            // `apply_expression_template` ops AND fires auto `match` rules until
-            // a pass performs zero rewrites (or the pass bound rejects). Each
-            // field is rewritten in the shared representation and materialized
-            // back into the owned document ONCE, only if it changed.
+            // non-template field (esm-spec §9.6.3): fires auto `match` rules and
+            // eagerly expands target-bearing references; NON-eager references
+            // survive (§9.6.4 rule 4). Then call-site checks on surviving
+            // references (§9.6.9): unknown name / bindings mismatch.
             let keys: Vec<String> = comp.keys().cloned().collect();
             for k in keys {
+                if k == "expression_templates" {
+                    continue;
+                }
                 let scope = format!("{scope_base}.{k}");
                 let Some(child) = comp.get(&k) else { continue };
                 let shared = to_shared(child);
                 let rewritten = rewrite_to_fixpoint(&shared, &ctx, &scope)?;
+                check_surviving_refs(&rewritten, &named, &scope, &mut PtrSet::default())?;
                 if !Rc::ptr_eq(&rewritten, &shared) {
                     comp.insert(k, to_value(&rewritten));
                 }
             }
             registries
                 .entry(cname.clone())
-                .or_insert_with(|| CompRegistry {
-                    decls: templates.clone(),
-                    bodies: composed.bodies.clone(),
-                    rules: rules.clone(),
-                    shape_env: shape_env.clone(),
+                .or_insert(CompRegistry {
+                    named,
+                    rules,
+                    shape_env,
+                    target_bearing,
                 });
         }
     }
@@ -1435,12 +1849,7 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
     // Coupling `variable_map` expression transforms (esm-spec §10.4/§10.5):
     // template invocations in a transform expand at load against the template
     // registry of the component that owns the entry's `to` target — the
-    // RECEIVING component, where a regridding library import (§9.7) lives. The
-    // transform is rewritten to fixpoint exactly as a field of that component
-    // would be (named templates + auto `match` rules, §9.6.3). A transform
-    // whose receiving component is absent or template-less is left
-    // unrewritten; any `apply_expression_template` nodes remaining in it are
-    // caught by the leftover scan below.
+    // RECEIVING component, where a regridding library import (§9.7) lives.
     if let Some(Value::Array(entries)) = root.get_mut("coupling") {
         for (idx, entry) in entries.iter_mut().enumerate() {
             let Some(obj) = entry.as_object_mut() else {
@@ -1463,56 +1872,35 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                 continue;
             };
             let ctx = RewriteCtx {
-                decls: &reg.decls,
-                bodies: &reg.bodies,
+                named: &reg.named,
                 rules: &reg.rules,
                 shape_env: &reg.shape_env,
+                target_bearing: &reg.target_bearing,
             };
             let scope = format!("coupling[{idx}].transform");
             let shared = to_shared(&transform);
             let rewritten = rewrite_to_fixpoint(&shared, &ctx, &scope)?;
+            check_surviving_refs(&rewritten, &reg.named, &scope, &mut PtrSet::default())?;
             if !Rc::ptr_eq(&rewritten, &shared) {
                 obj.insert("transform".to_string(), to_value(&rewritten));
             }
         }
     }
 
-    // Residual call sites. The top-level `expression_templates` registry is
-    // EXCLUDED: it is a DECLARATION that survives verbatim (esm-spec §9.6.4 rule
-    // 5), and a template BODY may legitimately carry `apply_expression_template`
-    // nodes referencing other match-less templates — resolved at registration
-    // time as an acyclic DAG (§9.6.3 / §9.7.3), not leftover call sites. Scanning
-    // it would report a template library's own declarations as unexpanded, which
-    // is exactly what happened the moment the registry stopped being deleted.
-    let mut leftover: Vec<String> = Vec::new();
-    match value.as_object() {
-        Some(root) => {
-            for (key, child) in root {
-                if key == "expression_templates" {
-                    continue;
-                }
-                find_apply_paths(child, &format!("/{key}"), &mut leftover);
-            }
-        }
-        None => find_apply_paths(value, "", &mut leftover),
-    }
-    if !leftover.is_empty() {
-        return Err(err(
-            "apply_expression_template_unknown_template",
-            format!(
-                "apply_expression_template ops remain after expansion at: {} \
-                 — likely referenced from a component lacking an expression_templates block",
-                leftover.join(", ")
-            ),
-        ));
-    }
+    // esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
+    // references are the NEW NORMAL. Only UNKNOWN-name / bindings-mismatch
+    // references are errors — already checked per component / per transform by
+    // `check_surviving_refs`. No global "no apply ops remain" gate.
 
-    // Validators run on the expanded form (esm-spec §9.6.4): reject any
-    // geometry-kernel node whose (possibly just-substituted) `manifold` is
-    // outside the closed set, and any makearray region whose folded bound pair
-    // is inverted (stop < start - 1; esm-spec §4.3.2).
-    validate_geometry_manifolds(value, "")?;
+    // Validation discharge (esm-spec §9.6.9): geometry-manifold and
+    // makearray-region checks on the reference-preserving form. The manifold
+    // check is per-instantiation (a `manifold` may be a template param), so it
+    // descends through surviving references' single-instantiation expansions.
+    // Region bounds cannot carry template params, so the makearray check runs
+    // on the reference-preserving tree AND the retained folded template bodies.
+    validate_geometry_manifolds_refaware(value, &registries)?;
     validate_makearray_regions(value, "")?;
+    validate_makearray_regions_in_registries(&registries)?;
 
     Ok(())
 }
@@ -1658,6 +2046,716 @@ pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), Expres
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reference-aware validation discharge (esm-spec §9.6.9, Option B)
+// ---------------------------------------------------------------------------
+
+/// esm-spec §9.6.9: `makearray_region_inverted` is discharged at registration
+/// on the composed, metaparameter-folded template bodies — region bounds cannot
+/// carry template params (they are metaparameter expressions, §9.7.6), so the
+/// check is instantiation-independent. Every retained template body (match and
+/// match-less) is validated directly. Mirrors the Julia reference
+/// `_validate_makearray_regions_in_registries`.
+fn validate_makearray_regions_in_registries(
+    registries: &std::collections::HashMap<String, CompRegistry>,
+) -> Result<(), ExpressionTemplateError> {
+    for reg in registries.values() {
+        for (tname, decl) in &reg.named {
+            let body = decl_body(decl);
+            if matches!(&*body, SNode::Null) {
+                continue;
+            }
+            validate_makearray_regions(
+                &to_value(&body),
+                &format!("expression_templates.{tname}/body"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Which templates can produce a geometry-kernel node (`GEOMETRY_MANIFOLD_OPS`)
+/// — directly in the body or transitively through a referenced template. Only
+/// references to these need per-instantiation manifold validation (§9.6.9).
+/// Mirrors the Julia reference `_template_manifold_bearing`.
+fn template_manifold_bearing(named: &Named) -> std::collections::HashMap<String, bool> {
+    fn direct(node: &Sv, seen: &mut PtrSet) -> bool {
+        match &**node {
+            SNode::Arr(items) => {
+                if !seen.insert(Rc::as_ptr(node)) {
+                    return false;
+                }
+                items.iter().any(|c| direct(c, seen))
+            }
+            SNode::Obj(fields) => {
+                if !seen.insert(Rc::as_ptr(node)) {
+                    return false;
+                }
+                if let Some(op) = obj_op(fields)
+                    && GEOMETRY_MANIFOLD_OPS.contains(&op)
+                {
+                    return true;
+                }
+                fields.iter().any(|(_, v)| direct(v, seen))
+            }
+            _ => false,
+        }
+    }
+    let mut mb: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut inprog: std::collections::HashSet<String> = std::collections::HashSet::new();
+    fn visit(
+        name: &str,
+        named: &Named,
+        mb: &mut std::collections::HashMap<String, bool>,
+        inprog: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        if let Some(v) = mb.get(name) {
+            return *v;
+        }
+        if inprog.contains(name) {
+            return false;
+        }
+        let Some(decl) = named.get(name) else {
+            mb.insert(name.to_string(), false);
+            return false;
+        };
+        inprog.insert(name.to_string());
+        let body = decl_body(decl);
+        let mut res = direct(&body, &mut PtrSet::default());
+        if !res {
+            let mut refs = Vec::new();
+            collect_apply_names_sv(&body, &mut refs, &mut PtrSet::default());
+            for r in refs {
+                if named.contains_key(&r) && visit(&r, named, mb, inprog) {
+                    res = true;
+                    break;
+                }
+            }
+        }
+        inprog.remove(name);
+        mb.insert(name.to_string(), res);
+        res
+    }
+    for n in named.keys() {
+        visit(n, named, &mut mb, &mut inprog);
+    }
+    mb
+}
+
+/// esm-spec §9.6.9: `geometry_manifold_invalid` is discharged per-instantiation
+/// (a `manifold` may be a template param). Direct geometry nodes in the
+/// reference-preserving tree are checked as before; every surviving
+/// `apply_expression_template` reference whose template can produce a geometry
+/// kernel is additionally expanded ONCE and its expansion validated. Mirrors
+/// the Julia reference `_validate_geometry_manifolds_refaware`.
+fn validate_geometry_manifolds_refaware(
+    value: &Value,
+    registries: &std::collections::HashMap<String, CompRegistry>,
+) -> Result<(), ExpressionTemplateError> {
+    // Direct nodes on the reference-preserving tree (skips template blocks and
+    // does not see manifold params hidden behind references).
+    validate_geometry_manifolds(value, "")?;
+    let Some(root) = value.as_object() else {
+        return Ok(());
+    };
+    for compkind in ["models", "reaction_systems"] {
+        let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for (cname, comp) in comps {
+            let Some(comp_obj) = comp.as_object() else {
+                continue;
+            };
+            let Some(reg) = registries.get(cname) else {
+                continue;
+            };
+            let manifold_bearing = template_manifold_bearing(&reg.named);
+            if !manifold_bearing.values().any(|b| *b) {
+                continue; // no geometry: nothing to check
+            }
+            let mut memo = PtrSet::default();
+            for (k, v) in comp_obj {
+                if k == "expression_templates" {
+                    continue;
+                }
+                let shared = to_shared(v);
+                validate_manifolds_in_refs(
+                    &shared,
+                    &reg.named,
+                    &manifold_bearing,
+                    &format!("{compkind}.{cname}.{k}"),
+                    &mut memo,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_manifolds_in_refs(
+    node: &Sv,
+    named: &Named,
+    manifold_bearing: &std::collections::HashMap<String, bool>,
+    path: &str,
+    memo: &mut PtrSet,
+) -> Result<(), ExpressionTemplateError> {
+    match &**node {
+        SNode::Arr(items) => {
+            if !memo.insert(Rc::as_ptr(node)) {
+                return Ok(());
+            }
+            for (i, c) in items.iter().enumerate() {
+                validate_manifolds_in_refs(
+                    c,
+                    named,
+                    manifold_bearing,
+                    &format!("{path}/{i}"),
+                    memo,
+                )?;
+            }
+        }
+        SNode::Obj(fields) => {
+            if !memo.insert(Rc::as_ptr(node)) {
+                return Ok(());
+            }
+            let name = if obj_op(fields) == Some(APPLY_OP) {
+                match obj_get(fields, "name").map(|v| &**v) {
+                    Some(SNode::Str(s)) => s.as_str(),
+                    _ => "",
+                }
+            } else {
+                ""
+            };
+            // Per-instantiation manifold check (§9.6.9): expand ONLY references
+            // whose template can produce a geometry-kernel node.
+            if !name.is_empty() && manifold_bearing.get(name).copied().unwrap_or(false) {
+                let mut expand_memo = PtrMemo::default();
+                if let Ok(expansion) = expand_all(node, named, path, &mut expand_memo) {
+                    let ev = to_value(&expansion);
+                    if let Err(e) = validate_geometry_manifolds(&ev, "") {
+                        if e.code == "geometry_manifold_invalid" {
+                            return Err(err(
+                                "geometry_manifold_invalid",
+                                format!(
+                                    "{path}: instantiation of template '{name}' — {} \
+                                     (esm-spec §9.6.9; per-instantiation manifold check)",
+                                    e.message
+                                ),
+                            ));
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+            for (k, v) in fields {
+                validate_manifolds_in_refs(
+                    v,
+                    named,
+                    manifold_bearing,
+                    &format!("{path}/{k}"),
+                    memo,
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// ===========================================================================
+// `expand` — the public full-expansion function (esm-spec §9.6.4 rule 2)
+// ===========================================================================
+
+/// Fully expand every surviving `apply_expression_template` reference in a
+/// document `value` loaded by [`lower_expression_templates`] (Option B),
+/// producing the Option-A image: every reference replaced by its expansion
+/// (pure substitution to the acyclic fixpoint, §9.6.4 rule 2) and every
+/// per-component `expression_templates` block stripped. Deterministic — the DAG
+/// is acyclic and substitution confluent, so `expand(load(f))` is structurally
+/// equal to the pre-0.9.0 expanded form. Mutates `value` in place. Mirrors the
+/// Julia reference `expand_document` / `Expand`.
+pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
+    let Some(root) = value.as_object_mut() else {
+        return Ok(());
+    };
+
+    // Capture each component's named registry BEFORE stripping the blocks.
+    let mut comp_named: std::collections::HashMap<(String, String), Named> =
+        std::collections::HashMap::new();
+    for compkind in ["models", "reaction_systems"] {
+        if let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) {
+            for (cname, comp) in comps {
+                let named = comp
+                    .get("expression_templates")
+                    .and_then(|v| v.as_object())
+                    .map(build_named)
+                    .unwrap_or_default();
+                comp_named.insert((compkind.to_string(), cname.clone()), named);
+            }
+        }
+    }
+
+    for compkind in ["models", "reaction_systems"] {
+        let Some(Value::Object(comps)) = root.get_mut(compkind) else {
+            continue;
+        };
+        for (cname, comp_value) in comps.iter_mut() {
+            let Value::Object(comp) = comp_value else {
+                continue;
+            };
+            let named = comp_named
+                .get(&(compkind.to_string(), cname.clone()))
+                .cloned()
+                .unwrap_or_default();
+            let scope = format!("{compkind}.{cname}");
+            let keys: Vec<String> = comp.keys().cloned().collect();
+            for k in keys {
+                if k == "expression_templates" || k == "expression_template_imports" {
+                    continue;
+                }
+                let Some(child) = comp.get(&k) else { continue };
+                let shared = to_shared(child);
+                let mut memo = PtrMemo::default();
+                let expanded = expand_all(&shared, &named, &format!("{scope}.{k}"), &mut memo)?;
+                if !Rc::ptr_eq(&expanded, &shared) {
+                    comp.insert(k, to_value(&expanded));
+                }
+            }
+            comp.remove("expression_templates");
+        }
+    }
+
+    if let Some(Value::Array(entries)) = root.get_mut("coupling") {
+        for (idx, entry) in entries.iter_mut().enumerate() {
+            let Some(obj) = entry.as_object_mut() else {
+                continue;
+            };
+            if obj.get("type").and_then(|v| v.as_str()) != Some("variable_map") {
+                continue;
+            }
+            let Some(transform) = obj.get("transform").filter(|t| t.is_object()).cloned() else {
+                continue;
+            };
+            let Some(comp_name) = obj
+                .get("to")
+                .and_then(|v| v.as_str())
+                .map(|t| t.split('.').next().unwrap_or("").to_string())
+            else {
+                continue;
+            };
+            let named = comp_named
+                .get(&("models".to_string(), comp_name.clone()))
+                .or_else(|| comp_named.get(&("reaction_systems".to_string(), comp_name.clone())));
+            let Some(named) = named else { continue };
+            let shared = to_shared(&transform);
+            let mut memo = PtrMemo::default();
+            let expanded =
+                expand_all(&shared, named, &format!("coupling[{idx}].transform"), &mut memo)?;
+            if !Rc::ptr_eq(&expanded, &shared) {
+                obj.insert("transform".to_string(), to_value(&expanded));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ===========================================================================
+// Reference-preserving emit (esm-spec §9.6.4 rule 5, §9.6.7)
+// ===========================================================================
+
+/// The transitive closure of the templates named by `refnames` (surviving-
+/// reference names), following references inside materialized bodies, keeping
+/// only MATCH-LESS entries (match rules are never materialized). Mirrors the
+/// Julia reference `_ref_closure`.
+fn ref_closure(
+    refnames: &std::collections::BTreeSet<String>,
+    named: &Named,
+) -> std::collections::BTreeSet<String> {
+    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut stack: Vec<String> = refnames.iter().cloned().collect();
+    while let Some(n) = stack.pop() {
+        if out.contains(&n) {
+            continue;
+        }
+        let Some(decl) = named.get(&n) else { continue };
+        if decl_has_match(decl) {
+            continue; // match rules not materialized
+        }
+        out.insert(n.clone());
+        let body = decl_body(decl);
+        let mut refs = Vec::new();
+        collect_apply_names_sv(&body, &mut refs, &mut PtrSet::default());
+        for r in refs {
+            stack.push(r);
+        }
+    }
+    out
+}
+
+/// Per-component MATCH-LESS template names authored in-file in `raw_source`
+/// (compkind.cname → ordered names). Emit keeps these verbatim as authored
+/// entries (esm-spec §9.6.4 rule 5). Mirrors `_authored_template_names`.
+fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<String, Vec<String>> {
+    let mut authored: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let Some(root) = raw_source.as_object() else {
+        return authored;
+    };
+    for compkind in ["models", "reaction_systems"] {
+        let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for (cname, comp) in comps {
+            let Some(tpl) = comp.get("expression_templates").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            let mut names = Vec::new();
+            for (n, d) in tpl {
+                if d.as_object().is_some_and(|o| !o.contains_key("match")) {
+                    names.push(n.clone());
+                }
+            }
+            authored.insert(format!("{compkind}.{cname}"), names);
+        }
+    }
+    authored
+}
+
+/// Produce the reference-preserving, self-contained emitted document (esm-spec
+/// §9.6.4 rule 5, RFC out-of-line-expression-templates §7.5) from a source
+/// document `raw_source` (a fixture, or an already-emitted document for the
+/// idempotency property). Resolves + loads `raw_source` under Option B, then for
+/// every component builds its emitted `expression_templates` block — authored
+/// match-less entries first in authored order, then the materialized transitive
+/// closure of its surviving references (match-less), lexicographically sorted —
+/// drops consumed `expression_template_imports`, and version-stamps `esm: 0.9.0`
+/// when any surviving reference or materialized entry remains (rule 8). Mirrors
+/// the Julia reference `emit_document`. `emit_esm_string ∘ emit_document` is a
+/// byte-wise fixed point under reload.
+pub fn emit_document(
+    raw_source: &Value,
+    base_path: &std::path::Path,
+) -> Result<Value, ExpressionTemplateError> {
+    let authored = authored_template_names(raw_source);
+    let resolved = crate::template_imports::resolve_template_machinery(
+        raw_source,
+        base_path,
+        &std::collections::BTreeMap::new(),
+    )?;
+    let mut loaded = resolved.unwrap_or_else(|| raw_source.clone());
+    lower_expression_templates(&mut loaded)?;
+    let Some(root) = loaded.as_object_mut() else {
+        return Ok(loaded);
+    };
+    let mut bump = false;
+
+    for compkind in ["models", "reaction_systems"] {
+        let Some(Value::Object(comps)) = root.get_mut(compkind) else {
+            continue;
+        };
+        for (cname, comp_value) in comps.iter_mut() {
+            let Value::Object(comp) = comp_value else {
+                continue;
+            };
+            let key = format!("{compkind}.{cname}");
+            let named = comp
+                .get("expression_templates")
+                .and_then(|v| v.as_object())
+                .map(build_named)
+                .unwrap_or_default();
+            // Surviving-reference names across every non-template field.
+            let mut refnames: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            for (k, v) in comp.iter() {
+                if k == "expression_templates" || k == "expression_template_imports" {
+                    continue;
+                }
+                let mut names = Vec::new();
+                collect_apply_names(v, &mut names);
+                for n in names {
+                    refnames.insert(n);
+                }
+            }
+            if !refnames.is_empty() {
+                bump = true;
+            }
+            let materialized = ref_closure(&refnames, &named);
+            let authored_here = authored.get(&key).cloned().unwrap_or_default();
+            let authored_set: std::collections::HashSet<&str> =
+                authored_here.iter().map(String::as_str).collect();
+
+            // Authored match-less entries first (authored order), then the
+            // materialized closure minus authored, lexicographically sorted.
+            let mut emit_block = Map::new();
+            for n in &authored_here {
+                if let Some(decl) = comp
+                    .get("expression_templates")
+                    .and_then(|v| v.as_object())
+                    .and_then(|t| t.get(n))
+                {
+                    emit_block.insert(n.clone(), decl.clone());
+                }
+            }
+            for n in &materialized {
+                if authored_set.contains(n.as_str()) {
+                    continue;
+                }
+                if let Some(decl) = comp
+                    .get("expression_templates")
+                    .and_then(|v| v.as_object())
+                    .and_then(|t| t.get(n))
+                {
+                    emit_block.insert(n.clone(), decl.clone());
+                    bump = true;
+                }
+            }
+
+            if emit_block.is_empty() {
+                comp.remove("expression_templates");
+            } else {
+                comp.insert("expression_templates".to_string(), Value::Object(emit_block));
+            }
+            comp.remove("expression_template_imports");
+        }
+    }
+
+    root.remove("expression_template_imports");
+    if bump {
+        root.insert("esm".to_string(), Value::String("0.9.0".to_string()));
+    }
+    Ok(loaded)
+}
+
+// --- Canonical byte writer (2-space indent, keys sorted except the ordered
+//     `expression_templates` block) — the cross-binding byte-identity surface. ---
+
+/// Canonicalize a JSON number to the JSON3-read equivalent the goldens were
+/// generated against: an integral, finite, `i64`-representable float is an
+/// integer literal (JSON3 reads `0.0` as `0`); non-integral floats are kept.
+fn canon_number(n: &serde_json::Number) -> serde_json::Number {
+    if n.is_i64() || n.is_u64() {
+        return n.clone();
+    }
+    if let Some(f) = n.as_f64()
+        && f.is_finite()
+        && f.fract() == 0.0
+        && f >= i64::MIN as f64
+        && f <= i64::MAX as f64
+    {
+        return serde_json::Number::from(f as i64);
+    }
+    n.clone()
+}
+
+/// Write `value` canonically into `out` at nesting `indent`. Object keys are
+/// emitted lexicographically (UTF-8 byte order) EXCEPT the direct entries of an
+/// `expression_templates` object, which preserve their insertion order
+/// (`preserve = true`). Mirrors the Julia reference `_emit_write`.
+fn emit_write(out: &mut String, value: &Value, indent: usize, preserve: bool) {
+    let pad = "  ".repeat(indent);
+    let pad1 = "  ".repeat(indent + 1);
+    match value {
+        Value::Object(map) => {
+            if map.is_empty() {
+                out.push_str("{}");
+                return;
+            }
+            let mut keys: Vec<&String> = map.keys().collect();
+            if !preserve {
+                keys.sort_unstable();
+            }
+            out.push_str("{\n");
+            for (i, k) in keys.iter().enumerate() {
+                out.push_str(&pad1);
+                out.push_str(&serde_json::to_string(k).expect("string key"));
+                out.push_str(": ");
+                let child = map.get(k.as_str()).expect("key present");
+                emit_write(out, child, indent + 1, k.as_str() == "expression_templates");
+                if i + 1 < keys.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad);
+            out.push('}');
+        }
+        Value::Array(items) => {
+            if items.is_empty() {
+                out.push_str("[]");
+                return;
+            }
+            out.push_str("[\n");
+            for (i, v) in items.iter().enumerate() {
+                out.push_str(&pad1);
+                emit_write(out, v, indent + 1, false);
+                if i + 1 < items.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad);
+            out.push(']');
+        }
+        Value::Number(n) => out.push_str(&canon_number(n).to_string()),
+        _ => out.push_str(&serde_json::to_string(value).expect("scalar")),
+    }
+}
+
+/// Canonical byte serialization of an emitted document (esm-spec §9.6.4 rule
+/// 5): 2-space indent, object keys sorted lexicographically EXCEPT the entries
+/// of an `expression_templates` object, which preserve their authored-first /
+/// materialized-sorted order. Trailing newline. The cross-binding byte-identity
+/// surface for the Option-B emitted form and the target of the `emitted.esm`
+/// goldens. Mirrors the Julia reference `emit_esm_string`.
+pub fn emit_esm_string(doc: &Value) -> String {
+    let mut out = String::new();
+    emit_write(&mut out, doc, 0, false);
+    out.push('\n');
+    out
+}
+
+// ===========================================================================
+// Flatten: template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
+// esm-libraries-spec §4.7.5)
+// ===========================================================================
+
+/// Rewrite the `name` of every `apply_expression_template` reference in `value`
+/// according to `rename` (old name → new name), in lockstep with a registry
+/// rename. Mirrors the Julia reference `_rename_apply_refs`.
+fn rename_apply_refs(value: &mut Value, rename: &std::collections::HashMap<String, String>) {
+    match value {
+        Value::Array(items) => {
+            for v in items {
+                rename_apply_refs(v, rename);
+            }
+        }
+        Value::Object(map) => {
+            let is_apply = map.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP);
+            if is_apply
+                && let Some(Value::String(n)) = map.get("name")
+                && let Some(newname) = rename.get(n)
+            {
+                let newname = newname.clone();
+                map.insert("name".to_string(), Value::String(newname));
+            }
+            for (_, v) in map.iter_mut() {
+                rename_apply_refs(v, rename);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
+/// esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
+/// document `loaded`, merge every component's `expression_templates` registry
+/// into a single document-scoped merged registry: deep-equal same-name entries
+/// dedupe at first occurrence; a non-deep-equal same-name collision renames
+/// BOTH entries to `<ComponentPath>.<name>` and rewrites their references in
+/// lockstep. Returns the rewritten document (component reference sites updated,
+/// per-component blocks dropped) and the merged registry (order-preserving).
+/// Mirrors the Julia reference `flatten_template_registries`.
+pub fn flatten_template_registries(loaded: &Value) -> (Value, Map<String, Value>) {
+    let mut root = loaded.clone();
+    // (path, match-less named registry as owned Values), in model then
+    // reaction-system, component-declaration order.
+    let mut comps: Vec<(String, Map<String, Value>)> = Vec::new();
+    if let Some(root_obj) = root.as_object() {
+        for compkind in ["models", "reaction_systems"] {
+            let Some(cs) = root_obj.get(compkind).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for (cname, comp) in cs {
+                let mut named = Map::new();
+                if let Some(tpl) = comp.get("expression_templates").and_then(|v| v.as_object()) {
+                    for (n, d) in tpl {
+                        if d.as_object().is_some_and(|o| o.contains_key("match")) {
+                            continue; // match rules not merged
+                        }
+                        named.insert(n.clone(), d.clone());
+                    }
+                }
+                comps.push((cname.clone(), named));
+            }
+        }
+    }
+
+    // Group each template name across components (preserving first-seen path).
+    let mut byname: Vec<(String, Vec<(String, Value)>)> = Vec::new();
+    for (path, named) in &comps {
+        let mut names: Vec<&String> = named.keys().collect();
+        names.sort_unstable();
+        for n in names {
+            match byname.iter_mut().find(|(k, _)| k == n) {
+                Some((_, occ)) => occ.push((path.clone(), named[n].clone())),
+                None => byname.push((n.clone(), vec![(path.clone(), named[n].clone())])),
+            }
+        }
+    }
+    byname.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut merged: Map<String, Value> = Map::new();
+    // path => (old => new)
+    let mut rename: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
+        std::collections::HashMap::new();
+    for (name, occ) in &byname {
+        let alleq = occ.iter().all(|o| o.1 == occ[0].1);
+        if alleq {
+            merged.insert(name.clone(), occ[0].1.clone()); // deep-equal dedup
+        } else {
+            for (path, decl) in occ {
+                let newname = format!("{path}.{name}");
+                merged.insert(newname.clone(), decl.clone());
+                rename
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(name.clone(), newname);
+            }
+        }
+    }
+
+    // Rewrite reference sites in lockstep (component expression positions and
+    // the carried bodies of the renamed entries), then drop per-component blocks.
+    let paths: Vec<String> = comps.iter().map(|(p, _)| p.clone()).collect();
+    if let Some(root_obj) = root.as_object_mut() {
+        for compkind in ["models", "reaction_systems"] {
+            let Some(Value::Object(cs)) = root_obj.get_mut(compkind) else {
+                continue;
+            };
+            for (cname, comp_value) in cs.iter_mut() {
+                let Value::Object(comp) = comp_value else {
+                    continue;
+                };
+                if let Some(rn) = rename.get(cname) {
+                    let keys: Vec<String> = comp.keys().cloned().collect();
+                    for k in keys {
+                        if k == "expression_templates" {
+                            continue;
+                        }
+                        if let Some(v) = comp.get_mut(&k) {
+                            rename_apply_refs(v, rn);
+                        }
+                    }
+                }
+                comp.remove("expression_templates");
+            }
+        }
+    }
+    // Rewrite nested references inside the renamed merged bodies.
+    for path in &paths {
+        if let Some(rn) = rename.get(path) {
+            for (_, new) in rn.iter() {
+                if let Some(decl) = merged.get_mut(new) {
+                    rename_apply_refs(decl, rn);
+                }
+            }
+        }
+    }
+
+    (root, merged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1702,7 +2800,11 @@ mod tests {
     #[test]
     fn expansion_strips_templates_block_and_replaces_apply_node() {
         let mut v = arrhenius_fixture();
+        // Option B: `arrhenius`'s body is pure evaluable-core, so its reference
+        // SURVIVES load; `expand` produces the Option-A image (block stripped,
+        // reference expanded) that the build path sees.
         lower_expression_templates(&mut v).expect("expansion");
+        expand(&mut v).expect("expand");
         let chem = &v["reaction_systems"]["chem"];
         assert!(chem.get("expression_templates").is_none());
         let rate = &chem["reactions"][0]["rate"];
@@ -1801,6 +2903,7 @@ mod tests {
             }}
         });
         lower_expression_templates(&mut v).expect("expansion");
+        expand(&mut v).expect("expand");
         let chem = &v["reaction_systems"]["chem"];
         assert!(chem.get("expression_templates").is_none());
         let rate = &chem["reactions"][0]["rate"];
@@ -1840,6 +2943,7 @@ mod tests {
             "op": "*", "args": [3, "T"]
         });
         lower_expression_templates(&mut v).expect("expansion");
+        expand(&mut v).expect("expand");
         let rate = &v["reaction_systems"]["chem"]["reactions"][0]["rate"];
         let exp_node = &rate["args"][1];
         assert_eq!(exp_node["op"], json!("exp"));
@@ -1866,6 +2970,7 @@ mod tests {
         let src = std::fs::read_to_string(&fixture_path).expect("read fixture.esm");
         let mut got: Value = serde_json::from_str(&src).expect("parse fixture");
         lower_expression_templates(&mut got).expect("expansion");
+        expand(&mut got).expect("expand");
         let expanded_src = std::fs::read_to_string(&expanded_path).expect("read expanded.esm");
         let want: Value = serde_json::from_str(&expanded_src).expect("parse expanded");
         let got_reactions = &got["reaction_systems"]["chem"]["reactions"];
@@ -1890,6 +2995,7 @@ mod tests {
         let src = std::fs::read_to_string(case.join("fixture.esm")).expect("read fixture.esm");
         let mut got: Value = serde_json::from_str(&src).expect("parse fixture");
         lower_expression_templates(&mut got).expect("expansion");
+        expand(&mut got).expect("expand");
         let expanded_src =
             std::fs::read_to_string(case.join("expanded.esm")).expect("read expanded.esm");
         let want: Value = serde_json::from_str(&expanded_src).expect("parse expanded");
@@ -1955,6 +3061,7 @@ mod tests {
           }
         });
         lower_expression_templates(&mut v).expect("rewrite");
+        expand(&mut v).expect("expand");
         let model = &v["models"]["Diff"];
         assert!(model.get("expression_templates").is_none());
         let rhs = &model["equations"][0]["rhs"];
@@ -2169,6 +3276,7 @@ mod tests {
             "overlap_area",
         );
         lower_expression_templates(&mut v).expect("rewrite");
+        expand(&mut v).expect("expand");
         assert_eq!(
             v["models"]["M"]["variables"]["area"]["expression"],
             json!({"op": "polygon_intersection_area", "manifold": "planar",
@@ -2198,6 +3306,7 @@ mod tests {
             "outer",
         );
         lower_expression_templates(&mut v).expect("rewrite");
+        expand(&mut v).expect("expand");
         assert_eq!(
             v["models"]["M"]["variables"]["area"]["expression"],
             json!({"op": "*", "args": [
@@ -2239,6 +3348,7 @@ mod tests {
             "shadowed",
         );
         lower_expression_templates(&mut v).expect("rewrite");
+        expand(&mut v).expect("expand");
         assert_eq!(
             v["models"]["M"]["variables"]["area"]["expression"]["manifold"],
             json!("spherical")

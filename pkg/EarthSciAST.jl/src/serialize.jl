@@ -1016,6 +1016,25 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
         result["metaparameters"] = file.metaparameters
     end
 
+    # esm-spec §9.6.4 rule 5 (Option B): re-inject each component's MATERIALIZED
+    # `expression_templates` registry so `save(EsmFile)` emits the
+    # reference-preserving form byte-identically to the raw `emit_document` path.
+    # The component's surviving `apply_expression_template` references already
+    # round-tripped through `serialize_expression` (call sites verbatim); these
+    # blocks supply the referenced template bodies (authored-first, then
+    # materialized-lexicographic). Keyed "<compkind>.<cname>".
+    if file.component_templates !== nothing
+        for (key, block) in file.component_templates
+            parts = split(key, "."; limit=2)
+            length(parts) == 2 || continue
+            compkind, cname = String(parts[1]), String(parts[2])
+            haskey(result, compkind) || continue
+            comp = result[compkind]
+            (comp isa AbstractDict && haskey(comp, cname)) || continue
+            comp[cname]["expression_templates"] = block
+        end
+    end
+
     return result
 end
 
@@ -1083,5 +1102,14 @@ Save an EsmFile object to a JSON stream.
 """
 function save(file::EsmFile, io::IO)
     serialized = serialize_esm_file(file)
-    write(io, JSON3.write(serialized, indent=2))
+    if file.component_templates !== nothing
+        # esm-spec §9.6.4 rule 5 (Option B): a document carrying surviving
+        # references / materialized registries emits in the canonical
+        # reference-preserving byte form — keys sorted except the ordered
+        # `expression_templates` blocks — byte-identical to the raw
+        # `emit_document` path. Other documents keep the historical JSON3 form.
+        write(io, emit_esm_string(serialized))
+    else
+        write(io, JSON3.write(serialized, indent=2))
+    end
 end

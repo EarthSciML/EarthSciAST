@@ -343,9 +343,35 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 			}
 			keep[n] = true
 		}
+		// esm-spec §9.7.2 / §9.6.4 rule 5 (Option B): `only` filters the
+		// importer's EXPLICIT visibility, but the kept templates' bodies may
+		// reference other "internal-wiring" templates that resolved in the
+		// target's own scope (a BC rule referencing an interior stencil). With
+		// bodies no longer inlined (§9.7.3), those referenced templates must be
+		// carried along as the transitive reference closure, or the surviving
+		// references would dangle. `only` is respected automatically —
+		// materialization is by reference closure.
+		closure := map[string]bool{}
+		var stack []string
+		for n := range keep {
+			if decl, ok := scope.templates.get(n).(map[string]any); ok {
+				collectApplyNames(&stack, decl["body"])
+			}
+		}
+		for len(stack) > 0 {
+			r := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if keep[r] || closure[r] || !scope.templates.has(r) {
+				continue
+			}
+			closure[r] = true
+			if decl, ok := scope.templates.get(r).(map[string]any); ok {
+				collectApplyNames(&stack, decl["body"])
+			}
+		}
 		filtered := newOrderedMap()
 		for _, n := range scope.templates.keys {
-			if keep[n] {
+			if keep[n] || closure[n] {
 				filtered.set(n, scope.templates.get(n))
 			}
 		}

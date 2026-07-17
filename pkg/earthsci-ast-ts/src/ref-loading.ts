@@ -23,6 +23,7 @@ import type { DataLoader, EsmFile, Model, ReactionSystem, SubsystemRef } from '.
 import {
   EsmMachineryError,
   deepEqual,
+  expandDocument,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
 } from './lower-expression-templates.js'
@@ -427,7 +428,10 @@ function resolveRefDocument(
     validateSchema,
   })
   if (resolved === null) return machineryInput
-  return lowerExpressionTemplates(resolved) as EsmFile
+  // esm-spec §9.6.4 (Option B): lower to the reference-preserving form, then
+  // apply the RFC §7.7 Expand-at-build strategy so the resolved subsystem is
+  // the Option-A expanded image (bit-identical downstream behavior).
+  return expandDocument(lowerExpressionTemplates(resolved)) as EsmFile
 }
 
 /**

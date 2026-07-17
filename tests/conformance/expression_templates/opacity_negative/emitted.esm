@@ -1,0 +1,89 @@
+{
+  "esm": "0.9.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "out-of-line-expression-templates conformance"
+    ],
+    "description": "esm-spec §9.6.4 rule 4 (RFC out-of-line-expression-templates §7.3, §9.2): the pinned pattern-opacity divergence. A high-priority compound rule matches D(*(U,Q)); the use site factors *(U,Q) into the target-free template `flux_prod` and references it. The rewrite engine treats the surviving reference as a LEAF, so the compound pattern MUST NOT match across the reference boundary. No other rule fires, so the spatial D survives lowering (rejected only at build by the unlowered_operator gate).",
+    "name": "opacity_negative"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "U"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "U"
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "expression_templates": {
+        "flux_prod": {
+          "body": {
+            "args": [
+              "u",
+              "w"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "u",
+            "w"
+          ]
+        }
+      },
+      "variables": {
+        "U": {
+          "default": 1.5,
+          "shape": [
+            "x"
+          ],
+          "type": "state",
+          "units": "1"
+        },
+        "flux": {
+          "expression": {
+            "args": [
+              {
+                "args": [],
+                "bindings": {
+                  "u": "U",
+                  "w": "q"
+                },
+                "name": "flux_prod",
+                "op": "apply_expression_template"
+              }
+            ],
+            "op": "D",
+            "wrt": "x"
+          },
+          "type": "observed",
+          "units": "1"
+        },
+        "q": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "state",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

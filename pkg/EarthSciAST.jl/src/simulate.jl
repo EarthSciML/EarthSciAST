@@ -104,9 +104,18 @@ function _prepare_run_doc(input)
         input = load(input; base_path=pwd())
     end
     if input isa EsmFile
-        input = flatten(input)
+        # esm-spec §9.6.4 Option B: the tree-walk FAST PATH carries surviving
+        # `apply_expression_template` references into the FlattenedSystem
+        # (`expand_refs=false`); they are Expanded against the merged
+        # `template_registry` at the build boundary below. Under
+        # `ESS_TEMPLATE_REF_DISABLE=1` load already expanded, so this is a no-op.
+        input = flatten(input; expand_refs=false)
     end
     if input isa FlattenedSystem
+        # Sound per-node `Expand` fallback (RFC §7.7): references that reached the
+        # tree-walk build are expanded here, bit-identically to the Expand-at-load
+        # image (gate d). No-op for a reference-free system.
+        input = expand_flattened_refs(input)
         # Lift a feed-forward algebraic physics chain authored as scalars into the
         # grid shape it inherits from the fields it reads (regrid outputs, loader
         # fields, the spatial state), so a scalar observed that consumes a build-once

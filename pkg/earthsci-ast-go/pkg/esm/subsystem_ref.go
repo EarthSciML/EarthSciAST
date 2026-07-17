@@ -251,6 +251,11 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
 			return err
 		}
+		// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): a mounted subsystem is
+		// inlined into the importing document as a fully-expanded (Option-A
+		// image) component, so its surviving references and per-component
+		// registries are resolved away here.
+		expandDocument(view)
 
 		// esm-spec §4.7: the mounted file's document-scoped index_sets (already
 		// metaparameter-folded) merge into the importing document's registry, so

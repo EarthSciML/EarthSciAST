@@ -25,8 +25,10 @@ from earthsci_ast.esm_types import (
 from earthsci_ast.flatten import FlattenError, flatten
 from earthsci_ast.lower_expression_templates import (
     ExpressionTemplateError,
+    expand_document,
     lower_expression_templates,
 )
+from earthsci_ast.json_walk import APPLY_OP
 from earthsci_ast.parse import _get_schema, _parse_coupling_entry
 
 
@@ -256,7 +258,10 @@ def _template_doc() -> dict:
 
 
 def test_coupling_transform_expands_with_receiving_component_templates():
-    out = lower_expression_templates(_template_doc())
+    # Option B (esm-spec §9.6.4): lower rewrites the transform in the receiving
+    # component's context but PRESERVES references + registries; expand_document
+    # produces the Option-A image (transform fully expanded, block stripped).
+    out = expand_document(lower_expression_templates(_template_doc()))
     assert out["coupling"][0]["transform"] == TRANSFORM_AST
     assert "expression_templates" not in out["models"]["Sink"]
 
@@ -268,15 +273,17 @@ def test_coupling_transform_template_expansion_through_load():
     assert coupling.transform == _transform_expr()
 
 
-def test_coupling_transform_apply_without_receiving_templates_is_leftover():
-    """A transform apply node whose receiving component lacks templates is left
-    unrewritten and caught by the existing leftover-apply diagnostic."""
+def test_coupling_transform_apply_without_receiving_templates_survives():
+    """Option B (esm-spec §9.6.4): the "no apply ops remain" global gate is
+    removed. A transform whose receiving component does not exist (so no registry
+    is in scope) is left UNREWRITTEN and its reference SURVIVES lower — surviving
+    references are the new normal (§9.6.4 rule 1); the dangling `to` is caught
+    downstream by structural validation, not by a leftover-apply gate here."""
     doc = _template_doc()
     # Point the entry at a component that does not exist.
     doc["coupling"][0]["to"] = "Nowhere.F_in"
-    with pytest.raises(ExpressionTemplateError) as excinfo:
-        lower_expression_templates(doc)
-    assert excinfo.value.code == "apply_expression_template_unknown_template"
+    out = lower_expression_templates(doc)  # no error under Option B
+    assert out["coupling"][0]["transform"].get("op") == APPLY_OP
 
 
 # ----------------------------------------------------------------------------

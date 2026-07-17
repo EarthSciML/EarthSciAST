@@ -1,0 +1,89 @@
+{
+  "esm": "0.9.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "out-of-line-expression-templates conformance"
+    ],
+    "description": "esm-spec §9.6.4 rule 4 (RFC out-of-line-expression-templates §7.3, §9.2): the SILENT form of the pattern-opacity divergence. A high-priority (10) compound rule matches D(*(U,Q)); a low-priority (0) generic rule matches D(f). The use site hides *(U,Q) inside the target-free reference `flux_prod`, so the compound rule does NOT fire (reference boundary). The generic rule DOES fire, binding the surviving reference WHOLE via the metavariable f — a silent scheme substitution (first-order marker 1 instead of the monotone marker 999).",
+    "name": "opacity_priority_shadowing"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "U"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "U"
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "expression_templates": {
+        "flux_prod": {
+          "body": {
+            "args": [
+              "u",
+              "w"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "u",
+            "w"
+          ]
+        }
+      },
+      "variables": {
+        "U": {
+          "default": 1.5,
+          "shape": [
+            "x"
+          ],
+          "type": "state",
+          "units": "1"
+        },
+        "flux": {
+          "expression": {
+            "args": [
+              1,
+              {
+                "args": [],
+                "bindings": {
+                  "u": "U",
+                  "w": "q"
+                },
+                "name": "flux_prod",
+                "op": "apply_expression_template"
+              }
+            ],
+            "op": "*"
+          },
+          "type": "observed",
+          "units": "1"
+        },
+        "q": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "state",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

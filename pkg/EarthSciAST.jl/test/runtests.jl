@@ -137,6 +137,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("expression_templates_test.jl")
     include("template_imports_test.jl")
     include("scope_injection_test.jl")
+    include("out_of_line_templates_test.jl")
 
     # ---- Shared fixture sweeps (tests/valid, tests/invalid, tests/display) ----
     # Smoke coverage across the shared fixture tree. Deeper checks live in the

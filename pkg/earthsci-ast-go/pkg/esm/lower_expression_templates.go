@@ -912,13 +912,13 @@ type rewriteMemoEntry struct {
 // and memoized by pointer identity via `memo`, so structural sharing introduced
 // by substituteParams survives every pass instead of being exponentially
 // unshared by rebuild-everything copying.
-func rewritePass(node any, named map[string]any, rules []matchRule, scope string, last *string, shapeEnv map[string][]string, memo rewriteMemo) (any, bool, error) {
+func rewritePass(node any, named map[string]any, rules []matchRule, scope string, last *string, shapeEnv map[string][]string, targetBearing map[string]bool, memo rewriteMemo) (any, bool, error) {
 	switch n := node.(type) {
 	case []any:
 		var out []any
 		changed := false
 		for i, c := range n {
-			nc, ch, err := rewritePass(c, named, rules, scope, last, shapeEnv, memo)
+			nc, ch, err := rewritePass(c, named, rules, scope, last, shapeEnv, targetBearing, memo)
 			if err != nil {
 				return nil, false, err
 			}
@@ -943,13 +943,23 @@ func rewritePass(node any, named map[string]any, rules []matchRule, scope string
 		op, _ := n["op"].(string)
 		// (1) Outermost-first: fire a rule AT this node before descending.
 		if op == applyExpressionTemplateOp {
-			*last = applyExpressionTemplateOp
-			expanded, err := expandApply(n, named, scope)
-			if err != nil {
-				return nil, false, err
+			// esm-spec §9.6.4 rule 4 (Option B): the engine treats a surviving
+			// (non-eager) reference as a LEAF — it does not descend into its
+			// `bindings`, no rule fires inside it, and it survives the fixpoint.
+			// Eager references were already removed by the pre-pass
+			// (expandEager); a defensive check keeps any eager node that a caller
+			// passed in unexpanded correct.
+			if refIsEager(n, targetBearing) {
+				*last = applyExpressionTemplateOp
+				expanded, err := expandEager(n, named, targetBearing, scope)
+				if err != nil {
+					return nil, false, err
+				}
+				memo[key] = rewriteMemoEntry{out: expanded, changed: true}
+				return expanded, true, nil
 			}
-			memo[key] = rewriteMemoEntry{out: expanded, changed: true}
-			return expanded, true, nil
+			memo[key] = rewriteMemoEntry{out: n, changed: false}
+			return n, false, nil
 		}
 		for i := range rules {
 			bindings := map[string]any{}
@@ -960,7 +970,15 @@ func rewritePass(node any, named map[string]any, rules []matchRule, scope string
 			if matchPattern(rules[i].pattern, n, rules[i].params, bindings) &&
 				whereSatisfied(rules[i].whereC, bindings, shapeEnv) {
 				*last = op
+				// Instantiate by pure substitution (through nested references'
+				// `bindings`; `name` is never a site). An eager reference
+				// introduced by the instantiation expands as part of the same
+				// rewrite (§9.6.4 rule 4) via the pre-pass.
 				fired := substituteParams(rules[i].body, bindings)
+				fired, err := expandEager(fired, named, targetBearing, scope)
+				if err != nil {
+					return nil, false, err
+				}
 				memo[key] = rewriteMemoEntry{out: fired, changed: true}
 				return fired, true, nil
 			}
@@ -968,7 +986,7 @@ func rewritePass(node any, named map[string]any, rules []matchRule, scope string
 		// (2) No rule fired here — descend into children.
 		var out map[string]any
 		for k, v := range n {
-			nv, ch, err := rewritePass(v, named, rules, scope, last, shapeEnv, memo)
+			nv, ch, err := rewritePass(v, named, rules, scope, last, shapeEnv, targetBearing, memo)
 			if err != nil {
 				return nil, false, err
 			}
@@ -998,13 +1016,22 @@ func rewritePass(node any, named map[string]any, rules []matchRule, scope string
 // `rewrite_rule_nonterminating` once MaxRewritePasses productive passes have run
 // without converging. This bound — not a static check — is the authoritative
 // termination guard.
-func rewriteToFixpoint(node any, named map[string]any, rules []matchRule, scope string, shapeEnv map[string][]string) (any, error) {
+//
+// esm-spec §9.6.4 rule 3 / RFC §7.1 step 5: the eager-expansion pre-pass runs
+// BEFORE the fixpoint and consumes no MaxRewritePasses budget. It removes every
+// eager reference (target-bearing, or T-op in bindings) so the fixpoint and the
+// later `unlowered_operator` gate walk a tree in which no rewrite-target op
+// hides inside a surviving reference.
+func rewriteToFixpoint(node any, named map[string]any, rules []matchRule, scope string, shapeEnv map[string][]string, targetBearing map[string]bool) (any, error) {
 	last := ""
-	current := node
+	current, err := expandEager(node, named, targetBearing, scope)
+	if err != nil {
+		return nil, err
+	}
 	for pass := 0; pass < MaxRewritePasses; pass++ {
 		// Fresh memo per pass: a node's rewrite result is pass-local (its
 		// children may only reach their final form in a later pass).
-		next, changed, err := rewritePass(current, named, rules, scope, &last, shapeEnv, rewriteMemo{})
+		next, changed, err := rewritePass(current, named, rules, scope, &last, shapeEnv, targetBearing, rewriteMemo{})
 		if err != nil {
 			return nil, err
 		}
@@ -1354,8 +1381,19 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 // which recovers genuine declaration order.
 //
 // Pre-condition: the input has been schema-validated.
+//
+// esm-spec §9.6.4 (Option B): lowering itself PRESERVES surviving
+// `apply_expression_template` references and per-component registries; this
+// entry point then Expands them in place (RFC out-of-line-expression-templates
+// §7.7 Expand-at-build), so callers see the Option-A image (references replaced
+// by their expansion, registries stripped) exactly as before. The
+// reference-preserving form is available via loadOptionB / EmitReferencePreserving.
 func LowerExpressionTemplates(view map[string]any) error {
-	return lowerExpressionTemplatesOrdered(view, nil)
+	if err := lowerExpressionTemplatesOrdered(view, nil); err != nil {
+		return err
+	}
+	expandDocument(view)
+	return nil
 }
 
 // lowerExpressionTemplatesOrdered is LowerExpressionTemplates with an optional
@@ -1394,13 +1432,18 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 	// their RECEIVING component; assign each site up front, the rewrite runs
 	// inside the per-component loop below where that context is in scope.
 	couplingSites := collectCouplingTransformSites(view)
+	// Per-component registries (cname → named), captured so the §9.6.9
+	// validation discharge can run on the reference-preserving form. Models are
+	// registered first; a reaction system never overwrites a same-named model
+	// (mirrors the Julia reference `registries`).
+	registries := map[string]map[string]any{}
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
-		for cname, compRaw := range comps {
-			compObj, ok := compRaw.(map[string]any)
+		for _, cname := range sortedKeys(comps) {
+			compObj, ok := comps[cname].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -1413,10 +1456,10 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 				if err := validateTemplates(tplMap, cscope); err != nil {
 					return err
 				}
-				// Registration-time body composition (esm-spec §9.7.3):
-				// inline body references to match-less in-scope templates as
-				// a statically-checked acyclic DAG, so every rule body the
-				// fixpoint sees is a closed AST.
+				// Registration-time body CHECKING (esm-spec §9.7.3, Option B):
+				// validate the body-reference DAG (acyclic, depth-bounded,
+				// references resolve to match-less templates). Bodies are NOT
+				// inlined — references are preserved (§9.6.4).
 				if err := composeTemplateBodies(tplMap, cscope); err != nil {
 					return err
 				}
@@ -1429,14 +1472,30 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			if err != nil {
 				return err
 			}
-			delete(compObj, "expression_templates")
-			for k, v := range compObj {
+			// Target-bearing flags (esm-spec §9.6.4 rule 3) drive the eager
+			// pre-pass and the surviving-reference leaf semantics.
+			targetBearing := templateTargetBearing(named)
+			// esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
+			// `expression_templates` block — it is the retained registered
+			// registry that emit materializes (§9.6.4 rule 5) and Expand
+			// consumes (§9.6.4 rule 2). Skip it (and any residual imports key)
+			// in the field-rewrite loop.
+			for _, k := range sortedKeys(compObj) {
+				if k == "expression_templates" || k == "expression_template_imports" {
+					continue
+				}
 				scope := fmt.Sprintf("%s.%s.%s", kind, cname, k)
-				rewritten, err := rewriteToFixpoint(v, named, rules, scope, shapeEnv)
+				rewritten, err := rewriteToFixpoint(compObj[k], named, rules, scope, shapeEnv, targetBearing)
 				if err != nil {
 					return err
 				}
 				compObj[k] = rewritten
+				// Call-site checks on surviving references (§9.6.9): unknown
+				// name / bindings mismatch. Known surviving references are the
+				// new normal (Option B) — no longer an error.
+				if err := checkSurvivingRefs(compObj[k], named, scope); err != nil {
+					return err
+				}
 			}
 			// Expression transforms of variable_map coupling entries whose
 			// receiving component is this one rewrite to fixpoint with the
@@ -1445,36 +1504,38 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			if len(named) > 0 || len(rules) > 0 {
 				for _, site := range couplingSites[[2]string{kind, cname}] {
 					scope := fmt.Sprintf("coupling[%d].transform", site.idx)
-					rewritten, err := rewriteToFixpoint(site.entry["transform"], named, rules, scope, shapeEnv)
+					rewritten, err := rewriteToFixpoint(site.entry["transform"], named, rules, scope, shapeEnv, targetBearing)
 					if err != nil {
 						return err
 					}
 					site.entry["transform"] = rewritten
+					if err := checkSurvivingRefs(rewritten, named, scope); err != nil {
+						return err
+					}
 				}
+			}
+			if _, dup := registries[cname]; !dup {
+				registries[cname] = named
 			}
 		}
 	}
-	// Presence probe first (pointer-memoized, cheap over a shared DAG); the
-	// full path enumeration — potentially expensive — runs only on the error
-	// path, where its output (and the diagnostic bytes) is unchanged: leftover
-	// applies live only in never-rewritten regions, which come straight from
-	// the parsed JSON and are therefore unshared trees.
-	if containsApplyOp(view) {
-		leftover := []string{}
-		findApplyPaths(view, "", &leftover)
-		return newETErr(
-			"apply_expression_template_unknown_template",
-			fmt.Sprintf("apply_expression_template ops remain after expansion at: %s — likely referenced from a component lacking an expression_templates block", strings.Join(leftover, ", ")),
-		)
-	}
-	// Validators run on the expanded form (esm-spec §9.6.4): reject any
-	// geometry-kernel node whose (possibly just-substituted) `manifold` is
-	// outside the closed set, and any makearray region whose folded bound pair
-	// is inverted (stop < start - 1; esm-spec §4.3.2).
-	if err := validateGeometryManifolds(view, ""); err != nil {
+	// esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
+	// references are the NEW NORMAL. Only unknown-name / bindings-mismatch
+	// references are errors — already checked per component / per transform by
+	// checkSurvivingRefs. No global "no apply ops remain" gate.
+	//
+	// Validation discharge (esm-spec §9.6.9): the geometry-manifold check is
+	// per-instantiation (a `manifold` may be a template param), so it descends
+	// through surviving references' single-instantiation expansions, memoized.
+	// Region bounds cannot carry template params, so the makearray check runs
+	// on the reference-preserving tree AND the retained folded template bodies.
+	if err := validateGeometryManifoldsRefaware(view, registries); err != nil {
 		return err
 	}
-	return validateMakearrayRegions(view, "")
+	if err := validateMakearrayRegions(view, ""); err != nil {
+		return err
+	}
+	return validateMakearrayRegionsInRegistries(registries)
 }
 
 func stripExpressionTemplates(view map[string]any) {
@@ -1510,6 +1571,9 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
 		return "", err
 	}
+	// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): the typed load path sees the
+	// Option-A image so downstream numeric behavior stays bit-identical.
+	expandDocument(view)
 	out, err := json.Marshal(view)
 	if err != nil {
 		return "", fmt.Errorf("apply_expression_template pass: re-marshal: %w", err)
@@ -1549,6 +1613,10 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
 		return "", err
 	}
+	// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): the raw §9.7 pipeline emits the
+	// Option-A image (references replaced by their expansion, registries
+	// stripped) so external conformance runners reproduce the expanded goldens.
+	expandDocument(view)
 	out, err := json.Marshal(view)
 	if err != nil {
 		return "", fmt.Errorf("template resolution pass: re-marshal: %w", err)

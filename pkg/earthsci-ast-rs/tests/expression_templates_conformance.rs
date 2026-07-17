@@ -9,7 +9,7 @@
 //! byte-identical fixpoint (or the same rejection).
 
 use earthsci_ast::lower_expression_templates::{
-    ExpressionTemplateError, lower_expression_templates,
+    ExpressionTemplateError, expand, lower_expression_templates,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -21,11 +21,15 @@ fn conf(fixture: &str) -> PathBuf {
     common::repo_fixture("conformance/expression_templates").join(fixture)
 }
 
-/// Parse `fixture.esm` and run the load-time rewrite engine to a fixpoint.
+/// Parse `fixture.esm`, run the Option-B load-time rewrite engine to a
+/// fixpoint, then `expand` the surviving references to the Option-A image
+/// (RFC out-of-line-expression-templates §7.7 Expand-at-build) — every fixture
+/// here is pinned against its `expanded*.esm` golden, the bridge oracle.
 fn lower_fixture(fixture: &str) -> Result<Value, ExpressionTemplateError> {
     let src = std::fs::read_to_string(conf(fixture).join("fixture.esm")).expect("read fixture.esm");
     let mut value: Value = serde_json::from_str(&src).expect("parse fixture.esm");
     lower_expression_templates(&mut value)?;
+    expand(&mut value)?;
     Ok(value)
 }
 

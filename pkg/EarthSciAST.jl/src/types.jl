@@ -1430,6 +1430,18 @@ struct EsmFile
     expression_templates::Union{Dict{String,Any},Nothing}
     metaparameters::Union{Dict{String,Any},Nothing}
 
+    # Per-component MATERIALIZED template registries (esm-spec §9.6.4 rule 5,
+    # Option B reference-preserving round-trip). Keyed by "<compkind>.<cname>"
+    # (e.g. "models.Advection"), each value is the emitted `expression_templates`
+    # block a component's surviving `apply_expression_template` references
+    # materialize into — authored entries first, then the reference closure. The
+    # component's equations/variables carry the surviving references as typed
+    # `apply_expression_template` `OpExpr`s; `serialize_esm_file` re-injects these
+    # blocks so `save(EsmFile)` emits the reference-preserving form byte-identically
+    # to `emit_document`. `nothing` under `ESS_TEMPLATE_REF_DISABLE=1` (Expand at
+    # load) or for a document with no surviving references.
+    component_templates::Union{Dict{String,Any},Nothing}
+
     # Constructor with optional parameters
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
@@ -1441,11 +1453,12 @@ struct EsmFile
             function_tables=nothing,
             index_sets=Dict{String,IndexSet}(),
             expression_templates=nothing,
-            metaparameters=nothing) =
+            metaparameters=nothing,
+            component_templates=nothing) =
         new(esm, metadata, models, reaction_systems, data_loaders,
             coupling, domain, enums, function_tables,
             Dict{String,IndexSet}(index_sets),
-            expression_templates, metaparameters)
+            expression_templates, metaparameters, component_templates)
 end
 
 # ========================================

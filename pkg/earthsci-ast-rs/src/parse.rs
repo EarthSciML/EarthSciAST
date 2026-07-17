@@ -177,11 +177,19 @@ pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFil
     // cross-language conformance agrees.
     validate_structural_json(&json_value)?;
 
-    // Expand `apply_expression_template` ops at load time (esm-spec §9.6 /
-    // docs/rfcs/ast-expression-templates.md). After this pass the JSON tree
-    // has no apply_expression_template nodes and no expression_templates
-    // blocks — typed structs see only normal Expression ASTs.
+    // Lower `apply_expression_template` ops at load time (esm-spec §9.6.4
+    // Option B, RFC out-of-line-expression-templates). This pass now PRESERVES
+    // surviving (non-eager) references and each component's
+    // `expression_templates` block (they travel into emit, §9.6.4 rule 5).
     crate::lower_expression_templates::lower_expression_templates(&mut json_value)
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
+    // The typed IR / build path (simulate, flatten, graph, …) is Expand-at-build
+    // (RFC out-of-line-expression-templates §7.7): expand every surviving
+    // reference here so downstream consumers see the fully expanded Option-A
+    // image — numeric results stay bit-identical, and the typed structs never
+    // see an `apply_expression_template` node or an `expression_templates` block.
+    crate::lower_expression_templates::expand(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Lower `enum`-op nodes to `const` integers using the file's `enums`

@@ -19,6 +19,7 @@ import pytest
 
 from earthsci_ast.lower_expression_templates import (
     ExpressionTemplateError,
+    expand_document,
     lower_expression_templates,
 )
 from earthsci_ast.parse import SchemaValidationError, load
@@ -41,11 +42,14 @@ def _read_json(path: str) -> dict:
 
 
 def _expand_raw(path: str) -> dict:
-    """The raw §9.7 pipeline (resolve → lower), mirroring the Julia golden
-    generator ``scripts/generate-template-import-goldens.jl``."""
+    """The raw §9.7 pipeline (resolve → lower → Expand), mirroring the Julia
+    golden generator. Under Option B (esm-spec §9.6.4) ``lower`` preserves
+    references + registries; ``expand_document`` produces the Option-A image the
+    ``expanded*.esm`` goldens pin (RFC out-of-line-expression-templates §12
+    gate 1)."""
     raw = _read_json(path)
     resolved = resolve_template_machinery(raw, os.path.dirname(path))
-    return lower_expression_templates(resolved if resolved is not None else raw)
+    return expand_document(lower_expression_templates(resolved if resolved is not None else raw))
 
 
 def _err_code(fn) -> str | None:
@@ -347,8 +351,11 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
             }
         )
     )
-    # t_keep's body reference to t_inner resolved in the LIBRARY's own scope,
-    # so importing only t_keep still yields 2 * 7.
+    # esm-spec §9.6.4 Option B: t_keep's body reference to t_inner resolved in
+    # the LIBRARY's own scope. Bodies are no longer inlined (§9.7.3), so
+    # importing `only: [t_keep]` carries the internal-wiring reference-closure
+    # (t_inner) along and the reference SURVIVES; Expand yields 2 * 7 (the
+    # Option-A image, §9.6.4 rule 2).
     p = tmp_path / "m.esm"
     p.write_text(
         _model_json('\n"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],')
@@ -356,8 +363,21 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
     raw = json.loads(p.read_text())
     resolved = resolve_template_machinery(raw, str(tmp_path))
     tpl = resolved["models"]["M"]["expression_templates"]
-    assert list(tpl.keys()) == ["t_keep"]
-    assert tpl["t_keep"]["body"] == {"op": "*", "args": [2, 7]}
+    # t_keep kept explicitly; t_inner carried by the reference closure;
+    # t_drop (unreferenced, filtered) is gone.
+    assert set(tpl.keys()) == {"t_keep", "t_inner"}
+    assert tpl["t_keep"]["body"] == {
+        "op": "*",
+        "args": [
+            2,
+            {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}},
+        ],
+    }
+    assert tpl["t_inner"]["body"] == 7
+    # The surviving reference expands to the inlined value (2 * 7).
+    from earthsci_ast.lower_expression_templates import _expand_all
+
+    assert _expand_all(tpl["t_keep"]["body"], tpl, "only-closure") == {"op": "*", "args": [2, 7]}
     # Referencing a filtered-out name from an expression position fails.
     p2 = tmp_path / "m2.esm"
     p2.write_text(
@@ -629,7 +649,10 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
             }
         },
     }
-    out = lower_expression_templates(copy.deepcopy(doc))
+    # esm-spec §9.6.4 Option B: the 3-deep local chain is CHECKED (acyclic,
+    # depth-bounded) but NOT inlined; the references survive lower and Expand
+    # denotes the fully-inlined value (§9.6.4 rule 2).
+    out = expand_document(lower_expression_templates(copy.deepcopy(doc)))
     assert out["models"]["M"]["variables"]["y"]["expression"] == {
         "op": "+",
         "args": [1, {"op": "+", "args": [2, 3]}],
@@ -646,13 +669,11 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
     )
 
 
-def test_cross_file_chains_do_not_accumulate_depth(tmp_path):
-    """The 32-template depth bound applies per composition scope: an imported
-    library's bodies arrive already CLOSED (composed in the library's own
-    scope, §9.7.3), so they count as depth-1 leaves in the importer — a
-    32-deep chain in a library plus a consumer template referencing its head
-    is legal, not a 33-deep chain."""
-    lib = _chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)
+def _chainlib_consumer(tmp_path, chain_len):
+    """A consumer whose local `uses_head` template references the head of an
+    imported `chain_len`-deep library chain (uninlined under Option B)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    lib = _chain_doc(chain_len)
     lib_doc = {
         "esm": "0.8.0",
         "metadata": {"name": "chainlib"},
@@ -668,8 +689,27 @@ def test_cross_file_chains_do_not_accumulate_depth(tmp_path):
             '"name": "c_01", "bindings": {}}}},'
         )
     )
-    f = load(str(consumer))  # must not raise template_body_expansion_too_deep
+    return str(consumer)
+
+
+def test_cross_file_chains_accumulate_depth_under_option_b(tmp_path):
+    """esm-spec §9.6.4 Option B: with bodies NO LONGER inlined (§9.7.3
+    check-only), an imported library's chain does NOT arrive closed — its
+    references are preserved, so the §9.7.3 depth check in the CONSUMING scope
+    spans the full cross-file chain. A consumer template referencing the head of
+    a 31-deep library chain composes to depth 32 (accepted); referencing the
+    head of a 32-deep chain composes to depth 33 and is rejected with
+    `template_body_expansion_too_deep`. (This inverts the pre-0.9.0 Option-A
+    behavior, where inlined-closed library bodies counted as depth-1 leaves; the
+    Julia reference dropped the old assertion for the same reason.)"""
+    # 31-deep library + head reference = 32 templates on the chain → accepted.
+    f = load(_chainlib_consumer(tmp_path / "ok", MAX_TEMPLATE_EXPANSION_DEPTH - 1))
     assert "M" in f.models
+    # 32-deep library + head reference = 33 → rejected in the consuming scope.
+    assert (
+        _err_code(lambda: load(_chainlib_consumer(tmp_path / "bad", MAX_TEMPLATE_EXPANSION_DEPTH)))
+        == "template_body_expansion_too_deep"
+    )
 
 
 def test_effective_order_beats_sorted_name_order(tmp_path):
@@ -819,7 +859,9 @@ def test_zero_parameter_templates_are_legal():
             "bindings": {},
         },
     }
-    out = lower_expression_templates(doc)
+    # Option B: `two` is target-free → the reference survives lower; Expand
+    # yields the Option-A constant image.
+    out = expand_document(lower_expression_templates(doc))
     assert out["models"]["M"]["variables"]["y"]["expression"] == 2
 
 

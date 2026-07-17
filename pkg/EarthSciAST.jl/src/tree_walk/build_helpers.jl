@@ -7,6 +7,21 @@
 # ========================================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BUILD-TIME BENCHMARK COUNTERS (RFC out-of-line-expression-templates §12).
+#
+# The RFC's headline metric is "node-lowerings" — distinct objects `_compile`
+# lowers — and "spine templates" — `_build_branch_template` calls. These two
+# `Ref`s let a benchmark script (`scripts/bench-out-of-line.jl`) count them
+# without a bespoke instrument. OFF by default: `_BENCH_ON[]` is a single Ref
+# read per call on the COLD build path (never per RHS evaluation), so the effect
+# on a normal build is negligible and on a normal solve is zero. A benchmark
+# sets `_BENCH_ON[] = true`, zeroes the counters, builds, and reads them back.
+const _BENCH_ON = Ref(false)
+const _BENCH_COMPILE_CALLS = Ref(0)
+const _BENCH_BRANCH_TEMPLATES = Ref(0)
+_bench_reset!() = (_BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0; nothing)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SHARED READ-ONLY `_EMPTY_*` SENTINELS — invariant: NEVER MUTATED.
 #
 # The `_EMPTY_*` constants scattered through this evaluator

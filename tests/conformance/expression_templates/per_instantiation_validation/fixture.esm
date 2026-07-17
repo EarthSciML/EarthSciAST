@@ -1,0 +1,39 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "per_instantiation_validation",
+    "description": "esm-spec §9.6.9 (RFC out-of-line-expression-templates §8, §9.2): a `manifold`-param template referenced at TWO call sites. `geometry_manifold_invalid` is discharged per-instantiation on the reference-preserving form: the first call site (manifold=spherical) is admissible, the second (manifold=bogus) is not. The offending call site is named in the diagnostic. INVALID fixture — load MUST reject.",
+    "authors": ["out-of-line-expression-templates conformance"]
+  },
+  "models": {
+    "m": {
+      "expression_templates": {
+        "overlap": {
+          "params": ["a", "b", "man"],
+          "body": {
+            "op": "polygon_intersection_area", "manifold": "man", "args": ["a", "b"]
+          }
+        }
+      },
+      "variables": {
+        "pa": { "type": "parameter", "units": "1", "default": 1.0 },
+        "pb": { "type": "parameter", "units": "1", "default": 1.0 },
+        "area_ok": {
+          "type": "observed", "units": "1",
+          "expression": {
+            "op": "apply_expression_template", "args": [], "name": "overlap",
+            "bindings": { "a": "pa", "b": "pb", "man": "spherical" }
+          }
+        },
+        "area_bad": {
+          "type": "observed", "units": "1",
+          "expression": {
+            "op": "apply_expression_template", "args": [], "name": "overlap",
+            "bindings": { "a": "pa", "b": "pb", "man": "bogus" }
+          }
+        }
+      },
+      "equations": []
+    }
+  }
+}
