@@ -779,10 +779,20 @@ struct _OopAccPlan
     # false on the whole parent.
     subs::Vector{_AccKernel}
     sub_plans::Vector{_OopAccPlan}
+    # Variable-valence reduction (`_NK_REDUCE` + `_VarBound`/`_FixedBound`,
+    # `_AK_STATE_INDIRECT[_COL]` / `_AK_CONST_EDGE`), CSR-segmented (gordian
+    # reduce-vectorize): `red_seg` is the row-pointer vector (length N+1, so cell
+    # `c`'s neighbour entries are `red_seg[c]:red_seg[c+1]-1` in the flat E-lane
+    # buffers), and `red_plan[1]` is the body's descriptor plan resolved at E-lane
+    # (per-entry `(c,n)`) granularity. Empty ⇒ this kernel carries no reduce. The
+    # E-lane gather is the ONLY state access; the segment fold runs on the gathered
+    # host buffer in child (CSR) order — bit-identical to `_eval_acc`'s seeded fold.
+    red_seg::Vector{Int}
+    red_plan::Vector{_OopAccPlan}
 end
 const _OOP_ACC_FALLBACK =
     _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[],
-                _AccKernel[], _OopAccPlan[])
+                _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[])
 
 # Identity lookup of a sub-kernel in the parent plan's flat transitive list.
 @inline function _oop_sub_index(subs::Vector{_AccKernel}, S::_AccKernel)
@@ -824,18 +834,38 @@ function _oop_acc_lanes(cs::_CellSet)
     return out, m1, m2, m3
 end
 
-# Can the whole spine (plus CSE recipes) evaluate as lane vectors? Declines the
-# n-indexed descriptors and reductions; a `_NK_CACHED` must resolve to THIS
-# kernel's scratch tiers. (Ghost-bearing STATE_TBL_BOX no longer declines —
-# gordian total-vectorize closed it via gather-then-select; the sub-kernel class
-# no longer declines either — gordian subcall-vectorize evaluates each template
-# body as its own whole-array op over the parent lanes, see `_oop_run_acc_vec`.
-# The variable-valence reduction / indirect gather (`_NK_REDUCE`,
-# `_AK_STATE_INDIRECT[_COL]`, `_AK_CONST_EDGE`) is the last remaining decline — a
-# latent IR capability with no production builder, see the header.)
-function _oop_acc_vecable(n::_Node, K::_AccKernel)
+# The descriptor kinds the E-lane (in-reduce) plan builder can resolve per entry
+# `(c,n)`. The n-indexed kinds (`_AK_STATE_INDIRECT[_COL]`, `_AK_CONST_EDGE`) are
+# ONLY meaningful inside a reduce; the affine/cell/invariant kinds broadcast a
+# cell value across the cell's segment. Box/forcing/tbl kinds are left to the
+# per-cell fallback (they need a per-entry `midx` the CSR layout does not carry).
+@inline _oop_reduce_desc_ok(ak::UInt8) =
+    ak === _AK_STATE_AFFINE || ak === _AK_STATE_INDIRECT ||
+    ak === _AK_STATE_INDIRECT_COL || ak === _AK_CONST_EDGE ||
+    ak === _AK_CONST_CELL || ak === _AK_CONST_AFFINE ||
+    ak === _AK_SCALAR || ak === _AK_STATE_FIXED || ak === _AK_ARR_FIXED ||
+    ak === _AK_LOOP_IDX
+
+# Can the whole spine (plus CSE recipes) evaluate as lane vectors? A `_NK_CACHED`
+# must resolve to THIS kernel's scratch tiers. (Ghost-bearing STATE_TBL_BOX no
+# longer declines — gordian total-vectorize closed it via gather-then-select; the
+# sub-kernel class no longer declines — gordian subcall-vectorize evaluates each
+# template body as its own whole-array op over the parent lanes; a variable-valence
+# reduction no longer declines — gordian reduce-vectorize evaluates the body over a
+# flat CSR gather and folds each segment in child order, see `_oop_run_acc_vec`.)
+# `in_reduce` permits the n-indexed descriptors that only make sense inside a fold.
+_oop_acc_vecable(n::_Node, K::_AccKernel) = _oop_acc_vecable(n, K, false)
+function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
     k = n.kind
-    k === _NK_REDUCE && return false
+    if k === _NK_REDUCE
+        # A reduce vectorizes as a CSR segment fold iff its OUTPUT set is
+        # contiguous (so cell ordinal == out slot == lane, the only layout a
+        # variable-valence unstructured reduction ever has) and its body's
+        # descriptors are all E-lane resolvable. Nested reduces are not modelled.
+        in_reduce && return false
+        _is_contig(K.cells) || return false
+        return _oop_acc_vecable(n.children[1], K, true)
+    end
     if k === _NK_SUBCALL
         # A template-body sub-kernel vectorizes iff its OWN spine + CSE recipes do
         # (checked against the SUB's descriptor table — a sub's `_NK_CACHED`
@@ -850,8 +880,14 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
     if k === _NK_ACCESS
         a = K.acc[n.idx]
         ak = a.kind
-        (ak === _AK_CONST_EDGE || ak === _AK_STATE_INDIRECT ||
-         ak === _AK_STATE_INDIRECT_COL) && return false
+        if ak === _AK_CONST_EDGE || ak === _AK_STATE_INDIRECT ||
+           ak === _AK_STATE_INDIRECT_COL
+            # n-indexed: only resolvable inside a CSR segment fold.
+            return in_reduce && _oop_reduce_desc_ok(ak)
+        end
+        # Inside a reduce, restrict to the E-lane-resolvable kinds (box/forcing/tbl
+        # need a per-entry midx the CSR layout omits — keep the per-cell fallback).
+        in_reduce && !_oop_reduce_desc_ok(ak) && return false
         # An unstructured slot-table gather vectorizes as a plain precomputed
         # gather (gather-of-gather resolved host-side). A ghost slot (0) in the
         # table also vectorizes (gordian total-vectorize): gather at a SAFE index
@@ -864,7 +900,7 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
     elseif k === _NK_CACHED
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
-    return all(c -> _oop_acc_vecable(c, K), n.children)
+    return all(c -> _oop_acc_vecable(c, K, in_reduce), n.children)
 end
 
 # Build observability (parallels `_CASCADE_TALLY`): why did an acc kernel decline
@@ -888,7 +924,10 @@ function _oop_decline_reason(K::_AccKernel)
 end
 function _oop_decline_walk(n::_Node, K::_AccKernel)
     k = n.kind
-    k === _NK_REDUCE && return :reduce
+    if k === _NK_REDUCE
+        _is_contig(K.cells) || return :reduce_noncontig
+        return _oop_decline_walk(n.children[1], K)   # report the real blocker in the body
+    end
     if k === _NK_SUBCALL
         S = n.payload::_AccKernel
         r = _oop_decline_walk(S.spine, S); r === :ok || return r
@@ -972,6 +1011,94 @@ function _build_oop_desc_vectors(acc::Vector{_AccDesc},
     return gathers, consts, forc, ghost
 end
 
+# CSR row pointers + per-entry (cell, neighbour) tables for a variable-valence
+# reduction. Cell `c`'s neighbour entries occupy the flat range
+# `seg_off[c]:seg_off[c+1]-1`, in ascending `n` (= child) order — so a per-segment
+# fold over the flat E-lane body buffer reproduces `_eval_acc`'s seeded child-order
+# sum exactly. `N` is the cell count (== lane count for a contiguous set).
+function _oop_reduce_segments(K::_AccKernel, N::Int)
+    seg_off = Vector{Int}(undef, N + 1)
+    seg_off[1] = 1
+    @inbounds for c in 1:N
+        seg_off[c+1] = seg_off[c] + _nbrcount(K.bound, c)
+    end
+    E = seg_off[N+1] - 1
+    seg_cell = Vector{Int}(undef, E)
+    seg_n    = Vector{Int}(undef, E)
+    @inbounds for c in 1:N
+        base = seg_off[c] - 1
+        for n in 1:_nbrcount(K.bound, c)
+            seg_cell[base+n] = c
+            seg_n[base+n]    = n
+        end
+    end
+    return seg_off, seg_cell, seg_n
+end
+
+# The E-lane (in-reduce) descriptor plan: one value per flat entry `e = (c, n)`.
+# The n-indexed kinds resolve per entry; cell/affine/invariant kinds broadcast a
+# cell value across the cell's whole segment (matching `_fetch`, which is n-blind
+# for them). `out[c]` is cell `c`'s output slot (== c for the contiguous set a
+# reduce always has). Only the state kinds produce a `gathers` vector (the sole
+# state access, whole-array); everything else is frozen `consts`.
+function _build_oop_reduce_desc_vectors(acc::Vector{_AccDesc}, seg_cell::Vector{Int},
+                                        seg_n::Vector{Int}, out::Vector{Int})
+    E = length(seg_cell)
+    nacc = length(acc)
+    gathers = [Int[] for _ in 1:nacc]
+    consts  = [Float64[] for _ in 1:nacc]
+    for (i, a) in enumerate(acc)
+        k = a.kind
+        if k === _AK_STATE_AFFINE
+            gathers[i] = Int[@inbounds out[seg_cell[e]] + a.delta for e in 1:E]
+        elseif k === _AK_STATE_INDIRECT
+            gathers[i] = Int[@inbounds a.conn[(seg_cell[e]-1)*a.width + seg_n[e]] for e in 1:E]
+        elseif k === _AK_STATE_INDIRECT_COL
+            gathers[i] = Int[@inbounds a.conn[(seg_cell[e]-1)*a.width + a.col] for e in 1:E]
+        elseif k === _AK_CONST_EDGE
+            consts[i] = Float64[@inbounds a.arr[(seg_cell[e]-1)*a.width + seg_n[e]] for e in 1:E]
+        elseif k === _AK_CONST_CELL
+            consts[i] = Float64[@inbounds a.arr[seg_cell[e]] for e in 1:E]   # c == oln (contiguous)
+        elseif k === _AK_CONST_AFFINE
+            consts[i] = Float64[@inbounds a.arr[out[seg_cell[e]] + a.delta] for e in 1:E]
+        elseif k === _AK_LOOP_IDX
+            # contiguous reduce: midx == (c, 1, 1); dim 1 → c, higher dims → 1.
+            consts[i] = a.dim === 1 ? Float64[Float64(seg_cell[e]) for e in 1:E] : fill(1.0, E)
+        end
+        # SCALAR / STATE_FIXED / ARR_FIXED: read directly by the walker (scalars,
+        # broadcast over the segment). Box/forcing/tbl kinds were declined upstream.
+    end
+    return gathers, consts
+end
+
+# Fold each cell's flat segment of the body buffer, seeded from `zerobar`, in
+# ascending (child) order — the byte-for-byte `_NK_REDUCE` sum. `bodyE` is a
+# length-E vector (a body with a per-neighbour descriptor) or a bare scalar (a
+# body that hoisted lane-invariant); both fold identically.
+function _oop_reduce_fold(bodyE, seg::Vector{Int}, zerobar::Float64, ::Type{T}) where {T}
+    N = length(seg) - 1
+    res = Vector{T}(undef, N)
+    z = convert(T, zerobar)
+    if bodyE isa AbstractArray
+        @inbounds for c in 1:N
+            s = z
+            for e in seg[c]:(seg[c+1]-1)
+                s += bodyE[e]
+            end
+            res[c] = s
+        end
+    else
+        @inbounds for c in 1:N
+            s = z
+            for _ in seg[c]:(seg[c+1]-1)
+                s += bodyE
+            end
+            res[c] = s
+        end
+    end
+    return res
+end
+
 function _build_oop_acc_plan(K::_AccKernel)
     ok = _oop_acc_vecable(K.spine, K) &&
          all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
@@ -995,10 +1122,26 @@ function _build_oop_acc_plan(K::_AccKernel)
             # A sub carries no cells of its own; `out_slots` is unused for a sub
             # (only the top-level plan scatters), so reuse the parent lane slots.
             sub_plans[j] = _OopAccPlan(true, out, sg, sc, sf, sgh,
-                                       _AccKernel[], _OopAccPlan[])
+                                       _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[])
         end
     end
-    return _OopAccPlan(true, out, gathers, consts, forc, ghost, subs, sub_plans)
+    # Variable-valence reduction: build the CSR segments + the E-lane body plan.
+    # `_build_acc_cse` never CSE's a reduce spine, so the reduce sits directly on
+    # `K.spine` (no recipes carry one) and there is exactly one to model.
+    red_seg = Int[]
+    red_plan = _OopAccPlan[]
+    if _acc_has_reduce(K.spine)
+        N = length(out)
+        seg_off, seg_cell, seg_n = _oop_reduce_segments(K, N)
+        eg, ec = _build_oop_reduce_desc_vectors(K.acc, seg_cell, seg_n, out)
+        nacc = length(K.acc)
+        red_seg = seg_off
+        red_plan = _OopAccPlan[_OopAccPlan(true, Int[], eg, ec,
+                        [Int[] for _ in 1:nacc], [Bool[] for _ in 1:nacc],
+                        _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[])]
+    end
+    return _OopAccPlan(true, out, gathers, consts, forc, ghost, subs, sub_plans,
+                       red_seg, red_plan)
 end
 
 # Per-call runtime context for template-body sub-kernels (`_NK_SUBCALL`). Holds
@@ -1029,7 +1172,12 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     if k === _NK_ACCESS
         a = K.acc[nd.idx]
         ak = a.kind
-        if ak === _AK_STATE_AFFINE
+        if ak === _AK_STATE_AFFINE || ak === _AK_STATE_INDIRECT ||
+           ak === _AK_STATE_INDIRECT_COL
+            # STATE_AFFINE gathers by `out.+delta`; the two n-indexed kinds only
+            # appear inside a CSR reduce, where `plan` is the E-lane plan and
+            # `gathers` already holds the per-entry `conn[(c-1)*width+n]` slots.
+            # (`_AK_CONST_EDGE` falls through to the frozen-consts arm below.)
             return _oop_gather(u, plan.gathers[nd.idx])
         elseif ak === _AK_STATE_TBL_BOX
             g = _oop_gather(u, plan.gathers[nd.idx])
@@ -1076,6 +1224,15 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             cv[i] = _oop_eval_acck(rs[i], u, p, t, S, Sp, iv, cv, sub, T)
         end
         return _oop_eval_acck(S.spine, u, p, t, S, Sp, iv, cv, sub, T)
+    elseif k === _NK_REDUCE
+        # Variable-valence sum reduction, CSR-segmented (gordian reduce-vectorize):
+        # evaluate the body ONCE over the flat E-lane buffer (its only state access
+        # is the whole-array gather in the E-plan), then fold each cell's segment
+        # SEQUENTIALLY in child (CSR) order, seeded from `zerobar` — bit-identical
+        # to `_eval_acc`'s `s = zerobar; for m in 1:cnt; s += body(c,m)`.
+        Ep = @inbounds plan.red_plan[1]
+        bodyE = _oop_eval_acck(nd.children[1], u, p, t, K, Ep, invvals, cellvals, sub, T)
+        return _oop_reduce_fold(bodyE, plan.red_seg, K.zerobar, T)
     elseif k === _NK_CONTRACTION
         # Fixed-width ⊕-fold over lane vectors, seeded from the 0̄ identity —
         # ((0̄ ⊕ c1) ⊕ c2)… in child order, broadcast per lane: the same fold
@@ -1101,7 +1258,7 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             end
         end
         return res
-    else # _NK_OP (REDUCE was declined at plan build)
+    else # _NK_OP
         op = nd.op
         ch = nd.children
         if op === :fn

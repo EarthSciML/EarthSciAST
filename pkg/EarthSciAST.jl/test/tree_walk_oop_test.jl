@@ -408,6 +408,60 @@ end
         end
     end
 
+    @testset "variable-valence reduction vectorizes (CSR segment fold)" begin
+        # A `_NK_REDUCE` + `_VarBound` unstructured FV divergence — indirect
+        # neighbour gather (`_AK_STATE_INDIRECT`), per-edge const (`_AK_CONST_EDGE`),
+        # self (`_AK_STATE_AFFINE`), per-cell area (`_AK_CONST_CELL`) — used to keep
+        # the per-cell oop fallback (a padded rectangular reduce would reorder the
+        # seeded ⊕-fold). It now vectorizes (gordian reduce-vectorize): the body is
+        # ONE flat CSR gather, folded per segment in child order — bit-identical to
+        # the scalar seeded sum, whole-array only, and differentiable.
+        #   D(q[c]) = ( Σ_{n=1}^{val[c]} efl[c,n]*0.5*(q[c]+q[noc[c,n]]) ) / area[c]
+        Nc = 300; maxval = 8
+        rng = 987654321
+        nextr() = (rng = (1103515245*rng + 12345) & 0x7fffffff; rng)
+        val = Vector{Int}(undef, Nc); noc = zeros(Int, Nc*maxval); efl = zeros(Nc*maxval)
+        for c in 1:Nc
+            v = 3 + nextr() % (maxval-2); val[c] = v
+            for n in 1:v
+                noc[(c-1)*maxval+n] = 1 + nextr() % Nc
+                efl[(c-1)*maxval+n] = 0.5 + (nextr() % 100)/100
+            end
+        end
+        area = Float64[1.0 + (c % 7)/3 for c in 1:Nc]
+        u = Float64[sin(0.11c) + 0.2cos(0.007c^2) for c in 1:Nc]
+
+        acc = ESM._AccDesc[
+            ESM._AccStateAffine(0),                 # q[c]
+            ESM._AccStateIndirect(noc, maxval),     # q[noc[c,n]]
+            ESM._AccConstEdge(efl, maxval),         # efl[c,n]
+            ESM._AccConstCell(area),                # area[c]
+        ]
+        qc = ESM._acc(1); qn = ESM._acc(2); e = ESM._acc(3); ar = ESM._acc(4)
+        body = ESM._aop(:*, ESM._aop(:*, e, ESM._alit(0.5)), ESM._aop(:+, qc, qn))
+        spine = ESM._aop(:/, ESM._areduce(body), ar)
+        K = ESM._AccKernel(ESM._contig_cells(Nc), spine, acc, ESM._VarBound(val), 0.0)
+
+        # scalar reference (the seeded child-order fold)
+        ref = zeros(Nc); ESM._run_acc_kernel!(ref, u, nothing, 0.0, K)
+
+        op = ESM._build_oop_acc_plan(K)
+        @test op.vectorizable                       # no more per-cell fallback
+        du_o = ESM._oop_run_acc_vec(zeros(Nc), u, nothing, 0.0, K, op, Float64)
+        @test du_o == ref                           # bit-identical to the scalar fold
+
+        # whole-array only: a state that throws on scalar reads still evaluates
+        du_g = ESM._oop_run_acc_vec(zeros(Nc), _GatherOnlyVec(u), nothing, 0.0, K, op, Float64)
+        @test du_g == ref
+
+        # AD: ∂D(q[c])/∂q[k] finite; the fold differentiates through the gather.
+        J = ForwardDiff.jacobian(
+            uu -> ESM._oop_run_acc_vec(zeros(eltype(uu), Nc), uu, nothing, 0.0, K,
+                                       ESM._build_oop_acc_plan(K), eltype(uu)), u)
+        @test all(isfinite, J)
+        @test any(!=(0.0), J)
+    end
+
     @testset "interp.* inside an arrayop: lanes ≡ scalar cores, and AD" begin
         # The acc `:fn` arm evaluates locate→gather→blend over whole lanes (the
         # form a tracer needs). It must be BIT-identical to the branchy scalar
