@@ -1290,7 +1290,7 @@ function Base.show(io::IO, ::MIME"text/plain", model::Model)
             else
                 "$(typeof(event.trigger))"
             end
-            affects_str = join(["$(affect.target) $(affect.operation) $(format_expression_unicode(affect.expression))" for affect in event.affects], ", ")
+            affects_str = join(["$(affect.lhs) = $(format_expression_unicode(affect.rhs))" for affect in event.affects], ", ")
             println(io, "    $i. $trigger_str: $affects_str")
         end
     end

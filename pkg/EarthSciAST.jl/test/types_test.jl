@@ -101,11 +101,13 @@ using EarthSciAST
         @test preset_trigger isa DiscreteEventTrigger
         @test preset_trigger.times == [1.0, 5.0, 10.0]
 
-        # Test FunctionalAffect
-        affect = FunctionalAffect("x", NumExpr(1.0), operation="add")
-        @test affect.target == "x"
-        @test affect.expression isa NumExpr
-        @test affect.operation == "add"
+        # Discrete events carry AffectEquation affects — the same {lhs, rhs}
+        # shape continuous events use (FunctionalAffect was removed).
+        affect = AffectEquation("x", NumExpr(1.0))
+        @test affect.lhs == "x"
+        @test affect.rhs isa NumExpr
+        ev = DiscreteEvent(PeriodicTrigger(10.0), [affect])
+        @test ev.affects == [affect]
     end
 
     @testset "System Configuration Types" begin

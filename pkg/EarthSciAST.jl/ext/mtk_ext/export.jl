@@ -573,9 +573,9 @@ function _discrete_cb_to_esm(cb, known_vars::Set{String},
                 gaps, where_str * ".condition"))
         end
         affects = cb.affects isa AbstractArray ? cb.affects : [cb.affects]
-        esm_affs = FunctionalAffect[]
+        esm_affs = AffectEquation[]
         for a in affects
-            af = _affect_to_functional(a, known_vars, gaps,
+            af = _affect_to_esm(a, known_vars, gaps,
                 where_str * ".affect")
             af !== nothing && push!(esm_affs, af)
         end
@@ -589,35 +589,23 @@ function _discrete_cb_to_esm(cb, known_vars::Set{String},
 end
 
 # Serialize one MTK affect (an `lhs ~ rhs` shaped object or a 2-tuple) to an
-# ESM affect record built by `make(lhs_name, rhs_esm)` — `AffectEquation` for
-# continuous events, the operation="set" `FunctionalAffect` for discrete
-# ones. Returns `nothing` when the affect's pieces can't be extracted (the
+# ESM `AffectEquation` (the affect shape shared by continuous and discrete
+# events). Returns `nothing` when the affect's pieces can't be extracted (the
 # enclosing callback then simply carries fewer affects).
-function _affect_to_esm_record(a, known_vars::Set{String},
-                               gaps::Vector{GapReport}, where_str::String,
-                               make::Function)
+function _affect_to_esm(a, known_vars::Set{String},
+                        gaps::Vector{GapReport}, where_str::String)
     try
         lhs_sym = hasproperty(a, :lhs) ? a.lhs : a[1]
         rhs_sym = hasproperty(a, :rhs) ? a.rhs : a[2]
         lhs_name = _strip_time(string(ModelingToolkit.getname(lhs_sym)))
         rhs_esm = _symbolic_to_esm_with_gaps(rhs_sym, known_vars, gaps,
             where_str * ".rhs")
-        return make(lhs_name, rhs_esm)
+        return AffectEquation(lhs_name, rhs_esm)
     catch e
         @debug "mtk2esm: unable to serialize event affect at $(where_str)" exception=(e, catch_backtrace())
         return nothing
     end
 end
-
-_affect_to_esm(a, known_vars::Set{String},
-               gaps::Vector{GapReport}, where_str::String) =
-    _affect_to_esm_record(a, known_vars, gaps, where_str,
-        (lhs_name, rhs_esm) -> AffectEquation(lhs_name, rhs_esm))
-
-_affect_to_functional(a, known_vars::Set{String},
-                      gaps::Vector{GapReport}, where_str::String) =
-    _affect_to_esm_record(a, known_vars, gaps, where_str,
-        (lhs_name, rhs_esm) -> FunctionalAffect(lhs_name, rhs_esm; operation="set"))
 
 # --- registered-function gap detection ---
 

@@ -257,11 +257,7 @@ using JSON3
         @test_throws ParseError EarthSciAST.parse_expression(Dict("invalid" => "data"))
     end
 
-    @testset "Legacy model `events` path (coerce_event dispatch regression)" begin
-        # Regression: a `coerce_event(::AbstractDict)::CouplingEvent` method
-        # used to shadow `coerce_event(::Any)::EventType` for JSON3.Object
-        # input (JSON3.Object <: AbstractDict), so a legacy model-level
-        # `events` array failed with "event requires 'event_type' field".
+    @testset "Model event arrays (discrete_events / continuous_events)" begin
         model_json = """
         {
           "variables": {
@@ -272,9 +268,11 @@ using JSON3
             { "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
               "rhs": {"op": "*", "args": [-0.1, "x"]} }
           ],
-          "events": [
+          "continuous_events": [
             { "conditions": [ {"op": "-", "args": ["x", "thresh"]} ],
-              "affects": [ {"lhs": "x", "rhs": 1.5} ] },
+              "affects": [ {"lhs": "x", "rhs": 1.5} ] }
+          ],
+          "discrete_events": [
             { "trigger": {"type": "periodic", "interval": 10.5},
               "affects": [ {"lhs": "x", "rhs": 0.25} ] }
           ]
@@ -288,16 +286,16 @@ using JSON3
         @test cev.conditions[1] isa OpExpr
         @test cev.affects[1].lhs == "x"
         dev = model.discrete_events[1]
-        @test dev.trigger isa PresetTimesTrigger || dev.trigger isa PeriodicTrigger
         @test dev.trigger isa PeriodicTrigger
         @test dev.trigger.period == 10.5
-        @test dev.affects[1].target == "x"
+        @test dev.affects[1].lhs == "x"
 
         # The same events also parse when handed native Dicts (the second
-        # dict-like carrier the legacy path can see).
+        # dict-like carrier coercion can see).
         model2 = EarthSciAST.coerce_model(
             JSON3.read(JSON3.write(JSON3.read(model_json))))
-        @test length(model2.events) == 2
+        @test length(model2.discrete_events) == 1
+        @test length(model2.continuous_events) == 1
     end
 
     @testset "is_valid_identifier is Unicode-safe" begin

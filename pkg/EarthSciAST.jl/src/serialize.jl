@@ -57,32 +57,34 @@ function serialize_index_set(is::IndexSet)::Dict{String,Any}
     return d
 end
 
-# Wire encoding for one optional `OpExpr` field. Most fields are
-# identity-encoded JSON scalars/arrays; the exceptions carry bespoke encodings:
+# Wire encoding for one optional `OpExpr` field, DRIVEN BY the field's `kind`
+# in `OPEXPR_FIELD_TABLE` (types.jl) — the same column the parse extraction
+# and the expression walkers derive from:
 #
-# - `lower` / `upper` / `expr_body` / `filter` / `key`: nested expression trees
-#   (`expr_body` lives under the JSON key "expr"; `key` is the value-invention
-#   producer's emitted skolem/tuple expression, RFC §5.5 / §6.1).
-# - `values`: one nested expression per `regions` entry (`makearray`).
-# - `ranges`: dense integer/expression tuples or index-set reference objects
+# - `:expr` (`lower`/`upper`/`expr_body`/`filter`/`key`): nested expression
+#   trees (`expr_body` lives under the JSON key "expr"; `key` is the
+#   value-invention producer's emitted skolem/tuple expression, RFC §5.5/§6.1).
+# - `:expr_vec` (`values`): one nested expression per `regions` entry.
+# - `:expr_map` (`table_axes`, `bindings`): expression-valued maps — the
+#   table_lookup per-axis inputs (JSON key "axes", esm-spec §9.5) and the
+#   expression-template parameter → argument map.
+# - `:ranges`: dense integer/expression tuples or index-set reference objects
 #   (`_serialize_range_value`, RFC §5.2).
-# - `table_axes`: the table_lookup per-axis input expression map, stored under
-#   the JSON key "axes" (esm-spec §9.5); `output` is preserved verbatim
-#   (Int or String) by the identity default.
-# - `join` (M2, RFC §5.3 / §7.2): round-trips back to the wire clause form
+# - `:join` (M2, RFC §5.3 / §7.2): round-trips back to the wire clause form
 #   `[{ "on": [[left, right], …] }, …]`.
-# - `bindings`: the expression-template parameter → argument-expression map.
+# - `:scalar`: identity-encoded JSON scalars/arrays (`output` is preserved
+#   verbatim, Int or String).
 function _serialize_opexpr_field(field::Symbol, v)
-    if field === :lower || field === :upper || field === :expr_body ||
-       field === :filter || field === :key
+    kind = getproperty(OPEXPR_FIELD_TABLE, field).kind
+    if kind === :expr
         return serialize_expression(v)
-    elseif field === :values
+    elseif kind === :expr_vec
         return [serialize_expression(x) for x in v]
-    elseif field === :ranges
+    elseif kind === :ranges
         return Dict{String,Any}(k => _serialize_range_value(x) for (k, x) in v)
-    elseif field === :table_axes || field === :bindings
+    elseif kind === :expr_map
         return Dict{String,Any}(k => serialize_expression(x) for (k, x) in v)
-    elseif field === :join
+    elseif kind === :join
         return [Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
                 for clause in v]
     else
@@ -108,8 +110,9 @@ function serialize_expression(expr::ASTExpr)
     elseif isa(expr, VarExpr)
         return expr.name
     elseif isa(expr, OpExpr)
-        # The optional-field portion is DRIVEN BY `OPEXPR_WIRE_KEYS` (parse.jl),
-        # the single OpExpr field ↔ wire-key contract, so a newly added struct
+        # The optional-field portion is DRIVEN BY `OPEXPR_WIRE_KEYS` (types.jl,
+        # derived from `OPEXPR_FIELD_TABLE`), the single OpExpr field ↔ wire-key
+        # contract, so a newly added struct
         # field cannot be forgotten here: once it joins the table it is emitted
         # under its wire key (identity-encoded unless `_serialize_opexpr_field`
         # gives it a bespoke encoding), and `round_trip_regression_test.jl`
@@ -200,10 +203,9 @@ end
 """
     serialize_discrete_event(event::DiscreteEvent) -> Dict{String,Any}
 
-Serialize DiscreteEvent to the schema shape. Julia stores event affects as a
-Vector{FunctionalAffect}(target, expression, operation) for legacy reasons,
-but the schema requires discrete_events[].affects to be an array of
-AffectEquation objects ({lhs, rhs}). Emit the schema shape.
+Serialize DiscreteEvent to the schema shape: `discrete_events[].affects` is an
+array of AffectEquation objects ({lhs, rhs}), matching the stored
+`Vector{AffectEquation}`.
 
 A handler-based event (parsed from a schema `functional_affect` descriptor)
 re-emits its raw descriptor verbatim under `functional_affect`; the schema's
@@ -218,10 +220,7 @@ function serialize_discrete_event(event::DiscreteEvent)::Dict{String,Any}
             "`functional_affect` descriptor (schema DiscreteEvent oneOf)"))
         result["functional_affect"] = event.functional_affect
     else
-        result["affects"] = [Dict{String,Any}(
-            "lhs" => a.target,
-            "rhs" => serialize_expression(a.expression),
-        ) for a in event.affects]
+        result["affects"] = [serialize_affect_equation(a) for a in event.affects]
     end
     if event.discrete_parameters !== nothing
         result["discrete_parameters"] = event.discrete_parameters

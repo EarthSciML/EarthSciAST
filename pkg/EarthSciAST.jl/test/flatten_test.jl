@@ -687,7 +687,7 @@ end
         fa = Dict{String,Any}("handler" => "reset", "args" => Any["x"])
         ev = DiscreteEvent(
             PeriodicTrigger(1.0),
-            [FunctionalAffect("x", _N(0.0))];
+            [AffectEquation("x", _N(0.0))];
             description="periodic reset", functional_affect=fa)
         vars = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable, default=1.0))
         model = Model(vars, [Equation(_deriv("x"), _V("x"))]; discrete_events=[ev])

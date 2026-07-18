@@ -100,24 +100,18 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # field-preserving rewrite so prefix rewrites reach arrayop / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
     # table_lookup per-axis input expressions, makearray `values`, value-invention
-    # `key`, and expression-valued dense `ranges` bounds. `map_children` routes
-    # through `reconstruct`, preserving all other fields (semiring, output_idx,
-    # table, output, int_var, join/join_gates, manifold, …) — earlier this rebuild
-    # hand-listed keywords and silently dropped int_var/lower/upper/table/
-    # table_axes/output.
+    # `key`, expression-valued dense `ranges` bounds, AND expression-template
+    # `bindings` values (esm-spec §9.6.4 rule 7 / §10.7: template `params` —
+    # the map's KEYS — never namespace, they are the template's formal
+    # parameters; the argument expressions bound TO them do, and `map_children`
+    # rewrites exactly the values). An explicit `bindings` carve-out used to
+    # live here because `map_children` skipped that field. `map_children`
+    # routes through `reconstruct`, preserving all non-expression fields
+    # (semiring, output_idx, table, output, int_var, join/join_gates,
+    # manifold, …) — earlier this rebuild hand-listed keywords and silently
+    # dropped int_var/lower/upper/table/table_axes/output.
     result = map_children(
         x -> _namespace_expr(x, prefix, local_names, memo), expr)::OpExpr
-    # esm-spec §9.6.4 rule 7 / §10.7: a surviving `apply_expression_template`
-    # reference carries free variable references in its `bindings` (which
-    # `map_children` does not traverse). The same component-scoping map applies
-    # to them (template `params` never namespace — they are the template's formal
-    # parameters, not component variables — but the values bound TO them do).
-    if expr.op == APPLY_EXPRESSION_TEMPLATE_OP && expr.bindings !== nothing
-        nb = Dict{String,ASTExpr}(
-            k => namespace_expr(v, prefix, local_names)
-            for (k, v) in expr.bindings)
-        result = reconstruct(result; bindings=nb)
-    end
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
     # column may name a component-local bin buffer (see `_namespace_join`).
@@ -238,11 +232,10 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     end
 
     for ev in model.discrete_events
-        new_affects = FunctionalAffect[
-            FunctionalAffect(
-                occursin('.', a.target) ? a.target : "$(prefix).$(a.target)",
-                namespace_expr(a.expression, prefix, local_names);
-                operation=a.operation)
+        new_affects = AffectEquation[
+            AffectEquation(
+                occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
+                namespace_expr(a.rhs, prefix, local_names))
             for a in ev.affects
         ]
         new_trigger = if ev.trigger isa ConditionTrigger
