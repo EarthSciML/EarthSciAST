@@ -32,30 +32,6 @@ function _serialize_range_value(v)
     return [x isa ASTExpr ? serialize_expression(x) : x for x in v]
 end
 
-"""
-    serialize_index_set(is::IndexSet) -> Dict{String,Any}
-
-Serialize one `index_sets` registry entry (RFC §5.2). Mirrors `coerce_index_set`:
-when a categorical set carries non-string members, `coerce_index_set` retains
-the originally-typed values in `members_raw` (the string-coerced `members` view
-is a lossy convenience), so `members_raw` — not `members` — is what round-trips
-back to the wire `members` key. String-only sets have `members_raw === nothing`
-and emit `members` unchanged.
-"""
-function serialize_index_set(is::IndexSet)::Dict{String,Any}
-    d = Dict{String,Any}("kind" => is.kind)
-    is.size !== nothing && (d["size"] = is.size)
-    if is.members_raw !== nothing
-        d["members"] = is.members_raw
-    elseif is.members !== nothing
-        d["members"] = is.members
-    end
-    is.of !== nothing && (d["of"] = is.of)
-    is.offsets !== nothing && (d["offsets"] = is.offsets)
-    is.values !== nothing && (d["values"] = is.values)
-    is.from_faq !== nothing && (d["from_faq"] = is.from_faq)
-    return d
-end
 
 # Wire encoding for one optional `OpExpr` field, DRIVEN BY the field's `kind`
 # in `OPEXPR_FIELD_TABLE` (types.jl) — the same column the parse extraction
@@ -539,66 +515,8 @@ function serialize_coupling_entry(entry::CouplingEntry)::Dict{String,Any}
     end
 end
 
-"""
-    serialize_coupling_import(entry::CouplingImport) -> Dict{String,Any}
 
-Serialize a `coupling_import` coupling entry (esm-spec §10.10). The import
-round-trips intact; expansion happens only in the flattened system.
-"""
-function serialize_coupling_import(entry::CouplingImport)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "type" => "coupling_import",
-        "ref" => entry.ref,
-        "bind" => Dict{String,Any}(entry.bind),
-    )
-    if entry.description !== nothing
-        result["description"] = entry.description
-    end
-    return result
-end
 
-"""
-    serialize_operator_compose(entry::CouplingOperatorCompose) -> Dict{String,Any}
-
-Serialize operator_compose coupling entry.
-"""
-function serialize_operator_compose(entry::CouplingOperatorCompose)::Dict{String,Any}
-    result = Dict{String,Any}("type" => "operator_compose", "systems" => entry.systems)
-
-    if entry.translate !== nothing
-        result["translate"] = entry.translate
-    end
-    if entry.description !== nothing
-        result["description"] = entry.description
-    end
-    if entry.lifting !== nothing
-        result["lifting"] = entry.lifting
-    end
-
-    return result
-end
-
-"""
-    serialize_couple(entry::CouplingCouple) -> Dict{String,Any}
-
-Serialize couple coupling entry.
-"""
-function serialize_couple(entry::CouplingCouple)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "type" => "couple",
-        "systems" => entry.systems,
-        "connector" => entry.connector
-    )
-
-    if entry.description !== nothing
-        result["description"] = entry.description
-    end
-    if entry.lifting !== nothing
-        result["lifting"] = entry.lifting
-    end
-
-    return result
-end
 
 """
     serialize_variable_map(entry::CouplingVariableMap) -> Dict{String,Any}
@@ -629,81 +547,8 @@ function serialize_variable_map(entry::CouplingVariableMap)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_operator_apply(entry::CouplingOperatorApply) -> Dict{String,Any}
 
-Serialize operator_apply coupling entry.
-"""
-function serialize_operator_apply(entry::CouplingOperatorApply)::Dict{String,Any}
-    result = Dict{String,Any}("type" => "operator_apply", "operator" => entry.operator)
 
-    if entry.description !== nothing
-        result["description"] = entry.description
-    end
-
-    return result
-end
-
-"""
-    serialize_callback(entry::CouplingCallback) -> Dict{String,Any}
-
-Serialize callback coupling entry.
-"""
-function serialize_callback(entry::CouplingCallback)::Dict{String,Any}
-    result = Dict{String,Any}("type" => "callback", "callback_id" => entry.callback_id)
-
-    if entry.config !== nothing
-        result["config"] = entry.config
-    end
-    if entry.description !== nothing
-        result["description"] = entry.description
-    end
-
-    return result
-end
-
-"""
-    serialize_coupling_event(entry::CouplingEvent) -> Dict{String,Any}
-
-Serialize an `event` coupling entry. Named `serialize_coupling_event` —
-mirroring the parser's `coerce_coupling_event` — rather than a
-`serialize_event(::CouplingEvent)` method of the model-event serializer
-above: the two wire shapes are unrelated (this one carries the `type`/
-`event_type` discriminators), so sharing the generic name only invited
-accidental dispatch coupling. Internal (unexported); reached via
-`serialize_coupling_entry`.
-"""
-function serialize_coupling_event(entry::CouplingEvent)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "type" => "event",
-        "event_type" => entry.event_type,
-        "affects" => [serialize_affect_equation(a) for a in entry.affects]
-    )
-
-    if entry.conditions !== nothing
-        result["conditions"] = [serialize_expression(c) for c in entry.conditions]
-    end
-    if entry.trigger !== nothing
-        result["trigger"] = serialize_trigger(entry.trigger)
-    end
-    if entry.affect_neg !== nothing
-        result["affect_neg"] = [serialize_affect_equation(a) for a in entry.affect_neg]
-    end
-    if entry.discrete_parameters !== nothing
-        result["discrete_parameters"] = entry.discrete_parameters
-    end
-    if entry.root_find !== nothing
-        result["root_find"] = entry.root_find
-    end
-    if entry.reinitialize !== nothing
-        result["reinitialize"] = entry.reinitialize
-    end
-    if entry.description !== nothing
-        result["description"] = entry.description
-    end
-
-    return result
-end
 
 
 
@@ -915,6 +760,17 @@ function _emit_data_loader_determinism(loader::DataLoader)
     det = serialize_data_loader_determinism(loader.determinism)
     return isempty(det) ? nothing : det
 end
+
+# coupling_import `bind`: always emitted (an empty bind map round-trips as {}).
+_emit_coupling_import_bind(entry::CouplingImport) = Dict{String,Any}(entry.bind)
+
+# index_sets `members`: `members_raw` — the originally-typed values — is what
+# round-trips back to the wire `members` key when present (mirroring
+# `_coerce_index_set_members_raw`); the stringified `members` view emits
+# otherwise; a set carrying neither omits the key.
+_emit_index_set_members(is::IndexSet) =
+    is.members_raw !== nothing ? is.members_raw : is.members
+
 
 # One emit statement per row, per the row's `emit` omission policy; `nothing`
 # for a `:never` (parse-only) row.

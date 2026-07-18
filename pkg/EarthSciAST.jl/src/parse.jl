@@ -1140,77 +1140,8 @@ function coerce_coupling_entry(data::Any)::CouplingEntry
     end
 end
 
-"""
-    coerce_coupling_import(data::AbstractDict) -> CouplingImport
 
-Parse a `coupling_import` coupling entry (esm-spec §10.10). The entry carries a
-`ref` to a coupling-library file and a `bind` map (role name → component); it is
-stored verbatim and expanded at flatten by `expand_coupling_imports`.
-"""
-function coerce_coupling_import(data::AbstractDict)::CouplingImport
-    if !haskey(data, "ref")
-        throw(ParseError("coupling_import requires 'ref' field"))
-    end
-    ref = String(data["ref"])
-    bind = Dict{String,String}()
-    bind_raw = _get_field(data, :bind, nothing)
-    if bind_raw !== nothing
-        if !(bind_raw isa AbstractDict)
-            throw(ParseError("coupling_import 'bind' must be an object mapping role names to components"))
-        end
-        for (k, v) in pairs(bind_raw)
-            bind[string(k)] = String(v)
-        end
-    end
-    description = _opt_string(data, :description)
-    return CouplingImport(ref, bind; description=description)
-end
 
-"""
-    coerce_operator_compose(data::AbstractDict) -> CouplingOperatorCompose
-
-Parse operator_compose coupling entry.
-"""
-function coerce_operator_compose(data::AbstractDict)::CouplingOperatorCompose
-    if !haskey(data, "systems")
-        throw(ParseError("operator_compose requires 'systems' field"))
-    end
-
-    systems = Vector{String}(data["systems"])
-    # JSON3.Object keys are Symbols — convert to String explicitly so the
-    # Dict{String,Any} field doesn't choke on Symbol→String conversion.
-    translate = _maybe(_get_field(data, :translate, nothing)) do t
-        Dict{String,Any}(string(k) => v for (k, v) in pairs(t))
-    end
-    description = _opt_string(data, :description)
-    lifting = _opt_string(data, :lifting)
-
-    return CouplingOperatorCompose(systems; translate=translate, description=description, lifting=lifting)
-end
-
-"""
-    coerce_couple(data::AbstractDict) -> CouplingCouple
-
-Parse couple coupling entry.
-"""
-function coerce_couple(data::AbstractDict)::CouplingCouple
-    required_fields = ["systems", "connector"]
-    for field in required_fields
-        if !haskey(data, field)
-            throw(ParseError("couple requires '$field' field"))
-        end
-    end
-
-    systems = Vector{String}(data["systems"])
-    # JSON3.Object keys are Symbols — convert to String explicitly so the
-    # Dict{String,Any} constructor doesn't choke on Symbol→String conversion.
-    connector_raw = data["connector"]
-    connector = Dict{String,Any}(string(k) => v for (k, v) in pairs(connector_raw))
-    description = _opt_string(data, :description)
-    lifting = _opt_string(data, :lifting)
-
-    return CouplingCouple(systems, connector; description=description, lifting=lifting)
-end
 
 """
     coerce_variable_map(data::AbstractDict) -> CouplingVariableMap
@@ -1257,121 +1188,9 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
     end
 end
 
-"""
-    coerce_operator_apply(data::AbstractDict) -> CouplingOperatorApply
 
-Parse operator_apply coupling entry.
-"""
-function coerce_operator_apply(data::AbstractDict)::CouplingOperatorApply
-    if !haskey(data, "operator")
-        throw(ParseError("operator_apply requires 'operator' field"))
-    end
 
-    operator = String(data["operator"])
-    description = _opt_string(data, :description)
 
-    return CouplingOperatorApply(operator; description=description)
-end
-
-"""
-    coerce_callback(data::AbstractDict) -> CouplingCallback
-
-Parse callback coupling entry.
-"""
-function coerce_callback(data::AbstractDict)::CouplingCallback
-    if !haskey(data, "callback_id")
-        throw(ParseError("callback requires 'callback_id' field"))
-    end
-
-    callback_id = String(data["callback_id"])
-    # JSON3.Object keys are Symbols; stringify explicitly.
-    config = _maybe(_get_field(data, :config, nothing)) do c
-        Dict{String,Any}(string(k) => v for (k, v) in pairs(c))
-    end
-    description = _opt_string(data, :description)
-
-    return CouplingCallback(callback_id; config=config, description=description)
-end
-
-"""
-    coerce_coupling_event(data::AbstractDict) -> CouplingEvent
-
-Parse event coupling entry.
-
-Named `coerce_coupling_event` (not `coerce_event`) so the coupling-entry
-parser can never be confused with the model-event coercers
-(`coerce_discrete_event` / `coerce_continuous_event`).
-"""
-function coerce_coupling_event(data::AbstractDict)::CouplingEvent
-    if !haskey(data, "event_type")
-        throw(ParseError("event requires 'event_type' field"))
-    end
-
-    event_type = String(data["event_type"])
-
-    # Parse conditions for continuous events
-    conditions = _maybe(_get_field(data, :conditions, nothing)) do cs
-        ASTExpr[parse_expression(c) for c in cs]
-    end
-
-    # Parse trigger for discrete events
-    trigger = _maybe(coerce_trigger, _get_field(data, :trigger, nothing))
-
-    # Parse affects (required)
-    if !haskey(data, "affects")
-        throw(ParseError("event requires 'affects' field"))
-    end
-    affects = [coerce_affect_equation(a) for a in data["affects"]]
-
-    # Parse optional fields
-    affect_neg = _maybe(_get_field(data, :affect_neg, nothing)) do an
-        [coerce_affect_equation(a) for a in an]
-    end
-
-    discrete_parameters = _maybe(Vector{String},
-                                 _get_field(data, :discrete_parameters, nothing))
-
-    root_find = _opt_string(data, :root_find)
-
-    reinitialize = _maybe(Bool, _get_field(data, :reinitialize, nothing))
-
-    description = _opt_string(data, :description)
-
-    return CouplingEvent(event_type, affects;
-                        conditions=conditions, trigger=trigger, affect_neg=affect_neg,
-                        discrete_parameters=discrete_parameters, root_find=root_find,
-                        reinitialize=reinitialize, description=description)
-end
-
-"""
-    coerce_index_set(data::Any) -> IndexSet
-
-Coerce one JSON `index_sets` registry entry into an `IndexSet`
-(RFC semiring-faq-unified-ir §5.2). Kind-conditional fields (`size`, `members`,
-`of`/`offsets`/`values`, `from_faq`) are read when present; completeness per kind
-is enforced by JSON-schema validation, not here.
-"""
-function coerce_index_set(data::Any)::IndexSet
-    kind_raw = _get_field(data, :kind, nothing)
-    kind_raw === nothing &&
-        throw(ParseError("index_sets entry requires a `kind` field"))
-    size_val = _opt_int(data, :size)
-    members_raw = _get_field(data, :members, nothing)
-    members = members_raw === nothing ? nothing : String[string(x) for x in members_raw]
-    # Keep the original member types ONLY when some member is not a string, so the
-    # join-key validator can reject float / null keys (RFC §5.3). A string-only
-    # set keeps `members_typed === nothing` and is unchanged from before.
-    members_typed = members_raw === nothing ? nothing :
-        (any(x -> !(x isa AbstractString), members_raw) ? Any[x for x in members_raw] : nothing)
-    of_raw = _get_field(data, :of, nothing)
-    of = of_raw === nothing ? nothing : String[string(x) for x in of_raw]
-    offsets = _opt_string(data, :offsets)
-    values = _opt_string(data, :values)
-    from_faq = _opt_string(data, :from_faq)
-    return IndexSet(string(kind_raw); size=size_val, members=members, of=of,
-                    offsets=offsets, values=values, from_faq=from_faq,
-                    members_raw=members_typed)
-end
 
 
 # ========================================
@@ -1386,6 +1205,30 @@ end
 # split. Irregular residue (discriminated unions, name-keyed-map↔vector
 # conversions, context-threaded messages) stays hand-written above; the
 # `:custom` rows below name their hand-written per-field hooks.
+
+# ── Hand-written `:custom` parse hooks (named by RECORD_FIELD_TABLES rows) ──
+
+# coupling_import `bind` (esm-spec §10.10): role name → component map.
+function _coerce_coupling_import_bind(v)
+    if !(v isa AbstractDict)
+        throw(ParseError("coupling_import 'bind' must be an object mapping role names to components"))
+    end
+    bind = Dict{String,String}()
+    for (k, x) in pairs(v)
+        bind[string(k)] = String(x)
+    end
+    return bind
+end
+
+# index_sets `members`: the stringified convenience view.
+_coerce_index_set_members(v) = String[string(x) for x in v]
+
+# index_sets `members_raw`: original member types retained ONLY when some
+# member is not a string, so the join-key validator can reject float / null
+# keys (RFC §5.3). A string-only set keeps `members_raw === nothing`.
+_coerce_index_set_members_raw(v) =
+    any(x -> !(x isa AbstractString), v) ? Any[x for x in v] : nothing
+
 
 # Parse-side value conversion for one table row: returns the expression
 # coercing `v` (the fetched wire value) per the row's `kind`.

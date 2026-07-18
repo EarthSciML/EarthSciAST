@@ -2119,6 +2119,73 @@ const RECORD_FIELD_TABLES = (
         (f = :reference, wire = "reference", kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
         (f = :metadata,  wire = "metadata",  kind = :raw, mode = :opt, emit = :nonnothing),
     )),
+    (T = :CouplingImport, fn = :coupling_import, tag = "coupling_import", rows = (
+        (f = :ref, wire = "ref", kind = :string_strict, mode = :req_err,
+         req_err = "coupling_import requires 'ref' field", emit = :always, pos = true),
+        (f = :bind, wire = "bind", kind = :custom, parse_fn = :_coerce_coupling_import_bind,
+         mode = :opt_empty, default = :(Dict{String,String}()),
+         emit = :custom, emit_fn = :_emit_coupling_import_bind, pos = true),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :CouplingOperatorCompose, fn = :operator_compose, tag = "operator_compose", rows = (
+        (f = :systems, wire = "systems", kind = :string_vec_strict, mode = :req_err,
+         req_err = "operator_compose requires 'systems' field", emit = :always, pos = true),
+        (f = :translate,   wire = "translate",   kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :lifting,     wire = "lifting",     kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :CouplingCouple, fn = :couple, tag = "couple", rows = (
+        (f = :systems, wire = "systems", kind = :string_vec_strict, mode = :req_err,
+         req_err = "couple requires 'systems' field", emit = :always, pos = true),
+        (f = :connector, wire = "connector", kind = :str_keyed_copy, mode = :req_err,
+         req_err = "couple requires 'connector' field", emit = :always, pos = true),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :lifting,     wire = "lifting",     kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :CouplingOperatorApply, fn = :operator_apply, tag = "operator_apply", rows = (
+        (f = :operator, wire = "operator", kind = :string_strict, mode = :req_err,
+         req_err = "operator_apply requires 'operator' field", emit = :always, pos = true),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :CouplingCallback, fn = :callback, tag = "callback", rows = (
+        (f = :callback_id, wire = "callback_id", kind = :string_strict, mode = :req_err,
+         req_err = "callback requires 'callback_id' field", emit = :always, pos = true),
+        (f = :config,      wire = "config",      kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :CouplingEvent, fn = :coupling_event, tag = "event", rows = (
+        (f = :event_type, wire = "event_type", kind = :string_strict, mode = :req_err,
+         req_err = "event requires 'event_type' field", emit = :always, pos = true),
+        (f = :conditions, wire = "conditions", kind = :expr_vec, mode = :opt, emit = :nonnothing),
+        (f = :trigger,    wire = "trigger",    kind = :record, of = :trigger, mode = :opt, emit = :nonnothing),
+        (f = :affects, wire = "affects", kind = :record_vec, of = :affect_equation,
+         eltype = :AffectEquation, mode = :req_err,
+         req_err = "event requires 'affects' field", emit = :always, pos = true),
+        (f = :affect_neg, wire = "affect_neg", kind = :record_vec, of = :affect_equation,
+         eltype = :AffectEquation, mode = :opt, emit = :nonnothing),
+        (f = :discrete_parameters, wire = "discrete_parameters", kind = :string_vec_strict,
+         mode = :opt, emit = :nonnothing),
+        (f = :root_find,    wire = "root_find",    kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :reinitialize, wire = "reinitialize", kind = :bool,   mode = :opt, emit = :nonnothing),
+        (f = :description,  wire = "description",  kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :IndexSet, fn = :index_set, rows = (
+        (f = :kind, wire = "kind", kind = :string, mode = :req_nullerr,
+         req_err = "index_sets entry requires a `kind` field", emit = :always, pos = true),
+        (f = :size, wire = "size", kind = :int, mode = :opt, emit = :nonnothing),
+        # ONE wire key, TWO struct fields (the §5.3 representation policy):
+        # `members` is the stringified convenience view; `members_raw` retains
+        # the originally-typed values only when some member is non-string, and
+        # is what round-trips back to the wire `members` key when present.
+        (f = :members, wire = "members", kind = :custom, parse_fn = :_coerce_index_set_members,
+         mode = :opt, emit = :custom, emit_fn = :_emit_index_set_members),
+        (f = :members_raw, wire = "members", kind = :custom,
+         parse_fn = :_coerce_index_set_members_raw, mode = :opt, emit = :never),
+        (f = :of,       wire = "of",       kind = :string_vec, mode = :opt, emit = :nonnothing),
+        (f = :offsets,  wire = "offsets",  kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :values,   wire = "values",   kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :from_faq, wire = "from_faq", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
 )
 
 # Each entry's rows (plus the injected map-key name, when marked) must cover
