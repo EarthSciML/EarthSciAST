@@ -86,6 +86,11 @@ system has spatial independent variables.
 function ModelingToolkit.System(flat::FlattenedSystem;
                                 name::Union{Symbol,AbstractString}=:anonymous,
                                 kwargs...)
+    # "Expand at your boundary" (RFC out-of-line-expression-templates §7.7):
+    # `flatten` carries surviving `apply_expression_template` references; MTK
+    # lowering has no template handling, so expand against the merged registry
+    # here. No-op for a reference-free system.
+    flat = expand_flattened_refs(flat)
     if _has_spatial_ivs(flat)
         throw(ArgumentError(_use_pde_ctor_msg(flat,
             "ModelingToolkit.PDESystem", "ModelingToolkit.System")))
@@ -178,6 +183,8 @@ source terms in the lowest grid cell.
 function ModelingToolkit.PDESystem(flat::FlattenedSystem;
                                    name::Union{Symbol,AbstractString}=:anonymous,
                                    kwargs...)
+    # Expand at the boundary (RFC §7.7) — same as the System entry above.
+    flat = expand_flattened_refs(flat)
     if !_has_spatial_ivs(flat)
         throw(ArgumentError(_use_ode_ctor_msg(
             "ModelingToolkit.System", "ModelingToolkit.PDESystem")))

@@ -54,16 +54,14 @@ end
 
 function build_once(fix::AbstractString, disable::Bool)
     withenv("ESS_TEMPLATE_REF_DISABLE" => (disable ? "1" : nothing)) do
-        # Fast path (default): references survive load and are CARRIED into the
-        # FlattenedSystem (`expand_refs=false`), then compiled once per (use
+        # Fast path (default): references survive load and are ALWAYS carried
+        # into the FlattenedSystem by `flatten`, then compiled once per (use
         # site, region class) as sub-kernels by the affine build (RFC §7.7
         # "compile references natively"). Under `ESS_TEMPLATE_REF_DISABLE=1`
-        # load already expanded, so `expand_refs` is moot and the build fuses
-        # the expanded spine. Both are bit-identical (gate 3); this measures the
-        # build cost. (An earlier revision passed `expand_refs = !disable`,
-        # which expanded at flatten on BOTH columns — the fast column never
-        # carried a reference.)
-        build_evaluator(flatten(load(fix); expand_refs = false))
+        # load already expanded, so no references reach flatten and the build
+        # fuses the expanded spine. Both are bit-identical (gate 3); this
+        # measures the build cost.
+        build_evaluator(flatten(load(fix)))
     end
 end
 

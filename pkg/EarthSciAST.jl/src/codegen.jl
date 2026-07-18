@@ -25,6 +25,11 @@ function _generate_script(file::EsmFile;
                           model_emitter::Function,
                           reaction_system_emitter::Function,
                           emit_data_loaders::Bool=false)
+    # Expand at the boundary (RFC out-of-line-expression-templates §7.7): the
+    # expression emitters have no `apply_expression_template` arm (the generic
+    # fallback would render `apply_expression_template()`, dropping name and
+    # bindings), so generated code must be the Option-A image. No-op without refs.
+    file.component_templates === nothing || (file = _expand_refs!(deepcopy(file)))
     lines = String[]
 
     # Header comment

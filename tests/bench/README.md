@@ -76,10 +76,11 @@ variants), with bit-identical solutions. Compile-once boundaries are the
 OUTERMOST expansion roots only — per-nested-root boundaries exploded 8,297 tiny
 variants on ESD's deeply factored templates and cost more than they saved.
 
-Gate 3 (§12) is pinned by `test/compile_once_templates_test.jl`: the fast path,
-the fused build (`ESS_TEMPLATE_REF_DISABLE=1`), the boundary-expanded build
-(`ESS_TEMPLATE_COMPILE_ONCE_DISABLE=1`), the per-cell reference
-(`ESS_STENCIL_DISABLE=1`), and the out-of-place emitter all produce the
-**bit-identical** RHS on both fixtures (exact `==` on `du`, multiple states and
-times), and the reduced-rank fixture pins the sound fallback chain
+Gate 3 (§12) is pinned by `test/compile_once_templates_test.jl`: the fast path
+(the default — `flatten` always carries references to the build boundary), the
+fused Expand-at-load build (`ESS_TEMPLATE_REF_DISABLE=1`, the one differential
+escape hatch), the per-cell reference (`ESS_STENCIL_DISABLE=1`), and the
+out-of-place emitter all produce the **bit-identical** RHS on both fixtures
+(exact `==` on `du`, multiple states and times), and the reduced-rank fixture
+pins the sound fallback chain
 (ref-aware attempt → fused retry → symbolic → per-cell).

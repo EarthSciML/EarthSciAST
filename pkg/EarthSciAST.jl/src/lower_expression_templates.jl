@@ -101,6 +101,10 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     "template_constraint_unknown_index_set",
     "geometry_manifold_invalid",
     "makearray_region_inverted",
+    # Flatten-time shadow-registry guard (flatten.jl): a surviving registry
+    # body references a variable a coupling `variable_map` rewrote in the
+    # flattened equations (esm-spec §9.6.4 / §10.4).
+    "template_body_references_coupling_rewritten_variable",
     # esm-spec §9.7 template-library imports + metaparameters
     # (template_imports.jl).
     "template_import_version_too_old",
@@ -1880,14 +1884,17 @@ end
 """
     expand_flattened_refs(flat::FlattenedSystem) -> FlattenedSystem
 
-The sound per-node `Expand` fallback applied at the tree-walk build boundary
-(esm-spec §9.6.4 rule 2, RFC out-of-line-expression-templates §7.7): expand every
-surviving `apply_expression_template` reference in the flattened equations and
-observed expressions against the merged `template_registry`, returning an
-Expanded copy. A no-op when the registry is empty (no references survived, or
-`ESS_TEMPLATE_REF_DISABLE=1` expanded at load). Called by `build_evaluator` so
-references that reach the tree-walk are handled and the result is bit-identical
-to the Expand-at-load image.
+The shared "Expand at your boundary" utility for `FlattenedSystem` consumers
+(esm-spec §9.6.4 rule 2, RFC out-of-line-expression-templates §7.7): expand
+every surviving `apply_expression_template` reference in the flattened
+equations and observed expressions against the merged `template_registry`,
+returning an Expanded copy, bit-identical to the Expand-at-load image. A no-op
+when the registry is empty (no references survived, or
+`ESS_TEMPLATE_REF_DISABLE=1` expanded at load). `flatten` ALWAYS carries
+references, so a consumer with no template handling calls this at its entry —
+the MTK `System`/`PDESystem` constructors do; the tree-walk `build_evaluator`
+does NOT (it expands at its own entry with site recording, the compile-once
+tier).
 """
 function expand_flattened_refs(flat::FlattenedSystem)::FlattenedSystem
     reg = flat.template_registry

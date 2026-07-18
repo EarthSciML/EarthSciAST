@@ -316,6 +316,11 @@ graph = expression_graph(equation)
 ```
 """
 function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
+    # Expand at the boundary (RFC out-of-line-expression-templates §7.7): a
+    # surviving `apply_expression_template` node hides its BODY's free component
+    # variables from `free_variables` (bindings are traversed; the body lives in
+    # the registry), so dependency edges would be incomplete. No-op without refs.
+    file.component_templates === nothing || (file = _expand_refs!(deepcopy(file)))
     nodes = VariableNode[]
     edges = _GraphEdge{VariableNode, DependencyEdge}[]
 

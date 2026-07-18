@@ -406,26 +406,20 @@ anchors their `ref`s and `load_ref` optionally overrides the resolver (see
 Throws `ConflictingDerivativeError` if any species is both the LHS of an
 explicit `D(X, t) = ...` equation and a reactant/product of a reaction — such
 a system is over-determined.
+
+INVARIANT (esm-spec §9.6.4 Option B): `flatten` ALWAYS carries surviving
+`apply_expression_template` references — MODEL-equation references ride into
+the `FlattenedSystem` (namespacing scopes their `bindings`), resolvable against
+the merged `template_registry` it also carries. Reaction-system RATE references
+never survive: they are expanded eagerly at collect (`_collect_reaction_system!`),
+before namespacing. Consumers that need the Option-A expanded image call
+[`expand_flattened_refs`](@ref) at their own boundary (RFC
+out-of-line-expression-templates §7.7); the tree-walk build expands at its entry
+with site recording (the compile-once tier). Under `ESS_TEMPLATE_REF_DISABLE=1`
+load already expanded, so no references reach `flatten` at all.
 """
 function flatten(file::EsmFile; base_path::AbstractString=".",
-                 load_ref=nothing, expand_refs::Bool=true)::FlattenedSystem
-    # esm-spec §9.6.4 Option B: when `apply_expression_template` references
-    # survived load (`file.component_templates !== nothing`):
-    #   * `expand_refs=true` (default) — Expand a COPY before flattening, so the
-    #     equations are the Option-A image (MTK and every general caller build the
-    #     expanded form). The caller's reference-preserving `EsmFile` is untouched,
-    #     so `serialize_esm_file` still emits it verbatim (R1 / §9.6.4 rule 5).
-    #   * `expand_refs=false` — CARRY the references into the FlattenedSystem
-    #     (namespacing now scopes their `bindings`); the tree-walk build entry
-    #     handles them via a sound per-node `Expand` fallback against the merged
-    #     `template_registry`. This is the fast-path flatten used by `simulate`
-    #     when `ESS_TEMPLATE_REF_DISABLE` is unset.
-    # Under `ESS_TEMPLATE_REF_DISABLE=1` load already expanded, so
-    # `component_templates` is `nothing` and this is a no-op either way.
-    if expand_refs && file.component_templates !== nothing
-        file = _expand_refs!(deepcopy(file))
-    end
-
+                 load_ref=nothing)::FlattenedSystem
     # Step 0a: Expand `coupling_import` entries (esm-spec §10.10.3) into concrete
     # edges BEFORE any coupling-consuming step, so imported edges participate in
     # conflict detection, unit checks, the coupling-rule loop, and the pointwise
@@ -494,6 +488,15 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     loader_names = file.data_loaders === nothing ? Set{String}() :
                    Set{String}(String(k) for k in keys(file.data_loaders))
 
+    # Names a `variable_map` SUBSTITUTED in the visible equation ASTs
+    # (`_substitute_variable_map!`; the expression-transform arm leaves `to`
+    # references intact, so it is exempt). A surviving template-registry body
+    # is NOT rewritten by that substitution — a body still referencing such a
+    # name would expand at the build boundary into a stale (possibly deleted)
+    # variable, silently diverging from the Expand-at-load image. Checked
+    # loudly against the merged registry below.
+    map_rewritten_names = Set{String}()
+
     for entry in file.coupling
         push!(coupling_rules_applied, describe_coupling_entry(entry))
         if entry isa CouplingOperatorCompose
@@ -503,6 +506,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         elseif entry isa CouplingVariableMap
             _apply_variable_map!(equations, params, entry;
                                  loader_names=loader_names, observeds=observeds)
+            entry.transform isa ASTExpr || push!(map_rewritten_names, entry.to)
         elseif entry isa CouplingOperatorApply
             push!(opaque_refs, "operator_apply:$(entry.operator)")
         elseif entry isa CouplingCallback
@@ -521,6 +525,13 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # references (analysis only); carried on the FlattenedSystem below. Empty
     # when no references survived load.
     template_registry = _merge_flat_registry(_scope_component_templates(file))
+
+    # Shadow-registry guard (the root cause behind the eager reaction-rate
+    # expansion): `_apply_variable_map!` rewrote the VISIBLE equation ASTs, but
+    # registry bodies are a shadow copy of authored source the substitution
+    # never sees. Fail loudly at flatten time rather than let the build
+    # boundary expand a stale name.
+    _check_registry_coupling_rewrites(template_registry, map_rewritten_names)
 
     # Step 3b: Pointwise spatial lift (§10.5). operator_compose has merged each
     # reaction/model state ODE with the spatial operator's advection; array-ify
@@ -629,9 +640,11 @@ fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
 # are not component variables, so the map never touches them. The caller's
 # `EsmFile` registry is untouched (emit still produces the authored bodies) —
 # this scopes a COPY for the flat registry only. Reaction-system blocks pass
-# through unscoped for now (their rate templates are expanded eagerly or carry
-# no free component names in the current corpus; a violation fails loudly at
-# build as an unbound variable).
+# through unscoped BY POLICY (the flatten invariant): references survive
+# flatten only in MODEL equations; reaction-RATE references are always expanded
+# eagerly at collect (`_collect_reaction_system!`, before namespacing), so a
+# reaction-system registry entry is never resolved against post-flatten — it
+# rides along solely so the reconstituted document round-trips.
 function _scope_component_templates(file::EsmFile)
     ct = file.component_templates
     ct === nothing && return nothing
@@ -672,6 +685,52 @@ function _scope_component_templates(file::EsmFile)
         out[String(compkey)] = newblock
     end
     return out
+end
+
+"""
+    _check_registry_coupling_rewrites(registry, rewritten)
+
+Shadow-registry validation (flatten-time, cheap): `_substitute_variable_map!`
+rewrites a coupling `variable_map`'s `to` name in every VISIBLE equation AST,
+but a surviving template-registry body is authored source the substitution
+never touches. If such a body still references a rewritten name, its expansion
+at the build boundary would surface a STALE reference (for `param_to_var` /
+`conversion_factor`, a deleted parameter → `E_TREEWALK_UNBOUND_VARIABLE` deep
+in the build; for the scaling transforms, a silent semantic divergence from the
+Expand-at-load image). Throw a clear error naming the template and the variable
+instead. Free names are collected with the generated walkers
+(`foreach_subexpr` descends `bindings` and `ranges`); the template's own formal
+`params` are its private scope and excluded.
+"""
+function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
+    (isempty(registry) || isempty(rewritten)) && return nothing
+    for tname in sort!(collect(keys(registry)))
+        decl = registry[tname]
+        _is_object(decl) || continue
+        body_raw = _raw_get(decl, "body")
+        body_raw === nothing && continue
+        pnames = Set{String}()
+        params_raw = _raw_get(decl, "params")
+        if params_raw isa AbstractVector
+            for p in params_raw
+                p isa AbstractString && push!(pnames, String(p))
+            end
+        end
+        names = Set{String}()
+        foreach_subexpr(parse_expression(body_raw)) do x
+            x isa VarExpr && push!(names, x.name)
+            nothing
+        end
+        hits = sort!(collect(intersect(setdiff(names, pnames), rewritten)))
+        isempty(hits) || throw(ExpressionTemplateError(
+            "template_body_references_coupling_rewritten_variable",
+            "expression template '$(String(tname))' body references " *
+            "'$(join(hits, "', '"))', which a coupling variable_map rewrote in " *
+            "the flattened equations; the registry body would expand to a stale " *
+            "name at the build boundary. Bind the value through the template's " *
+            "params, or expand the reference before coupling (esm-spec §9.6.4)."))
+    end
+    return nothing
 end
 
 function flattened_to_esm(flat::FlattenedSystem;
