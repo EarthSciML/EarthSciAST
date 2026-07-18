@@ -200,61 +200,6 @@ function _serialize_subsystem(v)::Dict{String,Any}
     end
 end
 
-"""
-    serialize_model(model::Model) -> Dict{String,Any}
-
-Serialize Model to JSON-compatible format.
-"""
-function serialize_model(model::Model)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "variables" => Dict(k => serialize_model_variable(v) for (k, v) in model.variables),
-        "equations" => [serialize_equation(eq) for eq in model.equations]
-    )
-
-    # Serialize discrete events if present
-    if !isempty(model.discrete_events)
-        result["discrete_events"] = [serialize_discrete_event(ev) for ev in model.discrete_events]
-    end
-
-    # Serialize continuous events if present
-    if !isempty(model.continuous_events)
-        result["continuous_events"] = [serialize_continuous_event(ev) for ev in model.continuous_events]
-    end
-
-    # Add subsystems if present. A subsystem value is a child Model, a
-    # DataLoader (RFC pure-io-data-loaders §4.3), or an unresolved SubsystemRef.
-    if !isempty(model.subsystems)
-        result["subsystems"] = Dict(k => _serialize_subsystem(v) for (k, v) in model.subsystems)
-    end
-
-    if model.tolerance !== nothing
-        result["tolerance"] = serialize_tolerance(model.tolerance)
-    end
-
-    if !isempty(model.tests)
-        result["tests"] = [serialize_test(t) for t in model.tests]
-    end
-
-    if !isempty(model.initialization_equations)
-        result["initialization_equations"] =
-            [serialize_equation(eq) for eq in model.initialization_equations]
-    end
-
-    if !isempty(model.guesses)
-        guesses_out = Dict{String,Any}()
-        for (k, v) in model.guesses
-            guesses_out[k] = v isa ASTExpr ?
-                serialize_expression(v) : v
-        end
-        result["guesses"] = guesses_out
-    end
-
-    if model.system_kind !== nothing
-        result["system_kind"] = model.system_kind
-    end
-
-    return result
-end
 
 
 
@@ -621,6 +566,22 @@ _emit_coupling_import_bind(entry::CouplingImport) = Dict{String,Any}(entry.bind)
 # otherwise; a set carrying neither omits the key.
 _emit_index_set_members(is::IndexSet) =
     is.members_raw !== nothing ? is.members_raw : is.members
+
+
+# Model `subsystems`: emitted when non-empty; each entry dispatches on its
+# §4.7 union arm (`_serialize_subsystem`).
+_emit_model_subsystems(m::Model) = isempty(m.subsystems) ? nothing :
+    Dict{String,Any}(k => _serialize_subsystem(v) for (k, v) in m.subsystems)
+
+# Model `guesses`: number-or-Expression map (gt-ebuq).
+function _emit_model_guesses(m::Model)
+    isempty(m.guesses) && return nothing
+    out = Dict{String,Any}()
+    for (k, v) in m.guesses
+        out[k] = v isa ASTExpr ? serialize_expression(v) : v
+    end
+    return out
+end
 
 
 # DiscreteEvent `affects` / `functional_affect` — the schema oneOf pair.

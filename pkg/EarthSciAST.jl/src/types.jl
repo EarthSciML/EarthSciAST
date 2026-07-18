@@ -2255,6 +2255,33 @@ const RECORD_FIELD_TABLES = (
         (f = :expression_template_imports, wire = "expression_template_imports", kind = :raw_vec,
          mode = :opt_empty, default = :(Any[]), emit = :nonempty),
     )),
+    (T = :Model, fn = :model, rows = (
+        (f = :variables, wire = "variables", kind = :record_map, of = :model_variable,
+         eltype = :ModelVariable, mode = :req, emit = :always, pos = true),
+        (f = :equations, wire = "equations", kind = :record_vec, of = :equation,
+         eltype = :Equation, mode = :req, emit = :always, pos = true),
+        (f = :discrete_events, wire = "discrete_events", kind = :record_vec, of = :discrete_event,
+         eltype = :DiscreteEvent, mode = :opt_empty, default = :(DiscreteEvent[]), emit = :nonempty),
+        (f = :continuous_events, wire = "continuous_events", kind = :record_vec, of = :continuous_event,
+         eltype = :ContinuousEvent, mode = :opt_empty, default = :(ContinuousEvent[]), emit = :nonempty),
+        (f = :initialization_equations, wire = "initialization_equations", kind = :record_vec,
+         of = :equation, eltype = :Equation, mode = :opt_empty, default = :(Equation[]),
+         emit = :nonempty),
+        # number-or-Expression solver guesses (gt-ebuq) — a per-value union,
+        # so a hand-written hook pair.
+        (f = :guesses, wire = "guesses", kind = :custom, parse_fn = :_coerce_model_guesses,
+         mode = :opt_empty, default = :(Dict{String,Union{Float64,ASTExpr}}()),
+         emit = :custom, emit_fn = :_emit_model_guesses),
+        (f = :system_kind, wire = "system_kind", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
+        (f = :tests, wire = "tests", kind = :record_vec, of = :test, eltype = :InlineTest,
+         mode = :opt_empty, default = :(InlineTest[]), emit = :nonempty),
+        # schema §4.7 subsystems: per-entry oneOf [Model, DataLoader,
+        # SubsystemRef], sniffed by the hand-written union hooks.
+        (f = :subsystems, wire = "subsystems", kind = :custom, parse_fn = :_coerce_model_subsystems,
+         mode = :opt_empty, default = :(Dict{String,SubsystemNode}()),
+         emit = :custom, emit_fn = :_emit_model_subsystems),
+    )),
 )
 
 # Each entry's rows (plus the injected map-key name, when marked) must cover

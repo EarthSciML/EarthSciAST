@@ -725,76 +725,6 @@ end
 
 
 
-"""
-    coerce_model(data::Any) -> Model
-
-Coerce JSON data into Model type.
-"""
-function coerce_model(data::Any)::Model
-    variables = Dict{String,ModelVariable}()
-    for (k, v) in pairs(data["variables"])
-        variables[string(k)] = coerce_model_variable(v)
-    end
-
-    equations = [coerce_equation(eq) for eq in data["equations"]]
-
-    # Handle new schema format with separate event arrays
-    discrete_events = DiscreteEvent[]
-    continuous_events = ContinuousEvent[]
-
-    if haskey(data, "discrete_events")
-        discrete_events = [coerce_discrete_event(ev) for ev in data["discrete_events"]]
-    end
-
-    if haskey(data, "continuous_events")
-        continuous_events = [coerce_continuous_event(ev) for ev in data["continuous_events"]]
-    end
-
-    # Initialization equations and solver guesses (gt-ebuq).
-    initialization_equations = _maybe(_get_field(data, :initialization_equations, nothing)) do eqs
-        [coerce_equation(eq) for eq in eqs]
-    end
-    initialization_equations === nothing && (initialization_equations = Equation[])
-    guesses = Dict{String,Union{Float64,ASTExpr}}()
-    guesses_raw = _get_field(data, :guesses, nothing)
-    if guesses_raw !== nothing
-        for (k, v) in pairs(guesses_raw)
-            if v isa Number
-                guesses[string(k)] = Float64(v)
-            else
-                guesses[string(k)] = parse_expression(v)
-            end
-        end
-    end
-    system_kind = _opt_string(data, :system_kind)
-
-    # Inline tests / tolerance (schema gt-cc1).
-    tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
-    tests_raw = _get_field(data, :tests, nothing)
-    tests = tests_raw !== nothing ?
-        EarthSciAST.InlineTest[coerce_test(t) for t in tests_raw] :
-        EarthSciAST.InlineTest[]
-
-    # Inline subsystems (schema §4.7, oneOf [Model, DataLoader, SubsystemRef]):
-    # each entry is coerced by `_coerce_subsystem_entry`.
-    subsystems = Dict{String,SubsystemNode}()
-    subsystems_raw = _get_field(data, :subsystems, nothing)
-    if subsystems_raw !== nothing
-        for (k, v) in pairs(subsystems_raw)
-            subsystems[string(k)] = _coerce_subsystem_entry(string(k), v)
-        end
-    end
-
-    return Model(variables, equations;
-                 discrete_events=discrete_events,
-                 continuous_events=continuous_events,
-                 subsystems=subsystems,
-                 tolerance=tolerance,
-                 tests=tests,
-                 initialization_equations=initialization_equations,
-                 guesses=guesses,
-                 system_kind=system_kind)
-end
 
 """
     _coerce_subsystem_entry(name::String, v) -> Union{Model,DataLoader,SubsystemRef}
@@ -1019,6 +949,22 @@ end
 # `:custom` rows below name their hand-written per-field hooks.
 
 # ── Hand-written `:custom` parse hooks (named by RECORD_FIELD_TABLES rows) ──
+# Model `guesses`: number-or-Expression solver-guess map (gt-ebuq).
+function _coerce_model_guesses(v)
+    guesses = Dict{String,Union{Float64,ASTExpr}}()
+    for (k, x) in pairs(v)
+        guesses[string(k)] = x isa Number ? Float64(x) : parse_expression(x)
+    end
+    return guesses
+end
+
+# Model `subsystems` (schema §4.7): each entry is oneOf [Model, DataLoader,
+# SubsystemRef], sniffed per entry by `_coerce_subsystem_entry` (the key is
+# threaded in for metaparameter-binding diagnostics).
+_coerce_model_subsystems(v) = Dict{String,SubsystemNode}(
+    string(k) => _coerce_subsystem_entry(string(k), x) for (k, x) in pairs(v))
+
+
 # DiscreteEvent `affects`: each entry must carry both lhs and rhs (pinned
 # per-entry ParseError), then coerces as an ordinary AffectEquation.
 function _coerce_discrete_affects(v)
