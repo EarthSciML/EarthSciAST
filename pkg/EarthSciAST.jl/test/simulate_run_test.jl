@@ -171,4 +171,24 @@ const ESM_S = EarthSciAST
         # The reaction really ran (B is fed by chemistry only; the couple never touches it).
         @test r["Chem.B"][end] > 1e-3
     end
+
+    @testset "preserve_refs=true (compile-once tier) == fused solve, bit-identical" begin
+        # `simulate(...; preserve_refs=true)` SKIPS `expand_flattened_refs`, carrying
+        # surviving `apply_expression_template` references to the build boundary where
+        # the affine compile-once tier factors each body once (RFC out-of-line-
+        # templates step c) instead of the fused per-node Expand. The SOLVED state
+        # must be bit-identical to the default fused path — gate 3 through the full
+        # `simulate` pipeline (provider-free, self-contained bench fixture). This is
+        # the reseact.esm Stage-C build path: 321 PPM references survive, the doc is
+        # ~277x smaller, and the tier build replaces a ~200M-node-lowering fused build.
+        fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
+                       "transport_3axis_7cubed_fullrank.esm")
+        rf = ESM_S.simulate(ESM_S.load(fix), (0.0, 0.5); alg = Tsit5(),
+                            saveat = [0.0, 0.5], preserve_refs = false)
+        rt = ESM_S.simulate(ESM_S.load(fix), (0.0, 0.5); alg = Tsit5(),
+                            saveat = [0.0, 0.5], preserve_refs = true)
+        @test rf.success && rt.success
+        @test length(rf.u[end]) == 343
+        @test rf.u[end] == rt.u[end]        # exact ==, no tolerance
+    end
 end

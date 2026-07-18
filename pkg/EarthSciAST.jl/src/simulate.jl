@@ -95,7 +95,7 @@ const DEFAULT_SIM_ABSTOL = 1e-6
 # always produced. `base_path = pwd()` anchors its relative refs, a file input
 # anchoring them at its own directory.
 # --------------------------------------------------------------------------- #
-function _prepare_run_doc(input)
+function _prepare_run_doc(input; preserve_refs::Bool=false)
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
         input = load(input)
@@ -115,7 +115,18 @@ function _prepare_run_doc(input)
         # Sound per-node `Expand` fallback (RFC §7.7): references that reached the
         # tree-walk build are expanded here, bit-identically to the Expand-at-load
         # image (gate d). No-op for a reference-free system.
-        input = expand_flattened_refs(input)
+        #
+        # OPT-IN (`preserve_refs=true`): SKIP this eager expansion and carry the
+        # surviving references through `flattened_to_esm` to the build boundary,
+        # where `_build_evaluator_impl` expands them with SITE RECORDING and the
+        # affine-stencil compile-once tier factors each body once per (use site,
+        # region class) instead of fusing it into every branch spine (RFC step c;
+        # ~50x fewer node-lowerings on the ESD PPM stack). The downstream shape
+        # transforms below only inspect equation LHS / infer shapes from
+        # already-shaped operands, so a surviving `apply_expression_template` node
+        # rides through them untouched. Default `false` keeps the byte-identical
+        # fused path for every existing caller.
+        preserve_refs || (input = expand_flattened_refs(input))
         # Lift a feed-forward algebraic physics chain authored as scalars into the
         # grid shape it inherits from the fields it reads (regrid outputs, loader
         # fields, the spatial state), so a scalar observed that consumes a build-once
@@ -285,8 +296,9 @@ function simulate(input, tspan;
                   abstol::Float64 = DEFAULT_SIM_ABSTOL,
                   saveat = nothing,
                   inspect::Union{Nothing,BuildInspection} = nothing,
-                  materialize_out::Union{Nothing,DiscreteMaterializer} = nothing)
-    doc = _prepare_run_doc(input)
+                  materialize_out::Union{Nothing,DiscreteMaterializer} = nothing,
+                  preserve_refs::Bool = false)
+    doc = _prepare_run_doc(input; preserve_refs=preserve_refs)
 
     overrides = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in parameters)
 
