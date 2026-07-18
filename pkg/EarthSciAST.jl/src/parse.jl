@@ -1104,88 +1104,10 @@ function coerce_reaction(data::Any)::Reaction
 end
 
 
-"""
-    coerce_data_loader_source(data::Any) -> DataLoaderSource
 
-Coerce JSON data into a DataLoaderSource.
-"""
-function coerce_data_loader_source(data::Any)::DataLoaderSource
-    url_template = string(data["url_template"])
-    mirrors = _maybe(_get_field(data, :mirrors, nothing)) do ms
-        [string(m) for m in ms]
-    end
-    return DataLoaderSource(url_template; mirrors=mirrors)
-end
 
-"""
-    coerce_data_loader_temporal(data::Any) -> DataLoaderTemporal
-"""
-function coerce_data_loader_temporal(data::Any)::DataLoaderTemporal
-    start = _opt_string(data, :start)
-    stop = _opt_string(data, :end)
-    file_period = _opt_string(data, :file_period)
-    frequency = _opt_string(data, :frequency)
-    records_per_file = _maybe(_get_field(data, :records_per_file, nothing)) do v
-        v isa Number ? Int(v) : string(v)
-    end
-    time_variable = _opt_string(data, :time_variable)
-    return DataLoaderTemporal(; start=start, stop=stop, file_period=file_period,
-                              frequency=frequency, records_per_file=records_per_file,
-                              time_variable=time_variable)
-end
 
-"""
-    coerce_data_loader_variable(data::Any) -> DataLoaderVariable
-"""
-function coerce_data_loader_variable(data::Any)::DataLoaderVariable
-    file_variable = string(data["file_variable"])
-    units = string(data["units"])
-    unit_conversion = _maybe(_get_field(data, :unit_conversion, nothing)) do v
-        v isa Number ? Float64(v) : parse_expression(v)
-    end
-    description = _opt_string(data, :description)
-    reference = _maybe(coerce_reference, _get_field(data, :reference, nothing))
-    return DataLoaderVariable(file_variable, units;
-                              unit_conversion=unit_conversion,
-                              description=description,
-                              reference=reference)
-end
 
-"""
-    coerce_data_loader_determinism(data::Any) -> DataLoaderDeterminism
-"""
-function coerce_data_loader_determinism(data::Any)::DataLoaderDeterminism
-    endian = _opt_string(data, :endian)
-    float_format = _opt_string(data, :float_format)
-    integer_width = _opt_int(data, :integer_width)
-    return DataLoaderDeterminism(; endian=endian, float_format=float_format, integer_width=integer_width)
-end
-
-"""
-    coerce_data_loader(data::Any) -> DataLoader
-
-Coerce JSON data into the STAC-like DataLoader type.
-"""
-function coerce_data_loader(data::Any)::DataLoader
-    kind = string(data["kind"])
-    source = coerce_data_loader_source(data["source"])
-
-    temporal = _maybe(coerce_data_loader_temporal, _get_field(data, :temporal, nothing))
-    determinism = _maybe(coerce_data_loader_determinism, _get_field(data, :determinism, nothing))
-
-    variables = Dict{String,DataLoaderVariable}(
-        string(k) => coerce_data_loader_variable(v) for (k, v) in pairs(data["variables"])
-    )
-
-    reference = _maybe(coerce_reference, _get_field(data, :reference, nothing))
-    metadata = _maybe(_to_native_json, _get_field(data, :metadata, nothing))
-
-    return DataLoader(kind, source, variables;
-                      temporal=temporal,
-                      determinism=determinism,
-                      reference=reference,
-                      metadata=metadata)
-end
 
 """
     coerce_coupling_entry(data::Any) -> CouplingEntry

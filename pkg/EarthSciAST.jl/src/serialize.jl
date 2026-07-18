@@ -503,87 +503,10 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_data_loader_source(src::DataLoaderSource) -> Dict{String,Any}
-"""
-function serialize_data_loader_source(src::DataLoaderSource)::Dict{String,Any}
-    result = Dict{String,Any}("url_template" => src.url_template)
-    if src.mirrors !== nothing
-        result["mirrors"] = src.mirrors
-    end
-    return result
-end
 
-"""
-    serialize_data_loader_temporal(t::DataLoaderTemporal) -> Dict{String,Any}
-"""
-function serialize_data_loader_temporal(t::DataLoaderTemporal)::Dict{String,Any}
-    result = Dict{String,Any}()
-    t.start !== nothing && (result["start"] = t.start)
-    t.stop !== nothing && (result["end"] = t.stop)
-    t.file_period !== nothing && (result["file_period"] = t.file_period)
-    t.frequency !== nothing && (result["frequency"] = t.frequency)
-    t.records_per_file !== nothing && (result["records_per_file"] = t.records_per_file)
-    t.time_variable !== nothing && (result["time_variable"] = t.time_variable)
-    return result
-end
 
-"""
-    serialize_data_loader_variable(v::DataLoaderVariable) -> Dict{String,Any}
-"""
-function serialize_data_loader_variable(v::DataLoaderVariable)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "file_variable" => v.file_variable,
-        "units" => v.units,
-    )
-    if v.unit_conversion !== nothing
-        result["unit_conversion"] = v.unit_conversion isa Number ?
-            v.unit_conversion : serialize_expression(v.unit_conversion)
-    end
-    v.description !== nothing && (result["description"] = v.description)
-    v.reference !== nothing && (result["reference"] = serialize_reference(v.reference))
-    return result
-end
 
-"""
-    serialize_data_loader_determinism(d::DataLoaderDeterminism) -> Dict{String,Any}
-"""
-function serialize_data_loader_determinism(d::DataLoaderDeterminism)::Dict{String,Any}
-    result = Dict{String,Any}()
-    d.endian !== nothing && (result["endian"] = d.endian)
-    d.float_format !== nothing && (result["float_format"] = d.float_format)
-    d.integer_width !== nothing && (result["integer_width"] = d.integer_width)
-    return result
-end
 
-"""
-    serialize_data_loader(loader::DataLoader) -> Dict{String,Any}
-
-Serialize DataLoader to JSON-compatible format (STAC-like shape).
-"""
-function serialize_data_loader(loader::DataLoader)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "kind" => loader.kind,
-        "source" => serialize_data_loader_source(loader.source),
-        "variables" => Dict{String,Any}(
-            k => serialize_data_loader_variable(v) for (k, v) in loader.variables
-        ),
-    )
-    if loader.temporal !== nothing
-        result["temporal"] = serialize_data_loader_temporal(loader.temporal)
-    end
-    if loader.determinism !== nothing
-        det_dict = serialize_data_loader_determinism(loader.determinism)
-        isempty(det_dict) || (result["determinism"] = det_dict)
-    end
-    if loader.reference !== nothing
-        result["reference"] = serialize_reference(loader.reference)
-    end
-    if loader.metadata !== nothing
-        result["metadata"] = loader.metadata
-    end
-    return result
-end
 
 # NOTE: `serialize_operator` / `serialize_registered_function` were removed
 # along with the `operators` / `registered_functions` emit path (esm-spec
@@ -980,6 +903,17 @@ function _record_emit_expr(row, v)
     else
         v
     end
+end
+
+# ── Hand-written `:custom` emit hooks (cross-field / doubly-conditional
+# omission policies the table names by symbol; `nothing` skips the key) ──────
+
+# DataLoader.determinism: emitted only when present AND its serialized dict is
+# non-empty (the historical `isempty(det_dict) ||` guard).
+function _emit_data_loader_determinism(loader::DataLoader)
+    loader.determinism === nothing && return nothing
+    det = serialize_data_loader_determinism(loader.determinism)
+    return isempty(det) ? nothing : det
 end
 
 # One emit statement per row, per the row's `emit` omission policy; `nothing`

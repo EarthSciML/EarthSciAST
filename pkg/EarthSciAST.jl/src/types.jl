@@ -2080,6 +2080,45 @@ const RECORD_FIELD_TABLES = (
          mode = :default, default = "t", emit = :nondefault),
         (f = :temporal, wire = "temporal", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
     )),
+    (T = :DataLoaderSource, fn = :data_loader_source, rows = (
+        (f = :url_template, wire = "url_template", kind = :string, mode = :req, emit = :always, pos = true),
+        (f = :mirrors,      wire = "mirrors",      kind = :string_vec, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :DataLoaderTemporal, fn = :data_loader_temporal, rows = (
+        (f = :start,            wire = "start",            kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :stop,             wire = "end",              kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :file_period,      wire = "file_period",      kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :frequency,        wire = "frequency",        kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :records_per_file, wire = "records_per_file", kind = :number_or_string, mode = :opt, emit = :nonnothing),
+        (f = :time_variable,    wire = "time_variable",    kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :DataLoaderVariable, fn = :data_loader_variable, rows = (
+        (f = :file_variable,   wire = "file_variable",   kind = :string, mode = :req, emit = :always, pos = true),
+        (f = :units,           wire = "units",           kind = :string, mode = :req, emit = :always, pos = true),
+        (f = :unit_conversion, wire = "unit_conversion", kind = :number_or_expr, mode = :opt, emit = :nonnothing),
+        (f = :description,     wire = "description",     kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :reference,       wire = "reference",       kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :DataLoaderDeterminism, fn = :data_loader_determinism, rows = (
+        (f = :endian,        wire = "endian",        kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :float_format,  wire = "float_format",  kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :integer_width, wire = "integer_width", kind = :int,    mode = :opt, emit = :nonnothing),
+    )),
+    (T = :DataLoader, fn = :data_loader, rows = (
+        (f = :kind,   wire = "kind",   kind = :string, mode = :req, emit = :always, pos = true),
+        (f = :source, wire = "source", kind = :record, of = :data_loader_source, mode = :req, emit = :always, pos = true),
+        (f = :temporal,    wire = "temporal",    kind = :record, of = :data_loader_temporal, mode = :opt, emit = :nonnothing),
+        # Emit-side residue AS A COLUMN: determinism is emitted only when
+        # present AND its serialized dict is non-empty (the historical
+        # `isempty(det_dict) ||` guard) — a cross-field-free but
+        # doubly-conditional policy, so it names a hand-written hook.
+        (f = :determinism, wire = "determinism", kind = :record, of = :data_loader_determinism, mode = :opt,
+         emit = :custom, emit_fn = :_emit_data_loader_determinism),
+        (f = :variables, wire = "variables", kind = :record_map, of = :data_loader_variable,
+         eltype = :DataLoaderVariable, mode = :req, emit = :always, pos = true),
+        (f = :reference, wire = "reference", kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
+        (f = :metadata,  wire = "metadata",  kind = :raw, mode = :opt, emit = :nonnothing),
+    )),
 )
 
 # Each entry's rows (plus the injected map-key name, when marked) must cover
