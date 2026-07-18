@@ -78,11 +78,13 @@ System`, `ModelingToolkit.PDESystem`, and `Catalyst.ReactionSystem` on ESM
 types are defined in package extensions (`EarthSciASTMTKExt`,
 `EarthSciASTCatalystExt`) that activate automatically.
 
-Without these packages loaded, the `MockMTKSystem`, `MockPDESystem`, and
-`MockCatalystSystem` types provide pure-Julia fallbacks with the same
-ODE-vs-PDE dispatch semantics — calling `MockMTKSystem(model)` on a model
-that flattens to a PDE throws an `ArgumentError` pointing at `MockPDESystem`
-(and vice versa).
+Without these packages loaded, the package is still fully usable:
+[`flatten`](@ref) produces a pure-Julia [`FlattenedSystem`](@ref) snapshot,
+and the MTK-free tree-walk runtime ([`build_evaluator`](@ref),
+[`simulate`](@ref)) runs models end to end. Only the symbolic
+`ModelingToolkit`/`Catalyst` constructors require the weak dependencies —
+calling one without its package loaded throws an `ArgumentError` naming
+what to load.
 
 ```@index
 ```

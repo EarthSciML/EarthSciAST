@@ -47,8 +47,9 @@ sys = ModelingToolkit.System(model; name=:AtmosphereModel)
 # Or, for models with spatial independent variables:
 # pde = ModelingToolkit.PDESystem(model; name=:AtmosphereModel)
 
-# Without ModelingToolkit loaded, the same pattern works via mock fallbacks:
-mock_sys = MockMTKSystem(model; name=:AtmosphereModel)
+# Without ModelingToolkit loaded, flatten() and the MTK-free runtime still work:
+flat = flatten(esm_file)
+result = simulate("model.esm", (0.0, 1.0))
 
 # Validate the model
 result = validate(esm_file)
@@ -76,9 +77,9 @@ rxn  = Catalyst.ReactionSystem(esm_file.reaction_systems["Chem"]; name=:Chem)
 recovered = EarthSciAST.Model(sys)
 ```
 
-The `MockMTKSystem`, `MockPDESystem`, and `MockCatalystSystem` types provide
-pure-Julia fallbacks when ModelingToolkit and Catalyst are not loaded, with
-the same ODE-vs-PDE dispatch semantics as the real constructors.
+When ModelingToolkit and Catalyst are not loaded, the pure-Julia path still
+covers the full pipeline: `flatten` produces a `FlattenedSystem` snapshot, and
+the tree-walk runtime (`build_evaluator`, `simulate`) runs it end to end.
 
 ## Documentation
 

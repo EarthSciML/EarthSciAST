@@ -91,8 +91,8 @@ end
 # Build symbolic variable dictionaries from a FlattenedSystem
 # ========================================
 
-# (The ODE-vs-PDE predicate `_has_spatial_ivs` is shared with the mock
-# systems and lives in src/mock_systems.jl.)
+# (The ODE-vs-PDE predicate `_has_spatial_ivs` lives in src/flatten.jl,
+# next to `FlattenedSystem`.)
 
 """
 Create Symbolics.jl variable/parameter symbols for every state, parameter, and

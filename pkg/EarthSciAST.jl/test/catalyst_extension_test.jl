@@ -39,7 +39,6 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
                                                         parameters=params)
 
         cat_rsys = Catalyst.ReactionSystem(esm_rsys; name=:OzonePhoto)
-        @test !(cat_rsys isa MockCatalystSystem)
         @test occursin("ReactionSystem", string(typeof(cat_rsys)))
 
         species_names = Set(string(Catalyst.getname(s))
