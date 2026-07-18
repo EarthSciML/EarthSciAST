@@ -710,8 +710,20 @@ end
 # LOWER slots — the box loop fills them front-to-back. Skipped for any spine with a
 # `_NK_REDUCE` (its body reads the neighbour index `n`, which the per-cell prelude —
 # run at n=0 — cannot capture).
-_acc_has_reduce(n::_Node) =
-    n.kind === _NK_REDUCE || any(_acc_has_reduce, n.children)
+# Identity-deduped existence predicate (ESS-0hh): the spine is a DAG (its
+# builders memoize by node identity), and the per-path recursion was
+# exponential on a doubling chain. A predicate is path-multiplicity-
+# insensitive, so a visited set is exactly equivalent.
+_acc_has_reduce(n::_Node) = _acc_has_reduce(n, IdDict{_Node,Nothing}())
+function _acc_has_reduce(n::_Node, seen::IdDict{_Node,Nothing})
+    n.kind === _NK_REDUCE && return true
+    haskey(seen, n) && return false
+    seen[n] = nothing
+    for c in n.children
+        _acc_has_reduce(c, seen) && return true
+    end
+    return false
+end
 
 # Structural key: two nodes share a value number iff their keys are equal. ACCESS
 # keys on descriptor CONTENT (`_desc_key`); an OP with a payload (interp `:fn`)
@@ -740,8 +752,29 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     key_to_vn = Dict{Any,Int}()
     vn_of = IdDict{_Node,Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
-    function number(n::_Node)
-        childvns = Int[number(c) for c in n.children]
+    # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
+    # exactly what earns a CSE slot — collapsing to distinct-node visits would
+    # change slot decisions on shared spines), but the spine is a DAG whose
+    # per-path recursion was exponential (ESS-0hh). Mirror `_cse_count!`
+    # (compile.jl): number each UNIQUE node once in identity-deduped postorder
+    # (a child's vn stays < its parent's, preserving the dependency-order
+    # invariant the recipe tiers rely on), then propagate saturating path
+    # multiplicities parent→child in reverse postorder and tally each unique
+    # node's multiplicity into its value number — identical totals to the full
+    # path enumeration, O(nodes + edges).
+    order = _Node[]
+    seen = IdDict{_Node,Nothing}()
+    function collect_postorder(n::_Node)
+        haskey(seen, n) && return
+        seen[n] = nothing
+        for c in n.children
+            collect_postorder(c)
+        end
+        push!(order, n)
+    end
+    collect_postorder(spine)
+    for n in order          # postorder ⇒ children already numbered
+        childvns = Int[vn_of[c] for c in n.children]
         key = _acc_vn_key(n, childvns, acc)
         vn = get(key_to_vn, key, 0)
         if vn == 0
@@ -754,11 +787,21 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
                   false                       # _NK_REDUCE excluded upstream; be safe
             push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
         end
-        counts[vn] += 1
         vn_of[n] = vn
-        return vn
     end
-    number(spine)
+    mult = IdDict{_Node,Int}()
+    mult[spine] = 1
+    for i in length(order):-1:1    # reverse postorder = parents before children
+        n = order[i]
+        m = get(mult, n, 0)
+        for c in n.children
+            mult[c] = _sat_add(get(mult, c, 0), m)
+        end
+    end
+    for n in order
+        vn = vn_of[n]
+        counts[vn] = _sat_add(counts[vn], get(mult, n, 0))
+    end
     # Two-tier slot assignment, in value-number order (a child's vn is always below
     # its parent's, so each tier's recipes end up dependency-ordered): every
     # invariant OP is hoisted to a per-call slot (once per call beats once per
@@ -775,16 +818,33 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     (isempty(inv_slot) && isempty(cell_slot)) && return (spine, _ACC_NO_CSE)
     inv_scratch = _AccScratch(length(inv_slot))
     cell_scratch = _AccScratch(length(cell_slot))
+    # Identity-memoized rewrite: `rw`'s output depends only on the node (its vn
+    # and rewritten children), so a shared input node maps to ONE shared output
+    # node — without the memo the per-path rebuild re-inflated a shared spine
+    # into an exponentially large tree (ESS-0hh). Values are unchanged: the
+    # runner evaluates the same ops on the same inputs either way.
+    rw_memo = IdDict{_Node,_Node}()
     function rw(n::_Node)
+        cached = get(rw_memo, n, nothing)
+        cached === nothing || return cached
         vn = vn_of[n]
         s = get(inv_slot, vn, 0)
-        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=inv_scratch)
-        s = get(cell_slot, vn, 0)
-        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=cell_scratch)
-        isempty(n.children) && return n
-        return _mknode(kind=n.kind, op=n.op, literal=n.literal, idx=n.idx,
-                       sym=n.sym, payload=n.payload,
-                       children=_Node[rw(c) for c in n.children])
+        result = if s != 0
+            _mknode(kind=_NK_CACHED, idx=s, payload=inv_scratch)
+        else
+            s = get(cell_slot, vn, 0)
+            if s != 0
+                _mknode(kind=_NK_CACHED, idx=s, payload=cell_scratch)
+            elseif isempty(n.children)
+                n
+            else
+                _mknode(kind=n.kind, op=n.op, literal=n.literal, idx=n.idx,
+                        sym=n.sym, payload=n.payload,
+                        children=_Node[rw(c) for c in n.children])
+            end
+        end
+        rw_memo[n] = result
+        return result
     end
     _recipe(vn) = (r = rep[vn];
         _mknode(kind=r.kind, op=r.op, literal=r.literal, idx=r.idx, sym=r.sym,

@@ -34,10 +34,21 @@
 # upper / filter / key / values / table_axes / ranges bounds. A clip nested in
 # e.g. a makearray region value would not seed the geometry-setup pass —
 # flagged for Wave 3.
+# Identity-deduped existence predicate (ESS-0hh): path-multiplicity-
+# insensitive, so the visited set is exactly equivalent — and O(nodes) on the
+# structurally-shared trees the fold/template passes produce.
 _expr_has_intersect_polygon(e::OpExpr) =
-    e.op == "intersect_polygon" ||
-    any(_expr_has_intersect_polygon, e.args) ||
-    (e.expr_body !== nothing && _expr_has_intersect_polygon(e.expr_body))
+    _expr_has_intersect_polygon(e, IdDict{OpExpr,Nothing}())
+function _expr_has_intersect_polygon(e::OpExpr, seen::IdDict{OpExpr,Nothing})
+    e.op == "intersect_polygon" && return true
+    haskey(seen, e) && return false
+    seen[e] = nothing
+    for a in e.args
+        a isa OpExpr && _expr_has_intersect_polygon(a, seen) && return true
+    end
+    return e.expr_body isa OpExpr &&
+           _expr_has_intersect_polygon(e.expr_body::OpExpr, seen)
+end
 _expr_has_intersect_polygon(::ASTExpr) = false
 _equations_have_intersect_polygon(eqs) =
     any(eq -> _expr_has_intersect_polygon(eq.lhs) || _expr_has_intersect_polygon(eq.rhs), eqs)
@@ -132,11 +143,20 @@ end
 
 # True iff any node in the subtree is a polygon_intersection_area op.
 # INTENTIONAL field subset — args / expr_body only, the exact mirror of
-# `_expr_has_intersect_polygon` above (see the Wave-3 note there).
+# `_expr_has_intersect_polygon` above (see the Wave-3 note there), including
+# its identity-deduped visited set (ESS-0hh).
 _expr_has_polygon_intersection_area(e::OpExpr) =
-    e.op == "polygon_intersection_area" ||
-    any(_expr_has_polygon_intersection_area, e.args) ||
-    (e.expr_body !== nothing && _expr_has_polygon_intersection_area(e.expr_body))
+    _expr_has_polygon_intersection_area(e, IdDict{OpExpr,Nothing}())
+function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr,Nothing})
+    e.op == "polygon_intersection_area" && return true
+    haskey(seen, e) && return false
+    seen[e] = nothing
+    for a in e.args
+        a isa OpExpr && _expr_has_polygon_intersection_area(a, seen) && return true
+    end
+    return e.expr_body isa OpExpr &&
+           _expr_has_polygon_intersection_area(e.expr_body::OpExpr, seen)
+end
 _expr_has_polygon_intersection_area(::ASTExpr) = false
 
 # An intersection-area leaf may live in an equation LHS/RHS or in an observed

@@ -88,20 +88,41 @@ const _SELF_INDEXED_OPS = _ops_with(:self_indexed)
 # (below) and `_lift_rhs_to_cell` (pointwise_lift.jl). The raw-JSON dict twin
 # of this rewrite is `_index_bare` (below), which walks a discretized native
 # document instead of typed Exprs.
+# IDENTITY-MEMOIZED (ESS-0hh): the rewrite is a pure function of the node —
+# `arrayvars`, `loops`, and both predicates are fixed within one call — so a
+# shared node rewrites to ONE shared output node. Without the memo the
+# per-path `reconstruct` re-inflated a structurally-shared input DAG (e.g. a
+# folded elementwise array-observed chain, whose sharing `_substitute_shared`
+# deliberately preserves) into an exponentially large output TREE. The memo
+# is fresh per top-level call; only `OpExpr` nodes are memoized (leaves are
+# immutable, childless, and O(1) to re-handle).
 function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
                                loops::Vector{String};
                                wrap_node, stop_node)::ASTExpr
+    return _wrap_bare_array_refs(expr, arrayvars, loops, wrap_node, stop_node,
+                                 IdDict{OpExpr,ASTExpr}())
+end
+function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
+                               loops::Vector{String}, wrap_node, stop_node,
+                               memo::IdDict{OpExpr,ASTExpr})::ASTExpr
     if expr isa VarExpr
         expr.name in arrayvars || return expr
         return _index_wrap(expr, loops)
     elseif expr isa OpExpr
-        wrap_node(expr) && return _index_wrap(expr, loops)
-        stop_node(expr) && return expr
-        new_args = ASTExpr[_wrap_bare_array_refs(a, arrayvars, loops;
-                                              wrap_node=wrap_node,
-                                              stop_node=stop_node)
-                        for a in expr.args]
-        return reconstruct(expr; args=new_args)
+        cached = get(memo, expr, nothing)
+        cached === nothing || return cached
+        result = if wrap_node(expr)
+            _index_wrap(expr, loops)
+        elseif stop_node(expr)
+            expr
+        else
+            new_args = ASTExpr[_wrap_bare_array_refs(a, arrayvars, loops,
+                                                     wrap_node, stop_node, memo)
+                               for a in expr.args]
+            reconstruct(expr; args=new_args)
+        end
+        memo[expr] = result
+        return result
     end
     return expr
 end

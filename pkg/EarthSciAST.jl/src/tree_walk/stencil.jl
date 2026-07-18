@@ -150,9 +150,14 @@ _TemplateCtx(sites::IdDict{OpExpr,OpExpr}, var_map::Dict{String,Int},
 # negative would return an unsubstituted loop var to resolve → a hard build
 # error instead of a fallback). Cold path — called once per branch template,
 # not per cell (the per-cell guard is the memoized `_refs_idxset`).
+# IDENTITY-MEMOIZED (`foreach_subexpr_once`): a pure existence predicate is
+# path-multiplicity-insensitive, and the branch-template expressions scanned
+# here share subtrees by reference (`_sub_preserving`) — the per-path walk was
+# exponential on a doubling chain (ESS-0hh). The memo is per call, which is
+# per QUERY: `idxset` is fixed within a call, so a node's answer cannot change.
 function _refs_loop_var(e::ASTExpr, idxset::Set{String})
     found = false
-    foreach_subexpr(e) do x
+    foreach_subexpr_once(e) do x
         found || (x isa VarExpr && x.name in idxset && (found = true))
         nothing
     end
@@ -524,30 +529,47 @@ end
 # invariant short-circuit, same region selection, same aggregate output-index
 # substitution — so a shared signature guarantees a shared template. `memo` caches
 # per-node variable sets across cells so the invariant guard costs O(|idxset|).
+#
+# IDENTITY-DEDUPED traversal (ESS-0hh): `seen` (fresh per top-level call, i.e.
+# per cell/site keying) enters each distinct `OpExpr` once, so keying a
+# structurally-shared spine (the obs-inlined body is a compact DAG by
+# `_sub_preserving` construction) is O(distinct nodes), not once per PATH.
+# The emitted STRING changes with this (a shared `index(makearray)` site
+# prints its `M<r>;` segment once instead of once per path), but the string
+# is ONLY ever compared to other strings produced by this same function over
+# the SAME body object (`branch_cache` / template-variant keys within one
+# equation build), and key-EQUALITY classes are preserved exactly: the
+# traversal — which sites are visited, in which order, and what each prints —
+# is a deterministic function of the fixed body DAG plus the per-cell region
+# selections, so two cells produce equal deduped keys iff they select equal
+# regions at every reachable site iff their per-path keys were equal.
 function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays,
-                      memo::IdDict{OpExpr,Bool})
+                      memo::IdDict{OpExpr,Bool},
+                      seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}())
     e isa OpExpr || return
     _refs_idxset(e, idxset, memo) || return
+    haskey(seen, e) && return
+    seen[e] = nothing
     if e.op == "index" && !isempty(e.args)
         fa = e.args[1]
         if fa isa OpExpr && (fa.op == "makearray" || _is_aggregate_op(fa.op))
-            _branch_key_indexed!(io, fa::OpExpr, e.args[2:end], idxset, idx_env, const_arrays, memo)
+            _branch_key_indexed!(io, fa::OpExpr, e.args[2:end], idxset, idx_env, const_arrays, memo, seen)
             return
         end
     end
     for a in e.args
-        _branch_key!(io, a, idxset, idx_env, const_arrays, memo)
+        _branch_key!(io, a, idxset, idx_env, const_arrays, memo, seen)
     end
-    e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays, memo)
+    e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays, memo, seen)
     if e.values !== nothing
         for v in e.values
-            _branch_key!(io, v, idxset, idx_env, const_arrays, memo)
+            _branch_key!(io, v, idxset, idx_env, const_arrays, memo, seen)
         end
     end
 end
 function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTExpr},
                               idxset::Set{String}, idx_env, const_arrays,
-                              memo::IdDict{OpExpr,Bool})
+                              memo::IdDict{OpExpr,Bool}, seen::IdDict{OpExpr,Nothing})
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
         r, _ = _select_region(producer, kvals)
@@ -556,9 +578,9 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         values = producer.values === nothing ? ASTExpr[] : producer.values
         sel = values[r]
         if _is_array_producer(sel)
-            _branch_key_indexed!(io, sel::OpExpr, kargs, idxset, idx_env, const_arrays, memo)
+            _branch_key_indexed!(io, sel::OpExpr, kargs, idxset, idx_env, const_arrays, memo, seen)
         else
-            _branch_key!(io, sel, idxset, idx_env, const_arrays, memo)
+            _branch_key!(io, sel, idxset, idx_env, const_arrays, memo, seen)
         end
         return
     end
@@ -585,7 +607,7 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
             added[d] = true
         end
     end
-    _branch_key!(io, body, idxset, idx_env, const_arrays, memo)
+    _branch_key!(io, body, idxset, idx_env, const_arrays, memo, seen)
     for d in n:-1:1
         nm = oi[d]
         old = saved[d]

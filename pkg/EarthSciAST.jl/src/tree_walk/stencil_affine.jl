@@ -56,9 +56,37 @@ end
 #   * `_NK_OP :fn` (interp)     op node carrying its `(fname, spec)` payload
 # Anything not modelled (a contraction node) throws `_StencilFallback` so the
 # caller runs the per-cell path — never a wrong kernel.
+#
+# IDENTITY-MEMOIZED (ESS-0hh): the compiled template is a DAG (`_stencilize` /
+# `_compile` preserve sharing via their identity memos), and the lowering is a
+# pure function of the node under one call's fixed `lane_repl`/`subcalls`, so
+# a shared template node lowers to ONE shared access node — the per-path
+# rebuild re-inflated the spine into an exponentially large tree AND pushed a
+# duplicate `acc` descriptor per PATH to each access leaf. With the memo a
+# shared leaf pushes its descriptor once and every parent references that
+# entry; evaluation reads `acc[idx]` by index, so values are unchanged, and
+# `_build_acc_cse` counts path multiplicities exactly, so CSE slot decisions
+# are unchanged too. On a tree (no shared nodes) the memo never hits —
+# byte-identical output, `acc` table included. The memo is per top-level
+# call; `_lower_subcall` re-enters through this entry so a variant body gets
+# its own memo for its own `lane_repl`.
 function _lower_to_access(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
                           acc::Vector{_AccDesc},
                           subcalls::Vector{_SubCallSite}=_SubCallSite[])::_Node
+    return _lower_to_access(tmpl, lane_repl, acc, subcalls, IdDict{_Node,_Node}())
+end
+function _lower_to_access(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
+                          acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
+                          memo::IdDict{_Node,_Node})::_Node
+    cached = get(memo, tmpl, nothing)
+    cached === nothing || return cached
+    result = _lower_to_access_node(tmpl, lane_repl, acc, subcalls, memo)
+    memo[tmpl] = result
+    return result
+end
+function _lower_to_access_node(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
+                               acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
+                               memo::IdDict{_Node,_Node})::_Node
     k = tmpl.kind
     if k === _NK_STATE
         if tmpl.idx < 0
@@ -88,7 +116,8 @@ function _lower_to_access(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
         # concrete `(fname, spec)` tuple for an interp `:fn` — the access evaluator's
         # `:fn` arm reads it exactly as `_eval_node_op` does. The fn's scalar query
         # args are ordinary children, lowered like any lane subtree.
-        ch = _Node[_lower_to_access(c, lane_repl, acc, subcalls) for c in tmpl.children]
+        ch = _Node[_lower_to_access(c, lane_repl, acc, subcalls, memo)
+                   for c in tmpl.children]
         return _mknode(kind=_NK_OP, op=tmpl.op, children=ch, payload=tmpl.payload)
     end
     throw(_StencilFallback("affine lowering: unhandled node kind $(Int(k))"))
@@ -356,8 +385,15 @@ function _collect_makearray_bounds!(cands::Vector{Set{Int}}, mk::OpExpr,
 end
 function _region_cut_candidates(body, idx_names::Vector{String})
     cands = [Set{Int}() for _ in idx_names]
+    # Identity-deduped (ESS-0hh): a Set-collector over the region bounds is
+    # path-multiplicity-insensitive, so entering each distinct node once
+    # collects exactly the same candidate sets — O(nodes) on a structurally-
+    # shared body instead of once per path.
+    seen = IdDict{OpExpr,Nothing}()
     walk(n) = begin
         n isa OpExpr || return
+        haskey(seen, n) && return
+        seen[n] = nothing
         if n.op == "index" && !isempty(n.args) &&
            n.args[1] isa OpExpr && (n.args[1]::OpExpr).op == "makearray"
             _collect_makearray_bounds!(cands, n.args[1]::OpExpr,
@@ -784,8 +820,16 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     length(lhs_idx_args) == D || return nothing
 
     if get(ENV, "ESS_STENCIL_DEBUG", "") == "1" && sites !== nothing
+        # IDENTITY-MEMOIZED walk (`foreach_subexpr_once`) — NOTE the metric
+        # changed with it (ESS-0hh): `reachable-in-body` used to count PATHS to
+        # each site root and now counts DISTINCT reachable roots. Distinct is
+        # the meaningful diagnostic — the compile-once tier compiles each root
+        # once regardless of in-degree, and `sites` is keyed by identity — and
+        # the per-path count made this debug print itself exponential on the
+        # obs-inlined body, which is a compact DAG by construction
+        # (`_sub_preserving`): enabling debugging must never hang the build.
         hit = 0
-        foreach_subexpr(body) do x
+        foreach_subexpr_once(body) do x
             x isa OpExpr && haskey(sites, x) && (hit += 1)
             nothing
         end

@@ -87,17 +87,28 @@ function _resolve_one_index_set_ref(ref::IndexSetRef, index_sets::AbstractDict,
 end
 
 # True iff any node in the subtree carries a `ranges` entry that is an IndexSetRef.
-function _has_index_set_ref(expr::OpExpr)
+# Identity-deduped (ESS-0hh): a pure existence predicate over a possibly
+# structurally-shared tree — the per-path recursion was exponential on a DAG.
+_has_index_set_ref(expr::OpExpr) = _has_index_set_ref(expr, IdDict{OpExpr,Nothing}())
+function _has_index_set_ref(expr::OpExpr, seen::IdDict{OpExpr,Nothing})
+    haskey(seen, expr) && return false
+    seen[expr] = nothing
     if expr.ranges !== nothing
         for v in values(expr.ranges)
             v isa IndexSetRef && return true
         end
     end
-    any(_has_index_set_ref, expr.args) && return true
-    expr.expr_body !== nothing && _has_index_set_ref(expr.expr_body) && return true
-    expr.values !== nothing && any(_has_index_set_ref, expr.values) && return true
-    expr.lower !== nothing && _has_index_set_ref(expr.lower) && return true
-    expr.upper !== nothing && _has_index_set_ref(expr.upper) && return true
+    for a in expr.args
+        a isa OpExpr && _has_index_set_ref(a, seen) && return true
+    end
+    expr.expr_body isa OpExpr && _has_index_set_ref(expr.expr_body::OpExpr, seen) && return true
+    if expr.values !== nothing
+        for v in expr.values
+            v isa OpExpr && _has_index_set_ref(v, seen) && return true
+        end
+    end
+    expr.lower isa OpExpr && _has_index_set_ref(expr.lower::OpExpr, seen) && return true
+    expr.upper isa OpExpr && _has_index_set_ref(expr.upper::OpExpr, seen) && return true
     return false
 end
 _has_index_set_ref(::ASTExpr) = false
@@ -105,44 +116,73 @@ _has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_
 
 # Rewrite every IndexSetRef in the subtree's ranges to its resolved concrete
 # form, rebuilding OpExpr nodes while preserving all fields.
+#
+# IDENTITY-MEMOIZED and IDENTITY-PRESERVING (ESS-0hh): the rewrite is a pure
+# function of the node under one call's fixed registries, so a shared node
+# resolves to ONE shared output node, and a node with no IndexSetRef anywhere
+# below is returned VERBATIM instead of reconstruct-copied. The unconditional
+# per-path rebuild both did exponential work on a structurally-shared
+# equation (e.g. a folded array-observed chain) and re-inflated the DAG into
+# an exponentially large tree for every stage downstream. Identity
+# preservation also keeps `_translate_equation_sites!` cheap: its lockstep
+# walk short-circuits on `old === new`.
 function _resolve_isr(expr::OpExpr, index_sets::AbstractDict,
                       derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-                      factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
-    new_args = ASTExpr[_resolve_isr(a, index_sets, derived_extents, factor_scope) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : _resolve_isr(expr.expr_body, index_sets, derived_extents, factor_scope)
-    new_values = expr.values === nothing ? nothing :
-                 ASTExpr[_resolve_isr(v, index_sets, derived_extents, factor_scope) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : _resolve_isr(expr.lower, index_sets, derived_extents, factor_scope)
-    new_upper = expr.upper === nothing ? nothing : _resolve_isr(expr.upper, index_sets, derived_extents, factor_scope)
+                      factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE,
+                      memo::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}())
+    cached = get(memo, expr, nothing)
+    cached === nothing || return cached
+    changed = false
+    res(x) = begin
+        r = _resolve_isr(x, index_sets, derived_extents, factor_scope, memo)
+        r === x || (changed = true)
+        r
+    end
+    new_args = ASTExpr[res(a) for a in expr.args]
+    new_body = expr.expr_body === nothing ? nothing : res(expr.expr_body)
+    new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
+    new_lower = expr.lower === nothing ? nothing : res(expr.lower)
+    new_upper = expr.upper === nothing ? nothing : res(expr.upper)
     new_ranges = expr.ranges
     if expr.ranges !== nothing && any(v -> v isa IndexSetRef, values(expr.ranges))
+        changed = true
         new_ranges = Dict{String,Any}()
         for (k, v) in expr.ranges
             new_ranges[k] = v isa IndexSetRef ?
                 _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
         end
     end
-    return reconstruct(expr; args=new_args, expr_body=new_body,
-                       values=new_values, lower=new_lower, upper=new_upper,
-                       ranges=new_ranges)
+    result = changed ?
+        reconstruct(expr; args=new_args, expr_body=new_body,
+                    values=new_values, lower=new_lower, upper=new_upper,
+                    ranges=new_ranges) : expr
+    memo[expr] = result
+    return result
 end
 _resolve_isr(expr::ASTExpr, ::AbstractDict, ::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-             ::AbstractDict=_EMPTY_FACTOR_SCOPE) = expr
+             ::AbstractDict=_EMPTY_FACTOR_SCOPE,
+             ::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}()) = expr
 _resolve_isr(eq::Equation, index_sets::AbstractDict,
              derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-             factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE) =
-    Equation(_resolve_isr(eq.lhs, index_sets, derived_extents, factor_scope),
-             _resolve_isr(eq.rhs, index_sets, derived_extents, factor_scope);
+             factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE,
+             memo::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}()) =
+    Equation(_resolve_isr(eq.lhs, index_sets, derived_extents, factor_scope, memo),
+             _resolve_isr(eq.rhs, index_sets, derived_extents, factor_scope, memo);
              _comment=eq._comment)
 
 # Resolve all index-set references across a vector of equations. Returns the
 # input unchanged when no equation uses a `{from}` reference — preserving
 # byte-identical behaviour (and the compiled tree) for existing files (§6).
+# One shared memo across the vector: the registries are fixed for the whole
+# call, so a subtree shared BETWEEN equations also resolves once and stays
+# shared.
 function _resolve_index_set_ranges(eqs::Vector{Equation}, index_sets::AbstractDict,
                                    derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
                                    factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
     any(_has_index_set_ref, eqs) || return eqs
-    return Equation[_resolve_isr(eq, index_sets, derived_extents, factor_scope) for eq in eqs]
+    memo = IdDict{OpExpr,ASTExpr}()
+    return Equation[_resolve_isr(eq, index_sets, derived_extents, factor_scope, memo)
+                    for eq in eqs]
 end
 
 # ---- Shared aggregate/einsum expansion core (one spelling, three sites) --------

@@ -327,12 +327,24 @@ end
 # only, NOT lower / upper / key / table_axes / ranges bounds. A join buried in
 # e.g. an integral bound would therefore skip the pre-pass even though
 # `_resolve_join_in_expr` does recurse those fields — flagged for Wave 3.
-function _expr_has_join(expr::OpExpr)
+# Identity-deduped (ESS-0hh): a pure existence predicate is path-multiplicity-
+# insensitive, so the visited set is exactly equivalent — and O(nodes) on a
+# structurally-shared tree instead of once per path.
+_expr_has_join(expr::OpExpr) = _expr_has_join(expr, IdDict{OpExpr,Nothing}())
+function _expr_has_join(expr::OpExpr, seen::IdDict{OpExpr,Nothing})
     expr.join !== nothing && return true
-    any(_expr_has_join, expr.args) && return true
-    expr.expr_body !== nothing && _expr_has_join(expr.expr_body) && return true
-    expr.values !== nothing && any(_expr_has_join, expr.values) && return true
-    expr.filter !== nothing && _expr_has_join(expr.filter) && return true
+    haskey(seen, expr) && return false
+    seen[expr] = nothing
+    for a in expr.args
+        a isa OpExpr && _expr_has_join(a, seen) && return true
+    end
+    expr.expr_body isa OpExpr && _expr_has_join(expr.expr_body::OpExpr, seen) && return true
+    if expr.values !== nothing
+        for v in expr.values
+            v isa OpExpr && _expr_has_join(v, seen) && return true
+        end
+    end
+    expr.filter isa OpExpr && _expr_has_join(expr.filter::OpExpr, seen) && return true
     return false
 end
 _expr_has_join(::ASTExpr) = false
