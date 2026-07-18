@@ -2186,6 +2186,75 @@ const RECORD_FIELD_TABLES = (
         (f = :values,   wire = "values",   kind = :string, mode = :opt, emit = :nonnothing),
         (f = :from_faq, wire = "from_faq", kind = :string, mode = :opt, emit = :nonnothing),
     )),
+    (T = :ModelVariable, fn = :model_variable, rows = (
+        (f = :type, wire = "type", kind = :model_variable_type, mode = :req, emit = :always, pos = true),
+        (f = :default,       wire = "default",       kind = :float,  mode = :opt, emit = :nonnothing),
+        (f = :description,   wire = "description",   kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :expression,    wire = "expression",    kind = :expr,   mode = :opt, emit = :nonnothing),
+        (f = :units,         wire = "units",         kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :shape,         wire = "shape",         kind = :string_vec, mode = :opt, emit = :nonnothing),
+        (f = :location,      wire = "location",      kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :noise_kind,    wire = "noise_kind",    kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :correlation_group, wire = "correlation_group", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :ContinuousEvent, fn = :continuous_event, rows = (
+        (f = :conditions, wire = "conditions", kind = :expr_vec, mode = :req_err,
+         req_err = "ContinuousEvent requires 'conditions' field", default = :(ASTExpr[]),
+         emit = :always, pos = true),
+        (f = :affects, wire = "affects", kind = :record_vec, of = :affect_equation,
+         eltype = :AffectEquation, mode = :opt_empty, default = :(AffectEquation[]),
+         emit = :always, pos = true),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :DiscreteEvent, fn = :discrete_event, rows = (
+        (f = :trigger, wire = "trigger", kind = :record, of = :trigger, mode = :req_err,
+         req_err = "DiscreteEvent requires 'trigger' field", emit = :always, pos = true),
+        # `affects` / `functional_affect` are the schema's oneOf pair: parse
+        # accepts either (per-entry lhs/rhs presence pinned by the affects
+        # hook); emit writes exactly one — the affects hook yields to a
+        # present descriptor, whose own hook re-emits it verbatim and refuses
+        # an event carrying both (the historical ArgumentError).
+        (f = :affects, wire = "affects", kind = :custom, parse_fn = :_coerce_discrete_affects,
+         mode = :opt_empty, default = :(AffectEquation[]),
+         emit = :custom, emit_fn = :_emit_discrete_event_affects, pos = true),
+        (f = :functional_affect, wire = "functional_affect", kind = :raw, mode = :opt,
+         emit = :custom, emit_fn = :_emit_discrete_event_functional_affect),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :discrete_parameters, wire = "discrete_parameters", kind = :string_vec_strict,
+         mode = :opt, emit = :nonnothing),
+    )),
+    (T = :Assertion, fn = :assertion, rows = (
+        (f = :variable, wire = "variable", kind = :string, mode = :req, emit = :always, pos = true),
+        (f = :time,     wire = "time",     kind = :float,  mode = :req, emit = :always, pos = true),
+        (f = :expected, wire = "expected", kind = :float,  mode = :req, emit = :always, pos = true),
+        (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
+        (f = :coords,    wire = "coords",    kind = :float_map, mode = :opt, emit = :nonnothing),
+        (f = :reduce,    wire = "reduce",    kind = :string, mode = :opt, emit = :nonnothing),
+        # from_file-vs-Expression discriminated union (spec §6.6.5): the
+        # `type` field — not dict-ness — routes to the verbatim from_file
+        # shape; anything else parses as an Expression AST.
+        (f = :reference, wire = "reference", kind = :custom, parse_fn = :_coerce_assertion_reference,
+         mode = :opt, emit = :custom, emit_fn = :_emit_assertion_reference),
+    )),
+    (T = :InlineTest, fn = :test, rows = (
+        (f = :id,        wire = "id",        kind = :string, mode = :req, emit = :always, pos = true),
+        (f = :time_span, wire = "time_span", kind = :record, of = :time_span, mode = :req,
+         emit = :always, pos = true),
+        (f = :assertions, wire = "assertions", kind = :record_vec, of = :assertion,
+         eltype = :Assertion, mode = :req, emit = :always, pos = true),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :initial_conditions, wire = "initial_conditions", kind = :float_map,
+         mode = :opt_empty, default = :(Dict{String,Float64}()), emit = :nonempty),
+        (f = :parameter_overrides, wire = "parameter_overrides", kind = :float_map,
+         mode = :opt_empty, default = :(Dict{String,Float64}()), emit = :nonempty),
+        (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
+        # esm-spec §9.7.10 form C: a test's injected imports are authored
+        # per-run config and DO survive parse → emit (unlike a component's
+        # own imports, which the load-time fixpoint consumes).
+        (f = :expression_template_imports, wire = "expression_template_imports", kind = :raw_vec,
+         mode = :opt_empty, default = :(Any[]), emit = :nonempty),
+    )),
 )
 
 # Each entry's rows (plus the injected map-key name, when marked) must cover

@@ -168,92 +168,9 @@ function serialize_event(event::EventType)::Dict{String,Any}
     end
 end
 
-"""
-    serialize_discrete_event(event::DiscreteEvent) -> Dict{String,Any}
-
-Serialize DiscreteEvent to the schema shape: `discrete_events[].affects` is an
-array of AffectEquation objects ({lhs, rhs}), matching the stored
-`Vector{AffectEquation}`.
-
-A handler-based event (parsed from a schema `functional_affect` descriptor)
-re-emits its raw descriptor verbatim under `functional_affect`; the schema's
-oneOf admits exactly one of `affects` / `functional_affect`, so an event
-carrying both is rejected here.
-"""
-function serialize_discrete_event(event::DiscreteEvent)::Dict{String,Any}
-    result = Dict{String,Any}("trigger" => serialize_trigger(event.trigger))
-    if event.functional_affect !== nothing
-        isempty(event.affects) || throw(ArgumentError(
-            "DiscreteEvent cannot carry both symbolic `affects` and a " *
-            "`functional_affect` descriptor (schema DiscreteEvent oneOf)"))
-        result["functional_affect"] = event.functional_affect
-    else
-        result["affects"] = [serialize_affect_equation(a) for a in event.affects]
-    end
-    if event.discrete_parameters !== nothing
-        result["discrete_parameters"] = event.discrete_parameters
-    end
-    if event.description !== nothing
-        result["description"] = event.description
-    end
-    return result
-end
-
-"""
-    serialize_continuous_event(event::ContinuousEvent) -> Dict{String,Any}
-
-Serialize ContinuousEvent to JSON-compatible format.
-"""
-function serialize_continuous_event(event::ContinuousEvent)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "conditions" => [serialize_expression(c) for c in event.conditions],
-        "affects" => [serialize_affect_equation(a) for a in event.affects]
-    )
-    if event.description !== nothing
-        result["description"] = event.description
-    end
-    return result
-end
 
 
-"""
-    serialize_model_variable(var::ModelVariable) -> Dict{String,Any}
 
-Serialize ModelVariable to JSON-compatible format.
-"""
-function serialize_model_variable(var::ModelVariable)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "type" => serialize_model_variable_type(var.type)
-    )
-    if var.default !== nothing
-        result["default"] = var.default
-    end
-    if var.units !== nothing
-        result["units"] = var.units
-    end
-    if var.default_units !== nothing
-        result["default_units"] = var.default_units
-    end
-    if var.description !== nothing
-        result["description"] = var.description
-    end
-    if var.expression !== nothing
-        result["expression"] = serialize_expression(var.expression)
-    end
-    if var.shape !== nothing
-        result["shape"] = String[d for d in var.shape]
-    end
-    if var.location !== nothing
-        result["location"] = var.location
-    end
-    if var.noise_kind !== nothing
-        result["noise_kind"] = var.noise_kind
-    end
-    if var.correlation_group !== nothing
-        result["correlation_group"] = var.correlation_group
-    end
-    return result
-end
 
 
 """
@@ -341,73 +258,7 @@ end
 
 
 
-"""
-    serialize_assertion(a::Assertion) -> Dict{String,Any}
-"""
-function serialize_assertion(a::Assertion)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "variable" => a.variable,
-        "time" => a.time,
-        "expected" => a.expected,
-    )
-    if a.tolerance !== nothing
-        result["tolerance"] = serialize_tolerance(a.tolerance)
-    end
-    if a.coords !== nothing
-        result["coords"] = Dict{String,Any}(k => v for (k, v) in a.coords)
-    end
-    if a.reduce !== nothing
-        result["reduce"] = a.reduce
-    end
-    if a.reference !== nothing
-        if a.reference isa ASTExpr
-            result["reference"] = serialize_expression(a.reference)
-        elseif a.reference isa AbstractDict
-            # from_file shape: round-trip its keys verbatim
-            ref_out = Dict{String,Any}()
-            for (k, v) in a.reference
-                ref_out[string(k)] = v
-            end
-            result["reference"] = ref_out
-        else
-            result["reference"] = a.reference
-        end
-    end
-    return result
-end
 
-"""
-    serialize_test(t::InlineTest) -> Dict{String,Any}
-"""
-function serialize_test(t::EarthSciAST.InlineTest)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "id" => t.id,
-        "time_span" => serialize_time_span(t.time_span),
-        "assertions" => [serialize_assertion(a) for a in t.assertions],
-    )
-    if t.description !== nothing
-        result["description"] = t.description
-    end
-    if !isempty(t.initial_conditions)
-        result["initial_conditions"] = Dict{String,Any}(
-            k => v for (k, v) in t.initial_conditions)
-    end
-    if !isempty(t.parameter_overrides)
-        result["parameter_overrides"] = Dict{String,Any}(
-            k => v for (k, v) in t.parameter_overrides)
-    end
-    if t.tolerance !== nothing
-        result["tolerance"] = serialize_tolerance(t.tolerance)
-    end
-    # esm-spec §9.7.10 form C: a test's injected imports are authored per-run
-    # config and DO survive parse → emit (unlike a component's own imports,
-    # which are consumed by the fixpoint at load).
-    if !isempty(t.expression_template_imports)
-        result["expression_template_imports"] =
-            [_to_native_json(e) for e in t.expression_template_imports]
-    end
-    return result
-end
 
 
 
@@ -770,6 +621,38 @@ _emit_coupling_import_bind(entry::CouplingImport) = Dict{String,Any}(entry.bind)
 # otherwise; a set carrying neither omits the key.
 _emit_index_set_members(is::IndexSet) =
     is.members_raw !== nothing ? is.members_raw : is.members
+
+
+# DiscreteEvent `affects` / `functional_affect` — the schema oneOf pair.
+# A handler-based event yields the affects key to its descriptor; the
+# descriptor hook re-emits it verbatim and refuses an event carrying both.
+_emit_discrete_event_affects(e::DiscreteEvent) =
+    e.functional_affect === nothing ?
+        [serialize_affect_equation(a) for a in e.affects] : nothing
+
+function _emit_discrete_event_functional_affect(e::DiscreteEvent)
+    e.functional_affect === nothing && return nothing
+    isempty(e.affects) || throw(ArgumentError(
+        "DiscreteEvent cannot carry both symbolic `affects` and a " *
+        "`functional_affect` descriptor (schema DiscreteEvent oneOf)"))
+    return e.functional_affect
+end
+
+# Assertion `reference`: an Expression AST serializes through the standard
+# serializer; the from_file shape round-trips its keys verbatim.
+function _emit_assertion_reference(a::Assertion)
+    a.reference === nothing && return nothing
+    if a.reference isa ASTExpr
+        return serialize_expression(a.reference)
+    elseif a.reference isa AbstractDict
+        ref_out = Dict{String,Any}()
+        for (k, v) in a.reference
+            ref_out[string(k)] = v
+        end
+        return ref_out
+    end
+    return a.reference
+end
 
 
 # One emit statement per row, per the row's `emit` omission policy; `nothing`

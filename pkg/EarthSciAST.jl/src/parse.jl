@@ -857,199 +857,11 @@ end
 
 
 
-"""
-    coerce_assertion(data::Any) -> Assertion
-
-Parse a schema `Assertion` object.
-"""
-function coerce_assertion(data::Any)::Assertion
-    variable = string(data["variable"])
-    time_val = Float64(data["time"])
-    expected = Float64(data["expected"])
-    tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
-    coords = nothing
-    coords_raw = _get_field(data, :coords, nothing)
-    if coords_raw !== nothing
-        coords = Dict{String,Float64}()
-        for (k, v) in pairs(coords_raw)
-            coords[string(k)] = Float64(v)
-        end
-    end
-    reduce_val = _opt_string(data, :reduce)
-    reference = nothing
-    ref = _get_field(data, :reference, nothing)
-    if ref !== nothing
-        # The from_file shape is a JSON object whose `type` is the literal
-        # string "from_file"; everything else — including an inline Expression
-        # AST, which is ALSO an object — is parsed as an Expression. The
-        # discriminator MUST be the `type` field: testing "is it dict-like"
-        # (the previous bug) routed every inline reference to the from_file
-        # branch and left the §6.6.5 analytic-reference path unreachable.
-        reftype = ref isa AbstractDict && haskey(ref, "type") ?
-            string(ref["type"]) : ""
-        if reftype == "from_file"
-            reference = Dict{String,Any}()
-            for (k, v) in pairs(ref)
-                reference[string(k)] = v
-            end
-        else
-            reference = parse_expression(ref)
-        end
-    end
-    return Assertion(variable, time_val, expected;
-                     tolerance=tolerance,
-                     coords=coords,
-                     reduce=reduce_val,
-                     reference=reference)
-end
-
-"""
-    coerce_test(data::Any) -> InlineTest
-
-Parse a schema `InlineTest` object into the Julia `InlineTest` struct.
-"""
-function coerce_test(data::Any)::EarthSciAST.InlineTest
-    id = string(data["id"])
-    time_span = coerce_time_span(data["time_span"])
-    assertions = [coerce_assertion(a) for a in data["assertions"]]
-    description = _opt_string(data, :description)
-    ic = Dict{String,Float64}()
-    ic_raw = _get_field(data, :initial_conditions, nothing)
-    if ic_raw !== nothing
-        for (k, v) in pairs(ic_raw)
-            ic[string(k)] = Float64(v)
-        end
-    end
-    po = Dict{String,Float64}()
-    po_raw = _get_field(data, :parameter_overrides, nothing)
-    if po_raw !== nothing
-        for (k, v) in pairs(po_raw)
-            po[string(k)] = Float64(v)
-        end
-    end
-    tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
-    # esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries naming the
-    # discretization this test runs under. Retained (not consumed at load) so
-    # the PDE runner can build a per-test ephemeral instance and so the field
-    # survives round-trip.
-    injected = Any[]
-    imports_raw = _get_field(data, :expression_template_imports, nothing)
-    if imports_raw !== nothing
-        injected = Any[_to_native_json(e) for e in imports_raw]
-    end
-    return EarthSciAST.InlineTest(id, time_span, assertions;
-        description=description,
-        initial_conditions=ic,
-        parameter_overrides=po,
-        tolerance=tolerance,
-        expression_template_imports=injected)
-end
-
-"""
-    coerce_model_variable(data::Any) -> ModelVariable
-
-Coerce JSON data into ModelVariable type.
-"""
-function coerce_model_variable(data::Any)::ModelVariable
-    var_type = coerce_model_variable_type(string(data["type"]))
-    default = _opt_float(data, :default)
-    description = _opt_string(data, :description)
-    expression = _maybe(parse_expression, _get_field(data, :expression, nothing))
-    units = _opt_string(data, :units)
-    default_units = _opt_string(data, :default_units)
-    shape = _maybe(_get_field(data, :shape, nothing)) do shp
-        String[string(d) for d in shp]
-    end
-    location = _opt_string(data, :location)
-    noise_kind = _opt_string(data, :noise_kind)
-    correlation_group = _opt_string(data, :correlation_group)
-
-    return ModelVariable(var_type,
-                        default=default,
-                        description=description,
-                        expression=expression,
-                        units=units,
-                        default_units=default_units,
-                        shape=shape,
-                        location=location,
-                        noise_kind=noise_kind,
-                        correlation_group=correlation_group)
-end
 
 
-"""
-    coerce_discrete_event(data::Any) -> DiscreteEvent
 
-Coerce JSON data specifically into DiscreteEvent.
 
-Schema: DiscreteEvent must have a trigger, and exactly one of 'affects' (array
-of AffectEquation) or 'functional_affect' (a registered handler descriptor).
-Affects are stored as `AffectEquation`s ({lhs, rhs}), the same shape
-`ContinuousEvent` uses. A schema 'functional_affect' handler descriptor is
-preserved verbatim on the event's `functional_affect` field (it cannot be
-executed symbolically, but it round-trips losslessly through serialize).
-"""
-function coerce_discrete_event(data::Any)::DiscreteEvent
-    if !_has_field(data, :trigger)
-        throw(ParseError("DiscreteEvent requires 'trigger' field"))
-    end
 
-    trigger = coerce_trigger(_get_field(data, :trigger, nothing))
-
-    affects = AffectEquation[]
-    if _has_field(data, :affects)
-        raw_affects = _get_field(data, :affects, [])
-        for a in raw_affects
-            if !_has_field(a, :lhs) || !_has_field(a, :rhs)
-                throw(ParseError("AffectEquation requires 'lhs' and 'rhs' fields"))
-            end
-            push!(affects, coerce_affect_equation(a))
-        end
-    end
-
-    # Schema functional_affect is a registered handler descriptor
-    # (handler_id, read_vars, read_params, modified_params?, config?). Keep
-    # the raw descriptor so serialize re-emits it unchanged instead of
-    # inventing a bogus {lhs, rhs} affect equation.
-    functional_affect = _maybe(_to_native_json, _get_field(data, :functional_affect, nothing))
-
-    description = _opt_string(data, :description)
-
-    # Discrete parameters (MTK `discrete_parameters`): names the event mutates
-    # as parameters rather than states. Kept on the event so `validate` can
-    # check each names a declared parameter, and so serialize round-trips it.
-    discrete_parameters = _maybe(Vector{String},
-                                 _get_field(data, :discrete_parameters, nothing))
-
-    return DiscreteEvent(trigger, affects, description=description,
-                         functional_affect=functional_affect,
-                         discrete_parameters=discrete_parameters)
-end
-
-"""
-    coerce_continuous_event(data::Any) -> ContinuousEvent
-
-Coerce JSON data specifically into ContinuousEvent.
-
-Handles optional schema fields (affect_neg, root_find, name, discrete_parameters)
-by ignoring them — the current Julia ContinuousEvent type does not model them,
-but their presence must not cause load to fail.
-"""
-function coerce_continuous_event(data::Any)::ContinuousEvent
-    if !_has_field(data, :conditions)
-        throw(ParseError("ContinuousEvent requires 'conditions' field"))
-    end
-
-    raw_conditions = _get_field(data, :conditions, [])
-    conditions = ASTExpr[parse_expression(c) for c in raw_conditions]
-
-    raw_affects = _has_field(data, :affects) ? _get_field(data, :affects, []) : []
-    affects = AffectEquation[coerce_affect_equation(a) for a in raw_affects]
-
-    description = _opt_string(data, :description)
-
-    return ContinuousEvent(conditions, affects, description=description)
-end
 
 
 """
@@ -1207,6 +1019,38 @@ end
 # `:custom` rows below name their hand-written per-field hooks.
 
 # ── Hand-written `:custom` parse hooks (named by RECORD_FIELD_TABLES rows) ──
+# DiscreteEvent `affects`: each entry must carry both lhs and rhs (pinned
+# per-entry ParseError), then coerces as an ordinary AffectEquation.
+function _coerce_discrete_affects(v)
+    affects = AffectEquation[]
+    for a in v
+        if !_has_field(a, :lhs) || !_has_field(a, :rhs)
+            throw(ParseError("AffectEquation requires 'lhs' and 'rhs' fields"))
+        end
+        push!(affects, coerce_affect_equation(a))
+    end
+    return affects
+end
+
+# Assertion `reference` (spec §6.6.5): the from_file shape is a JSON object
+# whose `type` is the literal string "from_file"; everything else — including
+# an inline Expression AST, which is ALSO an object — parses as an Expression.
+# The discriminator MUST be the `type` field: testing "is it dict-like"
+# (a previous bug) routed every inline reference to the from_file branch and
+# left the analytic-reference path unreachable.
+function _coerce_assertion_reference(ref)
+    reftype = ref isa AbstractDict && haskey(ref, "type") ?
+        string(ref["type"]) : ""
+    if reftype == "from_file"
+        reference = Dict{String,Any}()
+        for (k, v) in pairs(ref)
+            reference[string(k)] = v
+        end
+        return reference
+    end
+    return parse_expression(ref)
+end
+
 
 # coupling_import `bind` (esm-spec §10.10): role name → component map.
 function _coerce_coupling_import_bind(v)
