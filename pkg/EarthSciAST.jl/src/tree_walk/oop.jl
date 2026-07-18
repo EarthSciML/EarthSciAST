@@ -163,8 +163,10 @@ end
 #
 # The mechanical unary arms (`sin` … `ceil`), GENERATED from the op-registry table
 # exactly as `_eval_vec_unary_elementwise` (vectorize.jl) is, so a unary op added
-# to the registry reaches all three ladders at once. `nothing` ⇒ not a mechanical
-# unary op ⇒ the caller's ladder falls through.
+# to the registry reaches every ladder (scalar / vectorized / oop / access-kernel)
+# at once. `nothing` ⇒ not a mechanical unary op ⇒ the caller's ladder falls
+# through. The comparison / binary / min-max probes below follow the same
+# protocol from their own registry tables.
 let arms = :(return nothing)
     for row in reverse(_UNARY_ELEMENTWISE_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
@@ -175,6 +177,66 @@ let arms = :(return nothing)
                          arms)
     end
     @eval @inline function _oop_unary_elementwise(op::Symbol, c::AbstractVector)
+        $arms
+    end
+end
+
+# The comparison arms (`<` … `!=` → 1/0 in the value type), GENERATED from
+# `_COMPARISON_ELEMENTWISE_OPS` the same way. A comparison is piecewise
+# constant, so `one(T)`/`zero(T)` carry the correct (zero) derivative under AD.
+# `$(fnsym).(a, b)` is broadcast sugar for the hand-written infix `a .< b`, so
+# the fused blend is unchanged.
+let arms = :(return nothing)
+    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 2)
+                             return ifelse.($(row.fnsym).(c[1], c[2]), one(T), zero(T))
+                         end,
+                         arms)
+    end
+    @eval @inline function _oop_comparison(op::Symbol, c::AbstractVector,
+                                           ::Type{T}) where {T}
+        $arms
+    end
+end
+
+# The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
+# `_BINARY_ELEMENTWISE_OPS`. NB the `^` arm here is only the FALLBACK for a
+# malformed arity: a well-formed 2-ary `^`/`pow` is intercepted upstream by
+# `_oop_pow` / `_oop_eval_vec`'s literal-exponent arm and never reaches the
+# shared ladder (see `_oop_pow` for why).
+let arms = :(return nothing)
+    for row in reverse(_BINARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 2)
+                             return $(row.fnsym).(c[1], c[2])
+                         end,
+                         arms)
+    end
+    @eval @inline function _oop_binary_elementwise(op::Symbol, c::AbstractVector)
+        $arms
+    end
+end
+
+# The n-ary `min`/`max` folds (arity ≥ 2), GENERATED from `_NARY_MINMAX_OPS` —
+# same guard and fold order as the in-place ladders.
+let arms = :(return nothing)
+    for row in reverse(_NARY_MINMAX_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
+                                 $(row.name * " needs ≥2 args")))
+                             r = $(row.fnsym).(c[1], c[2])
+                             for i in 3:length(c)
+                                 r = $(row.fnsym).(r, c[i])
+                             end
+                             return r
+                         end,
+                         arms)
+    end
+    @eval @inline function _oop_minmax(op::Symbol, c::AbstractVector)
         $arms
     end
 end
@@ -205,33 +267,15 @@ function _oop_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
     elseif op === :neg
         _expect_arity_n(op, c, 1)
         return .-c[1]
-    elseif op === :/
-        _expect_arity_n(op, c, 2)
-        return c[1] ./ c[2]
-    elseif op === :^ || op === :pow
-        _expect_arity_n(op, c, 2)
-        return c[1] .^ c[2]
+    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
+    # registry (`_oop_binary_elementwise` above). The probe sits where `/` sat.
+    elseif (bin = _oop_binary_elementwise(op, c)) !== nothing
+        return bin
 
-    # Comparisons → 1/0 in the value type. A comparison is piecewise constant, so
-    # `one(T)`/`zero(T)` carry the correct (zero) derivative under AD.
-    elseif op === :<
-        _expect_arity_n(op, c, 2)
-        return ifelse.(c[1] .< c[2], one(T), zero(T))
-    elseif op === Symbol("<=")
-        _expect_arity_n(op, c, 2)
-        return ifelse.(c[1] .<= c[2], one(T), zero(T))
-    elseif op === :>
-        _expect_arity_n(op, c, 2)
-        return ifelse.(c[1] .> c[2], one(T), zero(T))
-    elseif op === Symbol(">=")
-        _expect_arity_n(op, c, 2)
-        return ifelse.(c[1] .>= c[2], one(T), zero(T))
-    elseif op === Symbol("==")
-        _expect_arity_n(op, c, 2)
-        return ifelse.(c[1] .== c[2], one(T), zero(T))
-    elseif op === Symbol("!=")
-        _expect_arity_n(op, c, 2)
-        return ifelse.(c[1] .!= c[2], one(T), zero(T))
+    # Comparisons → 1/0 in the value type — GENERATED from the registry
+    # (`_oop_comparison` above, where the piecewise-constant AD note lives).
+    elseif (cmp = _oop_comparison(op, c, T)) !== nothing
+        return cmp
 
     # Logical — folded (not short-circuited), matching `_eval_vec_op`; every child
     # is evaluated either way, so the values agree with the scalar arm too.
@@ -260,23 +304,10 @@ function _oop_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
         length(c) == 1 && return atan.(c[1])
         length(c) == 2 && return atan.(c[1], c[2])
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-    elseif op === :atan2
-        _expect_arity_n(op, c, 2)
-        return atan.(c[1], c[2])
-    elseif op === :min
-        length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
-        r = min.(c[1], c[2])
-        for i in 3:length(c)
-            r = min.(r, c[i])
-        end
-        return r
-    elseif op === :max
-        length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "max needs ≥2 args"))
-        r = max.(c[1], c[2])
-        for i in 3:length(c)
-            r = max.(r, c[i])
-        end
-        return r
+    # n-ary min/max (arity ≥ 2) — GENERATED from the registry (`_oop_minmax`
+    # above). (`atan2` is handled by the binary probe near the ladder top.)
+    elseif (mm = _oop_minmax(op, c)) !== nothing
+        return mm
 
     elseif op === :pi || op === :π
         return T(pi)

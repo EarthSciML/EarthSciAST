@@ -926,11 +926,93 @@ end
 # resolve, in THIS module's scope, to the registry's recorded scalar function —
 # so a future shadowing of e.g. `log` cannot silently desync the generated
 # ladder from the `_OP_TABLE` row (and from the scalar `_eval_node_op` twin,
-# which resolves the same module-scope names).
+# which resolves the same module-scope names). The comparison/binary/minmax
+# tables get the equivalent check at their definition site (op_registry.jl).
 for _row in _UNARY_ELEMENTWISE_OPS
     getfield(@__MODULE__, _row.sym) === _row.fn ||
         error("vectorize.jl: unary ladder arm '$(_row.name)' does not resolve " *
               "to the op-registry scalar function in module scope")
+end
+
+# The MECHANICAL comparison arms of `_eval_vec_op`, GENERATED from the registry
+# table `_COMPARISON_ELEMENTWISE_OPS` — same probe protocol as
+# `_eval_vec_unary_elementwise` above (write the caller's `b`, return `b`;
+# `nothing` ⇒ not a comparison). Each generated arm is the hand-written
+# original verbatim:
+#     _expect_arity_n(op, c, 2)
+#     c1 = …; c2 = …; @. b = ifelse(c1 OP c2, 1.0, 0.0); return b
+# (splicing the predicate symbol in call position IS the infix AST, so the `@.`
+# fusion is unchanged).
+let arms = :(return nothing)
+    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 2)
+                             c1 = _eval_vec(c[1], u, p, t, T)
+                             c2 = _eval_vec(c[2], u, p, t, T)
+                             @. b = ifelse($(row.fnsym)(c1, c2), 1.0, 0.0)
+                             return b
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_vec_comparison(op::Symbol, c::Vector{_VecNode},
+                                                b::AbstractVector, u, p, t,
+                                                ::Type{T}) where {T}
+        $arms
+    end
+end
+
+# The MECHANICAL fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`),
+# GENERATED from `_BINARY_ELEMENTWISE_OPS`. The `^`/`pow` arms remain THE ONE
+# ARM THAT DEPENDS ON DATA NODES STAYING `Float64`: the literal-exponent
+# protection lives in the LEAVES (`_VK_LITERAL`/`_VK_CONSTVEC` yield
+# `Vector{Float64}` at every value type, so a literal / const-array exponent
+# lowers to `Dual^Float64` — the power rule; see the full note at
+# `_eval_node_binary_elementwise`, compile.jl), which is exactly what makes the
+# arm itself mechanical and safe to generate.
+let arms = :(return nothing)
+    for row in reverse(_BINARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 2)
+                             c1 = _eval_vec(c[1], u, p, t, T)
+                             c2 = _eval_vec(c[2], u, p, t, T)
+                             @. b = $(row.fnsym)(c1, c2)
+                             return b
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_vec_binary_elementwise(op::Symbol, c::Vector{_VecNode},
+                                                        b::AbstractVector, u, p, t,
+                                                        ::Type{T}) where {T}
+        $arms
+    end
+end
+
+# The MECHANICAL n-ary `min`/`max` folds (esm-spec §4.2 — arity ≥ 2), GENERATED
+# from `_NARY_MINMAX_OPS`, matching the scalar arms' guard and fold order.
+let arms = :(return nothing)
+    for row in reverse(_NARY_MINMAX_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
+                                 $(row.name * " needs ≥2 args")))
+                             c1 = _eval_vec(c[1], u, p, t, T)
+                             c2 = _eval_vec(c[2], u, p, t, T)
+                             @. b = $(row.fnsym)(c1, c2)
+                             @inbounds for i in 3:length(c)
+                                 ci = _eval_vec(c[i], u, p, t, T)
+                                 @. b = $(row.fnsym)(b, ci)
+                             end
+                             return b
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_vec_minmax(op::Symbol, c::Vector{_VecNode},
+                                            b::AbstractVector, u, p, t,
+                                            ::Type{T}) where {T}
+        $arms
+    end
 end
 
 # Elementwise op over child vectors, written in place into `n.buf`. Each arm
@@ -986,54 +1068,16 @@ function _eval_vec_op(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
         c1 = _eval_vec(c[1], u, p, t, T)
         @. b = -c1
         return b
-    elseif op === :/
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T)
-        c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = c1 / c2
-        return b
-    elseif op === :^ || op === :pow
-        # THE ONE ARM THAT DEPENDS ON DATA NODES STAYING `Float64`. `^` is the only
-        # op whose derivative w.r.t. an OPERAND needs a function with a smaller
-        # domain than the op itself: ∂(x^y)/∂y = x^y·log(x). If a literal exponent
-        # were lifted into the differentiable type, ForwardDiff would evaluate that
-        # branch despite the exponent's partials all being zero — so `c[i]^2` over a
-        # lane vector holding any NEGATIVE cell would produce log(negative) = NaN and
-        # silently poison the gradient while the primal values still looked perfect.
-        # `_VK_LITERAL` and `_VK_CONSTVEC` yield `Vector{Float64}` at every value
-        # type, so a literal / const-array exponent lowers to `Dual^Float64` — the
-        # power rule. A state- or parameter-dependent exponent lowers to `Dual^Dual`,
-        # which is what it should be.
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T)
-        c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = c1 ^ c2
-        return b
+    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
+    # registry (`_eval_vec_binary_elementwise` above, where the `^`
+    # literal-exponent note lives). The probe sits where `/` sat.
+    elseif (bin = _eval_vec_binary_elementwise(op, c, b, u, p, t, T)) !== nothing
+        return bin
 
-    elseif op === :<
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = ifelse(c1 <  c2, 1.0, 0.0); return b
-    elseif op === Symbol("<=")
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = ifelse(c1 <= c2, 1.0, 0.0); return b
-    elseif op === :>
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = ifelse(c1 >  c2, 1.0, 0.0); return b
-    elseif op === Symbol(">=")
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = ifelse(c1 >= c2, 1.0, 0.0); return b
-    elseif op === Symbol("==")
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = ifelse(c1 == c2, 1.0, 0.0); return b
-    elseif op === Symbol("!=")
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = ifelse(c1 != c2, 1.0, 0.0); return b
+    # Comparisons → 1.0/0.0 — GENERATED from the registry
+    # (`_eval_vec_comparison` above); the probe sits where `<` sat.
+    elseif (cmp = _eval_vec_comparison(op, c, b, u, p, t, T)) !== nothing
+        return cmp
 
     elseif op === :and
         # 1.0 iff every child is non-zero (folds in child order, like the scalar
@@ -1080,7 +1124,7 @@ function _eval_vec_op(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
     # one of them ⇒ fall through to the structurally distinct arms below. The
     # probe sits where the first mechanical arm (`sin`) sat; every arm tests
     # `op === <disjoint symbol>`, so probing the second historical run
-    # (`sinh` … `ceil`) before `atan`/`atan2` cannot change which arm fires.
+    # (`sinh` … `ceil`) before `atan` cannot change which arm fires.
     elseif (unary = _eval_vec_unary_elementwise(op, c, b, u, p, t, T)) !== nothing
         return unary
     elseif op === :atan
@@ -1093,32 +1137,11 @@ function _eval_vec_op(n::_VecNode, u, p, t, ::Type{T})::_VecVal{T} where {T}
             @. b = atan(c1, c2); return b
         end
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-    elseif op === :atan2
-        _expect_arity_n(op, c, 2)
-        c1 = _eval_vec(c[1], u, p, t, T); c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = atan(c1, c2); return b
-    elseif op === :min
-        # n-ary min (esm-spec §4.2 — arity ≥ 2), matching the scalar arm's guard.
-        length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
-        c1 = _eval_vec(c[1], u, p, t, T)
-        c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = min(c1, c2)
-        @inbounds for i in 3:length(c)
-            ci = _eval_vec(c[i], u, p, t, T)
-            @. b = min(b, ci)
-        end
-        return b
-    elseif op === :max
-        # n-ary max (esm-spec §4.2 — arity ≥ 2), matching the scalar arm's guard.
-        length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "max needs ≥2 args"))
-        c1 = _eval_vec(c[1], u, p, t, T)
-        c2 = _eval_vec(c[2], u, p, t, T)
-        @. b = max(c1, c2)
-        @inbounds for i in 3:length(c)
-            ci = _eval_vec(c[i], u, p, t, T)
-            @. b = max(b, ci)
-        end
-        return b
+    # n-ary min/max (esm-spec §4.2 — arity ≥ 2) — GENERATED from the registry
+    # (`_eval_vec_minmax` above), matching the scalar arms' guard. (`atan2` is
+    # handled by the binary probe near the ladder top.)
+    elseif (mm = _eval_vec_minmax(op, c, b, u, p, t, T)) !== nothing
+        return mm
 
     elseif op === :pi || op === :π
         fill!(b, Float64(pi)); return b
