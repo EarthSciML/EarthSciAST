@@ -3,7 +3,8 @@
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 2 (build-time geometry): the M4 intersect_polygon clip kernel,
 # the fused polygon_intersection_area leaf, ranged clips, the setup-time
-# geometry evaluator (_GeoCtx/_geo_eval), and binning-coordinate derivation.
+# geometry materializers (_GeoCtx; the body COMPILER lives in
+# tree_walk/geometry_compile.jl), and binning-coordinate derivation.
 # ========================================================================
 
 # ============================================================
@@ -263,86 +264,11 @@ function _geo_index_extent(ref, index_sets, derived_extents)
     return Int(sz)
 end
 
-# Apply a scalar op at setup time (the polygon-area / overlap FAQ vocabulary).
-function _geo_apply_scalar(op::AbstractString, a::Vector{Float64})
-    op == "+"     && return sum(a)
-    op == "*"     && return prod(a)
-    op == "-"     && return length(a) == 1 ? -a[1] : a[1] - sum(@view a[2:end])
-    op == "/"     && return a[1] / a[2]
-    op == "^"     && return a[1] ^ a[2]
-    op == "max"   && return maximum(a)
-    op == "min"   && return minimum(a)
-    op == "sqrt"  && return sqrt(a[1])
-    op == "abs"   && return abs(a[1])
-    op == "cos"   && return cos(a[1])
-    op == "sin"   && return sin(a[1])
-    op == "atan2" && return atan(a[1], a[2])
-    op == "ifelse" && return a[1] != 0.0 ? a[2] : a[3]
-    op == "floor" && return floor(a[1])
-    op == "ceil"  && return ceil(a[1])
-    op == ">"  && return a[1] >  a[2] ? 1.0 : 0.0
-    op == "<"  && return a[1] <  a[2] ? 1.0 : 0.0
-    op == ">=" && return a[1] >= a[2] ? 1.0 : 0.0
-    op == "<=" && return a[1] <= a[2] ? 1.0 : 0.0
-    op == "==" && return a[1] == a[2] ? 1.0 : 0.0
-    op == "!=" && return a[1] != a[2] ? 1.0 : 0.0
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "unsupported op '$(op)' in setup-time geometry"))
-end
-
-# Arity-specialized scalar apply. `_geo_eval`'s general op branch used to collect
-# every operand into a freshly-allocated `Float64[]` and call `_geo_apply_scalar`
-# — one heap allocation per arithmetic node, per output cell (hundreds of
-# thousands of tiny garbage vectors in a conservative-regrid setup). The 1-, 2-
-# and 3-arg forms below cover the entire scalar vocabulary the FAQ emits (the
-# shoelace `*`/`-`, the `ifelse`/comparison gates), evaluating with NO allocation;
-# only a genuinely variadic `+`/`*`/`max`/`min` (>3 args) falls back to the vector
-# form. Each is byte-identical to `_geo_apply_scalar` at the same arity.
-@inline function _geo_apply1(op::AbstractString, a::Float64)
-    op == "-"     && return -a
-    op == "sqrt"  && return sqrt(a)
-    op == "abs"   && return abs(a)
-    op == "cos"   && return cos(a)
-    op == "sin"   && return sin(a)
-    op == "floor" && return floor(a)
-    op == "ceil"  && return ceil(a)
-    (op == "+" || op == "*" || op == "max" || op == "min") && return a  # unary reduction
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "unsupported unary op '$(op)' in setup-time geometry"))
-end
-@inline function _geo_apply2(op::AbstractString, a::Float64, b::Float64)
-    op == "+"     && return a + b
-    op == "-"     && return a - b
-    op == "*"     && return a * b
-    op == "/"     && return a / b
-    op == "^"     && return a ^ b
-    op == "max"   && return max(a, b)
-    op == "min"   && return min(a, b)
-    op == "atan2" && return atan(a, b)
-    op == ">"     && return a >  b ? 1.0 : 0.0
-    op == "<"     && return a <  b ? 1.0 : 0.0
-    op == ">="    && return a >= b ? 1.0 : 0.0
-    op == "<="    && return a <= b ? 1.0 : 0.0
-    op == "=="    && return a == b ? 1.0 : 0.0
-    op == "!="    && return a != b ? 1.0 : 0.0
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "unsupported binary op '$(op)' in setup-time geometry"))
-end
-@inline function _geo_apply3(op::AbstractString, a::Float64, b::Float64, c::Float64)
-    op == "ifelse" && return a != 0.0 ? b : c
-    op == "+"      && return a + b + c
-    op == "*"      && return a * b * c
-    op == "-"      && return a - b - c           # a[1] - sum(a[2:end])
-    op == "max"    && return max(a, b, c)
-    op == "min"    && return min(a, b, c)
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "unsupported ternary op '$(op)' in setup-time geometry"))
-end
-
-# Evaluate the k-th argument of an `index` node to an integer subscript (rounding
-# to nearest, matching the original `Int(round(_geo_eval(...)))`).
-@inline _geo_ix(expr, k::Int, ctx, idx_env, outer_setof) =
-    Int(round(_geo_eval(expr.args[k], ctx, idx_env, outer_setof)::Float64))
+# (The setup-time geometry SCALAR LADDER — `_geo_apply_scalar` and its
+# arity-specialized 1/2/3-arg twins — is gone: the geometry body is now
+# COMPILED ONCE per sweep into the shared `_Node` IR, so the scalar vocabulary
+# evaluates through `_eval_node_op`'s registry-generated arms. See
+# tree_walk/geometry_compile.jl.)
 
 # Map a join key column to the aggregate loop var that indexes it (via its
 # declared 1-D shape's index set).
@@ -355,16 +281,13 @@ function _geo_loopvar_for(col, setof, var_shapes)
     return nothing
 end
 
-# Loop-invariant context for the setup-time geometry evaluator (`_geo_eval` /
-# `_geo_agg_gate`): the value environment (name → const arrays + scalar params +
-# materialized geometry), the document index-set registry, the derived-extent
-# map, and the declared per-variable shapes (for join-column resolution). These
-# four were previously threaded as positional args repeated verbatim at every
-# recursive call site; only the loop-index environment (`idx_env`) and the
-# loop-var → index-set map (`setof`) vary during a walk, so those stay
-# positional. Build-time-only path — one small struct per materialization is
-# fine. `derived_extents` is read-only inside the walk (it is grown by the
-# materializers before evaluation).
+# Loop-invariant context for the setup-time geometry COMPILER (`_geo_compile`,
+# tree_walk/geometry_compile.jl) and the join-gate resolution: the value
+# environment (name → const arrays + scalar params + materialized geometry),
+# the document index-set registry, the derived-extent map, and the declared
+# per-variable shapes (for join-column resolution). Build-time-only path — one
+# small struct per materialization is fine. `derived_extents` is read-only
+# inside a compile/sweep (it is grown by the materializers before evaluation).
 struct _GeoCtx
     env::AbstractDict
     index_sets::Any
@@ -380,27 +303,13 @@ end
 # within a single build, never persisted or matched cross-binding.
 const _SKOLEM_HASH_CAP = 1 << 52
 
-# Aggregate gate: honor a `join` (key-equality across the joined columns — the
-# bin-skolem BROAD PHASE) and a `filter` predicate (sliver removal). A tuple that
-# fails either contributes the additive identity (RFC §5.3 / §5.8); ignoring the
-# join is numerically equivalent (non-candidate pairs have zero overlap) but the
-# gate makes the setup loop O(candidates) and faithful to the component structure.
-function _geo_agg_gate(expr, ie, ctx::_GeoCtx, setof)
-    if expr.join !== nothing
-        for clause in expr.join, pair in clause
-            colA, colB = String(pair[1]), String(pair[2])
-            lvA = _geo_loopvar_for(colA, setof, ctx.var_shapes)
-            lvB = _geo_loopvar_for(colB, setof, ctx.var_shapes)
-            (lvA === nothing || lvB === nothing) && continue
-            (haskey(ctx.env, colA) && haskey(ctx.env, colB)) || continue
-            ctx.env[colA][ie[lvA]] == ctx.env[colB][ie[lvB]] || return false
-        end
-    end
-    if expr.filter !== nothing
-        _geo_eval(expr.filter, ctx, ie, setof) != 0.0 || return false
-    end
-    return true
-end
+# (The per-tuple aggregate gate — `_geo_agg_gate` and its pre-resolved twin
+# `_geo_agg_gate_resolved` — is gone with the interpreter: a node's `join`
+# resolves ONCE per sweep through `_resolve_geo_join_gates` below and then
+# compiles to slot-addressed `_GeoSlotGate`s; the `filter` predicate compiles
+# to a `_Node` evaluated per cell. Same key-equality broad phase (RFC §5.3 /
+# §5.8), same gate-then-filter order — see `_geo_gate_ok` and `_geo_eval_agg`
+# in tree_walk/geometry_compile.jl.)
 
 # One resolved join-key equality: the two participating column arrays and the
 # loop-var names that index them. Everything here is INVARIANT across the output ×
@@ -415,11 +324,13 @@ struct _GeoJoinGate
     lvB::String
 end
 
-# Pre-resolve `expr.join` for `_geo_agg_gate_resolved`, faithfully replaying
-# `_geo_agg_gate`'s join arm: a pair whose loop vars don't resolve, or whose
+# Pre-resolve `expr.join` (once per sweep), faithfully replaying the historical
+# per-tuple join arm: a pair whose loop vars don't resolve, or whose
 # columns aren't both in `env`, is SKIPPED here exactly as the original `continue`
-# skips it — so an omitted pair never gates, byte-for-byte as before. Returns
-# `nothing` when the node has no join (lets the fast gate skip the whole arm).
+# skipped it — so an omitted pair never gates, byte-for-byte as before. Returns
+# `nothing` when the node has no join (lets the compiled gate skip the whole
+# arm). Consumed by `_geo_slot_gates` (tree_walk/geometry_compile.jl), which
+# maps the loop-var names to frame slots.
 function _resolve_geo_join_gates(expr, ctx::_GeoCtx, setof)
     expr.join === nothing && return nothing
     gates = _GeoJoinGate[]
@@ -434,160 +345,13 @@ function _resolve_geo_join_gates(expr, ctx::_GeoCtx, setof)
     return gates
 end
 
-# Fast twin of `_geo_agg_gate` for the hot map/contraction loops: consumes the
-# pre-resolved join gates (identical semantics to the join arm above) and still
-# evaluates the `filter` predicate per cell (it can reference per-cell values, so
-# it is not hoistable). `rgates === nothing` ⇒ no join arm.
-@inline function _geo_agg_gate_resolved(rgates, expr, ie, ctx::_GeoCtx, setof)
-    if rgates !== nothing
-        @inbounds for g in rgates
-            g.arrA[ie[g.lvA]] == g.arrB[ie[g.lvB]] || return false
-        end
-    end
-    if expr.filter !== nothing
-        _geo_eval(expr.filter, ctx, ie, setof) != 0.0 || return false
-    end
-    return true
-end
-
-# Setup-time evaluator for the geometry chain. Walks an expression to a Float64
-# (or, for `index` of a multi-dim array with FEWER indices, a slice array)
-# against the invariant `ctx` (see `_GeoCtx`) and the varying `idx_env` (loop
-# var → Int) / `outer_setof` (loop var → index-set name). Covers exactly the
-# ops the polygon-area / overlap-join FAQ uses; anything else is an explicit
-# setup-geometry error.
-function _geo_eval(expr, ctx::_GeoCtx, idx_env,
-                   outer_setof=Dict{String,String}())
-    if expr isa NumExpr
-        return expr.value
-    elseif expr isa IntExpr
-        return Float64(expr.value)
-    elseif expr isa VarExpr
-        haskey(idx_env, expr.name) && return Float64(idx_env[expr.name])
-        haskey(ctx.env, expr.name) && return ctx.env[expr.name]
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "unbound name '$(expr.name)' in setup-time geometry"))
-    elseif expr isa OpExpr
-        op = expr.op
-        if op == "index"
-            arr = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)
-            arr isa AbstractArray || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-                "index of a non-array in setup-time geometry"))
-            nidx = length(expr.args) - 1
-            nd = ndims(arr)
-            # Fast paths for the ranks the geometry FAQ actually uses (1–3 leading
-            # indices into a 1-/2-/3-D array). These avoid BOTH the `args[2:end]`
-            # slice allocation and the `arr[idxs...]` splat — the splat lowers to
-            # `Base._apply_iterate`, a dynamic-dispatch hot spot when it runs once
-            # per operand per cell. A partial index returns a `view` (no data copy):
-            # the const source array outlives every walk and is never mutated, and
-            # the only consumers are the read-only geometry kernel (bbox reject and
-            # `_as_ring`, which materializes a dense copy itself when it must). For a
-            # conservative regrid this matters because the planar broad-phase rejects
-            # most pairs straight off the operand bbox — the slice is never copied.
-            if nidx == 1
-                i1 = _geo_ix(expr, 2, ctx, idx_env, outer_setof)
-                nd == 1 && return arr[i1]
-                nd == 2 && return view(arr, i1, :)
-                nd == 3 && return view(arr, i1, :, :)
-            elseif nidx == 2
-                i1 = _geo_ix(expr, 2, ctx, idx_env, outer_setof)
-                i2 = _geo_ix(expr, 3, ctx, idx_env, outer_setof)
-                nd == 2 && return arr[i1, i2]
-                nd == 3 && return view(arr, i1, i2, :)
-            elseif nidx == 3 && nd == 3
-                i1 = _geo_ix(expr, 2, ctx, idx_env, outer_setof)
-                i2 = _geo_ix(expr, 3, ctx, idx_env, outer_setof)
-                i3 = _geo_ix(expr, 4, ctx, idx_env, outer_setof)
-                return arr[i1, i2, i3]
-            end
-            # General fallback (unusual ranks): build the index vector once.
-            idxs = Int[_geo_ix(expr, k, ctx, idx_env, outer_setof)
-                       for k in 2:length(expr.args)]
-            if nidx == nd
-                return arr[idxs...]
-            else
-                colons = ntuple(_ -> Colon(), nd - nidx)
-                return Array(arr[idxs..., colons...])   # partial index → slice
-            end
-        elseif op == "intersect_polygon"
-            a = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)
-            b = _geo_eval(expr.args[2], ctx, idx_env, outer_setof)
-            expr.manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                "intersect_polygon requires a manifold"))
-            return close_ring(intersect_polygon(a, b, expr.manifold))
-        elseif op == "polygon_intersection_area"
-            # FUSED scalar leaf (esm-spec §8.6.1): the overlap AREA of the two rings,
-            # with no exposed clip ring — so it evaluates as an ordinary scalar even
-            # inside a setup-time aggregate body (dense narrow phase, no ragged extent).
-            a = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)
-            b = _geo_eval(expr.args[2], ctx, idx_env, outer_setof)
-            expr.manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                "polygon_intersection_area requires a manifold"))
-            return _polygon_intersection_area(a, b, expr.manifold)
-        elseif op == "skolem"
-            # A skolem key is a deterministic id for its arg tuple; at setup it is
-            # only ever COMPARED (the bin equi-join), so a stable, session-local
-            # hash capped to the Float64-exact window suffices (_SKOLEM_HASH_CAP).
-            vals = Any[_geo_eval(a, ctx, idx_env, outer_setof)
-                       for a in expr.args]
-            return Float64(hash(Tuple(vals)) % _SKOLEM_HASH_CAP)
-        elseif op == "true"
-            return 1.0
-        elseif op == "false"
-            return 0.0
-        elseif op == "aggregate" || (op == "arrayop" && isempty(expr.output_idx))
-            # Scalar reduction over the declared ranges, honoring join/filter gates.
-            # `setof` accumulates loop-var → index-set across nesting so a join can
-            # resolve a key column indexed by an OUTER loop var (per-cell F_tgt).
-            loopvars = collect(keys(expr.ranges))
-            exts = Int[_geo_index_extent(expr.ranges[v], ctx.index_sets, ctx.derived_extents)
-                       for v in loopvars]
-            setof = copy(outer_setof)
-            for lv in loopvars
-                r = expr.ranges[lv]
-                r isa IndexSetRef && (setof[lv] = r.from)
-            end
-            acc = 0.0
-            # Reuse one env dict across the product: `copy(idx_env)` once (carrying
-            # the outer loop vars), then overwrite just this aggregate's loop vars
-            # each iteration — instead of a fresh Dict copy per tuple. Callees never
-            # retain `ie` (a nested aggregate copies again; the gate only reads it),
-            # so mutation-in-place is safe.
-            ie = copy(idx_env)
-            for tup in Iterators.product((1:e for e in exts)...)
-                for (lv, iv) in zip(loopvars, tup); ie[lv] = iv; end
-                _geo_agg_gate(expr, ie, ctx, setof) || continue
-                acc += _geo_eval(expr.expr_body, ctx, ie, setof)
-            end
-            return acc
-        else
-            # Arity-specialized, allocation-free apply for the common 1–3 arg ops
-            # (the whole FAQ scalar vocabulary); only a variadic reduction falls
-            # back to the vector form.
-            n = length(expr.args)
-            if n == 1
-                return _geo_apply1(op,
-                    _geo_eval(expr.args[1], ctx, idx_env, outer_setof)::Float64)
-            elseif n == 2
-                a = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)::Float64
-                b = _geo_eval(expr.args[2], ctx, idx_env, outer_setof)::Float64
-                return _geo_apply2(op, a, b)
-            elseif n == 3
-                a = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)::Float64
-                b = _geo_eval(expr.args[2], ctx, idx_env, outer_setof)::Float64
-                c = _geo_eval(expr.args[3], ctx, idx_env, outer_setof)::Float64
-                return _geo_apply3(op, a, b, c)
-            end
-            vals = Float64[_geo_eval(x, ctx, idx_env, outer_setof)
-                           for x in expr.args]
-            return _geo_apply_scalar(op, vals)
-        end
-    else
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "unsupported expression $(typeof(expr)) in setup-time geometry"))
-    end
-end
+# (The setup-time geometry INTERPRETER — `_geo_eval`, a raw-AST walker re-run
+# once per output cell × contraction tuple, the #1 build hotspot of a
+# conservative regrid — is retired. The geometry chain now COMPILES ONCE per
+# materialization sweep into the shared `_Node` IR and evaluates per cell
+# through `_eval_node`: see tree_walk/geometry_compile.jl for the compiler
+# (`_geo_compile` / `_geo_source`), the compiled gate (`_geo_gate_ok`), and
+# the `:geo_gather`/`:geo_pia`/`:geo_skolem`/`:geo_agg` evaluator arms.)
 
 # A clip ranged over an outer index set: an array-producing aggregate whose body
 # is `index(intersect_polygon(src[outer], tgt[outer]), ring, coord)`. The
@@ -622,13 +386,25 @@ function _materialize_ranged_clip(arrayop, env, index_sets, derived_extents,
     manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
         "ranged intersect_polygon requires a manifold"))
     ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
+    # Compile the two polygon operands ONCE (ring sources over the outer loop
+    # slots); each pair then resolves them against the frame — a `view`, no
+    # copy, exactly as before (see tree_walk/geometry_compile.jl).
+    nslots = Ref(0)
+    scope = Dict{String,Int}()
+    for lv in outer
+        nslots[] += 1
+        scope[lv] = nslots[]
+    end
+    g = _GeoCompileCtx(ctx, scope, Dict{String,String}(), nslots)
+    srcA = _geo_source(ipoly.args[1], g)
+    srcB = _geo_source(ipoly.args[2], g)
+    u = zeros(Float64, nslots[])
     rings = Dict{Tuple,Matrix{Float64}}()
     maxn = 0
-    ie = Dict{String,Any}()   # reused across pairs (callees only read / copy it)
     for tup in Iterators.product((1:e for e in outer_ext)...)
-        for (lv, v) in zip(outer, tup); ie[lv] = v; end
-        A = _geo_eval(ipoly.args[1], ctx, ie)
-        B = _geo_eval(ipoly.args[2], ctx, ie)
+        @inbounds for k in eachindex(outer); u[k] = Float64(tup[k]); end
+        A = _geo_ring_value(srcA, u, nothing, 0.0, Float64)
+        B = _geo_ring_value(srcB, u, nothing, 0.0, Float64)
         # A non-overlapping pair yields a degenerate (< 3 vertex) clip → a zero-area
         # cell; the matrix is sparse over non-candidate pairs and that is normal,
         # not an error (RFC §5.8: unmatched rows add the additive identity).
@@ -713,7 +489,7 @@ end
 # per output cell. A CONTRACTING aggregate — the on-disk einsum form where some
 # `ranges` keys are NOT in `output_idx` (e.g. `A_j[j] = Σ_i A_ij[i,j]`, the
 # row-sum) — sums the body over the contracted indices for each output cell. Both
-# honor the aggregate's `join` / `filter` gate (`_geo_agg_gate`): a rejected
+# honor the aggregate's `join` / `filter` gate (`_geo_gate_ok`): a rejected
 # contraction tuple contributes the additive identity 0̄ (RFC §5.3 / §5.8). This is
 # the setup-time twin of the ODE arrayop einsum path.
 function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
@@ -732,35 +508,47 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
         r isa IndexSetRef && (setof[v] = r.from)
     end
     ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
-    # Resolve the join gate ONCE for the whole sweep (see `_resolve_geo_join_gates`).
-    rgates = _resolve_geo_join_gates(arrayop, ctx, setof)
+    # COMPILE ONCE per sweep (tree_walk/geometry_compile.jl): the loop vars
+    # become frame slots (outputs first, then the contracted vars, in
+    # declaration order), the body and filter lower to `_Node` trees, and the
+    # join gate resolves to slot-addressed array equalities. The per-cell work
+    # below is then one `_eval_node` walk over the Float64 frame — no string
+    # dispatch, no per-node Dict lookups, no raw-AST re-walk (this sweep was
+    # the #1 build hotspot).
+    nslots = Ref(0)
+    scope = Dict{String,Int}()
+    for v in Iterators.flatten((out, contract))
+        nslots[] += 1
+        scope[v] = nslots[]
+    end
+    g = _GeoCompileCtx(ctx, scope, setof, nslots)
+    gates = _geo_slot_gates(arrayop, g)
+    filt = arrayop.filter === nothing ? nothing : _geo_compile(arrayop.filter, g)
+    body = _geo_compile(arrayop.expr_body, g)
+    u = zeros(Float64, nslots[])
+    nout = length(out)
     arr  = zeros(Float64, exts...)
-    # One reused env dict for the whole materialization (see `_geo_eval`'s
-    # aggregate branch): overwrite the loop-var slots each cell instead of
-    # allocating a fresh `Dict{String,Any}` per output cell (× per contraction
-    # tuple). `_geo_eval`/`_geo_agg_gate` only read `ie` or copy it, never retain
-    # it, so in-place reuse is safe.
-    ie = Dict{String,Any}()
     if isempty(contract)
         for tup in Iterators.product((1:e for e in exts)...)
-            for (lv, v) in zip(out, tup); ie[lv] = v; end
+            @inbounds for k in 1:nout; u[k] = Float64(tup[k]); end
             # A no-contraction map still honors an output-cell join/filter gate: a
             # rejected cell keeps the zero-initialized 0̄ (a cross-bin W_ij, a
             # sub-atol sliver). Degenerate (no join/filter) ⇒ gate is always true.
-            _geo_agg_gate_resolved(rgates, arrayop, ie, ctx, setof) || continue
-            arr[tup...] = _geo_eval(arrayop.expr_body, ctx, ie, setof)
+            _geo_gate_ok(gates, filt, u) || continue
+            arr[tup...] = _eval_node(body, u, nothing, 0.0, Float64)
         end
     else
         init, fold = _geo_reduce_fold(arrayop.reduce, arrayop.semiring)
         cexts = Int[_geo_index_extent(arrayop.ranges[c], index_sets, derived_extents)
                     for c in contract]
+        ncon = length(contract)
         for tup in Iterators.product((1:e for e in exts)...)
-            for (lv, v) in zip(out, tup); ie[lv] = v; end
+            @inbounds for k in 1:nout; u[k] = Float64(tup[k]); end
             acc = init
             for ct in Iterators.product((1:e for e in cexts)...)
-                for (lv, cv) in zip(contract, ct); ie[lv] = cv; end
-                _geo_agg_gate_resolved(rgates, arrayop, ie, ctx, setof) || continue
-                acc = fold(acc, _geo_eval(arrayop.expr_body, ctx, ie, setof))
+                @inbounds for k in 1:ncon; u[nout + k] = Float64(ct[k]); end
+                _geo_gate_ok(gates, filt, u) || continue
+                acc = fold(acc, _eval_node(body, u, nothing, 0.0, Float64))
             end
             arr[tup...] = acc
         end
@@ -777,16 +565,17 @@ end
 # EquilibriumMoistureContent / OneHourFuelMoisture / MidflameWind /
 # RothermelFireSpread) is promoted to a build-once MAP over the fire `[x,y]` grid.
 # Its body is PURE PHYSICS — `and`/`or`/`ifelse`, comparisons, `fn:interp.linear`,
-# `const`, `exp`/`log` — ops the limited geometry-FAQ evaluator (`_geo_eval`) does
+# `const`, `exp`/`log` — ops the limited setup-time geometry LANGUAGE does
 # NOT speak. Such a MAP must materialize through the GENERAL build-time cell
 # evaluator (`_eval_cellwise`), the same one `_materialize_setup_wholearray` uses.
 
-# The exact op vocabulary the setup-time geometry evaluator (`_geo_eval` /
-# `_geo_apply_scalar`) can evaluate: the scalar arithmetic / comparison / rounding
-# ops, the geometry leaves, and the nested aggregate/index gathers. A build-once
-# MAP whose body uses ONLY these needs no help — `_geo_eval` already materializes it
-# (a loader-field reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]`, a constructed cell
-# ring `tgt_poly[j,v,k] = ifelse(k==1, …, …)`, a geometry weight over a derived set).
+# The exact op vocabulary of the setup-time geometry language (compiled by
+# `_geo_compile`, tree_walk/geometry_compile.jl): the scalar arithmetic /
+# comparison / rounding ops, the geometry leaves, and the nested
+# aggregate/index gathers. A build-once MAP whose body uses ONLY these needs
+# no help — the geometry materializer already handles it (a loader-field
+# reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]`, a constructed cell ring
+# `tgt_poly[j,v,k] = ifelse(k==1, …, …)`, a geometry weight over a derived set).
 # A body that reaches for an op OUTSIDE this set — `and`/`or`/`not`, `fn`
 # (`interp.linear`), `const`, `exp`/`log`/`tan`/… — is a PROMOTED PHYSICS lookup that
 # only the general evaluator speaks; those, and only those, route to `_eval_cellwise`.
@@ -794,9 +583,9 @@ end
 # pinned by op_registry_test.jl.
 const _GEO_EVAL_OPS = _ops_with(:geo_eval)
 
-# True iff any op node in the subtree is OUTSIDE the `_geo_eval` vocabulary — i.e.
-# the body cannot be materialized by the setup-time geometry evaluator and needs
-# the general build-time cell evaluator instead.
+# True iff any op node in the subtree is OUTSIDE the `_GEO_EVAL_OPS` vocabulary
+# — i.e. the body cannot be materialized by the setup-time geometry path and
+# needs the general build-time cell evaluator instead.
 function _body_needs_general_eval(e::OpExpr)
     e.op in _GEO_EVAL_OPS || return true
     any(a -> a isa OpExpr && _body_needs_general_eval(a), e.args) && return true
@@ -816,8 +605,8 @@ end
 # physics lookup (FuelModelLookup/EMC/Rothermel/MidflameWind over the fire grid).
 # Every genuine geometry aggregate — a `polygon_intersection_area` weight, a
 # `A_j[j] = Σ_i A_ij[i,j]` row-sum, a constructed cell ring, a binning coordinate, a
-# skolem-bin producer, a loader-field reindex — uses ONLY `_geo_eval` ops and so
-# stays on `_geo_eval` (the `_materialize_geom_array` path), byte-identical.
+# skolem-bin producer, a loader-field reindex — uses ONLY `_GEO_EVAL_OPS` and so
+# stays on the compiled geometry path (`_materialize_geom_array`), byte-identical.
 function _is_setup_general_map(rhs)
     (rhs isa OpExpr && _is_aggregate_op(rhs.op)) || return false
     (rhs.output_idx !== nothing && any(s -> s isa AbstractString, rhs.output_idx)) || return false
@@ -1294,8 +1083,8 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
             # `log`). Materialize it through the general build-time cell evaluator (as
             # the makearray path does), byte-identical to the ODE RHS resolver. Every
             # geometry aggregate (a geometry weight, a contraction, a constructed ring,
-            # a reindex — all `_geo_eval` ops) fails `_is_setup_general_map` and falls
-            # through to `_geo_eval` below.
+            # a reindex — all `_GEO_EVAL_OPS`) fails `_is_setup_general_map` and falls
+            # through to the compiled geometry materializer below.
             _materialize_setup_general_map(rhs, env, index_sets, derived_extents,
                                            registered_functions)
         else

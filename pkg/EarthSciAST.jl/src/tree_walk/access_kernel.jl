@@ -328,12 +328,100 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     end
 end
 
+# ---- Generated mechanical arms (op-registry tables, src/op_registry.jl) ----
+#
+# The MECHANICAL arms of `_eval_acc_op` — unary elementwise, comparisons,
+# fixed-2-ary `/`/`^`/`pow`/`atan2`, and the n-ary `min`/`max` folds — are
+# GENERATED from the same registry tables that grow the other three ladders
+# (`_eval_node_op` / `_eval_vec_op` / `_oop_op`), so a mechanical op added to
+# `_OP_TABLE` reaches the access spine automatically. Probe protocol as
+# everywhere: `nothing` ⇒ not in the table ⇒ the ladder falls through.
+# DELIBERATELY NO ARITY GUARDS on the unary/comparison/binary arms — the
+# hand-written access arms had none (the spine is compiled from an
+# already-validated tree), and adding them would change the failure mode of a
+# malformed spine. `min`/`max` keep their historical `< 2` guard.
+let arms = :(return nothing)
+    for row in reverse(_UNARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             return $(row.sym)(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T))
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_acc_unary_elementwise(op::Symbol, ch::Vector{_Node},
+                                                       u, p, t, c::Int, n::Int, oln::Int,
+                                                       midx::NTuple{3,Int}, K::_AccKernel,
+                                                       ::Type{T}) where {T}
+        $arms
+    end
+end
+
+let arms = :(return nothing)
+    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             return $(row.fnsym)(
+                                 _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
+                                 _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)) ? 1.0 : 0.0
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_acc_comparison(op::Symbol, ch::Vector{_Node},
+                                                u, p, t, c::Int, n::Int, oln::Int,
+                                                midx::NTuple{3,Int}, K::_AccKernel,
+                                                ::Type{T}) where {T}
+        $arms
+    end
+end
+
+let arms = :(return nothing)
+    for row in reverse(_BINARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             return $(row.fnsym)(
+                                 _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
+                                 _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T))
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_acc_binary_elementwise(op::Symbol, ch::Vector{_Node},
+                                                        u, p, t, c::Int, n::Int, oln::Int,
+                                                        midx::NTuple{3,Int}, K::_AccKernel,
+                                                        ::Type{T}) where {T}
+        $arms
+    end
+end
+
+let arms = :(return nothing)
+    for row in reverse(_NARY_MINMAX_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             length(ch) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
+                                 $(row.name * " needs ≥2 args")))
+                             s = _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T)
+                             @inbounds for i in 2:length(ch)
+                                 s = $(row.fnsym)(s, _eval_acc(ch[i], u, p, t, c, n, oln, midx, K, T))
+                             end
+                             return s
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_acc_minmax(op::Symbol, ch::Vector{_Node},
+                                            u, p, t, c::Int, n::Int, oln::Int,
+                                            midx::NTuple{3,Int}, K::_AccKernel,
+                                            ::Type{T}) where {T}
+        $arms
+    end
+end
+
 # Op application over an access spine. MIRRORS `_eval_node_op` (compile.jl) arm for
 # arm — same arities, same n-ary folds, same `^`/comparison/logical/elementary-fn
 # semantics — because the affine path must be bit-identical to the per-cell path,
 # whose spine is the SAME compiled `_Node` tree evaluated by `_eval_node_op`. The
 # only difference is the leaf recursion (`_eval_acc`, which resolves `_NK_ACCESS` /
-# `_NK_REDUCE`). Drift between the two tables is caught by the differential test.
+# `_NK_REDUCE`). The mechanical arms are generated from the SAME registry tables
+# as `_eval_node_op`'s (see above), so those cannot drift by construction; the
+# hand-written remainder is still caught by the differential test.
 function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
                       midx::NTuple{3,Int}, K::_AccKernel, ::Type{T}) where {T}
     op = nd.op
@@ -353,18 +441,14 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
     elseif op === :neg
         return -ev(ch[1])
-    elseif op === :/
-        return ev(ch[1]) / ev(ch[2])
-    elseif op === :^ || op === :pow
-        return ev(ch[1]) ^ ev(ch[2])
 
-    # Comparisons → 1.0/0.0
-    elseif op === :<;            return ev(ch[1]) <  ev(ch[2]) ? 1.0 : 0.0
-    elseif op === Symbol("<=");  return ev(ch[1]) <= ev(ch[2]) ? 1.0 : 0.0
-    elseif op === :>;            return ev(ch[1]) >  ev(ch[2]) ? 1.0 : 0.0
-    elseif op === Symbol(">=");  return ev(ch[1]) >= ev(ch[2]) ? 1.0 : 0.0
-    elseif op === Symbol("==");  return ev(ch[1]) == ev(ch[2]) ? 1.0 : 0.0
-    elseif op === Symbol("!=");  return ev(ch[1]) != ev(ch[2]) ? 1.0 : 0.0
+    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED (registry).
+    elseif (bin = _eval_acc_binary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
+        return bin
+
+    # Comparisons → 1.0/0.0 — GENERATED (registry).
+    elseif (cmp = _eval_acc_comparison(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
+        return cmp
 
     # Logical
     elseif op === :and
@@ -379,39 +463,19 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     elseif op === :ifelse
         return ev(ch[1]) != 0 ? ev(ch[2]) : ev(ch[3])
 
-    # Elementary functions
-    elseif op === :sin;   return sin(ev(ch[1]))
-    elseif op === :cos;   return cos(ev(ch[1]))
-    elseif op === :tan;   return tan(ev(ch[1]))
-    elseif op === :asin;  return asin(ev(ch[1]))
-    elseif op === :acos;  return acos(ev(ch[1]))
+    # Elementary functions — the mechanical unary arms (`sin` … `ceil`) are
+    # GENERATED (registry); `atan` (1-or-2-ary) stays hand-written, `atan2` is
+    # handled by the binary probe above.
+    elseif (unary = _eval_acc_unary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
+        return unary
     elseif op === :atan
         length(ch) == 1 && return atan(ev(ch[1]))
         length(ch) == 2 && return atan(ev(ch[1]), ev(ch[2]))
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-    elseif op === :atan2; return atan(ev(ch[1]), ev(ch[2]))
-    elseif op === :sinh;  return sinh(ev(ch[1]))
-    elseif op === :cosh;  return cosh(ev(ch[1]))
-    elseif op === :tanh;  return tanh(ev(ch[1]))
-    elseif op === :asinh; return asinh(ev(ch[1]))
-    elseif op === :acosh; return acosh(ev(ch[1]))
-    elseif op === :atanh; return atanh(ev(ch[1]))
-    elseif op === :exp;   return exp(ev(ch[1]))
-    elseif op === :log;   return log(ev(ch[1]))
-    elseif op === :log10; return log10(ev(ch[1]))
-    elseif op === :sqrt;  return sqrt(ev(ch[1]))
-    elseif op === :abs;   return abs(ev(ch[1]))
-    elseif op === :sign;  return sign(ev(ch[1]))
-    elseif op === :floor; return floor(ev(ch[1]))
-    elseif op === :ceil;  return ceil(ev(ch[1]))
-    elseif op === :min
-        length(ch) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
-        s = ev(ch[1]); @inbounds for i in 2:length(ch); s = min(s, ev(ch[i])); end
-        return s
-    elseif op === :max
-        length(ch) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "max needs ≥2 args"))
-        s = ev(ch[1]); @inbounds for i in 2:length(ch); s = max(s, ev(ch[i])); end
-        return s
+
+    # n-ary min/max (arity ≥ 2) — GENERATED (registry).
+    elseif (mm = _eval_acc_minmax(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
+        return mm
     elseif op === :pi || op === :π
         return Float64(pi)
     elseif op === :e

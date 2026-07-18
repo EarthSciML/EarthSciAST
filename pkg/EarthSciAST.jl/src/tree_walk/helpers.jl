@@ -502,7 +502,7 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
         # `floor` in an index position wraps an already-integer subexpression (the
         # `/` case above is truncating integer `div`, == `floor` for the
         # non-negative cell subscripts a loader reindex forms). So it is a
-        # pass-through here, matching the build-once `_geo_eval` path where
+        # pass-through here, matching the build-once geometry path where
         # `floor((c-1)/GX)` folds to the same integer. Keeping it lets a loader
         # reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]` resolve on the LIVE gather
         # path (a discrete-cadence loader field), not only build-once.

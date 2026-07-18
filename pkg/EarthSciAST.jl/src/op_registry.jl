@@ -95,8 +95,9 @@ hand:
   specially; CSE never hoists through them.
 - `_STENCIL_ELEMENTWISE_OPS` (src/tree_walk/stencil.jl) — pure-elementwise ops
   the symbolic stencil fast path whitelists.
-- `_GEO_EVAL_OPS` (src/tree_walk/geometry_setup.jl) — the exact vocabulary the
-  setup-time geometry evaluator (`_geo_eval` / `_geo_apply_scalar`) speaks.
+- `_GEO_EVAL_OPS` (src/tree_walk/geometry_setup.jl) — the exact vocabulary of
+  the setup-time geometry language (compiled by `_geo_compile`,
+  src/tree_walk/geometry_compile.jl).
 - `_KNOWN_OPS` (ext/EarthSciASTMTKExt.jl) — ops the MTK exporter recognizes;
   anything else is flagged as a likely registered-function gap (gt-p3ep).
 - `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` (src/flatten.jl) — the spatial
@@ -107,7 +108,9 @@ hand:
   array-producing nodes for the shape-promotion / pointwise-lift rewrites,
   and the nodes that carry their own indexing (the producers plus `index`),
   which the leaf-indexing rewrites never descend into.
-- [`_UNARY_ELEMENTWISE_OPS`](@ref) — the ordered mechanical-unary table
+- [`_UNARY_ELEMENTWISE_OPS`](@ref), [`_COMPARISON_ELEMENTWISE_OPS`](@ref),
+  [`_BINARY_ELEMENTWISE_OPS`](@ref), [`_NARY_MINMAX_OPS`](@ref) — the ordered
+  mechanical ladder-arm tables the evaluator ladders generate their arms from
   (derived by filter, not by flag).
 
 Membership is BEHAVIOR: these sets gate fold/CSE/fast-path/materialization
@@ -211,7 +214,8 @@ const _OP_TABLE = _OpSpec[
         ws4=true, stencil=true, geo=true, known=true),
 
     # ── Niladic constants (`true`/`false` appear only in the geometry-setup
-    #    vocabulary — `_geo_eval` resolves them; the scalar ladders don't) ──
+    #    vocabulary — `_geo_compile` folds them to literals; the scalar
+    #    ladders don't speak them) ──
     _op("pi";    arity=0:0, category=:constant, stencil=true),
     _op("π";     arity=0:0, category=:constant, stencil=true),
     _op("e";     arity=0:0, category=:constant, stencil=true),
@@ -318,3 +322,74 @@ const _UNARY_ELEMENTWISE_OPS = Tuple(
     (name = s.name, sym = Symbol(s.name), fn = s.scalar_fn::Function)
     for s in _OP_TABLE
     if s.category === :elementary && s.arity == 1:1 && s.scalar_fn !== nothing)
+
+# The row shape shared by the three generated-ladder tables below. `sym` is the
+# op symbol the ladder arm MATCHES (`OpExpr.op` as a Symbol); `fnsym` is the
+# module-scope function name the generated arm CALLS — they differ exactly for
+# the alias rows (`pow` calls `^`, `atan2` calls `atan`). Splicing `fnsym` as a
+# call reproduces the hand-written arm's AST verbatim (`a < b` IS
+# `(<)(a, b)`), so the generated methods compile to the same branches, and `@.`
+# / broadcast fusion in the vectorized/oop consumers is unchanged. `fn` is kept
+# so load-time guards can assert `fnsym` still resolves to it in module scope.
+_ladder_row(s::_OpSpec) =
+    (name = s.name, sym = Symbol(s.name),
+     fnsym = nameof(s.scalar_fn::Function), fn = s.scalar_fn::Function)
+
+"""
+    _COMPARISON_ELEMENTWISE_OPS
+
+Ordered table of the MECHANICAL comparison arms — the `:comparison` registry
+rows, in registry (= hand-ladder) order: `<`, `<=`, `>`, `>=`, `==`, `!=`.
+Every evaluator ladder applies the Base predicate and maps its `Bool` through
+`1.0`/`0.0` (spec comparison semantics); the per-ladder arm shape (scalar
+ternary, `@.` blend, broadcast blend) lives with each generator. Consumers:
+`_eval_node_comparison` (compile.jl), `_eval_vec_comparison` (vectorize.jl),
+`_oop_comparison` (oop.jl), `_eval_acc_comparison` (access_kernel.jl).
+"""
+const _COMPARISON_ELEMENTWISE_OPS = Tuple(
+    _ladder_row(s) for s in _OP_TABLE if s.category === :comparison)
+
+"""
+    _BINARY_ELEMENTWISE_OPS
+
+Ordered table of the MECHANICAL fixed-2-ary elementwise arms: the registry's
+arithmetic/elementary rows with arity exactly `2:2` and a recorded scalar
+function — `/`, `^`, `pow` (the canonicalize-internal `^` alias), `atan2` (the
+explicit 2-ary `atan` spelling). NOTE the `^`/`pow` arms are mechanical only
+because the literal-exponent protection lives in the LEAVES, not the arm: a
+literal/const exponent stays `Float64` at every value type (see the `^` notes
+at `_eval_node`'s and `_eval_vec`'s literal kinds), so the generated
+`x ^ y` lands on `Dual^Float64` — the power rule — exactly as the hand arms
+did. Same four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
+"""
+const _BINARY_ELEMENTWISE_OPS = Tuple(
+    _ladder_row(s) for s in _OP_TABLE
+    if (s.category === :arithmetic || s.category === :elementary) &&
+       s.arity == 2:2 && s.scalar_fn !== nothing)
+
+"""
+    _NARY_MINMAX_OPS
+
+Ordered table of the MECHANICAL n-ary fold arms with a ≥2-arity guard: the
+elementary rows with arity `2:typemax` — `min`, `max` (esm-spec §4.2). The
+n-ary `+`/`*` are deliberately NOT here: their 1-ary form is a pass-through
+(and, on the vectorized ladder, returns the CHILD's buffer — a property
+`_vk_hoistable` depends on), so those arms are semantic, not mechanical. Same
+four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
+"""
+const _NARY_MINMAX_OPS = Tuple(
+    _ladder_row(s) for s in _OP_TABLE
+    if s.category === :elementary && s.arity == 2:typemax(Int))
+
+# Load-time guard for the symbol-spliced generated arms: each recorded function
+# name must resolve, in THIS module's scope, to the registry's recorded
+# function — so a future shadowing of e.g. `min` or `==` cannot silently desync
+# the generated ladders from their `_OP_TABLE` rows. (`_UNARY_ELEMENTWISE_OPS`
+# gets the equivalent check in vectorize.jl, next to its first consumer.)
+for _t in (_COMPARISON_ELEMENTWISE_OPS, _BINARY_ELEMENTWISE_OPS, _NARY_MINMAX_OPS)
+    for _row in _t
+        getfield(@__MODULE__, _row.fnsym) === _row.fn ||
+            error("op_registry: generated-ladder op '$(_row.name)' does not " *
+                  "resolve to its recorded scalar function in module scope")
+    end
+end

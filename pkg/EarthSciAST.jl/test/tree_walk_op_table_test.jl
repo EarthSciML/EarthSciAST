@@ -1,11 +1,13 @@
 # Op-table synchronization tests for the tree-walk evaluator.
 #
-# The evaluator carries several manually-parallel op ladders: the scalar
-# `_eval_node_op`, its vectorized twin `_eval_vec_op`, the build-time
+# The evaluator carries several parallel op ladders: the scalar
+# `_eval_node_op`, its vectorized twin `_eval_vec_op`, and the build-time
 # whitelists `_WS4_FOLDABLE_ELEMENTWISE_OPS` (elementwise array-observed fold)
-# and `_STENCIL_ELEMENTWISE_OPS` (symbolic stencil fast path), and the
-# setup-geometry ladder `_geo_apply_scalar`. Full table-driven codegen is out
-# of scope; instead these tests pin the containment relations so ladder DRIFT
+# and `_STENCIL_ELEMENTWISE_OPS` (symbolic stencil fast path). The MECHANICAL
+# arms (unary elementwise / comparisons / fixed-2-ary / n-ary min-max) are now
+# GENERATED from the op-registry tables, and the setup-geometry scalar ladder
+# is gone entirely (geometry bodies compile into the shared `_Node` IR); these
+# tests pin the containment relations so any remaining hand-written drift
 # fails CI:
 #
 #   * every op in `_WS4_FOLDABLE_ELEMENTWISE_OPS` has a scalar eval arm
@@ -16,7 +18,7 @@
 #     `_VecKernel`s evaluated by `_eval_vec_op`);
 #   * the scalar and vectorized ladders stay in sync over the full evaluable
 #     elementwise op family;
-#   * `_geo_apply_scalar` keeps an arm for every op of its documented
+#   * the compiled setup-geometry path covers every op of the documented
 #     polygon-area / overlap-join FAQ vocabulary.
 #
 # Also pins the read-only `_EMPTY_*` sentinel invariant (the shared empty
@@ -137,9 +139,13 @@ end
         end
     end
 
-    @testset "_geo_apply_scalar covers its documented FAQ vocabulary" begin
-        # The setup-geometry ladder's documented op set (polygon-area /
-        # overlap-join FAQ vocabulary). Removing an arm fails here.
+    @testset "compiled setup-geometry path covers the documented FAQ vocabulary" begin
+        # The setup-geometry scalar ladder (`_geo_apply_scalar/1/2/3`) is
+        # retired: geometry bodies COMPILE once per sweep into the shared
+        # `_Node` IR (`_geo_compile`, tree_walk/geometry_compile.jl) and
+        # evaluate through `_eval_node_op`'s registry-generated arms. Pin that
+        # every op of the documented polygon-area / overlap-join FAQ
+        # vocabulary still compiles AND evaluates to a Float64.
         geo_ops = Dict{String,Vector{Float64}}(
             "+" => [1.0, 2.0], "*" => [2.0, 3.0], "-" => [5.0, 2.0],
             "/" => [6.0, 3.0], "^" => [2.0, 3.0],
@@ -150,14 +156,25 @@ end
             ">" => [2.0, 1.0], "<" => [1.0, 2.0], ">=" => [2.0, 2.0],
             "<=" => [2.0, 2.0], "==" => [2.0, 2.0], "!=" => [1.0, 2.0],
         )
+        _geo_test_ctx() = ESM._GeoCompileCtx(
+            ESM._GeoCtx(Dict{String,Any}(), nothing, Dict{String,Int}(),
+                        Dict{String,Vector{String}}()),
+            Dict{String,Int}(), Dict{String,String}(), Ref(0))
         for (op, args) in sort!(collect(geo_ops); by=first)
-            v = ESM._geo_apply_scalar(op, args)
+            e = OpExpr(op, ESM.ASTExpr[NumExpr(a) for a in args])
+            node = ESM._geo_compile(e, _geo_test_ctx())
+            v = ESM._eval_node(node, Float64[], nothing, 0.0)
             @test v isa Float64
         end
+        # The variadic `-` the interpreter accepted still folds (left fold).
+        e3 = OpExpr("-", ESM.ASTExpr[NumExpr(9.0), NumExpr(3.0), NumExpr(2.0)])
+        @test ESM._eval_node(ESM._geo_compile(e3, _geo_test_ctx()),
+                             Float64[], nothing, 0.0) == 4.0
         # And an op outside the vocabulary still raises the explicit
-        # setup-geometry error (the ladder's fall-through arm).
+        # setup-geometry error — now at COMPILE time (before the sweep).
         err = try
-            ESM._geo_apply_scalar("no_such_op", [1.0])
+            ESM._geo_compile(OpExpr("no_such_op", ESM.ASTExpr[NumExpr(1.0)]),
+                             _geo_test_ctx())
             nothing
         catch e
             e

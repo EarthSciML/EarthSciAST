@@ -42,7 +42,8 @@
 #
 #   errors.jl          §1   TreeWalkError + E_TREEWALK_* codes
 #   geometry_setup.jl  §2   build-time geometry kernels (clip / fused area /
-#                           ranged clips / _geo_eval / binning coordinates)
+#                           ranged clips / binning coordinates); the geometry
+#                           BODY COMPILER is §2c (geometry_compile.jl, below)
 #   build_helpers.jl        _EMPTY_* sentinels, const-array boundary policy,
 #                           whole-array lift, WS4 elementwise fold
 #   build.jl           §2b  BuildInspection, build-pipeline stages,
@@ -51,6 +52,10 @@
 #   compile.jl         §3-4 _Node IR compilation, CSE (ess-r7h), the compiled
 #                           scalar walker (zero-alloc hot path), the RHS value
 #                           type (_rhs_value_type) both walkers compute in
+#   geometry_compile.jl §2c setup-time geometry BODY COMPILER: lowers geometry
+#                           bodies once per materialization sweep into the
+#                           _Node IR (compile-once, evaluate-per-cell —
+#                           retires the former _geo_eval interpreter)
 #   vectorize.jl       §4b  vectorized array kernels (ess-dhq): merge +
 #                           in-place runtime eval + _make_rhs — zero-alloc at
 #                           Float64, and eltype-generic (ForwardDiff over the
@@ -83,6 +88,7 @@ include("tree_walk/geometry_setup.jl")
 include("tree_walk/build_helpers.jl")
 include("tree_walk/build.jl")
 include("tree_walk/compile.jl")
+include("tree_walk/geometry_compile.jl")   # §2c: needs _Node (compile.jl)
 include("tree_walk/access_kernel.jl")
 include("tree_walk/vectorize.jl")
 include("tree_walk/oop.jl")

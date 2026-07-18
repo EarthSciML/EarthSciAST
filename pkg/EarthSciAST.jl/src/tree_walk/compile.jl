@@ -942,8 +942,9 @@ end
 # a `Type{…}` at each `f!` specialization — which is what makes `_cse_buf`/`_vbuf`
 # static dispatches and keeps the Float64 path byte-for-byte what it was.
 #
-# (oop.jl carries an identical `_oop_value_type`. The two emitters must agree on
-# the value type; dedupe when they are next touched together.)
+# (oop.jl's `_oop_value_type` is this same function under the emitter-local
+# name — `const _oop_value_type = _rhs_value_type` — so the two emitters agree
+# on the value type by construction.)
 @inline _promote_val_types(::Tuple{}) = Bool   # identity for `promote_type`
 @inline _promote_val_types(x::Tuple) =
     promote_type(typeof(x[1]), _promote_val_types(Base.tail(x)))
@@ -955,6 +956,26 @@ end
 # NamedTuple (see `_build_state_layout`); with no parameters there is nothing for it
 # to contribute to the value type.
 @inline _rhs_value_type(u, ::Nothing, t) = promote_type(eltype(u), typeof(t))
+
+# ---- Float32 state guard ----------------------------------------------------
+#
+# `Float32` state is refused LOUDLY at the RHS entry. The walkers are
+# eltype-generic, but every literal, const array, and captured forcing buffer is
+# `Float64` DATA — so a `Float32` `u` does not buy a Float32 pipeline: it
+# promotes to `T == Float64` at the first operator and the whole RHS computes in
+# Float64 anyway, plus one convert per state read/store. That is strictly SLOWER
+# than handing the same values over as `Float64`, and the silent promotion hides
+# it, so rejecting is the kindness. The `eltype` test is static per `f!`/`f`
+# specialization, so at Float64 (and under AD `Dual`s) the branch folds away and
+# the zero-alloc / instruction-identical property of the hot path is untouched.
+@inline function _reject_float32_state(u)
+    eltype(u) === Float32 && throw(TreeWalkError("E_TREEWALK_FLOAT32_STATE",
+        "Float32 state is not supported: the compiled RHS's literals and const " *
+        "data are Float64, so Float32 `u` silently promotes and computes in " *
+        "Float64 anyway — with an extra convert per state access, i.e. strictly " *
+        "slower than Float64 state. Pass the state as Vector{Float64}."))
+    return nothing
+end
 
 # Mutable CSE compile context: the set of cached keys, the slot assigned to each
 # (assigned lazily, in topological order, at first compile), the prelude
@@ -1176,11 +1197,115 @@ function _eval_contraction(n::_Node, u, p, t, ::Type{T}) where {T}
     end
 end
 
+# ---- Generated mechanical arms (op-registry tables, src/op_registry.jl) ----
+#
+# The MECHANICAL arms of `_eval_node_op` — the unary elementwise ops
+# (`sin` … `ceil`), the comparisons, the fixed-2-ary `/`/`^`/`pow`/`atan2`,
+# and the n-ary `min`/`max` folds — are GENERATED from the op-registry tables,
+# following the pattern `_eval_vec_unary_elementwise` (vectorize.jl)
+# established: one `op === :name` compare chain in table (= original
+# hand-ladder arm) order, each generated arm the hand-written original's AST
+# verbatim (splicing the function SYMBOL in call position reproduces the infix
+# form exactly — `a < b` IS `(<)(a, b)`). Each probe returns `nothing` when
+# `op` is not in its table, so the caller's ladder falls through to the
+# structurally distinct arms. This is NOT a Dict/table dispatch: the splice
+# compiles to the same compare-and-branch machine code as the hand ladder, and
+# the probe's small `Union{Nothing,…}` return is an isbits union — the
+# zero-allocation property of `f!` is untouched (pinned by
+# tree_walk_allocation_test.jl). A new mechanical op added to `_OP_TABLE`
+# grows every ladder at once.
+let arms = :(return nothing)
+    for row in reverse(_UNARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 1)
+                             return $(row.sym)(_eval_node(c[1], u, p, t, T))
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_node_unary_elementwise(op::Symbol, c::Vector{_Node},
+                                                        u, p, t, ::Type{T}) where {T}
+        $arms
+    end
+end
+
+# Comparisons → 1.0/0.0 (match `evaluate` semantics).
+let arms = :(return nothing)
+    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 2)
+                             return $(row.fnsym)(_eval_node(c[1], u, p, t, T),
+                                                 _eval_node(c[2], u, p, t, T)) ? 1.0 : 0.0
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_node_comparison(op::Symbol, c::Vector{_Node},
+                                                 u, p, t, ::Type{T}) where {T}
+        $arms
+    end
+end
+
+# Fixed-2-ary elementwise: `/`, `^`, `pow`, `atan2`.
+#
+# THE `^`/`pow` ARMS DESERVE THEIR OLD COMMENT: a LITERAL EXPONENT MUST STAY A
+# `Float64`, and the walker's leaves are why it does. `^` is the one op whose
+# derivative w.r.t. an OPERAND needs a function with a smaller domain than the
+# op itself: ∂(x^y)/∂y = x^y·log(x). Hand ForwardDiff a `Dual` exponent and it
+# takes that branch even when the exponent's partials are all zero, so `c^2` at
+# any NEGATIVE c evaluates log(c) and silently poisons the gradient with NaN
+# while the primal value still looks perfect. Because `_NK_LITERAL` returns its
+# raw `Float64` (see `_eval_node` — nothing in the walker converts leaves into
+# `T`), the generated `x ^ y` compiles to `Dual^Float64` — the power rule,
+# defined on the whole domain `^` is. (The vectorized twin gets the same
+# protection from `_VK_LITERAL`/`_VK_CONSTVEC` staying `Vector{Float64}`.) An
+# exponent that genuinely depends on a differentiated variable still lands on
+# `Dual^Dual`, which is correct. The protection lives in the LEAVES, so the arm
+# itself is mechanical and safe to generate.
+let arms = :(return nothing)
+    for row in reverse(_BINARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             _expect_arity_n(op, c, 2)
+                             return $(row.fnsym)(_eval_node(c[1], u, p, t, T),
+                                                 _eval_node(c[2], u, p, t, T))
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_node_binary_elementwise(op::Symbol, c::Vector{_Node},
+                                                         u, p, t, ::Type{T}) where {T}
+        $arms
+    end
+end
+
+# n-ary `min`/`max` (esm-spec §4.2 — arity ≥ 2), folded in child order.
+let arms = :(return nothing)
+    for row in reverse(_NARY_MINMAX_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
+                                 $(row.name * " needs ≥2 args")))
+                             acc = _eval_node(c[1], u, p, t, T)
+                             @inbounds for i in 2:length(c)
+                                 acc = $(row.fnsym)(acc, _eval_node(c[i], u, p, t, T))
+                             end
+                             return acc
+                         end,
+                         arms)
+    end
+    @eval @inline function _eval_node_minmax(op::Symbol, c::Vector{_Node},
+                                             u, p, t, ::Type{T}) where {T}
+        $arms
+    end
+end
+
 function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
     op = n.op
     c = n.children
 
-    # Arithmetic — the hot paths.
+    # Arithmetic — the hot paths. `+`/`*` (1-ary pass-through) and `-`/`neg`
+    # (1-or-2-ary `-`) stay hand-written: their arity polymorphism is
+    # semantic, not mechanical.
     if op === :+
         length(c) == 1 && return _eval_node(c[1], u, p, t, T)
         acc = _eval_node(c[1], u, p, t, T)
@@ -1208,44 +1333,16 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         # may carry `neg` ops where the source had `-x`.
         _expect_arity_n(op, c, 1)
         return -_eval_node(c[1], u, p, t, T)
-    elseif op === :/
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) / _eval_node(c[2], u, p, t, T)
-    elseif op === :^ || op === :pow
-        # A LITERAL EXPONENT MUST STAY A `Float64`, and this arm is why the walker
-        # never converts its leaves into `T`. `^` is the one op whose derivative
-        # w.r.t. an OPERAND needs a function with a smaller domain than the op
-        # itself: ∂(x^y)/∂y = x^y·log(x). Hand ForwardDiff a `Dual` exponent and it
-        # takes that branch even when the exponent's partials are all zero, so
-        # `c^2` at any NEGATIVE c evaluates log(c) and silently poisons the gradient
-        # with NaN while the primal value still looks perfect. Because
-        # `_NK_LITERAL` returns its raw `Float64`, this compiles to `Dual^Float64`
-        # — the power rule, defined on the whole domain `^` is. (The vectorized twin
-        # gets the same protection from `_VK_LITERAL`/`_VK_CONSTVEC` staying
-        # `Vector{Float64}`; see `_eval_vec`.) An exponent that genuinely depends on
-        # a differentiated variable still lands on `Dual^Dual`, which is correct.
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) ^ _eval_node(c[2], u, p, t, T)
+    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
+    # registry (see `_eval_node_binary_elementwise` above, where `^`'s
+    # literal-exponent note now lives). The probe sits where `/` sat.
+    elseif (bin = _eval_node_binary_elementwise(op, c, u, p, t, T)) !== nothing
+        return bin
 
-    # Comparisons → 1.0/0.0 (match `evaluate` semantics)
-    elseif op === :<
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) <  _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
-    elseif op === Symbol("<=")
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) <= _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
-    elseif op === :>
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) >  _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
-    elseif op === Symbol(">=")
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) >= _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
-    elseif op === Symbol("==")
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) == _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
-    elseif op === Symbol("!=")
-        _expect_arity_n(op, c, 2)
-        return _eval_node(c[1], u, p, t, T) != _eval_node(c[2], u, p, t, T) ? 1.0 : 0.0
+    # Comparisons → 1.0/0.0 (match `evaluate` semantics) — GENERATED from the
+    # registry (see `_eval_node_comparison` above).
+    elseif (cmp = _eval_node_comparison(op, c, u, p, t, T)) !== nothing
+        return cmp
 
     # Logical
     elseif op === :and
@@ -1268,12 +1365,12 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
                _eval_node(c[2], u, p, t, T) :
                _eval_node(c[3], u, p, t, T)
 
-    # Elementary functions
-    elseif op === :sin;   _expect_arity_n(op, c, 1); return sin(_eval_node(c[1], u, p, t, T))
-    elseif op === :cos;   _expect_arity_n(op, c, 1); return cos(_eval_node(c[1], u, p, t, T))
-    elseif op === :tan;   _expect_arity_n(op, c, 1); return tan(_eval_node(c[1], u, p, t, T))
-    elseif op === :asin;  _expect_arity_n(op, c, 1); return asin(_eval_node(c[1], u, p, t, T))
-    elseif op === :acos;  _expect_arity_n(op, c, 1); return acos(_eval_node(c[1], u, p, t, T))
+    # Elementary functions. The mechanical unary arms (`sin` … `ceil`) are
+    # GENERATED from the registry (see `_eval_node_unary_elementwise` above);
+    # the probe sits where the first mechanical arm (`sin`) sat. `atan`
+    # (1-or-2-ary) stays hand-written; `atan2` is handled by the binary probe.
+    elseif (unary = _eval_node_unary_elementwise(op, c, u, p, t, T)) !== nothing
+        return unary
     elseif op === :atan
         if length(c) == 1
             return atan(_eval_node(c[1], u, p, t, T))
@@ -1281,35 +1378,10 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
             return atan(_eval_node(c[1], u, p, t, T), _eval_node(c[2], u, p, t, T))
         end
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-    elseif op === :atan2
-        _expect_arity_n(op, c, 2)
-        return atan(_eval_node(c[1], u, p, t, T), _eval_node(c[2], u, p, t, T))
-    elseif op === :sinh;  _expect_arity_n(op, c, 1); return sinh(_eval_node(c[1], u, p, t, T))
-    elseif op === :cosh;  _expect_arity_n(op, c, 1); return cosh(_eval_node(c[1], u, p, t, T))
-    elseif op === :tanh;  _expect_arity_n(op, c, 1); return tanh(_eval_node(c[1], u, p, t, T))
-    elseif op === :asinh; _expect_arity_n(op, c, 1); return asinh(_eval_node(c[1], u, p, t, T))
-    elseif op === :acosh; _expect_arity_n(op, c, 1); return acosh(_eval_node(c[1], u, p, t, T))
-    elseif op === :atanh; _expect_arity_n(op, c, 1); return atanh(_eval_node(c[1], u, p, t, T))
-    elseif op === :exp;   _expect_arity_n(op, c, 1); return exp(_eval_node(c[1], u, p, t, T))
-    elseif op === :log;   _expect_arity_n(op, c, 1); return log(_eval_node(c[1], u, p, t, T))
-    elseif op === :log10; _expect_arity_n(op, c, 1); return log10(_eval_node(c[1], u, p, t, T))
-    elseif op === :sqrt;  _expect_arity_n(op, c, 1); return sqrt(_eval_node(c[1], u, p, t, T))
-    elseif op === :abs;   _expect_arity_n(op, c, 1); return abs(_eval_node(c[1], u, p, t, T))
-    elseif op === :sign;  _expect_arity_n(op, c, 1); return sign(_eval_node(c[1], u, p, t, T))
-    elseif op === :floor; _expect_arity_n(op, c, 1); return floor(_eval_node(c[1], u, p, t, T))
-    elseif op === :ceil;  _expect_arity_n(op, c, 1); return ceil(_eval_node(c[1], u, p, t, T))
-    elseif op === :min
-        # n-ary min (esm-spec §4.2 — arity ≥ 2)
-        length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "min needs ≥2 args"))
-        acc = _eval_node(c[1], u, p, t, T)
-        @inbounds for i in 2:length(c); acc = min(acc, _eval_node(c[i], u, p, t, T)); end
-        return acc
-    elseif op === :max
-        # n-ary max (esm-spec §4.2 — arity ≥ 2)
-        length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY", "max needs ≥2 args"))
-        acc = _eval_node(c[1], u, p, t, T)
-        @inbounds for i in 2:length(c); acc = max(acc, _eval_node(c[i], u, p, t, T)); end
-        return acc
+
+    # n-ary min/max (esm-spec §4.2 — arity ≥ 2) — GENERATED from the registry.
+    elseif (mm = _eval_node_minmax(op, c, u, p, t, T)) !== nothing
+        return mm
 
     elseif op === :pi || op === :π
         return Float64(pi)
@@ -1376,6 +1448,14 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
             "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
 
+    elseif op === :geo_gather || op === :geo_pia || op === :geo_skolem ||
+           op === :geo_agg
+        # Compiled setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl).
+        # These exist only in build-time compiled geometry bodies — `u` is a
+        # small loop-index frame there, never the ODE state — so this arm is
+        # cold by construction; it sits at the ladder tail where the RHS hot
+        # ops never reach it.
+        return _eval_geo_op(n, u, p, t, T)
     else
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", String(op)))
     end
