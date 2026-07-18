@@ -8,8 +8,6 @@
 #     `reconstruct`), including `table`/`table_axes`/`output`/`distinct`/`key`
 #     which the hand-rolled rebuild used to drop;
 #   * the resolve→compile live-forcing side channel is a typed `_PGatherRef`;
-#   * `_eval_vec_op` raises E_TREEWALK_ARITY (not BoundsError) on malformed
-#     nodes, matching its scalar twin;
 #   * the `:fn` eval arm throws explicitly instead of falling through to
 #     `nothing` when const-args are present but no interp.* case matches.
 
@@ -136,28 +134,6 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         # Live: an in-place refresh of the caller's buffer shows through.
         buf[2, 1] = 99.0
         @test ESM._eval_node(node, Float64[], NamedTuple(), 0.0) == 99.0
-    end
-
-    # ----------------------------------------------------------------
-    @testset "_eval_vec_op arity guards match the scalar twin" begin
-        lit = ESM._mknode(kind=ESM._NK_LITERAL, literal=0.5)
-        for (op, nargs, wrong) in ((:/, 2, 1), (:^, 2, 1), (:not, 1, 2),
-                                   (:ifelse, 3, 2), (:neg, 1, 2),
-                                   (:sqrt, 1, 2), (:atan2, 2, 1),
-                                   (:<, 2, 1), (:min, 2, 1), (:max, 2, 0))
-            bad = ESM._mkvnode(kind=ESM._VK_OP, op=op,
-                children=ESM._VecNode[ESM._merge_nodes(ESM._Node[lit], 1)
-                                      for _ in 1:wrong],
-                buf=Vector{Float64}(undef, 1))
-            err = try
-                ESM._eval_vec_op(bad, Float64[], NamedTuple(), 0.0, Float64)
-                nothing
-            catch e
-                e
-            end
-            @test err isa ESM.TreeWalkError
-            @test err.code == "E_TREEWALK_ARITY"
-        end
     end
 
     # ----------------------------------------------------------------

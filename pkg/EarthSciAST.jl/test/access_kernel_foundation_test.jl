@@ -176,4 +176,77 @@ const E = EarthSciAST
         # the lane tape must DECLINE (scalar runner keeps it), never mis-plan.
         @test E._build_acc_plan(K) === nothing
     end
+
+    # ---------- UNSTRUCTURED slot-table gather (_AK_STATE_TBL_BOX, stage 2) ----------
+    # A per-box slot table addressed by the cell multi-index — the lowering the
+    # box processor emits for a gather whose slot is NOT affine in the loop
+    # indices (indirect through a connectivity const). Ghost slot 0 fetches 0.0.
+    @testset "state slot-table gather ≡ per-cell (N=$N)" for N in (24, 257)
+        u = Float64[cos(0.2x) + 0.01x for x in 1:N]
+        perm = Int[mod1(5x + 2, N) for x in 1:N]
+        perm[2] = 0                                   # one ghost entry
+        # D(y[i]) = u[perm[i]] - 0.5*u[i]  over a 1-D box with unit stride.
+        acc = E._AccDesc[E._AccStateTblBox(copy(perm), 1, 0, 0, 1),
+                         E._AccStateAffine(0)]
+        sp = E._aop(:-, E._acc(1), E._aop(:*, E._alit(0.5), E._acc(2)))
+        K = E._AccKernel(E._CellSet([1], UnitRange{Int}[1:N], 0), sp, acc,
+                         E._FixedBound(0), 0.0)
+        ref = Float64[(perm[i] == 0 ? 0.0 : u[perm[i]]) - 0.5*u[i] for i in 1:N]
+        du = zeros(N)
+        E._run_acc_kernel!(du, u, nothing, 0.0, K)
+        @test du == ref                               # scalar runner, bit-identical
+        P = E._build_acc_plan(K; tile=16)             # the tape must PLAN this kind
+        @test P !== nothing
+        du2 = zeros(N)
+        E._run_acc_plan!(du2, u, nothing, 0.0, K, P)
+        @test du2 == ref                              # tape run, bit-identical
+    end
+
+    # ---------- END-TO-END: the BUILD emits the slot table (stage 2) ----------
+    # Past the Δ-cut cap (an unstructured permutation at large N), the default
+    # build must land ONE access kernel carrying the slot table — never O(N)
+    # boxes, never the symbolic/per-cell fallback — bit-identical to the forced
+    # per-cell reference, zero-alloc in place, and vectorized out of place.
+    @testset "build emits slot-table kernel for unstructured gather" begin
+        include("testutils.jl")
+        N = 64
+        perm = Int[mod1(7i + 3, N) for i in 1:N]
+        conn = Float64.(perm)
+        vars = Dict("y" => ModelVariable(StateVariable),
+                    "u" => ModelVariable(StateVariable))
+        lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
+        rhs = _arrayop1d(_idx("u", _idx("conn", _v("i"))), "i", 1, N)
+        model = E.Model(vars, [E.Equation(lhs, rhs)])
+        ics = Dict{String,Float64}()
+        for k in 1:N; ics["y[$k]"] = 0.0; ics["u[$k]"] = 1.0k; end
+        ca = Dict("conn" => conn)
+
+        f!, u0, p, _, vmap, d = E._build_evaluator_impl(model;
+            initial_conditions=ics, const_arrays=ca)
+        @test d.n_acc_kernels == 1                    # ONE kernel, not O(N) boxes
+        @test d.n_vec_kernels == 0
+        du = fill(-1.0, length(u0)); f!(du, u0, p, 0.0)
+        for i in 1:N
+            @test du[vmap["y[$i]"]] == u0[vmap["u[$(perm[i])]"]]
+        end
+
+        # forced per-cell reference: bit-identical on every written slot
+        fr!, u0r, pr, _, _ = withenv("ESS_STENCIL_DISABLE" => "1") do
+            build_evaluator(model; initial_conditions=ics, const_arrays=ca)
+        end
+        dur = fill(-1.0, length(u0r)); fr!(dur, u0r, pr, 0.0)
+        @test du == dur
+
+        # zero-alloc in place (the tape hosts the table gather)
+        f!(du, u0, p, 0.0)
+        @test (@allocated f!(du, u0, p, 0.0)) == 0
+
+        # oop: gather-of-gather resolved host-side, bit-identical
+        fo, u0o, po, _, _ = build_evaluator(model; initial_conditions=ics,
+            const_arrays=ca, form=:oop)
+        duo = fo(u0o, po, 0.0)
+        for i in 1:N
+            @test duo[vmap["y[$i]"]] == du[vmap["y[$i]"]]
+        end
+    end
 end

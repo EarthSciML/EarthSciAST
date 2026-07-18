@@ -34,8 +34,15 @@ const ESM = EarthSciAST
         ics = Dict("y[$k]" => 0.0 for k in 1:N)
 
         # clamp: M[5] -> M[4] = 40 (edge-extend)
-        f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
-            const_arrays=Dict("M" => M), const_array_boundaries=Dict("M" => [:clamp]))
+        # The boundary fold is in the affine per-cell signature (a cut at the
+        # clamp transition), so the DEFAULT build lands on the access-kernel
+        # path — pinned here so a signature regression can't silently demote
+        # these equations to a fallback tier.
+        f!, u0, p, _, vmap, _diag = ESM._build_evaluator_impl(model;
+            initial_conditions=ics, const_arrays=Dict("M" => M),
+            const_array_boundaries=Dict("M" => [:clamp]))
+        @test _diag.n_acc_kernels >= 1
+        @test _diag.n_vec_kernels == 0
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[1]"]], 20.0; rtol=1e-12)   # M[2], in range
         @test isapprox(du[vmap["y[3]"]], 40.0; rtol=1e-12)   # M[4], in range
@@ -72,8 +79,13 @@ const ESM = EarthSciAST
         end
 
         # clamp: conn[5] -> conn[4] = 1 -> u[1] = 10
-        f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
-            const_arrays=Dict("conn" => conn), const_array_boundaries=Dict("conn" => [:clamp]))
+        # The indirect-through-const state gather also lands on the access-kernel
+        # path (Δ-keyed cuts / indirect slot table) — pinned like testset A.
+        f!, u0, p, _, vmap, _diag = ESM._build_evaluator_impl(model;
+            initial_conditions=ics, const_arrays=Dict("conn" => conn),
+            const_array_boundaries=Dict("conn" => [:clamp]))
+        @test _diag.n_acc_kernels >= 1
+        @test _diag.n_vec_kernels == 0
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[1]"]], 30.0; rtol=1e-12)   # conn[2]=3 -> u[3]
         @test isapprox(du[vmap["y[2]"]], 40.0; rtol=1e-12)   # conn[3]=4 -> u[4]

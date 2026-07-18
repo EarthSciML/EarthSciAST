@@ -1664,7 +1664,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
-    scalar_entries, vec_kernels, acc_kernels = _compile_derivative_equations(derivative_eqs,
+    scalar_entries, percell_scalar, acc_kernels = _compile_derivative_equations(derivative_eqs,
         resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states; template_sites=template_sites,
         scalar_obs_inline=obs_plan.inline)
@@ -1686,33 +1686,14 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
                             has_pgather = !isempty(pgather), obs_defs=obs_defs)
 
-    # ---- Lane-invariant sharing across kernels and with the prelude (ha2) ----
-    # The pass above sees SCALAR equations only — `_cse_count!` walks `ASTExpr`
-    # entries, and the array path never produces any — so a lane-invariant subtree
-    # living in two array kernels plus one scalar equation was evaluated three times
-    # per RHS call, and its scalar occurrence looked like a SINGLETON (suppressing the
-    # prelude slot it should have had). This post-pass runs over the COMPILED `_Node`
-    # IR, where the two paths finally share a representation: it value-numbers every
-    # prelude def and every `_VK_INVARIANT` payload, gives one cache slot to each value
-    # that occurs more than once (or that a prelude def already computes), and rewrites
-    # the payloads — and the scalar trees — to read it. Mutates `rhs_list`,
-    # `scalar_prelude`, `scalar_cache` and `vec_kernels` in place, which is why it must
-    # run before the closure captures them. A model with no array kernels is untouched.
-    inv_diag = _share_lane_invariants!(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
-
-    # ---- Lane-VARYING vector sharing (cp5, vec_share.jl) ----
-    # The pass above shares SCALARS (a lane-invariant subtree collapses to one cache slot
-    # broadcast over the lanes). Nothing shared an N-lane VECTOR: `u[i]+w[i]` feeding both
-    # a `sin` and a `cos` lowered twice, and a flux `k*A[i]*B[i]` appearing in two species'
-    # balances was recomputed once per balance. This pass value-numbers the `_VecNode`
-    # templates on their LANE DATA (gather slots by value, constvec bits, fn spec content,
-    # `_VK_INVARIANT` by its scalar value number), hash-conses them into a DAG, and lifts
-    # every node with in-degree ≥ 2 into a VEC PRELUDE of defs evaluated once per RHS call;
-    # occurrences become `_VK_VCACHED` refs that read the def's buffer. Cross-kernel comes
-    # free: the slots vector IS the lane identity, so equal keys provably hold equal
-    # vectors. Runs AFTER the invariant pass so a shared invariant payload is already an
-    # `_NK_CACHED` slot here. Mutates `vec_kernels` in place.
-    vec_prelude, vec_diag = _share_lane_vectors!(vec_kernels, scalar_prelude, scalar_cache)
+    # ---- Forced per-cell reference (ESS_STENCIL_DISABLE=1) ----
+    # The disabled fallback's compiled per-cell nodes join the scalar list —
+    # each cell evaluated by the plain scalar walker `_eval_node`, with no merge
+    # machinery of any kind between it and the equation: the maximally
+    # independent oracle the acc≡per-cell differential tests compare against.
+    # Empty on every default build. Appended AFTER the CSE pass so the
+    # reference trees are exactly the `_compile` output, untouched by sharing.
+    isempty(percell_scalar) || append!(rhs_list, percell_scalar)
 
     # ---- Cadence tiers of the (now final) prelude (4qf, const_tier.jl) ----
     # Runs AFTER the sharing pass, because that pass APPENDS prelude defs — a
@@ -1732,53 +1713,35 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # exist): `:inplace` is the zero-alloc Float64 production RHS; `:oop` is the
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
-        _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_prelude, vec_kernels,
-                  acc_kernels, const_slots, dyn_slots)
+        _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
+                  const_slots, dyn_slots)
     elseif form === :oop
-        _make_rhs_oop(rhs_list, scalar_prelude, vec_prelude, vec_kernels, acc_kernels, n_states)
+        _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
     end
 
-    # Diagnostics for the N-independence property (ess-dhq acceptance #3): the
-    # number of array kernels and total compiled `_VecNode`s must be invariant
-    # across grid sizes; only the embedded slot/value vectors grow with N.
-    # `n_cse_slots` / `n_cse_occurrences` witness the CSE evaluate-once property
-    # (ess-r7h #2): distinct cached subexpressions vs total replaced occurrences.
+    # Diagnostics for the N-independence property: the number of array kernels
+    # (and their CSE tiers) must be invariant across grid sizes; only the
+    # embedded slot/value vectors grow with N. `n_cse_slots` /
+    # `n_cse_occurrences` witness the scalar CSE evaluate-once property
+    # (ess-r7h #2); `n_const_slots` / `n_dynamic_slots` partition the prelude by
+    # cadence (4qf) — `n_const_slots` is the number of slots `f!` skips on a
+    # call whose `p` has not moved.
     #
-    # `n_cse_slots` stays the SCALAR pass's slot count — the `n_invariant_*` triple is
-    # reported separately so the two mechanisms remain separately observable. The
-    # PRELUDE's actual length is `n_cse_slots + n_invariant_slots`:
-    #   n_invariant_slots        — new prelude slots created for lane-invariant subtrees
-    #                              shared across ≥ 2 array kernels
-    #   n_invariant_shared       — `_VK_INVARIANT` payloads collapsed to a single cache
-    #                              read (the cross-kernel + kernel→prelude win)
-    #   n_invariant_scalar_shared — occurrences in SCALAR equations rewritten onto one of
-    #                              those slots (the kernel→scalar direction, which the
-    #                              AST-level count pass structurally cannot see)
-    #
-    # `n_const_slots` / `n_dynamic_slots` partition the FINAL prelude by cadence (4qf):
-    # they sum to `n_cse_slots + n_invariant_slots`. `n_const_slots` is the number of
-    # slots `f!` skips on a call whose `p` has not moved. (Reported for an `:oop` build
-    # too — the classification is a property of the prelude, not of the emitter — but
-    # only `:inplace` acts on it; see `_make_rhs_oop`.)
-    #
-    # The `n_vec_*` triple is the LANE-VARYING vector sharing (cp5) — a SECOND prelude,
-    # of `_VecNode` defs holding whole N-lane vectors, disjoint from the scalar one above:
-    #   n_vec_slots         — shared lane vectors lifted into the vec prelude
-    #   n_vec_shared        — occurrence SITES collapsed onto them (≥ 2 × n_vec_slots)
-    #   n_vec_prelude_nodes — compiled `_VecNode`s in those defs. Like `template_node_count`
-    #                         it is N-INDEPENDENT: sharing moves nodes from the templates
-    #                         into the prelude, so the two must be read together — the sum
-    #                         is what shrinks, and `template_node_count` alone can only fall.
-    diag = (; n_vec_kernels = length(vec_kernels),
+    # The `_VecNode`-overlay fields (`n_vec_kernels`, `template_node_count`, the
+    # `n_invariant_*` and `n_vec_*` triples) are RETAINED AS HARD ZEROS: the
+    # overlay was deleted when the access-kernel IR became the only array
+    # runtime, and a large body of tests (and downstream tooling) asserts
+    # `n_vec_kernels == 0` — meaning "the unified IR owns every array
+    # equation" — which is now true by construction.
+    diag = (; n_vec_kernels = 0,
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
               n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
               n_scalar_entries = length(rhs_list),
-              template_node_count =
-                  sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
+              template_node_count = 0,
               n_cse_slots = cse_diag.n_slots,
               n_cse_occurrences = cse_diag.n_occurrences,
               # Named scalar-observed prelude slots (ess-obs-slots): observeds
@@ -1786,15 +1749,15 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # (array-valued + leaf-bodied + structurally/guard-demoted). An
               # aliased slot (an observed whose whole body was already a CSE
               # slot) still counts as a named slot; the PRELUDE length is
-              # `n_cse_slots + n_obs_slots + n_invariant_slots` minus aliases.
+              # `n_cse_slots + n_obs_slots` minus aliases.
               n_obs_slots = cse_diag.n_obs_slots,
               n_obs_inlined = obs_plan.n_inlined,
-              n_invariant_slots = inv_diag.n_invariant_slots,
-              n_invariant_shared = inv_diag.n_invariant_shared,
-              n_invariant_scalar_shared = inv_diag.n_invariant_scalar_shared,
-              n_vec_slots = vec_diag.n_vec_slots,
-              n_vec_shared = vec_diag.n_vec_shared,
-              n_vec_prelude_nodes = vec_diag.n_vec_prelude_nodes,
+              n_invariant_slots = 0,
+              n_invariant_shared = 0,
+              n_invariant_scalar_shared = 0,
+              n_vec_slots = 0,
+              n_vec_shared = 0,
+              n_vec_prelude_nodes = 0,
               n_const_slots = length(const_slots),
               n_dynamic_slots = length(dyn_slots))
 
@@ -1933,9 +1896,13 @@ end
 # here; compilation to the compact `_Node` form is deferred to the caller's
 # single batched `_cse_compile_scalar` pass, so common subexpressions are
 # eliminated across equations as well as within one RHS (ess-r7h). Array
-# (`arrayop`) derivative equations compile to whole-array kernels (ess-dhq)
-# instead of N per-cell scalar nodes — see section 4b and
-# `_compile_arrayop_equation!`. Returns `(scalar_entries, vec_kernels)`.
+# (`arrayop`) derivative equations compile to whole-array access kernels
+# instead of N per-cell scalar nodes — see `_compile_arrayop_equation!`.
+# `percell_scalar` carries the ESS_STENCIL_DISABLE=1 reference's compiled
+# per-cell nodes (empty on every default build); the caller appends them to
+# `rhs_list` so they evaluate through the plain scalar walker — the maximally
+# independent differential oracle. Returns
+# `(scalar_entries, percell_scalar, acc_kernels)`.
 function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
@@ -1949,7 +1916,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         scalar_obs_inline::Union{Nothing,Dict{String,ASTExpr}}=nothing)
     scalar_inline = scalar_obs_inline === nothing ? resolved_obs : scalar_obs_inline
     scalar_entries = Tuple{Int,ASTExpr}[]
-    vec_kernels = _VecKernel[]
+    percell_scalar = Tuple{Int,_Node}[]
     acc_kernels = _AccKernel[]
     covered = falses(n_states)
 
@@ -1989,13 +1956,13 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_arrayop_D_lhs(eq.lhs)
-            _compile_arrayop_equation!(vec_kernels, acc_kernels, covered, eq, resolved_obs,
+            _compile_arrayop_equation!(percell_scalar, acc_kernels, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs;
                                        template_sites=template_sites)
         end
     end
-    return scalar_entries, vec_kernels, acc_kernels
+    return scalar_entries, percell_scalar, acc_kernels
 end
 
 # ---- Stage: one arrayop derivative equation → whole-array kernels ----
@@ -2038,13 +2005,15 @@ function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{St
 end
 
 # ---- Cascade coverage tally (build observability) ----
-# Which of the four array-equation build attempts each equation LANDS on:
+# Which of the array-equation build attempts each equation LANDS on:
 #   :affine             — the polyhedral access-kernel build, first try
 #   :affine_fused_retry — affine succeeded only after fusing the compile-once
 #                         template tier back in
-#   :symbolic           — the symbolic-stencil `_VecKernel` path (affine declined)
-#   :percell            — the per-cell scalarize+merge fallback
+#   :percell_acc        — the per-cell scalarize fallback, merged into
+#                         indirect-outs `_AccKernel`s (acc_merge.jl)
 #   :percell_disabled   — ESS_STENCIL_DISABLE=1 forced the per-cell reference
+#                         (plain compiled scalar nodes on `rhs_list`, evaluated
+#                         by `_eval_node` — the differential oracle)
 # One increment per array equation, at the cascade's dispatch below. Cheap
 # (a Dict bump per EQUATION, not per cell) and always on; read it via
 # `EarthSciAST._CASCADE_TALLY`, reset with `EarthSciAST._reset_cascade_tally!()`.
@@ -2052,7 +2021,7 @@ const _CASCADE_TALLY = Dict{Symbol,Int}()
 _tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
 
-function _compile_arrayop_equation!(vec_kernels, acc_kernels,
+function _compile_arrayop_equation!(percell_scalar, acc_kernels,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
@@ -2151,31 +2120,19 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         append!(acc_kernels, affine_kernels)
         return nothing
     end
-    # Fast path (ess-perf §4c): compile the stencil spine ONCE symbolically
-    # and derive each cell's gather slots by evaluating the index expressions
-    # per lane, instead of running sub→resolve→compile for every cell. Only
-    # the no-contraction case qualifies; `_try_symbolic_stencil` returns
-    # `nothing` (and leaves `covered` untouched) for anything it cannot model,
-    # so we fall back to the byte-identical per-cell loop.
-    symbolic_kernels = (isempty(contract_names) && !_stencil_disabled()) ?
-        _try_symbolic_stencil(rhs_body, idx_names, range_iters, lhs_body,
-                              resolved_obs, array_var_info, var_map,
-                              const_registry, pgather, param_sym_set, reg_funcs,
-                              covered) : nothing
-    if symbolic_kernels !== nothing
-        _tally_cascade!(:symbolic)
-        append!(vec_kernels, symbolic_kernels)
-    else
-        _tally_cascade!(_stencil_disabled() ? :percell_disabled : :percell)
-        _compile_arrayop_percell!(vec_kernels, covered, lhs_body, rhs_body;
-            idx_names=idx_names, range_iters=range_iters,
-            contract_names=contract_names, contract_ranges=contract_ranges,
-            contract_const=contract_const, rhs_oplus=rhs_oplus,
-            rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
-            resolved_obs=resolved_obs, array_var_info=array_var_info,
-            var_map=var_map, const_registry=const_registry, pgather=pgather,
-            param_sym_set=param_sym_set, reg_funcs=reg_funcs)
-    end
+    # Anything the affine build cannot model takes the per-cell fallback, whose
+    # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
+    # under ESS_STENCIL_DISABLE=1, stay plain per-cell scalar nodes (the
+    # differential reference).
+    _tally_cascade!(_stencil_disabled() ? :percell_disabled : :percell_acc)
+    _compile_arrayop_percell!(percell_scalar, acc_kernels, covered, lhs_body, rhs_body;
+        idx_names=idx_names, range_iters=range_iters,
+        contract_names=contract_names, contract_ranges=contract_ranges,
+        contract_const=contract_const, rhs_oplus=rhs_oplus,
+        rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
+        resolved_obs=resolved_obs, array_var_info=array_var_info,
+        var_map=var_map, const_registry=const_registry, pgather=pgather,
+        param_sym_set=param_sym_set, reg_funcs=reg_funcs)
     return nothing
 end
 
@@ -2187,11 +2144,17 @@ end
 # (einsum) equation expands its reduction through the shared
 # `_foreach_aggregate_term` core and accumulates at runtime via
 # `_NK_CONTRACTION`; the per-cell nodes are then merged into whole-array
-# kernels (ess-dhq) — structurally-identical cells collapse to one template;
-# ghost boundaries / makearray regions / distinct valences form their own
-# (N-independent) groups. The equation-derived inputs are keyword-only (several
-# share a type, so positional passing could silently swap two of them).
-function _compile_arrayop_percell!(vec_kernels, covered::BitVector,
+# kernels — structurally-identical cells collapse to one template; ghost
+# boundaries / makearray regions / distinct valences form their own
+# (N-independent) groups. The DEFAULT merge target is the unified access-kernel
+# IR (`_acc_from_cell_entries`, acc_merge.jl → indirect-outs `_AccKernel`s,
+# lane-tape hosted at Float64); `ESS_STENCIL_DISABLE=1` skips the merge and
+# keeps the compiled per-cell nodes as plain scalar entries (`percell_scalar`
+# → `rhs_list`, evaluated by `_eval_node`) — the maximally independent
+# reference the acc≡per-cell differentials compare against. The
+# equation-derived inputs are keyword-only (several share a type, so
+# positional passing could silently swap two of them).
+function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVector,
         lhs_body::OpExpr, rhs_body::ASTExpr;
         idx_names::Vector{String}, range_iters,
         contract_names::Vector{String}, contract_ranges, contract_const,
@@ -2289,7 +2252,11 @@ function _compile_arrayop_percell!(vec_kernels, covered::BitVector,
             end
         end
     end
-    append!(vec_kernels, _vectorize_cell_entries(cell_entries))
+    if _stencil_disabled()
+        append!(percell_scalar, cell_entries)
+    else
+        append!(acc_kernels, _acc_from_cell_entries(cell_entries))
+    end
     return nothing
 end
 

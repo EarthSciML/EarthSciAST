@@ -35,9 +35,8 @@
 # definition order. Definitions used at include time (structs, consts) must
 # stay before their include-time uses — in particular `_Node`/`_BuildMemo`/
 # `_MaybeMemo` (compile.jl) precede the `_resolve_indices` signatures
-# (resolve.jl), and `_VecNode`/`_VecKernel` (vectorize.jl) precede the stencil
-# compiler (stencil.jl). Note that build.jl is included BEFORE compile.jl —
-# its function signatures therefore must not annotate compile/vectorize types
+# (resolve.jl). Note that build.jl is included BEFORE compile.jl — its
+# function signatures therefore must not annotate compile-layer types
 # (they are used at runtime only; see `_compile_arrayop_equation!`).
 #
 #   errors.jl          §1   TreeWalkError + E_TREEWALK_* codes
@@ -56,26 +55,20 @@
 #                           bodies once per materialization sweep into the
 #                           _Node IR (compile-once, evaluate-per-cell —
 #                           retires the former _geo_eval interpreter)
-#   vectorize.jl       §4b  vectorized array kernels (ess-dhq): merge +
-#                           in-place runtime eval + _make_rhs — zero-alloc at
-#                           Float64, and eltype-generic (ForwardDiff over the
-#                           state OR the parameters) via the per-node lazy
-#                           alt-buffer (_vbuf)
+#   access_kernel.jl   §4b  the UNIFIED array-kernel IR (_AccKernel): access
+#                           descriptors, the eltype-generic scalar runner, the
+#                           per-cell/invariant CSE tiers, and the Float64
+#                           lane tape (tiled, zero-alloc, SIMD op loops)
 #   oop.jl             §4d  out-of-place emitter over the SAME IR: eltype-generic
 #                           f(u,p,t) → du, the AD / device path (`form = :oop`)
-#   invariant_share.jl §4e  post-pass over the compiled IR: routes lane-invariant
-#                           kernel subtrees into the shared CSE prelude, so one
-#                           subtree is evaluated once per RHS call across every
-#                           kernel AND the scalar equations (ha2)
-#   vec_share.jl       §4f  the same idea one level up: shares whole N-LANE
-#                           VECTORS. Value-numbers the _VecNode templates on
-#                           their lane data, hash-conses them into a DAG, and
-#                           lifts every node used twice into a vec prelude of
-#                           _VecNode defs evaluated once per RHS call (cp5)
+#   acc_merge.jl       §4e  the per-cell fallback's whole-array host (grouping
+#                           signature + indirect-outs merge) and _make_rhs,
+#                           the in-place RHS closure generator
 #   const_tier.jl      §4g  partitions the (final) scalar prelude by cadence:
 #                           slots that depend only on `p` are refilled only when
 #                           `p` moves, not once per stage of every step (4qf)
-#   stencil.jl         §4c  symbolic stencil compiler (ess-perf)
+#   stencil.jl         §4c  symbolic stencilizer (sentinel spines + lane
+#                           recipes — the affine box processor's front half)
 #   helpers.jl         §5-5b misc + array-variable helpers (_cell_key /
 #                           _parse_cell_key, field ICs, _eval_const_int)
 #   semiring.jl        §5c  semiring registry + join-gate resolution
@@ -90,10 +83,8 @@ include("tree_walk/build.jl")
 include("tree_walk/compile.jl")
 include("tree_walk/geometry_compile.jl")   # §2c: needs _Node (compile.jl)
 include("tree_walk/access_kernel.jl")
-include("tree_walk/vectorize.jl")
 include("tree_walk/oop.jl")
-include("tree_walk/invariant_share.jl")
-include("tree_walk/vec_share.jl")
+include("tree_walk/acc_merge.jl")     # per-cell → indirect-outs _AccKernels + _make_rhs
 include("tree_walk/const_tier.jl")
 include("tree_walk/stencil.jl")
 include("tree_walk/stencil_affine.jl")

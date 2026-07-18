@@ -226,11 +226,27 @@ function _recipe_const_lin(rec::_LaneRecipe, idx_env, const_arrays)
     return LinearIndices(size(arr))[inds...]
 end
 
-# Per-cell signature `bkey | ghost_key` (region selection × ghost pattern) plus the
-# branch it resolves to. Builds/caches ONE sentinel template per region signature
-# (the expensive step, bounded by #groups); cheap recipe evals give the ghost key.
+# Per-cell signature `bkey | gather_key` (region selection × gather pattern) plus
+# the branch it resolves to. Builds/caches ONE sentinel template per region
+# signature (the expensive step, bounded by #groups); cheap recipe evals give the
+# gather key.
+#
+# The gather key has TWO strengths, selected by `okey`:
+#   * `okey === nothing` — the historical ghost-bit key (in-bounds vs ghost per
+#     state lane). Used by `_process_affine_box!`, which only needs bkey+branch.
+#   * `okey = (base, strides)` (the VERIFIED output affine map) — each state
+#     lane's Δ = slot − oln (or 'G' for a ghost) enters the key, so a PERIODIC
+#     WRAP — where the slot legally jumps by ±N·stride with no region or ghost
+#     transition — produces a signature change and therefore a CUT, giving the
+#     wrap its own box exactly as the polyhedral design intends. Δ subsumes the
+#     ghost bit (a ghost is 'G', any in-bounds lane its Δ).
+# Const lanes with a declared BOUNDARY POLICY (BoundedConstArray) additionally
+# key their per-dim fold class (in-range / clamp-low / clamp-high / wrap count),
+# so a clamp/wrap transition of a const gather also produces a cut — within each
+# resulting segment the resolved const index is affine again.
 function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
-                     var_map, param_sym_set, reg_funcs)
+                     var_map, param_sym_set, reg_funcs,
+                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
     env = ctx_proto.idx_env
     empty!(env)
     _set_env!(env, idx_names, loop)
@@ -242,7 +258,7 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         sig.branch_cache[bkey] = branch
     end
     _tmpl, recipes, state_ks, _subcalls = branch
-    # Only the STATE lanes feed the ghost key; evaluate just those into a reused
+    # Only the STATE lanes feed the gather key; evaluate just those into a reused
     # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
     state_vals = sig.state_scratch
     resize!(state_vals, length(state_ks))
@@ -250,7 +266,56 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         state_vals[i] = _eval_recipe(recipes[state_ks[i]], env, var_map,
                                      ctx_proto.const_arrays)::Int
     end
-    return bkey, string(bkey, '|', _ghost_key_states(state_vals)), branch
+    io = sig.bio                       # empty again after the take! above
+    print(io, bkey, '|')
+    if okey === nothing
+        @inbounds for v in state_vals
+            print(io, v == 0 ? '1' : '0')
+        end
+    else
+        base, strides = okey
+        oln = _box_oln(base, strides, loop, length(idx_names))
+        @inbounds for v in state_vals
+            v == 0 ? print(io, "G,") : print(io, v - oln, ',')
+        end
+    end
+    _const_fold_key!(io, recipes, env, ctx_proto.const_arrays)
+    return bkey, String(take!(io)), branch
+end
+
+# Append each policy-bearing const lane's per-dim boundary-fold class to the
+# signature: '.' in-range, 'l'/'h' clamp-low/high, 'w<k>' the periodic wrap
+# count (`fld(raw-1, n)` — the multiple of n the fold subtracts, so two cells
+# share a class iff the resolved index is the SAME affine function of the raw
+# one), 'E' an out-of-range index on an :error dim (the derive step then throws
+# the exact per-cell `E_TREEWALK_CONSTARRAY_OOB`). Plain const arrays (no
+# declared policy) contribute nothing: in-range indices have one class, and an
+# out-of-range one throws identically on every path.
+function _const_fold_key!(io::IOBuffer, recipes::Vector{_LaneRecipe}, env,
+                          const_arrays)
+    for rec in recipes
+        rec.kind == LANE_CONST || continue
+        arr = rec.arr
+        arr isa BoundedConstArray || continue
+        print(io, '|')
+        for d in 1:length(rec.idx_args)
+            v = _eval_const_int(rec.idx_args[d], env, const_arrays)
+            n = size(arr, d)
+            if 1 <= v <= n
+                print(io, '.')
+            else
+                pol = _const_dim_boundary(arr, d)
+                if pol === :clamp
+                    print(io, v < 1 ? 'l' : 'h')
+                elseif pol === :periodic
+                    print(io, 'w', fld(v - 1, n))
+                else
+                    print(io, 'E')
+                end
+            end
+        end
+    end
+    return io
 end
 
 # Probe values for a range: low / mid / high (deduplicated).
@@ -316,6 +381,17 @@ end
 # a box that spans a cut, which per-box corner verification catches → fallback.
 const _AFFINE_STABLE_GUARD = 8
 
+# Δ-keyed cut cap, per dim. State-Δ keying (see `_cell_ckey!`) exists to give
+# wrap/fold transitions their own boxes — a handful of segments, bounded by the
+# operator's half-width at each end. A GENUINELY UNSTRUCTURED gather (a slot
+# indirect through a connectivity permutation) changes Δ at every cell; carving a
+# box per cell would trade the O(#groups) build for O(#cells) kernels. So when a
+# dim's Δ-keyed scan opens more segments than this cap, that dim's cuts are
+# recomputed with the BASE key (region × ghost × const-fold) and the non-uniform
+# lane is left for the box processor's indirect-table derivation
+# (`_derive_lane_repl`), which materializes a per-box slot table instead.
+const _AFFINE_MAX_DELTA_SEGS = 16
+
 # Cut START indices per loop dim. For each dim, hold the OTHER dims at every
 # low/mid/high probe and record where the per-cell signature changes — but scan
 # INWARD FROM BOTH ENDS rather than across the whole range, stopping once the
@@ -330,61 +406,93 @@ const _AFFINE_STABLE_GUARD = 8
 # reaches is still caught by per-box corner verification (→ fallback), exactly as
 # the old full sweep's misses were: correctness never depends on cut completeness,
 # only speed.
+#
+# `okey` is the verified output affine map; the first scan of each dim keys state
+# lanes by their Δ (wrap boxes), falling back to the base key when the Δ-keyed
+# segment count exceeds `_AFFINE_MAX_DELTA_SEGS` (unstructured gather → the
+# indirect-table derivation owns it instead).
 function _affine_cut_points(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-                            var_map, param_sym_set, reg_funcs)
+                            var_map, param_sym_set, reg_funcs,
+                            okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
     region_cands = _region_cut_candidates(body, idx_names)
     for d in 1:D
-        rng = ranges[d]; lo, hi = first(rng), last(rng)
-        starts = Set{Int}(); push!(starts, lo)
-        otherdims = Int[dd for dd in 1:D if dd != d]
-        probesets = isempty(otherdims) ? [()] :
-            collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
-        loop = Vector{Int}(undef, D)
-        ck(iv) = (loop[d] = iv;
-                  (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
-                               var_map, param_sym_set, reg_funcs))[2])
-        # Region boundaries in this dim, kept only where they open a real segment
-        # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
-        cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
-        # Bound each front at the midpoint so a small range is covered once, not
-        # twice (the two scans meet at `mid`, overlapping on that single cell so
-        # the mid/mid+1 pair is still compared). For a large range each front
-        # stabilizes long before `mid`, so the deep interior is never scanned.
-        mid = (lo + hi) ÷ 2
-        for probe in probesets
-            for (ii, dd) in enumerate(otherdims); loop[dd] = probe[ii]; end
-            # Scan up from the low end: a change at `iv` opens a segment there.
-            prev = nothing; stable = 0; iv = lo
-            while iv <= mid
-                cur = ck(iv)
-                if prev !== nothing
-                    if cur != prev; push!(starts, iv); stable = 0
-                    else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
-                end
-                prev = cur; iv += 1
-            end
-            # Scan down from the high end: a change between `iv` and `iv+1` opens a
-            # segment at `iv+1`.
-            prev = nothing; stable = 0; iv = hi
-            while iv >= mid
-                cur = ck(iv)
-                if prev !== nothing
-                    if cur != prev; push!(starts, iv + 1); stable = 0
-                    else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
-                end
-                prev = cur; iv -= 1
-            end
-            # Mid-domain region boundaries the edge scans cannot reach: confirm each
-            # candidate is a genuine transition (C-1 vs C) before opening a segment.
-            for C in cand_d
-                ck(C - 1) != ck(C) && push!(starts, C)
-            end
+        starts = _scan_dim_cuts(sig, body, idx_names, ranges, ctx_proto, var_map,
+                                param_sym_set, reg_funcs, region_cands, d, okey)
+        if okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
+            starts = _scan_dim_cuts(sig, body, idx_names, ranges, ctx_proto, var_map,
+                                    param_sym_set, reg_funcs, region_cands, d, nothing)
         end
         cuts[d] = sort!(collect(starts))
     end
     return cuts
+end
+
+# One dim's edge-inward signature scan (see `_affine_cut_points`). Returns the
+# set of segment-start indices for dim `d` under the signature strength `okey`.
+function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
+                        var_map, param_sym_set, reg_funcs, region_cands, d::Int,
+                        okey::Union{Nothing,Tuple{Int,Vector{Int}}})
+    D = length(idx_names)
+    rng = ranges[d]; lo, hi = first(rng), last(rng)
+    starts = Set{Int}(); push!(starts, lo)
+    otherdims = Int[dd for dd in 1:D if dd != d]
+    probesets = isempty(otherdims) ? [()] :
+        collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
+    loop = Vector{Int}(undef, D)
+    ck(iv) = (loop[d] = iv;
+              (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
+                           var_map, param_sym_set, reg_funcs, okey))[2])
+    # Region boundaries in this dim, kept only where they open a real segment
+    # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
+    cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
+    # Bound each front at the midpoint so a small range is covered once, not
+    # twice (the two scans meet at `mid`, overlapping on that single cell so
+    # the mid/mid+1 pair is still compared). For a large range each front
+    # stabilizes long before `mid`, so the deep interior is never scanned.
+    mid = (lo + hi) ÷ 2
+    for probe in probesets
+        for (ii, dd) in enumerate(otherdims); loop[dd] = probe[ii]; end
+        # Over-cap early exit for a Δ-keyed scan: an unstructured gather changes
+        # Δ at EVERY cell, so without this the fronts would never stabilize and
+        # the scan would walk the whole range before the caller's cap fallback.
+        overcap() = okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
+        # Scan up from the low end: a change at `iv` opens a segment there.
+        prev = nothing; stable = 0; iv = lo
+        while iv <= mid
+            cur = ck(iv)
+            if prev !== nothing
+                if cur != prev
+                    push!(starts, iv); stable = 0
+                    overcap() && break
+                else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+            end
+            prev = cur; iv += 1
+        end
+        # Scan down from the high end: a change between `iv` and `iv+1` opens a
+        # segment at `iv+1`.
+        prev = nothing; stable = 0; iv = hi
+        while iv >= mid && !overcap()
+            cur = ck(iv)
+            if prev !== nothing
+                if cur != prev
+                    push!(starts, iv + 1); stable = 0
+                    overcap() && break
+                else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+            end
+            prev = cur; iv -= 1
+        end
+        # Mid-domain region boundaries the edge scans cannot reach: confirm each
+        # candidate is a genuine transition (C-1 vs C) before opening a segment.
+        for C in cand_d
+            ck(C - 1) != ck(C) && push!(starts, C)
+        end
+        # A Δ-keyed scan past the cap is abandoned early — the caller redoes the
+        # dim with the base key, so finishing the sweep would be wasted work.
+        okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS && break
+    end
+    return starts
 end
 
 # Turn per-dim cut starts into segment ranges covering `rng`.
@@ -408,6 +516,7 @@ function _desc_key(d::_AccDesc)
     k === _AK_LOOP_IDX     && return "LI$(d.dim)"
     k === _AK_CONST_BOX    && return "CB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
     k === _AK_FORCING_BOX  && return "FB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
+    k === _AK_STATE_TBL_BOX && return "ST$(objectid(d.conn)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
     return "?$(objectid(d))"
 end
 function _lane_repl_key(lane_repl)
@@ -419,20 +528,85 @@ function _lane_repl_key(lane_repl)
     return String(take!(io))
 end
 
+# Box-local DENSE addressing for a materialized per-box table: strides over the
+# box dims (fastest-first, matching `Iterators.product` fill order) and the
+# offset that maps the cell multi-index `midx` to `off + Σ(midx_d-1)·s_d`.
+function _box_local_addr(box, D)
+    s = zeros(Int, 3)
+    acc = 1
+    for d in 1:D
+        s[d] = acc
+        acc *= length(box[d])
+    end
+    off = 1
+    for d in 1:D
+        off -= (first(box[d]) - 1) * s[d]
+    end
+    return s, off, acc            # acc == number of cells in the box
+end
+
+# Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
+# array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
+# the per-cell fallback would run — stored densely in box-local layout, with 0
+# marking a ghost (fetched as the ghost literal 0.0). This is what an
+# unstructured gather (slot indirect through a connectivity const) lowers to;
+# it is bit-identical by construction and O(box) — the same order as the
+# connectivity input, and strictly smaller than the per-cell fallback's
+# per-lane slot vectors.
+function _materialize_state_tbl(rec::_LaneRecipe, idx_names, box, D,
+                                var_map, const_arrays)
+    s, off, len = _box_local_addr(box, D)
+    tbl = Vector{Int}(undef, len)
+    env = Dict{String,Int}()
+    j = 0
+    for loop in Iterators.product((box[d] for d in 1:D)...)
+        j += 1
+        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
+                              var_map, const_arrays)::Int
+    end
+    return _AccRepl(_AccStateTblBox(tbl, s[1], s[2], s[3], off))
+end
+
+# Materialize a NON-AFFINE const lane as a dense per-box VALUE table, addressed
+# box-locally through the existing `_AccConstBox` descriptor. The values are
+# `_eval_recipe`'s per-cell outputs (boundary folds included), so a fetch is
+# bit-identical to the per-cell resolve.
+function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
+                                var_map, const_arrays)
+    s, off, len = _box_local_addr(box, D)
+    vals = Vector{Float64}(undef, len)
+    env = Dict{String,Int}()
+    j = 0
+    for loop in Iterators.product((box[d] for d in 1:D)...)
+        j += 1
+        vals[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
+                               var_map, const_arrays)::Float64
+    end
+    return _AccRepl(_AccConstBox(vals, s[1], s[2], s[3], off))
+end
+
 # Derive one lane's lowering for a box and VERIFY it is uniform across the box
-# corners (state Δ constant, ghost uniform, const/forcing index affine). Any
-# non-uniformity — an incomplete cut, a clamp, a non-affine gather — throws
-# `_StencilFallback`. A live forcing (pgather) lane lowers to `_AccForcingBox`
-# over the aliased buffer (never folded to a literal, so it stays refresh-live).
+# corners (state Δ constant, ghost uniform, const/forcing index affine). A
+# non-uniform STATE lane (an unstructured/indirect gather, or a fold pattern
+# past the Δ-cut cap) and a non-affine CONST index MATERIALIZE per-box tables
+# instead of declining — see `_materialize_state_tbl` / `_materialize_const_box`.
+# A non-affine live-forcing (pgather) index still throws `_StencilFallback`
+# (per-cell fallback): a forcing gather must stay an index into the aliased live
+# buffer, and no table kind models that today. A live forcing lane otherwise
+# lowers to `_AccForcingBox` over the aliased buffer (never folded to a literal,
+# so it stays refresh-live).
 function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
-                           oln_rep, base, strides, D, var_map, const_arrays, flat_cache)
+                           oln_rep, base, strides, D, var_map, const_arrays,
+                           flat_cache, box)
     env = Dict{String,Int}()
     ev(loop) = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map, const_arrays)
     if rec.kind == LANE_STATE
         slot_rep = ev(rep)
         if slot_rep == 0                              # ghost → literal 0.0
             for cn in corners
-                ev(cn) == 0 || throw(_StencilFallback("ghost not uniform in box"))
+                ev(cn) == 0 ||
+                    return _materialize_state_tbl(rec, idx_names, box, D,
+                                                  var_map, const_arrays)
             end
             return _LitRepl(0.0)
         end
@@ -440,7 +614,8 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         for cn in corners
             sc = ev(cn)
             (sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ) ||
-                throw(_StencilFallback("state Δ not uniform in box"))
+                return _materialize_state_tbl(rec, idx_names, box, D,
+                                              var_map, const_arrays)
         end
         return _AccRepl(_AccStateAffine(Δ))
     elseif rec.kind == LANE_LOOPLIT
@@ -468,7 +643,8 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         off = lin_rep - sum((rep[d]-1)*s[d] for d in 1:D)
         for cn in corners
             (off + sum((cn[d]-1)*s[d] for d in 1:D)) == clin(cn) ||
-                throw(_StencilFallback("const index non-affine in box"))
+                return _materialize_const_box(rec, idx_names, box, D,
+                                              var_map, const_arrays)
         end
         return _AccRepl(_AccConstBox(arr_flat, s[1], s[2], s[3], off))
     else  # LANE_PGATHER — LIVE forcing gather
@@ -531,7 +707,7 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     for k in eachindex(recipes)
         lane_repl[k] = _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
                                          oln_rep, base, strides, D, var_map,
-                                         const_arrays, flat_cache)
+                                         const_arrays, flat_cache, box)
     end
 
     spine, acc, cse, subs = get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
@@ -625,7 +801,8 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     try
         base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
         cuts = _affine_cut_points(sig, body, idx_names, ranges, ctx_proto,
-                                  var_map, param_sym_set, reg_funcs)
+                                  var_map, param_sym_set, reg_funcs,
+                                  (base, strides))
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
         kernels = _AccKernel[]
         spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc},_AccCSE,Vector{_AccKernel}}}()
