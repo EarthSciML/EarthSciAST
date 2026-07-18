@@ -6,16 +6,15 @@ using JSON3
 using EarthSciAST
 using EarthSciAST: lower_expression_templates,
     reject_expression_templates_pre_v04, ExpressionTemplateError, OpExpr,
-    NumExpr, IntExpr, VarExpr, Expand, JSONLikeDict
+    NumExpr, IntExpr, VarExpr, Expand
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
 # esm-spec §9.6.4 Option B: `lower_expression_templates` PRESERVES surviving
 # `apply_expression_template` references; the Option-A expanded image (the
 # `expanded*.esm` oracle, §9.6.4 rule 2 / §9.6.7 bridge gate) is `Expand ∘
-# lower`. `_lowerx` reproduces that expanded image with a `.data` surface so the
-# raw-path comparison sites below read exactly as before.
-_lowerx(x) = JSONLikeDict(Expand(lower_expression_templates(x)))
+# lower`. The result is the plain native document tree (string-keyed).
+_lowerx(x) = Expand(lower_expression_templates(x))
 
 const ARRHENIUS_FIXTURE_JSON = """
 {
@@ -215,7 +214,7 @@ const ARRHENIUS_FIXTURE_JSON = """
         expanded_via_pass = _lowerx(raw)
         expanded_dict = JSON3.read(read(expanded_path, String))
         # Compare reactions arrays in JSON-normalised (testutils.jl _normj) form.
-        got = _normj(expanded_via_pass.data["reaction_systems"]["chem"]["reactions"])
+        got = _normj(expanded_via_pass["reaction_systems"]["chem"]["reactions"])
         want = _normj(expanded_dict.reaction_systems.chem.reactions)
         @test got == want
     end
@@ -231,9 +230,9 @@ const ARRHENIUS_FIXTURE_JSON = """
         raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
         expanded_via_pass = _lowerx(raw)
         expanded_dict = JSON3.read(read(joinpath(case, "expanded.esm"), String))
-        @test _normj(expanded_via_pass.data["coupling"]) ==
+        @test _normj(expanded_via_pass["coupling"]) ==
               _normj(expanded_dict.coupling)
-        @test _normj(expanded_via_pass.data["models"]) ==
+        @test _normj(expanded_via_pass["models"]) ==
               _normj(expanded_dict.models)
         # Typed load: the expanded transform arrives as an ASTExpr operator node.
         f = EarthSciAST.load(joinpath(case, "fixture.esm"))
@@ -290,7 +289,7 @@ end
         # rule can lower either inner D. The expanded form is `godunov_coef * u`
         # — crucially with NO `inv_dx` (which only the per-derivative rule emits).
         out = _lower_conf("godunov_beats_inner_deriv")
-        got = _normj(out.data["models"]["m"]["variables"])
+        got = _normj(out["models"]["m"]["variables"])
         @test got == _expanded_vars("godunov_beats_inner_deriv")
         # Guard the rewritten EXPRESSION subtree only (the variables dict still
         # declares an `inv_dx` parameter): the compound rule's product appears,
@@ -305,7 +304,7 @@ end
         # stencil (pass 2). Exercises the bounded fixpoint: a produced body is
         # re-scanned only in a SUBSEQUENT pass.
         out = _lower_conf("fixpoint_nested_deriv")
-        got = _normj(out.data["models"]["m"]["variables"])
+        got = _normj(out["models"]["m"]["variables"])
         @test got == _expanded_vars("fixpoint_nested_deriv")
         expr_json = JSON3.write(got["lap"]["expression"])
         @test !occursin("laplacian", expr_json)
@@ -362,7 +361,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out.data["models"]["m"]["variables"]["y"]["expression"])
+        expr = _normj(out["models"]["m"]["variables"]["y"]["expression"])
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[1.4, "u"])
     end
 end
@@ -399,7 +398,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out.data["models"]["M"]["variables"]["area"]["expression"])
+        expr = _normj(out["models"]["M"]["variables"]["area"]["expression"])
         @test expr == Dict{String,Any}(
             "op" => "polygon_intersection_area",
             "manifold" => "planar",
@@ -439,7 +438,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out.data["models"]["M"]["variables"]["scaled"]["expression"])
+        expr = _normj(out["models"]["M"]["variables"]["scaled"]["expression"])
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[
             Dict{String,Any}("op" => "polygon_intersection_area",
                              "manifold" => "spherical",
@@ -511,7 +510,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out.data["models"]["M"]["variables"]["area"]["expression"])
+        expr = _normj(out["models"]["M"]["variables"]["area"]["expression"])
         @test expr["manifold"] == "spherical"
     end
 end
@@ -525,8 +524,8 @@ end
     raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
     out = _lowerx(raw)
     expanded = JSON3.read(read(joinpath(case, "expanded.esm"), String))
-    @test _normj(out.data["models"]) == _normj(expanded.models)
-    vars = _normj(out.data["models"]["Overlap"]["variables"])
+    @test _normj(out["models"]) == _normj(expanded.models)
+    vars = _normj(out["models"]["Overlap"]["variables"])
     @test vars["area_planar"]["expression"]["manifold"] == "planar"
     @test vars["area_spherical"]["expression"]["manifold"] == "spherical"
 end
@@ -552,7 +551,7 @@ end
 
     @testset "constrained_match_scope: positive + negative in one document" begin
         out = _lower2("constrained_match_scope")
-        got = _nw(out.data["models"]["m"]["variables"])
+        got = _nw(out["models"]["m"]["variables"])
         @test got == _golden_vars("constrained_match_scope")
         # div(F_edge) rewritten; div(F_cell) constraint-excluded, survives.
         @test got["div_edge"]["expression"]["op"] == "*"
@@ -561,7 +560,7 @@ end
 
     @testset "two_div_two_meshes: identical patterns, disjoint shape scopes" begin
         out = _lower2("two_div_two_meshes")
-        got = _nw(out.data["models"]["m"]["variables"])
+        got = _nw(out["models"]["m"]["variables"])
         @test got == _golden_vars("two_div_two_meshes")
         # Each div lowered by ITS mesh's rule — not both by the
         # first-declared rule (the pre-`where` declaration-order behavior).
@@ -571,7 +570,7 @@ end
 
     @testset "per-variable selectivity via ground args (sanctioned mechanism)" begin
         out = _lower2("per_variable_scheme_literal_args")
-        got = _nw(out.data["models"]["m"]["variables"])
+        got = _nw(out["models"]["m"]["variables"])
         @test got == _golden_vars("per_variable_scheme_literal_args")
         @test got["du"]["expression"]["args"][1] == "upwind_coef"
         @test got["dv"]["expression"]["args"][1] == "central_coef"
@@ -632,7 +631,7 @@ end
         }
         """)
         out = _lowerx(JSON3.read(src))
-        expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
+        expr = _nw(out["models"]["m"]["variables"]["d"]["expression"])
         @test expr["op"] == "*"
         @test expr["args"][1] == "s"   # plain rule fired, not the fancy one
     end
@@ -652,7 +651,7 @@ end
         """), "{\"op\": \"div\", \"args\": [\"F_cell\"]}" =>
               "{\"op\": \"div\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}")
         out = _lowerx(JSON3.read(src))
-        expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
+        expr = _nw(out["models"]["m"]["variables"]["d"]["expression"])
         @test expr["op"] == "div"   # never rewritten; not an error
     end
 
@@ -716,7 +715,7 @@ end
         }
         """)
         out = _lowerx(JSON3.read(src))
-        expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
+        expr = _nw(out["models"]["m"]["variables"]["d"]["expression"])
         @test expr["op"] == "div"   # constraint unsatisfied; rule never fires
     end
 end

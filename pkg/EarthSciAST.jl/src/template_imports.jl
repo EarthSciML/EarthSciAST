@@ -16,9 +16,13 @@ Per document the order is innermost-first (esm-spec §9.7.6):
    invoked per component from `lower_expression_templates`);
 5. the §9.6.3 fixpoint on fully-concrete trees.
 
-Round-trip is Option A: `expression_template_imports`, `metaparameters`, and
-top-level `expression_templates` do not survive `parse → emit`; the emitted
-form is the expanded, folded document.
+Round-trip is Option B (esm-spec §9.6.4, esm 0.9.0): the §9.7 machinery is
+CONSUMED here — `expression_template_imports` and `metaparameters` do not
+survive `parse → emit` — but the resolved, folded template registries are
+retained per component and MATERIALIZED at emit (rule 5), with non-eager
+`apply_expression_template` references preserved at their call sites. A pure
+template-library file's top-level `expression_templates` snapshot survives
+verbatim so a library round-trips to itself.
 
 All diagnostics are raised as [`ExpressionTemplateError`](@ref) with the
 stable §9.6.6 codes so they are machine-checkable across bindings.
@@ -40,29 +44,10 @@ const _COMPONENT_KINDS = ("models", "reaction_systems")
 const _LIBRARY_FORBIDDEN_KEYS =
     ("models", "reaction_systems", "data_loaders", "coupling", "domain")
 
-# (`_raw_get` / `_raw_haskey` — Symbol-or-String key access over raw JSON —
-# live in src/json_walk.jl with the shared traversal combinators.)
-
-"""
-    _to_ordered(x)
-
-Deep-normalize a JSON view (JSON3.Object/Array or Dict/Vector) into
-`OrderedDict{String,Any}` / `Vector{Any}` PRESERVING document key order —
-unlike `_to_dict`, whose plain `Dict` loses it. Declaration order is normative
-for the §9.6.3 tie-break, so every tree the import resolver builds is ordered.
-"""
-function _to_ordered(x)
-    if _is_object(x)
-        out = OrderedDict{String,Any}()
-        for (k, v) in pairs(x)
-            out[string(k)] = _to_ordered(v)
-        end
-        return out
-    elseif _is_array(x)
-        return Any[_to_ordered(v) for v in x]
-    end
-    return x
-end
+# (`_raw_get` / `_raw_haskey` — string-keyed raw-JSON access — and
+# `_to_ordered` — the ONE order- and sharing-preserving normalizer every tree
+# the import resolver builds goes through — live in src/json_walk.jl with the
+# shared traversal combinators.)
 
 # ---------------------------------------------------------------------------
 # Spec-version gate (esm-spec §9.6.5)
@@ -522,30 +507,6 @@ function _collect_apply_names!(out::Vector{String}, x)
             nm !== nothing && push!(out, string(nm))
         end
         return true
-    end
-    return out
-end
-
-# Deliberately NOT a `_map_json` rewrite: this is a POST-order substitution
-# (children inline before the apply node is expanded). The rebuild uses an
-# `OrderedDict` so composed-body key order is the deterministic SOURCE order
-# (it surfaces in emitted component documents) — a plain `Dict` rebuilt keys in
-# hash order, which is not source order and can vary across Julia versions.
-function _inline_applies(node, templates::AbstractDict, scope::String)
-    if _is_array(node)
-        return Any[_inline_applies(c, templates, scope) for c in node]
-    end
-    _is_object(node) || return node
-    out = OrderedDict{String,Any}()
-    for (k, v) in pairs(node)
-        out[string(k)] = _inline_applies(v, templates, scope)
-    end
-    op = get(out, "op", nothing)
-    if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-        # Referenced bodies are already closed (topological order), so a single
-        # `_expand_apply` produces an apply-free subtree; the bindings' own
-        # sub-ASTs were inlined by the post-order walk above.
-        return _expand_apply(out, templates, scope)
     end
     return out
 end
@@ -1023,7 +984,8 @@ function _merge_named!(dst::OrderedDict{String,Any}, name::String, decl,
     if haskey(dst, name)
         # Deep-equal redeclaration (a diamond import) dedups at first
         # occurrence; a non-equal collision is a conflict (esm-spec §9.7.4/§9.7.5).
-        _json_equal(_normalize(dst[name]), _normalize(decl)) && return
+        # `_json_equal` is carrier-agnostic, so no pre-normalization is needed.
+        _json_equal(dst[name], decl) && return
         throw(ExpressionTemplateError(
             code,
             "$origin: $what '$name' collides with a non-deep-equal existing definition (esm-spec §9.7.4/§9.7.5)"))
@@ -1063,7 +1025,7 @@ function _collect_own_templates(raw, origin::String)::OrderedDict{String,Any}
             own[string(n)] = _to_ordered(d)
         end
     end
-    _validate_templates(Dict{String,Any}(own), origin)
+    _validate_templates(own, origin)
     return own
 end
 
@@ -1348,9 +1310,8 @@ function _process_library(raw, dir::String, stack::Vector{String},
                       "metaparameter", origin)
     end
 
-    # §9.7.3 body composition in the library's own scope (decl objects are
-    # mutated in place, so scope.templates sees the closed bodies).
-    _compose_template_bodies!(Dict{String,Any}(scope.templates), origin)
+    # §9.7.3 body-reference DAG validation in the library's own scope.
+    _compose_template_bodies!(scope.templates, origin)
     return scope
 end
 
@@ -1623,7 +1584,7 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
     # composed, `params` gone). The snapshot is what `serialize_esm_file` writes
     # back.
     if is_library
-        _compose_template_bodies!(Dict{String,Any}(top_templates), "document")
+        _compose_template_bodies!(top_templates, "document")
         delete!(root, "expression_templates")
     end
     delete!(root, "expression_template_imports")

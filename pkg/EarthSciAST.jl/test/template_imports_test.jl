@@ -8,7 +8,7 @@ using Test
 using JSON3
 using EarthSciAST
 using EarthSciAST: lower_expression_templates, resolve_template_machinery,
-    reject_template_imports_pre_v08, ExpressionTemplateError, JSONLikeDict,
+    reject_template_imports_pre_v08, ExpressionTemplateError,
     MAX_TEMPLATE_EXPANSION_DEPTH, serialize_esm_file, IntExpr, OpExpr,
     _url_join, _url_normalize, _url_dirname, _remove_dot_segments,
     _canonical_ref, _URL_FETCHER, require_meta_expr, eval_meta_expr
@@ -37,7 +37,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         raw = JSON3.read(read(path, String))
         resolved = resolve_template_machinery(raw, dirname(path))
         out = lower_expression_templates(resolved === nothing ? raw : resolved)
-        return _normj(out isa JSONLikeDict ? out.data : out)
+        return _normj(out)
     end
     _golden(path) = _normj(JSON3.read(read(path, String)))
 
@@ -820,7 +820,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                          "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
                          "rhs" => Dict("op" => "-", "args" => ["x"]))])))
         end
-        @test lower_expression_templates(chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)) isa JSONLikeDict
+        @test lower_expression_templates(chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)) isa AbstractDict
         @test _err_code(() ->
             lower_expression_templates(chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1))) ==
             "template_body_expansion_too_deep"

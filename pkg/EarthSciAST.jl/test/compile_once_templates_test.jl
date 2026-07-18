@@ -17,6 +17,8 @@ using EarthSciAST: load, flatten, build_evaluator, coerce_esm_file, TreeWalkErro
     _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_BRANCH_TEMPLATES, _BENCH_COMPILE_CALLS,
     _bench_reset!
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalone)
+
 @testset "compile-once template tier" begin
     bench(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", parts...)
 

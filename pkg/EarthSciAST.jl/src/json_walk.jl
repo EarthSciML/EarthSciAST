@@ -1,14 +1,16 @@
 """
 Shared raw-JSON traversal helpers for the load-time lowering passes.
 
-Every pre-parse lowering pass (closed-function enum lowering, expression
-templates §9.6, template-library imports §9.7, coupling imports §10.9–§10.11,
-value-invention front door) walks the same shape of tree: the raw document as
-`JSON3.Object`/`JSON3.Array` straight off the wire, or the
-`OrderedDict{String,Any}`/`Dict{String,Any}`/`Vector{Any}` forms the passes
-rebuild — i.e. objects keyed by `String` OR `Symbol`, arrays, and scalar
-leaves. This file hosts the key-agnostic accessors and the three traversal
-combinators so each pass expresses only its per-node logic, not the
+Documents are normalized ONCE at the wire boundary (`_read_json_document`,
+`coerce_esm_file`) into the ONE post-wire carrier — `OrderedDict{String,Any}`
+objects, `Vector{Any}` arrays, scalar leaves — via [`_to_ordered`](@ref)
+below. Every pre-parse lowering pass (closed-function enum lowering,
+expression templates §9.6, template-library imports §9.7, coupling imports
+§10.9–§10.11, value-invention front door) walks that shape, plus the raw
+`JSON3.Object`/`JSON3.Array` a wire-boundary gate inspects BEFORE
+normalization (JSON3's views accept string keys, so one string-keyed accessor
+serves both). This file hosts the accessors, the normalizer, and the three
+traversal combinators so each pass expresses only its per-node logic, not the
 object/array/leaf skeleton.
 
 Included before the lowering passes in EarthSciAST.jl; depends only on JSON3
@@ -18,7 +20,7 @@ and OrderedCollections (never on the typed AST).
 using OrderedCollections: OrderedDict
 
 # ---------------------------------------------------------------------------
-# Node classification + Symbol-or-String key access
+# Node classification + key access
 # ---------------------------------------------------------------------------
 
 # JSON node-kind predicates. `JSON3.Object <: AbstractDict` and
@@ -31,12 +33,58 @@ _is_array(x)  = (x isa AbstractVector || x isa JSON3.Array)
     _raw_get(x, key::String)
     _raw_haskey(x, key::String) -> Bool
 
-Key access over a raw JSON object regardless of key type: a `JSON3.Object`
-keys by `Symbol`, the rebuilt `Dict`/`OrderedDict` forms by `String`. `get`
-with the `String` key first, then the `Symbol` key (`nothing` if absent).
+String-keyed access over a raw JSON object. Post-wire trees are string-keyed
+(`_to_ordered`), and a `JSON3.Object` — the only pre-normalization carrier a
+wire-boundary gate still sees — resolves string keys natively, so one plain
+`get`/`haskey` covers every carrier. `_raw_get` reports an absent key as
+`nothing`.
 """
-_raw_get(x, key::String) = get(x, key, get(x, Symbol(key), nothing))
-_raw_haskey(x, key::String) = haskey(x, key) || haskey(x, Symbol(key))
+_raw_get(x, key::String) = get(x, key, nothing)
+_raw_haskey(x, key::String) = haskey(x, key)
+
+"""
+    _to_ordered(x)
+
+Deep-normalize any JSON carrier (a `JSON3.Object`/`JSON3.Array` straight off
+the wire, or a native dict/vector tree with `String` or `Symbol` keys) into
+the ONE post-wire carrier: `OrderedDict{String,Any}` objects, `Vector{Any}`
+arrays, scalar leaves — PRESERVING document key order (declaration order is
+normative for the §9.6.3 tie-break).
+
+SHARING-PRESERVING: an identity memo maps each input container to its single
+normalized counterpart, so a shared subtree — e.g. a template body composed
+as a DAG by `_substitute` — normalizes to ONE shared output object instead of
+being expanded into an exponential tree. Fresh-parsed JSON3 views are trees
+(no aliasing is expressible in JSON text), so the memo only ever fires on the
+native nodes the lowering passes themselves create.
+
+Always returns fresh containers (a deep, sharing-preserving copy), so callers
+may mutate the result without touching the input.
+"""
+_to_ordered(x) = _to_ordered_memo(x, IdDict{Any,Any}())
+
+function _to_ordered_memo(x, memo::IdDict{Any,Any})
+    if _is_object(x)
+        r = get(memo, x, nothing)
+        r === nothing || return r
+        out = OrderedDict{String,Any}()
+        memo[x] = out
+        for (k, v) in pairs(x)
+            out[string(k)] = _to_ordered_memo(v, memo)
+        end
+        return out
+    elseif _is_array(x)
+        r = get(memo, x, nothing)
+        r === nothing || return r
+        out = Vector{Any}()
+        memo[x] = out
+        for v in x
+            push!(out, _to_ordered_memo(v, memo))
+        end
+        return out
+    end
+    return x
+end
 
 # ---------------------------------------------------------------------------
 # Traversal combinators
