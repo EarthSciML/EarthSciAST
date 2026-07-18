@@ -154,6 +154,53 @@ _foreach_subexpr_children(f, ::VarExpr) = nothing
     return nothing
 end
 
+"""
+    foreach_subexpr_once(f, expr::ASTExpr) -> Nothing
+
+Identity-memoized [`foreach_subexpr`](@ref): each distinct `OpExpr` node
+(by `===`) is ENTERED at most once, so walking a structurally-shared
+expression DAG costs O(distinct nodes + edges) instead of once per PATH.
+`foreach_subexpr` on a DAG where a shared node is reachable through `k`
+parents re-walks its whole subtree `k` times — on the resolved observed
+map (`_resolve_observed`, tree_walk/helpers.jl), whose bodies are compact
+DAGs by construction (`_sub_preserving`'s identity memo), a depth-`n`
+chain that references its predecessor twice per level makes that 2^n.
+
+Same traversal contract as `foreach_subexpr` otherwise: children come from
+the ONE generated `OPEXPR_FIELD_TABLE` walk (every expression-bearing
+field), parent before children, `f` return value ignored.
+
+SEMANTICS CAVEAT — use for SET-COLLECTORS and predicate scans, not
+counters: only `OpExpr` nodes are memoized (the `_SubMemo` convention —
+`OpExpr` is mutable precisely so `===`/`objectid` are O(1) pointer
+identity; leaves are immutable and have no children, so re-visiting one is
+O(1) and bounded by the DAG's edge count). A leaf reachable through `k`
+distinct parent nodes is therefore yielded up to `k` times, and a shared
+`OpExpr` is yielded exactly once where `foreach_subexpr` would yield it
+once per path. Results that are insensitive to duplicate/deduplicated
+visits (e.g. accumulating names into a `Set`) are identical between the
+two walkers.
+"""
+function foreach_subexpr_once(f, expr::ASTExpr)
+    _foreach_subexpr_once(f, expr, IdDict{OpExpr,Nothing}())
+    return nothing
+end
+
+_foreach_subexpr_once(f, e::NumExpr, ::IdDict{OpExpr,Nothing}) = (f(e); nothing)
+_foreach_subexpr_once(f, e::IntExpr, ::IdDict{OpExpr,Nothing}) = (f(e); nothing)
+_foreach_subexpr_once(f, e::VarExpr, ::IdDict{OpExpr,Nothing}) = (f(e); nothing)
+# Generated from OPEXPR_FIELD_TABLE via the same `_opexpr_child_stmts`
+# splice as `_foreach_subexpr_children` — the field list lives in exactly
+# one place (do NOT hand-roll it here). The `seen` check is on ENTRY, so a
+# shared node's children are enumerated once no matter its in-degree.
+@eval function _foreach_subexpr_once(f, e::OpExpr, seen::IdDict{OpExpr,Nothing})
+    haskey(seen, e) && return nothing
+    seen[e] = nothing
+    f(e)
+    $(_opexpr_child_stmts(x -> :(_foreach_subexpr_once(f, $x, seen)))...)
+    return nothing
+end
+
 @eval function foreach_child_with_path(g, e::OpExpr, path::String)
     $((
         begin

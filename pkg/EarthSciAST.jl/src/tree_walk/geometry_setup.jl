@@ -795,9 +795,17 @@ end
 # `child_exprs` is what keeps this walker from drifting out of sync with the
 # rest of the IR again; `_build_discrete_materializer!` additionally CHECKS the
 # result on the compiled fill nodes, so a future divergence fails loudly.
+#
+# IDENTITY-MEMOIZED (`foreach_subexpr_once`, expression.jl — the same generated
+# field walk, deduplicated by `OpExpr` identity): the inputs here are routinely
+# DAGs — `_resolve_observed` bodies keep sharing via `_sub_preserving`'s
+# identity memo, and this walker runs INSIDE that resolver's fixed-point loop —
+# so the plain path-walk (`foreach_subexpr`) was exponential on an observed
+# chain whose levels each reference their predecessor ≥2× (ESS-1p5). A name set
+# is dedup-insensitive, so the result is identical to the un-memoized walk.
 function _referenced_var_names(expr, acc::Set{String}=Set{String}())
     expr isa ASTExpr || return acc
-    foreach_subexpr(expr) do e
+    foreach_subexpr_once(expr) do e
         if e isa VarExpr
             push!(acc, e.name)
         elseif e isa OpExpr && e.wrt !== nothing
