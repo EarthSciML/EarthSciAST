@@ -499,6 +499,15 @@ end
 # (one array subexpression reused across several arrayop equations) is a genuine
 # future case — keyed structurally on the post-merge `_VecNode` rather than on
 # `canonical_json`, with a per-call vector cache — and is tracked as a follow-up.
+#
+# WHAT THIS PASS NO LONGER CARRIES (ess-obs-slots): AUTHOR-NAMED sharing. A
+# scalar observed used to be spliced into every reader, and this pass then
+# re-discovered the declared sharing through canonical keys. Scalar observeds
+# now compile as NAMED PRELUDE DEFS in this same prelude (`_plan_observed_slots`
+# in build.jl; the `obs_defs` argument of `_cse_compile_scalar` below), so what
+# is left for the canonical-key machinery is exactly the ANONYMOUS repeats —
+# a subexpression written twice without a name, within one RHS, across
+# equations, or between an observed def and an equation.
 
 # Ops CSE must not look at: array/aggregate producers, const/enum data carriers,
 # and the unresolved/illegal-in-RHS markers. CSE never hoists a node rooted at
@@ -513,12 +522,13 @@ end
 # `datetime.*` registry (esm-spec §9.2) is closed and deterministic. Treating it
 # as opaque made every closed-function call a CSE BARRIER: `_cse_count!` stopped
 # at the `fn` node, so neither the call nor anything beneath it could be shared.
-# That is exactly the shape of an inlined observed chain that reaches a
-# time/solar-geometry subtree through an `interp.*` table lookup — e.g. FastJX's
-# 18 actinic-flux bands `F_i = interp.linear(table_i, axis, cos_sza)`, each
-# carrying a full copy of the inlined `Solar.cos_zenith` subtree, summed by ~14
-# photolysis rates: ~250 re-walks of the same solar chain per RHS call. Hoisting
-# through `fn` collapses all of them to one evaluation (see `_cse_rebuild`).
+# The historical motivating case was an INLINED observed chain reaching a
+# time/solar-geometry subtree through an `interp.*` table lookup (FastJX's 18
+# actinic-flux bands over one `Solar.cos_zenith` subtree — ~250 re-walks per
+# RHS call). NAMED observeds now carry that sharing as prelude slots
+# (ess-obs-slots), but `fn` transparency still matters twice over: an
+# ANONYMOUS repeated call is still shared here, and a slot DEF body reaching
+# through a closed function still hoists its shareable interior.
 # Membership is declared per-op in src/op_registry.jl (flag `:cse_opaque`)
 # and pinned by op_registry_test.jl.
 const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
@@ -537,6 +547,14 @@ _cse_hoistable(::ASTExpr) = false
 # as a CHILD of every hoistable ancestor, that throw used to decline sharing for the
 # whole met→physics stack sitting above a forcing buffer. The fix is to key the
 # gather as a LEAF with a canonicalizable, DISTINGUISHABLE identity:
+#
+# STILL NEEDED AFTER ess-obs-slots — verified, not assumed. Named observed
+# slots remove one class of key-bearing tree (an observed body spliced into
+# readers), but payload-bearing gathers still flow through `_cse_key` on two
+# live paths: a scalar EQUATION reading `index(forcing, …)` directly, and
+# every observed slot DEF body (resolved through the same `_resolve_indices`
+# and counted/keyed by `_cse_count!`/`_compile_cse`). Deleting this stand-in
+# would silently switch CSE off for both — exactly the ess-qic hole.
 #
 #     OpExpr("index", []; name="__pgather", value=[<buffer name>, <linear offset>])
 #
@@ -995,6 +1013,12 @@ mutable struct _CSEContext
     # function of the node for a fixed build context).
     keymemos::_CSEKeyMemos
     compiled::IdDict{OpExpr,_Node}
+    # NAMED scalar-observed slots (ess-obs-slots): observed name → prelude slot.
+    # Filled by `_cse_compile_scalar` as it compiles each observed def (in
+    # dependency order, before any equation); a `VarExpr` reader whose name is
+    # registered here lowers to `_NK_CACHED` on that slot instead of a spliced
+    # copy of the body (see `_plan_observed_slots`, build.jl).
+    obs_slot::Dict{String,Int}
 end
 
 # Rebuild the `_Node` that plain `_compile` would emit for a hoistable `expr`,
@@ -1019,6 +1043,16 @@ end
 # Falls back to plain `_compile` for leaves and opaque ops, so the result is
 # identical to `_compile` wherever nothing is hoisted.
 function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
+    # A named scalar-observed reference reads its prelude slot (ess-obs-slots).
+    # Checked FIRST: an observed name is neither a state, a parameter, nor `t`,
+    # so plain `_compile` would (rightly) reject it as unbound. Observed names
+    # are disjoint from the state/param namespaces by `_partition_variables`,
+    # so this shadows nothing.
+    if expr isa VarExpr
+        s = get(ctx.obs_slot, expr.name, 0)
+        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+        return _compile(expr, var_map, param_syms, reg_funcs)
+    end
     (expr isa OpExpr && _cse_hoistable(expr)) ||
         return _compile(expr, var_map, param_syms, reg_funcs)
 
@@ -1067,11 +1101,23 @@ end
 # forgotten `false` would silently restore the ess-qic coverage hole rather than
 # fail, and a hole that fails closed is exactly the bug this argument exists to fix.
 function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
-                             var_map, param_syms, reg_funcs; has_pgather::Bool)
+                             var_map, param_syms, reg_funcs; has_pgather::Bool,
+                             # Named scalar-observed defs (ess-obs-slots), in
+                             # dependency order, already `_resolve_indices`d.
+                             # Each compiles ONCE as a prelude def; readers
+                             # (`VarExpr` of the name, in entries or in later
+                             # defs) lower to `_NK_CACHED` on its slot.
+                             obs_defs::Vector{Pair{String,ASTExpr}}=Pair{String,ASTExpr}[])
     pgctx = has_pgather ? _PGatherKeyCtx() : nothing
     # One memo pair for BOTH passes: count and compile must key identically.
     keymemos = _CSEKeyMemos()
     counts = Dict{String,Tuple{Int,Int}}()
+    # Observed def bodies participate in anonymous CSE alongside the equations
+    # (a subtree shared between a def and an equation gets one slot); each def
+    # root is an unconditional occurrence — the prelude evaluates it every call.
+    for (_, e) in obs_defs
+        _cse_count!(e, counts, pgctx, keymemos)
+    end
     for (_, e) in entries
         _cse_count!(e, counts, pgctx, keymemos)
     end
@@ -1088,7 +1134,24 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
     end
     cache = _CSECache()
     ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache, pgctx,
-                      keymemos, IdDict{OpExpr,_Node}())
+                      keymemos, IdDict{OpExpr,_Node}(), Dict{String,Int}())
+    # ---- Named observed prelude defs, in dependency order (ess-obs-slots) ----
+    # Compiled BEFORE the equations so every reader's slot exists, and in
+    # dependency order so a def's slot reads land strictly below it (the
+    # topological-prelude invariant const_tier.jl and invariant_share.jl rely
+    # on). A def whose whole body lowered to an existing CSE slot (its key was
+    # counted >= 2) is ALIASED onto that slot rather than duplicated.
+    n_obs_own = 0
+    for (name, e) in obs_defs
+        node = _compile_cse(e, var_map, param_syms, reg_funcs, ctx)
+        if node.kind === _NK_CACHED && node.payload === cache
+            ctx.obs_slot[name] = node.idx
+        else
+            push!(ctx.defs, node)
+            ctx.obs_slot[name] = length(ctx.defs)
+            n_obs_own += 1
+        end
+    end
     rhs_list = Tuple{Int,_Node}[]
     for (idx, e) in entries
         push!(rhs_list, (idx, _compile_cse(e, var_map, param_syms, reg_funcs, ctx)))
@@ -1097,7 +1160,11 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
     # `_NK_CACHED` nodes captured, so this in-place resize is visible to them.
     # (`alt` is sized from `f64` on first use, i.e. after this.)
     resize!(cache.f64, length(ctx.defs))
-    diag = (; n_slots = length(ctx.defs), n_occurrences = n_occ)
+    # `n_slots` stays the ANONYMOUS-CSE slot count (the observed slots are
+    # reported as `n_obs_slots`, aliased-or-own; `n_obs_own` of them occupy
+    # their own prelude slot, so the prelude length is `n_slots + n_obs_own`).
+    diag = (; n_slots = length(ctx.defs) - n_obs_own, n_occurrences = n_occ,
+              n_obs_slots = length(obs_defs))
     return rhs_list, ctx.defs, cache, diag
 end
 

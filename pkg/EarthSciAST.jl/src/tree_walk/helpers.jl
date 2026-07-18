@@ -148,6 +148,13 @@ end
 # variable as a free variable — so inlining observed names into a
 # model equation is a single `_sub_preserving` call. Iteration cap =
 # depth of the longest valid chain; exceeding it means there's a cycle.
+#
+# CONSUMERS after ess-obs-slots: the ARRAY paths (arrayop kernels, stencil /
+# affine builds, discrete-cadence fills) and the inline FALLBACK of the scalar
+# path still splice these fully-resolved bodies. The scalar path's primary
+# mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build.jl),
+# which compiles each safe scalar observed's RAW body once and leaves its
+# references by-name — this resolved map then covers only the non-slot names.
 function _resolve_observed(obs::Dict{String,ASTExpr})
     resolved = Dict{String,ASTExpr}()
     for (k, v) in obs
@@ -177,6 +184,109 @@ function _resolve_observed(obs::Dict{String,ASTExpr})
     end
     throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
                         join(sort(collect(keys(obs))), ",")))
+end
+
+# ============================================================
+# 5a. Scalar-observed slot planning walkers (named prelude defs)
+# ============================================================
+#
+# A SCALAR observed compiles as a NAMED PRELUDE DEF (one `_NK_CACHED` slot,
+# evaluated once per RHS call in dependency order) instead of being spliced
+# into every reader — see `_plan_observed_slots` (build.jl) for the plan and
+# `_cse_compile_scalar` (compile.jl) for the compile. These two walkers are the
+# plan's safety analyses over the RAW (pre-`_resolve_indices`) trees.
+
+# Collect (into `hits`) every candidate observed name referenced anywhere in
+# `e` — the transitive-name primitive of the structural scan below.
+function _obs_mark_refs!(e::ASTExpr, names::Set{String}, hits::Set{String})
+    for r in _referenced_var_names(e)
+        r in names && push!(hits, r)
+    end
+    return nothing
+end
+
+# STRUCTURAL-POSITION scan: collect every candidate name referenced where the
+# build needs a concrete value at BUILD time — a slot read (a runtime value)
+# cannot stand in there, so such an observed must stay inlined:
+#   * `index` gather args — the target is resolved and the subscripts are folded
+#     by `_eval_const_int`, which knows only loop indices and const arrays;
+#   * aggregate range BOUNDS (`_expand_int_range_dyn` folds expression bounds);
+#   * `lower`/`upper` integral bounds, value-invention `key`s, table-lookup axes.
+# `expr_body` / `filter` / `values` / plain args are EXPRESSION positions — an
+# observed reference there survives to the compiled tree and reads its slot —
+# so the scan recurses rather than flags.
+function _obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{String})
+    e isa OpExpr || return nothing
+    if e.op == "index"
+        # Everything under a gather is build-time-resolved (the target itself,
+        # and each subscript through `_eval_const_int`) — flag it all.
+        for a in e.args
+            _obs_mark_refs!(a, names, hits)
+        end
+        return nothing
+    end
+    if e.ranges !== nothing
+        for (_, v) in e.ranges
+            v isa AbstractVector || continue
+            for b in v
+                b isa ASTExpr && _obs_mark_refs!(b, names, hits)
+            end
+        end
+    end
+    e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits)
+    e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits)
+    e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits)
+    if e.table_axes !== nothing
+        for (_, ax) in e.table_axes
+            _obs_mark_refs!(ax, names, hits)
+        end
+    end
+    for a in e.args
+        _obs_structural_refs!(a, names, hits)
+    end
+    e.expr_body === nothing || _obs_structural_refs!(e.expr_body::ASTExpr, names, hits)
+    e.filter === nothing || _obs_structural_refs!(e.filter::ASTExpr, names, hits)
+    if e.values !== nothing
+        for v in e.values
+            _obs_structural_refs!(v, names, hits)
+        end
+    end
+    return nothing
+end
+
+# GUARD-CONDITIONALITY count: tally per candidate name how many references are
+# TOTAL vs UNCONDITIONAL, mirroring the CSE per-key rule (`_cse_count!` /
+# `_cse_arg_conditional`): a reference under a lazy `ifelse` branch or a
+# short-circuited `and`/`or` argument is CONDITIONAL. A slot is evaluated
+# unconditionally in the prelude, so an observed with NO unconditional
+# reference must stay inlined behind its guards (`_plan_observed_slots`).
+#
+# Aggregate/makearray/index subtrees count all their references CONDITIONAL:
+# their build-time expansion can drop terms (an empty or join-rejected range,
+# an unselected makearray region), so a reference below them is not provably
+# evaluated — the conservative answer is today's inlining.
+function _count_obs_refs!(e::ASTExpr, names::Set{String},
+                          tot::Dict{String,Int}, unc::Dict{String,Int}, cond::Bool)
+    if e isa VarExpr
+        if e.name in names
+            tot[e.name] = get(tot, e.name, 0) + 1
+            cond || (unc[e.name] = get(unc, e.name, 0) + 1)
+        end
+        return nothing
+    end
+    e isa OpExpr || return nothing
+    op = e.op
+    if _is_aggregate_op(op) || op == "makearray" || op == "index"
+        for r in _referenced_var_names(e)
+            r in names && (tot[r] = get(tot, r, 0) + 1)
+        end
+        return nothing
+    end
+    for i in eachindex(e.args)
+        _count_obs_refs!(e.args[i], names, tot, unc,
+                         cond || _cse_arg_conditional(op, i))
+    end
+    return nothing
 end
 
 function _pick_tspan(tspan, model::Model)
