@@ -96,6 +96,12 @@ const _AK_FORCING_BOX        = UInt8(12)  # flat[off + Σ(midx_d-1)·s_d] (LIVE 
 # order as the connectivity input itself, and strictly less than the per-cell
 # fallback's per-lane slot vectors.
 const _AK_STATE_TBL_BOX      = UInt8(13)  # u[conn[off + Σ(midx_d-1)·s_d]] (0 ⇒ ghost 0.0)
+# A Float64 buffer read through an Int index table, box-addressed. The per-cell
+# merge (acc_merge.jl) emits it for a LIVE forcing gather whose linear offset
+# varies per cell (`_NK_PARAM_GATHER` lanes): `arr` is the aliased
+# `_PGatherArray.flat` buffer — refreshed in place, so the read must stay live,
+# which is why the VALUES are never materialized the way a const lane's are.
+const _AK_ARR_TBL_BOX        = UInt8(14)  # arr[conn[off + Σ(midx_d-1)·s_d]] (LIVE forcing table)
 
 struct _AccDesc
     kind::UInt8
@@ -144,6 +150,8 @@ _AccLoopIdx(dim::Int)                            = _mkacc(_AK_LOOP_IDX; dim=dim)
 _AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
 _AccStateTblBox(conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=s1, s2=s2, s3=s3, off=off)
+_AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
+    _mkacc(_AK_ARR_TBL_BOX; arr=arr, conn=conn, s1=s1, s2=s2, s3=s3, off=off)
 
 # One `_fetch`, dispatched by the kind tag — concrete field reads throughout, so
 # no dynamic dispatch and no boxing. Hot Cartesian cases first. The result is
@@ -178,6 +186,8 @@ _AccStateTblBox(conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
     elseif k === _AK_STATE_TBL_BOX
         s = @inbounds a.conn[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
         return s == 0 ? 0.0 : @inbounds u[s]     # 0 ⇒ ghost literal, as per cell
+    elseif k === _AK_ARR_TBL_BOX
+        return @inbounds a.arr[a.conn[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]]
     end
     throw(TreeWalkError("E_TREEWALK_ACC_BAD_DESC", "unknown access kind $(Int(k))"))
 end
@@ -200,13 +210,24 @@ struct _VarBound   <: _Bound; valence::Vector{Int}; end   # per-cell edge count 
 # regions in k), so it is a general strided box, not a slab.
 # UNSTRUCTURED / CONTIGUOUS: `strides` is empty; `ranges[1]` is the cell range
 # 1:ncell, `base` unused, and the out slot == the cell ordinal.
+# INDIRECT (`outs` non-empty): the per-cell merge (acc_merge.jl) hosts a group
+# of arbitrary output slots — cell ordinal c ∈ 1:length(outs) writes `du[outs[c]]`,
+# `midx == (c, 1, 1)`, and the box-addressed descriptors (CONST_BOX /
+# STATE_TBL_BOX / ARR_TBL_BOX with s1=1, off=1) index their per-cell tables by
+# that ordinal. `outs` is the same O(#cells) data the `_VecKernel` out_slots
+# vector always carried — no new memory class.
 struct _CellSet
     strides::Vector{Int}
     ranges::Vector{UnitRange{Int}}
     base::Int
+    outs::Vector{Int}
 end
+_CellSet(strides::Vector{Int}, ranges::Vector{UnitRange{Int}}, base::Int) =
+    _CellSet(strides, ranges, base, Int[])
 _contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell], 0)
-@inline _is_contig(cs::_CellSet) = isempty(cs.strides)
+_outs_cells(outs::Vector{Int}) = _CellSet(Int[], UnitRange{Int}[1:length(outs)], 0, outs)
+@inline _is_contig(cs::_CellSet) = isempty(cs.strides) && isempty(cs.outs)
+@inline _is_outs(cs::_CellSet) = !isempty(cs.outs)
 
 # ---- Per-cell CSE scratch ----
 # The affine spine is walked as a TREE once per cell (`_build_branch_template`
@@ -313,6 +334,12 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
             s += _eval_acc(body, u, p, t, c, m, oln, midx, K, T)
         end
         return s
+    elseif k === _NK_CONTRACTION
+        # Fixed-width runtime ⊕-fold (the per-cell merge hosts einsum groups on
+        # the access spine). MIRRORS `_eval_contraction` (compile.jl) arm for
+        # arm — seeded from the 0̄ identity on the node, sequential child-order
+        # fold — so the value is bit-identical to the per-cell reference.
+        return _eval_acc_contraction(nd, u, p, t, c, n, oln, midx, K, T)
     elseif k === _NK_PARAM
         return getfield(p, nd.sym)
     elseif k === _NK_TIME
@@ -341,6 +368,41 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         return _eval_acc(S.spine, u, p, t, c, n, oln, midx, S, T)
     else # _NK_OP
         return _eval_acc_op(nd, u, p, t, c, n, oln, midx, K, T)
+    end
+end
+
+# Runtime ⊕-fold over an access-spine contraction node's children, seeded from
+# `nd.literal` (the 0̄ identity baked on at build time) — byte-for-byte the
+# `_eval_contraction` (compile.jl) fold shape, with `_eval_acc` as the child
+# walker.
+function _eval_acc_contraction(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+                               midx::NTuple{3,Int}, K::_AccKernel, ::Type{T}) where {T}
+    op = nd.op
+    ch = nd.children
+    if op === :+
+        s = nd.literal
+        @inbounds for k in eachindex(ch)
+            s += _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T)
+        end
+        return s
+    elseif op === :*
+        s = nd.literal
+        @inbounds for k in eachindex(ch)
+            s *= _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T)
+        end
+        return s
+    elseif op === :max
+        s = nd.literal
+        @inbounds for k in eachindex(ch)
+            s = max(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
+        end
+        return s
+    else  # :min
+        s = nd.literal
+        @inbounds for k in eachindex(ch)
+            s = min(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
+        end
+        return s
     end
 end
 
@@ -586,7 +648,13 @@ function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     end
     _fill_invariant!(K, u, p, t, T)
     cs = K.cells
-    if _is_contig(cs)                               # contiguous / unstructured
+    if _is_outs(cs)                                 # indirect out slots (per-cell merge)
+        outs = cs.outs
+        @inbounds for c in eachindex(outs)
+            oln = outs[c]
+            du[oln] = _eval_cell(K, u, p, t, c, oln, (c, 1, 1), T)
+        end
+    elseif _is_contig(cs)                           # contiguous / unstructured
         @inbounds for c in cs.ranges[1]
             du[c] = _eval_cell(K, u, p, t, c, c, (c, 1, 1), T)
         end
@@ -780,6 +848,7 @@ const _TC_INTERP_LINEAR  = UInt8(7)   # d[l] = _interp_linear_core(spec, q[l])
 const _TC_INTERP_BILINEAR= UInt8(8)   # d[l] = _interp_bilinear_core(spec, x[l], y[l])
 const _TC_INTERP_SEARCH  = UInt8(9)   # d[l] = Float64(_interp_searchsorted_core(spec, q[l]))
 const _TC_GATHER_STATE_TBL=UInt8(10)  # s = conn[boxaddr(l)]; d[l] = s == 0 ? 0.0 : u[s]
+const _TC_GATHER_ARR_TBL = UInt8(11)  # d[l] = arr[conn[boxaddr(l)]]  (LIVE forcing table)
 
 # One instruction. Operand `args[k]` is a buffer id into the plan's `bufs`;
 # `strides[k]` is 0 (a length-1 scalar/literal slot, broadcast) or 1 (a lane
@@ -875,6 +944,16 @@ function _plan_scalar!(B::_AccPlanBuilder, kind::UInt8; idx::Int=0, sym::Symbol=
     end
 end
 
+# Is a box-addressed gather's index SEQUENTIAL within a tile? True when the
+# addressing uses only `mi1` (s2 == s3 == 0) and the kernel's cell walk fills
+# `mi1` consecutively per tile — an indirect-outs set, a contiguous set, or a
+# 1-D box (see the corresponding fills in `_run_acc_plan!`). The run loop then
+# derives lane l's index as `idx0 + (l-1)*s1` from the tile's first lane
+# instead of loading `mi1[l]` — a strided window LLVM can vectorize.
+@inline _tbl_seq(K::_AccKernel, s2::Int, s3::Int) =
+    s2 == 0 && s3 == 0 &&
+    (_is_outs(K.cells) || _is_contig(K.cells) || length(K.cells.strides) == 1)
+
 # Emit one node; returns `(buf, stride, istemp)`. `istemp` ⇒ the buffer is a
 # single-use lane temporary the CALLER may recycle once consumed.
 function _plan_emit!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
@@ -893,8 +972,10 @@ function _plan_emit!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
         elseif ak === _AK_CONST_BOX || ak === _AK_FORCING_BOX
             # Same addressing; a FORCING_BOX arr is the aliased LIVE buffer and is
             # re-gathered per tile, so an in-place refresh is always seen.
+            # `delta=2` marks a tile-sequential index (see `_tbl_seq`).
             d = _plan_newlane!(B)
             push!(B.instrs, _mkinstr(_TC_GATHER_ARR_BOX; dest=d, arr=a.arr,
+                                     delta=(_tbl_seq(K, a.s2, a.s3) ? 2 : 0),
                                      s1=a.s1, s2=a.s2, s3=a.s3, off=a.off))
             return (d, 1, true)
         elseif ak === _AK_LOOP_IDX
@@ -903,12 +984,30 @@ function _plan_emit!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
             return (d, 1, true)
         elseif ak === _AK_STATE_TBL_BOX
             # Unstructured slot-table gather (gather-of-gather): a tight per-lane
-            # loop over the box-addressed table, ghost slot 0 → 0.0.
+            # loop over the box-addressed table, ghost slot 0 → 0.0. Two
+            # PLAN-TIME facts ride `delta` as a bitmask so the run loop is
+            # specialized: bit 1 (value 1) = the table is ghost-free
+            # (branch-free loop); bit 2 (value 2) = the table index is
+            # tile-sequential (`_tbl_seq` — no per-lane mi1 load).
             d = _plan_newlane!(B)
+            fl = (any(==(0), a.conn) ? 0 : 1) | (_tbl_seq(K, a.s2, a.s3) ? 2 : 0)
             push!(B.instrs, _mkinstr(_TC_GATHER_STATE_TBL; dest=d, conn=a.conn,
+                                     delta=fl, s1=a.s1, s2=a.s2, s3=a.s3, off=a.off))
+            return (d, 1, true)
+        elseif ak === _AK_ARR_TBL_BOX
+            # LIVE forcing through a per-cell index table: `arr` is the aliased
+            # buffer, re-read every tile so an in-place refresh is always seen.
+            d = _plan_newlane!(B)
+            push!(B.instrs, _mkinstr(_TC_GATHER_ARR_TBL; dest=d, arr=a.arr, conn=a.conn,
+                                     delta=(_tbl_seq(K, a.s2, a.s3) ? 2 : 0),
                                      s1=a.s1, s2=a.s2, s3=a.s3, off=a.off))
             return (d, 1, true)
         elseif ak === _AK_CONST_CELL
+            # The ARR_CELL instruction reads `arr[oln[l]]` (cell ordinal == oln
+            # holds for contiguous sets only) — an indirect-outs kernel's ordinal
+            # rides mi1 instead, so decline there (the builder never emits
+            # CONST_CELL into an outs kernel; this guards hand-built ones).
+            _is_outs(K.cells) && throw(_AccPlanDecline())
             d = _plan_newlane!(B)
             push!(B.instrs, _mkinstr(_TC_GATHER_ARR_CELL; dest=d, arr=a.arr))
             return (d, 1, true)
@@ -935,6 +1034,23 @@ function _plan_emit!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
             return (_plan_scalar!(B, _SS_INV; idx=nd.idx, scratch=K.cse.inv_scratch), 0, false)
         end
         throw(_AccPlanDecline())       # foreign scratch (a sub-kernel context)
+    elseif k === _NK_CONTRACTION
+        # Fixed-width ⊕-fold as a tape op: the 0̄ identity rides as a stride-0
+        # first operand, so the n-ary fold loop computes ((0̄ ⊕ c1) ⊕ c2)… —
+        # exactly `_eval_acc_contraction`'s (and `_eval_contraction`'s) seeded
+        # sequential fold, bit for bit.
+        ch = nd.children
+        isempty(ch) && return (_plan_lit!(B, nd.literal), 0, false)
+        seedbuf = _plan_lit!(B, nd.literal)
+        ops = Tuple{Int,Int,Bool}[_plan_emit!(B, c, K) for c in ch]
+        d = _plan_newlane!(B)
+        push!(B.instrs, _mkinstr(_TC_OP; op=nd.op, dest=d,
+                                 args=Int[seedbuf; Int[o[1] for o in ops]],
+                                 strides=Int[0; Int[o[2] for o in ops]]))
+        for o in ops
+            o[3] && push!(B.free, o[1])
+        end
+        return (d, 1, true)
     elseif k === _NK_OP
         return _plan_emit_op!(B, nd, K)
     end
@@ -1037,13 +1153,77 @@ function _build_acc_plan(K::_AccKernel; tile::Int=1024)
 end
 
 # ---- Tape op loops (generated from the op-registry tables, like every ladder) ----
+#
+# STRIDE-SPECIALIZED map kernels. An operand's stride is 0 (a length-1
+# scalar/literal slot, broadcast) or 1 (a lane buffer); the branch is hoisted
+# OUT of the lane loop so each variant is a plain unit-stride loop LLVM can
+# SIMD-vectorize — the unified `1 + (l-1)*stride` read inside the loop
+# defeated vectorization and made the tape measurably slower than the
+# broadcast overlay it replaces. Same per-lane arithmetic in the same order,
+# so values are bit-identical (`@simd` on an elementwise map has no
+# cross-iteration dependence to reassociate).
+@inline function _tape_map1!(f::F, d::Vector{Float64},
+                             a::Vector{Float64}, sa::Int, L::Int) where {F}
+    if sa == 1
+        @inbounds @simd for l in 1:L
+            d[l] = f(a[l])
+        end
+    else
+        v = f(@inbounds a[1])
+        @inbounds for l in 1:L
+            d[l] = v
+        end
+    end
+    return nothing
+end
+@inline function _tape_map2!(f::F, d::Vector{Float64},
+                             a::Vector{Float64}, sa::Int,
+                             b::Vector{Float64}, sb::Int, L::Int) where {F}
+    if sa == 1
+        if sb == 1
+            @inbounds @simd for l in 1:L
+                d[l] = f(a[l], b[l])
+            end
+        else
+            bv = @inbounds b[1]
+            @inbounds @simd for l in 1:L
+                d[l] = f(a[l], bv)
+            end
+        end
+    elseif sb == 1
+        av = @inbounds a[1]
+        @inbounds @simd for l in 1:L
+            d[l] = f(av, b[l])
+        end
+    else
+        v = f(@inbounds(a[1]), @inbounds(b[1]))
+        @inbounds for l in 1:L
+            d[l] = v
+        end
+    end
+    return nothing
+end
+# In-place accumulate `d[l] = f(d[l], ck[·])` — the ⊕-fold's k ≥ 3 legs.
+@inline function _tape_acc2!(f::F, d::Vector{Float64},
+                             ck::Vector{Float64}, sk::Int, L::Int) where {F}
+    if sk == 1
+        @inbounds @simd for l in 1:L
+            d[l] = f(d[l], ck[l])
+        end
+    else
+        v = @inbounds ck[1]
+        @inbounds @simd for l in 1:L
+            d[l] = f(d[l], v)
+        end
+    end
+    return nothing
+end
+
 let arms = :(return false)
     for row in reverse(_UNARY_ELEMENTWISE_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
                          quote
-                             @inbounds for l in 1:L
-                                 d[l] = $(row.sym)(a[1 + (l-1)*sa])
-                             end
+                             _tape_map1!($(row.sym), d, a, sa, L)
                              return true
                          end, arms)
     end
@@ -1057,9 +1237,7 @@ let arms = :(return false)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
                          quote
-                             @inbounds for l in 1:L
-                                 d[l] = $(row.fnsym)(a[1 + (l-1)*sa], b[1 + (l-1)*sb])
-                             end
+                             _tape_map2!($(row.fnsym), d, a, sa, b, sb, L)
                              return true
                          end, arms)
     end
@@ -1074,9 +1252,8 @@ let arms = :(return false)
     for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
                          quote
-                             @inbounds for l in 1:L
-                                 d[l] = $(row.fnsym)(a[1 + (l-1)*sa], b[1 + (l-1)*sb]) ? 1.0 : 0.0
-                             end
+                             _tape_map2!((x, y) -> $(row.fnsym)(x, y) ? 1.0 : 0.0,
+                                         d, a, sa, b, sb, L)
                              return true
                          end, arms)
     end
@@ -1091,16 +1268,10 @@ let arms = :(return false)
     for row in reverse(_NARY_MINMAX_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
                          quote
-                             a = bufs[args[1]]; sa = sts[1]
-                             b = bufs[args[2]]; sb = sts[2]
-                             @inbounds for l in 1:L
-                                 d[l] = $(row.fnsym)(a[1 + (l-1)*sa], b[1 + (l-1)*sb])
-                             end
+                             _tape_map2!($(row.fnsym), d, bufs[args[1]], sts[1],
+                                         bufs[args[2]], sts[2], L)
                              for k in 3:length(args)
-                                 ck = bufs[args[k]]; sk = sts[k]
-                                 @inbounds for l in 1:L
-                                     d[l] = $(row.fnsym)(d[l], ck[1 + (l-1)*sk])
-                                 end
+                                 _tape_acc2!($(row.fnsym), d, bufs[args[k]], sts[k], L)
                              end
                              return true
                          end, arms)
@@ -1116,27 +1287,15 @@ end
 @inline function _tape_fold!(op::Symbol, d::Vector{Float64},
                              bufs::Vector{Vector{Float64}},
                              args::Vector{Int}, sts::Vector{Int}, L::Int)
-    a = bufs[args[1]]; sa = sts[1]
-    b = bufs[args[2]]; sb = sts[2]
     if op === :+
-        @inbounds for l in 1:L
-            d[l] = a[1 + (l-1)*sa] + b[1 + (l-1)*sb]
-        end
+        _tape_map2!(+, d, bufs[args[1]], sts[1], bufs[args[2]], sts[2], L)
         for k in 3:length(args)
-            ck = bufs[args[k]]; sk = sts[k]
-            @inbounds for l in 1:L
-                d[l] += ck[1 + (l-1)*sk]
-            end
+            _tape_acc2!(+, d, bufs[args[k]], sts[k], L)
         end
     else # :*
-        @inbounds for l in 1:L
-            d[l] = a[1 + (l-1)*sa] * b[1 + (l-1)*sb]
-        end
+        _tape_map2!(*, d, bufs[args[1]], sts[1], bufs[args[2]], sts[2], L)
         for k in 3:length(args)
-            ck = bufs[args[k]]; sk = sts[k]
-            @inbounds for l in 1:L
-                d[l] *= ck[1 + (l-1)*sk]
-            end
+            _tape_acc2!(*, d, bufs[args[k]], sts[k], L)
         end
     end
     return nothing
@@ -1152,31 +1311,19 @@ function _run_acc_tape_op!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, L::Int
     end
     a = bufs[args[1]]; sa = sts[1]
     if op === :- && length(args) == 2
-        b = bufs[args[2]]; sb = sts[2]
-        @inbounds for l in 1:L
-            d[l] = a[1 + (l-1)*sa] - b[1 + (l-1)*sb]
-        end
+        _tape_map2!(-, d, a, sa, bufs[args[2]], sts[2], L)
         return nothing
     elseif (op === :- || op === :neg)
-        @inbounds for l in 1:L
-            d[l] = -a[1 + (l-1)*sa]
-        end
+        _tape_map1!(-, d, a, sa, L)
         return nothing
     elseif op === :not
-        @inbounds for l in 1:L
-            d[l] = a[1 + (l-1)*sa] == 0 ? 1.0 : 0.0
-        end
+        _tape_map1!(x -> x == 0 ? 1.0 : 0.0, d, a, sa, L)
         return nothing
     elseif op === :atan
         if length(args) == 1
-            @inbounds for l in 1:L
-                d[l] = atan(a[1 + (l-1)*sa])
-            end
+            _tape_map1!(atan, d, a, sa, L)
         else
-            b = bufs[args[2]]; sb = sts[2]
-            @inbounds for l in 1:L
-                d[l] = atan(a[1 + (l-1)*sa], b[1 + (l-1)*sb])
-            end
+            _tape_map2!(atan, d, a, sa, bufs[args[2]], sts[2], L)
         end
         return nothing
     end
@@ -1209,8 +1356,15 @@ function _run_acc_instr!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, u,
         d = bufs[ins.dest]; arr = ins.arr
         mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
         s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
-        @inbounds for l in 1:L
-            d[l] = arr[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+        if ins.delta >= 2                    # tile-sequential index: strided copy
+            idx0 = off + (@inbounds(mi1[1]) - 1)*s1
+            @inbounds @simd for l in 1:L
+                d[l] = arr[idx0 + (l-1)*s1]
+            end
+        else
+            @inbounds for l in 1:L
+                d[l] = arr[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+            end
         end
     elseif c === _TC_LOOP_IDX
         d = bufs[ins.dest]
@@ -1227,9 +1381,41 @@ function _run_acc_instr!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, u,
         d = bufs[ins.dest]; conn = ins.conn
         mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
         s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
-        @inbounds for l in 1:L
-            s = conn[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
-            d[l] = s == 0 ? 0.0 : u[s]
+        fl = ins.delta                        # bit 1: ghost-free; bit 2: sequential
+        if fl == 3
+            idx0 = off + (@inbounds(mi1[1]) - 1)*s1
+            @inbounds for l in 1:L
+                d[l] = u[conn[idx0 + (l-1)*s1]]
+            end
+        elseif fl == 2
+            idx0 = off + (@inbounds(mi1[1]) - 1)*s1
+            @inbounds for l in 1:L
+                s = conn[idx0 + (l-1)*s1]
+                d[l] = s == 0 ? 0.0 : u[s]
+            end
+        elseif fl == 1
+            @inbounds for l in 1:L
+                d[l] = u[conn[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]]
+            end
+        else
+            @inbounds for l in 1:L
+                s = conn[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+                d[l] = s == 0 ? 0.0 : u[s]
+            end
+        end
+    elseif c === _TC_GATHER_ARR_TBL
+        d = bufs[ins.dest]; arr = ins.arr; conn = ins.conn
+        mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+        s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
+        if ins.delta >= 2
+            idx0 = off + (@inbounds(mi1[1]) - 1)*s1
+            @inbounds for l in 1:L
+                d[l] = arr[conn[idx0 + (l-1)*s1]]
+            end
+        else
+            @inbounds for l in 1:L
+                d[l] = arr[conn[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]]
+            end
         end
     elseif c === _TC_INTERP_LINEAR
         d = bufs[ins.dest]; spec = ins.payload::_InterpLinearSpec
@@ -1292,6 +1478,23 @@ function _run_acc_plan!(du, u, p, t, K::_AccKernel, P::_AccPlan)
     cs = K.cells
     oln = P.oln; mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
     tile = P.tile
+    if _is_outs(cs)
+        # Indirect out slots (per-cell merge): cell ordinal rides mi1, so the
+        # box-addressed per-cell tables (s1=1, off=1) index by ordinal.
+        outs = cs.outs
+        nc = length(outs)
+        i = 1
+        while i <= nc
+            L = min(tile, nc - i + 1)
+            @inbounds for l in 1:L
+                oln[l] = outs[i + l - 1]
+                mi1[l] = i + l - 1
+            end
+            _flush_acc_tile!(du, u, P, L)
+            i += L
+        end
+        return du
+    end
     if _is_contig(cs)
         rng = cs.ranges[1]
         i = first(rng); hi = last(rng)

@@ -1900,8 +1900,10 @@ end
 #   :affine_fused_retry — affine succeeded only after fusing the compile-once
 #                         template tier back in
 #   :symbolic           — the symbolic-stencil `_VecKernel` path (affine declined)
-#   :percell            — the per-cell scalarize+merge fallback
+#   :percell_acc        — the per-cell scalarize fallback, merged into
+#                         indirect-outs `_AccKernel`s (acc_merge.jl)
 #   :percell_disabled   — ESS_STENCIL_DISABLE=1 forced the per-cell reference
+#                         (the `_VecNode` overlay merge, the differential oracle)
 # One increment per array equation, at the cascade's dispatch below. Cheap
 # (a Dict bump per EQUATION, not per cell) and always on; read it via
 # `EarthSciAST._CASCADE_TALLY`, reset with `EarthSciAST._reset_cascade_tally!()`.
@@ -2023,8 +2025,8 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         _tally_cascade!(:symbolic)
         append!(vec_kernels, symbolic_kernels)
     else
-        _tally_cascade!(_stencil_disabled() ? :percell_disabled : :percell)
-        _compile_arrayop_percell!(vec_kernels, covered, lhs_body, rhs_body;
+        _tally_cascade!(_stencil_disabled() ? :percell_disabled : :percell_acc)
+        _compile_arrayop_percell!(vec_kernels, acc_kernels, covered, lhs_body, rhs_body;
             idx_names=idx_names, range_iters=range_iters,
             contract_names=contract_names, contract_ranges=contract_ranges,
             contract_const=contract_const, rhs_oplus=rhs_oplus,
@@ -2044,11 +2046,16 @@ end
 # (einsum) equation expands its reduction through the shared
 # `_foreach_aggregate_term` core and accumulates at runtime via
 # `_NK_CONTRACTION`; the per-cell nodes are then merged into whole-array
-# kernels (ess-dhq) — structurally-identical cells collapse to one template;
-# ghost boundaries / makearray regions / distinct valences form their own
-# (N-independent) groups. The equation-derived inputs are keyword-only (several
-# share a type, so positional passing could silently swap two of them).
-function _compile_arrayop_percell!(vec_kernels, covered::BitVector,
+# kernels — structurally-identical cells collapse to one template; ghost
+# boundaries / makearray regions / distinct valences form their own
+# (N-independent) groups. The DEFAULT merge target is the unified access-kernel
+# IR (`_acc_from_cell_entries`, acc_merge.jl → indirect-outs `_AccKernel`s,
+# lane-tape hosted at Float64); `ESS_STENCIL_DISABLE=1` keeps the `_VecNode`
+# overlay merge (`_vectorize_cell_entries`) as the independent per-cell
+# reference the acc≡percell differentials compare against. The
+# equation-derived inputs are keyword-only (several share a type, so
+# positional passing could silently swap two of them).
+function _compile_arrayop_percell!(vec_kernels, acc_kernels, covered::BitVector,
         lhs_body::OpExpr, rhs_body::ASTExpr;
         idx_names::Vector{String}, range_iters,
         contract_names::Vector{String}, contract_ranges, contract_const,
@@ -2146,7 +2153,11 @@ function _compile_arrayop_percell!(vec_kernels, covered::BitVector,
             end
         end
     end
-    append!(vec_kernels, _vectorize_cell_entries(cell_entries))
+    if _stencil_disabled()
+        append!(vec_kernels, _vectorize_cell_entries(cell_entries))
+    else
+        append!(acc_kernels, _acc_from_cell_entries(cell_entries))
+    end
     return nothing
 end
 

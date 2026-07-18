@@ -779,7 +779,8 @@ end
 # refuse `@compile` exactly as the `_VK_PGATHER` path does. Sub-kernel tables
 # (`K.subs`, transitive by construction) are scanned too.
 _acc_desc_live_forcing(a::_AccDesc) =
-    a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_FIXED
+    a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_FIXED ||
+    a.kind === _AK_ARR_TBL_BOX
 _acc_has_live_forcing(K::_AccKernel) =
     any(_acc_desc_live_forcing, K.acc) ||
     any(S -> any(_acc_desc_live_forcing, S.acc), K.subs)
@@ -816,6 +817,14 @@ function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     # mutation is fine. (A traced call never lands here for a DEFAULT affine
     # build — those kernels take `_oop_run_acc_vec`; a declined kernel's scalar
     # reads fail loudly inside Reactant.)
+    if _is_outs(cs)                                 # indirect out slots (per-cell merge)
+        outs = cs.outs
+        @inbounds for c in eachindex(outs)
+            oln = outs[c]
+            du = _oop_store(du, oln, _eval_cell(K, u, p, t, c, oln, (c, 1, 1), T))
+        end
+        return du
+    end
     if _is_contig(cs)                               # contiguous / unstructured
         @inbounds for c in cs.ranges[1]
             du = _oop_store(du, c, _eval_cell(K, u, p, t, c, c, (c, 1, 1), T))
@@ -871,6 +880,12 @@ const _OOP_ACC_FALLBACK = _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float6
 
 # Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order.
 function _oop_acc_lanes(cs::_CellSet)
+    if _is_outs(cs)
+        # Indirect out slots: the cell ORDINAL rides m1 (the box-addressed
+        # per-cell tables index by it, s1=1/off=1), `out` is the slot list.
+        L = length(cs.outs)
+        return copy(cs.outs), collect(1:L), fill(1, L), fill(1, L)
+    end
     if _is_contig(cs)
         rng = cs.ranges[1]
         out = collect(Int, rng)
@@ -909,6 +924,10 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
         # ghost slot (0), whose 0.0 blend would need per-lane masking: that
         # kernel keeps the documented per-cell oop fallback.
         ak === _AK_STATE_TBL_BOX && any(==(0), a.conn) && return false
+        # CONST_CELL addresses by `oln`, which equals the ordinal only for a
+        # contiguous set — an indirect-outs kernel would freeze wrong lanes.
+        # (The builder never emits it there; this guards hand-built kernels.)
+        ak === _AK_CONST_CELL && _is_outs(K.cells) && return false
     elseif k === _NK_CACHED
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
@@ -946,6 +965,11 @@ function _build_oop_acc_plan(K::_AccKernel)
         elseif k === _AK_FORCING_BOX
             forc[i] = Int[a.off + (m1[l]-1)*a.s1 + (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3
                           for l in 1:L]
+        elseif k === _AK_ARR_TBL_BOX
+            # LIVE forcing through a per-cell index table: freeze the INDICES
+            # (host data), re-gather the aliased buffer per call.
+            forc[i] = Int[@inbounds a.conn[a.off + (m1[l]-1)*a.s1 +
+                          (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
         elseif k === _AK_LOOP_IDX
             mi = a.dim === 1 ? m1 : a.dim === 2 ? m2 : m3
             consts[i] = Float64.(mi)
@@ -978,7 +1002,7 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         elseif ak === _AK_ARR_FIXED
             # LIVE forcing (invariant slot): re-read per call — data, zero derivative.
             return convert(T, @inbounds a.arr[a.idx])
-        elseif ak === _AK_FORCING_BOX
+        elseif ak === _AK_FORCING_BOX || ak === _AK_ARR_TBL_BOX
             # LIVE forcing lanes: re-gathered from the aliased buffer per call.
             return @inbounds a.arr[plan.forc[nd.idx]]
         else
@@ -994,6 +1018,31 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     elseif k === _NK_CACHED
         return nd.payload === K.cse.scratch ? (@inbounds cellvals[nd.idx]) :
                                               (@inbounds invvals[nd.idx])
+    elseif k === _NK_CONTRACTION
+        # Fixed-width ⊕-fold over lane vectors, seeded from the 0̄ identity —
+        # ((0̄ ⊕ c1) ⊕ c2)… in child order, broadcast per lane: the same fold
+        # `_eval_acc_contraction` runs per cell.
+        op = nd.op
+        ch = nd.children
+        res::Any = nd.literal     # scalar seed; the first broadcast promotes it
+        if op === :+
+            for i in eachindex(ch)
+                res = res .+ _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T)
+            end
+        elseif op === :*
+            for i in eachindex(ch)
+                res = res .* _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T)
+            end
+        elseif op === :max
+            for i in eachindex(ch)
+                res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T))
+            end
+        else  # :min
+            for i in eachindex(ch)
+                res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T))
+            end
+        end
+        return res
     else # _NK_OP (REDUCE/SUBCALL were declined at plan build)
         op = nd.op
         ch = nd.children
