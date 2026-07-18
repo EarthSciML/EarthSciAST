@@ -1,31 +1,15 @@
 # ========================================================================
 # tree_walk/stencil.jl — part of the tree-walk evaluator (gt-e8yw).
 # Included by src/tree_walk.jl; see that file for the full layout and
-# include order. Section 4c: the symbolic stencil compiler (ess-perf) — one spine
-# template per structural group, with per-lane recipe evaluation.
-# ========================================================================
-
+# include order. Section 4c: the symbolic STENCILIZER — one sentinel spine
+# template per structural group, with per-lane recipe evaluation. This is the
+# front half of the affine box processor (stencil_affine.jl): `_stencilize`
+# turns a rule body into a compiled `_Node` spine whose loop-var-dependent
+# leaves are LANE sentinels, and `_eval_recipe` resolves each lane at any cell.
+# The box processor derives per-box access descriptors from those recipes.
+# (The `_VecKernel` lowering that once consumed these templates was deleted
+# when the access-kernel IR became the only array runtime.)
 # ============================================================
-# 4c. Symbolic stencil compiler (ess-perf: one template per structural group)
-# ============================================================
-#
-# The per-cell array path (§4b) runs `_sub_preserving` → `_resolve_indices` →
-# `_compile` once for EVERY output cell, then `_vectorize_cell_entries` collapses
-# the structurally-identical per-cell `_Node` trees into `_VecKernel` templates.
-# For a stencil that is ~82% wasted work (measured): the tree SHAPE ("spine") is
-# identical across cells — only the state-gather slot indices (and per-cell const /
-# ghost leaves) differ. This pass builds the spine ONCE, symbolically, keeping
-# each loop-var-dependent gather as a LANE placeholder, then derives every cell's
-# leaf values by evaluating the gather index expressions per lane. The result is
-# the SAME set of `_VecKernel`s the per-cell path would produce — byte-identical
-# structure + slots — at O(spine + Σcells·gathers) instead of O(cells·spine).
-#
-# Applicability is intentionally narrow. `_stencilize` keeps ONLY the whitelisted
-# elementwise ops + `index(state/const/pgather, …)` gathers + `fn` leaves + bare
-# loop-index literals; ANY loop-var-dependent construct outside that set
-# (`arrayop`/`aggregate`/`makearray`/`integral`/`index`-of-those/`table_lookup`/…)
-# throws `_StencilFallback` and the caller runs the unchanged per-cell path. So the
-# fast path is provably identical WHERE it applies and simply absent elsewhere.
 #
 # Identity by construction, not by luck:
 #   • the spine template is produced by the SAME `_resolve_indices` + `_compile`
@@ -36,15 +20,17 @@
 #   • per-lane leaf evaluation (`_eval_recipe`) reuses the EXACT resolve helpers
 #     (`_eval_const_int`, `_cell_key`, `_resolve_const_index`, the ghost bounds
 #     test), so a lane's slot / ghost / const value is bit-for-bit what
-#     `_resolve_indices` returns;
-#   • `_lower_template` mirrors `_merge_nodes` arm-for-arm (all-equal→scalar,
-#     else→gather/constvec; interp const-fold via the SAME `_merge_fn_node`);
-#   • cells are grouped by ghost pattern — the ONLY structural variable among
-#     whitelisted cells (in-bounds STATE 'S' vs ghost LITERAL 'L') — reproducing
-#     the `_struct_sig` partition; iteration + first-seen order are preserved so
-#     lane↔out-slot pairing is identical.
-# `ESS_STENCIL_DISABLE=1` forces the fallback (used by the differential test that
-# asserts both paths build identical kernels).
+#     `_resolve_indices` returns.
+#
+# Applicability is intentionally narrow. `_stencilize` keeps ONLY the whitelisted
+# elementwise ops + `index(state/const/pgather, …)` gathers + `fn` leaves + bare
+# loop-index literals; ANY loop-var-dependent construct outside that set
+# (`arrayop`/`aggregate`/`makearray`/`integral`/`index`-of-those/`table_lookup`/…)
+# throws `_StencilFallback` and the caller runs the unchanged per-cell path. So the
+# fast path is provably identical WHERE it applies and simply absent elsewhere.
+#
+# `ESS_STENCIL_DISABLE=1` forces the per-cell SCALAR reference (compiled cell
+# nodes on `rhs_list`, evaluated by `_eval_node`) — the differential oracle.
 
 struct _StencilFallback <: Exception
     reason::String
@@ -220,9 +206,8 @@ struct _StencilCtx
     # Bool per node instead of a Set{String}.
     vsmemo::IdDict{OpExpr,Bool}
     # Compile-once template tier: the sub-kernel call sites this walk emitted
-    # (sentinel j ↔ subcalls[j]), and the per-equation template context (`nothing`
-    # on every reference-free build and on the symbolic `_VecKernel` path, which
-    # always receives the fused expanded body).
+    # (sentinel j ↔ subcalls[j]), and the per-equation template context
+    # (`nothing` on every reference-free build).
     subcalls::Vector{_SubCallSite}
     tctx::Union{Nothing,_TemplateCtx}
 end
@@ -610,8 +595,9 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
 end
 
 # Extend `var_map` with the lane sentinels → a negative slot marker. `_compile`
-# maps `VarExpr(lane_name(k))` to `_NK_STATE(idx = -k)`, which `_lower_template`
-# decodes back to `recipes[k]`. Built ONCE per equation (not per cell).
+# maps `VarExpr(lane_name(k))` to `_NK_STATE(idx = -k)`, which the box
+# processor's `_lower_to_access` decodes back to `recipes[k]`. Built ONCE per
+# equation (not per cell).
 function _lane_var_map(var_map::Dict{String,Int}, recipes::Vector{_LaneRecipe})
     isempty(recipes) && return var_map
     ext = copy(var_map)
@@ -623,9 +609,7 @@ end
 
 # Lane sentinels plus sub-kernel call sentinels (compile-once tier): call site j
 # maps to the disjoint negative range `-(_SUBCALL_SENT_BASE + j)`, decoded by
-# `_lower_to_access`. `_lower_template` (the symbolic `_VecKernel` path) never
-# sees one — that path always receives the fused expanded body — and guards the
-# range as an internal error rather than mis-indexing `recipes`.
+# `_lower_to_access`.
 function _ext_var_map(var_map::Dict{String,Int}, recipes::Vector{_LaneRecipe},
                       subcalls::Vector{_SubCallSite})
     (isempty(recipes) && isempty(subcalls)) && return var_map
@@ -700,22 +684,9 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
     end
 end
 
-# Ghost pattern of the STATE lanes — the ONLY structural variable among
-# whitelisted cells (in-bounds STATE 'S' vs ghost LITERAL 'L'). Two cells share a
-# `_VecKernel` iff this key is equal (and the invariant spine is identical, which
-# holds by construction). Encoded as a `String` for a cheap, hashable group key.
-function _ghost_key(lane_vals::Vector{Any}, state_ks::Vector{Int})
-    isempty(state_ks) && return ""
-    io = IOBuffer()
-    @inbounds for k in state_ks
-        print(io, (lane_vals[k]::Int) == 0 ? '1' : '0')
-    end
-    return String(take!(io))
-end
-
-# Same ghost key from the STATE-lane slots ALREADY isolated into a Vector{Int}
-# (the affine sweep evaluates only those — `_ghost_key` never reads a non-state
-# lane), so `_cell_ckey!` needs no `Vector{Any}` and no boxing.
+# Ghost pattern of the STATE lanes, from slots ALREADY isolated into a
+# Vector{Int} (the affine sweep evaluates only those), encoded as a `String`
+# for a cheap, hashable signature component (`_cell_ckey!`'s base key).
 function _ghost_key_states(state_vals::Vector{Int})
     isempty(state_vals) && return ""
     io = IOBuffer()
@@ -725,97 +696,11 @@ function _ghost_key_states(state_vals::Vector{Int})
     return String(take!(io))
 end
 
-# Lower the sentinel template `_Node` to a `_VecNode` for ONE structural group,
-# reading each lane's per-cell values from `cell_lanes` (`cell_lanes[j][k]` is
-# recipe `k`'s value for the group's lane `j`). Mirrors `_merge_nodes` exactly:
-# same all-equal → scalar / else → gather-or-constvec decisions, same interp fold.
-function _lower_template(n::_Node, recipes::Vector{_LaneRecipe},
-                         cell_lanes::Vector{Vector{Any}}, len::Int)::_VecNode
-    k = n.kind
-    if k === _NK_STATE
-        if n.idx < 0
-            r = -n.idx
-            # Sub-kernel call sentinels never reach the symbolic `_VecKernel`
-            # path (it always receives the fused expanded body); reaching one
-            # here is an internal invariant violation, never wire-visible.
-            r >= _SUBCALL_SENT_BASE && throw(TreeWalkError("E_TREEWALK_INTERNAL",
-                "symbolic stencil: sub-kernel call sentinel in a _VecKernel template"))
-            rec = recipes[r]
-            if rec.kind == LANE_STATE
-                # Ghost-ness is uniform within the group (it defines the group).
-                if (cell_lanes[1][r]::Int) == 0
-                    return _mkvnode(kind=_VK_LITERAL, literal=0.0, buf=Vector{Float64}(undef, len))
-                end
-                slots = Int[cell_lanes[j][r]::Int for j in 1:len]
-                s1 = slots[1]
-                if all(==(s1), slots)
-                    return _mkvnode(kind=_VK_STATE, idx=s1, buf=Vector{Float64}(undef, len))
-                end
-                return _mkvnode(kind=_VK_GATHER, slots=slots, buf=Vector{Float64}(undef, len))
-            elseif rec.kind == LANE_PGATHER
-                slots = Int[cell_lanes[j][r]::Int for j in 1:len]
-                return _mkvnode(kind=_VK_PGATHER, payload=(rec.arr::_PGatherArray).flat,
-                                slots=slots, buf=Vector{Float64}(undef, len))
-            else  # LANE_CONST / LANE_LOOPLIT → per-lane float
-                vals = Float64[cell_lanes[j][r]::Float64 for j in 1:len]
-                v1 = vals[1]
-                if all(x -> isequal(x, v1), vals)
-                    return _mkvnode(kind=_VK_LITERAL, literal=v1, buf=Vector{Float64}(undef, len))
-                end
-                return _mkvnode(kind=_VK_CONSTVEC, vals=vals)
-            end
-        end
-        return _mkvnode(kind=_VK_STATE, idx=n.idx, buf=Vector{Float64}(undef, len))
-    elseif k === _NK_LITERAL
-        return _mkvnode(kind=_VK_LITERAL, literal=n.literal, buf=Vector{Float64}(undef, len))
-    elseif k === _NK_PARAM
-        return _mkvnode(kind=_VK_PARAM, sym=n.sym, buf=Vector{Float64}(undef, len))
-    elseif k === _NK_TIME
-        return _mkvnode(kind=_VK_TIME, buf=Vector{Float64}(undef, len))
-    elseif k === _NK_PARAM_GATHER
-        # Invariant forcing gather (constant index) — one lin offset broadcast.
-        return _mkvnode(kind=_VK_PGATHER, payload=n.payload,
-                        slots=fill(n.idx, len), buf=Vector{Float64}(undef, len))
-    elseif k === _NK_CONTRACTION
-        # Contractions take the per-cell path (einsum), never the symbolic one —
-        # `_stencilize` rejects every contraction-bearing construct with a
-        # `_StencilFallback`, so this arm is an INTERNAL invariant violation
-        # (`E_TREEWALK_INTERNAL` is compiler-internal, never wire-visible: no
-        # conforming document can reach it).
-        throw(TreeWalkError("E_TREEWALK_INTERNAL",
-            "symbolic stencil: unexpected contraction node in template"))
-    else  # _NK_OP / fn
-        ch = _VecNode[_lower_template(c, recipes, cell_lanes, len) for c in n.children]
-        if n.op === :fn
-            return _merge_fn_node(n.payload, ch, len, length(ch))
-        end
-        # Lane-invariant subtree → one scalar eval per RHS call instead of one per lane
-        # (vectorize.jl). Built from the LOWERED children, never from this template node,
-        # whose LITERAL/STATE leaves are recipe placeholders rather than lane values.
-        hoisted = _maybe_hoist_invariant(n.op, n.payload, ch, len)
-        hoisted === nothing || return hoisted
-        return _mkvnode(kind=_VK_OP, op=n.op, payload=n.payload, children=ch,
-                        buf=Vector{Float64}(undef, len))
-    end
-end
-
 # One branch's spine entry: the compiled sentinel template, its lane recipes,
 # the recipe indices that are STATE gathers (the ghost-key columns), and the
 # sub-kernel call sites its spine references (empty on every reference-free
 # build and on the whole symbolic path).
 const _StencilBranch = Tuple{_Node,Vector{_LaneRecipe},Vector{Int},Vector{_SubCallSite}}
-
-# The collected state of one equation's symbolic-stencil sweep: the per-branch
-# spine templates, the structural groups (first-seen order preserved for
-# deterministic kernel ordering), and the per-cell du-slot / cell-name streams
-# in iteration order (for the duplicate-derivative check the commit step runs).
-struct _StencilGroups
-    branch_cache::Dict{String,_StencilBranch}
-    order::Vector{String}                                    # first-seen group keys
-    groups::Dict{String,Tuple{Vector{Int},Vector{Vector{Any}},String}}
-    du_ordered::Vector{Int}
-    cn_ordered::Vector{String}
-end
 
 # Build one branch's spine template. Sentinels pass through resolve untouched
 # and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
@@ -896,134 +781,3 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
             ctx.subcalls)
 end
 
-# The group-collection sweep: iterate every output cell, build each new branch's
-# spine template once, evaluate the lane recipes per cell, and group cells by
-# `bkey|gkey` (branch × ghost pattern — the only per-cell structural variables).
-# The `_StencilFallback` rewind is LOCALIZED here: any fallback inside the sweep
-# returns `nothing` (nothing observable has happened yet — `covered` is not
-# touched until the commit step); a real TreeWalkError propagates, exactly as it
-# would from the per-cell path.
-function _collect_stencil_groups(body::ASTExpr, idx_names::Vector{String},
-                                 range_iters, lhs_var::String,
-                                 lhs_idx_args::Vector{ASTExpr},
-                                 ctx_proto::_StencilCtx, var_map::Dict{String,Int},
-                                 param_sym_set, reg_funcs)::Union{_StencilGroups,Nothing}
-    st = _StencilGroups(Dict{String,_StencilBranch}(), String[],
-                        Dict{String,Tuple{Vector{Int},Vector{Vector{Any}},String}}(),
-                        Int[], String[])
-    idx_env = ctx_proto.idx_env
-    const_arrays = ctx_proto.const_arrays
-    bio = IOBuffer()
-    # Per-node variable-set cache for the branch-key guard, built once and reused
-    # across every cell (the spine is structurally identical cell to cell).
-    bmemo = IdDict{OpExpr,Bool}()
-    try
-        for idx_tuple in Iterators.product(range_iters...)
-            empty!(idx_env)
-            @inbounds for d in 1:length(idx_names)
-                idx_env[idx_names[d]] = idx_tuple[d]
-            end
-            # LHS index args are simple loop-var arithmetic; evaluate with an empty
-            # const-array env to match the per-cell fallback path (the
-            # `_is_arrayop_D_lhs` branch of `_build_evaluator_impl`) exactly.
-            du_inds = Int[_eval_const_int(a, idx_env) for a in lhs_idx_args]
-            cname = _cell_key(lhs_var, du_inds)
-            du_slot = get(var_map, cname, 0)
-            du_slot == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
-
-            _branch_key!(bio, body, ctx_proto.idxset, idx_env, const_arrays, bmemo)
-            bkey = String(take!(bio))
-            entry = get(st.branch_cache, bkey, nothing)
-            if entry === nothing
-                entry = _build_branch_template(body, ctx_proto, var_map,
-                                               param_sym_set, reg_funcs)
-                st.branch_cache[bkey] = entry
-            end
-            _tmpl, recipes, state_ks, _subcalls = entry
-
-            lane_vals = Vector{Any}(undef, length(recipes))
-            @inbounds for k in eachindex(recipes)
-                lane_vals[k] = _eval_recipe(recipes[k], idx_env, var_map, const_arrays)
-            end
-            ckey = string(bkey, '|', _ghost_key(lane_vals, state_ks))
-            slots, cells, _bk = get!(st.groups, ckey) do
-                push!(st.order, ckey)
-                (Int[], Vector{Any}[], bkey)
-            end
-            push!(slots, du_slot)
-            push!(cells, lane_vals)
-            push!(st.du_ordered, du_slot)
-            push!(st.cn_ordered, cname)
-        end
-    catch err
-        if err isa _StencilFallback
-            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-                @info "symbolic stencil fallback" reason = err.reason
-            return nothing   # covered is untouched — the per-cell path takes over
-        end
-        rethrow()
-    end
-    return st
-end
-
-# The commit step: mark `covered` (duplicate detection in iteration order,
-# matching the per-cell path's incremental check), then lower one `_VecKernel`
-# per structural group, in first-seen group order.
-function _commit_stencil_kernels(st::_StencilGroups, covered::BitVector)::Vector{_VecKernel}
-    for i in eachindex(st.du_ordered)
-        s = st.du_ordered[i]
-        covered[s] &&
-            throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", st.cn_ordered[i]))
-        covered[s] = true
-    end
-    kernels = _VecKernel[]
-    for ckey in st.order
-        slots, cells, bkey = st.groups[ckey]
-        tmpl, recipes, _, _ = st.branch_cache[bkey]
-        push!(kernels, _VecKernel(slots, _lower_template(tmpl, recipes, cells, length(slots)),
-                                  length(slots)))
-    end
-    return kernels
-end
-
-# Try to compile a no-contraction array equation via the symbolic stencil path.
-# Returns the `Vector{_VecKernel}` on success (marking `covered` for every cell it
-# owns), or `nothing` to signal the caller to run the unchanged per-cell fallback.
-# On `nothing`, `covered` is guaranteed untouched. Three steps: guard + inline
-# observeds (here), the group-collection sweep (`_collect_stencil_groups`, which
-# owns the `_StencilFallback` rewind), and the covered-marking / kernel-lowering
-# commit (`_commit_stencil_kernels`).
-function _try_symbolic_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
-                               range_iters, lhs_body::OpExpr,
-                               resolved_obs::Dict{String,ASTExpr},
-                               array_var_info, var_map::Dict{String,Int},
-                               const_arrays::AbstractDict, pgather::AbstractDict,
-                               param_sym_set, reg_funcs, covered::BitVector)
-    # Malformed LHS → fall back so the per-cell loop raises the exact
-    # `E_TREEWALK_ARRAYOP_MALFORMED_LHS` diagnostic (never a raw TypeError here).
-    (lhs_body.op == "D" && !isempty(lhs_body.args) &&
-     lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
-     !isempty((lhs_body.args[1]::OpExpr).args) &&
-     (lhs_body.args[1]::OpExpr).args[1] isa VarExpr) || return nothing
-
-    # Inline observed variables once. Their RHS are loop-index-independent, so a
-    # single substitution equals the per-cell `sub(sub(body, idx), obs)` order.
-    body = isempty(resolved_obs) ? rhs_body : _sub_preserving(rhs_body, resolved_obs)
-
-    # LHS write target: `D(index(var, k…))` — var + index-arg exprs shared by all
-    # cells (evaluated per cell against the sweep's `idx_env`).
-    inner = lhs_body.args[1]::OpExpr
-    lhs_var = (inner.args[1]::VarExpr).name
-    lhs_idx_args = inner.args[2:end]
-
-    # Prototype walk context: `recipes` is replaced per branch by
-    # `_build_branch_template`; `idx_env` is the sweep's (reused) cell env.
-    ctx_proto = _StencilCtx(Set{String}(idx_names), _LaneRecipe[],
-                            Dict{String,Int}(), array_var_info, const_arrays,
-                            pgather)
-    st = _collect_stencil_groups(body, idx_names, range_iters, lhs_var,
-                                 lhs_idx_args, ctx_proto, var_map,
-                                 param_sym_set, reg_funcs)
-    st === nothing && return nothing   # fallback — covered untouched
-    return _commit_stencil_kernels(st, covered)
-end

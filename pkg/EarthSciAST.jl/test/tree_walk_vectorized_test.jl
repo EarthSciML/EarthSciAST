@@ -199,57 +199,51 @@ end
         end
     end
 
-    # ess-wrh §4: an interp leaf whose query is a build-time constant folds, at
-    # build time, to a single `_VK_LITERAL` — the closed-function call and its box
-    # vanish for that leaf. A runtime query (`u[i]`) is not foldable and stays a
-    # `_VK_FN` carrying a typed `_Interp*Spec`. We assert at the `_merge_nodes`
-    # seam (the fold site) and end-to-end.
-    @testset "constant-query interp folds to a literal; runtime query stays a kernel (ess-wrh)" begin
+    # ess-wrh §4, re-hosted on the access-kernel IR: an interp leaf whose query
+    # is lane-invariant is hoisted to the kernel's INVARIANT CSE tier (one
+    # table lookup per RHS call, not N — `_build_acc_cse` marks a `:fn` op
+    # invariant when its children are); a runtime query (`u[i]`) stays a
+    # per-lane `:fn` spine op over a gather. Asserted at the `_acc_merge_nodes`
+    # seam and end-to-end.
+    @testset "constant-query interp hoists; runtime query stays a kernel (ess-wrh)" begin
         table = [10.0, 20.0, 40.0, 80.0, 160.0]; axis = [0.0, 1.0, 2.0, 3.0, 4.0]
         # `:fn` payload layout (perf-interp-alloc): `(fname, spec)`, where the
         # typed `_Interp*Spec` is validated + coerced ONCE at compile time by
         # `_compile_op` via `_build_interp_spec`. Hand-built nodes must use the
-        # same builder so this white-box `_merge_nodes` seam sees exactly what
-        # `_compile_op` produces (the const arrays are no longer re-derived at
-        # merge time).
+        # same builder so this white-box seam sees exactly what `_compile_op`
+        # produces.
         mkfn(child) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
             payload=("interp.linear",
                      ESM._build_interp_spec("interp.linear", Any[table, axis])),
             children=ESM._Node[child])
 
-        @testset "literal on-knot query → _VK_LITERAL = table entry" begin
+        @testset "literal query → invariant-tier hoist (one lookup per call)" begin
             lit = mkfn(ESM._mknode(kind=ESM._NK_LITERAL, literal=2.0))  # on knot axis[3]
-            merged = ESM._merge_nodes(ESM._Node[lit, lit, lit], 3)
-            @test merged.kind === ESM._VK_LITERAL
-            @test merged.literal == 40.0
+            acc = ESM._AccDesc[]
+            spine = ESM._acc_merge_nodes(ESM._Node[lit, lit, lit], 3, acc)
+            sp2, cse = ESM._build_acc_cse(spine, acc)
+            @test length(cse.inv_recipes) == 1        # the whole call hoisted
+            K = ESM._AccKernel(ESM._outs_cells([1, 2, 3]), sp2, acc,
+                               ESM._FixedBound(0), 0.0, cse)
+            du = zeros(3)
+            ESM._run_acc_kernel!(du, Float64[], NamedTuple(), 0.0, K)
+            @test all(==(40.0), du)
         end
 
-        @testset "literal between-knot query → _VK_LITERAL = exact blend" begin
-            lit = mkfn(ESM._mknode(kind=ESM._NK_LITERAL, literal=0.5))  # w=0.5 → 15.0
-            merged = ESM._merge_nodes(ESM._Node[lit], 1)
-            @test merged.kind === ESM._VK_LITERAL
-            @test merged.literal == 15.0
-        end
-
-        @testset "searchsorted literal query folds too" begin
-            ss = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-                payload=("interp.searchsorted",
-                         ESM._build_interp_spec("interp.searchsorted",
-                                                Any[[1.0, 2.0, 3.0, 4.0, 5.0]])),
-                children=ESM._Node[ESM._mknode(kind=ESM._NK_LITERAL, literal=2.5)])
-            merged = ESM._merge_nodes(ESM._Node[ss], 1)
-            @test merged.kind === ESM._VK_LITERAL
-            @test merged.literal == 3.0
-        end
-
-        @testset "runtime (state) query is NOT folded → _VK_FN + typed spec" begin
+        @testset "runtime (state) query is NOT hoisted → per-lane :fn spine op" begin
             g1 = mkfn(ESM._mknode(kind=ESM._NK_STATE, idx=1))
             g2 = mkfn(ESM._mknode(kind=ESM._NK_STATE, idx=2))
-            merged = ESM._merge_nodes(ESM._Node[g1, g2], 2)
-            @test merged.kind === ESM._VK_FN
-            @test merged.payload isa ESM._InterpLinearSpec
-            @test merged.payload.table == table
-            @test merged.payload.axis == axis
+            acc = ESM._AccDesc[]
+            spine = ESM._acc_merge_nodes(ESM._Node[g1, g2], 2, acc)
+            sp2, cse = ESM._build_acc_cse(spine, acc)
+            @test isempty(cse.inv_recipes)            # lane-varying: no hoist
+            @test length(acc) == 1                    # ONE gather table, not 2N nodes
+            K = ESM._AccKernel(ESM._outs_cells([3, 4]), sp2, acc,
+                               ESM._FixedBound(0), 0.0, cse)
+            u = [0.0, 2.0, 0.0, 0.0]                  # query u[1]=0 → 10, u[2]=2 → 40
+            du = zeros(4)
+            ESM._run_acc_kernel!(du, u, NamedTuple(), 0.0, K)
+            @test du[3] == 10.0 && du[4] == 40.0
         end
 
         @testset "end-to-end: folded constant-query arrayop is correct + 0-alloc" begin
@@ -272,13 +266,10 @@ end
     end
 end
 
-# The symbolic stencil compiler (ess-perf §4c) builds one spine template per
-# structural branch and derives each cell's gather slots by evaluating the index
-# expressions per lane, instead of running sub→resolve→compile for every cell.
-# It is provably identical to the per-cell path where it applies and falls back
-# otherwise. This regression guards that equivalence AND that the fast path fires.
-@testset "symbolic stencil compiler ≡ per-cell fallback (differential, ess-perf)" begin
-    # `ESS_STENCIL_DISABLE=1` forces the byte-identical per-cell path.
+# The default array build (affine access kernels + lane tape) against the
+# forced per-cell SCALAR reference (`ESS_STENCIL_DISABLE=1` — compiled cell
+# nodes on `rhs_list`, evaluated by `_eval_node` with no merge machinery).
+@testset "array kernels ≡ per-cell scalar reference (differential)" begin
     _build(model, ics, disable) =
         withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
             build_evaluator(model; initial_conditions=ics)
@@ -391,11 +382,12 @@ end
     # hand `_merge_nodes` such a group. Construct it directly (white-box) to pin the
     # guard itself: it is the backstop for a hash collision, or for a future grouping
     # change that stops keying the spec.
+    _amerge(nodes, len) = ESM._acc_merge_nodes(nodes, len, ESM._AccDesc[])
     @testset "(a) merging differing const tables throws, with a clear message" begin
         gA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
         gB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_STATE, idx=2))
         err = try
-            ESM._merge_nodes(ESM._Node[gA, gB], 2); nothing
+            _amerge(ESM._Node[gA, gB], 2); nothing
         catch e
             e
         end
@@ -404,32 +396,29 @@ end
         @test occursin("interp.linear", err.detail)
         @test occursin("const table", err.detail)
 
-        # It fires for the LANE-INVARIANT lowering too (a `fn` whose query children are
-        # all lane-invariant hoists to `_VK_INVARIANT` — one spec for the whole kernel,
-        # exactly the same hazard). A shared literal query would const-FOLD, so use a
-        # scalar state read (0-D inside an arrayop): lane-invariant, but not foldable.
+        # It fires whatever the query shape: a lane-invariant query (a 0-D state
+        # read — the whole call would hoist to the invariant CSE tier) and an
+        # all-literal one hit the SAME guard, which runs before any lowering.
         hA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
-        hB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_STATE, idx=1))  # SAME slot → invariant
-        @test ESM._merge_nodes(ESM._Node[hA, hA], 2).kind === ESM._VK_INVARIANT  # would hoist
-        @test_throws ESM.TreeWalkError ESM._merge_nodes(ESM._Node[hA, hB], 2)
+        hB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_STATE, idx=1))  # SAME slot
+        @test _amerge(ESM._Node[hA, hA], 2) isa ESM._Node            # equal specs merge
+        @test_throws ESM.TreeWalkError _amerge(ESM._Node[hA, hB], 2)
 
-        # …and for the const-FOLD lowering (all-literal query) — the guard runs before
-        # any of the three lowerings is chosen.
         fA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_LITERAL, literal=QUERY))
         fB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_LITERAL, literal=QUERY))
-        @test ESM._merge_nodes(ESM._Node[fA, fA], 2).kind === ESM._VK_LITERAL   # would fold
-        @test_throws ESM.TreeWalkError ESM._merge_nodes(ESM._Node[fA, fB], 2)
+        @test _amerge(ESM._Node[fA, fA], 2) isa ESM._Node
+        @test_throws ESM.TreeWalkError _amerge(ESM._Node[fA, fB], 2)
     end
 
     # -- (b) the normal case is untouched -----------------------------------
     @testset "(b) one shared table still merges into ONE kernel node" begin
         g1 = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
         g2 = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=2))
-        merged = ESM._merge_nodes(ESM._Node[g1, g2], 2)
-        @test merged.kind === ESM._VK_FN                       # one per-lane kernel …
-        @test merged.payload isa ESM._InterpLinearSpec         # … carrying one spec
-        @test merged.children[1].kind === ESM._VK_GATHER       # … over a per-lane gather
-        @test ESM._count_vecnodes(merged) == 2                 # exactly 2 nodes, not 2N
+        acc = ESM._AccDesc[]
+        merged = ESM._acc_merge_nodes(ESM._Node[g1, g2], 2, acc)
+        @test merged.kind === ESM._NK_OP && merged.op === :fn  # one per-lane kernel …
+        @test merged.payload[2] isa ESM._InterpLinearSpec      # … carrying one spec
+        @test length(acc) == 1                                 # … over ONE gather table
 
         # CONTENT, not `objectid`: two EQUAL tables built as DIFFERENT Julia objects
         # (the ordinary case — `_compile_fn_node` rebuilds the spec per call) must
@@ -437,16 +426,17 @@ end
         c1 = _fnnode(copy(TBL_A), ESM._mknode(kind=ESM._NK_STATE, idx=1))
         c2 = _fnnode(copy(TBL_A), ESM._mknode(kind=ESM._NK_STATE, idx=2))
         @test c1.payload[2] !== c2.payload[2]                  # genuinely distinct objects
-        merged_c = ESM._merge_nodes(ESM._Node[c1, c2], 2)
-        @test merged_c.kind === ESM._VK_FN                     # …still ONE kernel
-        @test ESM._count_vecnodes(merged_c) == ESM._count_vecnodes(merged)
+        acc2 = ESM._AccDesc[]
+        merged_c = ESM._acc_merge_nodes(ESM._Node[c1, c2], 2, acc2)
+        @test merged_c.kind === ESM._NK_OP && merged_c.op === :fn   # …still ONE kernel
+        @test length(acc2) == 1
     end
 
     # -- (d) end-to-end reproduction ----------------------------------------
     # `makearray` regions 1-2 → TBL_A, 3-4 → TBL_B, over an arrayop. Three build
-    # paths: the symbolic stencil (was already correct), the per-cell fallback via a
-    # contracted index (was WRONG), and the per-cell fallback via ESS_STENCIL_DISABLE
-    # (was WRONG). All three must now agree with the scalar oracle.
+    # paths: the default affine build, the per-cell fallback via a contracted
+    # index (was WRONG), and the forced per-cell scalar reference via
+    # ESS_STENCIL_DISABLE (was WRONG). All three must agree with the scalar oracle.
     N = 4
     mk_two_tables(tbl1, tbl2) = OpExpr("makearray", ESM.ASTExpr[];
         regions=[[[1, 2]], [[3, 4]]],
@@ -472,7 +462,7 @@ end
 
     @testset "(d) makearray regions with different tables — $label" for
             (label, rhs, disable) in (
-                ("symbolic stencil",           rhs_of(mk_two_tables(TBL_A, TBL_B); contract=false), false),
+                ("default (affine)",            rhs_of(mk_two_tables(TBL_A, TBL_B); contract=false), false),
                 ("per-cell (contracted index)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract=true),  false),
                 ("per-cell (stencil disabled)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract=false), true))
         du, d = _build_du(rhs; disable_stencil=disable)
@@ -481,30 +471,40 @@ end
         @test _bitsame(du[2], refA)
         @test _bitsame(du[3], refB)
         @test _bitsame(du[4], refB)
-        # Two distinct tables ⇒ two kernels. (Before the fix the per-cell paths
-        # collapsed to ONE kernel and returned refA in all four cells.) The
-        # non-disabled cases take the affine path by default (acc kernels); count
-        # both array-kernel flavours.
-        @test d.n_vec_kernels + d.n_acc_kernels == 2
+        # Two distinct tables ⇒ two kernels on the default paths. (Before the
+        # fix the per-cell paths collapsed to ONE kernel and returned refA in
+        # all four cells.) The DISABLED reference builds per-cell SCALAR
+        # entries — no array kernels at all, by design.
+        if disable
+            @test d.n_vec_kernels + d.n_acc_kernels == 0
+            @test d.n_scalar_entries == N
+        else
+            @test d.n_vec_kernels + d.n_acc_kernels == 2
+        end
     end
 
     # The converse, and the reason the key must be CONTENT: two regions whose tables
     # are EQUAL but are distinct Julia objects still collapse to ONE kernel.
-    @testset "(d') equal tables in both regions still collapse to one kernel" begin
+    @testset "(d') equal tables in both regions still agree with the oracle" begin
         for disable in (false, true)
-            du, d = _build_du(rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract=false);
-                              disable_stencil=disable)
+            du, _d = _build_du(rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract=false);
+                               disable_stencil=disable)
             @test all(_bitsame(x, refA) for x in du)
-            # The symbolic-stencil path splits by REGION regardless (its branch key
-            # names the region), so only assert the collapse on the per-cell path.
-            disable && @test d.n_vec_kernels == 1
         end
+        # The contracted-index form unrolls and lands on the affine path, which
+        # splits by makearray REGION (its cuts name the region) exactly as the
+        # old symbolic path did — two boxes, values still exact. The
+        # content-collapse property of the per-cell merge itself (equal tables
+        # as distinct objects → ONE kernel) is pinned white-box in (b).
+        du, d = _build_du(rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract=true);
+                          disable_stencil=false)
+        @test all(_bitsame(x, refA) for x in du)
+        @test d.n_vec_kernels + d.n_acc_kernels == 2
     end
 
     # -- (c) N-independence survives ----------------------------------------
     # Grouping by spec CONTENT is still N-independent: the number of DISTINCT tables
-    # is a property of the document, not of the grid. Pinned on the per-cell path,
-    # which is the one whose grouping changed.
+    # is a property of the document, not of the grid.
     @testset "(c) kernel count / template node count invariant across N" begin
         function _diag(N, disable)
             mk = OpExpr("makearray", ESM.ASTExpr[];
@@ -521,17 +521,18 @@ end
                 ESM._build_evaluator_impl(model; initial_conditions=ics)[6]
             end
         end
-        @testset "$(disable ? "per-cell" : "affine") path" for disable in (true, false)
-            ds = [_diag(N, disable) for N in (8, 16, 64)]
-            # disable=false takes the affine path by default (interp `:fn` in a
-            # makearray is modelled → acc kernels); disable=true stays per-cell (vec
-            # kernels). Either way: one whole-array kernel per distinct table,
-            # N-independent — count both flavours.
+        @testset "affine path" begin
+            ds = [_diag(N, false) for N in (8, 16, 64)]
             akerns(d) = d.n_vec_kernels + d.n_acc_kernels
             @test akerns(ds[1]) == akerns(ds[2]) == akerns(ds[3])
-            @test ds[1].template_node_count ==
-                  ds[2].template_node_count == ds[3].template_node_count
             @test akerns(ds[1]) == 2   # one kernel per distinct table, not per cell
+        end
+        @testset "per-cell scalar reference (disabled)" begin
+            # The forced reference is DELIBERATELY per-cell: scalar entries grow
+            # with N (that is what makes it the oracle), and no array kernels.
+            ds = [_diag(N, true) for N in (8, 16, 64)]
+            @test all(d -> d.n_vec_kernels + d.n_acc_kernels == 0, ds)
+            @test [d.n_scalar_entries for d in ds] == [8, 16, 64]
         end
     end
 end

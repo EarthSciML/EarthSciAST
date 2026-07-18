@@ -1,7 +1,7 @@
 # Op-table synchronization tests for the tree-walk evaluator.
 #
 # The evaluator carries several parallel op ladders: the scalar
-# `_eval_node_op`, its vectorized twin `_eval_vec_op`, and the build-time
+# `_eval_node_op`, its access-kernel twin `_eval_acc_op`, and the build-time
 # whitelists `_WS4_FOLDABLE_ELEMENTWISE_OPS` (elementwise array-observed fold)
 # and `_STENCIL_ELEMENTWISE_OPS` (symbolic stencil fast path). The MECHANICAL
 # arms (unary elementwise / comparisons / fixed-2-ary / n-ary min-max) are now
@@ -13,11 +13,11 @@
 #   * every op in `_WS4_FOLDABLE_ELEMENTWISE_OPS` has a scalar eval arm
 #     (otherwise the WS4 fold converts a build-time UNSUPPORTED_SHAPE error
 #     into a runtime UNSUPPORTED_OP after folding);
-#   * every op in `_STENCIL_ELEMENTWISE_OPS` has BOTH a scalar and a
-#     vectorized eval arm (the stencil fast path compiles whitelisted ops into
-#     `_VecKernel`s evaluated by `_eval_vec_op`);
-#   * the scalar and vectorized ladders stay in sync over the full evaluable
-#     elementwise op family;
+#   * every op in `_STENCIL_ELEMENTWISE_OPS` has BOTH a scalar and an
+#     access-kernel eval arm (the stencilizer compiles whitelisted ops into
+#     spines evaluated by `_eval_acc_op`);
+#   * the scalar and access-kernel ladders stay in sync over the full
+#     evaluable elementwise op family;
 #   * the compiled setup-geometry path covers every op of the documented
 #     polygon-area / overlap-join FAQ vocabulary.
 #
@@ -75,17 +75,25 @@ function _ot_scalar_supported(op::String)
     end
 end
 
-# True iff `op` also evaluates through the vectorized twin (`_eval_vec_op`,
-# reached by merging two structurally-identical per-cell nodes).
-function _ot_vector_supported(op::String)
+# True iff `op` also evaluates through the access-kernel twin (`_eval_acc_op`,
+# reached by merging two structurally-identical per-cell nodes into an
+# indirect-outs access kernel — the per-cell fallback's whole-array host).
+function _ot_acc_kernel(op::String)
     node = _ot_node(op)
-    merged = ESM._merge_nodes(ESM._Node[node, node], 2)
+    acc = ESM._AccDesc[]
+    spine = ESM._acc_merge_nodes(ESM._Node[node, node], 2, acc)
+    return ESM._AccKernel(ESM._outs_cells([1, 2]), spine, acc,
+                          ESM._FixedBound(0), 0.0)
+end
+function _ot_vector_supported(op::String)
+    K = _ot_acc_kernel(op)
+    du = zeros(2)
     try
-        v = ESM._eval_vec(merged, Float64[], NamedTuple(), 0.0, Float64)
-        return v isa Vector{Float64}
+        ESM._run_acc_kernel!(du, Float64[], NamedTuple(), 0.0, K)
+        return true
     catch err
         if err isa ESM.TreeWalkError
-            return !(err.code in ("E_TREEWALK_UNSUPPORTED_VEC_OP",
+            return !(err.code in ("E_TREEWALK_ACC_UNSUPPORTED_OP",
                                   "E_TREEWALK_UNSUPPORTED_OP"))
         end
         rethrow()
@@ -116,7 +124,7 @@ end
         end
     end
 
-    @testset "scalar/vectorized ladder parity over the evaluable family" begin
+    @testset "scalar/access-kernel ladder parity over the evaluable family" begin
         # The canonical elementwise family both ladders must agree on: the
         # arity table is exactly the evaluable-core elementwise surface
         # (esm-spec §4.2) plus the canonicalize-internal neg/pow aliases.
@@ -126,16 +134,15 @@ end
         end
     end
 
-    @testset "scalar/vector numeric agreement on representatives" begin
-        # Lane values of the merged template equal the scalar value — a cheap
+    @testset "scalar/access-kernel numeric agreement on representatives" begin
+        # Lane values of the merged kernel equal the scalar value — a cheap
         # drift check that an arm exists AND computes the same function.
         for op in sort!(collect(keys(_OT_ARITY)))
             node = _ot_node(op)
             sval = ESM._eval_node(node, Float64[], NamedTuple(), 0.0)
-            vval = ESM._eval_vec(ESM._merge_nodes(ESM._Node[node, node], 2),
-                                 Float64[], NamedTuple(), 0.0, Float64)
-            @test length(vval) == 2
-            @test vval[1] === sval && vval[2] === sval
+            du = fill(NaN, 2)
+            ESM._run_acc_kernel!(du, Float64[], NamedTuple(), 0.0, _ot_acc_kernel(op))
+            @test du[1] === sval && du[2] === sval
         end
     end
 

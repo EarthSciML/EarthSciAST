@@ -586,122 +586,6 @@ function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
         "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
 end
 
-# ---- Array walker (`_VecNode`) ----------------------------------------------
-#
-# Returns a length-`len` array for a lane-varying node and a bare scalar for a
-# lane-invariant one (LITERAL, PARAM, TIME, a hoisted `_VK_INVARIANT` subtree).
-# Broadcast makes the two interchangeable everywhere except the kernel root, which
-# `_make_rhs_oop` materializes.
-#
-# `_VK_INVARIANT` is where the hoisting pass pays off twice: the subtree is walked
-# ONCE per call as a scalar, so it is neither recomputed per lane nor materialized
-# as a constant-valued N-vector.
-#
-# `vcache` is the VEC PRELUDE's per-call results (vec_share.jl): the shared LANE
-# VECTORS, already computed, indexed by a `_VK_VCACHED` node's `idx`. Where `f!`'s
-# refs read a build-time buffer the def wrote in place, this emitter has no such
-# buffer to read — it is value-returning by construction — so the closure fills a
-# fresh `Vector{Any}` per call and the ref indexes it. Same evaluate-once property,
-# expressed the only way an out-of-place walker can express it.
-function _oop_eval_vec(n::_VecNode, u, p, t, cache::AbstractVector{T},
-                       vcache::Vector{Any}) where {T}
-    k = n.kind
-    if k === _VK_VCACHED
-        return @inbounds vcache[n.idx]
-    elseif k === _VK_LITERAL
-        return convert(T, n.literal)
-    elseif k === _VK_CONSTVEC
-        return n.vals                       # per-cell constants: `Float64` data
-    elseif k === _VK_STATE
-        return convert(T, _oop_read_state(u, n.idx))
-    elseif k === _VK_GATHER
-        return _oop_gather(u, n.slots)
-    elseif k === _VK_PARAM
-        return convert(T, getfield(p, n.sym))
-    elseif k === _VK_TIME
-        return convert(T, t)
-    elseif k === _VK_PGATHER
-        return @inbounds (n.payload::Vector{Float64})[n.slots]
-    elseif k === _VK_INVARIANT
-        return _oop_eval(n.payload::_Node, u, p, t, cache)
-    elseif k === _VK_REDUCE
-        return _oop_vec_reduce(n, u, p, t, cache, vcache)
-    elseif k === _VK_FN
-        return _oop_vec_fn(n, u, p, t, cache, vcache)
-    elseif (n.op === :^ || n.op === :pow) && length(n.children) == 2
-        # A literal exponent stays a literal — see `_oop_pow`. `c[i]^2` over a lane
-        # vector holding negative cells is the exact case that NaNs otherwise.
-        # (`_vk_hoistable` never lifts a `_VK_LITERAL`, so a shared exponent cannot
-        # hide behind a `_VK_VCACHED` and defeat this test.)
-        ch = n.children
-        base = _oop_eval_vec(ch[1], u, p, t, cache, vcache)
-        e = ch[2]
-        return e.kind === _VK_LITERAL ? base .^ e.literal :
-               base .^ _oop_eval_vec(e, u, p, t, cache, vcache)
-    else  # _VK_OP
-        ch = n.children
-        c = Vector{Any}(undef, length(ch))
-        for i in eachindex(ch)
-            c[i] = _oop_eval_vec(ch[i], u, p, t, cache, vcache)
-        end
-        return _oop_op(n.op, c, T)
-    end
-end
-
-# Axis fold, seeded from 0̄ as a SCALAR: the first `.+` broadcasts it up to the lane
-# vector. Same fold order as `_eval_vec_reduce`'s `fill!(b, 0̄)` + `@. b += ck`.
-function _oop_vec_reduce(n::_VecNode, u, p, t, cache::AbstractVector{T},
-                         vcache::Vector{Any}) where {T}
-    op = n.op
-    c = n.children
-    r = convert(T, n.literal)
-    if op === :+
-        for k in eachindex(c)
-            r = r .+ _oop_eval_vec(c[k], u, p, t, cache, vcache)
-        end
-    elseif op === :*
-        for k in eachindex(c)
-            r = r .* _oop_eval_vec(c[k], u, p, t, cache, vcache)
-        end
-    elseif op === :max
-        for k in eachindex(c)
-            r = max.(r, _oop_eval_vec(c[k], u, p, t, cache, vcache))
-        end
-    else  # :min
-        for k in eachindex(c)
-            r = min.(r, _oop_eval_vec(c[k], u, p, t, cache, vcache))
-        end
-    end
-    return r
-end
-
-# An interp leaf vectorizes by BROADCASTING the same scalar core the in-place
-# kernels call per lane — identical arithmetic, so identical bits, and it inherits
-# the generic query type for free. (An XLA backend will want this re-expressed as
-# locate → gather → blend, since a broadcast over an opaque core does not trace;
-# that is a backend concern, not a numerics one.)
-function _oop_vec_fn(n::_VecNode, u, p, t, cache::AbstractVector{T},
-                     vcache::Vector{Any}) where {T}
-    h = n.payload
-    c = n.children
-    if h isa _InterpLinearSpec
-        return _oop_interp_linear.(Ref(h), _oop_eval_vec(c[1], u, p, t, cache, vcache), T)
-    elseif h isa _InterpBilinearSpec
-        return _oop_interp_bilinear.(Ref(h), _oop_eval_vec(c[1], u, p, t, cache, vcache),
-                                     _oop_eval_vec(c[2], u, p, t, cache, vcache), T)
-    elseif h isa _InterpSearchsortedSpec
-        return _oop_interp_searchsorted.(Ref(h),
-                                         _oop_eval_vec(c[1], u, p, t, cache, vcache), T)
-    end
-    # All-scalar closed functions (`datetime.*`): boxed, one call per lane.
-    fname, spec = n.payload::Tuple{String,Any}
-    spec === nothing ||
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_VEC_OP", string("fn:", fname)))
-    cv = Any[_oop_eval_vec(ci, u, p, t, cache, vcache) for ci in c]
-    return broadcast((as...) -> convert(T, evaluate_closed_function(fname, Any[as...])),
-                     cv...)
-end
-
 # ---- The closure ------------------------------------------------------------
 #
 # Mirrors `_make_rhs` phase for phase (CSE prelude → scalar equations → array
@@ -756,19 +640,12 @@ _is_traced(u, p, t) = _reactant_rooted(u) || _reactant_rooted(t)
 # Does this compiled IR read a live forcing buffer anywhere? A `_VK_INVARIANT`
 # carries a scalar `_Node` in its payload, so the scalar side is walked too — a
 # forcing read hoisted into the scalar prelude is still a forcing read.
-_vec_has_pgather(n::_VecNode) =
-    n.kind === _VK_PGATHER ||
-    (n.kind === _VK_INVARIANT && n.payload isa _Node && _scalar_has_pgather(n.payload)) ||
-    any(_vec_has_pgather, n.children)
-
 _scalar_has_pgather(n::_Node) =
     n.kind === _NK_PARAM_GATHER || any(_scalar_has_pgather, n.children)
 
-function _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
+function _has_live_forcing(cse_prelude, rhs_list)
     any(_scalar_has_pgather, cse_prelude) && return true
-    any(((_, node),) -> _scalar_has_pgather(node), rhs_list) && return true
-    any(_vec_has_pgather, vec_prelude) && return true
-    any(vk -> _vec_has_pgather(vk.template), vec_kernels)
+    any(((_, node),) -> _scalar_has_pgather(node), rhs_list)
 end
 
 # The ACCESS-KERNEL half of the J5 guard. An affine kernel reads live forcing
@@ -1109,16 +986,13 @@ end
 
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
-                       vec_prelude::AbstractVector{_VecNode},
-                       vec_kernels::AbstractVector{_VecKernel},
                        acc_kernels::AbstractVector{_AccKernel},
                        n_states::Int)
     n_cse = length(cse_prelude)
-    n_vec = length(vec_prelude)
-    # J5 covers BOTH IR families: the `_VK_PGATHER`/`_NK_PARAM_GATHER` scan and
-    # the acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`) — an affine
-    # build over live forcing must refuse a trace exactly as the vec build does.
-    live_forcing = _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels) ||
+    # J5 covers BOTH IR families: the `_NK_PARAM_GATHER` scalar scan and the
+    # acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`/`_AK_ARR_TBL_BOX`)
+    # — an affine build over live forcing must refuse a trace all the same.
+    live_forcing = _has_live_forcing(cse_prelude, rhs_list) ||
                    any(_acc_has_live_forcing, acc_kernels)
     # Vectorized lane plans for the acc kernels (host index data, built once).
     acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
@@ -1148,23 +1022,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
             du = _oop_store(du, slot, _oop_eval(node, u, p, t, cache))
         end
 
-        # The shared LANE VECTORS (vec_share.jl), in topological slot order — the same
-        # phase, in the same place, that `f!` runs. `Vector{Any}` because a def's value is
-        # a `Vector{T}` or (for a `_VK_CONSTVEC`/`_VK_PGATHER` def) a `Vector{Float64}`;
-        # this emitter allocates per call anyway, so the box costs nothing it was not
-        # already paying, and every subsequent read of the def is one index instead of a
-        # re-walk of its whole subtree.
-        vcache = Vector{Any}(undef, n_vec)
-        @inbounds for s in 1:n_vec
-            vcache[s] = _oop_eval_vec(vec_prelude[s], u, p, t, cache, vcache)
-        end
-
-        for vk in vec_kernels
-            res = _oop_eval_vec(vk.template, u, p, t, cache, vcache)
-            du = _oop_scatter(du, vk.out_slots, res)
-        end
-
-        # Affine access kernels (ess-affine), out of place. The vectorized form
+        # Access kernels (the unified array IR), out of place. The vectorized form
         # (whole-array gathers/ops, one scatter — the TRACEABLE form) where the
         # plan permits; the per-cell `_oop_store` walk otherwise. On host both
         # produce the values `f!`'s in-place runners write, in the same slots, so

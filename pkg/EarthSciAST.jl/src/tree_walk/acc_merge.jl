@@ -1,27 +1,26 @@
 # ========================================================================
-# tree_walk/acc_merge.jl — part of the tree-walk evaluator (array-IR B, stage 3).
-# Included by src/tree_walk.jl AFTER vectorize.jl (it reuses `_struct_sig!` and
-# `_check_fn_group_specs`) and access_kernel.jl (`_AccKernel` and descriptors).
+# tree_walk/acc_merge.jl — part of the tree-walk evaluator (array-IR B, stage 3/4).
+# Included by src/tree_walk.jl AFTER access_kernel.jl (`_AccKernel` and
+# descriptors). Owns the per-cell → access-kernel merge, the structural
+# grouping signature, and the in-place RHS closure generator `_make_rhs`.
 #
 # The PER-CELL fallback's whole-array host: group an array equation's compiled
-# per-cell `(du_slot, _Node)` entries by structural signature — exactly the
-# `_vectorize_cell_entries` partition — and merge each group into ONE
-# `_AccKernel` over an INDIRECT-OUTS cell set, instead of a `_VecKernel` on the
-# `_VecNode` overlay. The Phase-A lane-tape machinery then runs the kernel
-# de-scalarized at Float64 (per-node tile loops over the merged per-cell
-# tables), the scalar `_eval_acc` walk stays the eltype-generic / lazy-guard
-# reference, and the oop vectorized form gets whole-array gathers — one IR
-# family for every array-equation tier.
+# per-cell `(du_slot, _Node)` entries by structural signature and merge each
+# group into ONE `_AccKernel` over an INDIRECT-OUTS cell set. The lane-tape
+# machinery then runs the kernel de-scalarized at Float64 (per-node tile loops
+# over the merged per-cell tables), the scalar `_eval_acc` walk stays the
+# eltype-generic / lazy-guard reference, and the oop vectorized form gets
+# whole-array gathers — one IR family for every array-equation tier.
 #
-# Bit-identity by construction: the merge is the same structural transpose
-# `_merge_nodes` performed — a leaf that is equal across the group stays a
-# scalar (literal / fixed slot / invariant), a varying one becomes a per-cell
-# table indexed by the cell ordinal — and the evaluators apply the identical
-# scalar op sequence per lane (`_eval_acc_op` mirrors `_eval_node_op`;
-# `_NK_CONTRACTION` keeps its seeded sequential ⊕-fold on every runner).
-# The forced per-cell reference (`ESS_STENCIL_DISABLE=1`) still builds the
-# `_VecNode` overlay, so the acc≡percell differentials compare two genuinely
-# independent merges.
+# Bit-identity by construction: the merge is a structural transpose — a leaf
+# that is equal across the group stays a scalar (literal / fixed slot /
+# invariant), a varying one becomes a per-cell table indexed by the cell
+# ordinal — and the evaluators apply the identical scalar op sequence per lane
+# (`_eval_acc_op` mirrors `_eval_node_op`; `_NK_CONTRACTION` keeps its seeded
+# sequential ⊕-fold on every runner). The forced per-cell reference
+# (`ESS_STENCIL_DISABLE=1`) skips the merge entirely — plain compiled scalar
+# nodes on `rhs_list`, evaluated by `_eval_node` — so the differentials
+# compare against a build with no merge machinery at all.
 #
 # LAZY GUARDS. `_eval_acc_op`'s `ifelse`/`and`/`or` arms short-circuit exactly
 # like the scalar walker's, so a merged group with a lazy guard keeps per-cell
@@ -37,6 +36,147 @@
 _acc_node_has_lazy(n::_Node) =
     (n.kind === _NK_OP && (n.op === :ifelse || n.op === :and || n.op === :or)) ||
     any(_acc_node_has_lazy, n.children)
+
+
+# ---- Structural grouping signature (moved here from the deleted _VecNode
+# overlay, vectorize.jl — same bytes, same partition) ----------------------
+
+# A signature that is equal for two per-cell nodes iff they have an identical
+# tree shape ignoring the values that legitimately vary per cell (STATE slot
+# index, LITERAL value). Same signature ⇒ unambiguous merge into one template.
+# Different signatures (in-bounds STATE vs ghost LITERAL, makearray region A vs
+# B, valence-5 vs valence-6 contraction) ⇒ separate kernels.
+#
+# The signature is written token-by-token into a caller-supplied `IOBuffer` and
+# materialised to a `String` exactly ONCE per top-level node (see the reusable
+# buffer in `_acc_from_cell_entries`). The earlier `string(…, join(…), …)` form
+# allocated an intermediate `String` at every interior node and re-copied every
+# descendant's bytes at each level up the tree — O(nodes × depth) garbage. The
+# emitted bytes are unchanged, so the grouping is identical.
+function _struct_sig!(io::IOBuffer, n::_Node)
+    k = n.kind
+    if k === _NK_STATE
+        print(io, 'S')
+    elseif k === _NK_LITERAL
+        print(io, 'L')
+    elseif k === _NK_PARAM
+        print(io, "P:", n.sym)
+    elseif k === _NK_PARAM_GATHER
+        # Cells gathering from the SAME captured buffer (same `payload` object)
+        # merge into one live-forcing table read; the per-lane linear `idx`
+        # becomes the index table. Different buffers ⇒ different `objectid` ⇒
+        # separate kernels.
+        print(io, "PG:", objectid(n.payload))
+    elseif k === _NK_TIME
+        print(io, 'T')
+    elseif k === _NK_CONTRACTION
+        print(io, "C:", n.op, '(')
+        _sig_children!(io, n.children)
+        print(io, ')')
+    else  # _NK_OP (including closed `fn`)
+        print(io, "O:", n.op)
+        pl = n.payload
+        if pl isa Tuple && length(pl) >= 2
+            # A closed `fn`: `payload === (fname, spec_or_nothing)`. The NAME alone
+            # is NOT a sufficient key. An `interp.*` node's const table/axis live in
+            # the typed spec, NOT in its children (`_compile_fn_node` pulls the const
+            # args out of the arg list), so two cells calling `interp.linear` against
+            # DIFFERENT tables have identical children and would otherwise share a
+            # signature — and `_merge_fn_node` puts ONE spec on the merged kernel, so
+            # every cell would silently compute against `nodes[1]`'s table. Reachable:
+            # a `makearray` whose regions each call `interp.*` with their own table,
+            # indexed inside an arrayop that takes the per-cell path (any contraction,
+            # i.e. an einsum/aggregate RHS). Keying the spec's CONTENT splits those
+            # into one kernel per distinct table.
+            #
+            # CONTENT, deliberately, not `objectid(spec)`: specs are rebuilt per
+            # `_compile_fn_node` call, so two cells with the SAME table routinely hold
+            # DIFFERENT spec objects. Identity keying would split groups that must
+            # merge and destroy the N-independence of the kernel count. Content keying
+            # keeps it: the number of DISTINCT tables is a property of the document,
+            # not of the grid.
+            print(io, '@', pl[1], '#', _fn_spec_hash(pl[2]))
+        elseif pl isa Tuple && length(pl) >= 1
+            print(io, '@', pl[1])
+        end
+        print(io, '(')
+        _sig_children!(io, n.children)
+        print(io, ')')
+    end
+    return io
+end
+
+function _sig_children!(io::IOBuffer, children)
+    first = true
+    for ch in children
+        first || print(io, ',')
+        first = false
+        _struct_sig!(io, ch)
+    end
+    return io
+end
+
+# Content hash / content equality for a closed function's build-time spec — the
+# matched (`hash`, `isequal`) pair the grouping and its guard need. `isequal`
+# (not `==`) so a table holding a NaN still compares equal to itself: two cells
+# genuinely sharing such a table must merge, not throw.
+#
+# `_fn_spec_hash` keys `_struct_sig!`'s grouping; `_fn_spec_content_equal` is the
+# exact check `_merge_fn_node` re-runs on the resulting group, so a hash COLLISION
+# degrades to a loud build error instead of back to silent wrong numbers.
+_fn_spec_hash(::Nothing) = UInt(0)                      # all-scalar `datetime.*`
+_fn_spec_hash(s::_InterpLinearSpec) = hash(s.axis, hash(s.table, UInt(0x11)))
+_fn_spec_hash(s::_InterpBilinearSpec) =
+    hash(s.axis_y, hash(s.axis_x, hash(s.table, UInt(0x22))))
+_fn_spec_hash(s::_InterpSearchsortedSpec) = hash(s.xs, UInt(0x33))
+# An unknown spec type cannot be content-hashed, so key it by IDENTITY: over-splitting
+# (a group per object) is safe — worst case an extra kernel — where under-splitting is
+# the silent wrong number this whole mechanism exists to prevent. No such spec exists
+# today (`_FN_CONST_ARG_SPECS` is the closed set); this is the fail-safe default for one
+# added without updating the three methods above.
+_fn_spec_hash(s) = objectid(s)
+
+_fn_spec_content_equal(a, b) = false                    # different spec types never match
+_fn_spec_content_equal(::Nothing, ::Nothing) = true
+_fn_spec_content_equal(a::_InterpLinearSpec, b::_InterpLinearSpec) =
+    isequal(a.table, b.table) && isequal(a.axis, b.axis)
+_fn_spec_content_equal(a::_InterpBilinearSpec, b::_InterpBilinearSpec) =
+    isequal(a.table, b.table) && isequal(a.axis_x, b.axis_x) && isequal(a.axis_y, b.axis_y)
+_fn_spec_content_equal(a::_InterpSearchsortedSpec, b::_InterpSearchsortedSpec) =
+    isequal(a.xs, b.xs)
+
+# Every cell in a `fn` group must carry a CONTENT-equal spec, because the merged
+# kernel carries exactly one. Throws rather than merging cells whose const tables
+# differ — the hazard this guards is a SILENT one (identical shapes, different
+# numbers), so it must fail at build.
+#
+# The `===` fast path is what keeps this free in practice: the per-equation build
+# memo makes every cell of one source `fn` node share ONE spec object, so the loop is
+# N pointer compares and the content compare is reached only for genuinely distinct
+# objects (an unmemoized rebuild, or a hash collision).
+function _check_fn_group_specs(nodes::Vector{_Node})
+    length(nodes) <= 1 && return nothing
+    fname1, spec1 = (nodes[1].payload)::Tuple{String,Any}
+    @inbounds for k in 2:length(nodes)
+        fnamek, speck = (nodes[k].payload)::Tuple{String,Any}
+        speck === spec1 && fnamek == fname1 && continue
+        (fnamek == fname1 && _fn_spec_content_equal(speck, spec1)) && continue
+        throw(TreeWalkError("E_TREEWALK_FN_SPEC_MISMATCH",
+            "vectorized array kernel: cells grouped as structurally identical carry " *
+            "DIFFERENT closed-function specs for '$(fname1)' (cell 1 vs cell $(k)" *
+            (fnamek == fname1 ? ": same function, different const table/axis" :
+                                ": different functions '$(fname1)' vs '$(fnamek)'") *
+            "). A merged kernel carries ONE spec for all its lanes, so these cells " *
+            "cannot share a vectorized kernel — evaluating them together would " *
+            "silently compute every cell against the FIRST cell's table. Cells whose " *
+            "const tables differ (e.g. `makearray` regions each calling `interp.*` " *
+            "with their own table) must land in SEPARATE structural groups; " *
+            "`_struct_sig!` keys the spec's content precisely so they do, so reaching " *
+            "this is a grouping-invariant break (a hash collision, or a signature that " *
+            "stopped keying the spec), not a model error."))
+    end
+    return nothing
+end
 
 # Merge one structurally-identical group of per-cell nodes into an access
 # spine, appending per-cell tables to `acc` (the kernel's descriptor table).
@@ -101,9 +241,8 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int,
 end
 
 # Group an array equation's per-cell `(du_slot, node)` entries by structure and
-# build one indirect-outs `_AccKernel` per group. Same signature partition and
-# first-seen order as `_vectorize_cell_entries` — kernel boundaries, lane
-# order, and out-slot order are identical to the overlay merge this replaces.
+# build one indirect-outs `_AccKernel` per group, in first-seen group order —
+# deterministic kernel boundaries, lane order, and out-slot order.
 function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccKernel}
     isempty(entries) && return _AccKernel[]
     order = String[]
@@ -133,4 +272,110 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccK
                                   _FixedBound(0), 0.0, cse))
     end
     return kernels
+end
+
+# Inner closure generator — separated so the closure's body is small
+# enough to stay inferable. `rhs_list` and `acc_kernels` are captured by the
+# closure; Julia specializes the generated method to the captured types.
+# Scalar/indexed-D equations evaluate through `rhs_list` (one slot each); array
+# (`arrayop`) equations evaluate through `acc_kernels` as whole-array access
+# kernels (in-place lane tapes at Float64, the eltype-generic scalar walk
+# otherwise). Accepts any AbstractVector so both the pre-allocated and the
+# dynamically-grown forms produced by build_evaluator work. The whole RHS is
+# allocation-free in steady state (ess-9cc), so it can be reused across every
+# RK stage without GC pressure — pinned by the `@allocated f!(du,u,p,t) == 0`
+# test.
+#
+# ELTYPE-GENERIC, STILL ZERO-ALLOC. `f!` computes in `T = _rhs_value_type(u, p, t)`,
+# which is a compile-time constant per specialization — so at `T === Float64` the
+# scratch lookups below (`_cse_buf`, and the acc scratch tiers) are field
+# loads and this is exactly the Float64 RHS it always was. Hand it `Dual` state
+# (a ForwardDiff Jacobian for a stiff solver) or a `Dual`-valued parameter
+# NamedTuple (a sensitivity) and the SAME closure evaluates in `Dual`, reusing the
+# per-node Dual buffers created on the first such call. `t` is folded into the value
+# type alongside `u` and `p` precisely so the parameter axis works: there `u` stays
+# `Vector{Float64}` and only the parameter VALUES are `Dual`, so a scratch sized
+# from `eltype(u)` alone would compile and then throw `Float64(::Dual)` on its first
+# store.
+function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
+                   cse_prelude::AbstractVector{_Node},
+                   cse_cache::_CSECache,
+                   acc_kernels::AbstractVector{_AccKernel},
+                   const_slots::AbstractVector{Int},
+                   dyn_slots::AbstractVector{Int})
+    # Lane tapes for the affine access kernels (access_kernel.jl): compiled once
+    # here, run in place of the per-cell scalar walk wherever a strided
+    # formulation exists (`nothing` ⇒ that kernel keeps the scalar runner). The
+    # tape is Float64-only; every other value type (ForwardDiff `Dual`) takes
+    # the eltype-generic scalar path below, which computes the SAME values.
+    acc_plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in acc_kernels]
+    function f!(du, u, p, t)
+        _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
+        T = _rhs_value_type(u, p, t)
+        # CSE prelude (ess-r7h), in its TWO CADENCE TIERS (4qf, const_tier.jl):
+        # evaluate each distinct shared subexpression once into the scratch cache,
+        # in slot order. `defs[s]` references only slots < s (topological), so each
+        # read is already filled. The cache makes `f!` non-reentrant (one instance
+        # per integrator, which is how ODE RHS closures are used). Empty prelude ⇒
+        # both loops are no-ops and `f!` is identical to the pre-CSE evaluator.
+        #
+        # Both loops are UNCONDITIONAL — every slot is evaluated before any equation
+        # runs, whether or not the guard above its occurrence would have fired. That
+        # is safe only because `_cse_compile_scalar` refuses to hoist a key whose
+        # every occurrence sits under a lazy `ifelse`/`and`/`or` arm (see the GUARDS
+        # note in compile.jl); a slot that exists always has an occurrence the walk
+        # would have evaluated anyway.
+        cache = _cse_buf(cse_cache, T)
+
+        # ---- Tier 1: CONST-cadence slots — refilled only when `p` moved ----
+        # These slots' defs read no state, no time and no live forcing buffer, and
+        # every cache ref in them lands on another CONST slot (the classification
+        # rule, const_tier.jl), so their values are a pure function of `p`. They stay
+        # good in THIS buffer until `p` changes or the buffer is replaced — which is
+        # exactly what `_cse_const_stale` tests. This is the whole point of the tier:
+        # a parameter-only Arrhenius chain `A*exp(-Ea/(R*Tref))` is evaluated once per
+        # parameter epoch instead of once per stage of every step, forever.
+        #
+        # NOT constant-folded at build time, deliberately: `p` legitimately changes
+        # (sweeps, `remake`) and under ForwardDiff-over-parameters its VALUES are
+        # `Dual`s. Freezing these slots would zero every parameter sensitivity.
+        if !isempty(const_slots) && _cse_const_stale(cse_cache, T, p)
+            @inbounds for i in eachindex(const_slots)
+                s = const_slots[i]
+                cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
+            end
+            _cse_mark_const!(cse_cache, T, p)
+        end
+
+        # ---- Tier 2: DYNAMIC slots — refilled every call ----
+        # A dynamic def may read const slots (all filled, above) and lower dynamic
+        # slots (filled by this loop, which is ascending) — so every read is already
+        # filled, exactly as in the single-loop prelude this replaces.
+        @inbounds for i in eachindex(dyn_slots)
+            s = dyn_slots[i]
+            cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
+        end
+        @inbounds for k in 1:length(rhs_list)
+            idx_and_node = rhs_list[k]
+            du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
+        end
+
+        # ---- Access kernels (the unified array IR, access_kernel.jl) ----
+        # Each resolves its gathers at runtime from an access-descriptor table over
+        # a strided output box — no per-lane slot vectors were built. The reduction
+        # bound / connectivity are data, so one kernel covers every valence.
+        # At Float64 a kernel with a lane tape runs de-scalarized (`_run_acc_plan!`,
+        # bit-identical + zero-alloc); everything else — a declined kernel, or any
+        # non-Float64 value type — walks the eltype-generic scalar runner.
+        @inbounds for j in 1:length(acc_kernels)
+            P = acc_plans[j]
+            if T === Float64 && P !== nothing
+                _run_acc_plan!(du, u, p, t, acc_kernels[j], P)
+            else
+                _run_acc_kernel!(du, u, p, t, acc_kernels[j], T)
+            end
+        end
+        return nothing
+    end
+    return f!
 end
