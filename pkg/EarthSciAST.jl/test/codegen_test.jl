@@ -4,6 +4,7 @@ Tests for code generation functionality (Julia and Python)
 
 using Test
 using EarthSciAST
+using JSON3
 
 const _CG = EarthSciAST
 
@@ -156,5 +157,38 @@ const _CG = EarthSciAST
             @test occursin("@parameters k_fast", joined)
             @test !occursin(r"@parameters.*\bA\b", joined)
         end
+    end
+
+    @testset "to_julia_code expands surviving template references (§9.6.4)" begin
+        # The expression emitters have no `apply_expression_template` arm (the
+        # generic fallback would emit `apply_expression_template()`, dropping
+        # name and bindings), so `_generate_script` must expand at its boundary.
+        doc = Dict{String,Any}(
+            "esm" => "0.9.0",
+            "metadata" => Dict{String,Any}("name" => "codegen_tpl"),
+            "models" => Dict{String,Any}("M" => Dict{String,Any}(
+                "expression_templates" => Dict{String,Any}("scale" => Dict{String,Any}(
+                    "params" => Any["x"],
+                    "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
+                "variables" => Dict{String,Any}(
+                    "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
+                    "y" => Dict{String,Any}("type" => "state", "default" => 1.0),
+                    "z" => Dict{String,Any}("type" => "state", "default" => 2.0)),
+                "equations" => Any[
+                    Dict{String,Any}(
+                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                        "rhs" => Dict{String,Any}("op" => "apply_expression_template",
+                            "args" => Any[], "name" => "scale",
+                            "bindings" => Dict{String,Any}("x" => "z"))),
+                    Dict{String,Any}(
+                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                        "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
+        file = _CG.load(IOBuffer(JSON3.write(doc)))
+        @test file.component_templates !== nothing       # the reference survived load
+        code = to_julia_code(file)
+        @test occursin("k * z", code)                     # the Option-A image emitted
+        @test !occursin("apply_expression_template", code)
+        # Expansion worked on a copy: the caller's file still carries the refs.
+        @test file.component_templates !== nothing
     end
 end

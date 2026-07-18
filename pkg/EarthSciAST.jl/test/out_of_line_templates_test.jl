@@ -260,11 +260,14 @@ include("testutils.jl")
 
     # -----------------------------------------------------------------------
     # Gate (d) — differential build (RFC §12 gate 3). The reference-aware
-    # tree-walk build (references CARRIED through flatten, `expand_refs=false`,
-    # then Expanded at the build boundary against the merged `template_registry`)
-    # MUST be bit-identical to the Expand-at-build path. Compares the built
-    # `f!(du,u,p,t)` on several random states — a stronger check than comparing
-    # only the solved trajectory (it pins the RHS everywhere). The 3-axis 7×7×7
+    # tree-walk build (references ALWAYS carried through flatten, expanded at
+    # the build boundary against the merged `template_registry` — THE default
+    # path) MUST be bit-identical to (a) the `expand_flattened_refs` boundary
+    # utility's Expand image (RFC §7.7 "Expand at your boundary") and (b) the
+    # `ESS_TEMPLATE_REF_DISABLE=1` Expand-at-load image — the ONE remaining
+    # escape hatch. Compares the built `f!(du,u,p,t)` on several random
+    # states — a stronger check than comparing only the solved trajectory (it
+    # pins the RHS everywhere). The 3-axis 7×7×7
     # `tests/bench/transport_3axis_7cubed.esm` reference-heavy fixture is the
     # committed measurement stack (§12).
     # -----------------------------------------------------------------------
@@ -273,10 +276,12 @@ include("testutils.jl")
         if isfile(F)
             f = EarthSciAST.load(F)
             @test f.component_templates !== nothing               # references survive load
-            flat_fast = EarthSciAST.flatten(f; expand_refs = false)   # references reach the build
+            flat_fast = EarthSciAST.flatten(f)                    # references reach the build
             @test !isempty(flat_fast.template_registry)           # merged registry carried
             f1!, u01, p1, _t1, vm1 = EarthSciAST.build_evaluator(flat_fast)
-            flat_exp = EarthSciAST.flatten(f; expand_refs = true)     # Expand-at-flatten
+            # The shared boundary utility: Expand the FlattenedSystem in place
+            # of the build-entry expansion — the consumer-side fallback path.
+            flat_exp = EarthSciAST.expand_flattened_refs(flat_fast)
             f2!, u02, p2, _t2, vm2 = EarthSciAST.build_evaluator(flat_exp)
             @test vm1 == vm2
             n = length(u01)
@@ -295,7 +300,7 @@ include("testutils.jl")
             end
             @test fd.component_templates === nothing
             f3!, u03, p3, _t3, _vm3 = EarthSciAST.build_evaluator(
-                EarthSciAST.flatten(fd; expand_refs = false))
+                EarthSciAST.flatten(fd))
             u = _probe(1)
             du1 = zeros(n); du3 = zeros(n)
             f1!(du1, u, p1, 0.3); f3!(du3, u, p3, 0.3)

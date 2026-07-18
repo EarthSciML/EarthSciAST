@@ -6,6 +6,7 @@ and Mermaid/DOT/JSON export sanitization.
 
 using Test
 using EarthSciAST
+using JSON3
 
 const ESSG = EarthSciAST
 
@@ -120,5 +121,39 @@ _graph_rsys() = ReactionSystem(
         @test length(g.nodes) == 1
         @test g.nodes[1].type == "reaction_system"
         @test g.nodes[1].metadata["species_count"] == 2
+    end
+
+    @testset "expression_graph expands surviving template references (§9.6.4)" begin
+        # A target-free `apply_expression_template` reference survives load; its
+        # BODY's free `k` is a real dependency of `y` that `free_variables` can
+        # only see after the boundary expansion (`bindings` alone reach just `z`).
+        doc = Dict{String,Any}(
+            "esm" => "0.9.0",
+            "metadata" => Dict{String,Any}("name" => "graph_tpl"),
+            "models" => Dict{String,Any}("M" => Dict{String,Any}(
+                "expression_templates" => Dict{String,Any}("scale" => Dict{String,Any}(
+                    "params" => Any["x"],
+                    "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
+                "variables" => Dict{String,Any}(
+                    "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
+                    "y" => Dict{String,Any}("type" => "state", "default" => 1.0),
+                    "z" => Dict{String,Any}("type" => "state", "default" => 2.0)),
+                "equations" => Any[
+                    Dict{String,Any}(
+                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                        "rhs" => Dict{String,Any}("op" => "apply_expression_template",
+                            "args" => Any[], "name" => "scale",
+                            "bindings" => Dict{String,Any}("x" => "z"))),
+                    Dict{String,Any}(
+                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                        "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
+        file = ESSG.load(IOBuffer(JSON3.write(doc)))
+        @test file.component_templates !== nothing       # the reference survived load
+        g = expression_graph(file)
+        pair(e) = Set([e.source.name, e.target.name])
+        @test any(e -> pair(e) == Set(["M.k", "M.y"]), g.edges)  # body free var edge
+        @test any(e -> pair(e) == Set(["M.z", "M.y"]), g.edges)  # binding edge
+        # Expansion worked on a copy: the caller's file still carries the refs.
+        @test file.component_templates !== nothing
     end
 end

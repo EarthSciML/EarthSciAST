@@ -2,18 +2,21 @@
 # "compile references natively", esm-spec §9.6.4 Option B): the affine stencil
 # build compiles each surviving `apply_expression_template` body once per
 # (use site, region class) and calls it as a runtime sub-kernel, instead of
-# fusing the expanded body into every branch spine. Gate 3 (§12): the result
-# MUST be bit-identical to the fused expanded build; `ESS_TEMPLATE_REF_DISABLE`
-# (expand at load) and `ESS_TEMPLATE_COMPILE_ONCE_DISABLE` (expand at the build
-# boundary) are the escape hatches, `ESS_STENCIL_DISABLE` forces the per-cell
-# reference. Drives tests/bench/transport_3axis_7cubed_fullrank.esm (the
-# 5×5×5-cross-product fixture the tier collapses to 5+5+5) plus inline
-# mini-fixtures for nested references and the missing-registry guard.
+# fusing the expanded body into every branch spine. This is THE default path —
+# `flatten` always carries references, and the build boundary is the single
+# evaluator-side expansion point. Gate 3 (§12): the result MUST be
+# bit-identical to the Expand-at-load image; `ESS_TEMPLATE_REF_DISABLE`
+# (expand at load, the Option-A image) is the ONE differential escape hatch,
+# and `ESS_STENCIL_DISABLE` forces the per-cell reference. Drives
+# tests/bench/transport_3axis_7cubed_fullrank.esm (the 5×5×5-cross-product
+# fixture the tier collapses to 5+5+5) plus inline mini-fixtures for nested
+# references and the missing-registry guard.
 
 using Test
 using JSON3
 using EarthSciAST
 using EarthSciAST: load, flatten, build_evaluator, coerce_esm_file, TreeWalkError,
+    ExpressionTemplateError,
     _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_BRANCH_TEMPLATES, _BENCH_COMPILE_CALLS,
     _bench_reset!
 
@@ -30,10 +33,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
     )
 
     # Build under an env overlay and return (du values at the probes, u0, counters).
-    function build_and_probe(fix::AbstractString; env=(), expand_at_flatten::Bool=false,
-                             form::Symbol=:inplace)
+    # The env overlay wraps LOAD as well as the build, so ESS_TEMPLATE_REF_DISABLE
+    # (the load-time Option-A hatch) takes effect where it lives.
+    function build_and_probe(fix::AbstractString; env=(), form::Symbol=:inplace)
         withenv(env...) do
-            flat = flatten(load(fix); expand_refs=expand_at_flatten)
+            flat = flatten(load(fix))
             _BENCH_ON[] = true
             _bench_reset!()
             f, u0, p, _, _ = build_evaluator(flat; form=form)
@@ -59,19 +63,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         FIX = bench("transport_3axis_7cubed_fullrank.esm")
 
         fast, u0, cfast = build_and_probe(FIX)
-        fused, _, cfused = build_and_probe(FIX; expand_at_flatten=true)
-        boundary, _, _ = build_and_probe(FIX; env=(("ESS_TEMPLATE_COMPILE_ONCE_DISABLE" => "1"),))
-        atload, _, _ = build_and_probe(FIX; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
+        atload, _, catload = build_and_probe(FIX; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
         percell, _, _ = build_and_probe(FIX; env=(("ESS_STENCIL_DISABLE" => "1"),))
         oop, _, _ = build_and_probe(FIX; form=:oop)
 
         @test length(u0) == 343
         for k in 1:3
-            # The fast path vs the fused affine build, the boundary-expanded
-            # build, the Expand-at-load build, the per-cell reference, and the
-            # out-of-place emitter: all EXACTLY equal (Float64 ==, no tolerance).
-            @test fast[k] == fused[k]
-            @test fast[k] == boundary[k]
+            # The default (compile-once) path vs the ESS_TEMPLATE_REF_DISABLE=1
+            # Expand-at-load fused build (the ONE differential hatch, RFC §12
+            # gate 3), the per-cell reference, and the out-of-place emitter:
+            # all EXACTLY equal (Float64 ==, no tolerance).
             @test fast[k] == atload[k]
             @test fast[k] == percell[k]
             @test fast[k] == oop[k]
@@ -81,8 +82,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # 5+5+5 replaces 5×5×5: fifteen compiled body variants, and the total
         # node-lowering count collapses (parents are tiny sub-call spines).
         @test cfast.variants == 15
-        @test cfused.variants == 0
-        @test cfast.compiles < cfused.compiles ÷ 4
+        @test catload.variants == 0
+        @test cfast.compiles < catload.compiles ÷ 4
     end
 
     @testset "reduced-rank fixture: per-cell fallback stays bit-identical" begin
@@ -92,9 +93,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # ref-aware attempt → fused retry → symbolic → per-cell, all sound.
         FIX = bench("transport_3axis_7cubed.esm")
         fast, u0, _ = build_and_probe(FIX)
-        fused, _, _ = build_and_probe(FIX; expand_at_flatten=true)
+        atload, _, _ = build_and_probe(FIX; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
         for k in 1:3
-            @test fast[k] == fused[k]
+            @test fast[k] == atload[k]
             @test sum(abs, fast[k]) > 0
         end
         @test length(u0) == 343
@@ -175,10 +176,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                 JSON3.write(io, doc)
             end
             fast, u0, cfast = build_and_probe(fix)
-            fused, _, _ = build_and_probe(fix; expand_at_flatten=true)
+            atload, _, _ = build_and_probe(fix; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
             @test length(u0) == 8
             for k in 1:3
-                @test fast[k] == fused[k]
+                @test fast[k] == atload[k]
                 @test sum(abs, fast[k]) > 0
             end
             # ONE variant: flux_int, with the nested pair_diff fused into it
@@ -278,6 +279,75 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             for k in 1:3
                 @test refbuild[k] == atload[k]
                 @test all(isfinite, refbuild[k])
+            end
+        end
+    end
+
+    @testset "shadow-registry guard: variable_map vs surviving MODEL template body" begin
+        # The remaining hole behind the eager reaction-rate expansion: a MODEL
+        # template legitimately survives to the flat registry, but its body's
+        # free reference to the model's own param (`T` → scoped `M.T`) is a
+        # SHADOW copy `_apply_variable_map!`'s equation substitution never sees.
+        # Expanding it at the build boundary would surface the stale (deleted)
+        # `M.T`. Flatten must fail loudly, naming the template and the variable.
+        doc = Dict(
+            "esm" => "0.9.0",
+            "metadata" => Dict("name" => "shadow_registry_guard"),
+            "models" => Dict(
+                "M" => Dict(
+                    "expression_templates" => Dict("scaleT" => Dict(
+                        "params" => ["kk"],
+                        # kk is the template's own param; T is the MODEL's param,
+                        # free in the body (scoped to `M.T` in the flat registry).
+                        "body" => Dict("op" => "*", "args" => ["kk",
+                            Dict("op" => "/", "args" => ["T", 300.0])]))),
+                    "variables" => Dict(
+                        "T" => Dict("type" => "parameter", "units" => "K",
+                                    "default" => 300.0),
+                        "a" => Dict("type" => "state", "units" => "1",
+                                    "default" => 1.0)),
+                    "equations" => [Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
+                        "rhs" => Dict("op" => "-", "args" => [
+                            Dict("op" => "apply_expression_template", "args" => [],
+                                 "name" => "scaleT",
+                                 "bindings" => Dict("kk" => 0.5))]))],
+                ),
+                "Src" => Dict(
+                    "variables" => Dict("Tsrc" => Dict(
+                        "type" => "observed", "units" => "K",
+                        "expression" => Dict("op" => "+", "args" => [290.0, 10.0]))),
+                    "equations" => Any[]),
+            ),
+            "coupling" => [Dict("type" => "variable_map",
+                                "from" => "Src.Tsrc", "to" => "M.T",
+                                "transform" => "param_to_var")],
+        )
+        mktempdir() do dir
+            fix = joinpath(dir, "shadow_registry_guard.esm")
+            open(fix, "w") do io
+                JSON3.write(io, doc)
+            end
+            err = try
+                flatten(load(fix))
+                nothing
+            catch e
+                e
+            end
+            @test err isa ExpressionTemplateError
+            @test err.code == "template_body_references_coupling_rewritten_variable"
+            @test occursin("scaleT", err.message)   # offending template named
+            @test occursin("M.T", err.message)      # rewritten variable named
+            # Under the Expand-at-load hatch the body was spliced BEFORE
+            # coupling, so the same document flattens (and builds) fine —
+            # exactly the divergence the guard exists to catch.
+            withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
+                flat = flatten(load(fix))
+                @test isempty(flat.template_registry)
+                f, u0, p, _, _ = build_evaluator(flat)
+                du = similar(u0)
+                f(du, u0, p, 0.0)
+                @test all(isfinite, du)
             end
         end
     end

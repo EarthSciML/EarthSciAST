@@ -33,7 +33,7 @@ using EarthSciAST: FlattenedSystem, ModelVariable, StateVariable,
     NumExpr, IntExpr, VarExpr, OpExpr,
     Equation, AffectEquation, Model, ContinuousEvent, DiscreteEvent,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger,
-    Domain, flatten, infer_array_shapes,
+    Domain, flatten, infer_array_shapes, expand_flattened_refs,
     GapReport,
     # MTK-independent helpers shared with the Catalyst extension
     # (src/mtk_export.jl) plus the ODE-vs-PDE split predicate and redirect

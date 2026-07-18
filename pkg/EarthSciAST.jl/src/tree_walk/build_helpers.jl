@@ -25,14 +25,6 @@ const _BENCH_BODY_VARIANTS = Ref(0)
 _bench_reset!() = (_BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0;
                    _BENCH_BODY_VARIANTS[] = 0; nothing)
 
-# Escape hatch for the compile-once template tier (RFC out-of-line-expression-
-# templates §12 gate 3; the analogue of `ESS_STENCIL_DISABLE`). When set, the
-# tree-walk build boundary expands every surviving `apply_expression_template`
-# reference up front (`expand_flattened_refs` / plain `_expand_model_refs!`) and
-# the affine build compiles the fused expanded spine exactly as before this
-# feature — the differential-test reference for the sub-kernel fast path.
-_template_compile_once_disabled() = get(ENV, "ESS_TEMPLATE_COMPILE_ONCE_DISABLE", "") == "1"
-
 # Lockstep site translation (compile-once template tier): a SHAPE-PRESERVING
 # equation rewrite — join-gate or index-set-range resolution rebuilds a node's
 # non-expression fields (`ranges`, `join_gates`) and every ancestor — detaches

@@ -1747,8 +1747,7 @@ function _build_evaluator_impl(model::Model;
     if _template_reg !== nothing
         model = deepcopy(model)
         sites = IdDict{OpExpr,OpExpr}()
-        _expand_model_refs!(model, _template_reg;
-                            sites=_template_compile_once_disabled() ? nothing : sites)
+        _expand_model_refs!(model, _template_reg; sites=sites)
         isempty(sites) || (_template_sites = sites)
     elseif _model_has_surviving_refs(model)
         # A surviving reference with no registry in reach would compile into an
@@ -2294,22 +2293,15 @@ materialized. Use this for a 0-D / array flattened system; for one carrying a
 spatial PDE, `discretize(flat; …)` first.
 """
 function build_evaluator(flat::FlattenedSystem; kwargs...)
-    # esm-spec §9.6.4 Option B / RFC §7.7: when the fast-path flatten carried
-    # surviving `apply_expression_template` references into the FlattenedSystem
-    # (a non-empty `template_registry`), they now ride the reconstituted document
-    # (`flattened_to_esm` emits the registry as the model's
-    # `expression_templates` block), and the tree-walk impl entry expands them
-    # with SITE RECORDING so the affine build can compile each body once and call
-    # it as a sub-kernel (the RFC's compile-once tier). Under
-    # `ESS_TEMPLATE_COMPILE_ONCE_DISABLE=1` the references are instead expanded
-    # HERE — the sound per-node `Expand` fallback, bit-identical to the
-    # `ESS_TEMPLATE_REF_DISABLE=1` Expand-at-load image (gate d) and the
-    # differential reference for the fast path. A no-op either way for a
-    # reference-free system.
-    if !isempty(flat.template_registry) && _template_compile_once_disabled()
-        flat = expand_flattened_refs(flat)
-        flat = FlattenedSystem(flat; template_registry=Dict{String,Any}())
-    end
+    # esm-spec §9.6.4 Option B / RFC §7.7: surviving `apply_expression_template`
+    # references carried by `flatten` (a non-empty `template_registry`) ride the
+    # reconstituted document (`flattened_to_esm` emits the registry as the
+    # model's `expression_templates` block), and the tree-walk impl entry
+    # expands them with SITE RECORDING so the affine build can compile each body
+    # once and call it as a sub-kernel (the RFC's compile-once tier) — the
+    # SINGLE evaluator-side expansion point. `ESS_TEMPLATE_REF_DISABLE=1`
+    # (Expand at load) is the one differential escape hatch (RFC §12 gate 3).
+    # A no-op for a reference-free system.
     return build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 

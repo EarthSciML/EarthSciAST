@@ -1,5 +1,6 @@
 using Test
 using EarthSciAST
+using JSON3
 using OrderedCollections: OrderedDict
 # Qualify ModelingToolkit and Symbolics so they don't collide with
 # EarthSciAST exports (e.g. `Equation`) in the shared Main scope
@@ -189,5 +190,50 @@ import Symbolics
         @test !isdefined(EarthSciAST, :MockMTKSystem)
         @test !isdefined(EarthSciAST, :MockPDESystem)
         @test !isdefined(EarthSciAST, :MockCatalystSystem)
+    end
+
+    @testset "System(::FlattenedSystem) expands surviving template references" begin
+        # `flatten` ALWAYS carries `apply_expression_template` references
+        # (esm-spec §9.6.4 Option B); the MTK constructor must Expand at its
+        # boundary (RFC out-of-line-expression-templates §7.7) — `_esm_to_symbolic`
+        # has no apply arm, so without the expansion this construction throws.
+        doc = Dict{String,Any}(
+            "esm" => "0.9.0",
+            "metadata" => Dict{String,Any}("name" => "mtk_tpl"),
+            "models" => Dict{String,Any}("M" => Dict{String,Any}(
+                "expression_templates" => Dict{String,Any}("scale" => Dict{String,Any}(
+                    "params" => Any["x"],
+                    "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
+                "variables" => Dict{String,Any}(
+                    "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
+                    "y" => Dict{String,Any}("type" => "state", "default" => 1.0),
+                    "z" => Dict{String,Any}("type" => "state", "default" => 2.0)),
+                "equations" => Any[
+                    Dict{String,Any}(
+                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                        "rhs" => Dict{String,Any}("op" => "apply_expression_template",
+                            "args" => Any[], "name" => "scale",
+                            "bindings" => Dict{String,Any}("x" => "z"))),
+                    Dict{String,Any}(
+                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                        "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
+        flat = EarthSciAST.flatten(EarthSciAST.load(IOBuffer(JSON3.write(doc))))
+        @test !isempty(flat.template_registry)     # references reached the boundary
+        sys = ModelingToolkit.System(flat; name=:TplRef)
+        eqs = ModelingToolkit.equations(sys)
+        @test length(eqs) == 2
+        # The expanded body's `k` appears in the lowered equations.
+        @test occursin("k", join(string.(eqs), "\n"))
+        # The caller's FlattenedSystem is untouched (expansion was on a copy):
+        # its D(M.y) equation still carries the surviving reference.
+        has_ref = false
+        for eq in flat.equations
+            EarthSciAST.foreach_subexpr(eq.rhs) do x
+                x isa EarthSciAST.OpExpr && x.op == "apply_expression_template" &&
+                    (has_ref = true)
+                nothing
+            end
+        end
+        @test has_ref
     end
 end

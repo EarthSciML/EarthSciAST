@@ -324,7 +324,9 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
 
     # v0.8.0: every component shares the document's single `domain`; a system
     # is spatial iff its variables are shaped over index sets, 0-D otherwise.
-    # esm-spec §9.6.4: a rate-law `apply_expression_template` reference is expanded
+    # POLICY (the flatten invariant, esm-spec §9.6.4): references survive
+    # flatten only in MODEL equations; reaction-RATE references are ALWAYS
+    # expanded here at collect. A rate-law `apply_expression_template` reference is expanded
     # EAGERLY here — BEFORE namespacing — so a template body's free variables that
     # name the reaction system's own scalar parameters (e.g. Arrhenius `P`/`T` in
     # `arrh_per_molecule = A*P*exp(B/T)/(8314e3*T)`) are renamed to the component

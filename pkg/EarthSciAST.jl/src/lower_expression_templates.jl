@@ -101,6 +101,10 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     "template_constraint_unknown_index_set",
     "geometry_manifold_invalid",
     "makearray_region_inverted",
+    # Flatten-time shadow-registry guard (flatten.jl): a surviving registry
+    # body references a variable a coupling `variable_map` rewrote in the
+    # flattened equations (esm-spec §9.6.4 / §10.4).
+    "template_body_references_coupling_rewritten_variable",
     # esm-spec §9.7 template-library imports + metaparameters
     # (template_imports.jl).
     "template_import_version_too_old",
