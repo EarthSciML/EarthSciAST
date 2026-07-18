@@ -900,9 +900,15 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
     k = n.kind
     (k === _NK_REDUCE || k === _NK_SUBCALL) && return false
     if k === _NK_ACCESS
-        ak = K.acc[n.idx].kind
+        a = K.acc[n.idx]
+        ak = a.kind
         (ak === _AK_CONST_EDGE || ak === _AK_STATE_INDIRECT ||
          ak === _AK_STATE_INDIRECT_COL) && return false
+        # An unstructured slot-table gather vectorizes as a plain precomputed
+        # gather (gather-of-gather resolved host-side) — unless the table holds a
+        # ghost slot (0), whose 0.0 blend would need per-lane masking: that
+        # kernel keeps the documented per-cell oop fallback.
+        ak === _AK_STATE_TBL_BOX && any(==(0), a.conn) && return false
     elseif k === _NK_CACHED
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
@@ -925,6 +931,12 @@ function _build_oop_acc_plan(K::_AccKernel)
         k = a.kind
         if k === _AK_STATE_AFFINE
             gathers[i] = out .+ a.delta
+        elseif k === _AK_STATE_TBL_BOX
+            # Gather-of-gather resolved on host: the per-lane state slot is the
+            # box-addressed table entry (never 0 — `_oop_acc_vecable` declined
+            # ghost-bearing tables), so the trace sees ONE plain gather.
+            gathers[i] = Int[@inbounds a.conn[a.off + (m1[l]-1)*a.s1 +
+                             (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
         elseif k === _AK_CONST_AFFINE
             gathers_i = out .+ a.delta
             consts[i] = a.arr[gathers_i]
@@ -957,7 +969,7 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     if k === _NK_ACCESS
         a = K.acc[nd.idx]
         ak = a.kind
-        if ak === _AK_STATE_AFFINE
+        if ak === _AK_STATE_AFFINE || ak === _AK_STATE_TBL_BOX
             return _oop_gather(u, plan.gathers[nd.idx])
         elseif ak === _AK_STATE_FIXED
             return convert(T, _oop_read_state(u, a.idx))

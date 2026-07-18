@@ -516,6 +516,7 @@ function _desc_key(d::_AccDesc)
     k === _AK_LOOP_IDX     && return "LI$(d.dim)"
     k === _AK_CONST_BOX    && return "CB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
     k === _AK_FORCING_BOX  && return "FB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
+    k === _AK_STATE_TBL_BOX && return "ST$(objectid(d.conn)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
     return "?$(objectid(d))"
 end
 function _lane_repl_key(lane_repl)
@@ -527,20 +528,85 @@ function _lane_repl_key(lane_repl)
     return String(take!(io))
 end
 
+# Box-local DENSE addressing for a materialized per-box table: strides over the
+# box dims (fastest-first, matching `Iterators.product` fill order) and the
+# offset that maps the cell multi-index `midx` to `off + Σ(midx_d-1)·s_d`.
+function _box_local_addr(box, D)
+    s = zeros(Int, 3)
+    acc = 1
+    for d in 1:D
+        s[d] = acc
+        acc *= length(box[d])
+    end
+    off = 1
+    for d in 1:D
+        off -= (first(box[d]) - 1) * s[d]
+    end
+    return s, off, acc            # acc == number of cells in the box
+end
+
+# Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
+# array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
+# the per-cell fallback would run — stored densely in box-local layout, with 0
+# marking a ghost (fetched as the ghost literal 0.0). This is what an
+# unstructured gather (slot indirect through a connectivity const) lowers to;
+# it is bit-identical by construction and O(box) — the same order as the
+# connectivity input, and strictly smaller than the per-cell fallback's
+# per-lane slot vectors.
+function _materialize_state_tbl(rec::_LaneRecipe, idx_names, box, D,
+                                var_map, const_arrays)
+    s, off, len = _box_local_addr(box, D)
+    tbl = Vector{Int}(undef, len)
+    env = Dict{String,Int}()
+    j = 0
+    for loop in Iterators.product((box[d] for d in 1:D)...)
+        j += 1
+        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
+                              var_map, const_arrays)::Int
+    end
+    return _AccRepl(_AccStateTblBox(tbl, s[1], s[2], s[3], off))
+end
+
+# Materialize a NON-AFFINE const lane as a dense per-box VALUE table, addressed
+# box-locally through the existing `_AccConstBox` descriptor. The values are
+# `_eval_recipe`'s per-cell outputs (boundary folds included), so a fetch is
+# bit-identical to the per-cell resolve.
+function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
+                                var_map, const_arrays)
+    s, off, len = _box_local_addr(box, D)
+    vals = Vector{Float64}(undef, len)
+    env = Dict{String,Int}()
+    j = 0
+    for loop in Iterators.product((box[d] for d in 1:D)...)
+        j += 1
+        vals[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
+                               var_map, const_arrays)::Float64
+    end
+    return _AccRepl(_AccConstBox(vals, s[1], s[2], s[3], off))
+end
+
 # Derive one lane's lowering for a box and VERIFY it is uniform across the box
-# corners (state Δ constant, ghost uniform, const/forcing index affine). Any
-# non-uniformity — an incomplete cut, a clamp, a non-affine gather — throws
-# `_StencilFallback`. A live forcing (pgather) lane lowers to `_AccForcingBox`
-# over the aliased buffer (never folded to a literal, so it stays refresh-live).
+# corners (state Δ constant, ghost uniform, const/forcing index affine). A
+# non-uniform STATE lane (an unstructured/indirect gather, or a fold pattern
+# past the Δ-cut cap) and a non-affine CONST index MATERIALIZE per-box tables
+# instead of declining — see `_materialize_state_tbl` / `_materialize_const_box`.
+# A non-affine live-forcing (pgather) index still throws `_StencilFallback`
+# (per-cell fallback): a forcing gather must stay an index into the aliased live
+# buffer, and no table kind models that today. A live forcing lane otherwise
+# lowers to `_AccForcingBox` over the aliased buffer (never folded to a literal,
+# so it stays refresh-live).
 function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
-                           oln_rep, base, strides, D, var_map, const_arrays, flat_cache)
+                           oln_rep, base, strides, D, var_map, const_arrays,
+                           flat_cache, box)
     env = Dict{String,Int}()
     ev(loop) = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map, const_arrays)
     if rec.kind == LANE_STATE
         slot_rep = ev(rep)
         if slot_rep == 0                              # ghost → literal 0.0
             for cn in corners
-                ev(cn) == 0 || throw(_StencilFallback("ghost not uniform in box"))
+                ev(cn) == 0 ||
+                    return _materialize_state_tbl(rec, idx_names, box, D,
+                                                  var_map, const_arrays)
             end
             return _LitRepl(0.0)
         end
@@ -548,7 +614,8 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         for cn in corners
             sc = ev(cn)
             (sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ) ||
-                throw(_StencilFallback("state Δ not uniform in box"))
+                return _materialize_state_tbl(rec, idx_names, box, D,
+                                              var_map, const_arrays)
         end
         return _AccRepl(_AccStateAffine(Δ))
     elseif rec.kind == LANE_LOOPLIT
@@ -576,7 +643,8 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         off = lin_rep - sum((rep[d]-1)*s[d] for d in 1:D)
         for cn in corners
             (off + sum((cn[d]-1)*s[d] for d in 1:D)) == clin(cn) ||
-                throw(_StencilFallback("const index non-affine in box"))
+                return _materialize_const_box(rec, idx_names, box, D,
+                                              var_map, const_arrays)
         end
         return _AccRepl(_AccConstBox(arr_flat, s[1], s[2], s[3], off))
     else  # LANE_PGATHER — LIVE forcing gather
@@ -639,7 +707,7 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     for k in eachindex(recipes)
         lane_repl[k] = _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
                                          oln_rep, base, strides, D, var_map,
-                                         const_arrays, flat_cache)
+                                         const_arrays, flat_cache, box)
     end
 
     spine, acc, cse, subs = get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do

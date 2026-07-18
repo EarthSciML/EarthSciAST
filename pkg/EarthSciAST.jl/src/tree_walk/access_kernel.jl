@@ -85,6 +85,17 @@ const _AK_ARR_FIXED          = UInt8(9)   # arr[idx]                    (invaria
 const _AK_STATE_INDIRECT     = UInt8(10)  # u[conn[(c-1)·width + n]]    (unstructured neighbour gather)
 const _AK_STATE_INDIRECT_COL = UInt8(11)  # u[conn[(c-1)·width + col]]  (unstructured fixed column)
 const _AK_FORCING_BOX        = UInt8(12)  # flat[off + Σ(midx_d-1)·s_d] (LIVE forcing on its own grid)
+# Unstructured state gather over a Cartesian box: a per-box SLOT TABLE addressed
+# by the cell multi-index (`conn[off + Σ(midx_d-1)·s_d]`, box-local dense
+# layout), holding the state slot each cell reads — or 0 for a ghost, which
+# fetches the ghost literal 0.0. Emitted by the box processor when a state
+# lane's slot is NOT an affine function of the loop indices (a gather indirect
+# through a connectivity const, a boundary-fold pattern past the Δ-cut cap):
+# the table entries are `_eval_recipe`'s per-cell outputs, so a fetch is
+# bit-identical to the per-cell resolve. The table is O(box) Ints — the same
+# order as the connectivity input itself, and strictly less than the per-cell
+# fallback's per-lane slot vectors.
+const _AK_STATE_TBL_BOX      = UInt8(13)  # u[conn[off + Σ(midx_d-1)·s_d]] (0 ⇒ ghost 0.0)
 
 struct _AccDesc
     kind::UInt8
@@ -131,6 +142,8 @@ _AccStateFixed(idx::Int)                         = _mkacc(_AK_STATE_FIXED; idx=i
 _AccArrFixed(arr::Vector{Float64}, idx::Int)     = _mkacc(_AK_ARR_FIXED; arr=arr, idx=idx)
 _AccLoopIdx(dim::Int)                            = _mkacc(_AK_LOOP_IDX; dim=dim)
 _AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
+_AccStateTblBox(conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
+    _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=s1, s2=s2, s3=s3, off=off)
 
 # One `_fetch`, dispatched by the kind tag — concrete field reads throughout, so
 # no dynamic dispatch and no boxing. Hot Cartesian cases first. The result is
@@ -162,6 +175,9 @@ _AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
         return @inbounds u[a.conn[(c-1)*a.width + n]]
     elseif k === _AK_STATE_INDIRECT_COL
         return @inbounds u[a.conn[(c-1)*a.width + a.col]]
+    elseif k === _AK_STATE_TBL_BOX
+        s = @inbounds a.conn[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
+        return s == 0 ? 0.0 : @inbounds u[s]     # 0 ⇒ ghost literal, as per cell
     end
     throw(TreeWalkError("E_TREEWALK_ACC_BAD_DESC", "unknown access kind $(Int(k))"))
 end
@@ -763,6 +779,7 @@ const _TC_OP             = UInt8(6)   # elementwise / fold op over operand buffe
 const _TC_INTERP_LINEAR  = UInt8(7)   # d[l] = _interp_linear_core(spec, q[l])
 const _TC_INTERP_BILINEAR= UInt8(8)   # d[l] = _interp_bilinear_core(spec, x[l], y[l])
 const _TC_INTERP_SEARCH  = UInt8(9)   # d[l] = Float64(_interp_searchsorted_core(spec, q[l]))
+const _TC_GATHER_STATE_TBL=UInt8(10)  # s = conn[boxaddr(l)]; d[l] = s == 0 ? 0.0 : u[s]
 
 # One instruction. Operand `args[k]` is a buffer id into the plan's `bufs`;
 # `strides[k]` is 0 (a length-1 scalar/literal slot, broadcast) or 1 (a lane
@@ -776,13 +793,15 @@ struct _AccInstr
     strides::Vector{Int}
     delta::Int                 # gather Δ (GATHER_*) / loop dim (LOOP_IDX)
     arr::Vector{Float64}       # gather source (empty sentinel otherwise)
-    s1::Int; s2::Int; s3::Int; off::Int   # box addressing (GATHER_ARR_BOX)
+    conn::Vector{Int}          # slot table (GATHER_STATE_TBL; empty sentinel otherwise)
+    s1::Int; s2::Int; s3::Int; off::Int   # box addressing (GATHER_ARR_BOX / _STATE_TBL)
     payload::Any               # typed interp spec (INTERP_*), else nothing
 end
 _mkinstr(code::UInt8; op::Symbol=Symbol(""), dest::Int=0, args::Vector{Int}=Int[],
          strides::Vector{Int}=Int[], delta::Int=0, arr::Vector{Float64}=_AK_NO_ARR,
+         conn::Vector{Int}=_AK_NO_CONN,
          s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, payload=nothing) =
-    _AccInstr(code, op, dest, args, strides, delta, arr, s1, s2, s3, off, payload)
+    _AccInstr(code, op, dest, args, strides, delta, arr, conn, s1, s2, s3, off, payload)
 
 # Per-call scalar sources: lane-INVARIANT leaves, read once per RHS call into a
 # length-1 buffer (stride-0 operand). `_SS_ARR` re-reads its (possibly LIVE
@@ -881,6 +900,13 @@ function _plan_emit!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
         elseif ak === _AK_LOOP_IDX
             d = _plan_newlane!(B)
             push!(B.instrs, _mkinstr(_TC_LOOP_IDX; dest=d, delta=a.dim))
+            return (d, 1, true)
+        elseif ak === _AK_STATE_TBL_BOX
+            # Unstructured slot-table gather (gather-of-gather): a tight per-lane
+            # loop over the box-addressed table, ghost slot 0 → 0.0.
+            d = _plan_newlane!(B)
+            push!(B.instrs, _mkinstr(_TC_GATHER_STATE_TBL; dest=d, conn=a.conn,
+                                     s1=a.s1, s2=a.s2, s3=a.s3, off=a.off))
             return (d, 1, true)
         elseif ak === _AK_CONST_CELL
             d = _plan_newlane!(B)
@@ -1196,6 +1222,14 @@ function _run_acc_instr!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, u,
         d = bufs[ins.dest]; arr = ins.arr; oln = P.oln    # cell ordinal == oln
         @inbounds for l in 1:L
             d[l] = arr[oln[l]]
+        end
+    elseif c === _TC_GATHER_STATE_TBL
+        d = bufs[ins.dest]; conn = ins.conn
+        mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+        s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
+        @inbounds for l in 1:L
+            s = conn[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+            d[l] = s == 0 ? 0.0 : u[s]
         end
     elseif c === _TC_INTERP_LINEAR
         d = bufs[ins.dest]; spec = ins.payload::_InterpLinearSpec
