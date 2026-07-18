@@ -942,8 +942,9 @@ end
 # a `Type{…}` at each `f!` specialization — which is what makes `_cse_buf`/`_vbuf`
 # static dispatches and keeps the Float64 path byte-for-byte what it was.
 #
-# (oop.jl carries an identical `_oop_value_type`. The two emitters must agree on
-# the value type; dedupe when they are next touched together.)
+# (oop.jl's `_oop_value_type` is this same function under the emitter-local
+# name — `const _oop_value_type = _rhs_value_type` — so the two emitters agree
+# on the value type by construction.)
 @inline _promote_val_types(::Tuple{}) = Bool   # identity for `promote_type`
 @inline _promote_val_types(x::Tuple) =
     promote_type(typeof(x[1]), _promote_val_types(Base.tail(x)))
@@ -955,6 +956,26 @@ end
 # NamedTuple (see `_build_state_layout`); with no parameters there is nothing for it
 # to contribute to the value type.
 @inline _rhs_value_type(u, ::Nothing, t) = promote_type(eltype(u), typeof(t))
+
+# ---- Float32 state guard ----------------------------------------------------
+#
+# `Float32` state is refused LOUDLY at the RHS entry. The walkers are
+# eltype-generic, but every literal, const array, and captured forcing buffer is
+# `Float64` DATA — so a `Float32` `u` does not buy a Float32 pipeline: it
+# promotes to `T == Float64` at the first operator and the whole RHS computes in
+# Float64 anyway, plus one convert per state read/store. That is strictly SLOWER
+# than handing the same values over as `Float64`, and the silent promotion hides
+# it, so rejecting is the kindness. The `eltype` test is static per `f!`/`f`
+# specialization, so at Float64 (and under AD `Dual`s) the branch folds away and
+# the zero-alloc / instruction-identical property of the hot path is untouched.
+@inline function _reject_float32_state(u)
+    eltype(u) === Float32 && throw(TreeWalkError("E_TREEWALK_FLOAT32_STATE",
+        "Float32 state is not supported: the compiled RHS's literals and const " *
+        "data are Float64, so Float32 `u` silently promotes and computes in " *
+        "Float64 anyway — with an extra convert per state access, i.e. strictly " *
+        "slower than Float64 state. Pass the state as Vector{Float64}."))
+    return nothing
+end
 
 # Mutable CSE compile context: the set of cached keys, the slot assigned to each
 # (assigned lazily, in topological order, at first compile), the prelude

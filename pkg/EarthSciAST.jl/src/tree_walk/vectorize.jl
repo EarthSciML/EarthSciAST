@@ -1166,6 +1166,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    const_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int})
     function f!(du, u, p, t)
+        _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
         # CSE prelude (ess-r7h), in its TWO CADENCE TIERS (4qf, const_tier.jl):
         # evaluate each distinct shared subexpression once into the scratch cache,

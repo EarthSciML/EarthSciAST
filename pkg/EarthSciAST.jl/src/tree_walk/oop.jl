@@ -94,25 +94,12 @@
 # ---- Value type -------------------------------------------------------------
 #
 # The RHS's value type is fixed by the three runtime inputs: the state, the
-# parameter values, and time. Literals, const arrays, and captured forcing buffers
-# are `Float64` DATA — never differentiated — so they promote into `T` rather than
-# constraining it.
-#
-# Deriving `T` from all three (not just `eltype(u)`) is load-bearing. Under
-# ForwardDiff-over-parameters `u` is a plain `Vector{Float64}` and only the `p`
-# values are `Dual`; a `du` sized from `eltype(u)` would be `Vector{Float64}` and
-# the first store would throw `Float64(::Dual)`.
-@inline _oop_promote_vals(::Tuple{}) = Bool   # identity for `promote_type`
-@inline _oop_promote_vals(x::Tuple) =
-    promote_type(typeof(x[1]), _oop_promote_vals(Base.tail(x)))
-
-@inline _oop_value_type(u, p::NamedTuple, t) =
-    promote_type(eltype(u), _oop_promote_vals(values(p)), typeof(t))
-
-# A parameter-free model carries SciMLBase's `nothing` sentinel instead of an empty
-# NamedTuple (see `_build_state_layout`); with no parameters there is nothing for it
-# to contribute to the value type.
-@inline _oop_value_type(u, ::Nothing, t) = promote_type(eltype(u), typeof(t))
+# parameter values, and time — see `_rhs_value_type` (compile.jl), whose
+# rationale (deriving `T` from all three, not just `eltype(u)`, is load-bearing
+# under ForwardDiff-over-parameters) applies verbatim here. The two emitters
+# MUST agree on the value type, so this is the same function under the
+# emitter-local name (it was an identical hand-copy until the promised dedupe).
+const _oop_value_type = _rhs_value_type
 
 # ---- Container seams (GPU / Reactant) ---------------------------------------
 #
@@ -719,6 +706,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     n_vec = length(vec_prelude)
     live_forcing = _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
     function f(u, p, t)
+        _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         if has_acc && _is_traced(u, p, t)
             throw(TreeWalkError("E_TREEWALK_ACC_XLA_UNSUPPORTED",
                 "This model built affine access kernels (ess-affine), which are not " *

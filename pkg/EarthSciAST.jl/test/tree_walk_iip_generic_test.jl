@@ -371,4 +371,41 @@ end
         # A parameter-free model carries `nothing`, not an empty NamedTuple.
         @test ESM._rhs_value_type(D[D(1.0)], nothing, 0.0) === D
     end
+
+    # ---- 6. Float32 state is rejected loudly ----------------------------------
+
+    @testset "Float32 state is rejected, not silently promoted" begin
+        # Every literal/const in the compiled RHS is Float64, so Float32 state
+        # would silently compute in Float64 anyway — slower than Float64 state.
+        # The runner refuses it with a loud TreeWalkError instead (both forms).
+        doc = _gi_rd(8)
+        f!, u0, p, _, _ = ESM.build_evaluator(doc)
+        u32 = Float32.(_gi_seed(length(u0)))
+        du32 = similar(u32)
+        err = try
+            f!(du32, u32, p, 0.0)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ESM.TreeWalkError
+        @test err.code == "E_TREEWALK_FLOAT32_STATE"
+
+        fo = ESM.build_evaluator(doc; form = :oop)[1]
+        erro = try
+            fo(u32, p, 0.0)
+            nothing
+        catch e
+            e
+        end
+        @test erro isa ESM.TreeWalkError
+        @test erro.code == "E_TREEWALK_FLOAT32_STATE"
+
+        # Float64 state through the same closures still works (the guard is a
+        # statically-folded no-op there).
+        u = _gi_seed(length(u0))
+        du = similar(u)
+        f!(du, u, p, 0.0)
+        @test all(isfinite, du)
+    end
 end
