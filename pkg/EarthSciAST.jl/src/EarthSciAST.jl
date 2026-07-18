@@ -59,6 +59,9 @@ include("template_imports.jl")
 # Wire I/O
 include("parse.jl")
 include("serialize.jl")
+# Document load pipeline + subsystem-ref linker (RFC-3986 URL machinery,
+# top-level {ref} inlining, cycle detection, index-set registry merge)
+include("resolve.jl")
 # Coupling-library files + `coupling_import` role binding (esm-spec §10.9–§10.11)
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
