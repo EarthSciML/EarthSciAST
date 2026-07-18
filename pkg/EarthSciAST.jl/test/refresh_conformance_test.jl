@@ -117,7 +117,6 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
             materialize_out = dm2)
         interior = [t for t in anchors if t > 0.0]
         prov = _RGConfProvider(interior, Dict(t => Dict("F_src" => fsrc_anchor(t)) for t in interior))
-        model = _ESS_RG.coerce_esm_file(JSON3.read(JSON3.write(sim_doc))).models["M"]
         cb, tstops = _ESS_RG.build_refresh_callback(;
             providers = Dict("F_src" => prov),
             buffers = _ESS_RG.RefreshBuffers(Dict("F_src" => fsrc_buf2)),  # SAME buffer object

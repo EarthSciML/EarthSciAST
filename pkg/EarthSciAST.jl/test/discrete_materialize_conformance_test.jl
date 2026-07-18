@@ -83,7 +83,6 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # refreshes `src` at each interior anchor and fires `post_refresh =
         # dm.materialize!` (the integrated discrete-materialization path). Forcing
         # frozen per segment -> RHS pure -> closed form matched to solver tol.
-        model = _ESS_DM.load(fixture).models["M"]
         srcbuf2 = copy(src_at(0.0))
         dm2 = _ESS_DM.DiscreteMaterializer()
         f2!, u02, p2, _ts2, vm2 = _ESS_DM.build_evaluator(_ESS_DM.load(fixture);
