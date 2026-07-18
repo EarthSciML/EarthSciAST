@@ -70,11 +70,26 @@ grows skip semantics.
 """
     AssertionResult
 
-Outcome of one `(file, container, test, assertion_idx)` evaluation.
+Outcome of one `(file, container, test, assertion_idx)` evaluation — the ONE
+result type both inline-test runners produce ([`run_esm_tests`](@ref) over the
+MTK engine and [`run_pde_tests`](@ref) over the tree-walk/simulate engine;
+`PdeAssertionResult` is an alias of this type).
+
 `message` carries the diff or error text for non-`PASS` results.
 `duration_s` is this assertion's even share of its test's wall time (solve +
 all samples), so summing `duration_s` over a test's assertions recovers the
 test's duration (the JUnit testcase `time`).
+
+§6.6.5 fields: `reduce` is the assertion's declared field reduction (`nothing`
+for a plain scalar assertion — always `nothing` from the MTK runner);
+`rtol`/`atol` are the RESOLVED §6.6.4 tolerances the pass predicate used
+(`0.0`/`0.0` on results synthesized before tolerance resolution, e.g. a
+parse/compile failure). The trailing three fields have defaults, so the
+historical 12-argument positional construction still works.
+
+Virtual properties (backwards compatibility with the former
+`PdeAssertionResult`): `r.passed` (`status == PASS`) and `r.model` (alias of
+`container_name`).
 """
 struct AssertionResult
     file::String
@@ -89,7 +104,31 @@ struct AssertionResult
     status::AssertionStatus
     message::String
     duration_s::Float64
+    reduce::Union{String,Nothing}
+    rtol::Float64
+    atol::Float64
 end
+
+# Historical 12-argument construction (pre-unification field set) — the §6.6.5
+# fields default to "no reduction declared / tolerance never resolved".
+AssertionResult(file, container_kind::Symbol, container_name, test_id,
+                assertion_idx::Integer, variable, time::Real, expected::Real,
+                actual, status::AssertionStatus, message, duration_s::Real) =
+    AssertionResult(file, container_kind, container_name, test_id,
+                    assertion_idx, variable, time, expected, actual, status,
+                    message, duration_s, nothing, 0.0, 0.0)
+
+# Backcompat virtual properties: `r.passed` predates the `status` field on the
+# PDE runner's results, and `r.model` was that runner's name for
+# `container_name`. Both are kept so existing callers (and the cross-binding
+# conformance suites' expectations) continue to work.
+function Base.getproperty(r::AssertionResult, name::Symbol)
+    name === :passed && return getfield(r, :status) == PASS
+    name === :model && return getfield(r, :container_name)
+    return getfield(r, name)
+end
+Base.propertynames(::AssertionResult) =
+    (fieldnames(AssertionResult)..., :passed, :model)
 
 # ---------------------------------------------------------------------------
 # Discovery
@@ -168,8 +207,8 @@ discover_esm_files(; kwargs...) = discover_esm_files(DEFAULT_ROOTS; kwargs...)
 
 const _DEFAULT_REL_TOL = 1.0e-6
 
-# Tight solver tolerances for integrating inline tests, shared between
-# `_run_tests_on_compiled` (MTK path) and `run_pde_tests`' keyword defaults
+# Tight solver tolerances for integrating inline tests, shared between the
+# MTK engine's per-test solve and `run_pde_tests`' keyword defaults
 # (tree-walk path): assertion expectations are pinned to many digits, so the
 # integration error must sit well below the default rel=1e-6 assertion gate.
 const DEFAULT_TEST_RELTOL = 1e-10
@@ -290,16 +329,105 @@ function _pick_solver(file::AbstractString="";
 end
 
 # ---------------------------------------------------------------------------
-# Per-container test execution
+# Unified per-test frame — ONE runner skeleton shared by both inline-test
+# entry points, with the execution engine pluggable:
+#
+#   engine            entry point       execution pathway
+#   ----------------  ----------------  ------------------------------------
+#   MtkTestEngine     run_esm_tests     mtkcompile + ODEProblem + interpolant
+#   SimulateTestEngine run_pde_tests    tree-walk simulate() + field lookup
+#                     (pde_inline_tests.jl)
+#
+# The frame owns everything the two runners used to duplicate: the per-test /
+# per-assertion loop, §6.6.4 tolerance resolution, the §6.6.3 pass predicate
+# and failure message, outcome buffering + even wall-time split, and
+# `AssertionResult` construction. An ENGINE implements three methods:
+#
+#   _engine_setup(engine, t) -> handle::Any | String
+#       Execute test `t` (solve/simulate). Returns an opaque per-test handle
+#       on success, or a `String` failure message — the frame then records one
+#       ERROR result per assertion carrying that message.
+#   _engine_actual(engine, handle, a) -> Real
+#       The assertion's actual value (scalar sample or §6.6.5 field
+#       reduction). May throw; the frame records an ERROR result formatted by:
+#   _engine_error_message(engine, err) -> String
+#       Engine-specific formatting of a per-assertion evaluation error.
 # ---------------------------------------------------------------------------
 
 # One assertion's evaluated outcome, buffered until the whole test's wall time
-# is known (see the timing comment in `_run_tests_on_compiled`) and only then
+# is known (see the timing comment in `_run_test_frame!`) and only then
 # stamped into `AssertionResult`s with the even per-assertion duration share.
 const _AssertionOutcome = @NamedTuple{idx::Int, variable::String, time::Float64,
+                                      reduce::Union{String,Nothing},
                                       expected::Float64,
                                       actual::Union{Float64,Nothing},
+                                      rtol::Float64, atol::Float64,
                                       status::AssertionStatus, message::String}
+
+function _run_test_frame!(results::Vector{AssertionResult}, engine,
+                          file::AbstractString, container_kind::Symbol,
+                          container_name::AbstractString, container_tolerance,
+                          tests)
+    for t in tests
+        t_start = time()
+        handle = _engine_setup(engine, t)
+
+        # Evaluate every assertion first, then time the WHOLE test once and
+        # give each assertion an even share of it: `write_junit_xml` sums
+        # `duration_s` per testcase, so per-assertion cumulative stamps would
+        # overcount the test's wall time N-fold.
+        outcomes = _AssertionOutcome[]
+        for (i, a) in enumerate(t.assertions)
+            rtol, atol = _resolve_tolerance(container_tolerance, t.tolerance,
+                                             a.tolerance)
+            if handle isa String   # engine setup failed for this test
+                push!(outcomes, (idx=i, variable=a.variable, time=a.time,
+                                  reduce=a.reduce, expected=a.expected,
+                                  actual=nothing, rtol=rtol, atol=atol,
+                                  status=ERROR, message=handle))
+                continue
+            end
+
+            local actual_val::Union{Float64,Nothing} = nothing
+            local status::AssertionStatus = FAIL
+            local msg::String = ""
+            try
+                actual_val = Float64(_engine_actual(engine, handle, a))
+                if _check_assertion(actual_val, a.expected, rtol, atol)
+                    status = PASS
+                else
+                    msg = _assertion_fail_message(actual_val, a.expected,
+                                                  rtol, atol)
+                end
+            catch err
+                actual_val = nothing
+                status = ERROR
+                msg = _engine_error_message(engine, err)
+            end
+
+            push!(outcomes, (idx=i, variable=a.variable, time=a.time,
+                              reduce=a.reduce, expected=a.expected,
+                              actual=actual_val, rtol=rtol, atol=atol,
+                              status=status, message=msg))
+        end
+
+        duration_share = (time() - t_start) / max(length(outcomes), 1)
+        for o in outcomes
+            push!(results, AssertionResult(
+                String(file), container_kind, String(container_name), t.id,
+                o.idx, o.variable, o.time, o.expected, o.actual, o.status,
+                o.message, duration_share, o.reduce, o.rtol, o.atol))
+        end
+    end
+    return results
+end
+
+# ---------------------------------------------------------------------------
+# MTK engine — compile once per container (see `_run_container_tests!`), then
+# per test build an ODEProblem from the test's ICs/overrides, solve with the
+# selected (possibly stiff-overridden) solver, and sample assertions via the
+# solution interpolant.
+# ---------------------------------------------------------------------------
 
 # For reaction_system containers, species and parameter defaults declared in
 # the ESM file are NOT propagated through the Catalyst.@species / @parameters
@@ -330,96 +458,45 @@ function _catalyst_default_maps(container_kind::Symbol, esm_container, simp,
     return defaults_u0, defaults_p
 end
 
-function _run_tests_on_compiled(file::AbstractString, container_kind::Symbol,
-                                container_name::AbstractString,
-                                container_tolerance, tests, simp,
-                                sys_name::Symbol, results::Vector{AssertionResult};
-                                esm_container=nothing,
-                                stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
-    isempty(tests) && return
+struct MtkTestEngine
+    simp::Any
+    sys_name::Symbol
+    container_kind::Symbol
+    solver::Any
+    defaults_u0::Dict{Any,Float64}
+    defaults_p::Dict{Any,Float64}
+end
+
+function _engine_setup(e::MtkTestEngine, t)
     MTK = _require_mtk()
-    solver, _solver_kind = _pick_solver(file; stiff_files=stiff_files)
-
-    defaults_u0, defaults_p =
-        _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
-
-    for t in tests
-        t_start = time()
-        local sol = nothing
-        local prob_err::Union{Nothing,Exception} = nothing
-        try
-            u0_map = copy(defaults_u0)
-            for (spec, val) in t.initial_conditions
-                handle = _resolve_handle(simp, sys_name, spec)
-                u0_map[handle] = Float64(val)
-            end
-            p_map = copy(defaults_p)
-            for (spec, val) in t.parameter_overrides
-                handle = _resolve_handle(simp, sys_name, spec)
-                p_map[handle] = Float64(val)
-            end
-            tspan = (t.time_span.start, t.time_span.stop)
-            merged = isempty(p_map) ? u0_map : Base.merge(u0_map, p_map)
-            prob = if container_kind === :reaction_system
-                MTK.ODEProblem(simp, merged, tspan; combinatoric_ratelaws=false)
-            else
-                MTK.ODEProblem(simp, merged, tspan)
-            end
-            sol = MTK.SciMLBase.solve(prob, solver;
-                                       reltol=DEFAULT_TEST_RELTOL,
-                                       abstol=DEFAULT_TEST_ABSTOL)
-        catch err
-            prob_err = err
+    try
+        u0_map = copy(e.defaults_u0)
+        for (spec, val) in t.initial_conditions
+            u0_map[_resolve_handle(e.simp, e.sys_name, spec)] = Float64(val)
         end
-
-        # Evaluate every assertion first, then time the WHOLE test once and
-        # give each assertion an even share of it: `write_junit_xml` sums
-        # `duration_s` per testcase, so per-assertion cumulative stamps would
-        # overcount the test's wall time N-fold.
-        outcomes = _AssertionOutcome[]
-        for (i, a) in enumerate(t.assertions)
-            if prob_err !== nothing
-                push!(outcomes, (idx=i, variable=a.variable, time=a.time,
-                                  expected=a.expected, actual=nothing,
-                                  status=ERROR,
-                                  message="Solve setup failed: $(prob_err)"))
-                continue
-            end
-
-            rtol, atol = _resolve_tolerance(container_tolerance, t.tolerance,
-                                             a.tolerance)
-            local actual_val::Union{Float64,Nothing} = nothing
-            local status::AssertionStatus = FAIL
-            local msg::String = ""
-            try
-                handle = _resolve_handle(simp, sys_name, a.variable)
-                raw = sol(a.time, idxs=handle)
-                actual_val = Float64(raw)
-                if _check_assertion(actual_val, a.expected, rtol, atol)
-                    status = PASS
-                else
-                    msg = _assertion_fail_message(actual_val, a.expected,
-                                                  rtol, atol)
-                end
-            catch err
-                status = ERROR
-                msg = "Sample/compare failed: $(err)"
-            end
-
-            push!(outcomes, (idx=i, variable=a.variable, time=a.time,
-                              expected=a.expected, actual=actual_val,
-                              status=status, message=msg))
+        p_map = copy(e.defaults_p)
+        for (spec, val) in t.parameter_overrides
+            p_map[_resolve_handle(e.simp, e.sys_name, spec)] = Float64(val)
         end
-
-        duration_share = (time() - t_start) / max(length(outcomes), 1)
-        for o in outcomes
-            push!(results, AssertionResult(
-                file, container_kind, String(container_name), t.id, o.idx,
-                o.variable, o.time, o.expected, o.actual, o.status, o.message,
-                duration_share))
+        tspan = (t.time_span.start, t.time_span.stop)
+        merged = isempty(p_map) ? u0_map : Base.merge(u0_map, p_map)
+        prob = if e.container_kind === :reaction_system
+            MTK.ODEProblem(e.simp, merged, tspan; combinatoric_ratelaws=false)
+        else
+            MTK.ODEProblem(e.simp, merged, tspan)
         end
+        return MTK.SciMLBase.solve(prob, e.solver;
+                                    reltol=DEFAULT_TEST_RELTOL,
+                                    abstol=DEFAULT_TEST_ABSTOL)
+    catch err
+        return "Solve setup failed: $(err)"
     end
 end
+
+_engine_actual(e::MtkTestEngine, sol, a) =
+    sol(a.time, idxs=_resolve_handle(e.simp, e.sys_name, a.variable))
+
+_engine_error_message(::MtkTestEngine, err) = "Sample/compare failed: $(err)"
 
 function _compile_model(model, name::Symbol)
     MTK = _require_mtk()
@@ -441,9 +518,13 @@ end
 # ---------------------------------------------------------------------------
 
 # Compile one container (a `Model` or a `ReactionSystem`) via `compile` and
-# run its inline tests; a compile failure records one ERROR result per test
-# (`label` names the container family in the error message). Containers with
-# no tests are skipped without compiling.
+# run its inline tests through the unified frame with an `MtkTestEngine`; a
+# compile failure records one ERROR result per test (`label` names the
+# container family in the error message). Containers with no tests are skipped
+# without compiling. Solver selection (`_pick_solver`) and Catalyst default
+# seeding (`_catalyst_default_maps`) run OUTSIDE any try/catch on purpose: a
+# missing solver stack or an unresolvable declared default must abort the run
+# loudly, not degrade to per-test ERROR rows.
 function _run_container_tests!(results::Vector{AssertionResult},
                                path::AbstractString, container_kind::Symbol,
                                name::AbstractString, container,
@@ -463,10 +544,13 @@ function _run_container_tests!(results::Vector{AssertionResult},
         end
         return
     end
-    _run_tests_on_compiled(path, container_kind, String(name),
-                            container.tolerance, container.tests, simp,
-                            sys_name, results; esm_container=esm_container,
-                            stiff_files=stiff_files)
+    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files)
+    defaults_u0, defaults_p =
+        _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
+    engine = MtkTestEngine(simp, sys_name, container_kind, solver,
+                           defaults_u0, defaults_p)
+    _run_test_frame!(results, engine, path, container_kind, String(name),
+                     container.tolerance, container.tests)
 end
 
 function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
@@ -625,7 +709,7 @@ function _xml_escape(s::AbstractString)
 end
 
 """
-    write_junit_xml(results, path)
+    write_junit_xml(results, path; file=nothing)
 
 Emit a junit-compatible XML report covering every `AssertionResult`.
 
@@ -634,8 +718,22 @@ failing assertions inside it produce `<failure>` / `<error>` children. The
 testcase `time` attribute is the sum of its assertions' `duration_s` — each
 assertion carries an even share of its test's wall time, so the sum is the
 test's duration (no N-fold overcount).
+
+`file`, when given, relabels every result's source file before grouping —
+used by [`run_pde_tests`](@ref) callers, whose results carry no per-assertion
+source file (`r.file == ""`), to label the whole batch in the testcase
+classnames.
 """
-function write_junit_xml(results::Vector{AssertionResult}, path::AbstractString)
+function write_junit_xml(results::Vector{AssertionResult}, path::AbstractString;
+                         file::Union{Nothing,AbstractString}=nothing)
+    if file !== nothing
+        results = AssertionResult[
+            AssertionResult(String(file), r.container_kind, r.container_name,
+                            r.test_id, r.assertion_idx, r.variable, r.time,
+                            r.expected, r.actual, r.status, r.message,
+                            r.duration_s, r.reduce, r.rtol, r.atol)
+            for r in results]
+    end
     by_test = Dict{Tuple{String,String,String},Vector{AssertionResult}}()
     order = Tuple{String,String,String}[]
     for r in results

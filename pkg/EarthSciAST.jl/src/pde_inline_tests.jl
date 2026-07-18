@@ -49,11 +49,13 @@
 #   test of the selected model(s); returns per-assertion results carrying the
 #   ACTUAL reduction values (conformance runners record these).
 #
-# SHARED helpers: tolerance resolution (`_resolve_tolerance`), the pass
-# predicate (`_check_assertion`), the solver-tolerance defaults
-# (`DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`), and the `AssertionStatus`
-# enum live in run_tests.jl's "SHARED §6.6 assertion helpers" section — the
-# two runners' assertion semantics are deliberately identical.
+# SHARED frame: `run_pde_tests` and `run_esm_tests` are the SAME runner
+# skeleton — `_run_test_frame!` in run_tests.jl (per-test/per-assertion loop,
+# §6.6.4 tolerance resolution, §6.6.3 pass predicate, wall-time split,
+# `AssertionResult` construction, JUnit emission) — with different execution
+# ENGINES plugged in. This file contributes the `SimulateTestEngine`
+# (tree-walk simulate + field lookup) and the §6.6.5 evaluation machinery it
+# drives; the MTK engine lives beside the frame in run_tests.jl.
 # ===========================================================================
 
 """
@@ -73,40 +75,19 @@ Base.showerror(io::IO, e::PdeTestError) = print(io, "PdeTestError: ", e.msg)
 """
     PdeAssertionResult
 
-Outcome of one §6.6.5 inline-test assertion evaluated through the tree-walk
-simulation pathway. `actual` is the computed reduction value (`nothing` when
-the simulation or reduction itself failed); `message` carries the diff or
-error text for non-passing results.
+Alias of [`AssertionResult`](@ref) — the two inline-test runners share ONE
+result type (and one JUnit emitter). Kept as a name because `run_pde_tests`'
+results were historically a distinct struct; the old field spellings survive
+as virtual properties on `AssertionResult` (`r.model` ≡ `r.container_name`,
+`r.passed` ≡ `r.status == PASS`).
 
-`status` uses the same [`AssertionStatus`](@ref) enum as the MTK runner's
-`AssertionResult`: `PASS`, `FAIL` (value outside tolerance), or `ERROR` (the
-simulation or the assertion evaluation raised). The virtual property
-`r.passed` (`status == PASS`) is kept for backwards compatibility.
+For results produced by [`run_pde_tests`](@ref): `container_kind` is always
+`:model`, `file` is `""` (the PDE runner takes one document, not a discovery
+walk — pass `file=...` to [`write_junit_xml`](@ref) to label the batch), and
+`reduce`/`rtol`/`atol` carry the assertion's declared reduction and the
+resolved §6.6.4 tolerances.
 """
-struct PdeAssertionResult
-    model::String
-    test_id::String
-    assertion_idx::Int
-    variable::String
-    time::Float64
-    reduce::Union{String,Nothing}
-    expected::Float64
-    actual::Union{Float64,Nothing}
-    rtol::Float64
-    atol::Float64
-    status::AssertionStatus
-    message::String
-end
-
-# Backcompat: `r.passed` predates the `status` field; keep it as a virtual
-# property so existing callers (and the cross-binding conformance suites'
-# expectations) continue to work.
-function Base.getproperty(r::PdeAssertionResult, name::Symbol)
-    name === :passed && return getfield(r, :status) == PASS
-    return getfield(r, name)
-end
-Base.propertynames(::PdeAssertionResult) =
-    (fieldnames(PdeAssertionResult)..., :passed)
+const PdeAssertionResult = AssertionResult
 
 """
     evaluate_cellwise(expr, cells; const_arrays=Dict(), registered_functions=Dict(),
@@ -530,56 +511,80 @@ function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
     return field_reduce(a.reduce, field; reference=ref)
 end
 
-# esm-spec §9.7.10 form C: resolve the `(run_file, run_model)` pair test `t`
-# runs against. A test that injects a discretization runs against an EPHEMERAL
-# instance of component `mname` with the test's imports appended to its scope
-# and its rewrite-targets lowered; the persisted `file` is never mutated. A
-# test with no injection runs against the file/model as loaded. Returns the
-# failure message `String` when the ephemeral build could not be built.
-function _resolve_test_target(file::EsmFile, input, mname::AbstractString,
-                              model, t, resolved_base::AbstractString)
-    isempty(t.expression_template_imports) && return (file, model)
+# esm-spec §9.7.10 form C: resolve the file test `t` runs against. A test
+# that injects a discretization runs against an EPHEMERAL instance of
+# component `mname` with the test's imports appended to its scope and its
+# rewrite-targets lowered; the persisted `file` is never mutated. A test with
+# no injection runs against the file as loaded. Returns the failure message
+# `String` when the ephemeral build could not be built.
+function _resolve_test_target(file::EsmFile, input, mname::AbstractString, t,
+                              resolved_base::AbstractString)::Union{EsmFile,String}
+    isempty(t.expression_template_imports) && return file
     try
         src = input isa AbstractString ? String(input) : nothing
-        run_file = _ephemeral_injected_file(file, src, String(mname),
+        return _ephemeral_injected_file(file, src, String(mname),
             t.expression_template_imports, resolved_base)
-        rm = run_file.models === nothing ? nothing :
-            get(run_file.models, String(mname), nothing)
-        rm === nothing && throw(PdeTestError(
-            "component '$(mname)' vanished from the ephemeral build"))
-        return (run_file, rm)
     catch err
         return "per-test discretization injection failed: " *
                "$(sprint(showerror, err))"
     end
 end
 
-# Run test `t` against `run_file` through the official tree-walk simulation
-# pathway. `simulate` flattens the file (models + coupling) into ONE runnable
-# system named "Flattened", so no model_name is passed here; element names
-# keep their owning-model prefix, which the `_state_cells` / `_scalar_slot`
-# lookups resolve per assertion. Returns the successful
-# [`SimulationResult`](@ref), or the failure message `String` when the
-# build/solve raised or the solver retcode was unsuccessful — one Union return
-# instead of the coupled `sim` / `sim_err` sentinel pair.
-function _simulate_for_test(run_file::EsmFile, t, times::Vector{Float64},
-                            insp::BuildInspection; alg, reltol::Float64,
-                            abstol::Float64)::Union{SimulationResult,String}
+# ---------------------------------------------------------------------------
+# Simulate engine — the tree-walk execution strategy plugged into the unified
+# per-test frame (`_run_test_frame!`, run_tests.jl). Per test: resolve the
+# §9.7.10 form-C injection target, `simulate` with the assertion times as
+# `saveat`, then evaluate each assertion against the saved fields. `simulate`
+# flattens the file (models + coupling) into ONE runnable system named
+# "Flattened", so no model_name is passed; element names keep their
+# owning-model prefix, which the `_state_cells` / `_scalar_slot` lookups
+# resolve per assertion.
+# ---------------------------------------------------------------------------
+struct SimulateTestEngine
+    file::EsmFile            # document as loaded
+    input::Any               # original `run_pde_tests` input (path or EsmFile)
+    mname::String
+    resolved_base::String
+    alg::Any
+    reltol::Float64
+    abstol::Float64
+end
+
+# Per-test handle: the successful simulation plus the build-observability sink
+# (assertions on ARRAY OBSERVEDS evaluate their resolved expression from
+# `insp` — see `_observed_field`) and the file the assertions resolve shapes
+# against (the ephemeral injected file when the test injects a discretization).
+struct _SimulateHandle
+    sim::SimulationResult
+    insp::BuildInspection
+    eval_file::EsmFile
+end
+
+function _engine_setup(e::SimulateTestEngine, t)
+    target = _resolve_test_target(e.file, e.input, e.mname, t, e.resolved_base)
+    target isa String && return target   # injection failed
+    times = sort!(unique(Float64[a.time for a in t.assertions]))
+    insp = BuildInspection()
     local sim
     try
-        sim = simulate(run_file, (t.time_span.start, t.time_span.stop);
-                       alg=alg, reltol=reltol, abstol=abstol, saveat=times,
-                       parameters=t.parameter_overrides,
+        sim = simulate(target, (t.time_span.start, t.time_span.stop);
+                       alg=e.alg, reltol=e.reltol, abstol=e.abstol,
+                       saveat=times, parameters=t.parameter_overrides,
                        initial_conditions=t.initial_conditions,
                        inspect=insp)
     catch err
         return "simulate failed: $(sprint(showerror, err))"
     end
-    if !sim.success
-        return "solver retcode $(sim.retcode): $(sim.message)"
-    end
-    return sim
+    sim.success || return "solver retcode $(sim.retcode): $(sim.message)"
+    return _SimulateHandle(sim, insp, target)
 end
+
+_engine_actual(e::SimulateTestEngine, h::_SimulateHandle, a) =
+    _evaluate_assertion(a, h.sim, h.insp, h.eval_file, e.mname,
+                        e.resolved_base)
+
+_engine_error_message(::SimulateTestEngine, err) =
+    "assertion evaluation failed: $(sprint(showerror, err))"
 
 """
     run_pde_tests(input; model_name=nothing, alg=nothing,
@@ -607,11 +612,15 @@ directory when `input` is a path, else the working directory.
 
 Tolerances resolve per esm-spec §6.6.4 (assertion > test > model > default
 `rel=1e-6`); the pass predicate is the same `isapprox` check `run_esm_tests`
-uses (shared helpers in run_tests.jl), and each result carries the same
-[`AssertionStatus`](@ref) (`PASS`/`FAIL`/`ERROR`) as the MTK runner's results.
-`alg` is REQUIRED (e.g. `Tsit5()` with OrdinaryDiffEqTsit5 loaded) — the
-solve runs in the SciMLBase extension. `reltol`/`abstol` default to the shared
-inline-test solver tolerances `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
+uses, and the results are the same [`AssertionResult`](@ref) type the MTK
+runner produces — both runners are the SAME frame (`_run_test_frame!` in
+run_tests.jl) with different execution engines plugged in, so tolerance
+resolution, the pass predicate, per-test wall-time accounting, and JUnit
+emission ([`write_junit_xml`](@ref), with `file=...` labeling the batch)
+cannot drift apart. `alg` is REQUIRED (e.g. `Tsit5()` with
+OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension.
+`reltol`/`abstol` default to the shared inline-test solver tolerances
+`DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
 """
 function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                        alg=nothing,
@@ -628,82 +637,10 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
     for (mname, model) in file.models
         model_name !== nothing && String(mname) != String(model_name) && continue
         isempty(model.tests) && continue
-        for t in model.tests
-            times = sort!(unique(Float64[a.time for a in t.assertions]))
-            target = _resolve_test_target(file, input, String(mname), model, t,
-                                          resolved_base)
-            # Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
-            # slot) evaluate their resolved expression from here (`_observed_field`).
-            insp = BuildInspection()
-            local run_model, eval_file
-            local outcome::Union{SimulationResult,String}
-            if target isa String
-                # Injection failed: assertions error with the injection
-                # message; tolerances resolve against the ORIGINAL model.
-                outcome = target
-                run_model = model
-                eval_file = file
-            else
-                run_file, run_model = target
-                eval_file = run_file
-                outcome = _simulate_for_test(run_file, t, times, insp;
-                                             alg=alg, reltol=reltol,
-                                             abstol=abstol)
-            end
-            for (i, a) in enumerate(t.assertions)
-                rtol, atol = _resolve_tolerance(run_model.tolerance, t.tolerance, a.tolerance)
-                if outcome isa String
-                    push!(results, PdeAssertionResult(String(mname), t.id, i,
-                        a.variable, a.time, a.reduce, a.expected, nothing,
-                        rtol, atol, ERROR, outcome))
-                    continue
-                end
-                actual::Union{Float64,Nothing} = nothing
-                msg = ""
-                try
-                    actual = _evaluate_assertion(a, outcome, insp, eval_file,
-                                                 String(mname), resolved_base)
-                catch err
-                    msg = "assertion evaluation failed: $(sprint(showerror, err))"
-                end
-                if actual === nothing
-                    push!(results, PdeAssertionResult(String(mname), t.id, i,
-                        a.variable, a.time, a.reduce, a.expected, nothing,
-                        rtol, atol, ERROR, msg))
-                else
-                    ok = _check_assertion(actual, a.expected, rtol, atol)
-                    ok || (msg = _assertion_fail_message(actual, a.expected,
-                                                         rtol, atol))
-                    push!(results, PdeAssertionResult(String(mname), t.id, i,
-                        a.variable, a.time, a.reduce, a.expected, actual,
-                        rtol, atol, ok ? PASS : FAIL, msg))
-                end
-            end
-        end
+        engine = SimulateTestEngine(file, input, String(mname),
+                                    resolved_base, alg, reltol, abstol)
+        _run_test_frame!(results, engine, "", :model, String(mname),
+                         model.tolerance, model.tests)
     end
     return results
 end
-
-# ---------------------------------------------------------------------------
-# JUnit wiring — PDE results ride the MTK runner's summary/emission path by
-# converting to `AssertionResult`. The PDE runner does not track per-assertion
-# source file or wall time, so `file` labels the whole batch (testcase
-# classname) and `duration_s` is 0.0.
-# ---------------------------------------------------------------------------
-AssertionResult(r::PdeAssertionResult; file::AbstractString="") =
-    AssertionResult(String(file), :model, r.model, r.test_id, r.assertion_idx,
-                    r.variable, r.time, r.expected, r.actual, r.status,
-                    r.message, 0.0)
-
-"""
-    write_junit_xml(results::Vector{PdeAssertionResult}, path; file="")
-
-Emit the same junit-compatible XML report as the MTK runner's
-[`write_junit_xml`](@ref) from PDE inline-test results: each result converts
-to an [`AssertionResult`](@ref) (`container_kind = :model`, `duration_s = 0.0`;
-`file` labels the source document in the testcase classnames).
-"""
-write_junit_xml(results::Vector{PdeAssertionResult}, path::AbstractString;
-                file::AbstractString="") =
-    write_junit_xml(AssertionResult[AssertionResult(r; file=file) for r in results],
-                    String(path))
