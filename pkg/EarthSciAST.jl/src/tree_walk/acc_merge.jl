@@ -23,13 +23,20 @@
 # compare against a build with no merge machinery at all.
 #
 # LAZY GUARDS. `_eval_acc_op`'s `ifelse`/`and`/`or` arms short-circuit exactly
-# like the scalar walker's, so a merged group with a lazy guard keeps per-cell
-# guard semantics on the scalar runner (the lane tape declines lazy ops and
-# leaves such kernels there — the documented policy: stop REQUIRING the
-# overlay, don't force eagerness). For the same reason the per-cell/invariant
-# CSE tiers are SKIPPED on a lazy-bearing spine: their prelude is
-# unconditional, and hoisting a subtree whose occurrences sit under a guard
-# could evaluate what the guarded walk would skip.
+# like the scalar walker's, so on the SCALAR reference runner a merged group
+# with a lazy guard keeps per-cell guard semantics. The lane tape no longer
+# declines these kernels (gordian total-vectorize): it evaluates the guards
+# EAGERLY as select/blend, on a spine copy `_acc_sanitize_guards` makes total,
+# so a throwing op under an unentered branch cannot raise (see access_kernel.jl).
+#
+# The per-cell/invariant CSE tiers are still SKIPPED on a lazy-bearing spine —
+# but the reason is the SCALAR path alone, not the tape. `_build_acc_cse` counts
+# total occurrences (not unconditional ones), so hoisting a subtree whose
+# occurrences all sit under a guard into the UNCONDITIONAL CSE prelude would
+# evaluate what the lazy scalar walk skips. Since the same `_AccKernel` backs
+# both runners and the scalar path must stay lazy, we skip CSE here. (The tape's
+# own sanitized selects ARE total, so a tape-LOCAL CSE across selects would be
+# sound — a future optimization, out of scope for the eager-select landing.)
 # ========================================================================
 
 # Does this spine carry an op whose scalar evaluation is lazy?
@@ -265,7 +272,8 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccK
         acc = _AccDesc[]
         spine = _acc_merge_nodes(nds, len, acc)
         # CSE + invariant hoisting on the merged spine — skipped on a
-        # lazy-bearing one (see the header) so guard semantics survive.
+        # lazy-bearing one (see the header) so the SCALAR reference stays lazy;
+        # the tape sanitizes and eager-blends the guards from this same spine.
         spine, cse = _acc_node_has_lazy(spine) ? (spine, _ACC_NO_CSE) :
                      _build_acc_cse(spine, acc)
         push!(kernels, _AccKernel(_outs_cells(slots), spine, acc,

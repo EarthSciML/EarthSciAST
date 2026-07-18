@@ -249,4 +249,75 @@ const E = EarthSciAST
             @test duo[vmap["y[$i]"]] == du[vmap["y[$i]"]]
         end
     end
+
+    # ---------- GUARD VECTORIZATION (gordian total-vectorize, Stage 1) ----------
+    # The lane tape now COMPILES `ifelse`/`and`/`or` as eager select/blend, on a
+    # spine `_acc_sanitize_guards` makes total, so a throwing op under an
+    # unentered guard cannot raise. Every guarded kernel must (a) plan, (b) match
+    # the scalar LAZY reference bit for bit, (c) stay zero-alloc — while an
+    # UNguarded domain violation still raises on the tape.
+    @testset "guarded singularity: eager select ≡ lazy scalar" begin
+        N = 64
+        # alternating sign so ~half the cells are OUT of every guarded domain
+        u = Float64[(-1.0)^i * (0.05 + 0.03i) for i in 1:N]
+        @test any(<(0), u) && any(>(0), u)
+        cells = E._CellSet([1], UnitRange{Int}[1:N], 0)     # contiguous 1:N
+        mkK(spine) = E._AccKernel(cells, spine,
+                                  E._AccDesc[E._AccStateAffine(0)], E._FixedBound(0), 0.0)
+
+        # each spine reads u[oln] through _acc(1); guards protect a singular op
+        specs = Dict(
+            # ifelse guarding log (base 1.0 safe): negative cells take the else arm
+            "ifelse-log" => E._aop(:ifelse, E._aop(:>, E._acc(1), E._alit(0.0)),
+                                   E._aop(:log, E._acc(1)), E._alit(-9.0)),
+            # ifelse guarding sqrt
+            "ifelse-sqrt" => E._aop(:ifelse, E._aop(:>=, E._acc(1), E._alit(0.0)),
+                                    E._aop(:sqrt, E._acc(1)), E._alit(0.0)),
+            # ifelse guarding ^ with a real (fractional) exponent: base sanitized
+            "ifelse-pow" => E._aop(:ifelse, E._aop(:>, E._acc(1), E._alit(0.0)),
+                                   E._aop(:^, E._acc(1), E._alit(0.5)), E._alit(0.0)),
+            # acosh (safe 1.0): guard x>1
+            "ifelse-acosh" => E._aop(:ifelse, E._aop(:>, E._acc(1), E._alit(1.0)),
+                                     E._aop(:acosh, E._acc(1)), E._alit(0.0)),
+            # asin (safe 0.0): guard |x|<=1 via and(x>=-1, x<=1)
+            "and-asin" => E._aop(:ifelse,
+                                 E._aop(:and, E._aop(:>=, E._acc(1), E._alit(-1.0)),
+                                        E._aop(:<=, E._acc(1), E._alit(1.0))),
+                                 E._aop(:asin, E._acc(1)), E._alit(0.0)),
+            # `and` short-circuit: second conjunct is a singular op; when the first
+            # conjunct is false the scalar walk skips it, eager must not throw.
+            "and-guards-sqrt" => E._aop(:and, E._aop(:>, E._acc(1), E._alit(0.0)),
+                                        E._aop(:>, E._aop(:sqrt, E._acc(1)), E._alit(0.1))),
+            # `or` short-circuit: second disjunct singular; skipped when first true.
+            "or-guards-log" => E._aop(:or, E._aop(:<, E._acc(1), E._alit(0.0)),
+                                      E._aop(:>, E._aop(:log, E._acc(1)), E._alit(-1.0))),
+            # nested guards compose by mask conjunction
+            "nested" => E._aop(:ifelse, E._aop(:>, E._acc(1), E._alit(0.0)),
+                               E._aop(:ifelse, E._aop(:<, E._acc(1), E._alit(1.0)),
+                                      E._aop(:log, E._acc(1)), E._alit(2.0)),
+                               E._alit(-3.0)),
+        )
+        for (name, spine) in specs
+            K = mkK(spine)
+            ref = zeros(N)
+            E._run_acc_kernel!(ref, u, nothing, 0.0, K)     # scalar LAZY reference
+            @test all(isfinite, ref)                        # reference itself is total
+            P = E._build_acc_plan(K; tile=8)
+            @test P !== nothing                             # (a) plans
+            tape = zeros(N)
+            E._run_acc_plan!(tape, u, nothing, 0.0, K, P)   # eager, sanitized
+            @test tape == ref                               # (b) bit-identical
+            E._run_acc_plan!(tape, u, nothing, 0.0, K, P)   # warm
+            @test (@allocated E._run_acc_plan!(tape, u, nothing, 0.0, K, P)) == 0  # (c)
+        end
+
+        # An UNGUARDED domain violation still throws on the tape (contract intact).
+        Kbad = mkK(E._aop(:log, E._acc(1)))
+        Pbad = E._build_acc_plan(Kbad; tile=8)
+        @test Pbad !== nothing
+        @test_throws DomainError E._run_acc_plan!(zeros(N), u, nothing, 0.0, Kbad, Pbad)
+        Kbad2 = mkK(E._aop(:sqrt, E._acc(1)))
+        @test_throws DomainError E._run_acc_plan!(zeros(N), u, nothing, 0.0, Kbad2,
+                                                  E._build_acc_plan(Kbad2; tile=8))
+    end
 end

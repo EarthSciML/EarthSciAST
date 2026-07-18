@@ -889,13 +889,20 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 #   * Float64 ONLY. `_make_rhs` routes `T === Float64` (a compile-time constant)
 #     through the tape and every other value type (ForwardDiff `Dual`) through
 #     the scalar `_run_acc_kernel!`, which stays the eltype-generic reference.
+#   * GUARD OPS (`ifelse`/`and`/`or`) ARE supported (gordian total-vectorize):
+#     the tape evaluates them EAGERLY as select/blend instructions. Eager and
+#     lazy agree in VALUE (a guard's result depends only on which branch is
+#     taken); they differ only in that eager could enter a branch that THROWS a
+#     `DomainError`, which `_acc_sanitize_guards` removes by rewriting each
+#     throwing op under a guard to run on a safe neutral off its taken mask. The
+#     scalar `_eval_acc` reference keeps the unsanitized spine and stays lazy, so
+#     an UNguarded domain violation still raises on both paths.
 #   * DECLINES (returns `nothing`, scalar runner keeps the kernel) anything whose
-#     vector semantics could diverge from the scalar walk: `ifelse`/`and`/`or`
-#     (LAZY per cell in `_eval_acc_op`; an eager lane loop could evaluate a
-#     guarded arm the scalar walk skips), `_NK_REDUCE` (n-dependent), template
-#     sub-kernels, boxed closed functions, and the unstructured n-indexed
-#     descriptors. Interp `:fn` leaves ARE supported — a per-lane loop over the
-#     SAME `_interp_*_core` kernels is bit-identical by construction.
+#     vector semantics could diverge from the scalar walk: `_NK_REDUCE`
+#     (n-dependent), template sub-kernels, boxed closed functions, and the
+#     unstructured n-indexed descriptors. Interp `:fn` leaves ARE supported — a
+#     per-lane loop over the SAME `_interp_*_core` kernels is bit-identical by
+#     construction.
 
 # Tape opcodes.
 const _TC_GATHER_STATE   = UInt8(1)   # d[l] = u[oln[l] + delta]
@@ -1117,13 +1124,15 @@ function _plan_emit!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
     throw(_AccPlanDecline())           # _NK_REDUCE / _NK_SUBCALL / anything else
 end
 
-# Ops with lazy scalar semantics (`ifelse`/`and`/`or`) are DECLINED — see the
-# header. `:Pre` and arity-1 `+`/`*` are pass-through (no instruction).
+# Ops with lazy scalar semantics (`ifelse`/`and`/`or`). NO LONGER declined: the
+# tape evaluates them EAGERLY as select/blend instructions, and
+# `_acc_sanitize_guards` (called by `_build_acc_plan`) rewrites any throwing op
+# under a guard so eager evaluation cannot raise — see the header. `:Pre` and
+# arity-1 `+`/`*` are pass-through (no instruction).
 const _PLAN_LAZY_OPS = (:ifelse, :and, :or)
 
 function _plan_emit_op!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
     op = nd.op
-    op in _PLAN_LAZY_OPS && throw(_AccPlanDecline())
     ch = nd.children
     if op === :pi || op === :π
         return (_plan_lit!(B, Float64(pi)), 0, false)
@@ -1176,6 +1185,8 @@ function _plan_op_supported(op::Symbol, nargs::Int)
     op === :- && return nargs == 1 || nargs == 2
     op === :neg && return nargs == 1
     op === :not && return nargs == 1
+    op === :ifelse && return nargs == 3
+    (op === :and || op === :or) && return nargs >= 2
     op === :atan && return nargs == 1 || nargs == 2
     any(r -> r.sym === op, _BINARY_ELEMENTWISE_OPS) && return nargs == 2
     any(r -> r.sym === op, _COMPARISON_ELEMENTWISE_OPS) && return nargs == 2
@@ -1184,12 +1195,88 @@ function _plan_op_supported(op::Symbol, nargs::Int)
     return false
 end
 
+# ---- Guard-operand sanitization (gordian total-vectorize, Stage 1) ----------
+#
+# The tape evaluates `ifelse`/`and`/`or` EAGERLY (both arms per lane). That is
+# value-identical to the scalar short-circuit EXCEPT that an op which raises a
+# `DomainError` off its domain (`log(-x)`, `sqrt(-x)`, `asin(|x|>1)`, `(-x)^0.5`,
+# …) would throw when the eager walk enters a branch the scalar walk skips. This
+# pass makes eager evaluation TOTAL: for each such op sitting under a guard, its
+# DOMAIN operand is rewritten to `select(mask, operand, SAFE)` where `mask` is
+# the conjunction of the enclosing guard predicates (computed BEFORE the branch,
+# by construction: the mask node is a child of the select the op reads) and
+# `SAFE` is a per-op in-domain neutral. Where `mask` is TRUE the select returns
+# the authored operand, so `op(select(m,x,SAFE)) == op(x)` bit for bit; where it
+# is FALSE the op runs on `SAFE` (no throw) and the guard above discards it.
+#
+# Operates on a TAPE-ONLY copy of the spine — the scalar `_eval_acc` reference
+# keeps the unsanitized spine and stays lazy. Ops that produce NaN/Inf WITHOUT
+# throwing (`/`, `log(0)`) need nothing: the select discards their garbage.
+#
+# `(operand_index, SAFE)` for every op whose real-domain evaluation can raise.
+# `^`/`pow` sanitize the BASE (operand 1); `1.0 ^ y` is always finite.
+const _ACC_GUARD_SAFE = Dict{Symbol,Tuple{Int,Float64}}(
+    :log => (1, 1.0), :log2 => (1, 1.0), :log10 => (1, 1.0), :log1p => (1, 0.0),
+    :sqrt => (1, 1.0),
+    :asin => (1, 0.0), :acos => (1, 0.0), :atanh => (1, 0.0),
+    :acosh => (1, 1.0),
+    :^ => (1, 1.0), :pow => (1, 1.0),
+)
+
+# Conjoin the running guard mask with a predicate node (`nothing` ⇒ top level,
+# unguarded — no mask yet). `and` is eager-total on the tape, so the conjunction
+# is safe to evaluate; a false conjunct dominates regardless of later garbage.
+@inline _acc_guard_conj(mask, pred::_Node) = mask === nothing ? pred : _aop(:and, mask, pred)
+
+# Rewrite `nd` so every throwing op under `mask` reads a sanitized operand.
+# `mask::Union{Nothing,_Node}` is the enclosing guard conjunction (truthy exactly
+# where the scalar walk would evaluate this subtree).
+function _acc_sanitize_guards(nd::_Node, mask)
+    nd.kind === _NK_OP || return nd            # leaves: nothing to guard
+    op = nd.op
+    ch = nd.children
+    if op === :ifelse                          # ifelse(cond, a, b)
+        cond = _acc_sanitize_guards(ch[1], mask)
+        a = _acc_sanitize_guards(ch[2], _acc_guard_conj(mask, cond))
+        b = _acc_sanitize_guards(ch[3], _acc_guard_conj(mask, _aop(:not, cond)))
+        return _aop(:ifelse, cond, a, b)
+    elseif op === :and                         # xi guarded by x1..x_{i-1} all truthy
+        run = mask
+        kids = _Node[]
+        for c in ch
+            cs = _acc_sanitize_guards(c, run)
+            push!(kids, cs)
+            run = _acc_guard_conj(run, cs)
+        end
+        return _aop(:and, kids...)
+    elseif op === :or                          # xi guarded by x1..x_{i-1} all falsy
+        run = mask
+        kids = _Node[]
+        for c in ch
+            cs = _acc_sanitize_guards(c, run)
+            push!(kids, cs)
+            run = _acc_guard_conj(run, _aop(:not, cs))
+        end
+        return _aop(:or, kids...)
+    end
+    safe = get(_ACC_GUARD_SAFE, op, nothing)
+    kids = _Node[_acc_sanitize_guards(c, mask) for c in ch]
+    if safe !== nothing && mask !== nothing
+        (di, sv) = safe
+        di <= length(kids) &&
+            (kids[di] = _aop(:ifelse, mask, kids[di], _alit(sv)))
+    end
+    return _aop(op, kids...)
+end
+
 """
     _build_acc_plan(K::_AccKernel; tile=1024) -> Union{_AccPlan,Nothing}
 
 Compile `K` into a lane tape, or return `nothing` when the kernel has no strided
-formulation (reduction, sub-kernel call, lazy op, boxed closed function,
-n-indexed descriptor) — the scalar `_run_acc_kernel!` then keeps the kernel.
+formulation (reduction, sub-kernel call, boxed closed function, n-indexed
+descriptor) — the scalar `_run_acc_kernel!` then keeps the kernel. Lazy guard
+ops (`ifelse`/`and`/`or`) ARE compiled: eager select/blend on a spine copy
+sanitized by `_acc_sanitize_guards` so eager evaluation cannot throw.
 """
 function _build_acc_plan(K::_AccKernel; tile::Int=1024)
     isempty(K.subs) || return nothing
@@ -1202,7 +1289,12 @@ function _build_acc_plan(K::_AccKernel; tile::Int=1024)
             push!(B.recipe_bufs, b)
             push!(B.recipe_strides, s)
         end
-        (rb, rs, _) = _plan_emit!(B, K.spine, K)
+        # Guard-bearing spines are sanitized (tape-only) so their eager selects
+        # are total; a guard-free spine is emitted verbatim (byte-for-byte the
+        # pre-Stage-1 plan). Guard-bearing kernels carry no CSE (acc_merge skips
+        # it so the scalar reference stays lazy), so only the spine is rewritten.
+        spine = _acc_node_has_lazy(K.spine) ? _acc_sanitize_guards(K.spine, nothing) : K.spine
+        (rb, rs, _) = _plan_emit!(B, spine, K)
         mi2 = fill(1, tile); mi3 = fill(1, tile)
         return _AccPlan(tile, B.bufs, B.scalars, B.instrs, rb, rs,
                         Vector{Int}(undef, tile), Vector{Int}(undef, tile), mi2, mi3)
@@ -1361,12 +1453,101 @@ end
     return nothing
 end
 
+# ---- Guard ops as EAGER SELECT/blend (gordian total-vectorize) --------------
+#
+# `ifelse`/`and`/`or` are LAZY per cell in `_eval_acc_op` (the scalar reference
+# still short-circuits). On the tape they are EAGER: both arms are computed for
+# every lane and blended by `Base.ifelse` (branch-free). The value is identical
+# to the scalar walk because (a) a guard's RESULT depends only on which branch
+# is taken (`false & x == false`, `true | x == true`), and (b) any operand that
+# could THROW under an unentered branch has been rewritten to
+# `op(select(mask, operand, SAFE))` by `_acc_sanitize_guards` at plan build, so
+# eager evaluation of the discarded branch cannot raise — see the sanitizer.
+# Where a mask is TRUE the operand is unchanged (`select(m,x,1)` returns `x`), so
+# the taken value is bit-identical to the lazy path; where it is FALSE the op
+# runs on the safe neutral and the select at the guard discards the result.
+
+# `d[l] = c ? a : b`, condition truthy iff `!= 0` (matching `_eval_acc_op`'s
+# `ifelse` arm). `Base.ifelse` reads both already-computed operand buffers — no
+# throw is possible here, they hold finite blends. Stride-1 fast path is the hot
+# case (a comparison result over two lane buffers); the unified read serves the
+# rarer broadcast operands.
+@inline function _tape_select!(d::Vector{Float64},
+                               c::Vector{Float64}, sc::Int,
+                               a::Vector{Float64}, sa::Int,
+                               b::Vector{Float64}, sb::Int, L::Int)
+    if sc == 1 && sa == 1 && sb == 1
+        @inbounds @simd for l in 1:L
+            d[l] = ifelse(c[l] != 0, a[l], b[l])
+        end
+    else
+        @inbounds for l in 1:L
+            d[l] = ifelse(c[1 + (l-1)*sc] != 0, a[1 + (l-1)*sa], b[1 + (l-1)*sb])
+        end
+    end
+    return nothing
+end
+
+# `and`/`or` as an eager 0.0/1.0 fold: `d = (x1!=0) ⊗ (x2!=0) ⊗ …`, ⊗ = `&`/`|`.
+# Boolean-associative, so the fold order is irrelevant to the (exact 0.0/1.0)
+# result — it matches the scalar short-circuit result bit for bit (only the
+# side effect of THROWING differed, and the sanitizer removed that).
+@inline function _tape_bool_fold!(isand::Bool, d::Vector{Float64},
+                                  bufs::Vector{Vector{Float64}},
+                                  args::Vector{Int}, sts::Vector{Int}, L::Int)
+    a1 = bufs[args[1]]; s1 = sts[1]
+    if s1 == 1
+        @inbounds @simd for l in 1:L
+            d[l] = ifelse(a1[l] != 0, 1.0, 0.0)
+        end
+    else
+        v = ifelse(@inbounds(a1[1]) != 0, 1.0, 0.0)
+        @inbounds for l in 1:L
+            d[l] = v
+        end
+    end
+    for k in 2:length(args)
+        ak = bufs[args[k]]; sk = sts[k]
+        if isand
+            if sk == 1
+                @inbounds @simd for l in 1:L
+                    d[l] = ifelse((d[l] != 0) & (ak[l] != 0), 1.0, 0.0)
+                end
+            else
+                bv = @inbounds ak[1]
+                @inbounds @simd for l in 1:L
+                    d[l] = ifelse((d[l] != 0) & (bv != 0), 1.0, 0.0)
+                end
+            end
+        else
+            if sk == 1
+                @inbounds @simd for l in 1:L
+                    d[l] = ifelse((d[l] != 0) | (ak[l] != 0), 1.0, 0.0)
+                end
+            else
+                bv = @inbounds ak[1]
+                @inbounds @simd for l in 1:L
+                    d[l] = ifelse((d[l] != 0) | (bv != 0), 1.0, 0.0)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
 function _run_acc_tape_op!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, L::Int)
     op = ins.op
     d = bufs[ins.dest]
     args = ins.args; sts = ins.strides
     if op === :+ || op === :*
         _tape_fold!(op, d, bufs, args, sts, L)
+        return nothing
+    elseif op === :ifelse
+        _tape_select!(d, bufs[args[1]], sts[1], bufs[args[2]], sts[2],
+                      bufs[args[3]], sts[3], L)
+        return nothing
+    elseif op === :and || op === :or
+        _tape_bool_fold!(op === :and, d, bufs, args, sts, L)
         return nothing
     end
     a = bufs[args[1]]; sa = sts[1]
