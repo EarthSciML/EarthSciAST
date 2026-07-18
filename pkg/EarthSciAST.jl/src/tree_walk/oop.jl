@@ -678,11 +678,25 @@ _acc_has_live_forcing(K::_AccKernel) =
 #
 #   * The PER-CELL fallback — `_oop_run_acc_kernel` — the functional twin of
 #     `_run_acc_kernel!`: same cell walk, same eltype-generic `_eval_acc` spine,
-#     each value landing through the `_oop_store` seam. Kept for the kernels the
-#     vectorized form declines (a variable-valence reduction, an unstructured
-#     indirect gather, a template sub-kernel call). Correct on host
+#     each value landing through the `_oop_store` seam. Correct on host
 #     (Float64 / ForwardDiff `Dual`); under a trace its per-cell scalar reads
 #     fail LOUDLY in Reactant rather than silently.
+#
+#     Two classes still take this fallback (gordian total-vectorize closed the
+#     ghost-bearing state table — it now vectorizes by gather-then-select):
+#       - VARIABLE-VALENCE reductions / unstructured indirect gathers (`_NK_REDUCE`
+#         with a per-cell neighbour count, `_AK_STATE_INDIRECT[_COL]`, `_AK_CONST_
+#         EDGE`). A whole-array form needs a SEGMENTED gather+reduce (CSR-style)
+#         that reproduces `_eval_acc`'s seeded, child-ORDERED ⊕-fold bit for bit;
+#         a padded rectangular reduce would reorder the fold. Left as a fallback
+#         rather than risk a fold-order divergence across the semiring/aggregate/
+#         join corpus.
+#       - TEMPLATE SUB-KERNEL calls (`K.subs` non-empty / `_NK_SUBCALL`). Needs the
+#         sub-kernel evaluated as its own whole-array op over the parent's lanes
+#         and its result array spliced into the parent operand stream (per
+#         (variant, region), shared). The in-place tape declines these the same
+#         way (`isempty(K.subs)` gate in `_build_acc_plan`); neither path
+#         vectorizes them yet.
 function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     for S in K.subs                                 # template-body sub-kernels:
         _fill_invariant!(S, u, p, t, T)             # invariant tier once per call
@@ -752,8 +766,12 @@ struct _OopAccPlan
     gathers::Vector{Vector{Int}}      # per descriptor: state gather slots (empty otherwise)
     consts::Vector{Vector{Float64}}   # per descriptor: frozen lane values (empty otherwise)
     forc::Vector{Vector{Int}}         # per descriptor: LIVE forcing flat indices (empty otherwise)
+    ghost::Vector{Vector{Bool}}       # per descriptor: ghost-lane mask for a STATE_TBL_BOX with
+                                      # a 0 slot (empty ⇒ no ghost); true lanes select 0.0 after
+                                      # a gather at a SAFE index (see _build_oop_acc_plan)
 end
-const _OOP_ACC_FALLBACK = _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[])
+const _OOP_ACC_FALLBACK =
+    _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[])
 
 # Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order.
 function _oop_acc_lanes(cs::_CellSet)
@@ -787,7 +805,10 @@ end
 
 # Can the whole spine (plus CSE recipes) evaluate as lane vectors? Declines the
 # n-indexed descriptors, reductions, and sub-kernel calls; a `_NK_CACHED` must
-# resolve to THIS kernel's scratch tiers.
+# resolve to THIS kernel's scratch tiers. (Ghost-bearing STATE_TBL_BOX no longer
+# declines — gordian total-vectorize closed it via gather-then-select; the
+# variable-valence reduction / indirect gather and the sub-kernel classes remain
+# per-cell — see the `_oop_run_acc_kernel` header for the precise reason.)
 function _oop_acc_vecable(n::_Node, K::_AccKernel)
     k = n.kind
     (k === _NK_REDUCE || k === _NK_SUBCALL) && return false
@@ -797,10 +818,10 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
         (ak === _AK_CONST_EDGE || ak === _AK_STATE_INDIRECT ||
          ak === _AK_STATE_INDIRECT_COL) && return false
         # An unstructured slot-table gather vectorizes as a plain precomputed
-        # gather (gather-of-gather resolved host-side) — unless the table holds a
-        # ghost slot (0), whose 0.0 blend would need per-lane masking: that
-        # kernel keeps the documented per-cell oop fallback.
-        ak === _AK_STATE_TBL_BOX && any(==(0), a.conn) && return false
+        # gather (gather-of-gather resolved host-side). A ghost slot (0) in the
+        # table also vectorizes (gordian total-vectorize): gather at a SAFE index
+        # and select 0.0 on the ghost lanes against a host-precomputed mask (see
+        # `_build_oop_acc_plan`) — no per-cell fallback, still whole-array only.
         # CONST_CELL addresses by `oln`, which equals the ordinal only for a
         # contiguous set — an indirect-outs kernel would freeze wrong lanes.
         # (The builder never emits it there; this guards hand-built kernels.)
@@ -823,16 +844,25 @@ function _build_oop_acc_plan(K::_AccKernel)
     gathers = [Int[] for _ in 1:nacc]
     consts  = [Float64[] for _ in 1:nacc]
     forc    = [Int[] for _ in 1:nacc]
+    ghost   = [Bool[] for _ in 1:nacc]
     for (i, a) in enumerate(K.acc)
         k = a.kind
         if k === _AK_STATE_AFFINE
             gathers[i] = out .+ a.delta
         elseif k === _AK_STATE_TBL_BOX
             # Gather-of-gather resolved on host: the per-lane state slot is the
-            # box-addressed table entry (never 0 — `_oop_acc_vecable` declined
-            # ghost-bearing tables), so the trace sees ONE plain gather.
-            gathers[i] = Int[@inbounds a.conn[a.off + (m1[l]-1)*a.s1 +
-                             (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
+            # box-addressed table entry. A ghost slot (0) — which the in-place
+            # tape reads as 0.0 — is gathered at a SAFE index (1, always valid)
+            # and masked: the eval selects 0.0 on those lanes, so the trace still
+            # sees ONE whole-array gather plus a select against a constant mask.
+            raw = Int[@inbounds a.conn[a.off + (m1[l]-1)*a.s1 +
+                      (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
+            if any(==(0), raw)
+                ghost[i]   = Bool[s == 0 for s in raw]
+                gathers[i] = Int[s == 0 ? 1 : s for s in raw]
+            else
+                gathers[i] = raw
+            end
         elseif k === _AK_CONST_AFFINE
             gathers_i = out .+ a.delta
             consts[i] = a.arr[gathers_i]
@@ -855,7 +885,7 @@ function _build_oop_acc_plan(K::_AccKernel)
         end
         # SCALAR / STATE_FIXED / ARR_FIXED: read directly by the walker.
     end
-    return _OopAccPlan(true, out, gathers, consts, forc)
+    return _OopAccPlan(true, out, gathers, consts, forc, ghost)
 end
 
 # The lane walker: value-returning, whole-array, routed through the same seams
@@ -870,8 +900,14 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     if k === _NK_ACCESS
         a = K.acc[nd.idx]
         ak = a.kind
-        if ak === _AK_STATE_AFFINE || ak === _AK_STATE_TBL_BOX
+        if ak === _AK_STATE_AFFINE
             return _oop_gather(u, plan.gathers[nd.idx])
+        elseif ak === _AK_STATE_TBL_BOX
+            g = _oop_gather(u, plan.gathers[nd.idx])
+            m = plan.ghost[nd.idx]
+            # ghost lanes (table slot 0) select 0.0 — the in-place tape's
+            # `s == 0 ? 0.0 : u[s]`, bit-identical; the gather used a safe index.
+            return isempty(m) ? g : ifelse.(m, zero(T), g)
         elseif ak === _AK_STATE_FIXED
             return convert(T, _oop_read_state(u, a.idx))
         elseif ak === _AK_SCALAR

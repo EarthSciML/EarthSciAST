@@ -363,6 +363,51 @@ end
         @test got == want
     end
 
+    @testset "ghost-bearing state table vectorizes (gather-then-select)" begin
+        # A `_AK_STATE_TBL_BOX` whose table holds a ghost slot (0) — read as 0.0
+        # by the in-place tape — used to keep the per-cell oop fallback. It now
+        # vectorizes (gordian total-vectorize): gather at a SAFE index, then
+        # select 0.0 on the ghost lanes against a host mask. Must be bit-identical
+        # to the in-place tape, evaluate WITHOUT scalar-indexing the state, and
+        # differentiate correctly (ghost lanes carry zero state-derivative).
+        N = 40
+        u = _seed(N)
+        conn = Int[ i % 4 == 0 ? 0 : ((i + 7) % N) + 1  for i in 1:N ]  # every 4th ghost
+        @assert any(==(0), conn) && any(!=(0), conn)
+        acc = ESM._AccDesc[ESM._AccStateTblBox(conn, 1, 0, 0, 1)]       # boxaddr = i
+        spine = ESM._aop(:+, ESM._acc(1), ESM._aop(:*, ESM._alit(2.0), ESM._acc(1)))
+        K = ESM._AccKernel(ESM._CellSet([1], UnitRange{Int}[1:N], 0), spine, acc,
+                           ESM._FixedBound(0), 0.0)
+
+        # in-place tape reference (handles the ghost via _TC_GATHER_STATE_TBL)
+        ref = zeros(N)
+        ESM._run_acc_plan!(ref, u, nothing, 0.0, K, ESM._build_acc_plan(K; tile=8))
+        man = [ conn[i] == 0 ? 0.0 : 3.0*u[conn[i]] for i in 1:N ]
+        @test ref == man
+
+        op = ESM._build_oop_acc_plan(K)
+        @test op.vectorizable                                          # no more fallback
+        du_o = ESM._oop_run_acc_vec(zeros(N), u, nothing, 0.0, K, op, Float64)
+        @test du_o == ref                                             # bit-identical
+
+        # whole-array only: evaluate through a state that throws on scalar reads
+        du_g = ESM._oop_run_acc_vec(zeros(N), _GatherOnlyVec(u), nothing, 0.0, K, op, Float64)
+        @test du_g == ref
+
+        # AD: ghost lanes → zero derivative, else ∂/∂u[conn[i]] == 3.0
+        J = ForwardDiff.jacobian(
+            uu -> ESM._oop_run_acc_vec(zeros(eltype(uu), N), uu, nothing, 0.0, K,
+                                       ESM._build_oop_acc_plan(K), eltype(uu)), u)
+        @test all(isfinite, J)
+        for i in 1:N
+            if conn[i] == 0
+                @test all(==(0.0), @view J[i, :])
+            else
+                @test J[i, conn[i]] == 3.0
+            end
+        end
+    end
+
     @testset "interp.* inside an arrayop: lanes ≡ scalar cores, and AD" begin
         # The acc `:fn` arm evaluates locate→gather→blend over whole lanes (the
         # form a tracer needs). It must be BIT-identical to the branchy scalar
