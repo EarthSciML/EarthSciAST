@@ -54,6 +54,17 @@ const E = EarthSciAST
         du0 = zeros(ncell)
         for K in kernels; E._run_acc_kernel!(du0, fill(2.71828, ncell), nothing, 0.0, K); end
         @test maximum(abs, du0) == 0.0
+
+        # LANE TAPE (de-scalarized runner): every structured kernel must plan,
+        # and the planned run must be bit-identical to the scalar walk — with a
+        # deliberately tiny tile so several tile flushes cover one box.
+        du_t = zeros(ncell)
+        for K in kernels
+            P = E._build_acc_plan(K; tile=8)
+            @test P !== nothing
+            E._run_acc_plan!(du_t, u, nothing, 0.0, K, P)
+        end
+        @test du_t == ref                      # bit-identical, tiled
     end
 
     # ---------- STRUCTURED + reduced-rank const: D(q[i,j,k]) = Kz[k]*(qU - 2qC + qD) ----------
@@ -104,6 +115,16 @@ const E = EarthSciAST
         du = zeros(ncell)
         for K in kernels; E._run_acc_kernel!(du, u, nothing, 0.0, K); end
         @test du == ref                        # bit-identical, _AccConstBox addressing
+
+        # Lane tape over the 3-D boxes (const-box addressing through the tile's
+        # multi-index buffers), small tile → many flushes per box.
+        du_t = zeros(ncell)
+        for K in kernels
+            P = E._build_acc_plan(K; tile=16)
+            @test P !== nothing
+            E._run_acc_plan!(du_t, u, nothing, 0.0, K, P)
+        end
+        @test du_t == ref
     end
 
     # ---------- UNSTRUCTURED: variable-valence FV divergence ----------
@@ -150,5 +171,9 @@ const E = EarthSciAST
         du = zeros(Nc)
         E._run_acc_kernel!(du, u, nothing, 0.0, K)
         @test du == ref                        # bit-identical
+
+        # No strided formulation exists for a variable-valence indirect kernel:
+        # the lane tape must DECLINE (scalar runner keeps it), never mis-plan.
+        @test E._build_acc_plan(K) === nothing
     end
 end

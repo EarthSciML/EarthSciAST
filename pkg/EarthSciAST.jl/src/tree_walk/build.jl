@@ -1894,6 +1894,21 @@ function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{St
     return OpExpr(oplus, ASTExpr[NumExpr(zerobar); terms])
 end
 
+# ---- Cascade coverage tally (build observability) ----
+# Which of the four array-equation build attempts each equation LANDS on:
+#   :affine             — the polyhedral access-kernel build, first try
+#   :affine_fused_retry — affine succeeded only after fusing the compile-once
+#                         template tier back in
+#   :symbolic           — the symbolic-stencil `_VecKernel` path (affine declined)
+#   :percell            — the per-cell scalarize+merge fallback
+#   :percell_disabled   — ESS_STENCIL_DISABLE=1 forced the per-cell reference
+# One increment per array equation, at the cascade's dispatch below. Cheap
+# (a Dict bump per EQUATION, not per cell) and always on; read it via
+# `EarthSciAST._CASCADE_TALLY`, reset with `EarthSciAST._reset_cascade_tally!()`.
+const _CASCADE_TALLY = Dict{Symbol,Int}()
+_tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
+_reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
+
 function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
@@ -1960,6 +1975,7 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
     # a join gate (either can vary the term set per output cell) is left to the
     # per-cell path.
     affine_kernels = nothing
+    affine_first_try = false
     if !_stencil_disabled()
         affine_body =
             isempty(contract_names) ? rhs_body :
@@ -1972,6 +1988,7 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
                                 resolved_obs, array_var_info, var_map,
                                 const_registry, pgather, param_sym_set, reg_funcs,
                                 covered; template_sites=template_sites)
+        affine_first_try = affine_kernels !== nothing
         # Compile-once tier declined (a body construct the sub-kernel split cannot
         # model): retry the SAME expanded body fused — exactly the pre-tier build.
         # Rarely taken; `covered` is untouched on a `nothing` return.
@@ -1984,6 +2001,7 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
         end
     end
     if affine_kernels !== nothing
+        _tally_cascade!(affine_first_try ? :affine : :affine_fused_retry)
         get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
             (println(stderr, "[ess-affine] FIRED: ", length(affine_kernels),
                      " access kernels for ", _output_idx_strings(lhs_op)); flush(stderr))
@@ -2002,8 +2020,10 @@ function _compile_arrayop_equation!(vec_kernels, acc_kernels,
                               const_registry, pgather, param_sym_set, reg_funcs,
                               covered) : nothing
     if symbolic_kernels !== nothing
+        _tally_cascade!(:symbolic)
         append!(vec_kernels, symbolic_kernels)
     else
+        _tally_cascade!(_stencil_disabled() ? :percell_disabled : :percell)
         _compile_arrayop_percell!(vec_kernels, covered, lhs_body, rhs_body;
             idx_names=idx_names, range_iters=range_iters,
             contract_names=contract_names, contract_ranges=contract_ranges,

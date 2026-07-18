@@ -717,3 +717,583 @@ _acc(id::Int) = _mknode(kind=_NK_ACCESS, idx=id)
 _areduce(body::_Node) = _mknode(kind=_NK_REDUCE, children=_Node[body])
 _aop(op::Symbol, kids::_Node...) = _mknode(kind=_NK_OP, op=op, children=collect(_Node, kids))
 _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
+
+# ========================================================================
+# THE LANE TAPE (ess-affine de-scalarization) — a strided/whole-box runner.
+# ========================================================================
+#
+# `_run_acc_kernel!` walks the access SPINE once per cell: correct, zero-alloc,
+# eltype-generic — and per-cell interpretive (one dynamic `_Node` dispatch per
+# node PER CELL). The lane tape removes the per-cell interpretation where a
+# strided formulation exists: at build time a qualifying kernel is compiled ONCE
+# into a linear TAPE of per-NODE instructions, each a tight typed loop over a
+# TILE of cells (gather `u[oln+Δ]` / const-box reads, then elementwise op loops
+# over preallocated lane buffers). Per-node dispatch happens once per tile
+# instead of once per cell; the arithmetic per lane is the SAME scalar op
+# sequence `_eval_acc` performs per cell, in the same fold order, so the result
+# is BIT-IDENTICAL (the stencil_affine differential tests are the oracle).
+#
+# Design constraints, all load-bearing:
+#   * ZERO ALLOCATION per RHS call: every buffer (lane temporaries, literal /
+#     scalar slots, the tile's oln/multi-index vectors) is preallocated at plan
+#     build. Post-CSE the spine is a TREE (shared subtrees are `_NK_CACHED`
+#     reads), so temporaries are single-use and recycle by stack discipline —
+#     peak lane buffers ≈ tree depth + #cell-CSE recipes, NOT #nodes.
+#   * TILED, so memory stays O(#live-buffers × tile) — never O(#cells) — and the
+#     O(#structural groups) build property of the affine path is preserved: no
+#     per-lane slot vector is ever materialized.
+#   * Float64 ONLY. `_make_rhs` routes `T === Float64` (a compile-time constant)
+#     through the tape and every other value type (ForwardDiff `Dual`) through
+#     the scalar `_run_acc_kernel!`, which stays the eltype-generic reference.
+#   * DECLINES (returns `nothing`, scalar runner keeps the kernel) anything whose
+#     vector semantics could diverge from the scalar walk: `ifelse`/`and`/`or`
+#     (LAZY per cell in `_eval_acc_op`; an eager lane loop could evaluate a
+#     guarded arm the scalar walk skips), `_NK_REDUCE` (n-dependent), template
+#     sub-kernels, boxed closed functions, and the unstructured n-indexed
+#     descriptors. Interp `:fn` leaves ARE supported — a per-lane loop over the
+#     SAME `_interp_*_core` kernels is bit-identical by construction.
+
+# Tape opcodes.
+const _TC_GATHER_STATE   = UInt8(1)   # d[l] = u[oln[l] + delta]
+const _TC_GATHER_ARR_OLN = UInt8(2)   # d[l] = arr[oln[l] + delta]
+const _TC_GATHER_ARR_BOX = UInt8(3)   # d[l] = arr[off + (mi1[l]-1)s1 + (mi2[l]-1)s2 + (mi3[l]-1)s3]
+const _TC_LOOP_IDX       = UInt8(4)   # d[l] = Float64(mi{delta}[l])
+const _TC_GATHER_ARR_CELL= UInt8(5)   # d[l] = arr[cell[l]]  (contiguous: cell == oln)
+const _TC_OP             = UInt8(6)   # elementwise / fold op over operand buffers
+const _TC_INTERP_LINEAR  = UInt8(7)   # d[l] = _interp_linear_core(spec, q[l])
+const _TC_INTERP_BILINEAR= UInt8(8)   # d[l] = _interp_bilinear_core(spec, x[l], y[l])
+const _TC_INTERP_SEARCH  = UInt8(9)   # d[l] = Float64(_interp_searchsorted_core(spec, q[l]))
+
+# One instruction. Operand `args[k]` is a buffer id into the plan's `bufs`;
+# `strides[k]` is 0 (a length-1 scalar/literal slot, broadcast) or 1 (a lane
+# buffer). `1 + (l-1)*stride` is the branch-free unified read (the classic
+# broadcast trick), so every op loop serves scalar and lane operands alike.
+struct _AccInstr
+    code::UInt8
+    op::Symbol
+    dest::Int
+    args::Vector{Int}
+    strides::Vector{Int}
+    delta::Int                 # gather Δ (GATHER_*) / loop dim (LOOP_IDX)
+    arr::Vector{Float64}       # gather source (empty sentinel otherwise)
+    s1::Int; s2::Int; s3::Int; off::Int   # box addressing (GATHER_ARR_BOX)
+    payload::Any               # typed interp spec (INTERP_*), else nothing
+end
+_mkinstr(code::UInt8; op::Symbol=Symbol(""), dest::Int=0, args::Vector{Int}=Int[],
+         strides::Vector{Int}=Int[], delta::Int=0, arr::Vector{Float64}=_AK_NO_ARR,
+         s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, payload=nothing) =
+    _AccInstr(code, op, dest, args, strides, delta, arr, s1, s2, s3, off, payload)
+
+# Per-call scalar sources: lane-INVARIANT leaves, read once per RHS call into a
+# length-1 buffer (stride-0 operand). `_SS_ARR` re-reads its (possibly LIVE
+# forcing) array on every call — never folded at plan time.
+const _SS_PARAM = UInt8(1)     # Float64(getfield(p, sym))
+const _SS_TIME  = UInt8(2)     # Float64(t)
+const _SS_STATE = UInt8(3)     # u[idx]           (invariant pinned state slot)
+const _SS_ARR   = UInt8(4)     # arr[idx]         (invariant — possibly live — gather)
+const _SS_INV   = UInt8(5)     # inv-CSE scratch f64[idx] (filled by _fill_invariant!)
+struct _AccScalarSrc
+    kind::UInt8
+    idx::Int
+    sym::Symbol
+    arr::Vector{Float64}
+    scratch::_AccScratch
+    dest::Int                  # 1-length buffer id
+end
+const _SS_NO_SCRATCH = _AccScratch(0)
+
+struct _AccPlan
+    tile::Int
+    bufs::Vector{Vector{Float64}}
+    scalars::Vector{_AccScalarSrc}
+    instrs::Vector{_AccInstr}
+    result::Int                # spine result buffer id
+    result_stride::Int         # 0 ⇒ lane-invariant spine value
+    oln::Vector{Int}           # per-tile output slots (c == oln, see _run_box_kernel!)
+    mi1::Vector{Int}           # per-tile loop multi-index (padded with 1s)
+    mi2::Vector{Int}
+    mi3::Vector{Int}
+end
+
+# Plan-build decline: the kernel keeps the scalar runner. Never an error.
+struct _AccPlanDecline <: Exception end
+
+mutable struct _AccPlanBuilder
+    tile::Int
+    bufs::Vector{Vector{Float64}}
+    free::Vector{Int}                  # recyclable lane-buffer ids
+    lit_cache::Dict{Float64,Int}
+    scal_cache::Dict{Any,Int}
+    scalars::Vector{_AccScalarSrc}
+    instrs::Vector{_AccInstr}
+    recipe_bufs::Vector{Int}           # cell-CSE slot → buffer id
+    recipe_strides::Vector{Int}
+end
+_AccPlanBuilder(tile::Int) =
+    _AccPlanBuilder(tile, Vector{Float64}[], Int[], Dict{Float64,Int}(),
+                    Dict{Any,Int}(), _AccScalarSrc[], _AccInstr[], Int[], Int[])
+
+function _plan_newlane!(B::_AccPlanBuilder)
+    isempty(B.free) || return pop!(B.free)
+    push!(B.bufs, Vector{Float64}(undef, B.tile))
+    return length(B.bufs)
+end
+function _plan_lit!(B::_AccPlanBuilder, v::Float64)
+    get!(B.lit_cache, v) do
+        push!(B.bufs, Float64[v])
+        length(B.bufs)
+    end
+end
+function _plan_scalar!(B::_AccPlanBuilder, kind::UInt8; idx::Int=0, sym::Symbol=Symbol(""),
+                       arr::Vector{Float64}=_AK_NO_ARR,
+                       scratch::_AccScratch=_SS_NO_SCRATCH)
+    key = (kind, idx, sym, objectid(arr), objectid(scratch))
+    get!(B.scal_cache, key) do
+        push!(B.bufs, Float64[0.0])
+        d = length(B.bufs)
+        push!(B.scalars, _AccScalarSrc(kind, idx, sym, arr, scratch, d))
+        d
+    end
+end
+
+# Emit one node; returns `(buf, stride, istemp)`. `istemp` ⇒ the buffer is a
+# single-use lane temporary the CALLER may recycle once consumed.
+function _plan_emit!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
+    k = nd.kind
+    if k === _NK_ACCESS
+        a = K.acc[nd.idx]
+        ak = a.kind
+        if ak === _AK_STATE_AFFINE
+            d = _plan_newlane!(B)
+            push!(B.instrs, _mkinstr(_TC_GATHER_STATE; dest=d, delta=a.delta))
+            return (d, 1, true)
+        elseif ak === _AK_CONST_AFFINE
+            d = _plan_newlane!(B)
+            push!(B.instrs, _mkinstr(_TC_GATHER_ARR_OLN; dest=d, delta=a.delta, arr=a.arr))
+            return (d, 1, true)
+        elseif ak === _AK_CONST_BOX || ak === _AK_FORCING_BOX
+            # Same addressing; a FORCING_BOX arr is the aliased LIVE buffer and is
+            # re-gathered per tile, so an in-place refresh is always seen.
+            d = _plan_newlane!(B)
+            push!(B.instrs, _mkinstr(_TC_GATHER_ARR_BOX; dest=d, arr=a.arr,
+                                     s1=a.s1, s2=a.s2, s3=a.s3, off=a.off))
+            return (d, 1, true)
+        elseif ak === _AK_LOOP_IDX
+            d = _plan_newlane!(B)
+            push!(B.instrs, _mkinstr(_TC_LOOP_IDX; dest=d, delta=a.dim))
+            return (d, 1, true)
+        elseif ak === _AK_CONST_CELL
+            d = _plan_newlane!(B)
+            push!(B.instrs, _mkinstr(_TC_GATHER_ARR_CELL; dest=d, arr=a.arr))
+            return (d, 1, true)
+        elseif ak === _AK_SCALAR
+            return (_plan_lit!(B, a.v), 0, false)
+        elseif ak === _AK_STATE_FIXED
+            return (_plan_scalar!(B, _SS_STATE; idx=a.idx), 0, false)
+        elseif ak === _AK_ARR_FIXED
+            return (_plan_scalar!(B, _SS_ARR; idx=a.idx, arr=a.arr), 0, false)
+        else
+            throw(_AccPlanDecline())   # CONST_EDGE / STATE_INDIRECT[_COL]: n-indexed
+        end
+    elseif k === _NK_LITERAL
+        return (_plan_lit!(B, nd.literal), 0, false)
+    elseif k === _NK_PARAM
+        return (_plan_scalar!(B, _SS_PARAM; sym=nd.sym), 0, false)
+    elseif k === _NK_TIME
+        return (_plan_scalar!(B, _SS_TIME), 0, false)
+    elseif k === _NK_CACHED
+        pl = nd.payload
+        if pl === K.cse.scratch
+            return (B.recipe_bufs[nd.idx], B.recipe_strides[nd.idx], false)
+        elseif pl === K.cse.inv_scratch
+            return (_plan_scalar!(B, _SS_INV; idx=nd.idx, scratch=K.cse.inv_scratch), 0, false)
+        end
+        throw(_AccPlanDecline())       # foreign scratch (a sub-kernel context)
+    elseif k === _NK_OP
+        return _plan_emit_op!(B, nd, K)
+    end
+    throw(_AccPlanDecline())           # _NK_REDUCE / _NK_SUBCALL / anything else
+end
+
+# Ops with lazy scalar semantics (`ifelse`/`and`/`or`) are DECLINED — see the
+# header. `:Pre` and arity-1 `+`/`*` are pass-through (no instruction).
+const _PLAN_LAZY_OPS = (:ifelse, :and, :or)
+
+function _plan_emit_op!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
+    op = nd.op
+    op in _PLAN_LAZY_OPS && throw(_AccPlanDecline())
+    ch = nd.children
+    if op === :pi || op === :π
+        return (_plan_lit!(B, Float64(pi)), 0, false)
+    elseif op === :e
+        return (_plan_lit!(B, Float64(ℯ)), 0, false)
+    elseif op === :Pre
+        length(ch) == 1 || throw(_AccPlanDecline())
+        return _plan_emit!(B, ch[1], K)
+    elseif (op === :+ || op === :*) && length(ch) == 1
+        return _plan_emit!(B, ch[1], K)
+    elseif op === :fn
+        return _plan_emit_fn!(B, nd, K)
+    end
+    _plan_op_supported(op, length(ch)) || throw(_AccPlanDecline())
+    # Children first (left→right, same order as the scalar walk), THEN the dest,
+    # THEN recycle: a temp freed before a sibling is emitted could be clobbered.
+    ops = Tuple{Int,Int,Bool}[_plan_emit!(B, c, K) for c in ch]
+    d = _plan_newlane!(B)
+    push!(B.instrs, _mkinstr(_TC_OP; op=op, dest=d,
+                             args=Int[o[1] for o in ops],
+                             strides=Int[o[2] for o in ops]))
+    for o in ops
+        o[3] && push!(B.free, o[1])
+    end
+    return (d, 1, true)
+end
+
+function _plan_emit_fn!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
+    pl = nd.payload
+    ch = nd.children
+    code = pl isa Tuple{String,_InterpLinearSpec} ? _TC_INTERP_LINEAR :
+           pl isa Tuple{String,_InterpBilinearSpec} ? _TC_INTERP_BILINEAR :
+           pl isa Tuple{String,_InterpSearchsortedSpec} ? _TC_INTERP_SEARCH :
+           throw(_AccPlanDecline())    # boxed all-scalar fn: per-lane Any boxing
+    ops = Tuple{Int,Int,Bool}[_plan_emit!(B, c, K) for c in ch]
+    d = _plan_newlane!(B)
+    push!(B.instrs, _mkinstr(code; dest=d,
+                             args=Int[o[1] for o in ops],
+                             strides=Int[o[2] for o in ops], payload=pl[2]))
+    for o in ops
+        o[3] && push!(B.free, o[1])
+    end
+    return (d, 1, true)
+end
+
+# Which ops the tape's `_TC_OP` runner handles (mirrors `_eval_acc_op` minus the
+# lazy ops, `:fn` and the plan-time constants — those have their own emit arms).
+function _plan_op_supported(op::Symbol, nargs::Int)
+    (op === :+ || op === :*) && return nargs >= 1
+    op === :- && return nargs == 1 || nargs == 2
+    op === :neg && return nargs == 1
+    op === :not && return nargs == 1
+    op === :atan && return nargs == 1 || nargs == 2
+    any(r -> r.sym === op, _BINARY_ELEMENTWISE_OPS) && return nargs == 2
+    any(r -> r.sym === op, _COMPARISON_ELEMENTWISE_OPS) && return nargs == 2
+    any(r -> r.sym === op, _UNARY_ELEMENTWISE_OPS) && return nargs == 1
+    any(r -> r.sym === op, _NARY_MINMAX_OPS) && return nargs >= 2
+    return false
+end
+
+"""
+    _build_acc_plan(K::_AccKernel; tile=1024) -> Union{_AccPlan,Nothing}
+
+Compile `K` into a lane tape, or return `nothing` when the kernel has no strided
+formulation (reduction, sub-kernel call, lazy op, boxed closed function,
+n-indexed descriptor) — the scalar `_run_acc_kernel!` then keeps the kernel.
+"""
+function _build_acc_plan(K::_AccKernel; tile::Int=1024)
+    isempty(K.subs) || return nothing
+    length(K.cells.strides) <= 3 || return nothing   # >3-D box: scalar fallback
+    B = _AccPlanBuilder(tile)
+    try
+        cse = K.cse
+        for r in cse.recipes
+            (b, s, _) = _plan_emit!(B, r, K)   # recipe results are multi-read: never recycled
+            push!(B.recipe_bufs, b)
+            push!(B.recipe_strides, s)
+        end
+        (rb, rs, _) = _plan_emit!(B, K.spine, K)
+        mi2 = fill(1, tile); mi3 = fill(1, tile)
+        return _AccPlan(tile, B.bufs, B.scalars, B.instrs, rb, rs,
+                        Vector{Int}(undef, tile), Vector{Int}(undef, tile), mi2, mi3)
+    catch err
+        err isa _AccPlanDecline && return nothing
+        rethrow()
+    end
+end
+
+# ---- Tape op loops (generated from the op-registry tables, like every ladder) ----
+let arms = :(return false)
+    for row in reverse(_UNARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             @inbounds for l in 1:L
+                                 d[l] = $(row.sym)(a[1 + (l-1)*sa])
+                             end
+                             return true
+                         end, arms)
+    end
+    @eval @inline function _tape_unary!(op::Symbol, d::Vector{Float64},
+                                        a::Vector{Float64}, sa::Int, L::Int)
+        $arms
+    end
+end
+
+let arms = :(return false)
+    for row in reverse(_BINARY_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             @inbounds for l in 1:L
+                                 d[l] = $(row.fnsym)(a[1 + (l-1)*sa], b[1 + (l-1)*sb])
+                             end
+                             return true
+                         end, arms)
+    end
+    @eval @inline function _tape_binary!(op::Symbol, d::Vector{Float64},
+                                         a::Vector{Float64}, sa::Int,
+                                         b::Vector{Float64}, sb::Int, L::Int)
+        $arms
+    end
+end
+
+let arms = :(return false)
+    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             @inbounds for l in 1:L
+                                 d[l] = $(row.fnsym)(a[1 + (l-1)*sa], b[1 + (l-1)*sb]) ? 1.0 : 0.0
+                             end
+                             return true
+                         end, arms)
+    end
+    @eval @inline function _tape_comparison!(op::Symbol, d::Vector{Float64},
+                                             a::Vector{Float64}, sa::Int,
+                                             b::Vector{Float64}, sb::Int, L::Int)
+        $arms
+    end
+end
+
+let arms = :(return false)
+    for row in reverse(_NARY_MINMAX_OPS)
+        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
+                         quote
+                             a = bufs[args[1]]; sa = sts[1]
+                             b = bufs[args[2]]; sb = sts[2]
+                             @inbounds for l in 1:L
+                                 d[l] = $(row.fnsym)(a[1 + (l-1)*sa], b[1 + (l-1)*sb])
+                             end
+                             for k in 3:length(args)
+                                 ck = bufs[args[k]]; sk = sts[k]
+                                 @inbounds for l in 1:L
+                                     d[l] = $(row.fnsym)(d[l], ck[1 + (l-1)*sk])
+                                 end
+                             end
+                             return true
+                         end, arms)
+    end
+    @eval @inline function _tape_minmax!(op::Symbol, d::Vector{Float64},
+                                         bufs::Vector{Vector{Float64}},
+                                         args::Vector{Int}, sts::Vector{Int}, L::Int)
+        $arms
+    end
+end
+
+# Fold order mirrors `_eval_acc_op`'s `:+`/`:*` arms exactly: ((c1 ⊕ c2) ⊕ c3)…
+@inline function _tape_fold!(op::Symbol, d::Vector{Float64},
+                             bufs::Vector{Vector{Float64}},
+                             args::Vector{Int}, sts::Vector{Int}, L::Int)
+    a = bufs[args[1]]; sa = sts[1]
+    b = bufs[args[2]]; sb = sts[2]
+    if op === :+
+        @inbounds for l in 1:L
+            d[l] = a[1 + (l-1)*sa] + b[1 + (l-1)*sb]
+        end
+        for k in 3:length(args)
+            ck = bufs[args[k]]; sk = sts[k]
+            @inbounds for l in 1:L
+                d[l] += ck[1 + (l-1)*sk]
+            end
+        end
+    else # :*
+        @inbounds for l in 1:L
+            d[l] = a[1 + (l-1)*sa] * b[1 + (l-1)*sb]
+        end
+        for k in 3:length(args)
+            ck = bufs[args[k]]; sk = sts[k]
+            @inbounds for l in 1:L
+                d[l] *= ck[1 + (l-1)*sk]
+            end
+        end
+    end
+    return nothing
+end
+
+function _run_acc_tape_op!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, L::Int)
+    op = ins.op
+    d = bufs[ins.dest]
+    args = ins.args; sts = ins.strides
+    if op === :+ || op === :*
+        _tape_fold!(op, d, bufs, args, sts, L)
+        return nothing
+    end
+    a = bufs[args[1]]; sa = sts[1]
+    if op === :- && length(args) == 2
+        b = bufs[args[2]]; sb = sts[2]
+        @inbounds for l in 1:L
+            d[l] = a[1 + (l-1)*sa] - b[1 + (l-1)*sb]
+        end
+        return nothing
+    elseif (op === :- || op === :neg)
+        @inbounds for l in 1:L
+            d[l] = -a[1 + (l-1)*sa]
+        end
+        return nothing
+    elseif op === :not
+        @inbounds for l in 1:L
+            d[l] = a[1 + (l-1)*sa] == 0 ? 1.0 : 0.0
+        end
+        return nothing
+    elseif op === :atan
+        if length(args) == 1
+            @inbounds for l in 1:L
+                d[l] = atan(a[1 + (l-1)*sa])
+            end
+        else
+            b = bufs[args[2]]; sb = sts[2]
+            @inbounds for l in 1:L
+                d[l] = atan(a[1 + (l-1)*sa], b[1 + (l-1)*sb])
+            end
+        end
+        return nothing
+    end
+    if length(args) == 2
+        b = bufs[args[2]]; sb = sts[2]
+        _tape_binary!(op, d, a, sa, b, sb, L) && return nothing
+        _tape_comparison!(op, d, a, sa, b, sb, L) && return nothing
+    end
+    length(args) == 1 && _tape_unary!(op, d, a, sa, L) && return nothing
+    _tape_minmax!(op, d, bufs, args, sts, L) && return nothing
+    throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))  # unreachable: plan-gated
+end
+
+function _run_acc_instr!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, u,
+                         P::_AccPlan, L::Int)
+    c = ins.code
+    if c === _TC_OP
+        _run_acc_tape_op!(ins, bufs, L)
+    elseif c === _TC_GATHER_STATE
+        d = bufs[ins.dest]; oln = P.oln; Δ = ins.delta
+        @inbounds for l in 1:L
+            d[l] = u[oln[l] + Δ]
+        end
+    elseif c === _TC_GATHER_ARR_OLN
+        d = bufs[ins.dest]; arr = ins.arr; oln = P.oln; Δ = ins.delta
+        @inbounds for l in 1:L
+            d[l] = arr[oln[l] + Δ]
+        end
+    elseif c === _TC_GATHER_ARR_BOX
+        d = bufs[ins.dest]; arr = ins.arr
+        mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+        s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
+        @inbounds for l in 1:L
+            d[l] = arr[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+        end
+    elseif c === _TC_LOOP_IDX
+        d = bufs[ins.dest]
+        mi = ins.delta === 1 ? P.mi1 : ins.delta === 2 ? P.mi2 : P.mi3
+        @inbounds for l in 1:L
+            d[l] = Float64(mi[l])
+        end
+    elseif c === _TC_GATHER_ARR_CELL
+        d = bufs[ins.dest]; arr = ins.arr; oln = P.oln    # cell ordinal == oln
+        @inbounds for l in 1:L
+            d[l] = arr[oln[l]]
+        end
+    elseif c === _TC_INTERP_LINEAR
+        d = bufs[ins.dest]; spec = ins.payload::_InterpLinearSpec
+        q = bufs[ins.args[1]]; sq = ins.strides[1]
+        @inbounds for l in 1:L
+            d[l] = _interp_linear_core(spec.table, spec.axis, q[1 + (l-1)*sq])
+        end
+    elseif c === _TC_INTERP_BILINEAR
+        d = bufs[ins.dest]; spec = ins.payload::_InterpBilinearSpec
+        x = bufs[ins.args[1]]; sx = ins.strides[1]
+        y = bufs[ins.args[2]]; sy = ins.strides[2]
+        @inbounds for l in 1:L
+            d[l] = _interp_bilinear_core(spec.table, spec.axis_x, spec.axis_y,
+                                         x[1 + (l-1)*sx], y[1 + (l-1)*sy])
+        end
+    else # _TC_INTERP_SEARCH
+        d = bufs[ins.dest]; spec = ins.payload::_InterpSearchsortedSpec
+        q = bufs[ins.args[1]]; sq = ins.strides[1]
+        @inbounds for l in 1:L
+            d[l] = Float64(_interp_searchsorted_core("interp.searchsorted",
+                                                     q[1 + (l-1)*sq], spec.xs))
+        end
+    end
+    return nothing
+end
+
+@inline function _flush_acc_tile!(du, u, P::_AccPlan, L::Int)
+    bufs = P.bufs
+    instrs = P.instrs
+    @inbounds for i in eachindex(instrs)
+        _run_acc_instr!(instrs[i], bufs, u, P, L)
+    end
+    r = bufs[P.result]; rs = P.result_stride
+    oln = P.oln
+    @inbounds for l in 1:L
+        du[oln[l]] = r[1 + (l-1)*rs]
+    end
+    return nothing
+end
+
+# Run one planned kernel in place. Bit-identical to `_run_acc_kernel!` at
+# Float64 (same per-lane op sequence, same fold order, same write order) and
+# zero-allocation (all buffers preallocated on the plan). `Float64` only —
+# `_make_rhs` gates on `T === Float64` and sends every other value type to the
+# scalar runner.
+function _run_acc_plan!(du, u, p, t, K::_AccKernel, P::_AccPlan)
+    _fill_invariant!(K, u, p, t, Float64)
+    # Per-call scalar sources → their 1-length stride-0 buffers.
+    scs = P.scalars
+    bufs = P.bufs
+    @inbounds for i in eachindex(scs)
+        s = scs[i]
+        v = s.kind === _SS_PARAM ? Float64(getfield(p, s.sym)) :
+            s.kind === _SS_TIME  ? Float64(t) :
+            s.kind === _SS_STATE ? Float64(u[s.idx]) :
+            s.kind === _SS_ARR   ? s.arr[s.idx] :
+                                   _acc_scratch_read(s.scratch, s.idx, Float64)
+        bufs[s.dest][1] = v
+    end
+    cs = K.cells
+    oln = P.oln; mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+    tile = P.tile
+    if _is_contig(cs)
+        rng = cs.ranges[1]
+        i = first(rng); hi = last(rng)
+        while i <= hi
+            L = min(tile, hi - i + 1)
+            @inbounds for l in 1:L
+                oln[l] = i + l - 1
+                mi1[l] = i + l - 1        # midx == (c, 1, 1) for a contiguous set
+            end
+            _flush_acc_tile!(du, u, P, L)
+            i += L
+        end
+        return du
+    end
+    # Strided box, in the EXACT `_run_box_kernel!` iteration order.
+    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
+    L = 0
+    if nd == 1
+        s1 = st[1]
+        @inbounds for i in rg[1]
+            L += 1; oln[L] = b + i*s1; mi1[L] = i
+            L == tile && (_flush_acc_tile!(du, u, P, L); L = 0)
+        end
+    elseif nd == 2
+        s1 = st[1]; s2 = st[2]
+        @inbounds for j in rg[2], i in rg[1]
+            L += 1; oln[L] = b + i*s1 + j*s2; mi1[L] = i; mi2[L] = j
+            L == tile && (_flush_acc_tile!(du, u, P, L); L = 0)
+        end
+    else # nd == 3 (plan build capped rank at 3)
+        s1 = st[1]; s2 = st[2]; s3 = st[3]
+        @inbounds for k in rg[3], j in rg[2], i in rg[1]
+            L += 1; oln[L] = b + i*s1 + j*s2 + k*s3; mi1[L] = i; mi2[L] = j; mi3[L] = k
+            L == tile && (_flush_acc_tile!(du, u, P, L); L = 0)
+        end
+    end
+    L > 0 && _flush_acc_tile!(du, u, P, L)
+    return du
+end
