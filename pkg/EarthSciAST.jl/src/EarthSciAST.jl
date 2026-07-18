@@ -187,7 +187,10 @@ export
     provider_refresh_times, provider_is_const, provider_sample,
     # One-call run entry (load → discretize → build_evaluator → seed → refresh →
     # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).
+    # `prepare` runs the deterministic-per-document pipeline ONCE into a cached
+    # `PreparedModel`; `simulate(prep, tspan; …)` skips prep/build entirely.
     simulate, SimulationResult, SimulateError, seed_expression_ic!, final_state,
+    prepare, PreparedModel,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,
