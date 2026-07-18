@@ -16,7 +16,7 @@ fallback throws a `RefreshError` telling the user what to load.
 """
 module EarthSciASTDataRefreshExt
 
-using EarthSciAST: Model, RefreshBuffers,
+using EarthSciAST: RefreshBuffers,
     RefreshError, provider_is_const, provider_refresh_times, provider_sample,
     _write_forcing!
 # Explicit import so we can add the extension method to this generic.
@@ -53,7 +53,10 @@ function _group_discrete_providers(providers::AbstractDict, buffers::RefreshBuff
     return groups
 end
 
-function build_refresh_callback(model::Model;
+# Zero-positional keyword method (the callback is a pure function of the
+# provider/buffer registries; it never reads the model). More specific than the
+# core's varargs fallback, so it wins whenever this extension is loaded.
+function build_refresh_callback(;
                                 providers::AbstractDict,
                                 buffers::RefreshBuffers,
                                 post_refresh::Function = () -> nothing)

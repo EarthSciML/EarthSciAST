@@ -63,7 +63,7 @@ struct _BareSource end
         prov = MockProvider([1.0, 2.0], Dict(
             1.0 => Dict("forcing" => [5.0]),
             2.0 => Dict("forcing" => [-1.0])))
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers=Dict("forcing" => prov),
             buffers=RefreshBuffers(Dict("forcing" => buf)))   # SAME buf object
 
@@ -95,7 +95,7 @@ struct _BareSource end
         prov = MockProvider([1.0, 2.0], Dict(
             1.0 => Dict("forcing" => [5.0]),
             2.0 => Dict("forcing" => [-1.0])))
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers=Dict("forcing" => prov),
             buffers=RefreshBuffers(Dict("forcing" => buf)))
 
@@ -115,7 +115,7 @@ struct _BareSource end
 
         const_prov = MockProvider(Float64[], Dict{Float64,Dict{String,Vector{Float64}}}())
         @test provider_is_const(const_prov)
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers=Dict("forcing" => const_prov),
             buffers=RefreshBuffers(Dict("forcing" => buf)))
         @test isempty(tstops)
@@ -137,7 +137,7 @@ struct _BareSource end
             param_arrays=Dict("a" => abuf, "b" => bbuf))
 
         prov = MockProvider([1.0], Dict(1.0 => Dict("a" => [10.0], "b" => [100.0])))
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers=Dict("a" => prov, "b" => prov),          # SAME provider object
             buffers=RefreshBuffers(Dict("a" => abuf, "b" => bbuf)))
         @test tstops == [1.0]
@@ -204,7 +204,7 @@ struct _BareSource end
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))])
         prov = MockProvider([1.0], Dict(1.0 => Dict("forcing" => [5.0])))
         err = try
-            build_refresh_callback(model;
+            build_refresh_callback(;
                 providers=Dict("forcing" => prov),
                 buffers=RefreshBuffers(Dict("other" => [0.0])))
             nothing

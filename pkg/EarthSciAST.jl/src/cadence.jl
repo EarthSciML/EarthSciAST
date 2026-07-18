@@ -1,11 +1,11 @@
 """
     EarthSciAST.Cadence
 
-The **dependency-partition (cadence) pass** — the EarthSciAST analogue of
-ModelingToolkit's `structural_simplify` / observed-variable elimination,
-generalised from two phases to three. It is the normative contract of
-`CONFORMANCE_SPEC.md` §5.7 (RFC `semiring-faq-unified-ir` §6.1), implemented for
-the Julia binding (bead `ess-my4.3.7`).
+The raw-JSON **cadence classifier** backing the cross-binding conformance
+contract of `CONFORMANCE_SPEC.md` §5.7 (RFC `semiring-faq-unified-ir` §6.1,
+bead `ess-my4.3.7`) — the EarthSciAST analogue of ModelingToolkit's
+`structural_simplify` / observed-variable elimination, generalised from two
+phases to three.
 
 Every value is classified by the **cadence** at which it can change, forming the
 total order `const ⊏ discrete ⊏ continuous`:
@@ -17,21 +17,21 @@ total order `const ⊏ discrete ⊏ continuous`:
 | `continuous` | every step | hot per-step `_Node` tree | `state` variable, the independent variable `t` |
 
 The pass is a **pure function of the data-dependency DAG**: `class(node) = max`
-over its inputs' classes, derived bottom-up, never declared. It generalises the
-constant-fold the numeric build already performs (`tree_walk.jl`'s
-`_resolve_indices` inlining non-state gathers to literals) — applied once at the
-`const` threshold and again at the `discrete` one.
+over its inputs' classes, derived bottom-up, never declared.
 
-# Why raw JSON, not the typed IR
+# CONFORMANCE-ONLY: why raw JSON, not the typed IR
 
-Like [`build_reference_graph`](@ref) (`reference_graph.jl`), this pass walks the
-**raw parsed JSON** of a model (`AbstractDict` / `JSON3.Object` → native dicts),
-*not* the typed `OpExpr` IR. The cadence vocabulary lives in fields the typed IR
-does not preserve — the aggregate-node `id`, the `expect_cadence` assertion, the
-`distinct` flag. The schema already admits all of them, so the raw document
-carries everything the partition needs. (The `discrete` variable kind IS now
-modelled by the typed parser — `DiscreteVariable` — but the other three fields
-still are not, so this pass stays on the raw document.)
+This module walks the **raw parsed JSON** of a model (`AbstractDict` /
+`JSON3.Object` → native dicts) because the conformance fixtures carry the
+`expect_cadence` assertion — an annotation the typed IR deliberately does not
+parse. It is consumed ONLY by the conformance surface: the cadence adapter
+(`scripts/cadence_adapter.jl`, which also hosts the §5.7 `partition_model`
+pass and the CONST-fold kernels) and `test/cadence_test.jl`. The PRODUCTION
+build path no longer touches it: the value-invention front door
+(`value_invention.jl`) derives the §5.7 guard-2 classification directly on the
+typed `OpExpr` IR, which now preserves every wire field
+(`OPEXPR_FIELD_TABLE`, types.jl). `reference_graph.jl` walks raw JSON for the
+same conformance reason.
 
 # The gather rule (the design's load-bearing rule)
 
@@ -45,27 +45,19 @@ is what lets a stencil *split* across phases: in `index(u, index(nbr,i,k))` the
 inner topology selection `index(nbr,i,k)` is `const` while the outer value load
 `index(u, .)` is `continuous`.
 
-# Outputs
-
-[`partition_model`](@ref) returns the three things conformance asserts directly
-(§5.7.7): the **class summary** (annotated nodes tallied by derived class), the
-**materialization-point set** (where the frontier cut fires — a lower-cadence
-sub-DAG feeding a higher-cadence parent, plus the per-equation output buffers
-that fold out of the hot path entirely), and the emptiness of the hot tree /
-per-event handler. The `const`-fold byte kernels ([`compute_fold`](@ref)) reuse
-the [`Relational`](@ref) engine and serialise byte-identically to the golden.
-
 The guards ([`assert_no_continuous_relational`](@ref),
-[`assert_acyclic_index_sets`](@ref), and the `expect_cadence` check folded into
-[`partition_model`](@ref)) are *checked*, not hoped for.
+[`assert_acyclic_index_sets`](@ref), and the [`check_expect_cadence!`](@ref)
+assertion) are *checked*, not hoped for. The index-set acyclicity guard routes
+through the shared three-color DFS (`detect_cycle`, reference_graph.jl) over a
+materialised set→set graph instead of carrying its own cycle detector.
 """
 module Cadence
 
 import JSON3
-using ..Relational: skolem_edge, distinct
+using ..EarthSciAST: ReferenceGraph, ReferenceVertex, detect_cycle,
+    _ensure_vertex!, _add_edge!
 
-export CadenceError, partition_model, compute_fold, canonical_serialize,
-    classify, run_guards,
+export CadenceError, classify,
     assert_no_continuous_relational, assert_acyclic_index_sets,
     load_model_json
 
@@ -95,14 +87,9 @@ Base.showerror(io::IO, e::CadenceError) = print(io, "CadenceError: ", e.msg)
 # ── Raw-JSON access ─────────────────────────────────────────────────────────
 # Convert JSON3 structures to native `Dict{String,Any}` / `Vector{Any}` so node
 # access is uniform string-keyed `get`/`haskey` — a direct mirror of the
-# reference classifier (`scripts/run-cadence-conformance.py`).
-#
-# NOTE(idiom): this pass EAGERLY converts the whole document up front and then
-# assumes String keys everywhere. reference_graph.jl solves the same raw-JSON
-# access problem the opposite way: no conversion, with `_get` / `_haskey` /
-# `_str_keys` accessors that tolerate String- or Symbol-keyed dicts in place.
-# Two deliberate idioms for one problem — unify in a later wave if at all; do
-# not rewrite piecemeal.
+# reference classifier (`scripts/run-cadence-conformance.py`). Conformance
+# fixtures are small, so the up-front copy is cheap; the production build path
+# never runs this conversion (it parses straight into the typed IR).
 
 to_native(x::JSON3.Object) = Dict{String,Any}(String(k) => to_native(v) for (k, v) in pairs(x))
 to_native(x::JSON3.Array) = Any[to_native(v) for v in x]
@@ -114,8 +101,7 @@ to_native(x) = x
     load_model_json(path, model_name) -> Dict{String,Any}
 
 Load one model from an `.esm` document as a native JSON dict (no typed coercion:
-this pass needs the `id` / `expect_cadence` / `distinct` fields the typed IR does
-not preserve).
+this classifier needs the `expect_cadence` field the typed IR does not parse).
 """
 function load_model_json(path::AbstractString, model_name::AbstractString)
     doc = to_native(JSON3.read(read(path, String)))
@@ -195,10 +181,12 @@ end
 """
     child_exprs(node) -> Vector
 
-Every sub-Expression of an operator node: the operand list `args` plus the
+Every sub-Expression of a RAW operator node: the operand list `args` plus the
 aggregate/integral sub-fields `expr`, `key`, `filter`, `lower`, `upper`.
 `output_idx`, `ranges`, `wrt`, `dim`, `var` are index/metadata declarations
-(`const`), not value inputs, and are excluded.
+(`const`), not value inputs, and are excluded. (The typed-IR analogue is the
+generated `child_exprs` walker in expression.jl; this raw twin exists only
+because the conformance fixtures are classified pre-parse.)
 """
 function child_exprs(node::AbstractDict)
     out = Any[]
@@ -215,9 +203,9 @@ function child_exprs(node::AbstractDict)
 end
 
 # Per-pass class memo: operator node (by identity) → derived class. Threaded
-# through [`partition_model`](@ref) / [`run_guards`](@ref) so each node is
-# classified exactly once per pass instead of re-running the recursive
-# `classify` from scratch at every visit (quadratic-plus on deep trees).
+# through the walkers so each node is classified exactly once per pass instead
+# of re-running the recursive `classify` from scratch at every visit
+# (quadratic-plus on deep trees).
 const ClassMemo = IdDict{Any,String}
 
 """
@@ -344,7 +332,10 @@ end
 §5.7 guard 1: the `≤discrete` subgraph must be a DAG. A derived index set points
 (via `from_faq`) at the node that materialises it; that node references index
 sets (via `ranges {from}`); a cycle in those edges is an implicit/iterative
-solve, out of scope. Throws [`CadenceError`](@ref) naming the cycle.
+solve, out of scope. The implicit set→node→set relation is materialised as a
+small graph and checked by the SHARED three-color DFS
+([`detect_cycle`](@ref), reference_graph.jl). Throws [`CadenceError`](@ref)
+naming the cycle.
 """
 function assert_acyclic_index_sets(model)
     index_sets = get(model, "index_sets", Dict{String,Any}())
@@ -385,191 +376,25 @@ function assert_acyclic_index_sets(model)
         end
     end
 
-    # Three-color (WHITE/GRAY/BLACK) DFS, RECURSIVE form over the implicit
-    # set→node→set edge relation (no materialized graph). Its iterative twin
-    # is `detect_cycle` (reference_graph.jl), which colors a built
-    # `ReferenceGraph`'s explicit adjacency. Sharing one utility would mean
-    # either materializing this implicit graph or abstracting neighbor
-    # iteration across the Cadence submodule boundary — deferred; see the
-    # cross-reference note at `detect_cycle`.
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = Dict{String,Int}()
-
-    function visit(name, stack::Vector{String})
-        color[name] = GRAY
-        push!(stack, name)
-        node_id = get(set_to_node, name, nothing)
-        if node_id !== nothing
-            for nxt in get(node_reads, node_id, Set{String}())
-                haskey(set_to_node, nxt) || continue  # only derived sets participate
-                if get(color, nxt, WHITE) == GRAY
-                    cyc = vcat(stack[findfirst(==(nxt), stack):end], [nxt])
-                    throw(CadenceError(
-                        "cycle in the ≤DISCRETE index-set dependency graph " *
-                        "(implicit solve, out of scope — §5.7 guard 1): " *
-                        join(cyc, " -> ")))
-                elseif get(color, nxt, WHITE) == WHITE
-                    visit(nxt, stack)
-                end
-            end
-        end
-        pop!(stack)
-        color[name] = BLACK
-        return
-    end
-
+    # Materialise the derived-set dependency graph (vertex per derived set,
+    # edge per set→set read through its producer node) and run the shared
+    # deterministic DFS over it.
+    g = ReferenceGraph("cadence-index-set-deps")
     for name in keys(set_to_node)
-        get(color, name, WHITE) == WHITE && visit(name, String[])
+        _ensure_vertex!(g, ReferenceVertex(String(name), "index_set", String(name),
+                                           nothing, nothing, nothing))
     end
-    return
-end
-
-# ── The pass ─────────────────────────────────────────────────────────────────
-
-"""Yield every equation-RHS root expression (the computations the partition
-classifies; the LHS is the output target)."""
-function model_nodes(model)
-    out = Any[]
-    for eq in get(model, "equations", Any[])
-        rhs = get(eq, "rhs", nothing)
-        isa(rhs, AbstractDict) && push!(out, rhs)
-    end
-    return out
-end
-
-"""
-    partition_model(model::AbstractDict) -> NamedTuple
-
-Run the §5.7 partition over one model (a raw-JSON model dict). Returns:
-
-- `class_summary::Dict{String,Int}` — annotated nodes by derived class.
-- `materialization_points::Vector` — the frontier: expr-edge cuts (a
-  lower-cadence sub-DAG feeding a higher-cadence parent) plus one
-  `output_buffer` per equation whose RHS folds out of the hot path entirely
-  (class `⊏ continuous` → `const`/`discrete`→`artifact`).
-- `hot_tree_empty::Bool` — no `continuous` per-step work (a pure-topology rule).
-- `event_handler_empty::Bool` — no `discrete` per-event materialization.
-- `problems::Vector{String}` — `expect_cadence` disagreements (guard 3).
-
-This is the classification half. The relational guards
-([`assert_no_continuous_relational`](@ref), [`assert_acyclic_index_sets`](@ref))
-are applied separately by [`run_guards`](@ref).
-"""
-function partition_model(model::AbstractDict)
-    counts = Dict("const" => 0, "discrete" => 0, "continuous" => 0)
-    problems = String[]
-    points = Any[]
-    rhss = model_nodes(model)
-    # One shared memo across every walker: each node's class is derived once
-    # per pass (see ClassMemo).
-    memo = ClassMemo()
-    for rhs in rhss
-        check_expect_cadence!(rhs, model, problems, memo)
-        tally_classes!(rhs, model, counts, memo)
-        materialization_frontier!(rhs, model, points, memo)
-        # Output-buffer cut: an equation whose RHS classifies below `continuous`
-        # folds out of the per-step hot path entirely (the observed-variable
-        # elimination) — into the artifact (`const`) or the per-event handler
-        # (`discrete`). That whole RHS is a materialization point.
-        rc = classify(rhs, model, memo)
-        if CLASS_RANK[rc] < CLASS_RANK["continuous"]
-            push!(points, Dict{String,Any}(
-                "threshold" => "$(rc)->artifact",
-                "kind" => "output_buffer"))
+    for (name, node_id) in set_to_node
+        for nxt in get(node_reads, node_id, Set{String}())
+            haskey(set_to_node, nxt) || continue  # only derived sets participate
+            _add_edge!(g, String(name), String(nxt), "range_from")
         end
     end
-    hot_tree_empty = !any(has_continuous(rhs, model, memo) for rhs in rhss)
-    event_handler_empty = !any(startswith(p["threshold"], "discrete") for p in points)
-    return (class_summary=counts, materialization_points=points,
-        hot_tree_empty=hot_tree_empty, event_handler_empty=event_handler_empty,
-        problems=problems)
-end
-
-"""
-    run_guards(model)
-
-Apply the §5.7.6 checked guards over a model: the `expect_cadence` assertion
-(guard 3), no-continuous-relational (guard 2), and index-set acyclicity (guard
-1). Throws [`CadenceError`](@ref) on the first violation.
-"""
-function run_guards(model)
-    problems = String[]
-    memo = ClassMemo()
-    for rhs in model_nodes(model)
-        check_expect_cadence!(rhs, model, problems, memo)
-        assert_no_continuous_relational(rhs, model, memo)
-    end
-    isempty(problems) || throw(CadenceError(first(problems)))
-    assert_acyclic_index_sets(model)
+    cyc = detect_cycle(g)
+    cyc === nothing || throw(CadenceError(
+        "cycle in the ≤DISCRETE index-set dependency graph " *
+        "(implicit solve, out of scope — §5.7 guard 1): " * join(cyc, " -> ")))
     return
-end
-
-# ── CONST-fold kernels (§5.7.4) ──────────────────────────────────────────────
-#
-# The buffers the frontier cut folds out of the hot path. Topology folds
-# (edge enumeration, dense ranking) reuse the `Relational` engine so the bytes
-# match the §5.5 determinism contract; the array reshapes are local.
-
-"""
-    canonical_serialize(value) -> String
-
-Canonical byte form of a folded buffer: compact JSON (`,`/`:` separators, no
-spaces), integers as bare digits, nested arrays/tuples as JSON arrays — the same
-canonical-JSON discipline §5.5.3 and the round-trip / determinism contracts
-require. Compared byte-for-byte across bindings.
-"""
-canonical_serialize(x::Bool) = x ? "true" : "false"
-canonical_serialize(x::Integer) = string(x)
-canonical_serialize(v::AbstractVector) = "[" * join((canonical_serialize(e) for e in v), ",") * "]"
-canonical_serialize(t::Tuple) = "[" * join((canonical_serialize(e) for e in t), ",") * "]"
-
-fold_to_zero_based(arr) = [[x - 1 for x in row] for row in arr]
-fold_identity(arr) = arr
-
-"""Enumerate the unique edges from the (lo, hi) endpoint tables: `skolem_edge`
-canonicalises each pair (undirected → sorted), `distinct` sorts by the total
-order and drops adjacent duplicates (§5.5 rules 2 & 4). Identical to the
-determinism `edge_enumeration` reference."""
-function fold_edge_enumeration(face_lo, face_hi, mode)
-    pairs = Tuple[]
-    for (flo, fhi) in zip(face_lo, face_hi)
-        for (lo, hi) in zip(flo, fhi)
-            (isa(lo, AbstractFloat) || isa(hi, AbstractFloat)) &&
-                throw(CadenceError("float component forbidden in a topology key (§5.5 rule 1)"))
-            push!(pairs, mode == "undirected" ? skolem_edge(lo, hi) : (lo, hi))
-        end
-    end
-    return distinct(pairs)
-end
-
-"""Dense 0-based ids over the enumerated edge set (the array-backend index)."""
-function fold_rank(face_lo, face_hi, mode)
-    edges = fold_edge_enumeration(face_lo, face_hi, mode)
-    return collect(0:(length(edges)-1))
-end
-
-"""
-    compute_fold(label, spec, inputs) -> value
-
-Apply the named `const`-fold kernel (`spec["fold"]`) over the concrete `inputs`
-(the manifest's `const_fold.inputs` — the fixtures themselves are value-free).
-Returns the folded value; pass it through [`canonical_serialize`](@ref) for the
-byte form the golden pins.
-"""
-function compute_fold(label, spec, inputs)
-    kind = get(spec, "fold", nothing)
-    if kind == "to_zero_based"
-        return fold_to_zero_based(inputs[get(spec, "array", label)])
-    elseif kind == "identity"
-        return fold_identity(inputs[get(spec, "array", label)])
-    elseif kind == "edge_enumeration"
-        return fold_edge_enumeration(inputs["face_lo"], inputs["face_hi"],
-            get(inputs, "skolem", "undirected"))
-    elseif kind == "rank"
-        return fold_rank(inputs["face_lo"], inputs["face_hi"],
-            get(inputs, "skolem", "undirected"))
-    end
-    throw(CadenceError("buffer $(repr(label)): unknown fold kind $(repr(kind))"))
 end
 
 end # module Cadence

@@ -353,9 +353,7 @@ function simulate(input, tspan;
     cb = nothing
     tstops = Float64[]
     if !isempty(discrete_providers)
-        file = coerce_esm_file(doc)
-        model = _select_model(file, model_name)
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers = discrete_providers,
             buffers = RefreshBuffers(merged_param),
             post_refresh = dm.materialize!)   # recompute discrete caches per boundary

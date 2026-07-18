@@ -114,11 +114,12 @@ end
     # value-invention front-door from the COMPUTED bins (no pre-baked categorical
     # members). dx=2 ⇒ cells {1,2} share lon-bin 0, cell 3 is lon-bin 1.
     @testset "broad phase: candidate set = computed bin-Skolem equi-join" begin
-        mj = ESS._select_model_json(JSON3.read(read(_OJ_FIXTURE, String)),
-                                    "ConservativeRegridOverlapJoin")
+        _oj_file = ESS.coerce_esm_file(JSON3.read(read(_OJ_FIXTURE, String)))
         vi = ESS.materialize_value_invention(
-            mj, Dict("src_lon" => _SRC_LON, "src_lat" => _SRC_LAT,
-                     "tgt_lon" => _TGT_LON, "tgt_lat" => _TGT_LAT),
+            ESS._select_model(_oj_file, "ConservativeRegridOverlapJoin"),
+            _oj_file.index_sets,
+            Dict("src_lon" => _SRC_LON, "src_lat" => _SRC_LAT,
+                 "tgt_lon" => _TGT_LON, "tgt_lat" => _TGT_LAT),
             Dict("dx" => _DX, "dy" => _DY, "atol" => 1e-15))
         @test vi.members["candidate_set"] == [(1, 1), (1, 2), (2, 1), (2, 2), (3, 3)]
         @test vi.extents["candidate_set"] == 5

@@ -99,7 +99,7 @@ end
         prov = _RefreshLogProvider([1.0, 2.0], Dict(
             1.0 => Dict("src" => [2.0, 2.0, 2.0]),
             2.0 => Dict("src" => [3.0, 3.0, 3.0])))
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers=Dict("src" => prov),
             buffers  =RefreshBuffers(Dict("src" => srcbuf)))   # SAME buffer object as param_arrays
         @test tstops == [1.0, 2.0]
@@ -141,7 +141,7 @@ end
         const_scale = _RefreshLogProvider(Float64[], Dict{Float64,Dict{String,Vector{Float64}}}())
         @test provider_is_const(const_scale)
 
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers=Dict("src" => disc, "scale" => const_scale),
             buffers  =RefreshBuffers(Dict("src" => srcbuf)))
         @test tstops == [1.0, 2.0, 3.0]   # union of the DISCRETE anchors; the CONST provider adds none
@@ -179,7 +179,7 @@ end
         # Drive an honest solve across a boundary: the callback's affect! performs
         # a real in-place refresh through the machinery, not a hand-poked buffer.
         prov = _RefreshLogProvider([1.0], Dict(1.0 => Dict("src" => [9.0, 9.0, 9.0])))
-        cb, tstops = build_refresh_callback(model;
+        cb, tstops = build_refresh_callback(;
             providers=Dict("src" => prov),
             buffers  =RefreshBuffers(Dict("src" => srcbuf)))
         prob = ODE.ODEProblem(f!, u0, (0.0, 1.5), p)

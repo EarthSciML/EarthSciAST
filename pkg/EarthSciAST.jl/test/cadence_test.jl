@@ -8,6 +8,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 # would pollute the shared Main namespace under runtests.jl).
 const _Cadence = EarthSciAST.Cadence
 
+# The §5.7 pass driver (`partition_model`, `run_guards`) and the CONST-fold
+# kernels live in the conformance adapter script (they are consumed only by the
+# adapter and this test); its `PROGRAM_FILE` guard keeps the CLI entry from
+# firing under this include.
+include(joinpath(@__DIR__, "..", "scripts", "cadence_adapter.jl"))
+const _CadPass = CadenceConformanceAdapter
+
 # The dependency-partition (cadence) pass — CONFORMANCE_SPEC.md §5.7, the
 # normative form of RFC `semiring-faq-unified-ir` §6.1 (bead ess-my4.3.7).
 # These tests assert the Julia pass independently re-derives the same contract
@@ -26,7 +33,7 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
 
     @testset "golden agreement — $(fx["id"])" for fx in manifest["fixtures"]
         model = _Cadence.load_model_json(joinpath(TESTUTILS_REPO_ROOT, fx["fixture"]), fx["model"])
-        r = _Cadence.partition_model(model)
+        r = _CadPass.partition_model(model)
 
         # (a) class summary — annotated nodes by DERIVED class == golden.
         for (cls, n) in fx["class_summary"]
@@ -48,12 +55,12 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         cf = get(fx, "const_fold", Dict{String,Any}())
         inputs = get(cf, "inputs", Dict{String,Any}())
         for (label, spec) in get(cf, "expected", Dict{String,Any}())
-            bytes = _Cadence.canonical_serialize(_Cadence.compute_fold(label, spec, inputs))
+            bytes = _CadPass.canonical_serialize(_CadPass.compute_fold(label, spec, inputs))
             @test bytes == spec["serialized"]
         end
 
         # (d) guards hold on a valid fixture (no false positives).
-        @test (_Cadence.run_guards(model); true)
+        @test (_CadPass.run_guards(model); true)
     end
 
     @testset "gather rule splits the stencil (§5.7.3)" begin
@@ -143,7 +150,7 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         # guard lives in run_guards (not partition_model).
         fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "aggregate", "continuous_relational_node.esm")
         model = _Cadence.load_model_json(fixture, "ContinuousRelationalNode")
-        @test_throws _Cadence.CadenceError _Cadence.run_guards(model)
+        @test_throws _Cadence.CadenceError _CadPass.run_guards(model)
     end
 
     @testset "neg: from_faq cycle rejected (guard 1)" begin
@@ -167,6 +174,6 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
     end
 
     @testset "neg: float topology key rejected (§5.5 rule 1)" begin
-        @test_throws _Cadence.CadenceError _Cadence.fold_edge_enumeration(Any[Any[1.5]], Any[Any[2]], "undirected")
+        @test_throws _Cadence.CadenceError _CadPass.fold_edge_enumeration(Any[Any[1.5]], Any[Any[2]], "undirected")
     end
 end

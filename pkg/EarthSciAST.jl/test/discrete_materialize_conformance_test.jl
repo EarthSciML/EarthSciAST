@@ -91,7 +91,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
             materialize_out = dm2)
         interior = [t for t in anchors if t > 0.0]
         prov = _DMConfProvider(interior, Dict(t => Dict("src" => src_at(t)) for t in interior))
-        cb, tstops = _ESS_DM.build_refresh_callback(model;
+        cb, tstops = _ESS_DM.build_refresh_callback(;
             providers = Dict("src" => prov),
             buffers = _ESS_DM.RefreshBuffers(Dict("src" => srcbuf2)),  # SAME buffer object
             post_refresh = dm2.materialize!)

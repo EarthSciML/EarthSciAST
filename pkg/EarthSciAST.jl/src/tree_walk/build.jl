@@ -2217,9 +2217,10 @@ function _component_template_reg(file::EsmFile, model_name)
     return get(ct, "models.$name", nothing)
 end
 
-# Direct EsmFile/Model entry points carry no raw JSON, so value-invention
-# materialisation can only run through the AbstractDict front-door; default the
-# internal extents/vars to empty here so a direct typed call is unchanged.
+# Value-invention materialisation runs only through the AbstractDict
+# front-door (which owns the document-scoped index-set registry the pass
+# needs); default the internal extents/vars to empty here so a direct
+# EsmFile/Model call is unchanged.
 
 """
     build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
@@ -2236,18 +2237,18 @@ literal values. Used to inject `__stgfw_` Fornberg weight arrays for
 function build_evaluator(esm::AbstractDict;
                          model_name::Union{Nothing,AbstractString}=nothing,
                          kwargs...)
-    # `coerce_esm_file` expects a JSON3-style object (property-access
-    # getters). Round-trip through JSON3 so raw Julia Dict inputs — the
-    # signature from the bead description — work.
-    file = coerce_esm_file(JSON3.read(JSON3.write(esm)))
+    # `coerce_esm_file` normalizes every dict-like carrier (JSON3 object,
+    # native Dict, JSONLikeDict) itself — no JSON-string round-trip.
+    file = coerce_esm_file(esm)
 
-    # ---- Value-invention front-door (RFC §6.1) ----
-    # The raw JSON (NOT the typed IR, which drops the aggregate `key`/`distinct`)
-    # is the only place the value-invention vocabulary survives, so materialise
-    # any derived index set here and thread the extents into the typed path. A
-    # no-op (and byte-identical) for models without a skolem/distinct/rank node.
+    # ---- Value-invention front-door (RFC §6.1), on the TYPED IR ----
+    # `OpExpr` preserves the full value-invention vocabulary (`id`, `distinct`,
+    # `key`, `arg`, `join`, `label`; see OPEXPR_FIELD_TABLE), so any derived
+    # index set is materialised from the typed model and the extents threaded
+    # into the typed path. A no-op (and byte-identical) for models without a
+    # skolem/distinct/rank node.
     kwd = Dict{Symbol,Any}(kwargs)
-    model_json = _select_model_json(esm, model_name)
+    model = _select_model_or_nothing(file, model_name)
 
     # ---- Build-time binning-coordinate derivation (RFC §8.6.1 purity) ----
     # A broad-phase binning coordinate declared INLINE as a reduce aggregate over the
@@ -2258,22 +2259,22 @@ function build_evaluator(esm::AbstractDict;
     # observed exists.
     _params = get(kwd, :parameter_overrides, Dict{String,Float64}())
     _ca = Dict{String,Any}(String(k) => v for (k, v) in get(kwd, :const_arrays, Dict{String,Any}()))
-    if model_json !== nothing
+    if model !== nothing
         # The coordinate buffers a value-invention skolem GATHERS from (`src_lon`,
         # `tgt_lon`): a build-time-constant one is derived here so a
         # TEMPLATE-CONSTRUCTED (aggregate-valued) coordinate is admissible as a
         # skolem-bin index target (not only a const-supplied / reduce-over-const one).
-        _vi_targets = _vi_skolem_index_targets(model_json)
-        _derived = _derive_binning_coords(_select_model(file, model_name),
-                                          file.index_sets, _ca, _params, _vi_targets)
+        _vi_targets = _vi_skolem_index_targets(model)
+        _derived = _derive_binning_coords(model, file.index_sets, _ca, _params,
+                                          _vi_targets)
         if !isempty(_derived)
             merge!(_ca, _derived)
             kwd[:const_arrays] = _ca
         end
     end
 
-    _vi = model_json === nothing ? nothing :
-          materialize_value_invention(model_json, _ca, _params)
+    _vi = model === nothing ? nothing :
+          materialize_value_invention(model, file.index_sets, _ca, _params)
 
     return build_evaluator(file; model_name=model_name,
                            _vi_extents=(_vi === nothing ? Dict{String,Int}() : _vi.extents),
@@ -2338,31 +2339,15 @@ function _model_has_surviving_refs(model::Model)
     return found
 end
 
-# Select one raw model document (native dict) from a raw ESM dict, mirroring
-# `_select_model` for the typed path. Returns `nothing` when no model matches.
-function _select_model_json(esm::AbstractDict, model_name)
-    doc = Cadence.to_native(esm)
-    models = get(doc, "models", nothing)
-    isa(models, AbstractDict) && !isempty(models) || return nothing
-    model = if model_name !== nothing
-        get(models, String(model_name), nothing)
-    elseif length(models) == 1
-        first(values(models))
-    else
-        nothing
-    end
-    (model === nothing || !isa(model, AbstractDict)) && return model
-    # esm-spec v0.8.0: the index-set registry is a single document-scoped object,
-    # but the value-invention / relational front-door reads it off the model dict.
-    # Inject the document registry here so a `{from}` / `from_faq` reference still
-    # resolves. A no-op when the document declares none, or when the model already
-    # carries its own registry (legacy internal reconstitution).
-    doc_is = get(doc, "index_sets", nothing)
-    if doc_is !== nothing && !haskey(model, "index_sets")
-        model = Dict{String,Any}(model)
-        model["index_sets"] = doc_is
-    end
-    return model
+# Select one typed model from an `EsmFile`, mirroring `_select_model`'s name
+# resolution WITHOUT throwing: the value-invention front-door skips
+# materialisation when no model matches and lets the typed entry point raise the
+# proper `E_TREEWALK_NO_MODEL` / `E_TREEWALK_AMBIGUOUS_MODEL` diagnostic.
+function _select_model_or_nothing(file::EsmFile, model_name)
+    models = file.models
+    (models === nothing || isempty(models)) && return nothing
+    model_name !== nothing && return get(models, String(model_name), nothing)
+    return length(models) == 1 ? first(values(models)) : nothing
 end
 
 """

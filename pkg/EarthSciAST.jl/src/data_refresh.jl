@@ -196,18 +196,20 @@ Base.length(b::RefreshBuffers) = length(b.buffers)
 # --------------------------------------------------------------------------- #
 
 """
-    build_refresh_callback(model::Model; providers, buffers,
+    build_refresh_callback(; providers, buffers,
                            post_refresh = () -> nothing)
         -> (cb, tstops::Vector{Float64})
 
-Build the discrete-cadence loader-refresh callback for `model` and its tstops,
-WITHOUT embedding a solver (`[[library-exposes-rhs-not-solver]]`). The caller
-attaches both to their own problem:
+Build the discrete-cadence loader-refresh callback and its tstops, WITHOUT
+embedding a solver (`[[library-exposes-rhs-not-solver]]`). The callback is a
+pure function of the `providers` and `buffers` registries — it never reads the
+model (the forcing names and cadences live entirely in those two arguments).
+The caller attaches both to their own problem:
 
 ```julia
 forcing = Dict("wind" => zeros(nx, ny))
 f!, u0, p, tspan, _ = build_evaluator(model; param_arrays = forcing, …)
-cb, tstops = build_refresh_callback(model;
+cb, tstops = build_refresh_callback(;
     providers = Dict("wind" => wind_provider),   # var name => data Provider
     buffers   = RefreshBuffers(forcing))         # same array objects as param_arrays
 prob = ODEProblem(f!, u0, tspan, p)              # USER's solver call
@@ -253,7 +255,7 @@ package extension); calling it without them throws [`RefreshError`](@ref).
 function build_refresh_callback end
 
 # Fallback (varargs ⇒ strictly less specific than the extension's
-# `(model::Model)` method): fires only when the extension is NOT loaded.
+# zero-positional keyword method): fires only when the extension is NOT loaded.
 build_refresh_callback(args...; kwargs...) = throw(RefreshError(
     "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
     "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *

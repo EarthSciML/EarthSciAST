@@ -170,11 +170,10 @@ closes the cycle), or `nothing` if the graph is acyclic. Three-color DFS over
 the dependency edges, deterministic (sorted vertices, sorted neighbours).
 """
 function detect_cycle(g::ReferenceGraph)
-    # Three-color (WHITE/GRAY/BLACK) DFS, ITERATIVE form over a materialized
-    # graph. Its recursive twin is `Cadence.assert_acyclic_index_sets`
-    # (cadence.jl), which runs the same coloring over the IMPLICIT
-    # set→node→set edge relation without building a graph first — see the
-    # cross-reference note there before unifying the two.
+    # Three-color (WHITE/GRAY/BLACK) DFS, iterative, over a materialized graph.
+    # This is the ONE cycle detector: `Cadence.assert_acyclic_index_sets`
+    # (cadence.jl) materializes its implicit set→node→set relation into a small
+    # `ReferenceGraph` and routes through here rather than carrying a twin.
     WHITE, GRAY, BLACK = 0, 1, 2
     color = Dict{String,Int}(k => WHITE for k in keys(g.vertices))
     # Precompute sorted adjacency once: the DFS revisits each vertex's
@@ -251,11 +250,11 @@ end
 #
 # NOTE(idiom): these `_get` / `_haskey` / `_str_keys` accessors tolerate
 # String- OR Symbol-keyed dicts IN PLACE (no copy of the parsed document),
-# threaded through every walk below. The Cadence pass (cadence.jl) solves the
-# same raw-JSON access problem the opposite way: it EAGERLY converts the whole
-# document to native `Dict{String,Any}` up front (`Cadence.to_native`) and then
-# assumes String keys everywhere. Two deliberate idioms for one problem —
-# unify in a later wave if at all; do not rewrite piecemeal.
+# threaded through every walk below. The Cadence classifier (cadence.jl) —
+# conformance-only, like this pass — instead converts each (small) fixture
+# model to native `Dict{String,Any}` up front (`Cadence.to_native`); the
+# production build path parses straight into the typed IR and runs neither
+# idiom.
 
 const _AGGREGATE_OPS = ("aggregate", "arrayop")
 
