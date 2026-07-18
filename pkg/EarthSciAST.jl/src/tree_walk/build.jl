@@ -978,12 +978,16 @@ end
 # evaluate such a subscript, so it marks the const-tier materialization seed. An affine
 # subscript (loop vars + const-array gathers, e.g. a conservative regrid's `W[i,j]` or
 # a reshape `(gy−1)·NX+gx`) references no scalar parameter and is NOT flagged.
-# The scan visits EVERY expression-bearing field via the shared `foreach_subexpr`
-# traversal (not a hand-rolled args/expr_body/values subset), so a coordinate gather
-# buried in an aggregate `filter` predicate or a table-lookup axis is seen too.
+# The scan visits EVERY expression-bearing field via the shared traversal (not a
+# hand-rolled args/expr_body/values subset), so a coordinate gather buried in an
+# aggregate `filter` predicate or a table-lookup axis is seen too.
+# IDENTITY-MEMOIZED (`foreach_subexpr_once`): a pure existence predicate is
+# path-multiplicity-insensitive, and the cadence-split def bodies scanned here
+# are DAGs after template lowering / `_sub_preserving` — the per-path walk
+# (`foreach_subexpr`) was exponential on a shared doubling chain (ESS-0hh).
 function _has_param_indexed_gather(e::ASTExpr, scalar_params::Set{String})
     found = false
-    foreach_subexpr(e) do n
+    foreach_subexpr_once(e) do n
         found && return nothing
         n isa OpExpr && n.op == "index" && length(n.args) >= 2 || return nothing
         for k in 2:length(n.args)
@@ -2437,11 +2441,13 @@ end
 
 # Does any equation / variable expression of `model` (or a subsystem) carry a
 # surviving `apply_expression_template` node? Build-time guard input; one cheap
-# whole-model walk (`foreach_subexpr` descends `bindings` too, which is harmless
-# here — the apply node itself is what is being detected).
+# whole-model walk (the traversal descends `bindings` too, which is harmless
+# here — the apply node itself is what is being detected). Identity-memoized
+# (`foreach_subexpr_once`): an existence predicate is path-multiplicity-
+# insensitive, and equation trees can be compact DAGs (ESS-0hh).
 function _model_has_surviving_refs(model::Model)
     found = false
-    check(e) = e === nothing || found ? nothing : foreach_subexpr(e) do x
+    check(e) = e === nothing || found ? nothing : foreach_subexpr_once(e) do x
         x isa OpExpr && x.op == "apply_expression_template" && (found = true)
         nothing
     end

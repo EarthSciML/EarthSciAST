@@ -34,17 +34,25 @@ _bench_reset!() = (_BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0;
 # rebuilt counterpart. Old keys are kept (harmless — they no longer appear in
 # any tree); a subtree whose expression-slot count changed is skipped, so its
 # sites degrade to the fused build — slower, never wrong.
+# Identity-deduped on the OLD node (ESS-0hh): the shape-preserving rewrites are
+# identity-memoized, so a shared old node maps to exactly ONE new node — a
+# repeat (old, new) visit through another parent is redundant, and skipping it
+# keeps the lockstep walk O(distinct nodes) on a shared DAG (unchanged
+# subtrees already short-circuit via `old === new`).
 function _translate_sites_lockstep!(sites::IdDict{OpExpr,OpExpr},
-                                    old::ASTExpr, new::ASTExpr)
+                                    old::ASTExpr, new::ASTExpr,
+                                    seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}())
     old === new && return nothing
     (old isa OpExpr && new isa OpExpr) || return nothing
+    haskey(seen, old) && return nothing
+    seen[old] = nothing
     ap = get(sites, old, nothing)
     ap === nothing || (sites[new] = ap)
     co = child_exprs(old)
     cn = child_exprs(new)
     length(co) == length(cn) || return nothing
     for i in eachindex(co)
-        _translate_sites_lockstep!(sites, co[i], cn[i])
+        _translate_sites_lockstep!(sites, co[i], cn[i], seen)
     end
     return nothing
 end
@@ -266,6 +274,35 @@ end
 # invariant above is pinned by tree_walk_op_table_test.jl.
 const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 
+# Identity-memoized `substitute` with FULL field coverage: shared input nodes
+# map to ONE shared output node, so substituting into a structurally-shared
+# DAG yields a DAG of the same shape instead of re-inflating it into an
+# exponentially larger TREE (plain `substitute` rebuilds every changed
+# ancestor once per PATH — on a doubling chain the output itself blows up in
+# MEMORY, not just time; ESS-0hh). Results are identical to `substitute` up
+# to sharing.
+#
+# NOT `_sub_preserving` (tree_walk/helpers.jl): that helper substitutes only
+# through args / expr_body / values / filter / ranges — the fields its
+# per-cell arrayop callers need — while the fold below rewrites arbitrary
+# READER equations, which may reference a folded name inside an integral
+# bound, a table-lookup axis, a value-invention `key`, or a `bindings` value.
+# Routing through the `map_children` generated full field walk covers every
+# expression-bearing field exactly as `substitute` does (and inherits its
+# identity-preserving no-change fast path). Fresh memo per top-level call:
+# `bindings` is fixed within one call, so input identity → output is sound.
+# (Spelled `IdDict{OpExpr,ASTExpr}`, not the `_SubMemo` alias — helpers.jl,
+# which defines the alias, is included after this file.)
+function _substitute_shared(e::ASTExpr, bindings::Dict{String,ASTExpr},
+                            memo::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}())
+    e isa OpExpr || return substitute(e, bindings)
+    cached = get(memo, e, nothing)
+    cached === nothing || return cached
+    r = map_children(x -> _substitute_shared(x, bindings, memo), e)
+    memo[e] = r
+    return r
+end
+
 # ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
 # Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining
 # equation RHS is an ELEMENTWISE expression — top-level op in
@@ -321,13 +358,16 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
     order = _dependency_order(collect(keys(targets)), name -> deps[name];
         on_cycle=_ -> throw(TreeWalkError("E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
             "cyclic elementwise array-observed dependency among $(collect(keys(targets)))")))
+    # `_substitute_shared`, not plain `substitute`: a raw target body can be a
+    # DAG (template lowering shares subtrees by reference), and the per-path
+    # rebuild would materialize it as an exponentially large tree.
     resolved = Dict{String,ASTExpr}()
     for name in order
-        resolved[name] = substitute(targets[name], resolved)
+        resolved[name] = _substitute_shared(targets[name], resolved)
     end
 
     # Drop each folded definition and substitute its fully-resolved RHS into
-    # every remaining reader.
+    # every remaining reader (sharing-preserving, as above).
     folded = Set{String}(keys(targets))
     out = Equation[]
     for eq in equations
@@ -335,7 +375,8 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
         if lhs isa VarExpr && lhs.name in folded
             continue
         end
-        push!(out, Equation(lhs, substitute(eq.rhs, resolved); _comment=eq._comment))
+        push!(out, Equation(lhs, _substitute_shared(eq.rhs, resolved);
+                            _comment=eq._comment))
     end
     return (out, folded)
 end

@@ -449,13 +449,34 @@ function free_variables(expr::VarExpr)::Set{String}
 end
 
 function free_variables(expr::OpExpr)::Set{String}
+    # IDENTITY-MEMOIZED bottom-up computation (ESS-0hh): the free-variable set
+    # of a subtree is INTRINSIC to it — a variable bound by an ENCLOSING binder
+    # is still free in the subtree, because binder subtraction happens at the
+    # binder node itself — so two paths reaching the same shared node always
+    # yield the same set, and caching per `OpExpr` identity is sound. Inputs
+    # here are routinely DAGs (`_sub_preserving` / template lowering keep
+    # structurally-identical subtrees shared by reference), on which the plain
+    # per-path recursion re-walked a node once per PATH — exponential on a
+    # doubling chain. The memo is per top-level call, so the returned set (a
+    # fresh `Set` per distinct node) is never aliased across calls.
+    return _free_variables_dag(expr, IdDict{OpExpr,Set{String}}())
+end
+
+function _free_variables_dag(expr::OpExpr,
+                             memo::IdDict{OpExpr,Set{String}})::Set{String}
+    cached = get(memo, expr, nothing)
+    cached === nothing || return cached
     # Union of free variables from EVERY expression-bearing field (via the
     # shared `child_exprs` traversal), so dependency analysis sees references
     # inside aggregate/arrayop bodies, filter predicates, integral bounds,
     # makearray values, and table-lookup axis inputs.
     result = Set{String}()
     for c in child_exprs(expr)
-        union!(result, free_variables(c))
+        if c isa OpExpr
+            union!(result, _free_variables_dag(c, memo))
+        elseif c isa VarExpr
+            push!(result, c.name)
+        end
     end
 
     # Symbols bound by THIS node (aggregate/arrayop loop indices, an
@@ -469,6 +490,7 @@ function free_variables(expr::OpExpr)::Set{String}
         push!(result, expr.wrt)
     end
 
+    memo[expr] = result
     return result
 end
 
