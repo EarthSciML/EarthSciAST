@@ -1448,6 +1448,14 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
             "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
 
+    elseif op === :geo_gather || op === :geo_pia || op === :geo_skolem ||
+           op === :geo_agg
+        # Compiled setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl).
+        # These exist only in build-time compiled geometry bodies — `u` is a
+        # small loop-index frame there, never the ODE state — so this arm is
+        # cold by construction; it sits at the ladder tail where the RHS hot
+        # ops never reach it.
+        return _eval_geo_op(n, u, p, t, T)
     else
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", String(op)))
     end

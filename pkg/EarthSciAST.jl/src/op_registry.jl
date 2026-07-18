@@ -95,8 +95,9 @@ hand:
   specially; CSE never hoists through them.
 - `_STENCIL_ELEMENTWISE_OPS` (src/tree_walk/stencil.jl) — pure-elementwise ops
   the symbolic stencil fast path whitelists.
-- `_GEO_EVAL_OPS` (src/tree_walk/geometry_setup.jl) — the exact vocabulary the
-  setup-time geometry evaluator (`_geo_eval` / `_geo_apply_scalar`) speaks.
+- `_GEO_EVAL_OPS` (src/tree_walk/geometry_setup.jl) — the exact vocabulary of
+  the setup-time geometry language (compiled by `_geo_compile`,
+  src/tree_walk/geometry_compile.jl).
 - `_KNOWN_OPS` (ext/EarthSciASTMTKExt.jl) — ops the MTK exporter recognizes;
   anything else is flagged as a likely registered-function gap (gt-p3ep).
 - `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` (src/flatten.jl) — the spatial
@@ -213,7 +214,8 @@ const _OP_TABLE = _OpSpec[
         ws4=true, stencil=true, geo=true, known=true),
 
     # ── Niladic constants (`true`/`false` appear only in the geometry-setup
-    #    vocabulary — `_geo_eval` resolves them; the scalar ladders don't) ──
+    #    vocabulary — `_geo_compile` folds them to literals; the scalar
+    #    ladders don't speak them) ──
     _op("pi";    arity=0:0, category=:constant, stencil=true),
     _op("π";     arity=0:0, category=:constant, stencil=true),
     _op("e";     arity=0:0, category=:constant, stencil=true),
