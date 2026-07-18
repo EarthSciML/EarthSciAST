@@ -239,17 +239,6 @@ function serialize_continuous_event(event::ContinuousEvent)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_affect_equation(affect::AffectEquation) -> Dict{String,Any}
-
-Serialize AffectEquation to JSON-compatible format.
-"""
-function serialize_affect_equation(affect::AffectEquation)::Dict{String,Any}
-    return Dict{String,Any}(
-        "lhs" => affect.lhs,
-        "rhs" => serialize_expression(affect.rhs)
-    )
-end
 
 """
     serialize_model_variable(var::ModelVariable) -> Dict{String,Any}
@@ -290,21 +279,6 @@ function serialize_model_variable(var::ModelVariable)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_equation(eq::Equation) -> Dict{String,Any}
-
-Serialize Equation to JSON-compatible format.
-"""
-function serialize_equation(eq::Equation)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "lhs" => serialize_expression(eq.lhs),
-        "rhs" => serialize_expression(eq.rhs)
-    )
-    if eq._comment !== nothing
-        result["_comment"] = eq._comment
-    end
-    return result
-end
 
 """
     _serialize_subsystem(v) -> Dict{String,Any}
@@ -389,26 +363,7 @@ function serialize_model(model::Model)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_tolerance(tol::Tolerance) -> Dict{String,Any}
-"""
-function serialize_tolerance(tol::Tolerance)::Dict{String,Any}
-    result = Dict{String,Any}()
-    if tol.abs !== nothing
-        result["abs"] = tol.abs
-    end
-    if tol.rel !== nothing
-        result["rel"] = tol.rel
-    end
-    return result
-end
 
-"""
-    serialize_time_span(span::TimeSpan) -> Dict{String,Any}
-"""
-function serialize_time_span(span::TimeSpan)::Dict{String,Any}
-    return Dict{String,Any}("start" => span.start, "end" => span.stop)
-end
 
 """
     serialize_assertion(a::Assertion) -> Dict{String,Any}
@@ -478,54 +433,7 @@ function serialize_test(t::EarthSciAST.InlineTest)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_species(species::Species) -> Dict{String,Any}
 
-Serialize Species to JSON-compatible format.
-Note: Species name is the key in the species dictionary, not a property of the Species object.
-"""
-function serialize_species(species::Species)::Dict{String,Any}
-    result = Dict{String,Any}()
-    if species.units !== nothing
-        result["units"] = species.units
-    end
-    if species.default !== nothing
-        result["default"] = species.default
-    end
-    if species.default_units !== nothing
-        result["default_units"] = species.default_units
-    end
-    if species.description !== nothing
-        result["description"] = species.description
-    end
-    if species.constant !== nothing
-        result["constant"] = species.constant
-    end
-    return result
-end
-
-"""
-    serialize_parameter(param::Parameter) -> Dict{String,Any}
-
-Serialize Parameter to JSON-compatible format.
-Note: Parameter name is the key in the parameters dictionary, not a property of the Parameter object.
-"""
-function serialize_parameter(param::Parameter)::Dict{String,Any}
-    result = Dict{String,Any}()
-    if param.default !== nothing
-        result["default"] = param.default
-    end
-    if param.description !== nothing
-        result["description"] = param.description
-    end
-    if param.units !== nothing
-        result["units"] = param.units
-    end
-    if param.default_units !== nothing
-        result["default_units"] = param.default_units
-    end
-    return result
-end
 
 """
     serialize_reaction(reaction::Reaction) -> Dict{String,Any}
@@ -874,79 +782,8 @@ function serialize_coupling_event(entry::CouplingEvent)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_reference(ref::Reference) -> Dict{String,Any}
 
-Serialize Reference to JSON-compatible format.
-"""
-function serialize_reference(ref::Reference)::Dict{String,Any}
-    result = Dict{String,Any}()
-    if ref.doi !== nothing
-        result["doi"] = ref.doi
-    end
-    if ref.citation !== nothing
-        result["citation"] = ref.citation
-    end
-    if ref.url !== nothing
-        result["url"] = ref.url
-    end
-    if ref.notes !== nothing
-        result["notes"] = ref.notes
-    end
-    return result
-end
 
-"""
-    serialize_metadata(metadata::Metadata) -> Dict{String,Any}
-
-Serialize Metadata to JSON-compatible format.
-"""
-function serialize_metadata(metadata::Metadata)::Dict{String,Any}
-    result = Dict{String,Any}("name" => metadata.name)
-
-    if metadata.description !== nothing
-        result["description"] = metadata.description
-    end
-    if !isempty(metadata.authors)
-        result["authors"] = metadata.authors
-    end
-    if metadata.license !== nothing
-        result["license"] = metadata.license
-    end
-    if metadata.created !== nothing
-        result["created"] = metadata.created
-    end
-    if metadata.modified !== nothing
-        result["modified"] = metadata.modified
-    end
-    if !isempty(metadata.tags)
-        result["tags"] = metadata.tags
-    end
-    if !isempty(metadata.references)
-        result["references"] = [serialize_reference(r) for r in metadata.references]
-    end
-
-    return result
-end
-
-"""
-    serialize_domain(domain::Domain) -> Dict{String,Any}
-
-Serialize Domain to JSON-compatible format.
-"""
-function serialize_domain(domain::Domain)::Dict{String,Any}
-    result = Dict{String,Any}()
-    # Emit only a NON-default independent variable. `"t"` is the schema default,
-    # so writing it back unconditionally would add a key to every document that
-    # omitted it and break canonical-bytes round-tripping.
-    if domain.independent_variable != "t"
-        result["independent_variable"] = domain.independent_variable
-    end
-    if domain.temporal !== nothing
-        result["temporal"] = domain.temporal
-    end
-    return result
-end
 
 """
     serialize_esm_file(file::EsmFile) -> Dict{String,Any}
@@ -1103,4 +940,95 @@ function save(file::EsmFile, io::IO)
     else
         write(io, JSON3.write(serialized, indent=2))
     end
+end
+# ========================================
+# Table-generated record serializers
+# ========================================
+#
+# One `serialize_<fn>` per `RECORD_FIELD_TABLES` entry (types.jl — the shared
+# per-type field tables; the parse direction is generated from the SAME table
+# in parse.jl). Each generated serializer emits one wire key per row, in table
+# order, honoring the row's omission policy (`emit` column); a coupling
+# entry's `tag` emits its `"type"` discriminator first. JSON object equality
+# — the round-trip contract — is key-order agnostic, so table order is the
+# one emission order. `:custom` rows name hand-written whole-struct hooks
+# (returning `nothing` to skip the key) for the cross-field policies.
+
+# Serialize-side wire encoding for one table row: returns the expression
+# encoding `v` (the struct field's value) per the row's `kind`. Kinds without
+# a case are identity-encoded JSON scalars / arrays / verbatim values.
+function _record_emit_expr(row, v)
+    kind = row.kind
+    if kind === :expr
+        :(serialize_expression($v))
+    elseif kind === :expr_vec
+        :([serialize_expression(x) for x in $v])
+    elseif kind === :number_or_expr
+        :(let x = $v; x isa Number ? x : serialize_expression(x) end)
+    elseif kind === :float_map
+        :(Dict{String,Any}(k => x for (k, x) in $v))
+    elseif kind === :raw_vec
+        :([_to_native_json(e) for e in $v])
+    elseif kind === :model_variable_type
+        :(serialize_model_variable_type($v))
+    elseif kind === :record
+        :($(Symbol(:serialize_, row.of))($v))
+    elseif kind === :record_vec
+        :([$(Symbol(:serialize_, row.of))(x) for x in $v])
+    elseif kind === :record_map
+        :(Dict{String,Any}(k => $(Symbol(:serialize_, row.of))(x) for (k, x) in $v))
+    else
+        v
+    end
+end
+
+# One emit statement per row, per the row's `emit` omission policy; `nothing`
+# for a `:never` (parse-only) row.
+function _record_emit_stmt(row)
+    w = row.wire
+    f = row.f
+    emit = row.emit
+    if emit === :never
+        nothing
+    elseif emit === :always
+        :(result[$w] = $(_record_emit_expr(row, :(x.$f))))
+    elseif emit === :nonnothing
+        :(let v = x.$f
+              v === nothing || (result[$w] = $(_record_emit_expr(row, :v)))
+          end)
+    elseif emit === :nonempty
+        :(isempty(x.$f) || (result[$w] = $(_record_emit_expr(row, :(x.$f)))))
+    elseif emit === :nondefault
+        :(x.$f == $(row.default) || (result[$w] = $(_record_emit_expr(row, :(x.$f)))))
+    elseif emit === :custom
+        :(let v = $(row.emit_fn)(x)
+              v === nothing || (result[$w] = v)
+          end)
+    else
+        error("RECORD_FIELD_TABLES: unknown emit policy $(emit) for field $(row.f)")
+    end
+end
+
+# GENERATED serializers: one per table entry, named `serialize_<fn>`.
+for spec in RECORD_FIELD_TABLES
+    sname = Symbol(:serialize_, spec.fn)
+    stmts = Any[]
+    tag = get(spec, :tag, nothing)
+    tag === nothing || push!(stmts, :(result["type"] = $tag))
+    for row in spec.rows
+        s = _record_emit_stmt(row)
+        s === nothing || push!(stmts, s)
+    end
+    @eval function $sname(x::$(spec.T))::Dict{String,Any}
+        result = Dict{String,Any}()
+        $(stmts...)
+        return result
+    end
+    @eval @doc $("""
+        serialize_$(spec.fn)(x::$(spec.T)) -> Dict{String,Any}
+
+    Serialize `$(spec.T)` to its JSON-compatible wire form. GENERATED from
+    `RECORD_FIELD_TABLES` (types.jl); the parse direction is generated from
+    the same table in parse.jl.
+    """) $sname
 end

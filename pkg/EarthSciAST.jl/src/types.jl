@@ -1962,3 +1962,132 @@ raw_products(r::Reaction) = getfield(r, :products)
 # NOTE: `Model` has no `getproperty` override — the legacy `model.events`
 # combined-vector shim was removed; use `model.discrete_events` /
 # `model.continuous_events` directly.
+# ========================================
+# 15. Record wire-mapping tables
+# ========================================
+
+"""
+    RECORD_FIELD_TABLES
+
+The per-type field-spec tables for the REGULAR record types — the single
+source of truth from which BOTH wire directions are generated
+(`coerce_<fn>` in parse.jl, `serialize_<fn>` in serialize.jl), following the
+[`OPEXPR_FIELD_TABLE`](@ref) precedent. One entry per type:
+
+- `T`: the struct's name (a `Symbol`; resolved in this module).
+- `fn`: the coercer/serializer name suffix (`coerce_<fn>` / `serialize_<fn>`).
+- `tag`: for a coupling-entry type, the `"type"` discriminator string the
+  serializer emits first (`nothing`/absent otherwise; the parse side never
+  reads it — `coerce_coupling_entry` dispatches on it before calling in).
+- `injected`: `true` when the record's `name` is the KEY of an enclosing
+  name-keyed map, injected as the coercer's first argument and never
+  read from or emitted to the record's own wire body (Species, Parameter).
+- `rows`: one row per struct field, in HISTORICAL PARSE ORDER (which pins
+  ParseError precedence on multiply-invalid nodes; emission follows the same
+  order — JSON object equality, the round-trip contract, is key-order
+  agnostic). Row columns:
+    - `f`: struct field name == constructor keyword name.
+    - `wire`: the JSON key (renames live here: `stop` ↔ `"end"`).
+    - `kind`: the value class, naming the coercion/encoding pair —
+      `:string` (`string(v)`/identity), `:string_strict` (`String(v)`),
+      `:float`, `:int`, `:bool`, `:number_or_string`, `:number_or_expr`,
+      `:expr`, `:expr_vec`, `:string_vec` (`string.()` each),
+      `:string_vec_strict` (`Vector{String}(v)`), `:float_map`,
+      `:str_keyed_copy` (string-keyed shallow `Dict{String,Any}` copy),
+      `:raw` (`_to_native_json` verbatim passthrough), `:raw_vec`,
+      `:model_variable_type`, `:record`/`:record_vec`/`:record_map`
+      (nested `coerce_<of>`/`serialize_<of>`; `T` names the element type),
+      `:custom` (`parse_fn` on the fetched value; `emit_fn` on the struct).
+    - `mode`: parse-side fetch policy — `:req` (`data[wire]`, KeyError when
+      missing, exactly as the historical direct index), `:req_err`
+      (`_has_field` guard throwing the PINNED `req_err` message; a JSON
+      `null` value then flows to the converter — or to `default` when the
+      row has one — matching each historical site), `:req_nullerr`
+      (null-or-absent throws `req_err`), `:opt` (absent/null → `nothing`),
+      `:opt_empty` (absent/null → `default`), `:default` (absent/null →
+      `default`, present → converted), `:force` (fetch null-as-absent and
+      convert unconditionally, so the converter's own error surfaces).
+    - `emit`: serialize-side omission policy — `:always`, `:nonnothing`,
+      `:nonempty`, `:nondefault` (against `default`), `:custom`
+      (`emit_fn(x)`, `nothing` skips the key), `:never`.
+    - `pos`: `true` for the constructor's positional arguments (in row
+      order); all other rows pass as keywords.
+
+The IRREGULAR residue deliberately stays hand-written and is NOT here:
+discriminated-union sniffing (`coerce_coupling_entry`, `coerce_trigger` /
+`serialize_trigger`, `_coerce_subsystem_entry` / `_serialize_subsystem`),
+name-keyed-map↔vector conversions with injected names (`ReactionSystem`),
+`Reaction` (null-vs-absent substrates/products + `_emit_stoich`),
+`CouplingVariableMap` (transform union + constructor-error rebranding),
+`FunctionTable`/`FunctionTableAxis` and `coerce_enums`/
+`coerce_function_tables` (table-name-context-threaded ParseError messages),
+and the `EsmFile` orchestrator.
+
+A load-time assert (below) pins each entry's rows to `fieldnames(T)` exactly;
+`round_trip_regression_test.jl` / `conformance_round_trip_test.jl` pin the
+wire behavior.
+"""
+const RECORD_FIELD_TABLES = (
+    (T = :Reference, fn = :reference, rows = (
+        (f = :doi,      wire = "doi",      kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :citation, wire = "citation", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :url,      wire = "url",      kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :notes,    wire = "notes",    kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :Metadata, fn = :metadata, rows = (
+        (f = :name,        wire = "name",        kind = :string, mode = :req, emit = :always, pos = true),
+        (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :authors,     wire = "authors",     kind = :string_vec, mode = :opt_empty, default = :(String[]), emit = :nonempty),
+        (f = :license,     wire = "license",     kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :created,     wire = "created",     kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :modified,    wire = "modified",    kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :tags,        wire = "tags",        kind = :string_vec, mode = :opt_empty, default = :(String[]), emit = :nonempty),
+        (f = :references,  wire = "references",  kind = :record_vec, of = :reference, eltype = :Reference,
+         mode = :opt_empty, default = :(Reference[]), emit = :nonempty),
+    )),
+    (T = :Tolerance, fn = :tolerance, rows = (
+        (f = :abs, wire = "abs", kind = :float, mode = :opt, emit = :nonnothing),
+        (f = :rel, wire = "rel", kind = :float, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :TimeSpan, fn = :time_span, rows = (
+        (f = :start, wire = "start", kind = :float, mode = :req, emit = :always, pos = true),
+        (f = :stop,  wire = "end",   kind = :float, mode = :req, emit = :always, pos = true),
+    )),
+    (T = :Species, fn = :species, injected = true, rows = (
+        (f = :units,         wire = "units",         kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :default,       wire = "default",       kind = :float,  mode = :opt, emit = :nonnothing),
+        (f = :description,   wire = "description",   kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :constant,      wire = "constant",      kind = :bool,   mode = :opt, emit = :nonnothing),
+    )),
+    (T = :Parameter, fn = :parameter, injected = true, rows = (
+        (f = :default,       wire = "default",       kind = :float,  mode = :req, emit = :nonnothing, pos = true),
+        (f = :description,   wire = "description",   kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :units,         wire = "units",         kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :Equation, fn = :equation, rows = (
+        (f = :lhs,      wire = "lhs",      kind = :expr,   mode = :req, emit = :always, pos = true),
+        (f = :rhs,      wire = "rhs",      kind = :expr,   mode = :req, emit = :always, pos = true),
+        (f = :_comment, wire = "_comment", kind = :string, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :AffectEquation, fn = :affect_equation, rows = (
+        (f = :lhs, wire = "lhs", kind = :string, mode = :default, default = "", emit = :always, pos = true),
+        (f = :rhs, wire = "rhs", kind = :expr,   mode = :force,   emit = :always, pos = true),
+    )),
+    (T = :Domain, fn = :domain, rows = (
+        (f = :independent_variable, wire = "independent_variable", kind = :string,
+         mode = :default, default = "t", emit = :nondefault),
+        (f = :temporal, wire = "temporal", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+    )),
+)
+
+# Each entry's rows (plus the injected map-key name, when marked) must cover
+# EXACTLY the struct's fields — a new field without a row fails at load, the
+# same guarantee `OPEXPR_FIELD_TABLE` gives `OpExpr`.
+for spec in RECORD_FIELD_TABLES
+    T = getfield(@__MODULE__, spec.T)
+    covered = Set{Symbol}(row.f for row in spec.rows)
+    get(spec, :injected, false) && push!(covered, :name)
+    @assert covered == Set(fieldnames(T)) "RECORD_FIELD_TABLES.$(spec.T) rows must cover fieldnames($(spec.T)) exactly"
+end

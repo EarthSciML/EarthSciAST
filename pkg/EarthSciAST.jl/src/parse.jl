@@ -723,44 +723,7 @@ function coerce_function_tables(data)::Dict{String,FunctionTable}
 end
 
 
-"""
-    coerce_metadata(data::Any) -> Metadata
 
-Coerce JSON data into Metadata type.
-"""
-function coerce_metadata(data::Any)::Metadata
-    name = string(data["name"])
-    description = _opt_string(data, :description)
-    authors = haskey(data, "authors") ? [string(a) for a in data["authors"]] : String[]
-    license = _opt_string(data, :license)
-    created = _opt_string(data, :created)
-    modified = _opt_string(data, :modified)
-    tags = haskey(data, "tags") ? [string(t) for t in data["tags"]] : String[]
-    references = haskey(data, "references") ? [coerce_reference(r) for r in data["references"]] : Reference[]
-
-    return Metadata(name,
-                   description=description,
-                   authors=authors,
-                   license=license,
-                   created=created,
-                   modified=modified,
-                   tags=tags,
-                   references=references)
-end
-
-"""
-    coerce_reference(data::Any) -> Reference
-
-Coerce JSON data into Reference type.
-"""
-function coerce_reference(data::Any)::Reference
-    doi = _opt_string(data, :doi)
-    citation = _opt_string(data, :citation)
-    url = _opt_string(data, :url)
-    notes = _opt_string(data, :notes)
-
-    return Reference(doi=doi, citation=citation, url=url, notes=notes)
-end
 
 """
     coerce_model(data::Any) -> Model
@@ -892,27 +855,7 @@ function _coerce_subsystem_entry(name::String, v)
     end
 end
 
-"""
-    coerce_tolerance(data::Any) -> Tolerance
 
-Parse a schema `Tolerance` object into the Julia `Tolerance` struct.
-"""
-function coerce_tolerance(data::Any)::Tolerance
-    abs_val = _opt_float(data, :abs)
-    rel_val = _opt_float(data, :rel)
-    return Tolerance(; abs=abs_val, rel=rel_val)
-end
-
-"""
-    coerce_time_span(data::Any) -> TimeSpan
-
-Parse a schema `TimeSpan` object.
-"""
-function coerce_time_span(data::Any)::TimeSpan
-    start_val = Float64(data["start"])
-    stop_val = Float64(data["end"])
-    return TimeSpan(start_val, stop_val)
-end
 
 """
     coerce_assertion(data::Any) -> Assertion
@@ -1033,17 +976,6 @@ function coerce_model_variable(data::Any)::ModelVariable
                         correlation_group=correlation_group)
 end
 
-"""
-    coerce_equation(data::Any) -> Equation
-
-Coerce JSON data into Equation type.
-"""
-function coerce_equation(data::Any)::Equation
-    lhs = parse_expression(data["lhs"])
-    rhs = parse_expression(data["rhs"])
-    comment = _opt_string(data, :_comment)
-    return Equation(lhs, rhs; _comment=comment)
-end
 
 """
     coerce_discrete_event(data::Any) -> DiscreteEvent
@@ -1119,18 +1051,6 @@ function coerce_continuous_event(data::Any)::ContinuousEvent
     return ContinuousEvent(conditions, affects, description=description)
 end
 
-"""
-    coerce_affect_equation(data::Any) -> AffectEquation
-
-Coerce JSON data into AffectEquation type.
-"""
-function coerce_affect_equation(data::Any)::AffectEquation
-    # Through `_get_field` (string-keyed, null-as-absent), matching every
-    # other coercion helper.
-    lhs = string(_get_field(data, :lhs, ""))
-    rhs = parse_expression(_get_field(data, :rhs, nothing))
-    return AffectEquation(lhs, rhs)
-end
 
 """
     coerce_reaction_system(data::Any) -> ReactionSystem
@@ -1156,20 +1076,6 @@ function coerce_reaction_system(data::Any)::ReactionSystem
                           tolerance=tolerance, tests=tests)
 end
 
-"""
-    coerce_species(name::String, data::Any) -> Species
-
-Coerce JSON data into Species type with explicit name.
-"""
-function coerce_species(name::String, data::Any)::Species
-    units = _opt_string(data, :units)
-    default = _opt_float(data, :default)
-    description = _opt_string(data, :description)
-    default_units = _opt_string(data, :default_units)
-    constant = _maybe(Bool, _get_field(data, :constant, nothing))
-
-    return Species(name, units=units, default=default, description=description, default_units=default_units, constant=constant)
-end
 
 """
     coerce_reaction(data::Any) -> Reaction
@@ -1197,19 +1103,6 @@ function coerce_reaction(data::Any)::Reaction
     return Reaction(id, substrates, products, rate, name=name, reference=reference)
 end
 
-"""
-    coerce_parameter(name::String, data::Any) -> Parameter
-
-Coerce JSON data into Parameter type with explicit name.
-"""
-function coerce_parameter(name::String, data::Any)::Parameter
-    default = Float64(data["default"])
-    description = _opt_string(data, :description)
-    units = _opt_string(data, :units)
-    default_units = _opt_string(data, :default_units)
-
-    return Parameter(name, default, description=description, units=units, default_units=default_units)
-end
 
 """
     coerce_data_loader_source(data::Any) -> DataLoaderSource
@@ -1558,16 +1451,136 @@ function coerce_index_set(data::Any)::IndexSet
                     members_raw=members_typed)
 end
 
-"""
-    coerce_domain(data::Any) -> Domain
 
-Coerce JSON data into Domain type.
-"""
-function coerce_domain(data::Any)::Domain
-    temporal = _maybe(get(data, "temporal", nothing)) do t
-        Dict{String,Any}(string(k) => v for (k, v) in pairs(t))
+# ========================================
+# Table-generated record coercers
+# ========================================
+#
+# One `coerce_<fn>` per `RECORD_FIELD_TABLES` entry (types.jl — the shared
+# per-type field tables; the serialize direction is generated from the SAME
+# table in serialize.jl). Each generated coercer extracts one local per row,
+# in table order (the historical parse order, pinning ParseError precedence),
+# then calls the type's constructor with the table's positional/keyword
+# split. Irregular residue (discriminated unions, name-keyed-map↔vector
+# conversions, context-threaded messages) stays hand-written above; the
+# `:custom` rows below name their hand-written per-field hooks.
+
+# Parse-side value conversion for one table row: returns the expression
+# coercing `v` (the fetched wire value) per the row's `kind`.
+function _record_parse_expr(row, v)
+    kind = row.kind
+    if kind === :string
+        :(string($v))
+    elseif kind === :string_strict
+        :(String($v))
+    elseif kind === :float
+        :(Float64($v))
+    elseif kind === :int
+        :(Int($v))
+    elseif kind === :bool
+        :(Bool($v))
+    elseif kind === :number_or_string
+        :(let x = $v; x isa Number ? Int(x) : string(x) end)
+    elseif kind === :number_or_expr
+        :(let x = $v; x isa Number ? Float64(x) : parse_expression(x) end)
+    elseif kind === :expr
+        :(parse_expression($v))
+    elseif kind === :expr_vec
+        :(ASTExpr[parse_expression(x) for x in $v])
+    elseif kind === :string_vec
+        :([string(x) for x in $v])
+    elseif kind === :string_vec_strict
+        :(Vector{String}($v))
+    elseif kind === :float_map
+        :(Dict{String,Float64}(string(k) => Float64(x) for (k, x) in pairs($v)))
+    elseif kind === :str_keyed_copy
+        :(Dict{String,Any}(string(k) => x for (k, x) in pairs($v)))
+    elseif kind === :raw
+        :(_to_native_json($v))
+    elseif kind === :raw_vec
+        :(Any[_to_native_json(e) for e in $v])
+    elseif kind === :model_variable_type
+        :(coerce_model_variable_type(string($v)))
+    elseif kind === :record
+        :($(Symbol(:coerce_, row.of))($v))
+    elseif kind === :record_vec
+        :($(row.eltype)[$(Symbol(:coerce_, row.of))(x) for x in $v])
+    elseif kind === :record_map
+        :(Dict{String,$(row.eltype)}(string(k) => $(Symbol(:coerce_, row.of))(x)
+                                     for (k, x) in pairs($v)))
+    elseif kind === :custom
+        :($(row.parse_fn)($v))
+    else
+        error("RECORD_FIELD_TABLES: unknown kind $(kind) for field $(row.f)")
     end
-    iv = get(data, "independent_variable", nothing)
-    return Domain(independent_variable = iv === nothing ? "t" : string(iv),
-                  temporal = temporal)
+end
+
+# One `<field> = <fetch+convert>` statement per row, per the row's `mode`
+# (fetch policy). See the RECORD_FIELD_TABLES docstring (types.jl) for the
+# exact policy each mode encodes.
+function _record_coerce_stmt(row)
+    f = row.f
+    key = QuoteNode(Symbol(row.wire))
+    w = row.wire
+    mode = row.mode
+    if mode === :req
+        :($f = $(_record_parse_expr(row, :(data[$w]))))
+    elseif mode === :req_err
+        body = haskey(row, :default) ?
+            :(let v = _get_field(data, $key, nothing)
+                  v === nothing ? $(row.default) : $(_record_parse_expr(row, :v))
+              end) :
+            _record_parse_expr(row, :(_get_field(data, $key, nothing)))
+        quote
+            _has_field(data, $key) || throw(ParseError($(row.req_err)))
+            $f = $body
+        end
+    elseif mode === :req_nullerr
+        quote
+            $f = let v = _get_field(data, $key, nothing)
+                v === nothing && throw(ParseError($(row.req_err)))
+                $(_record_parse_expr(row, :v))
+            end
+        end
+    elseif mode === :opt
+        :($f = let v = _get_field(data, $key, nothing)
+              v === nothing ? nothing : $(_record_parse_expr(row, :v))
+          end)
+    elseif mode === :opt_empty || mode === :default
+        :($f = let v = _get_field(data, $key, nothing)
+              v === nothing ? $(row.default) : $(_record_parse_expr(row, :v))
+          end)
+    elseif mode === :force
+        :($f = $(_record_parse_expr(row, :(_get_field(data, $key, nothing)))))
+    else
+        error("RECORD_FIELD_TABLES: unknown mode $(mode) for field $(row.f)")
+    end
+end
+
+# GENERATED coercers: one per table entry, named `coerce_<fn>`, constructing
+# the type with the table's positional args (in row order; an `injected`
+# map-key name leads) and one keyword per remaining row.
+for spec in RECORD_FIELD_TABLES
+    fname = Symbol(:coerce_, spec.fn)
+    injected = get(spec, :injected, false)
+    stmts = Any[_record_coerce_stmt(row) for row in spec.rows]
+    posargs = Any[]
+    injected && push!(posargs, :name)
+    append!(posargs, Any[row.f for row in spec.rows if get(row, :pos, false)])
+    kwargs = Any[Expr(:kw, row.f, row.f) for row in spec.rows if !get(row, :pos, false)]
+    ctor = isempty(kwargs) ?
+        Expr(:call, spec.T, posargs...) :
+        Expr(:call, spec.T, Expr(:parameters, kwargs...), posargs...)
+    argdecls = injected ? Any[:(name::String), :(data::Any)] : Any[:(data::Any)]
+    @eval function $fname($(argdecls...))::$(spec.T)
+        $(stmts...)
+        return $ctor
+    end
+    @eval @doc $("""
+        coerce_$(spec.fn)($(injected ? "name, " : "")data) -> $(spec.T)
+
+    Coerce JSON data into `$(spec.T)`. GENERATED from `RECORD_FIELD_TABLES`
+    (types.jl) — one extraction per row in table (historical parse) order;
+    the serialize direction is generated from the same table in serialize.jl.
+    """) $fname
 end
