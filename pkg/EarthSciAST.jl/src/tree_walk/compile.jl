@@ -499,6 +499,15 @@ end
 # (one array subexpression reused across several arrayop equations) is a genuine
 # future case — keyed structurally on the post-merge `_VecNode` rather than on
 # `canonical_json`, with a per-call vector cache — and is tracked as a follow-up.
+#
+# WHAT THIS PASS NO LONGER CARRIES (ess-obs-slots): AUTHOR-NAMED sharing. A
+# scalar observed used to be spliced into every reader, and this pass then
+# re-discovered the declared sharing through canonical keys. Scalar observeds
+# now compile as NAMED PRELUDE DEFS in this same prelude (`_plan_observed_slots`
+# in build.jl; the `obs_defs` argument of `_cse_compile_scalar` below), so what
+# is left for the canonical-key machinery is exactly the ANONYMOUS repeats —
+# a subexpression written twice without a name, within one RHS, across
+# equations, or between an observed def and an equation.
 
 # Ops CSE must not look at: array/aggregate producers, const/enum data carriers,
 # and the unresolved/illegal-in-RHS markers. CSE never hoists a node rooted at
@@ -513,12 +522,13 @@ end
 # `datetime.*` registry (esm-spec §9.2) is closed and deterministic. Treating it
 # as opaque made every closed-function call a CSE BARRIER: `_cse_count!` stopped
 # at the `fn` node, so neither the call nor anything beneath it could be shared.
-# That is exactly the shape of an inlined observed chain that reaches a
-# time/solar-geometry subtree through an `interp.*` table lookup — e.g. FastJX's
-# 18 actinic-flux bands `F_i = interp.linear(table_i, axis, cos_sza)`, each
-# carrying a full copy of the inlined `Solar.cos_zenith` subtree, summed by ~14
-# photolysis rates: ~250 re-walks of the same solar chain per RHS call. Hoisting
-# through `fn` collapses all of them to one evaluation (see `_cse_rebuild`).
+# The historical motivating case was an INLINED observed chain reaching a
+# time/solar-geometry subtree through an `interp.*` table lookup (FastJX's 18
+# actinic-flux bands over one `Solar.cos_zenith` subtree — ~250 re-walks per
+# RHS call). NAMED observeds now carry that sharing as prelude slots
+# (ess-obs-slots), but `fn` transparency still matters twice over: an
+# ANONYMOUS repeated call is still shared here, and a slot DEF body reaching
+# through a closed function still hoists its shareable interior.
 # Membership is declared per-op in src/op_registry.jl (flag `:cse_opaque`)
 # and pinned by op_registry_test.jl.
 const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
@@ -537,6 +547,14 @@ _cse_hoistable(::ASTExpr) = false
 # as a CHILD of every hoistable ancestor, that throw used to decline sharing for the
 # whole met→physics stack sitting above a forcing buffer. The fix is to key the
 # gather as a LEAF with a canonicalizable, DISTINGUISHABLE identity:
+#
+# STILL NEEDED AFTER ess-obs-slots — verified, not assumed. Named observed
+# slots remove one class of key-bearing tree (an observed body spliced into
+# readers), but payload-bearing gathers still flow through `_cse_key` on two
+# live paths: a scalar EQUATION reading `index(forcing, …)` directly, and
+# every observed slot DEF body (resolved through the same `_resolve_indices`
+# and counted/keyed by `_cse_count!`/`_compile_cse`). Deleting this stand-in
+# would silently switch CSE off for both — exactly the ess-qic hole.
 #
 #     OpExpr("index", []; name="__pgather", value=[<buffer name>, <linear offset>])
 #

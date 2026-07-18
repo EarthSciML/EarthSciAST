@@ -148,6 +148,13 @@ end
 # variable as a free variable — so inlining observed names into a
 # model equation is a single `_sub_preserving` call. Iteration cap =
 # depth of the longest valid chain; exceeding it means there's a cycle.
+#
+# CONSUMERS after ess-obs-slots: the ARRAY paths (arrayop kernels, stencil /
+# affine builds, discrete-cadence fills) and the inline FALLBACK of the scalar
+# path still splice these fully-resolved bodies. The scalar path's primary
+# mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build.jl),
+# which compiles each safe scalar observed's RAW body once and leaves its
+# references by-name — this resolved map then covers only the non-slot names.
 function _resolve_observed(obs::Dict{String,ASTExpr})
     resolved = Dict{String,ASTExpr}()
     for (k, v) in obs
