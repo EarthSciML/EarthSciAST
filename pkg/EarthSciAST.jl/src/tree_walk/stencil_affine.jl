@@ -226,11 +226,27 @@ function _recipe_const_lin(rec::_LaneRecipe, idx_env, const_arrays)
     return LinearIndices(size(arr))[inds...]
 end
 
-# Per-cell signature `bkey | ghost_key` (region selection × ghost pattern) plus the
-# branch it resolves to. Builds/caches ONE sentinel template per region signature
-# (the expensive step, bounded by #groups); cheap recipe evals give the ghost key.
+# Per-cell signature `bkey | gather_key` (region selection × gather pattern) plus
+# the branch it resolves to. Builds/caches ONE sentinel template per region
+# signature (the expensive step, bounded by #groups); cheap recipe evals give the
+# gather key.
+#
+# The gather key has TWO strengths, selected by `okey`:
+#   * `okey === nothing` — the historical ghost-bit key (in-bounds vs ghost per
+#     state lane). Used by `_process_affine_box!`, which only needs bkey+branch.
+#   * `okey = (base, strides)` (the VERIFIED output affine map) — each state
+#     lane's Δ = slot − oln (or 'G' for a ghost) enters the key, so a PERIODIC
+#     WRAP — where the slot legally jumps by ±N·stride with no region or ghost
+#     transition — produces a signature change and therefore a CUT, giving the
+#     wrap its own box exactly as the polyhedral design intends. Δ subsumes the
+#     ghost bit (a ghost is 'G', any in-bounds lane its Δ).
+# Const lanes with a declared BOUNDARY POLICY (BoundedConstArray) additionally
+# key their per-dim fold class (in-range / clamp-low / clamp-high / wrap count),
+# so a clamp/wrap transition of a const gather also produces a cut — within each
+# resulting segment the resolved const index is affine again.
 function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
-                     var_map, param_sym_set, reg_funcs)
+                     var_map, param_sym_set, reg_funcs,
+                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
     env = ctx_proto.idx_env
     empty!(env)
     _set_env!(env, idx_names, loop)
@@ -242,7 +258,7 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         sig.branch_cache[bkey] = branch
     end
     _tmpl, recipes, state_ks, _subcalls = branch
-    # Only the STATE lanes feed the ghost key; evaluate just those into a reused
+    # Only the STATE lanes feed the gather key; evaluate just those into a reused
     # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
     state_vals = sig.state_scratch
     resize!(state_vals, length(state_ks))
@@ -250,7 +266,56 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         state_vals[i] = _eval_recipe(recipes[state_ks[i]], env, var_map,
                                      ctx_proto.const_arrays)::Int
     end
-    return bkey, string(bkey, '|', _ghost_key_states(state_vals)), branch
+    io = sig.bio                       # empty again after the take! above
+    print(io, bkey, '|')
+    if okey === nothing
+        @inbounds for v in state_vals
+            print(io, v == 0 ? '1' : '0')
+        end
+    else
+        base, strides = okey
+        oln = _box_oln(base, strides, loop, length(idx_names))
+        @inbounds for v in state_vals
+            v == 0 ? print(io, "G,") : print(io, v - oln, ',')
+        end
+    end
+    _const_fold_key!(io, recipes, env, ctx_proto.const_arrays)
+    return bkey, String(take!(io)), branch
+end
+
+# Append each policy-bearing const lane's per-dim boundary-fold class to the
+# signature: '.' in-range, 'l'/'h' clamp-low/high, 'w<k>' the periodic wrap
+# count (`fld(raw-1, n)` — the multiple of n the fold subtracts, so two cells
+# share a class iff the resolved index is the SAME affine function of the raw
+# one), 'E' an out-of-range index on an :error dim (the derive step then throws
+# the exact per-cell `E_TREEWALK_CONSTARRAY_OOB`). Plain const arrays (no
+# declared policy) contribute nothing: in-range indices have one class, and an
+# out-of-range one throws identically on every path.
+function _const_fold_key!(io::IOBuffer, recipes::Vector{_LaneRecipe}, env,
+                          const_arrays)
+    for rec in recipes
+        rec.kind == LANE_CONST || continue
+        arr = rec.arr
+        arr isa BoundedConstArray || continue
+        print(io, '|')
+        for d in 1:length(rec.idx_args)
+            v = _eval_const_int(rec.idx_args[d], env, const_arrays)
+            n = size(arr, d)
+            if 1 <= v <= n
+                print(io, '.')
+            else
+                pol = _const_dim_boundary(arr, d)
+                if pol === :clamp
+                    print(io, v < 1 ? 'l' : 'h')
+                elseif pol === :periodic
+                    print(io, 'w', fld(v - 1, n))
+                else
+                    print(io, 'E')
+                end
+            end
+        end
+    end
+    return io
 end
 
 # Probe values for a range: low / mid / high (deduplicated).
@@ -316,6 +381,17 @@ end
 # a box that spans a cut, which per-box corner verification catches → fallback.
 const _AFFINE_STABLE_GUARD = 8
 
+# Δ-keyed cut cap, per dim. State-Δ keying (see `_cell_ckey!`) exists to give
+# wrap/fold transitions their own boxes — a handful of segments, bounded by the
+# operator's half-width at each end. A GENUINELY UNSTRUCTURED gather (a slot
+# indirect through a connectivity permutation) changes Δ at every cell; carving a
+# box per cell would trade the O(#groups) build for O(#cells) kernels. So when a
+# dim's Δ-keyed scan opens more segments than this cap, that dim's cuts are
+# recomputed with the BASE key (region × ghost × const-fold) and the non-uniform
+# lane is left for the box processor's indirect-table derivation
+# (`_derive_lane_repl`), which materializes a per-box slot table instead.
+const _AFFINE_MAX_DELTA_SEGS = 16
+
 # Cut START indices per loop dim. For each dim, hold the OTHER dims at every
 # low/mid/high probe and record where the per-cell signature changes — but scan
 # INWARD FROM BOTH ENDS rather than across the whole range, stopping once the
@@ -330,61 +406,93 @@ const _AFFINE_STABLE_GUARD = 8
 # reaches is still caught by per-box corner verification (→ fallback), exactly as
 # the old full sweep's misses were: correctness never depends on cut completeness,
 # only speed.
+#
+# `okey` is the verified output affine map; the first scan of each dim keys state
+# lanes by their Δ (wrap boxes), falling back to the base key when the Δ-keyed
+# segment count exceeds `_AFFINE_MAX_DELTA_SEGS` (unstructured gather → the
+# indirect-table derivation owns it instead).
 function _affine_cut_points(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-                            var_map, param_sym_set, reg_funcs)
+                            var_map, param_sym_set, reg_funcs,
+                            okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
     region_cands = _region_cut_candidates(body, idx_names)
     for d in 1:D
-        rng = ranges[d]; lo, hi = first(rng), last(rng)
-        starts = Set{Int}(); push!(starts, lo)
-        otherdims = Int[dd for dd in 1:D if dd != d]
-        probesets = isempty(otherdims) ? [()] :
-            collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
-        loop = Vector{Int}(undef, D)
-        ck(iv) = (loop[d] = iv;
-                  (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
-                               var_map, param_sym_set, reg_funcs))[2])
-        # Region boundaries in this dim, kept only where they open a real segment
-        # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
-        cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
-        # Bound each front at the midpoint so a small range is covered once, not
-        # twice (the two scans meet at `mid`, overlapping on that single cell so
-        # the mid/mid+1 pair is still compared). For a large range each front
-        # stabilizes long before `mid`, so the deep interior is never scanned.
-        mid = (lo + hi) ÷ 2
-        for probe in probesets
-            for (ii, dd) in enumerate(otherdims); loop[dd] = probe[ii]; end
-            # Scan up from the low end: a change at `iv` opens a segment there.
-            prev = nothing; stable = 0; iv = lo
-            while iv <= mid
-                cur = ck(iv)
-                if prev !== nothing
-                    if cur != prev; push!(starts, iv); stable = 0
-                    else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
-                end
-                prev = cur; iv += 1
-            end
-            # Scan down from the high end: a change between `iv` and `iv+1` opens a
-            # segment at `iv+1`.
-            prev = nothing; stable = 0; iv = hi
-            while iv >= mid
-                cur = ck(iv)
-                if prev !== nothing
-                    if cur != prev; push!(starts, iv + 1); stable = 0
-                    else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
-                end
-                prev = cur; iv -= 1
-            end
-            # Mid-domain region boundaries the edge scans cannot reach: confirm each
-            # candidate is a genuine transition (C-1 vs C) before opening a segment.
-            for C in cand_d
-                ck(C - 1) != ck(C) && push!(starts, C)
-            end
+        starts = _scan_dim_cuts(sig, body, idx_names, ranges, ctx_proto, var_map,
+                                param_sym_set, reg_funcs, region_cands, d, okey)
+        if okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
+            starts = _scan_dim_cuts(sig, body, idx_names, ranges, ctx_proto, var_map,
+                                    param_sym_set, reg_funcs, region_cands, d, nothing)
         end
         cuts[d] = sort!(collect(starts))
     end
     return cuts
+end
+
+# One dim's edge-inward signature scan (see `_affine_cut_points`). Returns the
+# set of segment-start indices for dim `d` under the signature strength `okey`.
+function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
+                        var_map, param_sym_set, reg_funcs, region_cands, d::Int,
+                        okey::Union{Nothing,Tuple{Int,Vector{Int}}})
+    D = length(idx_names)
+    rng = ranges[d]; lo, hi = first(rng), last(rng)
+    starts = Set{Int}(); push!(starts, lo)
+    otherdims = Int[dd for dd in 1:D if dd != d]
+    probesets = isempty(otherdims) ? [()] :
+        collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
+    loop = Vector{Int}(undef, D)
+    ck(iv) = (loop[d] = iv;
+              (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
+                           var_map, param_sym_set, reg_funcs, okey))[2])
+    # Region boundaries in this dim, kept only where they open a real segment
+    # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
+    cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
+    # Bound each front at the midpoint so a small range is covered once, not
+    # twice (the two scans meet at `mid`, overlapping on that single cell so
+    # the mid/mid+1 pair is still compared). For a large range each front
+    # stabilizes long before `mid`, so the deep interior is never scanned.
+    mid = (lo + hi) ÷ 2
+    for probe in probesets
+        for (ii, dd) in enumerate(otherdims); loop[dd] = probe[ii]; end
+        # Over-cap early exit for a Δ-keyed scan: an unstructured gather changes
+        # Δ at EVERY cell, so without this the fronts would never stabilize and
+        # the scan would walk the whole range before the caller's cap fallback.
+        overcap() = okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
+        # Scan up from the low end: a change at `iv` opens a segment there.
+        prev = nothing; stable = 0; iv = lo
+        while iv <= mid
+            cur = ck(iv)
+            if prev !== nothing
+                if cur != prev
+                    push!(starts, iv); stable = 0
+                    overcap() && break
+                else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+            end
+            prev = cur; iv += 1
+        end
+        # Scan down from the high end: a change between `iv` and `iv+1` opens a
+        # segment at `iv+1`.
+        prev = nothing; stable = 0; iv = hi
+        while iv >= mid && !overcap()
+            cur = ck(iv)
+            if prev !== nothing
+                if cur != prev
+                    push!(starts, iv + 1); stable = 0
+                    overcap() && break
+                else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+            end
+            prev = cur; iv -= 1
+        end
+        # Mid-domain region boundaries the edge scans cannot reach: confirm each
+        # candidate is a genuine transition (C-1 vs C) before opening a segment.
+        for C in cand_d
+            ck(C - 1) != ck(C) && push!(starts, C)
+        end
+        # A Δ-keyed scan past the cap is abandoned early — the caller redoes the
+        # dim with the base key, so finishing the sweep would be wasted work.
+        okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS && break
+    end
+    return starts
 end
 
 # Turn per-dim cut starts into segment ranges covering `rng`.
@@ -625,7 +733,8 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     try
         base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
         cuts = _affine_cut_points(sig, body, idx_names, ranges, ctx_proto,
-                                  var_map, param_sym_set, reg_funcs)
+                                  var_map, param_sym_set, reg_funcs,
+                                  (base, strides))
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
         kernels = _AccKernel[]
         spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc},_AccCSE,Vector{_AccKernel}}}()
