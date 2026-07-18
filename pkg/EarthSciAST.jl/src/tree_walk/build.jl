@@ -700,7 +700,10 @@ end
 # geometry observed (F_tgt …) or a promoted array observed enters the
 # substitution map as an arrayop value; `index(obs, j)` in a reader
 # beta-reduces to its body via `_resolve_indices` (ess-14f.4 /
-# shape-promotion). Returns `(derivative_eqs, resolved_obs)`.
+# shape-promotion). Returns `(derivative_eqs, resolved_obs, raw_obs)`; the RAW
+# map preserves the author-declared observed-into-observed references so the
+# scalar-slot plan (`_plan_observed_slots`) can compile each observed once as a
+# named prelude def instead of splicing the resolved chain into every reader.
 function _split_observed_and_derivatives(equations::Vector{Equation},
                                          observed_names, geom_ring_vars,
                                          geom_setup_vars, geom_inline_vars,
@@ -729,7 +732,115 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                 _equation_tag(eq)))
         end
     end
-    return derivative_eqs, _resolve_observed(observed_exprs)
+    return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs
+end
+
+# ---- Stage: scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
+#
+# STOP INLINING SCALAR OBSERVEDS. The author-declared name of a scalar observed
+# IS a sharing declaration — splicing its body into every reader erases the name
+# and then three passes (scalar CSE, invariant_share, vec_share) re-discover the
+# sharing structurally. Instead each safe scalar observed compiles ONCE as a
+# NAMED PRELUDE DEF (an ordinary `_NK_CACHED` slot in the scalar CSE prelude,
+# evaluated in dependency order before the equations — see `_cse_compile_scalar`);
+# every scalar-equation reader references the slot.
+#
+# WHAT STAYS INLINED (falls back to today's `_sub_preserving` splice, i.e. the
+# entry is left in the `inline` map):
+#   * ARRAY-valued observeds (arrayop/makearray producers, geometry live fields,
+#     promoted array observeds) — the `index(obs, i)` beta-reduction path is
+#     untouched by design;
+#   * LEAF bodies (a bare variable/literal alias) — a slot would cost a store +
+#     a read to replace a bare leaf read;
+#   * STRUCTURAL references — an observed read where the build needs a concrete
+#     value at build time (a gather subscript, a range bound; see
+#     `_obs_structural_refs!`);
+#   * GUARD-ONLY references — the prelude is unconditional while the scalar
+#     walkers are lazy for `ifelse`/`and`/`or`, so an observed referenced ONLY
+#     under guards must not be hoisted into unconditional evaluation (same rule
+#     the CSE pass applies per-key; see `_count_obs_refs!`). The demotion is a
+#     fixed point: a slot kept alive only by a demoted def's references is
+#     demoted in turn, so every surviving slot has an unconditional evaluation
+#     site in the pre-slot walk — hoisting it introduces no new throw/NaN.
+#
+# The ARRAY paths (arrayop kernels, stencil/affine builds, discrete-cadence
+# fills) keep receiving the FULL resolved map and inline exactly as before; a
+# kernel's inlined copy of a slotted observed is later collapsed onto the
+# observed's slot by `_share_lane_invariants!` when the value numbers match.
+#
+# Returns `(; defs, inline, n_inlined)`:
+#   defs      — dependency-ordered `name => body` pairs; each body is the RAW
+#               observed RHS with only the non-slot observeds substituted (so
+#               slot-to-slot references stay by-name and compile to slot reads);
+#   inline    — the substitution map for SCALAR equations: `resolved_obs` minus
+#               the slotted names (`nothing` ⇔ no slots, so the caller passes
+#               `resolved_obs` through untouched — byte-identical build);
+#   n_inlined — observed equations NOT slotted (array + leaf + demoted).
+function _plan_observed_slots(derivative_eqs::Vector{Equation},
+                              raw_obs::Dict{String,ASTExpr},
+                              resolved_obs::Dict{String,ASTExpr},
+                              observed_names)
+    n_total = length(raw_obs)
+    none = (; defs=Pair{String,ASTExpr}[], inline=nothing, n_inlined=n_total)
+    isempty(raw_obs) && return none
+    obs_scalar = Set{String}(String(n) for n in observed_names)
+    # (1) Candidates: author-declared scalar observeds with an interior (OpExpr)
+    # body whose resolved form is still scalar-valued.
+    candidates = Set{String}()
+    for (name, body) in raw_obs
+        name in obs_scalar || continue
+        body isa OpExpr || continue
+        _is_array_producer(resolved_obs[name]) && continue
+        push!(candidates, name)
+    end
+    isempty(candidates) && return none
+    scalar_rhs = ASTExpr[eq.rhs for eq in derivative_eqs
+                         if _is_scalar_D_lhs(eq.lhs) || _is_indexed_D_lhs(eq.lhs)]
+    # (2) Structural demotion: a candidate read in a build-time position (in a
+    # scalar reader or in another candidate's def) must stay inlined.
+    hits = Set{String}()
+    for rhs in scalar_rhs
+        _obs_structural_refs!(rhs, candidates, hits)
+    end
+    for name in candidates
+        _obs_structural_refs!(raw_obs[name], candidates, hits)
+    end
+    setdiff!(candidates, hits)
+    # (3) Guard-safety fixed point over the SCALAR-path reference graph. A
+    # demoted candidate's def is inlined via its RESOLVED body (which contains
+    # no observed names), so its references simply drop out of the next round.
+    while !isempty(candidates)
+        tot = Dict{String,Int}()
+        unc = Dict{String,Int}()
+        for rhs in scalar_rhs
+            _count_obs_refs!(rhs, candidates, tot, unc, false)
+        end
+        for name in candidates
+            _count_obs_refs!(raw_obs[name], candidates, tot, unc, false)
+        end
+        demote = String[n for n in candidates if get(unc, n, 0) == 0]
+        isempty(demote) && break
+        setdiff!(candidates, demote)
+    end
+    isempty(candidates) && return none
+    # (4) The scalar-path inline map (non-slot observeds only) and the
+    # dependency-ordered defs. A def's references to non-slot observeds are
+    # substituted with their RESOLVED bodies; references to other slots stay
+    # by-name. Cycles are impossible here (`_resolve_observed` already threw),
+    # but fail loudly rather than assume.
+    inline = Dict{String,ASTExpr}(k => v for (k, v) in resolved_obs
+                                  if !(k in candidates))
+    order = _dependency_order(sort!(collect(candidates)),
+        n -> String[r for r in _referenced_var_names(raw_obs[n]) if r in candidates];
+        on_cycle=done -> throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
+            join(sort!(collect(setdiff(candidates, done))), ","))))
+    defs = Pair{String,ASTExpr}[]
+    for n in order
+        body = raw_obs[n]
+        isempty(inline) || (body = _sub_preserving(body, inline))
+        push!(defs, n => body)
+    end
+    return (; defs, inline, n_inlined=n_total - length(defs))
 end
 
 # ---- Stage: const-array registry ----
@@ -1480,7 +1591,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     n_states = length(layout.all_state_names)
 
     # ---- Observed substitution / derivative-equation split ----
-    derivative_eqs, resolved_obs = _split_observed_and_derivatives(parts.equations,
+    derivative_eqs, resolved_obs, raw_obs = _split_observed_and_derivatives(
+        parts.equations,
         parts.observed_names, cls.geom_ring_vars, cls.geom_setup_vars,
         cls.geom_inline_vars, cls.array_inline_vars)
 
@@ -1535,11 +1647,27 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                            layout.array_var_info, const_registry, pgather,
                            param_sym_set, reg_funcs, p)
 
+    # ---- Scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
+    # Decide which scalar observeds compile as named prelude slots and which
+    # stay inlined (see `_plan_observed_slots`). The SCALAR equation arms then
+    # substitute only the non-slot observeds; every array path below keeps the
+    # full `resolved_obs` and is byte-identical to the pre-slot build.
+    obs_plan = _plan_observed_slots(derivative_eqs, raw_obs, resolved_obs,
+                                    parts.observed_names)
+    # Each slot def resolves through the SAME context the scalar entries use,
+    # in dependency order (a def may read a state gather / const array / live
+    # forcing buffer exactly as its inlined copy did).
+    obs_defs = Pair{String,ASTExpr}[
+        name => _resolve_indices(body, layout.array_var_info, var_map,
+                                 const_registry, pgather)
+        for (name, body) in obs_plan.defs]
+
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
     scalar_entries, vec_kernels, acc_kernels = _compile_derivative_equations(derivative_eqs,
         resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
-        param_sym_set, reg_funcs, n_states; template_sites=template_sites)
+        param_sym_set, reg_funcs, n_states; template_sites=template_sites,
+        scalar_obs_inline=obs_plan.inline)
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
@@ -1556,7 +1684,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # caches, which is why this is read after `_build_discrete_materializer!` ran.
     rhs_list, scalar_prelude, scalar_cache, cse_diag =
         _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
-                            has_pgather = !isempty(pgather))
+                            has_pgather = !isempty(pgather), obs_defs=obs_defs)
 
     # ---- Lane-invariant sharing across kernels and with the prelude (ha2) ----
     # The pass above sees SCALAR equations only — `_cse_count!` walks `ASTExpr`
@@ -1653,6 +1781,14 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                   sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
               n_cse_slots = cse_diag.n_slots,
               n_cse_occurrences = cse_diag.n_occurrences,
+              # Named scalar-observed prelude slots (ess-obs-slots): observeds
+              # compiled once as named defs vs observed equations left inlined
+              # (array-valued + leaf-bodied + structurally/guard-demoted). An
+              # aliased slot (an observed whose whole body was already a CSE
+              # slot) still counts as a named slot; the PRELUDE length is
+              # `n_cse_slots + n_obs_slots + n_invariant_slots` minus aliases.
+              n_obs_slots = cse_diag.n_obs_slots,
+              n_obs_inlined = obs_plan.n_inlined,
               n_invariant_slots = inv_diag.n_invariant_slots,
               n_invariant_shared = inv_diag.n_invariant_shared,
               n_invariant_scalar_shared = inv_diag.n_invariant_scalar_shared,
@@ -1804,7 +1940,14 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int;
-        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing)
+        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
+        # SCALAR-arm substitution map (ess-obs-slots): `resolved_obs` minus the
+        # observeds compiled as named prelude slots, so a slot reference stays a
+        # bare `VarExpr` for `_compile_cse` to lower onto its slot. `nothing`
+        # (no slots) ⇔ the full map — byte-identical to the pre-slot build. The
+        # ARRAY (`arrayop`) arm always inlines the FULL map.
+        scalar_obs_inline::Union{Nothing,Dict{String,ASTExpr}}=nothing)
+    scalar_inline = scalar_obs_inline === nothing ? resolved_obs : scalar_obs_inline
     scalar_entries = Tuple{Int,ASTExpr}[]
     vec_kernels = _VecKernel[]
     acc_kernels = _AccKernel[]
@@ -1819,8 +1962,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             covered[idx] &&
                 throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", state_name.name))
             covered[idx] = true
-            rhs = isempty(resolved_obs) ? eq.rhs :
-                  _sub_preserving(eq.rhs, resolved_obs)
+            rhs = isempty(scalar_inline) ? eq.rhs :
+                  _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
 
@@ -1840,8 +1983,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             covered[idx] &&
                 throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
             covered[idx] = true
-            rhs = isempty(resolved_obs) ? eq.rhs :
-                  _sub_preserving(eq.rhs, resolved_obs)
+            rhs = isempty(scalar_inline) ? eq.rhs :
+                  _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
 

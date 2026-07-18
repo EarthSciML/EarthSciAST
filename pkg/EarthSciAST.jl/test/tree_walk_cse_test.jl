@@ -520,18 +520,24 @@ end
     end
 
     # ----------------------------------------------------------------
-    # The `fn` node itself is hoisted (each band computed once, not once per
-    # consumer), witnessed by the build diagnostic.
+    # Each band is computed once, not once per consumer — witnessed by the
+    # build diagnostic. MECHANISM UPDATE (ess-obs-slots): the bands and the
+    # `sza` chain are AUTHOR-NAMED observeds, so they are now NAMED PRELUDE
+    # SLOTS (`n_obs_slots`), not canonical-JSON CSE re-discoveries. With the
+    # sharing declared by name, the anonymous CSE pass has nothing left to
+    # find (the consumers' weighted terms are all distinct).
     # ----------------------------------------------------------------
-    @testset "closed-function calls are hoisted into cache slots" begin
+    @testset "observeds become named prelude slots (one per band + sza)" begin
         K, M = 8, 6
         _f!, _u0, _p, _ts, _vm, diag =
             ESM._build_evaluator_impl(_fanout_model(K, M))
-        # ≥ K slots: one per distinct `interp.linear` band, plus the shared `sza`
-        # subtree and its two `datetime.*` calls beneath it.
-        @test diag.n_cse_slots >= K + 1
-        # Each band occurs once per consumer → ≥ K*M replaced occurrences.
-        @test diag.n_cse_occurrences >= K * M
+        # K+1 named slots: one per `interp.linear` band observed, plus `sza`.
+        @test diag.n_obs_slots == K + 1
+        @test diag.n_obs_inlined == 0
+        # The observed-slot mechanism SUBSUMES the CSE re-discovery here: no
+        # anonymous repeats remain once the names carry the sharing.
+        @test diag.n_cse_slots == 0
+        @test diag.n_cse_occurrences == 0
     end
 
     # ----------------------------------------------------------------
