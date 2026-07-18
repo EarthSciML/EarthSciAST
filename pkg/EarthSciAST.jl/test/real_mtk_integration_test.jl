@@ -35,7 +35,6 @@ import Symbolics
         model = Model(vars, [eq])
         sys = ModelingToolkit.System(model; name=:RealTest)
 
-        @test !(sys isa MockMTKSystem)
         type_str = string(typeof(sys))
         @test occursin("System", type_str) || occursin("ODE", type_str)
 
@@ -157,7 +156,6 @@ import Symbolics
             FlattenMetadata())
 
         pde = ModelingToolkit.PDESystem(flat; name=:VertDep)
-        @test !(pde isa MockPDESystem)
         @test occursin("PDESystem", string(typeof(pde)))
         @test length(pde.bcs) >= 1
         # The BC string should contain a z-derivative and reference the
@@ -186,9 +184,10 @@ import Symbolics
         @test !isdefined(EarthSciAST, :from_catalyst_system)
         @test !isdefined(EarthSciAST, :check_mtk_availability)
         @test !isdefined(EarthSciAST, :check_catalyst_availability)
-        # The mock fallbacks DO exist.
-        @test isdefined(EarthSciAST, :MockMTKSystem)
-        @test isdefined(EarthSciAST, :MockPDESystem)
-        @test isdefined(EarthSciAST, :MockCatalystSystem)
+        # The vestigial Mock* fallbacks were deleted too (the MTK-free path
+        # is flatten/FlattenedSystem + build_evaluator/simulate).
+        @test !isdefined(EarthSciAST, :MockMTKSystem)
+        @test !isdefined(EarthSciAST, :MockPDESystem)
+        @test !isdefined(EarthSciAST, :MockCatalystSystem)
     end
 end

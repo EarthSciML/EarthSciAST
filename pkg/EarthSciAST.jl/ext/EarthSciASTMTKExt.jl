@@ -17,8 +17,8 @@ directions of the ESM ⇄ MTK bridge:
 Kept a `weakdep` extension (mirroring `SimulateExt` / `DataRefreshExt`) so
 the base package carries no MTK dependency; without it loaded, the core
 stubs in src/mtk_export.jl throw an `ArgumentError` naming what to load,
-and the mock systems (src/mock_systems.jl) remain available as pure-Julia
-fallbacks.
+and the MTK-free path (`flatten` → `FlattenedSystem`, `build_evaluator`,
+`simulate`) remains fully available.
 """
 module EarthSciASTMTKExt
 
@@ -35,8 +35,9 @@ using EarthSciAST: FlattenedSystem, ModelVariable, StateVariable,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger, FunctionalAffect,
     Domain, flatten, infer_array_shapes,
     GapReport,
-    # MTK-independent helpers shared with the Catalyst extension and the
-    # mock systems (src/mtk_export.jl and src/mock_systems.jl).
+    # MTK-independent helpers shared with the Catalyst extension
+    # (src/mtk_export.jl) plus the ODE-vs-PDE split predicate and redirect
+    # messages (src/flatten.jl).
     _strip_time, _resolve_sys_name,
     _reference_notes, _esm_file_metadata, _warn_gaps,
     _has_spatial_ivs, _use_pde_ctor_msg, _use_ode_ctor_msg

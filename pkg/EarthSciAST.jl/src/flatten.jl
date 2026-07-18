@@ -155,6 +155,44 @@ FlattenedSystem(flat::FlattenedSystem;
                     function_tables, template_registry)
 
 # ========================================
+# ODE-vs-PDE split predicate + redirect messages
+# ========================================
+
+"""
+    _has_spatial_ivs(flat::FlattenedSystem) -> Bool
+
+Return true when the flattened system has spatial independent variables
+(i.e. needs a PDESystem rather than an ODESystem). A FlattenedSystem with
+`[:t]` only is a pure ODE; anything else is a PDE.
+"""
+function _has_spatial_ivs(flat::FlattenedSystem)
+    return !(length(flat.independent_variables) == 1 &&
+             flat.independent_variables[1] == :t)
+end
+
+"""
+    _use_pde_ctor_msg(flat, pde_ctor, ode_ctor) -> String
+
+Error text for calling an ODE-only constructor (`ode_ctor`, e.g.
+`"ModelingToolkit.System"`) on a flattened system with spatial independent
+variables. Used by the MTK extension so the redirect wording stays
+consistent everywhere the split is enforced.
+"""
+_use_pde_ctor_msg(flat::FlattenedSystem, pde_ctor::String, ode_ctor::String) =
+    "Flattened system has independent variables $(flat.independent_variables), " *
+    "which indicates a PDE. Use $(pde_ctor)(...) instead of $(ode_ctor)(...)."
+
+"""
+    _use_ode_ctor_msg(ode_ctor, pde_ctor) -> String
+
+Mirror of [`_use_pde_ctor_msg`](@ref): error text for calling a PDE-only
+constructor (`pde_ctor`) on a pure-ODE flattened system.
+"""
+_use_ode_ctor_msg(ode_ctor::String, pde_ctor::String) =
+    "Flattened system has independent variables [t] only — this is a " *
+    "pure ODE system. Use $(ode_ctor)(...) instead of $(pde_ctor)(...)."
+
+# ========================================
 # Reaction Lowering Helper (§4.6 + §4.7.6)
 # ========================================
 

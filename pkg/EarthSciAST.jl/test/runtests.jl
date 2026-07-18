@@ -25,7 +25,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
     # ---- MTK / Catalyst integration (ext/EarthSciASTMTKExt.jl,
     #      ext/EarthSciASTCatalystExt.jl) ----
-    include("mtk_catalyst_test.jl")
     include("real_mtk_integration_test.jl")
     include("mtk_metadata_test.jl")
     include("simulate_e2e_test.jl")
@@ -39,13 +38,12 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     #      src/types.jl; codegen.jl; flatten.jl and its split passes
     #      (flatten_errors.jl, namespacing.jl, coupling_apply.jl,
     #      pointwise_lift.jl, array_shape_inference.jl, shape_promotion.jl);
-    #      mock_systems.jl; edit.jl) ----
+    #      edit.jl) ----
     include("reference_resolution_test.jl")
     include("codegen_test.jl")
     include("flatten_test.jl")
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")
-    include("mock_systems_test.jl")
     include("shape_promotion_test.jl")
     include("subsystem_ref_test.jl")
     include("reaction_system_ref_test.jl")

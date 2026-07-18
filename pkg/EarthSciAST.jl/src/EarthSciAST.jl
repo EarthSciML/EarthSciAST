@@ -10,8 +10,9 @@ their composition, and runtime configuration.
 Deep ModelingToolkit/Catalyst integration is provided by package extensions
 (`EarthSciASTMTKExt`, `EarthSciASTCatalystExt`) that load
 automatically when the user imports `ModelingToolkit` or `Catalyst`. Without
-those packages loaded, `MockMTKSystem`, `MockPDESystem`, and `MockCatalystSystem`
-give plain-Julia snapshots of the flattened system with the same ODE/PDE split.
+those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
+snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `simulate`)
+runs it end to end.
 
 Two features live in namespaced submodules rather than the flat namespace:
 `EarthSciAST.Cadence` (loader-cadence classification and model
@@ -46,7 +47,6 @@ include("pointwise_lift.jl")
 include("flatten.jl")
 include("array_shape_inference.jl")
 include("shape_promotion.jl")
-include("mock_systems.jl")
 # Load-time lowering passes (closed registry, templates, imports) and their
 # shared raw-JSON traversal helpers
 include("json_walk.jl")
@@ -140,8 +140,6 @@ export
     validate_reference_syntax, is_valid_identifier,
     # Reaction system ODE derivation
     derive_odes, stoichiometric_matrix, mass_action_rate,
-    # Mock systems (no-MTK / no-Catalyst fallbacks)
-    MockMTKSystem, MockPDESystem, MockCatalystSystem,
     # Graph analysis (Section 4.8)
     Graph, ComponentNode, CouplingEdge, VariableNode, DependencyEdge,
     component_graph, expression_graph, adjacency, predecessors, successors,
