@@ -769,9 +769,30 @@ struct _OopAccPlan
     ghost::Vector{Vector{Bool}}       # per descriptor: ghost-lane mask for a STATE_TBL_BOX with
                                       # a 0 slot (empty ⇒ no ghost); true lanes select 0.0 after
                                       # a gather at a SAFE index (see _build_oop_acc_plan)
+    # Template-body sub-kernels (compile-once tier, `_NK_SUBCALL`): the parent's
+    # FLAT transitive `K.subs` list and, aligned with it, each sub-kernel's own
+    # lane plan built against the PARENT's lane enumeration (a sub is evaluated at
+    # the parent's `(c,n,oln,midx)`, so its descriptors index by the parent lanes).
+    # Empty for every reference-free kernel. Nested subs are all present here
+    # (K.subs is transitive), so a `_NK_SUBCALL` in a sub's spine resolves against
+    # this same list. A sub whose spine does not vectorize forces `vectorizable`
+    # false on the whole parent.
+    subs::Vector{_AccKernel}
+    sub_plans::Vector{_OopAccPlan}
 end
 const _OOP_ACC_FALLBACK =
-    _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[])
+    _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[],
+                _AccKernel[], _OopAccPlan[])
+
+# Identity lookup of a sub-kernel in the parent plan's flat transitive list.
+@inline function _oop_sub_index(subs::Vector{_AccKernel}, S::_AccKernel)
+    @inbounds for j in eachindex(subs)
+        subs[j] === S && return j
+    end
+    throw(TreeWalkError("E_TREEWALK_ACC_SUBCALL_UNKNOWN",
+        "vectorized oop: a _NK_SUBCALL references a sub-kernel absent from the " *
+        "parent's transitive K.subs list — a `_collect_subkernels` invariant break."))
+end
 
 # Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order.
 function _oop_acc_lanes(cs::_CellSet)
@@ -804,14 +825,28 @@ function _oop_acc_lanes(cs::_CellSet)
 end
 
 # Can the whole spine (plus CSE recipes) evaluate as lane vectors? Declines the
-# n-indexed descriptors, reductions, and sub-kernel calls; a `_NK_CACHED` must
-# resolve to THIS kernel's scratch tiers. (Ghost-bearing STATE_TBL_BOX no longer
-# declines — gordian total-vectorize closed it via gather-then-select; the
-# variable-valence reduction / indirect gather and the sub-kernel classes remain
-# per-cell — see the `_oop_run_acc_kernel` header for the precise reason.)
+# n-indexed descriptors and reductions; a `_NK_CACHED` must resolve to THIS
+# kernel's scratch tiers. (Ghost-bearing STATE_TBL_BOX no longer declines —
+# gordian total-vectorize closed it via gather-then-select; the sub-kernel class
+# no longer declines either — gordian subcall-vectorize evaluates each template
+# body as its own whole-array op over the parent lanes, see `_oop_run_acc_vec`.
+# The variable-valence reduction / indirect gather (`_NK_REDUCE`,
+# `_AK_STATE_INDIRECT[_COL]`, `_AK_CONST_EDGE`) is the last remaining decline — a
+# latent IR capability with no production builder, see the header.)
 function _oop_acc_vecable(n::_Node, K::_AccKernel)
     k = n.kind
-    (k === _NK_REDUCE || k === _NK_SUBCALL) && return false
+    k === _NK_REDUCE && return false
+    if k === _NK_SUBCALL
+        # A template-body sub-kernel vectorizes iff its OWN spine + CSE recipes do
+        # (checked against the SUB's descriptor table — a sub's `_NK_CACHED`
+        # resolves to the sub's scratch, not the parent's). Nested subcalls recurse
+        # the same way. `K.subs` being transitive means every reachable sub is also
+        # planned at the parent, so this check and the plan build agree.
+        S = n.payload::_AccKernel
+        return _oop_acc_vecable(S.spine, S) &&
+               all(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
+               all(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
+    end
     if k === _NK_ACCESS
         a = K.acc[n.idx]
         ak = a.kind
@@ -832,20 +867,69 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
     return all(c -> _oop_acc_vecable(c, K), n.children)
 end
 
-function _build_oop_acc_plan(K::_AccKernel)
-    isempty(K.subs) || return _OOP_ACC_FALLBACK
-    ok = _oop_acc_vecable(K.spine, K) &&
-         all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
-         all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
-    ok || return _OOP_ACC_FALLBACK
-    out, m1, m2, m3 = _oop_acc_lanes(K.cells)
+# Build observability (parallels `_CASCADE_TALLY`): why did an acc kernel decline
+# the vectorized oop plan? Returns `:ok`, or the first blocking reason — a
+# `_NK_REDUCE` / `_AK_STATE_INDIRECT[_COL]` / `_AK_CONST_EDGE` (the last remaining
+# per-cell oop fallback class, a latent IR capability with no production builder).
+# Sub-kernels (`_NK_SUBCALL`) are NOT a decline reason — they now vectorize
+# (gordian subcall-vectorize) — so the walk recurses into each. Read corpus-wide
+# via the `ESS_OOP_PROBE=1` hook in `_make_rhs` (records `:oop_vec` / `:oopdecl_*`
+# into the cascade tally).
+function _oop_decline_reason(K::_AccKernel)
+    r = _oop_decline_walk(K.spine, K)
+    r === :ok || return r
+    for rec in K.cse.recipes
+        rr = _oop_decline_walk(rec, K); rr === :ok || return rr
+    end
+    for rec in K.cse.inv_recipes
+        rr = _oop_decline_walk(rec, K); rr === :ok || return rr
+    end
+    return :ok
+end
+function _oop_decline_walk(n::_Node, K::_AccKernel)
+    k = n.kind
+    k === _NK_REDUCE && return :reduce
+    if k === _NK_SUBCALL
+        S = n.payload::_AccKernel
+        r = _oop_decline_walk(S.spine, S); r === :ok || return r
+        for rec in S.cse.recipes
+            rr = _oop_decline_walk(rec, S); rr === :ok || return rr
+        end
+        for rec in S.cse.inv_recipes
+            rr = _oop_decline_walk(rec, S); rr === :ok || return rr
+        end
+        return :ok
+    end
+    if k === _NK_ACCESS
+        ak = K.acc[n.idx].kind
+        ak === _AK_CONST_EDGE && return :const_edge
+        ak === _AK_STATE_INDIRECT && return :state_indirect
+        ak === _AK_STATE_INDIRECT_COL && return :state_indirect_col
+        (ak === _AK_CONST_CELL && _is_outs(K.cells)) && return :const_cell_outs
+    elseif k === _NK_CACHED
+        (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return :cached
+    end
+    for c in n.children
+        r = _oop_decline_walk(c, K); r === :ok || return r
+    end
+    return :ok
+end
+
+# Resolve one descriptor table's per-lane host data against a GIVEN lane
+# enumeration (`out`/`m1`/`m2`/`m3`). Split out of `_build_oop_acc_plan` so a
+# template-body sub-kernel — evaluated at the PARENT's lanes — resolves its own
+# descriptors against those same parent lanes (its `_contig_cells(0)` carries no
+# lanes of its own). Returns the four aligned per-descriptor vectors.
+function _build_oop_desc_vectors(acc::Vector{_AccDesc},
+                                 out::Vector{Int}, m1::Vector{Int},
+                                 m2::Vector{Int}, m3::Vector{Int})
     L = length(out)
-    nacc = length(K.acc)
+    nacc = length(acc)
     gathers = [Int[] for _ in 1:nacc]
     consts  = [Float64[] for _ in 1:nacc]
     forc    = [Int[] for _ in 1:nacc]
     ghost   = [Bool[] for _ in 1:nacc]
-    for (i, a) in enumerate(K.acc)
+    for (i, a) in enumerate(acc)
         k = a.kind
         if k === _AK_STATE_AFFINE
             gathers[i] = out .+ a.delta
@@ -885,17 +969,62 @@ function _build_oop_acc_plan(K::_AccKernel)
         end
         # SCALAR / STATE_FIXED / ARR_FIXED: read directly by the walker.
     end
-    return _OopAccPlan(true, out, gathers, consts, forc, ghost)
+    return gathers, consts, forc, ghost
 end
+
+function _build_oop_acc_plan(K::_AccKernel)
+    ok = _oop_acc_vecable(K.spine, K) &&
+         all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
+         all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
+    ok || return _OOP_ACC_FALLBACK
+    out, m1, m2, m3 = _oop_acc_lanes(K.cells)
+    gathers, consts, forc, ghost = _build_oop_desc_vectors(K.acc, out, m1, m2, m3)
+    # Template-body sub-kernels (`K.subs`, transitive/nested-first): each is
+    # evaluated at the parent's `(c,n,oln,midx)`, so resolve its descriptor tables
+    # against the PARENT's lane enumeration. `_oop_acc_vecable` already accepted
+    # every `_NK_SUBCALL` above (recursing into each sub), so the subs vectorize by
+    # construction; build their aligned lane plans here so the walker can splice
+    # each variant's whole-array result into the parent operand stream.
+    subs = K.subs
+    sub_plans = _OopAccPlan[]
+    if !isempty(subs)
+        sub_plans = Vector{_OopAccPlan}(undef, length(subs))
+        for j in eachindex(subs)
+            S = subs[j]
+            sg, sc, sf, sgh = _build_oop_desc_vectors(S.acc, out, m1, m2, m3)
+            # A sub carries no cells of its own; `out_slots` is unused for a sub
+            # (only the top-level plan scatters), so reuse the parent lane slots.
+            sub_plans[j] = _OopAccPlan(true, out, sg, sc, sf, sgh,
+                                       _AccKernel[], _OopAccPlan[])
+        end
+    end
+    return _OopAccPlan(true, out, gathers, consts, forc, ghost, subs, sub_plans)
+end
+
+# Per-call runtime context for template-body sub-kernels (`_NK_SUBCALL`). Holds
+# the parent plan's flat transitive sub list + aligned build-time lane plans (for
+# identity lookup), and per-sub CSE tier buffers allocated ONCE per call: the
+# invariant tier filled by the runner prologue, the per-cell tier refilled at each
+# subcall site (matching the scalar `_NK_SUBCALL`, which re-fills per cell). Empty
+# for every reference-free kernel (`_OOP_NO_SUB`, shared and never mutated).
+struct _OopSubRT
+    subs::Vector{_AccKernel}
+    plans::Vector{_OopAccPlan}
+    invvals::Vector{Vector{Any}}
+    cellvals::Vector{Vector{Any}}
+end
+const _OOP_NO_SUB = _OopSubRT(_AccKernel[], _OopAccPlan[], Vector{Any}[], Vector{Any}[])
 
 # The lane walker: value-returning, whole-array, routed through the same seams
 # as the `_VecNode` walker — a lane-varying node yields a length-L vector, a
 # lane-invariant one a bare scalar, and broadcast makes them interchangeable.
 # `cellvals`/`invvals` are this call's CSE tier results (the out-of-place
-# expression of the scratch buffers), filled in slot order by the caller.
+# expression of the scratch buffers) for kernel `K`, filled in slot order by the
+# caller; `sub` is the parent-scoped sub-kernel runtime (constant across the whole
+# walk — a `_NK_SUBCALL` looks its sub up there, never in the descending `K`/`plan`).
 function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                         invvals::Vector{Any}, cellvals::Vector{Any},
-                        ::Type{T}) where {T}
+                        sub::_OopSubRT, ::Type{T}) where {T}
     k = nd.kind
     if k === _NK_ACCESS
         a = K.acc[nd.idx]
@@ -931,6 +1060,22 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     elseif k === _NK_CACHED
         return nd.payload === K.cse.scratch ? (@inbounds cellvals[nd.idx]) :
                                               (@inbounds invvals[nd.idx])
+    elseif k === _NK_SUBCALL
+        # Template-body sub-kernel: evaluate its spine as its OWN whole-array op
+        # over the PARENT's lanes (its descriptors were resolved against them in
+        # `_build_oop_acc_plan`), splicing the lane-aligned result in here. The
+        # invariant tier was filled once this call by the runner prologue; refill
+        # the per-cell tier now — the same per-subcall fill the scalar path does.
+        S = nd.payload::_AccKernel
+        j = _oop_sub_index(sub.subs, S)
+        Sp = @inbounds sub.plans[j]
+        iv = @inbounds sub.invvals[j]
+        cv = @inbounds sub.cellvals[j]
+        rs = S.cse.recipes
+        @inbounds for i in eachindex(rs)
+            cv[i] = _oop_eval_acck(rs[i], u, p, t, S, Sp, iv, cv, sub, T)
+        end
+        return _oop_eval_acck(S.spine, u, p, t, S, Sp, iv, cv, sub, T)
     elseif k === _NK_CONTRACTION
         # Fixed-width ⊕-fold over lane vectors, seeded from the 0̄ identity —
         # ((0̄ ⊕ c1) ⊕ c2)… in child order, broadcast per lane: the same fold
@@ -940,37 +1085,37 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         res::Any = nd.literal     # scalar seed; the first broadcast promotes it
         if op === :+
             for i in eachindex(ch)
-                res = res .+ _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T)
+                res = res .+ _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T)
             end
         elseif op === :*
             for i in eachindex(ch)
-                res = res .* _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T)
+                res = res .* _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T)
             end
         elseif op === :max
             for i in eachindex(ch)
-                res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T))
+                res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T))
             end
         else  # :min
             for i in eachindex(ch)
-                res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T))
+                res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T))
             end
         end
         return res
-    else # _NK_OP (REDUCE/SUBCALL were declined at plan build)
+    else # _NK_OP (REDUCE was declined at plan build)
         op = nd.op
         ch = nd.children
         if op === :fn
-            return _oop_acck_fn(nd, u, p, t, K, plan, invvals, cellvals, T)
+            return _oop_acck_fn(nd, u, p, t, K, plan, invvals, cellvals, sub, T)
         elseif (op === :^ || op === :pow) && length(ch) == 2
             # A literal exponent stays a literal — see `_oop_pow`.
-            base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, T)
+            base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, sub, T)
             e = ch[2]
             return e.kind === _NK_LITERAL ? base .^ e.literal :
-                   base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, T)
+                   base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, sub, T)
         end
         c = Vector{Any}(undef, length(ch))
         for i in eachindex(ch)
-            c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T)
+            c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T)
         end
         return _oop_op(op, c, T)
     end
@@ -978,10 +1123,10 @@ end
 
 function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                       invvals::Vector{Any}, cellvals::Vector{Any},
-                      ::Type{T}) where {T}
+                      sub::_OopSubRT, ::Type{T}) where {T}
     pl = nd.payload
     ch = nd.children
-    ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, T)
+    ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, sub, T)
     if pl isa Tuple{String,_InterpLinearSpec}
         return _oop_interp_linear_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,_InterpBilinearSpec}
@@ -1000,24 +1145,49 @@ function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
 end
 
-# Run one vectorized acc kernel: CSE tiers in slot order (invariant tier —
-# scalars — first, exactly as `_fill_invariant!` runs before the cell loop),
-# spine over whole lanes, then ONE scatter.
+# Run one vectorized acc kernel: sub-kernel invariant tiers first (once per call,
+# in nested-first `K.subs` order — the prologue the in-place runner also runs),
+# then K's own CSE tiers in slot order (invariant scalars first), the spine over
+# whole lanes, and ONE scatter.
 function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                           ::Type{T}) where {T}
+    sub = _oop_build_subrt(plan)
+    for j in eachindex(sub.subs)
+        S = @inbounds sub.subs[j]
+        Sp = @inbounds sub.plans[j]
+        iv = @inbounds sub.invvals[j]; cv = @inbounds sub.cellvals[j]
+        ir = S.cse.inv_recipes
+        @inbounds for i in eachindex(ir)
+            iv[i] = _oop_eval_acck(ir[i], u, p, t, S, Sp, iv, cv, sub, T)
+        end
+    end
     cse = K.cse
     invvals = Vector{Any}(undef, length(cse.inv_recipes))
     cellvals = Vector{Any}(undef, length(cse.recipes))
     for i in eachindex(cse.inv_recipes)
         invvals[i] = _oop_eval_acck(cse.inv_recipes[i], u, p, t, K, plan,
-                                    invvals, cellvals, T)
+                                    invvals, cellvals, sub, T)
     end
     for i in eachindex(cse.recipes)
         cellvals[i] = _oop_eval_acck(cse.recipes[i], u, p, t, K, plan,
-                                     invvals, cellvals, T)
+                                     invvals, cellvals, sub, T)
     end
-    res = _oop_eval_acck(K.spine, u, p, t, K, plan, invvals, cellvals, T)
+    res = _oop_eval_acck(K.spine, u, p, t, K, plan, invvals, cellvals, sub, T)
     return _oop_scatter(du, plan.out_slots, res)
+end
+
+# Allocate the per-call sub-kernel runtime (empty ⇒ the shared no-op singleton).
+function _oop_build_subrt(plan::_OopAccPlan)
+    subs = plan.subs
+    isempty(subs) && return _OOP_NO_SUB
+    invvals  = Vector{Vector{Any}}(undef, length(subs))
+    cellvals = Vector{Vector{Any}}(undef, length(subs))
+    @inbounds for j in eachindex(subs)
+        S = subs[j]
+        invvals[j]  = Vector{Any}(undef, length(S.cse.inv_recipes))
+        cellvals[j] = Vector{Any}(undef, length(S.cse.recipes))
+    end
+    return _OopSubRT(subs, plan.sub_plans, invvals, cellvals)
 end
 
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},

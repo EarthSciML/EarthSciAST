@@ -22,6 +22,21 @@ using EarthSciAST: load, flatten, build_evaluator, coerce_esm_file, TreeWalkErro
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalone)
 
+# A state wrapper that THROWS on scalar reads but serves whole-array gathers — the
+# access profile of a traced array (Reactant rejects `u[i]`, accepts `u[slots]`).
+# Used to prove, on host, that the vectorized `:oop` acc form (template sub-kernels
+# included) touches the state only through whole-array ops. Defined at module scope
+# (a `struct` cannot live inside a `@testset`).
+if !isdefined(@__MODULE__, :_TemplGatherOnly)
+    struct _TemplGatherOnly <: AbstractVector{Float64}
+        v::Vector{Float64}
+    end
+    Base.size(g::_TemplGatherOnly) = size(g.v)
+    Base.getindex(::_TemplGatherOnly, ::Int) = error("scalar state read — XLA rejects it")
+    Base.getindex(g::_TemplGatherOnly, I::AbstractVector{<:Integer}) = g.v[I]
+    Base.similar(g::_TemplGatherOnly, ::Type{T}, dims::Dims) where {T} = similar(g.v, T, dims)
+end
+
 @testset "compile-once template tier" begin
     bench(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", parts...)
 
@@ -84,6 +99,31 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         @test cfast.variants == 15
         @test catload.variants == 0
         @test cfast.compiles < catload.compiles ÷ 4
+    end
+
+    @testset "gate: template sub-kernels vectorize for :oop (traceable)" begin
+        # gordian subcall-vectorize: a template-body sub-kernel (`K.subs` /
+        # `_NK_SUBCALL`) used to force the per-cell oop FALLBACK (`_oop_run_acc_kernel`),
+        # which scalar-indexes the state and so cannot be traced. It now evaluates
+        # each variant as its OWN whole-array op over the parent lanes and splices
+        # the lane-aligned result into the parent operand stream. Pin structurally:
+        # this fixture DOES carry sub-kernels, EVERY acc plan is vectorizable (no
+        # fallback), and the whole array phase evaluates WITHOUT scalar-indexing the
+        # state — the property a tracer (Reactant/XLA) actually rejects.
+        FIX = bench("transport_3axis_7cubed_fullrank.esm")
+        flat = flatten(load(FIX))
+        fo, u0, p, _, _ = build_evaluator(flat; form=:oop)
+        oplans = getfield(fo, :acc_plans)
+        @test !isempty(oplans)
+        @test any(P -> !isempty(P.subs), oplans)     # the tier actually fired here
+        @test all(P -> P.vectorizable, oplans)       # …and none forced the fallback
+
+        # `form = :oop` must evaluate through a gather-only state (defined at module
+        # scope above) and land bit-identically on the plain result.
+        u = probe_states(length(u0))[2]
+        want = fo(u, p, 0.7)
+        @test fo(_TemplGatherOnly(u), p, 0.7) == want   # whole-array only, bit-identical
+        @test sum(abs, want) > 0
     end
 
     @testset "reduced-rank fixture: per-cell fallback stays bit-identical" begin

@@ -317,6 +317,16 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # tape is Float64-only; every other value type (ForwardDiff `Dual`) takes
     # the eltype-generic scalar path below, which computes the SAME values.
     acc_plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in acc_kernels]
+    # Build observability: with ESS_OOP_PROBE=1, record how each array kernel would
+    # plan for the vectorized (traceable) `:oop` form — `:oop_vec` when it
+    # vectorizes whole-array, else `:oopdecl_<reason>` — into the cascade tally, so
+    # the corpus's oop-fallback coverage is readable from an ordinary in-place build.
+    if get(ENV, "ESS_OOP_PROBE", "") == "1"
+        for K in acc_kernels
+            P = _build_oop_acc_plan(K)
+            _tally_cascade!(P.vectorizable ? :oop_vec : Symbol("oopdecl_", _oop_decline_reason(K)))
+        end
+    end
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
