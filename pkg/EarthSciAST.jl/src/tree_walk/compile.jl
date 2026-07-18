@@ -239,6 +239,13 @@ end
 # the AST nor re-validates the axis. All-scalar closed functions (`datetime.*`)
 # store `nothing` and keep the boxed `evaluate_closed_function` path.
 #
+# TOTALITY CONTRACT: a closed function must be TOTAL over real inputs — never
+# throw; return `NaN` off its domain (see registered_functions.jl). The array
+# evaluators (whole-array `_oop` and the lane tape) call `fn` EAGERLY for every
+# cell, including guard-excluded ones, then blend by select — so a `fn` that
+# throws off-domain diverges from the short-circuiting scalar reference, which
+# is an author contract violation, not an evaluator bug.
+#
 # `compile_child` lowers ONE scalar argument expression to a `_Node`. It is a
 # parameter — not a hardcoded `_compile` call — so the CSE pass can reuse this
 # exact lowering while compiling the scalar args through `_compile_cse` (ess-r7h

@@ -16,7 +16,31 @@ Implements the spec-defined closed function set from esm-spec §9.2:
   exactly-representable IEEE-754 inputs (esm-94w).
 
 The set is **closed**: callers MUST reject any `fn`-op `name` outside this
-list (diagnostic `unknown_closed_function`). This module provides:
+list (diagnostic `unknown_closed_function`).
+
+## TOTALITY CONTRACT (evaluator-facing)
+
+Every closed function MUST be **total over real inputs**: given any finite
+real argument in-shape, it returns a value and **NEVER throws** — an
+out-of-domain input yields `NaN` (or the spec-pinned clamp), never an
+exception. This is a hard requirement, not a nicety, because the array
+evaluators evaluate a closed `fn` **eagerly for every lane** — including lanes
+whose value a per-cell guard (`ifelse`/`and`/`or`) will discard. The
+whole-array (`_oop`) and lane-tape (`_run_acc_plan!`) paths compute the `fn`
+on all cells and then blend; a guard's false lanes get a garbage-but-finite
+`fn` value that the select throws away. The scalar reference walk, by
+contrast, still SHORT-CIRCUITS — it never evaluates a guarded `fn` on a lane
+the guard excludes.
+
+Consequence: a closed function that **throws** off its domain is observable
+only as a *difference between evaluator paths* (the vectorized paths raise
+where the scalar path silently skipped), and that divergence is a **contract
+violation by the function author, not an evaluator bug**. The spec-defined
+`datetime.*` / `interp.*` set honors this contract (the calendar functions are
+total on finite `Float64`; the interpolators extrapolate flat rather than
+raising). Any future closed primitive must too.
+
+This module provides:
 
 - [`closed_function_names`](@ref) — the public closed-set as a `Set{String}`.
 - [`evaluate_closed_function`](@ref) — dispatch entry point used by both the

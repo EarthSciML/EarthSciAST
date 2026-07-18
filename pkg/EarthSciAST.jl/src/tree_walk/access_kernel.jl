@@ -899,10 +899,15 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 #     an UNguarded domain violation still raises on both paths.
 #   * DECLINES (returns `nothing`, scalar runner keeps the kernel) anything whose
 #     vector semantics could diverge from the scalar walk: `_NK_REDUCE`
-#     (n-dependent), template sub-kernels, boxed closed functions, and the
-#     unstructured n-indexed descriptors. Interp `:fn` leaves ARE supported — a
-#     per-lane loop over the SAME `_interp_*_core` kernels is bit-identical by
-#     construction.
+#     (n-dependent), template sub-kernels, and the unstructured n-indexed
+#     descriptors. Interp `:fn` leaves ARE supported (a per-lane loop over the
+#     SAME `_interp_*_core` kernels, bit-identical by construction); BOXED closed
+#     `:fn` leaves (`datetime.*`) are ALSO supported (gordian total-vectorize) —
+#     a per-lane `_eval_closed_fn` loop, safe because a closed function is total
+#     by contract (never throws on real inputs), so an eager eval under a guard
+#     matches the lazy walk bit for bit and any off-domain NaN is discarded by
+#     the guard's select. A lane-varying boxed fn boxes its args per lane exactly
+#     as the scalar walk does (the ONE place the tape is not zero-alloc).
 
 # Tape opcodes.
 const _TC_GATHER_STATE   = UInt8(1)   # d[l] = u[oln[l] + delta]
@@ -916,6 +921,7 @@ const _TC_INTERP_BILINEAR= UInt8(8)   # d[l] = _interp_bilinear_core(spec, x[l],
 const _TC_INTERP_SEARCH  = UInt8(9)   # d[l] = Float64(_interp_searchsorted_core(spec, q[l]))
 const _TC_GATHER_STATE_TBL=UInt8(10)  # s = conn[boxaddr(l)]; d[l] = s == 0 ? 0.0 : u[s]
 const _TC_GATHER_ARR_TBL = UInt8(11)  # d[l] = arr[conn[boxaddr(l)]]  (LIVE forcing table)
+const _TC_FN             = UInt8(12)  # d[l] = _eval_closed_fn(name, args[·], Float64)  (boxed closed fn)
 
 # One instruction. Operand `args[k]` is a buffer id into the plan's `bufs`;
 # `strides[k]` is 0 (a length-1 scalar/literal slot, broadcast) or 1 (a lane
@@ -1163,10 +1169,30 @@ end
 function _plan_emit_fn!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
     pl = nd.payload
     ch = nd.children
+    if pl isa Tuple{String,Nothing}
+        # BOXED closed fn (`datetime.*`): no typed interp spec, so evaluate it
+        # per lane through `_eval_closed_fn` (gordian total-vectorize, Stage 2).
+        # Totality is the AUTHOR'S CONTRACT — a closed function must be total over
+        # real inputs (never throw; return NaN off-domain), so eager per-lane eval
+        # under a guard is safe and the guard's select discards any off-domain
+        # NaN. Args box into a reused per-instruction `Any` buffer (exactly the
+        # scalar walk's boxing); a lane-invariant fn is evaluated once per tile.
+        ops = Tuple{Int,Int,Bool}[_plan_emit!(B, c, K) for c in ch]
+        d = _plan_newlane!(B)
+        argbuf = Vector{Any}(undef, length(ops))
+        push!(B.instrs, _mkinstr(_TC_FN; dest=d,
+                                 args=Int[o[1] for o in ops],
+                                 strides=Int[o[2] for o in ops],
+                                 payload=(pl[1]::String, argbuf)))
+        for o in ops
+            o[3] && push!(B.free, o[1])
+        end
+        return (d, 1, true)
+    end
     code = pl isa Tuple{String,_InterpLinearSpec} ? _TC_INTERP_LINEAR :
            pl isa Tuple{String,_InterpBilinearSpec} ? _TC_INTERP_BILINEAR :
            pl isa Tuple{String,_InterpSearchsortedSpec} ? _TC_INTERP_SEARCH :
-           throw(_AccPlanDecline())    # boxed all-scalar fn: per-lane Any boxing
+           throw(_AccPlanDecline())    # unknown payload shape
     ops = Tuple{Int,Int,Bool}[_plan_emit!(B, c, K) for c in ch]
     d = _plan_newlane!(B)
     push!(B.instrs, _mkinstr(code; dest=d,
@@ -1266,17 +1292,22 @@ function _acc_sanitize_guards(nd::_Node, mask)
         di <= length(kids) &&
             (kids[di] = _aop(:ifelse, mask, kids[di], _alit(sv)))
     end
-    return _aop(op, kids...)
+    # Rebuild via `_mknode` (NOT `_aop`, which drops payload) so an op carrying a
+    # payload — notably `:fn` (closed-function name / typed interp spec) — keeps
+    # it; otherwise a guarded `fn` would lose its identity and decline the tape.
+    return _mknode(kind=_NK_OP, op=op, payload=nd.payload, children=kids)
 end
 
 """
     _build_acc_plan(K::_AccKernel; tile=1024) -> Union{_AccPlan,Nothing}
 
 Compile `K` into a lane tape, or return `nothing` when the kernel has no strided
-formulation (reduction, sub-kernel call, boxed closed function, n-indexed
-descriptor) — the scalar `_run_acc_kernel!` then keeps the kernel. Lazy guard
-ops (`ifelse`/`and`/`or`) ARE compiled: eager select/blend on a spine copy
-sanitized by `_acc_sanitize_guards` so eager evaluation cannot throw.
+formulation (reduction, sub-kernel call, n-indexed descriptor) — the scalar
+`_run_acc_kernel!` then keeps the kernel. Lazy guard ops (`ifelse`/`and`/`or`)
+ARE compiled: eager select/blend on a spine copy sanitized by
+`_acc_sanitize_guards` so eager evaluation cannot throw. Boxed closed `fn`
+(`datetime.*`) leaves ARE compiled: a per-lane `_eval_closed_fn` loop, total by
+the closed-function contract.
 """
 function _build_acc_plan(K::_AccKernel; tile::Int=1024)
     isempty(K.subs) || return nothing
@@ -1672,12 +1703,36 @@ function _run_acc_instr!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, u,
             d[l] = _interp_bilinear_core(spec.table, spec.axis_x, spec.axis_y,
                                          x[1 + (l-1)*sx], y[1 + (l-1)*sy])
         end
-    else # _TC_INTERP_SEARCH
+    elseif c === _TC_INTERP_SEARCH
         d = bufs[ins.dest]; spec = ins.payload::_InterpSearchsortedSpec
         q = bufs[ins.args[1]]; sq = ins.strides[1]
         @inbounds for l in 1:L
             d[l] = Float64(_interp_searchsorted_core("interp.searchsorted",
                                                      q[1 + (l-1)*sq], spec.xs))
+        end
+    else # _TC_FN — boxed closed fn (datetime.*), per-lane through _eval_closed_fn
+        d = bufs[ins.dest]
+        name, argbuf = ins.payload::Tuple{String,Vector{Any}}
+        args = ins.args; sts = ins.strides; na = length(args)
+        allinv = true
+        for k in 1:na
+            sts[k] == 0 || (allinv = false; break)
+        end
+        if allinv                       # lane-invariant fn: ONE call, broadcast
+            @inbounds for k in 1:na
+                argbuf[k] = bufs[args[k]][1]
+            end
+            v = Float64(_eval_closed_fn(name, argbuf, Float64))
+            @inbounds for l in 1:L
+                d[l] = v
+            end
+        else                            # lane-varying args: per-lane (boxes, as scalar)
+            @inbounds for l in 1:L
+                for k in 1:na
+                    argbuf[k] = bufs[args[k]][1 + (l-1)*sts[k]]
+                end
+                d[l] = Float64(_eval_closed_fn(name, argbuf, Float64))
+            end
         end
     end
     return nothing
@@ -1699,7 +1754,9 @@ end
 
 # Run one planned kernel in place. Bit-identical to `_run_acc_kernel!` at
 # Float64 (same per-lane op sequence, same fold order, same write order) and
-# zero-allocation (all buffers preallocated on the plan). `Float64` only —
+# zero-allocation (all buffers preallocated on the plan) — the ONE exception is
+# a boxed closed `fn` (`datetime.*`) with lane-varying args, which boxes those
+# args per lane exactly as the scalar `:fn` arm does. `Float64` only —
 # `_make_rhs` gates on `T === Float64` and sends every other value type to the
 # scalar runner.
 function _run_acc_plan!(du, u, p, t, K::_AccKernel, P::_AccPlan)

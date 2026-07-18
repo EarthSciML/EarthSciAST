@@ -320,4 +320,54 @@ const E = EarthSciAST
         @test_throws DomainError E._run_acc_plan!(zeros(N), u, nothing, 0.0, Kbad2,
                                                   E._build_acc_plan(Kbad2; tile=8))
     end
+
+    # ---------- BOXED CLOSED `fn` UNDER A GUARD (gordian total-vectorize, Stage 2) ----------
+    # A boxed closed fn (`datetime.*`) no longer declines the tape: it evaluates
+    # eagerly per lane through `_eval_closed_fn`. Totality is the AUTHOR CONTRACT
+    # (a closed fn is total over real inputs — never throws, returns NaN
+    # off-domain), so eager eval under a guard is safe and any off-domain value
+    # is discarded by the guard's select. Must (a) plan (not decline), (b) match
+    # the scalar reference bit for bit, on both invariant and lane-varying args.
+    @testset "boxed closed fn under guard: eager per-lane ≡ scalar" begin
+        N = 48
+        u = Float64[(-1.0)^k * (0.05 + 0.03k) for k in 1:N]     # alternating sign
+        tval = 1.5e9                                            # a finite unix time
+        cells = E._CellSet([1], UnitRange{Int}[1:N], 0)
+        tnode() = E._mknode(kind=E._NK_TIME)
+        fn(name, kids...) = E._mknode(kind=E._NK_OP, op=:fn,
+                                      children=E._Node[kids...], payload=(name, nothing))
+        mkK(spine) = E._AccKernel(cells, spine,
+                                  E._AccDesc[E._AccStateAffine(0)], E._FixedBound(0), 0.0)
+
+        # invariant fn arg (t) — evaluated ONCE per tile, broadcast
+        s_inv = E._aop(:ifelse, E._aop(:>, E._acc(1), E._alit(0.0)),
+                       E._aop(:+, E._aop(:*, fn("datetime.julian_day", tnode()),
+                                         E._alit(1e-4)), E._acc(1)),
+                       E._alit(-1.0))
+        # lane-varying fn arg (t + u[i]·Δ, always finite) — per-lane fn loop, and a
+        # NESTED guard so composition is exercised on the fn arm
+        s_var = E._aop(:ifelse, E._aop(:>, E._acc(1), E._alit(0.0)),
+                       E._aop(:ifelse, E._aop(:<, E._acc(1), E._alit(10.0)),
+                              fn("datetime.day_of_year",
+                                 E._aop(:+, tnode(), E._aop(:*, E._acc(1), E._alit(3600.0)))),
+                              E._alit(1.0)),
+                       E._alit(-2.0))
+        for (name, spine) in (("invariant-arg", s_inv), ("lane-varying-arg", s_var))
+            K = mkK(spine)
+            P = E._build_acc_plan(K; tile=8)
+            @test P !== nothing                         # (a) planned, no decline
+            ref = zeros(N); E._run_acc_kernel!(ref, u, nothing, tval, K)
+            tape = zeros(N); E._run_acc_plan!(tape, u, nothing, tval, K, P)
+            @test all(isfinite, tape)
+            @test tape == ref                           # (b) bit-identical blend
+        end
+
+        # An UNguarded boxed fn also vectorizes and matches the scalar walk.
+        Kun = mkK(E._aop(:*, fn("datetime.julian_day", tnode()), E._acc(1)))
+        Pun = E._build_acc_plan(Kun; tile=8)
+        @test Pun !== nothing
+        refu = zeros(N); E._run_acc_kernel!(refu, u, nothing, tval, Kun)
+        tapu = zeros(N); E._run_acc_plan!(tapu, u, nothing, tval, Kun, Pun)
+        @test tapu == refu
+    end
 end
