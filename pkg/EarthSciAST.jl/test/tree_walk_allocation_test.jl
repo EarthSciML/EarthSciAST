@@ -173,8 +173,10 @@ end
 
     @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
         # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at every
-        # size (a per-cell leak would grow the byte count with N).
-        for N in (64, 256, 1024)
+        # size (a per-cell leak would grow the byte count with N). N = 2500
+        # crosses the affine lane tape's tile boundary (1024) twice, so the
+        # tiled flush loop is pinned allocation-free too.
+        for N in (64, 256, 1024, 2500)
             ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
             @test built_rhs_alloc_bytes(_stencil_model(N); initial_conditions=ics) == 0
         end

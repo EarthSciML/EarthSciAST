@@ -124,6 +124,19 @@ end
 # Deliberately signed, so `c[i]^2` sits on a negative base.
 _seed(n) = [0.6sin(0.7k) - 0.15 for k in 1:n]
 
+# A state vector that REFUSES scalar reads but serves whole-array gathers — the
+# access profile of a traced array (Reactant rejects `u[i]`, accepts `u[slots]`).
+# Running `form = :oop` on it proves, on host, that the vectorized acc form
+# touches the state only through whole-array ops.
+struct _GatherOnlyVec <: AbstractVector{Float64}
+    v::Vector{Float64}
+end
+Base.size(g::_GatherOnlyVec) = size(g.v)
+Base.getindex(::_GatherOnlyVec, ::Int) =
+    error("scalar indexing of the state — the access XLA rejects")
+Base.getindex(g::_GatherOnlyVec, I::AbstractVector{<:Integer}) = g.v[I]
+Base.similar(g::_GatherOnlyVec, ::Type{T}, dims::Dims) where {T} = similar(g.v, T, dims)
+
 # `f!` writes only the slots it has equations for: a state with no `D(...)` equation is
 # left UNTOUCHED, so `f!` is only correct when handed an already-zeroed `du` (which is
 # what an integrator does). Zero it here too, or the comparison below would be against
@@ -319,5 +332,77 @@ end
         @test ESM._oop_value_type(D[D(1.0)], (a = 1.0,), 0.0) === D    # state is Dual
         @test ESM._oop_value_type(Float64[1.0], (a = D(1.0),), 0.0) === D  # params are
         @test ESM._oop_value_type(Float64[1.0], nothing, 0.0) === Float64  # no params
+    end
+
+    # ---- The de-scalarized (traceable) acc form ------------------------------
+
+    @testset "a DEFAULT (affine) build takes the vectorized acc form" begin
+        # The refusal this replaced (`E_TREEWALK_ACC_XLA_UNSUPPORTED`) meant the
+        # flagship tracing feature only worked with ESS_STENCIL_DISABLE=1. Pin
+        # the fix structurally: the default build of a stencil model produces acc
+        # kernels, EVERY one of them plans vectorizable for `:oop`, and the
+        # in-place build carries a lane tape for each — so neither emitter walks
+        # cells one at a time on the default path.
+        fi, _, _, _, _ = ESM.build_evaluator(_rd(64))
+        fo, _, _, _, _ = ESM.build_evaluator(_rd(64); form = :oop)
+        @test !isempty(getfield(fi, :acc_kernels))
+        @test all(P -> P !== nothing, getfield(fi, :acc_plans))
+        oplans = getfield(fo, :acc_plans)
+        @test !isempty(oplans) && all(P -> P.vectorizable, oplans)
+    end
+
+    @testset "the vectorized acc form never scalar-indexes the state" begin
+        # The property XLA actually rejects. A minimal state wrapper that THROWS
+        # on scalar reads but serves whole-array gathers: `form = :oop` on a
+        # default affine build must evaluate through it — proof, on host, that
+        # every state access is a whole-array op (the traceability contract),
+        # with no Reactant in the loop.
+        fo, u0, p, _, _ = ESM.build_evaluator(_rd(24); form = :oop)
+        u = _seed(length(u0))
+        want = fo(u, p, 0.4)
+        got = fo(_GatherOnlyVec(u), p, 0.4)
+        @test got == want
+    end
+
+    @testset "interp.* inside an arrayop: lanes ≡ scalar cores, and AD" begin
+        # The acc `:fn` arm evaluates locate→gather→blend over whole lanes (the
+        # form a tracer needs). It must be BIT-identical to the branchy scalar
+        # cores — pinned both through the emitters and directly, over a dense
+        # query sweep hitting in-range, every knot, both clamps, and NaN.
+        table = Any[10.0, 20.0, 40.0, 80.0, 160.0]
+        axis = Any[0.0, 1.0, 2.0, 3.0, 4.0]
+        body = _o("+", _fnop("interp.linear", _cst(table), _cst(axis), _ix("c", "i")),
+                  _o("*", -0.5, _ix("c", "i")))
+        doc = _doc("FNAO", Dict{String,Any}("c" => _state(shape = Any["n"])),
+            Any[Dict{String,Any}("lhs" => _ao(_Dt(_ix("c", "i"))), "rhs" => _ao(body))];
+            index_sets = _nset(48))
+        fi, fo, u0, p, _ = _both(doc)
+        u = [4.4 * (k - 1) / 47 - 0.2 for k in 1:48]   # spans both clamps
+        for t in (0.0, 1.1)
+            @test _ip(fi, u, p, t) == fo(u, p, t)      # bit-for-bit
+        end
+        J = ForwardDiff.jacobian(uu -> fo(uu, p, 0.0), u)
+        @test all(isfinite, J)
+
+        # Direct dense sweeps against the cores (isequal: NaN pins as NaN).
+        lspec = ESM._InterpLinearSpec([10.0, 20.0, 40.0, 80.0, 160.0],
+                                      [0.0, 1.0, 2.0, 3.0, 4.0])
+        qs = vcat(collect(-1.0:0.037:5.0), [0.0, 1.0, 2.0, 3.0, 4.0, NaN, -0.0])
+        @test all(isequal(a, b) for (a, b) in zip(
+            ESM._oop_interp_linear_lanes(lspec, qs, Float64),
+            [ESM._interp_linear_core(lspec.table, lspec.axis, q) for q in qs]))
+        sspec = ESM._InterpSearchsortedSpec([1.0, 2.0, 2.0, 3.0, 4.0])  # duplicate knot
+        @test all(isequal(a, b) for (a, b) in zip(
+            ESM._oop_interp_searchsorted_lanes(sspec, qs, Float64),
+            [Float64(ESM._interp_searchsorted_core("interp.searchsorted", q, sspec.xs))
+             for q in qs]))
+        bspec = ESM._InterpBilinearSpec([[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]],
+                                        [0.0, 1.0, 2.0], [0.0, 1.0, 2.0])
+        xs = vcat(collect(-0.5:0.13:2.5), [0.0, 1.0, 2.0, NaN, 0.7])
+        ys = reverse(vcat(collect(-0.5:0.13:2.5), [1.0, NaN, 0.0, 2.0, 1.3]))
+        @test all(isequal(a, b) for (a, b) in zip(
+            ESM._oop_interp_bilinear_lanes(bspec, xs, ys, Float64),
+            [ESM._interp_bilinear_core(bspec.table, bspec.axis_x, bspec.axis_y, x, y)
+             for (x, y) in zip(xs, ys)]))
     end
 end

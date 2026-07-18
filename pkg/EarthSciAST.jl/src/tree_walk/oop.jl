@@ -336,6 +336,113 @@ end
 @inline _oop_interp_searchsorted(h::_InterpSearchsortedSpec, x, ::Type{T}) where {T} =
     convert(T, _interp_searchsorted_core("interp.searchsorted", x, h.xs))
 
+# ---- interp.* over whole LANES: locate → gather → blend ----------------------
+#
+# The de-scalarized interp forms the affine access-kernel path evaluates (and the
+# forms an XLA/Reactant trace needs): NO branch on the query, NO opaque scalar
+# core inside a broadcast — every step is elementwise arithmetic + `ifelse`
+# selection, so a traced query lane vector flows through as whole-array ops and
+# the emitted program's size is O(table), independent of the grid.
+#
+# BIT-IDENTICAL to the scalar cores, by mirroring their decision trees with
+# `ifelse` selects instead of branches:
+#   * locate: `i = clamp(Σ_k [axis[k] ≤ x], 1, n-1)` — for a validated strictly-
+#     increasing axis this is exactly the scan's "largest k with axis[k] ≤ x".
+#   * gather: chained `ifelse(i == k, table[k], …)` SELECTS (never blends) the
+#     cell's endpoints, so table entries come through exactly (no `0·Inf`, no
+#     signed-zero surprises).
+#   * blend: the cores' pinned form `tᵢ + w·(tᵢ₊₁ − tᵢ)` verbatim.
+#   * clamps: the same outer `x ≤ axis[1]` / `x ≥ axis[n]` selects the cores
+#     early-return on. A NaN query fails both compares, takes the blend arm, and
+#     `w = (NaN − aᵢ)/…` propagates NaN — the cores' documented NaN semantics.
+# The oop test file pins these against the scalar cores over dense query sweeps
+# (in-range, knots, both clamps, NaN).
+#
+# `q` may be a lane vector OR a scalar (an invariant query) — broadcast serves
+# both, exactly like the rest of this emitter.
+function _oop_interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T}
+    axis = h.axis; table = h.table
+    n = length(axis)
+    cnt = ifelse.(axis[1] .<= q, 1.0, 0.0)
+    for k in 2:n
+        cnt = cnt .+ ifelse.(axis[k] .<= q, 1.0, 0.0)
+    end
+    i = min.(max.(cnt, 1.0), Float64(n - 1))
+    ai  = axis[1] .+ zero.(i);  ai1 = axis[2] .+ zero.(i)
+    ti  = table[1] .+ zero.(i); ti1 = table[2] .+ zero.(i)
+    for k in 2:(n - 1)
+        sel = i .== Float64(k)
+        ai  = ifelse.(sel, axis[k],      ai)
+        ai1 = ifelse.(sel, axis[k + 1],  ai1)
+        ti  = ifelse.(sel, table[k],     ti)
+        ti1 = ifelse.(sel, table[k + 1], ti1)
+    end
+    w = (q .- ai) ./ (ai1 .- ai)
+    blend = ti .+ w .* (ti1 .- ti)
+    return ifelse.(q .<= axis[1], table[1],
+                   ifelse.(q .>= axis[n], table[n], blend))
+end
+
+function _oop_interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q, ::Type{T}) where {T}
+    xs = h.xs
+    n = length(xs)
+    n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
+    # smallest i with xs[i] ≥ x  ==  #(xs .< x) + 1; NaN → n+1 (selected explicitly,
+    # since `xs[k] < NaN` is false everywhere and would land on 1).
+    cnt = ifelse.(xs[1] .< q, 1.0, 0.0)
+    for k in 2:n
+        cnt = cnt .+ ifelse.(xs[k] .< q, 1.0, 0.0)
+    end
+    r = cnt .+ 1.0
+    return ifelse.(q .!= q, Float64(n + 1), r)
+end
+
+function _oop_interp_bilinear_lanes(h::_InterpBilinearSpec, x, y, ::Type{T}) where {T}
+    ax = h.axis_x; ay = h.axis_y; table = h.table
+    Nx = length(ax); Ny = length(ay)
+    # Per-axis clamp of the QUERY (the core's x_q/y_q), then count-locate.
+    x_q = ifelse.(x .<= ax[1], ax[1], ifelse.(x .>= ax[Nx], ax[Nx], x))
+    y_q = ifelse.(y .<= ay[1], ay[1], ifelse.(y .>= ay[Ny], ay[Ny], y))
+    ci = ifelse.(ax[1] .<= x_q, 1.0, 0.0)
+    for k in 2:Nx
+        ci = ci .+ ifelse.(ax[k] .<= x_q, 1.0, 0.0)
+    end
+    i = min.(max.(ci, 1.0), Float64(Nx - 1))
+    cj = ifelse.(ay[1] .<= y_q, 1.0, 0.0)
+    for k in 2:Ny
+        cj = cj .+ ifelse.(ay[k] .<= y_q, 1.0, 0.0)
+    end
+    j = min.(max.(cj, 1.0), Float64(Ny - 1))
+    xi  = ax[1] .+ zero.(i); xip1 = ax[2] .+ zero.(i)
+    for k in 2:(Nx - 1)
+        sel = i .== Float64(k)
+        xi   = ifelse.(sel, ax[k],     xi)
+        xip1 = ifelse.(sel, ax[k + 1], xip1)
+    end
+    yj  = ay[1] .+ zero.(j); yjp1 = ay[2] .+ zero.(j)
+    for k in 2:(Ny - 1)
+        sel = j .== Float64(k)
+        yj   = ifelse.(sel, ay[k],     yj)
+        yjp1 = ifelse.(sel, ay[k + 1], yjp1)
+    end
+    # Corner gathers: doubly-chained selects over the (Nx−1)×(Ny−1) cells.
+    t_ij   = table[1][1] .+ zero.(i .+ j); t_i1j  = table[2][1] .+ zero.(i .+ j)
+    t_ijp1 = table[1][2] .+ zero.(i .+ j); t_i1jp1 = table[2][2] .+ zero.(i .+ j)
+    for k in 1:(Nx - 1), l in 1:(Ny - 1)
+        (k == 1 && l == 1) && continue
+        sel = (i .== Float64(k)) .& (j .== Float64(l))
+        t_ij    = ifelse.(sel, table[k][l],         t_ij)
+        t_i1j   = ifelse.(sel, table[k + 1][l],     t_i1j)
+        t_ijp1  = ifelse.(sel, table[k][l + 1],     t_ijp1)
+        t_i1jp1 = ifelse.(sel, table[k + 1][l + 1], t_i1jp1)
+    end
+    wx = (x_q .- xi) ./ (xip1 .- xi)
+    wy = (y_q .- yj) ./ (yjp1 .- yj)
+    row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
+    row_jp1 = t_ijp1 .+ wx .* (t_i1jp1 .- t_ijp1)
+    return row_j .+ wy .* (row_jp1 .- row_j)
+end
+
 # ---- Scalar walker (`_Node`) ------------------------------------------------
 #
 # The generic twin of `_eval_node`. Type-stable in `T`: every leaf converts into the
@@ -664,23 +771,40 @@ function _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
     any(vk -> _vec_has_pgather(vk.template), vec_kernels)
 end
 
+# The ACCESS-KERNEL half of the J5 guard. An affine kernel reads live forcing
+# through two descriptor kinds: `_AK_FORCING_BOX` (a lane-affine gather off the
+# aliased `_PGatherArray.flat`) and `_AK_ARR_FIXED` (the lowering of an invariant
+# `_NK_PARAM_GATHER` — also the aliased buffer). Both are host arrays a tracer
+# would bake in as constants, so a build whose acc kernels carry either must
+# refuse `@compile` exactly as the `_VK_PGATHER` path does. Sub-kernel tables
+# (`K.subs`, transitive by construction) are scanned too.
+_acc_desc_live_forcing(a::_AccDesc) =
+    a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_FIXED
+_acc_has_live_forcing(K::_AccKernel) =
+    any(_acc_desc_live_forcing, K.acc) ||
+    any(S -> any(_acc_desc_live_forcing, S.acc), K.subs)
+
 # ---- Affine access kernels, out of place (ess-affine) -----------------------
 #
-# The functional twin of `_run_acc_kernel!` (access_kernel.jl): the SAME cell walk
-# and the SAME `_eval_acc` spine evaluation — which is eltype-generic, so this
-# inherits AD and a bit-identical Float64 run for free — but each cell's value
-# lands through the `_oop_store` seam, which RETURNS `du`, so an immutable/rebound
-# output is expressible exactly as the rest of this emitter is. The box index math
-# mirrors `_run_box_kernel!` (rank ≤ 3 unrolled, `oln = base + Σ i_d·stride_d`).
+# TWO FORMS, chosen per kernel at closure build:
 #
-# NOT de-scalarized for tracing. `_eval_acc` reads `u[oln+Δ]` directly (through the
-# descriptor `_fetch`, not the `_oop_read_state` seam) — one scalar index per gather
-# per cell, the per-lane scalar access XLA rejects (property 2 in this file's
-# header). Rewriting the affine gathers/scatters into whole-box array ops is the
-# same body of work `_make_rhs`'s de-scalarization was, and is deferred; `f` above
-# REFUSES a traced call while acc kernels are present rather than emit a program
-# that scalar-indexes a traced value. On host (Float64 / ForwardDiff `Dual`) it is
-# correct and matches both the in-place affine path and the per-cell reference.
+#   * The VECTORIZED (de-scalarized) form — `_oop_run_acc_vec` below — the
+#     default. Every state read is a whole-array `_oop_gather(u, slots)` with
+#     slot vectors precomputed on host from the kernel's affine descriptors,
+#     every op is the shared broadcast ladder, interp leaves are the
+#     locate→gather→blend lane forms, and the kernel's whole result lands
+#     through ONE `_oop_scatter`. NOTHING scalar-indexes `u` per cell, so an
+#     XLA/Reactant trace of a DEFAULT (affine) build emits a program whose size
+#     is independent of the grid — the refusal this replaced
+#     (`E_TREEWALK_ACC_XLA_UNSUPPORTED`) is gone.
+#
+#   * The PER-CELL fallback — `_oop_run_acc_kernel` — the functional twin of
+#     `_run_acc_kernel!`: same cell walk, same eltype-generic `_eval_acc` spine,
+#     each value landing through the `_oop_store` seam. Kept for the kernels the
+#     vectorized form declines (a variable-valence reduction, an unstructured
+#     indirect gather, a template sub-kernel call). Correct on host
+#     (Float64 / ForwardDiff `Dual`); under a trace its per-cell scalar reads
+#     fail LOUDLY in Reactant rather than silently.
 function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     for S in K.subs                                 # template-body sub-kernels:
         _fill_invariant!(S, u, p, t, T)             # invariant tier once per call
@@ -688,8 +812,10 @@ function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     _fill_invariant!(K, u, p, t, T)                 # once per call, before the loop
     cs = K.cells
     # `_eval_cell` fills the per-cell CSE scratch (an in-place buffer write) then
-    # returns the spine value; on the host / ForwardDiff-over-oop path that mutation
-    # is fine, and a traced call is already refused upstream (acc + traced throws).
+    # returns the spine value; on the host / ForwardDiff-over-oop path that
+    # mutation is fine. (A traced call never lands here for a DEFAULT affine
+    # build — those kernels take `_oop_run_acc_vec`; a declined kernel's scalar
+    # reads fail loudly inside Reactant.)
     if _is_contig(cs)                               # contiguous / unstructured
         @inbounds for c in cs.ranges[1]
             du = _oop_store(du, c, _eval_cell(K, u, p, t, c, c, (c, 1, 1), T))
@@ -726,29 +852,217 @@ function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     return du
 end
 
+# ---- The vectorized (traceable) acc form ------------------------------------
+#
+# Per-kernel host-side lane index, built ONCE at closure build: the output slots
+# in the EXACT `_run_acc_kernel!` cell order, the loop multi-index per lane, and
+# — per access descriptor — either a precomputed state-gather slot vector, a
+# frozen const lane vector, or (for a LIVE forcing box) the flat indices to
+# re-gather per call. All `Int`/`Float64` host data: under tracing these are the
+# constant index sets a gather/scatter op wants, never traced values.
+struct _OopAccPlan
+    vectorizable::Bool
+    out_slots::Vector{Int}
+    gathers::Vector{Vector{Int}}      # per descriptor: state gather slots (empty otherwise)
+    consts::Vector{Vector{Float64}}   # per descriptor: frozen lane values (empty otherwise)
+    forc::Vector{Vector{Int}}         # per descriptor: LIVE forcing flat indices (empty otherwise)
+end
+const _OOP_ACC_FALLBACK = _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[])
+
+# Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order.
+function _oop_acc_lanes(cs::_CellSet)
+    if _is_contig(cs)
+        rng = cs.ranges[1]
+        out = collect(Int, rng)
+        return out, copy(out), fill(1, length(out)), fill(1, length(out))
+    end
+    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
+    L = prod(length, rg)
+    out = Vector{Int}(undef, L); m1 = Vector{Int}(undef, L)
+    m2 = fill(1, L); m3 = fill(1, L)
+    q = 0
+    @inbounds for idxs in Iterators.product(rg...)
+        q += 1
+        oln = b
+        for d in 1:nd; oln += idxs[d]*st[d]; end
+        out[q] = oln
+        m1[q] = idxs[1]
+        nd >= 2 && (m2[q] = idxs[2])
+        nd >= 3 && (m3[q] = idxs[3])
+    end
+    return out, m1, m2, m3
+end
+
+# Can the whole spine (plus CSE recipes) evaluate as lane vectors? Declines the
+# n-indexed descriptors, reductions, and sub-kernel calls; a `_NK_CACHED` must
+# resolve to THIS kernel's scratch tiers.
+function _oop_acc_vecable(n::_Node, K::_AccKernel)
+    k = n.kind
+    (k === _NK_REDUCE || k === _NK_SUBCALL) && return false
+    if k === _NK_ACCESS
+        ak = K.acc[n.idx].kind
+        (ak === _AK_CONST_EDGE || ak === _AK_STATE_INDIRECT ||
+         ak === _AK_STATE_INDIRECT_COL) && return false
+    elseif k === _NK_CACHED
+        (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
+    end
+    return all(c -> _oop_acc_vecable(c, K), n.children)
+end
+
+function _build_oop_acc_plan(K::_AccKernel)
+    isempty(K.subs) || return _OOP_ACC_FALLBACK
+    ok = _oop_acc_vecable(K.spine, K) &&
+         all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
+         all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
+    ok || return _OOP_ACC_FALLBACK
+    out, m1, m2, m3 = _oop_acc_lanes(K.cells)
+    L = length(out)
+    nacc = length(K.acc)
+    gathers = [Int[] for _ in 1:nacc]
+    consts  = [Float64[] for _ in 1:nacc]
+    forc    = [Int[] for _ in 1:nacc]
+    for (i, a) in enumerate(K.acc)
+        k = a.kind
+        if k === _AK_STATE_AFFINE
+            gathers[i] = out .+ a.delta
+        elseif k === _AK_CONST_AFFINE
+            gathers_i = out .+ a.delta
+            consts[i] = a.arr[gathers_i]
+        elseif k === _AK_CONST_BOX
+            consts[i] = Float64[@inbounds a.arr[a.off + (m1[l]-1)*a.s1 +
+                                (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
+        elseif k === _AK_FORCING_BOX
+            forc[i] = Int[a.off + (m1[l]-1)*a.s1 + (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3
+                          for l in 1:L]
+        elseif k === _AK_LOOP_IDX
+            mi = a.dim === 1 ? m1 : a.dim === 2 ? m2 : m3
+            consts[i] = Float64.(mi)
+        elseif k === _AK_CONST_CELL
+            consts[i] = a.arr[out]        # cell ordinal == oln (see _run_box_kernel!)
+        end
+        # SCALAR / STATE_FIXED / ARR_FIXED: read directly by the walker.
+    end
+    return _OopAccPlan(true, out, gathers, consts, forc)
+end
+
+# The lane walker: value-returning, whole-array, routed through the same seams
+# as the `_VecNode` walker — a lane-varying node yields a length-L vector, a
+# lane-invariant one a bare scalar, and broadcast makes them interchangeable.
+# `cellvals`/`invvals` are this call's CSE tier results (the out-of-place
+# expression of the scratch buffers), filled in slot order by the caller.
+function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
+                        invvals::Vector{Any}, cellvals::Vector{Any},
+                        ::Type{T}) where {T}
+    k = nd.kind
+    if k === _NK_ACCESS
+        a = K.acc[nd.idx]
+        ak = a.kind
+        if ak === _AK_STATE_AFFINE
+            return _oop_gather(u, plan.gathers[nd.idx])
+        elseif ak === _AK_STATE_FIXED
+            return convert(T, _oop_read_state(u, a.idx))
+        elseif ak === _AK_SCALAR
+            return convert(T, a.v)
+        elseif ak === _AK_ARR_FIXED
+            # LIVE forcing (invariant slot): re-read per call — data, zero derivative.
+            return convert(T, @inbounds a.arr[a.idx])
+        elseif ak === _AK_FORCING_BOX
+            # LIVE forcing lanes: re-gathered from the aliased buffer per call.
+            return @inbounds a.arr[plan.forc[nd.idx]]
+        else
+            # CONST_AFFINE / CONST_BOX / LOOP_IDX / CONST_CELL: frozen lane data.
+            return plan.consts[nd.idx]
+        end
+    elseif k === _NK_LITERAL
+        return convert(T, nd.literal)
+    elseif k === _NK_PARAM
+        return convert(T, getfield(p, nd.sym))
+    elseif k === _NK_TIME
+        return convert(T, t)
+    elseif k === _NK_CACHED
+        return nd.payload === K.cse.scratch ? (@inbounds cellvals[nd.idx]) :
+                                              (@inbounds invvals[nd.idx])
+    else # _NK_OP (REDUCE/SUBCALL were declined at plan build)
+        op = nd.op
+        ch = nd.children
+        if op === :fn
+            return _oop_acck_fn(nd, u, p, t, K, plan, invvals, cellvals, T)
+        elseif (op === :^ || op === :pow) && length(ch) == 2
+            # A literal exponent stays a literal — see `_oop_pow`.
+            base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, T)
+            e = ch[2]
+            return e.kind === _NK_LITERAL ? base .^ e.literal :
+                   base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, T)
+        end
+        c = Vector{Any}(undef, length(ch))
+        for i in eachindex(ch)
+            c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, T)
+        end
+        return _oop_op(op, c, T)
+    end
+end
+
+function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
+                      invvals::Vector{Any}, cellvals::Vector{Any},
+                      ::Type{T}) where {T}
+    pl = nd.payload
+    ch = nd.children
+    ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, T)
+    if pl isa Tuple{String,_InterpLinearSpec}
+        return _oop_interp_linear_lanes(pl[2], ev(ch[1]), T)
+    elseif pl isa Tuple{String,_InterpBilinearSpec}
+        return _oop_interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
+    elseif pl isa Tuple{String,_InterpSearchsortedSpec}
+        return _oop_interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
+    elseif pl isa Tuple{String,Nothing}
+        # All-scalar closed functions (`datetime.*`): boxed, one call per lane —
+        # host-correct; a trace fails loudly inside the opaque callee.
+        fname = pl[1]
+        cv = Any[ev(ci) for ci in ch]
+        return broadcast((as...) -> convert(T, _eval_closed_fn(fname, Any[as...], T)),
+                         cv...)
+    end
+    throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
+        "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
+end
+
+# Run one vectorized acc kernel: CSE tiers in slot order (invariant tier —
+# scalars — first, exactly as `_fill_invariant!` runs before the cell loop),
+# spine over whole lanes, then ONE scatter.
+function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
+                          ::Type{T}) where {T}
+    cse = K.cse
+    invvals = Vector{Any}(undef, length(cse.inv_recipes))
+    cellvals = Vector{Any}(undef, length(cse.recipes))
+    for i in eachindex(cse.inv_recipes)
+        invvals[i] = _oop_eval_acck(cse.inv_recipes[i], u, p, t, K, plan,
+                                    invvals, cellvals, T)
+    end
+    for i in eachindex(cse.recipes)
+        cellvals[i] = _oop_eval_acck(cse.recipes[i], u, p, t, K, plan,
+                                     invvals, cellvals, T)
+    end
+    res = _oop_eval_acck(K.spine, u, p, t, K, plan, invvals, cellvals, T)
+    return _oop_scatter(du, plan.out_slots, res)
+end
+
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        vec_prelude::AbstractVector{_VecNode},
                        vec_kernels::AbstractVector{_VecKernel},
                        acc_kernels::AbstractVector{_AccKernel},
                        n_states::Int)
-    has_acc = !isempty(acc_kernels)
     n_cse = length(cse_prelude)
     n_vec = length(vec_prelude)
-    live_forcing = _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels)
+    # J5 covers BOTH IR families: the `_VK_PGATHER`/`_NK_PARAM_GATHER` scan and
+    # the acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`) — an affine
+    # build over live forcing must refuse a trace exactly as the vec build does.
+    live_forcing = _has_live_forcing(cse_prelude, rhs_list, vec_prelude, vec_kernels) ||
+                   any(_acc_has_live_forcing, acc_kernels)
+    # Vectorized lane plans for the acc kernels (host index data, built once).
+    acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
     function f(u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
-        if has_acc && _is_traced(u, p, t)
-            throw(TreeWalkError("E_TREEWALK_ACC_XLA_UNSUPPORTED",
-                "This model built affine access kernels (ess-affine), which are not " *
-                "yet de-scalarized for tracing: `_eval_acc` reads `u[oln+Δ]` one " *
-                "scalar index per gather per cell, and an XLA/Reactant tracer rejects " *
-                "scalar indexing of a traced array. Rewriting the affine gathers/" *
-                "scatters into whole-box array ops (the same de-scalarization the vec " *
-                "kernels already have) is deferred. Run the interpreted evaluator " *
-                "(host Float64 or ForwardDiff `Dual`), where the affine path is correct " *
-                "and bit-identical to the per-cell reference."))
-        end
         if live_forcing && _is_traced(u, p, t)
             throw(TreeWalkError("E_TREEWALK_XLA_LIVE_FORCING",
                 "This model binds a live forcing buffer through `param_arrays`, and " *
@@ -789,12 +1103,16 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
             du = _oop_scatter(du, vk.out_slots, res)
         end
 
-        # Affine access kernels (ess-affine), out of place. Each rebinds `du`
-        # through the `_oop_store` seam — see `_oop_run_acc_kernel`. On host these
-        # are the same values `f!`'s in-place `_run_acc_kernel!` writes, in the same
-        # slots, so a Float64 `:oop` run stays bit-identical to `:inplace`.
-        for K in acc_kernels
-            du = _oop_run_acc_kernel(du, u, p, t, K, T)
+        # Affine access kernels (ess-affine), out of place. The vectorized form
+        # (whole-array gathers/ops, one scatter — the TRACEABLE form) where the
+        # plan permits; the per-cell `_oop_store` walk otherwise. On host both
+        # produce the values `f!`'s in-place runners write, in the same slots, so
+        # a Float64 `:oop` run stays bit-identical to `:inplace`.
+        for j in eachindex(acc_kernels)
+            plan = acc_plans[j]
+            du = plan.vectorizable ?
+                 _oop_run_acc_vec(du, u, p, t, acc_kernels[j], plan, T) :
+                 _oop_run_acc_kernel(du, u, p, t, acc_kernels[j], T)
         end
         return du
     end

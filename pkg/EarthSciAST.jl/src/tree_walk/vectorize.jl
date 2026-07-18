@@ -1188,6 +1188,12 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    acc_kernels::AbstractVector{_AccKernel},
                    const_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int})
+    # Lane tapes for the affine access kernels (access_kernel.jl): compiled once
+    # here, run in place of the per-cell scalar walk wherever a strided
+    # formulation exists (`nothing` ⇒ that kernel keeps the scalar runner). The
+    # tape is Float64-only; every other value type (ForwardDiff `Dual`) takes
+    # the eltype-generic scalar path below, which computes the SAME values.
+    acc_plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in acc_kernels]
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
@@ -1268,8 +1274,16 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # Each resolves its gathers at runtime from an access-descriptor table over
         # a strided output box — no per-lane slot vectors were built. The reduction
         # bound / connectivity are data, so one kernel covers every valence.
+        # At Float64 a kernel with a lane tape runs de-scalarized (`_run_acc_plan!`,
+        # bit-identical + zero-alloc); everything else — a declined kernel, or any
+        # non-Float64 value type — walks the eltype-generic scalar runner.
         @inbounds for j in 1:length(acc_kernels)
-            _run_acc_kernel!(du, u, p, t, acc_kernels[j], T)
+            P = acc_plans[j]
+            if T === Float64 && P !== nothing
+                _run_acc_plan!(du, u, p, t, acc_kernels[j], P)
+            else
+                _run_acc_kernel!(du, u, p, t, acc_kernels[j], T)
+            end
         end
         return nothing
     end
