@@ -140,7 +140,7 @@ function _rewrite_entry!(entry::AbstractDict, structfn, exprfn)
                 if v isa AbstractString
                     next[nk] = structfn(v)
                 elseif v isa AbstractDict
-                    vv = _to_native_json(v)
+                    vv = _to_ordered(v)
                     if haskey(vv, "var") && vv["var"] isa AbstractString
                         vv["var"] = structfn(vv["var"])
                     end
@@ -200,7 +200,7 @@ dot) — bare Expression operands like `"t"` are incidental.
 """
 function _collect_role_segments(edge)::Set{String}
     seen = Set{String}()
-    clone = _to_native_json(edge)  # fresh deep copy; never mutates the source
+    clone = _to_ordered(edge)  # fresh deep copy; never mutates the source
     structfn = function (ref)
         push!(seen, _head_segment(ref))
         return ref
@@ -429,7 +429,7 @@ function _expand_edges(edges, bind::AbstractDict)::Vector{CouplingEntry}
     rw = ref_ -> _rewrite_scoped_ref(ref_, bind)
     expanded = CouplingEntry[]
     for edge in edges
-        clone = _to_native_json(edge)
+        clone = _to_ordered(edge)   # fresh native copy: the rewrite mutates it
         _rewrite_entry!(clone, rw, rw)
         push!(expanded, coerce_coupling_entry(clone))
     end

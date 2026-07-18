@@ -37,18 +37,18 @@ end
 Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
 
 
-# Recursively convert JSON3 parse results (JSON3.Object / JSON3.Array) into
-# native Julia containers (Dict{String,Any} / Vector{Any}). JSONSchema.jl's
-# `type: array` check does not recognize JSON3.Array as an array, so free-form
-# fields that are round-tripped through schema validation must be converted.
+# Recursively convert any JSON carrier into plain-`Dict{String,Any}` /
+# `Vector{Any}` containers — the UNORDERED deep-plain normalizer, kept (beside
+# the order-preserving `_to_ordered` in json_walk.jl) for two jobs where key
+# order is deliberately NOT part of the contract:
+#   * raw-passthrough values stored on typed structs and re-emitted verbatim
+#     (`functional_affect`, loader `metadata`, the `_verbatim_decl` snapshots,
+#     serialize.jl's import-entry copies) — historically plain Dicts, and the
+#     JSON3-write byte surface of `save` depends on that staying so;
+#   * carrier-independent input to JSONSchema.jl (`validate_schema`), whose
+#     `type: array` check does not recognize `JSON3.Array`.
 function _to_native_json(x)
-    if x isa JSONLikeDict
-        # The expression-template lowering pass wraps the document in
-        # `JSONLikeDict`, which is not an `AbstractDict`; convert it (and its
-        # nested wrapped values) to native containers so struct fields typed
-        # `Dict{String,Any}`/`Any` accept the result.
-        return Dict{String,Any}(string(k) => _to_native_json(v) for (k, v) in pairs(x))
-    elseif x isa JSON3.Array || x isa AbstractVector
+    if x isa JSON3.Array || x isa AbstractVector
         return Any[_to_native_json(v) for v in x]
     elseif x isa JSON3.Object || x isa AbstractDict
         return Dict{String,Any}(string(k) => _to_native_json(v) for (k, v) in pairs(x))
@@ -91,8 +91,8 @@ function parse_expression(data::Any)::ASTExpr
     elseif isa(data, String)
         return VarExpr(data)
     elseif _has_field(data, :op)
-        # Any dict-like carrier (native Dict, JSON3.Object, JSONLikeDict)
-        # holding an `op` key — one shared parse path for all of them.
+        # Any dict-like carrier (the post-wire native tree, or a JSON3.Object
+        # fed directly) holding an `op` key — one shared parse path.
         return _parse_op_dict_memoized(data)
     else
         throw(ParseError("Invalid expression format: expected number, string, or object with 'op' field. Got: $(typeof(data))"))
@@ -114,10 +114,11 @@ splices bindings and bodies by reference), so the same raw node object can hang
 under many parents; parsing is a pure function of the node, and the memo makes
 the typed IR mirror that sharing — each unique raw node coerces to ONE `OpExpr`,
 keeping coercion linear in unique nodes instead of exponential in paths. The
-key is the UNDERLYING dict (a `JSONLikeDict` wrapper is allocated per access,
-so wrappers are unwrapped before keying). Outside an active memo scope,
-parsing is unmemoized — a caller that hand-mutates raw dicts between
-`parse_expression` calls sees unchanged behavior.
+key is the raw dict itself (`coerce_esm_file`'s entry normalization is
+sharing-preserving, so the DAG's identity structure survives into the memo).
+Outside an active memo scope, parsing is unmemoized — a caller that
+hand-mutates raw dicts between `parse_expression` calls sees unchanged
+behavior.
 """
 const _PARSE_EXPR_MEMO_KEY = :_earthsci_ast_parse_expression_memo
 
@@ -125,11 +126,10 @@ function _parse_op_dict_memoized(data)
     memo = get(task_local_storage(), _PARSE_EXPR_MEMO_KEY,
                nothing)::Union{Nothing,IdDict{Any,ASTExpr}}
     memo === nothing && return _parse_op_dict(data)
-    key = data isa JSONLikeDict ? getfield(data, :data) : data
-    r = get(memo, key, nothing)
+    r = get(memo, data, nothing)
     r === nothing || return r
     res = _parse_op_dict(data)
-    memo[key] = res
+    memo[data] = res
     return res
 end
 
@@ -137,9 +137,8 @@ end
 #
 # One extraction statement per `OPEXPR_FIELD_TABLE` row (struct-field order),
 # derived from the row's `kind` (expression-bearing shapes) or `parse` recipe
-# tag (scalar coercions). Field lookup goes through `_get_field`, which
-# resolves both symbol- and string-keyed carriers (native Dict, JSON3.Object,
-# JSONLikeDict), so each wire key is named exactly once — in the table.
+# tag (scalar coercions). Field lookup goes through `_get_field` (string-keyed,
+# null-as-absent), so each wire key is named exactly once — in the table.
 # Op-conditional structural validation is spliced in at the same positions the
 # historical hand-written extraction performed it (integral bounds directly
 # after `upper`, `intersect_polygon` manifold directly after `manifold`), so
@@ -219,10 +218,10 @@ const _PARSE_OP_VALIDATOR_AFTER = Dict{Symbol,Expr}(
                  if f !== :op && f !== :args && spec.kind !== :internal)...))
 end
 
-# Shared implementation for every dict-like carrier (native Dict, JSON3.Object,
-# JSONLikeDict). The optional-field portion is generated from
-# `OPEXPR_FIELD_TABLE` (see `_parse_op_optional_fields` above); only the
-# structural `op`/`args` handling and op-existence rejections live here.
+# Shared implementation for every dict-like carrier. The optional-field
+# portion is generated from `OPEXPR_FIELD_TABLE` (see
+# `_parse_op_optional_fields` above); only the structural `op`/`args` handling
+# and op-existence rejections live here.
 function _parse_op_dict(data)
     op = string(_get_field(data, :op, nothing))
     if op == "call"
@@ -312,26 +311,22 @@ end
 # Uniform field access for JSON-carrier values
 # ========================================
 #
-# Parsed documents arrive as one of three dict-like carriers: a native `Dict`
-# (string or symbol keys), a `JSON3.Object` (symbol keys, string keys also
-# accepted), or a `JSONLikeDict` (the expression-template lowering wrapper).
-# `_has_field` / `_get_field` are THE canonical, non-throwing accessors for all
-# of them — no try/catch control flow, no per-carrier special cases at use
-# sites. A JSON `null` value is reported as absent by `_get_field` (callers
-# uniformly treat `null` as "field not given").
+# Post-wire documents are the ONE normalized carrier (string-keyed native
+# dicts, `_to_ordered`); a `JSON3.Object` fed directly to a coercer resolves
+# string keys natively, so plain string-keyed `get`/`haskey` covers both.
+# `_has_field` / `_get_field` are the canonical, non-throwing accessors — no
+# try/catch control flow, no per-carrier special cases at use sites. A JSON
+# `null` value is reported as absent by `_get_field` (callers uniformly treat
+# `null` as "field not given").
 
-# True when `data` is one of the dict-like JSON carriers.
-_is_json_object(data) = data isa AbstractDict || data isa JSONLikeDict
+# True when `data` is a dict-like JSON carrier.
+_is_json_object(data) = data isa AbstractDict
 
-function _has_field(data, key::Symbol)::Bool
-    _is_json_object(data) || return false
-    return haskey(data, key) || haskey(data, string(key))
-end
+_has_field(data, key::Symbol)::Bool =
+    data isa AbstractDict && haskey(data, string(key))
 
 function _get_field(data, key::Symbol, default)
-    _is_json_object(data) || return default
-    v = get(data, key, nothing)
-    v === nothing || return v
+    data isa AbstractDict || return default
     v = get(data, string(key), nothing)
     return v === nothing ? default : v
 end
@@ -491,19 +486,17 @@ end
 
 Coerce raw JSON data into properly typed EsmFile with custom union type handling.
 
-Accepts any of the dict-like JSON carriers: a `JSON3.Object` (the load path),
-a `JSONLikeDict` (the template-lowering path), or a plain native
-`Dict{String,Any}` / symbol-keyed dict (e.g. a document assembled in Julia
-code) — a native dict is normalized into the `JSONLikeDict` property surface
-here, so callers no longer need the `JSON3.read(JSON3.write(doc))` type-launder.
+Accepts ANY dict-like JSON carrier — a `JSON3.Object` straight off the wire,
+the load pipeline's already-native tree, or a `Dict` assembled in Julia code
+(string- or symbol-keyed) — and normalizes it ONCE, here at the boundary, into
+the single post-wire carrier (`_to_ordered`: string-keyed `OrderedDict` tree),
+so every nested coercer speaks plain string-keyed `get`. The normalization is
+sharing-preserving, so the structural sharing template expansion builds
+carries through into the `parse_expression` identity memo. Callers never need
+a `JSON3.read(JSON3.write(doc))` type-launder.
 """
 function coerce_esm_file(data::Any)::EsmFile
-    if data isa AbstractDict && !(data isa JSON3.Object)
-        # Native dicts lack the JSON3-style property surface the nested
-        # coercers use; wrap them (stringifying keys recursively) so one code
-        # path serves every carrier.
-        data = JSONLikeDict(_to_native_json(data))
-    end
+    data = _to_ordered(data)
 
     # Extract required fields
     esm_raw = _get_field(data, :esm, nothing)
@@ -651,7 +644,7 @@ function coerce_enums(data)::Dict{String,Dict{String,Int}}
         if isempty(enum_name)
             throw(ParseError("enums: enum name must be non-empty"))
         end
-        if !(mapping_raw isa AbstractDict || mapping_raw isa JSON3.Object)
+        if !(mapping_raw isa AbstractDict)
             throw(ParseError("enums.$(enum_name): mapping must be a JSON object"))
         end
         mapping = Dict{String,Int}()
@@ -694,43 +687,39 @@ function coerce_function_tables(data)::Dict{String,FunctionTable}
         if isempty(table_name)
             throw(ParseError("function_tables: table name must be non-empty"))
         end
-        if !(entry_raw isa AbstractDict || entry_raw isa JSON3.Object || entry_raw isa JSONLikeDict)
+        if !(entry_raw isa AbstractDict)
             throw(ParseError("function_tables.$(table_name): entry must be a JSON object"))
         end
-        axes_raw = get(entry_raw, :axes, nothing)
+        axes_raw = get(entry_raw, "axes", nothing)
         if axes_raw === nothing
             throw(ParseError("function_tables.$(table_name): `axes` is required (esm-spec §9.5)"))
         end
         axes_vec = Vector{FunctionTableAxis}()
         for ax_raw in axes_raw
-            ax_name = string(get(ax_raw, :name, ""))
+            ax_name = string(get(ax_raw, "name", ""))
             if isempty(ax_name)
                 throw(ParseError("function_tables.$(table_name).axes: axis `name` must be non-empty"))
             end
-            ax_values_raw = get(ax_raw, :values, nothing)
+            ax_values_raw = get(ax_raw, "values", nothing)
             if ax_values_raw === nothing
                 throw(ParseError("function_tables.$(table_name).axes.$(ax_name): `values` is required"))
             end
             ax_values = Vector{Float64}([Float64(v) for v in ax_values_raw])
-            ax_units = _maybe(string, get(ax_raw, :units, nothing))
+            ax_units = _maybe(string, get(ax_raw, "units", nothing))
             push!(axes_vec, FunctionTableAxis(ax_name, ax_values; units=ax_units))
         end
-        if !haskey(entry_raw, :data)
+        if !haskey(entry_raw, "data")
             throw(ParseError("function_tables.$(table_name): `data` is required (esm-spec §9.5)"))
         end
-        data_native = _to_native_json(entry_raw.data)
-        description = _maybe(string, get(entry_raw, :description, nothing))
-        interpolation = _maybe(string, get(entry_raw, :interpolation, nothing))
-        out_of_bounds = _maybe(string, get(entry_raw, :out_of_bounds, nothing))
-        outputs = if haskey(entry_raw, :outputs) && entry_raw.outputs !== nothing
-            Vector{String}([string(s) for s in entry_raw.outputs])
-        else
-            nothing
+        data_native = _to_native_json(entry_raw["data"])
+        description = _maybe(string, get(entry_raw, "description", nothing))
+        interpolation = _maybe(string, get(entry_raw, "interpolation", nothing))
+        out_of_bounds = _maybe(string, get(entry_raw, "out_of_bounds", nothing))
+        outputs = _maybe(_get_field(entry_raw, :outputs, nothing)) do os
+            Vector{String}([string(s) for s in os])
         end
-        shape = if haskey(entry_raw, :shape) && entry_raw.shape !== nothing
-            Vector{Int}([Int(s) for s in entry_raw.shape])
-        else
-            nothing
+        shape = _maybe(_get_field(entry_raw, :shape, nothing)) do shp
+            Vector{Int}([Int(s) for s in shp])
         end
         schema_version = _opt_string(entry_raw, :schema_version)
         out[table_name] = FunctionTable(axes_vec, data_native;
@@ -748,14 +737,14 @@ end
 Coerce JSON data into Metadata type.
 """
 function coerce_metadata(data::Any)::Metadata
-    name = string(data.name)
+    name = string(data["name"])
     description = _opt_string(data, :description)
-    authors = haskey(data, :authors) ? [string(a) for a in data.authors] : String[]
+    authors = haskey(data, "authors") ? [string(a) for a in data["authors"]] : String[]
     license = _opt_string(data, :license)
     created = _opt_string(data, :created)
     modified = _opt_string(data, :modified)
-    tags = haskey(data, :tags) ? [string(t) for t in data.tags] : String[]
-    references = haskey(data, :references) ? [coerce_reference(r) for r in data.references] : Reference[]
+    tags = haskey(data, "tags") ? [string(t) for t in data["tags"]] : String[]
+    references = haskey(data, "references") ? [coerce_reference(r) for r in data["references"]] : Reference[]
 
     return Metadata(name,
                    description=description,
@@ -788,32 +777,33 @@ Coerce JSON data into Model type.
 """
 function coerce_model(data::Any)::Model
     variables = Dict{String,ModelVariable}()
-    for (k, v) in pairs(data.variables)
+    for (k, v) in pairs(data["variables"])
         variables[string(k)] = coerce_model_variable(v)
     end
 
-    equations = [coerce_equation(eq) for eq in data.equations]
+    equations = [coerce_equation(eq) for eq in data["equations"]]
 
     # Handle new schema format with separate event arrays
     discrete_events = DiscreteEvent[]
     continuous_events = ContinuousEvent[]
 
-    if haskey(data, :discrete_events)
-        discrete_events = [coerce_discrete_event(ev) for ev in data.discrete_events]
+    if haskey(data, "discrete_events")
+        discrete_events = [coerce_discrete_event(ev) for ev in data["discrete_events"]]
     end
 
-    if haskey(data, :continuous_events)
-        continuous_events = [coerce_continuous_event(ev) for ev in data.continuous_events]
+    if haskey(data, "continuous_events")
+        continuous_events = [coerce_continuous_event(ev) for ev in data["continuous_events"]]
     end
 
     # Initialization equations and solver guesses (gt-ebuq).
-    initialization_equations = haskey(data, :initialization_equations) &&
-        data.initialization_equations !== nothing ?
-        [coerce_equation(eq) for eq in data.initialization_equations] :
-        Equation[]
+    initialization_equations = _maybe(_get_field(data, :initialization_equations, nothing)) do eqs
+        [coerce_equation(eq) for eq in eqs]
+    end
+    initialization_equations === nothing && (initialization_equations = Equation[])
     guesses = Dict{String,Union{Float64,ASTExpr}}()
-    if haskey(data, :guesses) && data.guesses !== nothing
-        for (k, v) in pairs(data.guesses)
+    guesses_raw = _get_field(data, :guesses, nothing)
+    if guesses_raw !== nothing
+        for (k, v) in pairs(guesses_raw)
             if v isa Number
                 guesses[string(k)] = Float64(v)
             else
@@ -825,15 +815,17 @@ function coerce_model(data::Any)::Model
 
     # Inline tests / tolerance (schema gt-cc1).
     tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
-    tests = haskey(data, :tests) && data.tests !== nothing ?
-        EarthSciAST.InlineTest[coerce_test(t) for t in data.tests] :
+    tests_raw = _get_field(data, :tests, nothing)
+    tests = tests_raw !== nothing ?
+        EarthSciAST.InlineTest[coerce_test(t) for t in tests_raw] :
         EarthSciAST.InlineTest[]
 
     # Inline subsystems (schema §4.7, oneOf [Model, DataLoader, SubsystemRef]):
     # each entry is coerced by `_coerce_subsystem_entry`.
     subsystems = Dict{String,SubsystemNode}()
-    if haskey(data, :subsystems) && data.subsystems !== nothing
-        for (k, v) in pairs(data.subsystems)
+    subsystems_raw = _get_field(data, :subsystems, nothing)
+    if subsystems_raw !== nothing
+        for (k, v) in pairs(subsystems_raw)
             subsystems[string(k)] = _coerce_subsystem_entry(string(k), v)
         end
     end
@@ -860,7 +852,7 @@ coerced recursively; ref entries become a `SubsystemRef` placeholder that
 is the subsystem key, used only in metaparameter-binding diagnostics.
 """
 function _coerce_subsystem_entry(name::String, v)
-    if haskey(v, :ref) && v.ref !== nothing
+    if _get_field(v, :ref, nothing) !== nothing
         # Optional `bindings` closes the referenced document's open
         # metaparameters at this edge (esm-spec §9.7.6 binding site 3). A
         # binding VALUE may be a metaparameter EXPRESSION — an integer, a
@@ -879,8 +871,9 @@ function _coerce_subsystem_entry(name::String, v)
         # document does not declare survives the substitution and fails
         # loudly with `template_import_unknown_name`.
         bindings = Dict{String,Int}()
-        if haskey(v, :bindings) && v.bindings !== nothing
-            for (bk, bv) in pairs(v.bindings)
+        bindings_raw = _get_field(v, :bindings, nothing)
+        if bindings_raw !== nothing
+            for (bk, bv) in pairs(bindings_raw)
                 bctx = "subsystems.$(name): binding '$(string(bk))'"
                 expr = require_meta_expr(_to_native_json(bv), bctx)
                 bindings[string(bk)] =
@@ -893,12 +886,12 @@ function _coerce_subsystem_entry(name::String, v)
         # threads them into the referenced document's load and the
         # §9.6.3 fixpoint consumes them before the mounted form is set.
         injected = Any[]
-        if haskey(v, :expression_template_imports) &&
-           v.expression_template_imports !== nothing
-            injected = Any[_to_native_json(e) for e in v.expression_template_imports]
+        imports_raw = _get_field(v, :expression_template_imports, nothing)
+        if imports_raw !== nothing
+            injected = Any[_to_native_json(e) for e in imports_raw]
         end
-        return SubsystemRef(string(v.ref), bindings, injected)
-    elseif haskey(v, :kind) && haskey(v, :source)
+        return SubsystemRef(string(v["ref"]), bindings, injected)
+    elseif haskey(v, "kind") && haskey(v, "source")
         # Loader-required fields (kind + source) discriminate an inline
         # data loader from a Model, which carries equations instead.
         return coerce_data_loader(v)
@@ -924,8 +917,8 @@ end
 Parse a schema `TimeSpan` object.
 """
 function coerce_time_span(data::Any)::TimeSpan
-    start_val = Float64(data.start)
-    stop_val = Float64(data[Symbol("end")])
+    start_val = Float64(data["start"])
+    stop_val = Float64(data["end"])
     return TimeSpan(start_val, stop_val)
 end
 
@@ -935,36 +928,30 @@ end
 Parse a schema `Assertion` object.
 """
 function coerce_assertion(data::Any)::Assertion
-    variable = string(data.variable)
-    time_val = Float64(data.time)
-    expected = Float64(data.expected)
+    variable = string(data["variable"])
+    time_val = Float64(data["time"])
+    expected = Float64(data["expected"])
     tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
     coords = nothing
-    if haskey(data, :coords) && data.coords !== nothing
+    coords_raw = _get_field(data, :coords, nothing)
+    if coords_raw !== nothing
         coords = Dict{String,Float64}()
-        for (k, v) in pairs(data.coords)
+        for (k, v) in pairs(coords_raw)
             coords[string(k)] = Float64(v)
         end
     end
     reduce_val = _opt_string(data, :reduce)
     reference = nothing
-    if haskey(data, :reference) && data.reference !== nothing
-        ref = data.reference
+    ref = _get_field(data, :reference, nothing)
+    if ref !== nothing
         # The from_file shape is a JSON object whose `type` is the literal
         # string "from_file"; everything else — including an inline Expression
         # AST, which is ALSO an object — is parsed as an Expression. The
-        # discriminator MUST be the `type` field: a loaded `JSON3.Object` is an
-        # `AbstractDict`, so testing "is it dict-like" (the previous bug) routed
-        # every inline reference to the from_file branch and left the §6.6.5
-        # analytic-reference path unreachable.
-        reftype = if ref isa AbstractDict
-            haskey(ref, :type) ? string(ref[:type]) :
-                (haskey(ref, "type") ? string(ref["type"]) : "")
-        elseif hasproperty(ref, :type)
-            string(getproperty(ref, :type))
-        else
-            ""
-        end
+        # discriminator MUST be the `type` field: testing "is it dict-like"
+        # (the previous bug) routed every inline reference to the from_file
+        # branch and left the §6.6.5 analytic-reference path unreachable.
+        reftype = ref isa AbstractDict && haskey(ref, "type") ?
+            string(ref["type"]) : ""
         if reftype == "from_file"
             reference = Dict{String,Any}()
             for (k, v) in pairs(ref)
@@ -987,19 +974,21 @@ end
 Parse a schema `InlineTest` object into the Julia `InlineTest` struct.
 """
 function coerce_test(data::Any)::EarthSciAST.InlineTest
-    id = string(data.id)
-    time_span = coerce_time_span(data.time_span)
-    assertions = [coerce_assertion(a) for a in data.assertions]
+    id = string(data["id"])
+    time_span = coerce_time_span(data["time_span"])
+    assertions = [coerce_assertion(a) for a in data["assertions"]]
     description = _opt_string(data, :description)
     ic = Dict{String,Float64}()
-    if haskey(data, :initial_conditions) && data.initial_conditions !== nothing
-        for (k, v) in pairs(data.initial_conditions)
+    ic_raw = _get_field(data, :initial_conditions, nothing)
+    if ic_raw !== nothing
+        for (k, v) in pairs(ic_raw)
             ic[string(k)] = Float64(v)
         end
     end
     po = Dict{String,Float64}()
-    if haskey(data, :parameter_overrides) && data.parameter_overrides !== nothing
-        for (k, v) in pairs(data.parameter_overrides)
+    po_raw = _get_field(data, :parameter_overrides, nothing)
+    if po_raw !== nothing
+        for (k, v) in pairs(po_raw)
             po[string(k)] = Float64(v)
         end
     end
@@ -1009,9 +998,9 @@ function coerce_test(data::Any)::EarthSciAST.InlineTest
     # the PDE runner can build a per-test ephemeral instance and so the field
     # survives round-trip.
     injected = Any[]
-    if haskey(data, :expression_template_imports) &&
-       data.expression_template_imports !== nothing
-        injected = Any[_to_native_json(e) for e in data.expression_template_imports]
+    imports_raw = _get_field(data, :expression_template_imports, nothing)
+    if imports_raw !== nothing
+        injected = Any[_to_native_json(e) for e in imports_raw]
     end
     return EarthSciAST.InlineTest(id, time_span, assertions;
         description=description,
@@ -1027,16 +1016,14 @@ end
 Coerce JSON data into ModelVariable type.
 """
 function coerce_model_variable(data::Any)::ModelVariable
-    var_type = coerce_model_variable_type(string(data.type))
+    var_type = coerce_model_variable_type(string(data["type"]))
     default = _opt_float(data, :default)
     description = _opt_string(data, :description)
     expression = _maybe(parse_expression, _get_field(data, :expression, nothing))
     units = _opt_string(data, :units)
     default_units = _opt_string(data, :default_units)
-    shape = if haskey(data, :shape) && data.shape !== nothing
-        String[string(d) for d in data.shape]
-    else
-        nothing
+    shape = _maybe(_get_field(data, :shape, nothing)) do shp
+        String[string(d) for d in shp]
     end
     location = _opt_string(data, :location)
     noise_kind = _opt_string(data, :noise_kind)
@@ -1060,8 +1047,8 @@ end
 Coerce JSON data into Equation type.
 """
 function coerce_equation(data::Any)::Equation
-    lhs = parse_expression(data.lhs)
-    rhs = parse_expression(data.rhs)
+    lhs = parse_expression(data["lhs"])
+    rhs = parse_expression(data["rhs"])
     comment = _opt_string(data, :_comment)
     return Equation(lhs, rhs; _comment=comment)
 end
@@ -1146,8 +1133,8 @@ end
 Coerce JSON data into AffectEquation type.
 """
 function coerce_affect_equation(data::Any)::AffectEquation
-    # `_get_field` resolves both symbol- and string-keyed carriers (JSON3.Object,
-    # native Dict, JSONLikeDict), matching every other coercion helper.
+    # Through `_get_field` (string-keyed, null-as-absent), matching every
+    # other coercion helper.
     lhs = string(_get_field(data, :lhs, ""))
     rhs = parse_expression(_get_field(data, :rhs, nothing))
     return AffectEquation(lhs, rhs)
@@ -1160,15 +1147,17 @@ Coerce JSON data into ReactionSystem type.
 """
 function coerce_reaction_system(data::Any)::ReactionSystem
     # Convert species dict to vector - species are now keyed by name
-    species = [coerce_species(string(k), v) for (k, v) in pairs(data.species)]
-    reactions = [coerce_reaction(r) for r in data.reactions]
+    species = [coerce_species(string(k), v) for (k, v) in pairs(data["species"])]
+    reactions = [coerce_reaction(r) for r in data["reactions"]]
     # Convert parameters dict to vector - parameters are now keyed by name
-    parameters = haskey(data, :parameters) ? [coerce_parameter(string(k), v) for (k, v) in pairs(data.parameters)] : Parameter[]
+    parameters = haskey(data, "parameters") ?
+        [coerce_parameter(string(k), v) for (k, v) in pairs(data["parameters"])] : Parameter[]
 
     # Inline tests / tolerance (schema gt-cc1) — same shape as on Model.
     tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
-    tests = haskey(data, :tests) && data.tests !== nothing ?
-        EarthSciAST.InlineTest[coerce_test(t) for t in data.tests] :
+    tests_raw = _get_field(data, :tests, nothing)
+    tests = tests_raw !== nothing ?
+        EarthSciAST.InlineTest[coerce_test(t) for t in tests_raw] :
         EarthSciAST.InlineTest[]
 
     return ReactionSystem(species, reactions; parameters=parameters,
@@ -1196,21 +1185,22 @@ end
 Coerce JSON data into Reaction type.
 """
 function coerce_reaction(data::Any)::Reaction
-    id = string(data.id)
-    name = _maybe(string, get(data, :name, nothing))
+    id = string(data["id"])
+    name = _maybe(string, get(data, "name", nothing))
 
     # Substrates / products can be null (source / sink reactions).
     # Stoichiometry may be integer or fractional per v0.2.x schema — the
     # StoichiometryEntry constructor enforces finite positivity.
     stoich_entries(key) = _maybe(get(data, key, nothing)) do entries
-        [StoichiometryEntry(string(entry.species), entry.stoichiometry) for entry in entries]
+        [StoichiometryEntry(string(entry["species"]), entry["stoichiometry"])
+         for entry in entries]
     end
-    substrates = stoich_entries(:substrates)
-    products = stoich_entries(:products)
+    substrates = stoich_entries("substrates")
+    products = stoich_entries("products")
 
-    rate = parse_expression(data.rate)
+    rate = parse_expression(data["rate"])
 
-    reference = _maybe(coerce_reference, get(data, :reference, nothing))
+    reference = _maybe(coerce_reference, get(data, "reference", nothing))
 
     return Reaction(id, substrates, products, rate, name=name, reference=reference)
 end
@@ -1221,7 +1211,7 @@ end
 Coerce JSON data into Parameter type with explicit name.
 """
 function coerce_parameter(name::String, data::Any)::Parameter
-    default = Float64(data.default)
+    default = Float64(data["default"])
     description = _opt_string(data, :description)
     units = _opt_string(data, :units)
     default_units = _opt_string(data, :default_units)
@@ -1235,9 +1225,10 @@ end
 Coerce JSON data into a DataLoaderSource.
 """
 function coerce_data_loader_source(data::Any)::DataLoaderSource
-    url_template = string(data.url_template)
-    mirrors = haskey(data, :mirrors) && data.mirrors !== nothing ?
-              [string(m) for m in data.mirrors] : nothing
+    url_template = string(data["url_template"])
+    mirrors = _maybe(_get_field(data, :mirrors, nothing)) do ms
+        [string(m) for m in ms]
+    end
     return DataLoaderSource(url_template; mirrors=mirrors)
 end
 
@@ -1249,11 +1240,8 @@ function coerce_data_loader_temporal(data::Any)::DataLoaderTemporal
     stop = _opt_string(data, :end)
     file_period = _opt_string(data, :file_period)
     frequency = _opt_string(data, :frequency)
-    records_per_file = if haskey(data, :records_per_file) && data.records_per_file !== nothing
-        v = data.records_per_file
+    records_per_file = _maybe(_get_field(data, :records_per_file, nothing)) do v
         v isa Number ? Int(v) : string(v)
-    else
-        nothing
     end
     time_variable = _opt_string(data, :time_variable)
     return DataLoaderTemporal(; start=start, stop=stop, file_period=file_period,
@@ -1265,13 +1253,10 @@ end
     coerce_data_loader_variable(data::Any) -> DataLoaderVariable
 """
 function coerce_data_loader_variable(data::Any)::DataLoaderVariable
-    file_variable = string(data.file_variable)
-    units = string(data.units)
-    unit_conversion = if haskey(data, :unit_conversion) && data.unit_conversion !== nothing
-        v = data.unit_conversion
+    file_variable = string(data["file_variable"])
+    units = string(data["units"])
+    unit_conversion = _maybe(_get_field(data, :unit_conversion, nothing)) do v
         v isa Number ? Float64(v) : parse_expression(v)
-    else
-        nothing
     end
     description = _opt_string(data, :description)
     reference = _maybe(coerce_reference, _get_field(data, :reference, nothing))
@@ -1297,14 +1282,14 @@ end
 Coerce JSON data into the STAC-like DataLoader type.
 """
 function coerce_data_loader(data::Any)::DataLoader
-    kind = string(data.kind)
-    source = coerce_data_loader_source(data.source)
+    kind = string(data["kind"])
+    source = coerce_data_loader_source(data["source"])
 
     temporal = _maybe(coerce_data_loader_temporal, _get_field(data, :temporal, nothing))
     determinism = _maybe(coerce_data_loader_determinism, _get_field(data, :determinism, nothing))
 
     variables = Dict{String,DataLoaderVariable}(
-        string(k) => coerce_data_loader_variable(v) for (k, v) in pairs(data.variables)
+        string(k) => coerce_data_loader_variable(v) for (k, v) in pairs(data["variables"])
     )
 
     reference = _maybe(coerce_reference, _get_field(data, :reference, nothing))
@@ -1323,12 +1308,6 @@ end
 Coerce JSON data into concrete CouplingEntry subtype based on the 'type' field.
 """
 function coerce_coupling_entry(data::Any)::CouplingEntry
-    # A coupling entry arrives as a `JSONLikeDict` when the document went through
-    # the expression-template lowering pass (which wraps the doc), and the typed
-    # per-type coercers below dispatch on `::AbstractDict`, which `JSONLikeDict`
-    # is not. Normalize it to a native dict so a file combining
-    # `expression_templates` with `coupling` loads.
-    data isa JSONLikeDict && (data = _to_native_json(data))
     if !(data isa AbstractDict) || !haskey(data, "type")
         throw(ParseError("CouplingEntry must be an object with 'type' field"))
     end
@@ -1593,10 +1572,10 @@ end
 Coerce JSON data into Domain type.
 """
 function coerce_domain(data::Any)::Domain
-    temporal = _maybe(get(data, :temporal, nothing)) do t
+    temporal = _maybe(get(data, "temporal", nothing)) do t
         Dict{String,Any}(string(k) => v for (k, v) in pairs(t))
     end
-    iv = get(data, :independent_variable, nothing)
+    iv = get(data, "independent_variable", nothing)
     return Domain(independent_variable = iv === nothing ? "t" : string(iv),
                   temporal = temporal)
 end
@@ -1676,7 +1655,10 @@ through `coerce_esm_file`, before it is flattened and run.
 function load(doc::AbstractDict;
               base_path::AbstractString=pwd(),
               metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
-    return _load_document(doc, String(base_path); metaparameters=metaparameters)
+    # Wire boundary for the in-memory path: normalize the caller's dict (which
+    # may be symbol-keyed, or nest JSON3 values) into the one post-wire carrier.
+    return _load_document(_to_ordered(doc), String(base_path);
+                          metaparameters=metaparameters)
 end
 
 """
@@ -1684,9 +1666,8 @@ end
 
 The document pipeline shared by every `load` method: top-level `{ref}` inlining
 → `_load_parsed` (version gates, schema validation, template lowering,
-coercion) → nested subsystem-ref resolution. `raw_data` may be the raw JSON3
-document (the file path) or an already-native dict (the in-memory path); both
-inliners accept either.
+coercion) → nested subsystem-ref resolution. `raw_data` is the post-wire
+native document (`_read_json_document` / the normalized in-memory dict).
 
 Factored out so a file and the identical document held as a dict cannot drift
 apart — the only difference between them is which `base_path` anchors the refs.
@@ -1698,18 +1679,21 @@ function _load_document(raw_data, base_path::String;
     # references its components by `{"ref": "..."}` — as the Python runner's
     # by-name model resolver expects — loads here too. Returns `nothing` when
     # the file has no such stubs (the common case), in which case the
-    # already-parsed document is reused as-is; only the stub path pays a
-    # JSON re-serialize (the inliner rewrites the document structurally).
+    # already-parsed document is reused as-is; only the stub path pays a copy
+    # (the inliner rewrites the document structurally).
     # Two composable passes: top-level model `{ref}` stubs, then top-level
     # reaction_system `{ref}` stubs (schema §4.7: each block's entry is
     # oneOf [component, {ref}]). The reaction-system pass runs on the model
-    # pass's native output when it produced one, so an assembly may mount a
+    # pass's output when it produced one, so an assembly may mount a
     # model AND a reaction system by reference on the same document.
     inlined_m = _inline_toplevel_model_refs(raw_data, base_path)
     rs_src = inlined_m === nothing ? raw_data : inlined_m
     inlined_r = _inline_toplevel_reaction_system_refs(rs_src, base_path)
-    native = inlined_r !== nothing ? inlined_r : inlined_m
-    doc = native === nothing ? raw_data : JSON3.read(JSON3.write(native))
+    inlined = inlined_r !== nothing ? inlined_r : inlined_m
+    # One carrier end to end: the inliners emit the same normalized native
+    # tree the parse boundary produces, so there is no re-serialize
+    # type-launder between them and the typed pipeline.
+    doc = inlined === nothing ? raw_data : inlined
     file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters)
     # Resolve nested subsystem references relative to the document's directory.
     resolve_subsystem_refs!(file, base_path)
@@ -1734,20 +1718,24 @@ function load(io::IO; base_path::AbstractString=pwd(),
 end
 
 """
-    _read_json_document(json_string) -> JSON3 document
+    _read_json_document(json_string) -> OrderedDict{String,Any} document
 
-Parse a JSON document string, rebranding a malformed-JSON failure as a
-[`ParseError`](@ref) ("Invalid JSON: …"). ONLY the JSON3 parse is guarded —
-downstream schema/coercion errors propagate with their own types, never
-rebranded as JSON errors.
+THE wire boundary: parse a JSON document string and normalize it — once, here
+— into the single post-wire carrier (`_to_ordered`: order-preserving,
+string-keyed native tree). Everything downstream (schema validation, template
+lowering, coercion) speaks exactly this one carrier. A malformed-JSON failure
+is rebranded as a [`ParseError`](@ref) ("Invalid JSON: …"); ONLY the JSON3
+parse is guarded — downstream schema/coercion errors propagate with their own
+types, never rebranded as JSON errors.
 """
 function _read_json_document(json_string::AbstractString)
-    try
-        return JSON3.read(json_string)
+    parsed = try
+        JSON3.read(json_string)
     catch e
         msg = hasfield(typeof(e), :msg) ? e.msg : sprint(showerror, e)
         throw(ParseError("Invalid JSON: $(msg)", e))
     end
+    return _to_ordered(parsed)
 end
 
 """
@@ -1852,7 +1840,8 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     machinery_input = injected_root === nothing ? raw_data : injected_root
     resolved = resolve_template_machinery(machinery_input, String(base_path);
                                           metaparameters=metaparameters)
-    loaded = lower_expression_templates(resolved === nothing ? machinery_input : resolved)
+    lowered_src = resolved === nothing ? machinery_input : resolved
+    loaded = lower_expression_templates(lowered_src)
     # esm-spec §9.6.4 Option B: `lower_expression_templates` PRESERVES surviving
     # `apply_expression_template` references and per-component registries.
     #   * Default (fast path): references survive into the typed IR. The
@@ -1865,11 +1854,13 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     #     `ESS_STENCIL_DISABLE` and the differential-test baseline (gate d).
     comp_tpls = nothing
     esm_stamp = nothing
-    if loaded isa JSONLikeDict
+    if loaded !== lowered_src
+        # Template machinery ran: `loaded` is the fresh rewritten native root
+        # (the no-machinery fast path returns its input BY IDENTITY).
         if _template_ref_disabled()
-            expanded = JSONLikeDict(expand_document(loaded))
+            expanded = expand_document(loaded)
         else
-            root = _to_dict(getfield(loaded, :data))::Dict{String,Any}
+            root = loaded
             authored = _authored_template_names(machinery_input)
             # Coupling `variable_map` transform references can't be per-component
             # materialized (coupling is not a component), so expand them against
@@ -1891,17 +1882,13 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
                 comp_tpls = Dict{String,Any}(k => v for (k, v) in blocks)
             end
             bump && (esm_stamp = "0.9.0")
-            expanded = JSONLikeDict(root)
+            expanded = root
         end
     else
+        # No component templates (e.g. a directly-loaded library file, or a
+        # metaparameters-only problem file): the document flows on unchanged;
+        # `coerce_esm_file` normalizes at its own boundary.
         expanded = loaded
-        if resolved !== nothing
-            # The lowering pass fast-paths files without component templates
-            # (e.g. a directly-loaded library file, or a metaparameters-only
-            # problem file); wrap the native tree so `coerce_esm_file` sees
-            # the JSON3-compatible property surface.
-            expanded = JSONLikeDict(_to_dict(expanded))
-        end
     end
     # Coerce under an identity parse memo (see `_PARSE_EXPR_MEMO_KEY`) so the
     # structural sharing the template-expansion passes built in the raw tree
@@ -1926,20 +1913,15 @@ them. Gate (d)'s differential builds a fixture both ways and compares exactly.
 _template_ref_disabled() = get(ENV, "ESS_TEMPLATE_REF_DISABLE", "") == "1"
 
 # A deep, plain-`Dict` copy of a top-level declaration block, or `nothing`.
-# Plain `Dict`/`Vector`/scalars only — a JSON3 view or a `JSONLikeDict` would
-# carry a custom type into `serialize_esm_file`, and the schema validator rejects
-# what it cannot recognize as a JSON object.
+# Plain `Dict`/`Vector`/scalars only (`_to_native_json`) — the snapshot lives
+# on the typed `EsmFile` and is re-emitted verbatim by `serialize_esm_file`,
+# whose byte surface has always been the plain-Dict one.
 function _verbatim_decl(raw_data, key::Symbol)
     v = _get_field(raw_data, key, nothing)
     v === nothing && return nothing
-    d = _to_dict(v)
-    d isa AbstractDict || return nothing
-    return Dict{String,Any}(string(k) => _plain_json(val) for (k, val) in pairs(d))
+    d = _to_native_json(v)
+    return d isa AbstractDict ? d : nothing
 end
-
-_plain_json(x::AbstractDict) = Dict{String,Any}(string(k) => _plain_json(v) for (k, v) in pairs(x))
-_plain_json(x::AbstractVector) = Any[_plain_json(v) for v in x]
-_plain_json(x) = x
 
 # Rebuild `file` carrying the verbatim declaration blocks and, from esm 0.9.0
 # (Option B), the per-component MATERIALIZED template registries + a possibly
@@ -2017,12 +1999,10 @@ end
 Return a native ESM dict with every top-level model `{ref}` stub replaced by the
 referenced component's model (and its `function_tables` / `enums` /
 `data_loaders` merged in), or `nothing` when `raw_data` has no such stub.
-
-Reads the document through `_get_field` / `_has_field`, so it accepts the raw
-JSON3 document (symbol-keyed) as well as an already-native string-keyed dict —
-the same carriers [`_inline_toplevel_reaction_system_refs`](@ref) accepts, so
-the two top-level inliners compose on one document and `load(::AbstractDict)`
-resolves stubs exactly as `load(::String)` does.
+The stub path copies the document (`_to_ordered`, order-preserving) so the
+in-place worker never mutates the caller's tree; the reaction-system inliner
+composes on the same copy, and `load(::AbstractDict)` resolves stubs exactly
+as `load(::String)` does.
 """
 function _inline_toplevel_model_refs(raw_data, base_path::String)
     models = _get_field(raw_data, :models, nothing)
@@ -2031,7 +2011,7 @@ function _inline_toplevel_model_refs(raw_data, base_path::String)
         _is_json_object(m) && _has_field(m, :ref) && !_has_field(m, :variables)
     end
     has_stub || return nothing
-    native = _to_native_json(raw_data)
+    native = _to_ordered(raw_data)
     _inline_toplevel_model_refs!(native, base_path, Set{String}())
     return native
 end
@@ -2041,7 +2021,7 @@ end
 
 In-place native-dict worker for [`_inline_toplevel_model_refs`](@ref).
 """
-function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::String,
+function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_path::String,
                                       visited::Set{String})
     models = get(native, "models", nothing)
     models isa AbstractDict || return
@@ -2064,8 +2044,8 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
         try
             isfile(refpath) || throw(SubsystemRefError(
                 "Referenced model file not found: $(refpath) (from ref '$(ref)')"))
-            comp = _to_native_json(JSON3.read(read(refpath, String)))
-            comp isa Dict{String,Any} || throw(SubsystemRefError(
+            comp = _to_ordered(JSON3.read(read(refpath, String)))
+            comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
                 "Referenced model file '$(ref)' did not parse as a JSON object"))
             # A §4.7 subsystem ref (here, a top-level model `{ref}`) MUST NOT
             # target a library file — neither a template library nor a coupling
@@ -2103,7 +2083,7 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
             # (grid resolution) reach the leaf document-wide.
             edge_imports = get(entry, "expression_template_imports", nothing)
             if edge_imports isa AbstractVector && !isempty(edge_imports)
-                imports_native = _to_native_json(edge_imports)
+                imports_native = _to_ordered(edge_imports)
                 _absolutize_nested_refs!(imports_native, base_path)
                 _append_component_imports!(cmodel, imports_native)
             end
@@ -2135,9 +2115,9 @@ replaced by the referenced component's reaction system (and its
 [`_inline_toplevel_model_refs`](@ref) (schema §4.7: a `reaction_systems` entry is
 `oneOf [ReactionSystem, {ref}]`), so an assembly may mount an external
 reaction-system file — e.g. `superfast.esm` — by reference instead of inlining
-its whole `reaction_systems` block. Accepts either the raw JSON3 document or an
-already-native dict (the model-ref inliner's output), so the two top-level
-inliners compose on one document.
+its whole `reaction_systems` block. Accepts the post-wire native document or
+the model-ref inliner's output, so the two top-level inliners compose on one
+document.
 """
 function _inline_toplevel_reaction_system_refs(raw_data, base_path::String)
     rsystems = _get_field(raw_data, :reaction_systems, nothing)
@@ -2146,7 +2126,7 @@ function _inline_toplevel_reaction_system_refs(raw_data, base_path::String)
         _is_json_object(r) && _has_field(r, :ref) && !_has_field(r, :species)
     end
     has_stub || return nothing
-    native = _to_native_json(raw_data)
+    native = _to_ordered(raw_data)
     _inline_toplevel_reaction_system_refs!(native, base_path, Set{String}())
     return native
 end
@@ -2162,7 +2142,7 @@ splices in its single top-level reaction system (or the one named by a
 Cycle detection is PATH-scoped, so the same single-reaction-system file may be
 mounted under several assembly keys.
 """
-function _inline_toplevel_reaction_system_refs!(native::Dict{String,Any}, base_path::String,
+function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}, base_path::String,
                                                 visited::Set{String})
     rsystems = get(native, "reaction_systems", nothing)
     rsystems isa AbstractDict || return
@@ -2182,8 +2162,8 @@ function _inline_toplevel_reaction_system_refs!(native::Dict{String,Any}, base_p
         try
             isfile(refpath) || throw(SubsystemRefError(
                 "Referenced reaction system file not found: $(refpath) (from ref '$(ref)')"))
-            comp = _to_native_json(JSON3.read(read(refpath, String)))
-            comp isa Dict{String,Any} || throw(SubsystemRefError(
+            comp = _to_ordered(JSON3.read(read(refpath, String)))
+            comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
                 "Referenced reaction system file '$(ref)' did not parse as a JSON object"))
             # A §4.7 subsystem ref MUST NOT target a template/coupling library.
             _reject_library_ref(comp, ref, refpath)
@@ -2214,7 +2194,7 @@ function _inline_toplevel_reaction_system_refs!(native::Dict{String,Any}, base_p
             # order), with refs anchored at THIS document's directory.
             edge_imports = get(entry, "expression_template_imports", nothing)
             if edge_imports isa AbstractVector && !isempty(edge_imports)
-                imports_native = _to_native_json(edge_imports)
+                imports_native = _to_ordered(edge_imports)
                 _absolutize_nested_refs!(imports_native, base_path)
                 _append_component_imports!(crsys, imports_native)
             end

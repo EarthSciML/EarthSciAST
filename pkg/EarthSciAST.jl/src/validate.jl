@@ -334,14 +334,13 @@ function validate_schema(data::Any)::Vector{SchemaError}
     end
     errors = SchemaError[]
     try
-        # Normalise to NATIVE JSON containers first. The two callers hand this
-        # function different carriers — the conformance producer a native
-        # `Dict{String,Any}` tree, but `load` the raw `JSON3.Object` straight off
-        # the parser — and JSON3's `JSON3.Array` is not a `Base.Array`, so
-        # JSONSchema.jl's `type: array` check (and every `oneOf` branch that
-        # depends on it) misfires on the JSON3 carrier. Coercing to native
-        # containers makes the walk carrier-independent (the same reason
-        # `validate()` funnels its input through `_plain_json`).
+        # Normalise to NATIVE JSON containers first. Callers hand this function
+        # different carriers — the load pipeline the post-wire ordered tree,
+        # the conformance producer a native `Dict{String,Any}` tree, direct
+        # callers possibly a raw `JSON3.Object` — and JSON3's `JSON3.Array` is
+        # not a `Base.Array`, so JSONSchema.jl's `type: array` check (and every
+        # `oneOf` branch that depends on it) misfires on the JSON3 carrier.
+        # Coercing to native containers makes the walk carrier-independent.
         native = _to_native_json(data)
         _collect_schema_errors!(errors, native, ESM_SCHEMA.data, "")
     catch e
@@ -500,16 +499,15 @@ function validate(file::EsmFile)::ValidationResult
     # top-level `anyOf` requires either `models` or `reaction_systems`, so a
     # stub dict with just `esm` and `metadata.name` would always fail.
     #
-    # `_plain_json` is not cosmetic. Several fields are RAW passthrough
-    # (`coupling[*].connector`, `callback.config`, `translate`, `domain.temporal`,
-    # the template declarations), and they still hold the JSON3 values they were
-    # parsed from — `JSON3.Object`, `JSON3.Array`. JSONSchema.jl does not
-    # recognize those as JSON objects/arrays, so it failed `type: object` and
-    # reported a bogus `oneOf` failure on a document a compliant Draft 2020-12
-    # validator accepts with ZERO errors: tests/valid/scoped_refs_coupling.esm was
-    # rejected for a `couple` entry whose `connector.equations` were `JSON3.Object`
-    # rather than `Dict`. The error was in the validator's INPUT, not the document.
-    data = _plain_json(serialize_esm_file(file))
+    # Raw-passthrough fields (`coupling[*].connector`, `callback.config`,
+    # `translate`, `domain.temporal`, the template declarations) hold native
+    # values — documents are normalized once at the wire boundary — and
+    # `validate_schema` itself funnels its input through `_to_native_json`, so
+    # no extra carrier scrub is needed here. (Historically JSON3 values leaked
+    # through these fields and JSONSchema.jl misread them, rejecting e.g.
+    # tests/valid/scoped_refs_coupling.esm for a `couple` entry whose
+    # `connector.equations` were `JSON3.Object` rather than `Dict`.)
+    data = serialize_esm_file(file)
 
     schema_errors = validate_schema(data)
     structural_errors = validate_structural(file)

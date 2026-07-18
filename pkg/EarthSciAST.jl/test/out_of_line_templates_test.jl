@@ -9,7 +9,7 @@ using JSON3
 using EarthSciAST
 using EarthSciAST: lower_expression_templates, resolve_template_machinery,
     Expand, expand_document, emit_document, emit_esm_string,
-    flatten_template_registries, ExpressionTemplateError, JSONLikeDict,
+    flatten_template_registries, ExpressionTemplateError,
     serialize_esm_file
 
 include("testutils.jl")
@@ -79,7 +79,7 @@ include("testutils.jl")
         loaded = _load("import_smoke")
         @test _normj(Expand(loaded)) == _normj(Expand(loaded))
         # non-destructive: the loaded view still carries surviving references
-        d = loaded isa JSONLikeDict ? getfield(loaded, :data) : loaded
+        d = loaded
         mk = d["models"]["Advection"]["equations"][1]["rhs"]["args"][2]
         @test _normj(mk)["op"] == "makearray"
     end
@@ -123,7 +123,7 @@ include("testutils.jl")
     # -----------------------------------------------------------------------
     @testset "eager_target_bearing: eager expands+lowers, target-free survives" begin
         loaded = _load("eager_target_bearing")
-        d = loaded isa JSONLikeDict ? getfield(loaded, :data) : loaded
+        d = loaded
         vars = d["models"]["m"]["variables"]
         # POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
         # lowered by the `central` rule → an aggregate. No surviving ref.
@@ -144,7 +144,7 @@ include("testutils.jl")
     # -----------------------------------------------------------------------
     @testset "opacity_negative: compound rule does not see through a reference" begin
         loaded = _load("opacity_negative")
-        d = loaded isa JSONLikeDict ? getfield(loaded, :data) : loaded
+        d = loaded
         flux = _normj(d["models"]["m"]["variables"]["flux"]["expression"])
         @test flux["op"] == "D"                    # compound did NOT fire (no marker 999)
         @test _isapply(flux["args"][1])            # its arg is the surviving reference
@@ -160,7 +160,7 @@ include("testutils.jl")
     # -----------------------------------------------------------------------
     @testset "opacity_priority_shadowing: generic fires, compound silently does not" begin
         loaded = _load("opacity_priority_shadowing")
-        d = loaded isa JSONLikeDict ? getfield(loaded, :data) : loaded
+        d = loaded
         flux = _normj(d["models"]["m"]["variables"]["flux"]["expression"])
         @test flux["op"] == "*"
         @test flux["args"][1] == 1                 # generic marker (NOT compound 999)
