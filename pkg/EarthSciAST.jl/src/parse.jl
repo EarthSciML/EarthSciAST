@@ -99,35 +99,10 @@ function parse_expression(data::Any)::ASTExpr
     end
 end
 
-"""
-    OPEXPR_WIRE_KEYS
-
-The `OpExpr` field ↔ wire (JSON) key contract, as a NamedTuple mapping each
-struct field name to the JSON key it is parsed from / serialized to. Three
-fields are spelled differently on the wire (`int_var` ↔ `var`, `expr_body` ↔
-`expr`, `table_axes` ↔ `axes`); everything else matches. `join_gates` is the
-one struct field deliberately absent: it is a build-time artifact, never
-parsed or serialized.
-
-This table is the single source of truth checked by the exhaustiveness test
-(`round_trip_regression_test.jl`): adding an `OpExpr` field without updating
-this table, `reconstruct(::OpExpr)`, `_parse_op_dict`, and
-`serialize_expression` fails CI.
-"""
-const OPEXPR_WIRE_KEYS = (
-    op = :op, args = :args, wrt = :wrt, dim = :dim,
-    int_var = :var, lower = :lower, upper = :upper,
-    output_idx = :output_idx, expr_body = :expr, reduce = :reduce,
-    semiring = :semiring, ranges = :ranges, regions = :regions,
-    values = :values, shape = :shape, perm = :perm, axis = :axis,
-    fn = :fn, name = :name, value = :value,
-    table = :table, table_axes = :axes, output = :output,
-    join = :join, filter = :filter,
-    id = :id, manifold = :manifold,
-    distinct = :distinct, key = :key,
-    arg = :arg, bindings = :bindings,
-    label = :label,
-)
+# NOTE: the `OpExpr` field ↔ wire-key contract (`OPEXPR_WIRE_KEYS`) and the
+# field-spec table it derives from (`OPEXPR_FIELD_TABLE`) live in types.jl,
+# next to the struct. The field-extraction core of `_parse_op_dict` below
+# (`_parse_op_optional_fields`) is GENERATED from that table.
 
 """
     _PARSE_EXPR_MEMO_KEY
@@ -158,10 +133,96 @@ function _parse_op_dict_memoized(data)
     return res
 end
 
+# ── Generated optional-field extraction ─────────────────────────────────────
+#
+# One extraction statement per `OPEXPR_FIELD_TABLE` row (struct-field order),
+# derived from the row's `kind` (expression-bearing shapes) or `parse` recipe
+# tag (scalar coercions). Field lookup goes through `_get_field`, which
+# resolves both symbol- and string-keyed carriers (native Dict, JSON3.Object,
+# JSONLikeDict), so each wire key is named exactly once — in the table.
+# Op-conditional structural validation is spliced in at the same positions the
+# historical hand-written extraction performed it (integral bounds directly
+# after `upper`, `intersect_polygon` manifold directly after `manifold`), so
+# ParseError precedence on multiply-invalid nodes is unchanged. `table_axes`
+# is the one op-conditional extraction: the `axes` key is only parsed for a
+# `table_lookup` node, and its coercer needs the already-extracted `table` id
+# and `args` (the table row order guarantees `table` is bound first).
+function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr,Nothing}
+    (f === :op || f === :args) && return nothing        # structural, hand-parsed
+    spec.kind === :internal && return nothing           # never on the wire
+    w = QuoteNode(spec.wire)
+    rhs = if f === :table_axes
+        :(op == "table_lookup" ?
+            _coerce_table_lookup_axes(table, _get_field(data, $w, nothing), args) :
+            nothing)
+    elseif spec.kind === :expr
+        :(_maybe(parse_expression, _get_field(data, $w, nothing)))
+    elseif spec.kind === :expr_vec
+        :(let raw = _get_field(data, $w, nothing)
+            raw === nothing ? nothing :
+                Vector{ASTExpr}([parse_expression(v) for v in raw])
+        end)
+    elseif spec.kind === :expr_map
+        :(let raw = _get_field(data, $w, nothing)
+            raw === nothing ? nothing :
+                Dict{String,ASTExpr}(string(k) => parse_expression(v)
+                                     for (k, v) in pairs(raw))
+        end)
+    elseif spec.kind === :ranges
+        :(_coerce_ranges(_get_field(data, $w, nothing)))
+    elseif spec.kind === :join
+        :(_coerce_join(_get_field(data, $w, nothing)))
+    elseif spec.parse === :string
+        :(_opt_string(data, $w))
+    elseif spec.parse === :int
+        :(_opt_int(data, $w))
+    elseif spec.parse === :int_vec
+        :(let raw = _get_field(data, $w, nothing)
+            raw === nothing ? nothing : Vector{Int}([Int(x) for x in raw])
+        end)
+    elseif spec.parse === :bool
+        :(_maybe(Bool, _get_field(data, $w, nothing)))
+    elseif spec.parse === :json
+        # JSON-typed value (number, integer, or nested array); convert JSON3
+        # containers to native Julia ones so downstream code doesn't have to
+        # special-case JSON3 types.
+        :(_maybe(_to_native_json, _get_field(data, $w, nothing)))
+    elseif spec.parse === :output_idx
+        :(_coerce_output_idx(_get_field(data, $w, nothing)))
+    elseif spec.parse === :regions
+        :(_coerce_regions(_get_field(data, $w, nothing)))
+    elseif spec.parse === :shape
+        :(_coerce_shape(_get_field(data, $w, nothing)))
+    elseif spec.parse === :int_or_string
+        :(let raw = _get_field(data, $w, nothing)
+            raw === nothing ? nothing : (raw isa Integer ? Int(raw) : string(raw))
+        end)
+    else
+        error("OPEXPR_FIELD_TABLE row $(f) has no parse recipe " *
+              "(kind=$(spec.kind), parse=$(spec.parse))")
+    end
+    return :($f = $rhs)
+end
+
+# Per-op structural validators spliced in AFTER the named field's extraction.
+const _PARSE_OP_VALIDATOR_AFTER = Dict{Symbol,Expr}(
+    :upper => :(op == "integral" && _validate_integral_op(int_var, lower, upper)),
+    :manifold => :(op == "intersect_polygon" && _validate_intersect_polygon_op(manifold)),
+)
+
+@eval function _parse_op_optional_fields(data, op::String, args::Vector{ASTExpr})
+    $((stmt for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+       for stmt in (_parse_op_field_stmt(f, spec),
+                    get(_PARSE_OP_VALIDATOR_AFTER, f, nothing))
+       if stmt !== nothing)...)
+    return (; $((f for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                 if f !== :op && f !== :args && spec.kind !== :internal)...))
+end
+
 # Shared implementation for every dict-like carrier (native Dict, JSON3.Object,
-# JSONLikeDict). Field lookup goes through `_get_field`, which resolves both
-# symbol- and string-keyed carriers, so each wire key is named exactly once at
-# its point of use (no positional string/symbol parallel lists to transpose).
+# JSONLikeDict). The optional-field portion is generated from
+# `OPEXPR_FIELD_TABLE` (see `_parse_op_optional_fields` above); only the
+# structural `op`/`args` handling and op-existence rejections live here.
 function _parse_op_dict(data)
     op = string(_get_field(data, :op, nothing))
     if op == "call"
@@ -182,103 +243,8 @@ function _parse_op_dict(data)
     # so a loaded document never carries an `apply_expression_template` node.
     args_data = _get_field(data, :args, ())
     args = Vector{ASTExpr}([parse_expression(arg) for arg in args_data])
-    wrt = _opt_string(data, :wrt)
-    dim = _opt_string(data, :dim)
-
-    int_var_str = _opt_string(data, :var)
-    lower_expr = _maybe(parse_expression, _get_field(data, :lower, nothing))
-    upper_expr = _maybe(parse_expression, _get_field(data, :upper, nothing))
-    op == "integral" && _validate_integral_op(int_var_str, lower_expr, upper_expr)
-
-    output_idx = _coerce_output_idx(_get_field(data, :output_idx, nothing))
-    expr_body = _maybe(parse_expression, _get_field(data, :expr, nothing))
-    reduce_str = _opt_string(data, :reduce)
-    semiring_str = _opt_string(data, :semiring)
-    ranges = _coerce_ranges(_get_field(data, :ranges, nothing))
-    regions = _coerce_regions(_get_field(data, :regions, nothing))
-    raw_values = _get_field(data, :values, nothing)
-    values_vec = raw_values === nothing ? nothing :
-        Vector{ASTExpr}([parse_expression(v) for v in raw_values])
-    shape_vec = _coerce_shape(_get_field(data, :shape, nothing))
-    perm_raw = _get_field(data, :perm, nothing)
-    perm_vec = perm_raw === nothing ? nothing : Vector{Int}([Int(p) for p in perm_raw])
-    axis_int = _opt_int(data, :axis)
-    fn_str = _opt_string(data, :fn)
-    name_str = _opt_string(data, :name)
-    # `const` value is JSON-typed (number, integer, or nested array); convert
-    # JSON3 arrays / objects to native Julia containers so downstream code
-    # doesn't have to special-case JSON3 types.
-    value_native = _maybe(_to_native_json, _get_field(data, :value, nothing))
-
-    # table_lookup (esm-spec §9.5, v0.4.0): table id, per-axis input expression
-    # map (carried under JSON key "axes" — struct field `table_axes`), optional
-    # output selector. The `axes` key is only parsed for a table_lookup node.
-    table_str = _opt_string(data, :table)
-    table_axes_dict = op == "table_lookup" ?
-        _coerce_table_lookup_axes(table_str, _get_field(data, :axes, nothing), args) :
-        nothing
-    output_raw = _get_field(data, :output, nothing)
-    if output_raw === nothing
-        output_native = nothing
-    elseif output_raw isa Integer
-        output_native = Int(output_raw)
-    else
-        output_native = string(output_raw)
-    end
-
-    # M2 (RFC §5.3 / §7.2): the optional value-equality `join` clauses and the
-    # boolean `filter` predicate that gate which index combinations of an
-    # aggregate / arrayop contribute a ⊗-product term.
-    join_clauses = _coerce_join(_get_field(data, :join, nothing))
-    filter_expr = _maybe(parse_expression, _get_field(data, :filter, nothing))
-
-    # M4 geometry kernel (RFC §8.1 / Appendix B; schema bead ess-my4.4.2): the
-    # node-local `id` (§6.1, by which a derived index set names its producer)
-    # and the `intersect_polygon` `manifold` flag.
-    id_str = _opt_string(data, :id)
-    manifold_str = _opt_string(data, :manifold)
-    op == "intersect_polygon" && _validate_intersect_polygon_op(manifold_str)
-
-    # Value-invention producer vocabulary (RFC §5.5 / §6.1): the `distinct` set-
-    # former flag and the emitted `key` (a skolem/tuple KEY expression). Preserved
-    # through the typed IR so a flattened document's producer is still recognised.
-    distinct_val = _maybe(Bool, _get_field(data, :distinct, nothing))
-    key_expr = _maybe(parse_expression, _get_field(data, :key, nothing))
-
-    # Arg-witness (`argmin`/`argmax`) witnessing index symbol, and the
-    # `apply_expression_template` parameter→argument bindings map. Both are
-    # rendered by the pretty-printer per RENDERING_CONTRACT.md; parsed here so a
-    # typed node round-trips them (`apply_expression_template` is otherwise
-    # rejected above before this point, so `bindings` is generic wire storage).
-    arg_str = _opt_string(data, :arg)
-    bindings_raw = _get_field(data, :bindings, nothing)
-    bindings_dict = nothing
-    if bindings_raw !== nothing
-        bindings_dict = Dict{String,ASTExpr}()
-        for (k, v) in pairs(bindings_raw)
-            bindings_dict[string(k)] = parse_expression(v)
-        end
-    end
-
-    # `skolem` documentary relation tag (esm-spec value-invention §5.5): a plain
-    # optional string, parsed exactly like `fn`/`name`. It is NOT part of the
-    # emitted key — `args` are the pure key components (see `_vi_skolem`).
-    label_str = _opt_string(data, :label)
-
-    return OpExpr(op, args;
-        wrt=wrt,
-        dim=dim,
-        int_var=int_var_str, lower=lower_expr, upper=upper_expr,
-        output_idx=output_idx, expr_body=expr_body, reduce=reduce_str,
-        semiring=semiring_str,
-        ranges=ranges, regions=regions, values=values_vec, shape=shape_vec,
-        perm=perm_vec, axis=axis_int, fn=fn_str,
-        name=name_str, value=value_native,
-        table=table_str, table_axes=table_axes_dict, output=output_native,
-        join=join_clauses, filter=filter_expr,
-        id=id_str, manifold=manifold_str,
-        distinct=distinct_val, key=key_expr,
-        arg=arg_str, bindings=bindings_dict, label=label_str)
+    flds = _parse_op_optional_fields(data, op, args)
+    return OpExpr(op, args; flds...)
 end
 
 # ── Per-op validators for `_parse_op_dict` ──────────────────────────────────
@@ -857,21 +823,6 @@ function coerce_model(data::Any)::Model
     end
     system_kind = _opt_string(data, :system_kind)
 
-    # Backwards compatibility: handle old 'events' field
-    if haskey(data, :events)
-        mixed_events = [coerce_event(ev) for ev in data.events]
-        base = create_model_with_mixed_events(variables, equations, mixed_events)
-        # Preserve init fields on the legacy path by re-packing.
-        return Model(base.variables, base.equations,
-                     base.discrete_events, base.continuous_events,
-                     base.subsystems;
-                     tolerance=base.tolerance,
-                     tests=base.tests,
-                     initialization_equations=initialization_equations,
-                     guesses=guesses,
-                     system_kind=system_kind)
-    end
-
     # Inline tests / tolerance (schema gt-cc1).
     tolerance = _maybe(coerce_tolerance, _get_field(data, :tolerance, nothing))
     tests = haskey(data, :tests) && data.tests !== nothing ?
@@ -880,7 +831,7 @@ function coerce_model(data::Any)::Model
 
     # Inline subsystems (schema §4.7, oneOf [Model, DataLoader, SubsystemRef]):
     # each entry is coerced by `_coerce_subsystem_entry`.
-    subsystems = Dict{String,Any}()
+    subsystems = Dict{String,SubsystemNode}()
     if haskey(data, :subsystems) && data.subsystems !== nothing
         for (k, v) in pairs(data.subsystems)
             subsystems[string(k)] = _coerce_subsystem_entry(string(k), v)
@@ -1116,31 +1067,14 @@ function coerce_equation(data::Any)::Equation
 end
 
 """
-    coerce_event(data::Any) -> EventType
-
-Coerce JSON data into EventType (ContinuousEvent or DiscreteEvent).
-"""
-function coerce_event(data::Any)::EventType
-    if _has_field(data, :conditions)
-        return coerce_continuous_event(data)
-    elseif _has_field(data, :trigger)
-        return coerce_discrete_event(data)
-    else
-        throw(ParseError("Invalid EventType: missing 'conditions' or 'trigger' field"))
-    end
-end
-
-"""
     coerce_discrete_event(data::Any) -> DiscreteEvent
 
 Coerce JSON data specifically into DiscreteEvent.
 
 Schema: DiscreteEvent must have a trigger, and exactly one of 'affects' (array
 of AffectEquation) or 'functional_affect' (a registered handler descriptor).
-The Julia DiscreteEvent type stores affects as a Vector{FunctionalAffect}
-where each FunctionalAffect represents an assignment (target, expression,
-operation); schema AffectEquation entries {lhs, rhs} are converted to that
-form with operation="set". A schema 'functional_affect' handler descriptor is
+Affects are stored as `AffectEquation`s ({lhs, rhs}), the same shape
+`ContinuousEvent` uses. A schema 'functional_affect' handler descriptor is
 preserved verbatim on the event's `functional_affect` field (it cannot be
 executed symbolically, but it round-trips losslessly through serialize).
 """
@@ -1151,11 +1085,14 @@ function coerce_discrete_event(data::Any)::DiscreteEvent
 
     trigger = coerce_trigger(_get_field(data, :trigger, nothing))
 
-    affects = FunctionalAffect[]
+    affects = AffectEquation[]
     if _has_field(data, :affects)
         raw_affects = _get_field(data, :affects, [])
         for a in raw_affects
-            push!(affects, _affect_equation_to_functional_affect(a))
+            if !_has_field(a, :lhs) || !_has_field(a, :rhs)
+                throw(ParseError("AffectEquation requires 'lhs' and 'rhs' fields"))
+            end
+            push!(affects, coerce_affect_equation(a))
         end
     end
 
@@ -1176,17 +1113,6 @@ function coerce_discrete_event(data::Any)::DiscreteEvent
     return DiscreteEvent(trigger, affects, description=description,
                          functional_affect=functional_affect,
                          discrete_parameters=discrete_parameters)
-end
-
-# Convert a schema AffectEquation JSON object ({lhs, rhs}) into the Julia
-# internal FunctionalAffect representation (target, expression, operation).
-function _affect_equation_to_functional_affect(data)::FunctionalAffect
-    if !_has_field(data, :lhs) || !_has_field(data, :rhs)
-        throw(ParseError("AffectEquation requires 'lhs' and 'rhs' fields"))
-    end
-    target = string(_get_field(data, :lhs, ""))
-    expression = parse_expression(_get_field(data, :rhs, nothing))
-    return FunctionalAffect(target, expression, operation="set")
 end
 
 """
@@ -1220,8 +1146,10 @@ end
 Coerce JSON data into AffectEquation type.
 """
 function coerce_affect_equation(data::Any)::AffectEquation
-    lhs = string(data.lhs)
-    rhs = parse_expression(data.rhs)
+    # `_get_field` resolves both symbol- and string-keyed carriers (JSON3.Object,
+    # native Dict, JSONLikeDict), matching every other coercion helper.
+    lhs = string(_get_field(data, :lhs, ""))
+    rhs = parse_expression(_get_field(data, :rhs, nothing))
     return AffectEquation(lhs, rhs)
 end
 
@@ -1584,11 +1512,9 @@ end
 
 Parse event coupling entry.
 
-Named `coerce_coupling_event` — NOT a `coerce_event(::AbstractDict)` method —
-because `JSON3.Object <: AbstractDict`: an `::AbstractDict` method would be
-more specific than `coerce_event(::Any)` and hijack the legacy model-`events`
-dispatch, breaking the model events path with a spurious "event requires
-'event_type' field" error (regression-tested in parse_test.jl).
+Named `coerce_coupling_event` (not `coerce_event`) so the coupling-entry
+parser can never be confused with the model-event coercers
+(`coerce_discrete_event` / `coerce_continuous_event`).
 """
 function coerce_coupling_event(data::AbstractDict)::CouplingEvent
     if !haskey(data, "event_type")

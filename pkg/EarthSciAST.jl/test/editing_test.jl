@@ -328,7 +328,7 @@ end
 
         disc = DiscreteEvent(
             ConditionTrigger(VarExpr("x")),
-            [FunctionalAffect("x", NumExpr(0.0))],
+            [AffectEquation("x", NumExpr(0.0))],
             description="reset",
         )
         cont = ContinuousEvent(

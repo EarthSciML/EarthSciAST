@@ -32,7 +32,7 @@ using EarthSciAST: FlattenedSystem, ModelVariable, StateVariable,
     ParameterVariable, ObservedVariable, BrownianVariable,
     NumExpr, IntExpr, VarExpr, OpExpr,
     Equation, AffectEquation, Model, ContinuousEvent, DiscreteEvent,
-    ConditionTrigger, PeriodicTrigger, PresetTimesTrigger, FunctionalAffect,
+    ConditionTrigger, PeriodicTrigger, PresetTimesTrigger,
     Domain, flatten, infer_array_shapes,
     GapReport,
     # MTK-independent helpers shared with the Catalyst extension

@@ -16,8 +16,64 @@ transparently extends the folder.
 """
 
 # ========================================
-# 0. Shared sub-expression traversal
+# 0. Shared sub-expression traversal (GENERATED from OPEXPR_FIELD_TABLE)
 # ========================================
+#
+# Every walker below is `@eval`-generated from `OPEXPR_FIELD_TABLE` (types.jl),
+# so the expression-bearing field set exists in EXACTLY ONE place. Traversal
+# order is struct-field order: `args`, `lower`, `upper`, `expr_body`, dense
+# `ranges` bounds, `values`, `table_axes` (sorted keys), `filter`, `key`,
+# `bindings` (sorted keys).
+
+# Build one visit statement per expression-bearing table row. `wrap` maps the
+# child-element expression (a `Symbol` naming a local bound to one child) to
+# the statement that visits it — spliced INLINE, so the generated walkers stay
+# closure-free (see `_foreach_subexpr_children` note below).
+function _opexpr_child_stmts(wrap::Function)::Vector{Expr}
+    stmts = Expr[]
+    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+        if spec.kind === :expr
+            push!(stmts, :(let x = e.$f
+                x === nothing || $(wrap(:x))
+            end))
+        elseif spec.kind === :expr_vec
+            # `args` is the one never-`nothing` instance; the guard folds away.
+            push!(stmts, :(let v = e.$f
+                if v !== nothing
+                    for x in v
+                        $(wrap(:x))
+                    end
+                end
+            end))
+        elseif spec.kind === :expr_map
+            push!(stmts, :(let m = e.$f
+                if m !== nothing
+                    for mk in sort!(collect(keys(m)))
+                        let x = m[mk]
+                            $(wrap(:x))
+                        end
+                    end
+                end
+            end))
+        elseif spec.kind === :ranges
+            # A `ranges` entry is an `IndexSetRef` (no sub-expressions) or a
+            # dense bound vector whose entries may be expression-valued.
+            push!(stmts, :(let m = e.$f
+                if m !== nothing
+                    for mk in sort!(collect(keys(m)))
+                        v = m[mk]
+                        if v isa AbstractVector
+                            for x in v
+                                x isa ASTExpr && $(wrap(:x))
+                            end
+                        end
+                    end
+                end
+            end))
+        end
+    end
+    return stmts
+end
 
 """
     child_exprs(e::ASTExpr) -> Vector{ASTExpr}
@@ -28,46 +84,25 @@ All immediate sub-expressions of `e`, drawn from EVERY expression-bearing
 [`substitute`](@ref), so dependency analysis sees variables nested inside
 aggregate/arrayop bodies (`expr_body`), filter predicates (`filter`), integral
 bounds (`lower`/`upper`), makearray `values`, table-lookup axis inputs
-(`table_axes`), expression-valued dense `ranges` bounds, and value-invention
-`key` expressions.
+(`table_axes`), expression-valued dense `ranges` bounds, value-invention
+`key` expressions, AND expression-template `bindings` values (historically the
+one field this traversal missed while validate's copy missed `ranges` — both
+walkers are now generated from `OPEXPR_FIELD_TABLE` and traverse both).
 
-Non-expression fields (`wrt`, `dim`, `int_var`, `output_idx`, `join`,
-`regions`, `shape`, `perm`, `axis`, `fn`, `name`, `value`, `table`, `output`,
-`id`, `manifold`, `distinct`, …) carry strings/ints/const data, not `ASTExpr`
-sub-trees, and are not traversed. `wrt` names a variable and is handled
-separately by `free_variables`/`contains`. Literal and variable leaves have no
-children.
+Non-expression fields (kind `:scalar`/`:join`/`:internal` in the table: `wrt`,
+`dim`, `int_var`, `output_idx`, `join`, `regions`, `shape`, `perm`, `axis`,
+`fn`, `name`, `value`, `table`, `output`, `id`, `manifold`, `distinct`, …)
+carry strings/ints/const data, not `ASTExpr` sub-trees, and are not traversed.
+`wrt` names a variable and is handled separately by
+`free_variables`/`contains`. Literal and variable leaves have no children.
 """
 child_exprs(::NumExpr) = ASTExpr[]
 child_exprs(::IntExpr) = ASTExpr[]
 child_exprs(::VarExpr) = ASTExpr[]
 
-function child_exprs(e::OpExpr)::Vector{ASTExpr}
+@eval function child_exprs(e::OpExpr)::Vector{ASTExpr}
     out = ASTExpr[]
-    append!(out, e.args)
-    for f in (e.lower, e.upper, e.expr_body, e.filter, e.key)
-        f === nothing || push!(out, f)
-    end
-    if e.values !== nothing
-        append!(out, e.values)
-    end
-    if e.table_axes !== nothing
-        for k in sort!(collect(keys(e.table_axes)))
-            push!(out, e.table_axes[k])
-        end
-    end
-    if e.ranges !== nothing
-        # A `ranges` entry is an `IndexSetRef` (no sub-expressions) or a dense
-        # bound vector whose entries may be expression-valued.
-        for k in sort!(collect(keys(e.ranges)))
-            v = e.ranges[k]
-            if v isa AbstractVector
-                for x in v
-                    x isa ASTExpr && push!(out, x)
-                end
-            end
-        end
-    end
+    $(_opexpr_child_stmts(x -> :(push!(out, $x)))...)
     return out
 end
 
@@ -78,49 +113,23 @@ Apply `f` to `expr` and to every descendant expression node, depth-first,
 parent before children, drawing children from [`child_exprs`](@ref) — so `f`
 sees expressions nested in EVERY expression-bearing `OpExpr` field
 (aggregate/arrayop bodies, filters, integral bounds, makearray `values`,
-table-lookup axis inputs, dense `ranges` bounds, value-invention `key`s), not
-just `args`.
+table-lookup axis inputs, dense `ranges` bounds, value-invention `key`s,
+template `bindings` values), not just `args`.
 
 Build predicate scans and collectors on this instead of hand-rolling a
 recursive field walk: a hand-rolled walk over `args` (or a partial field list)
 silently misses variables in the fields above, and a newly added
 expression-bearing `OpExpr` field then has to be patched into every copy.
-`child_exprs`/[`map_children`](@ref) are the two places that enumerate the
-field list; this is the corresponding whole-subtree visitor. Internal —
-read-only traversal; for structure-preserving rewrites use `map_children`.
+`OPEXPR_FIELD_TABLE` (types.jl) is the ONE place that enumerates the field
+list; every walker here is generated from it. Internal — read-only traversal;
+for structure-preserving rewrites use `map_children`.
 """
-# Apply `f` to each immediate child WITHOUT materializing a `child_exprs` vector —
-# the same field set, same order (args, then the single-expression fields, values,
-# then sorted table_axes / dense ranges bounds). Used by the hot read-only walks
-# (`foreach_subexpr`, `_stencil_var_set`) so a whole-tree scan allocates nothing on
-# the common args-only node.
-function foreach_child(f, e::OpExpr)
-    for a in e.args
-        f(a)
-    end
-    for fld in (e.lower, e.upper, e.expr_body, e.filter, e.key)
-        fld === nothing || f(fld)
-    end
-    if e.values !== nothing
-        for v in e.values
-            f(v)
-        end
-    end
-    if e.table_axes !== nothing
-        for k in sort!(collect(keys(e.table_axes)))
-            f(e.table_axes[k])
-        end
-    end
-    if e.ranges !== nothing
-        for k in sort!(collect(keys(e.ranges)))
-            v = e.ranges[k]
-            if v isa AbstractVector
-                for x in v
-                    x isa ASTExpr && f(x)
-                end
-            end
-        end
-    end
+# Apply `f` to each immediate child WITHOUT materializing a `child_exprs`
+# vector — same generated field set, same order. Used by the hot read-only
+# walks (`foreach_subexpr`, `_stencil_var_set`) so a whole-tree scan allocates
+# nothing on the common args-only node.
+@eval function foreach_child(f, e::OpExpr)
+    $(_opexpr_child_stmts(x -> :(f($x)))...)
     return nothing
 end
 foreach_child(::Any, ::NumExpr) = nothing
@@ -133,45 +142,90 @@ function foreach_subexpr(f, expr::ASTExpr)
     return nothing
 end
 # Recurse without an allocating per-node closure: `f` is threaded straight through
-# each recursive `foreach_subexpr` call (inlining the `foreach_child` field walk
-# here — a `c -> foreach_subexpr(f, c)` closure would allocate once per node,
-# which is exactly the cost this removes).
+# each recursive `foreach_subexpr` call (the generator splices
+# `foreach_subexpr(f, x)` directly into the field walk — a
+# `c -> foreach_subexpr(f, c)` closure would allocate once per node, which is
+# exactly the cost this removes).
 _foreach_subexpr_children(f, ::NumExpr) = nothing
 _foreach_subexpr_children(f, ::IntExpr) = nothing
 _foreach_subexpr_children(f, ::VarExpr) = nothing
-function _foreach_subexpr_children(f, e::OpExpr)
-    for a in e.args
-        foreach_subexpr(f, a)
-    end
-    for fld in (e.lower, e.upper, e.expr_body, e.filter, e.key)
-        fld === nothing || foreach_subexpr(f, fld)
-    end
-    if e.values !== nothing
-        for v in e.values
-            foreach_subexpr(f, v)
-        end
-    end
-    if e.table_axes !== nothing
-        for k in sort!(collect(keys(e.table_axes)))
-            foreach_subexpr(f, e.table_axes[k])
-        end
-    end
-    if e.ranges !== nothing
-        for k in sort!(collect(keys(e.ranges)))
-            v = e.ranges[k]
-            if v isa AbstractVector
-                for x in v
-                    x isa ASTExpr && foreach_subexpr(f, x)
-                end
-            end
-        end
-    end
+@eval function _foreach_subexpr_children(f, e::OpExpr)
+    $(_opexpr_child_stmts(x -> :(foreach_subexpr(f, $x)))...)
     return nothing
 end
+
+@eval function foreach_child_with_path(g, e::OpExpr, path::String)
+    $((
+        begin
+            w = string(spec.wire)
+            if spec.kind === :expr
+                :(let x = e.$f
+                    x === nothing || g(x, string(path, $("/" * w)))
+                end)
+            elseif spec.kind === :expr_vec
+                :(let v = e.$f
+                    if v !== nothing
+                        for (i, x) in enumerate(v)
+                            g(x, string(path, $("/" * w * "/"), i - 1))
+                        end
+                    end
+                end)
+            elseif spec.kind === :expr_map
+                :(let m = e.$f
+                    if m !== nothing
+                        for mk in sort!(collect(keys(m)))
+                            g(m[mk], string(path, $("/" * w * "/"), mk))
+                        end
+                    end
+                end)
+            else # :ranges
+                :(let m = e.$f
+                    if m !== nothing
+                        for mk in sort!(collect(keys(m)))
+                            v = m[mk]
+                            if v isa AbstractVector
+                                for (i, x) in enumerate(v)
+                                    x isa ASTExpr &&
+                                        g(x, string(path, $("/" * w * "/"), mk, "/", i - 1))
+                                end
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+        for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+        if spec.kind in (:expr, :expr_vec, :expr_map, :ranges)
+    )...)
+    return nothing
+end
+
+@doc """
+    foreach_child_with_path(g, e::OpExpr, path::String) -> Nothing
+
+Apply `g(child, child_path)` to each immediate sub-expression of `e` — the
+SAME generated field set and order as [`child_exprs`](@ref) — where
+`child_path` extends `path` with the child's WIRE-key segment
+(JSON-Pointer-style): `<path>/args/<i>`, `<path>/lower`, `<path>/expr`,
+`<path>/ranges/<key>/<i>`, `<path>/values/<i>`, `<path>/axes/<key>`,
+`<path>/filter`, `<path>/key`, `<path>/bindings/<key>` (indices 0-based).
+Used by validate's reference walk so its descent can never drift from the
+shared traversal.
+""" foreach_child_with_path
 
 # Index/loop symbols BOUND by this node itself (aggregate/arrayop range keys,
 # `output_idx` axis names, an integral's `int_var`). These are node-local
 # binders, not references to enclosing-scope variables.
+#
+# NOT the same set as validate.jl's `_bound_index_symbols`, deliberately: that
+# checker additionally credits an argmin/argmax `arg` witness, subscript-
+# position index names (`index(u, i+1)`), a `skolem` first-arg binder, and
+# `bindings` KEYS (template formal parameters — the table's `binds_scope`
+# flag) into reference-check scope, because validation answers "could this
+# name legally appear here?" while this helper answers the narrower
+# "does THIS node bind this symbol for `free_variables` subtraction?".
+# Widening this set would silently hide real free variables from dependency
+# analysis.
 function _bound_symbols(e::OpExpr)::Vector{String}
     out = String[]
     e.int_var === nothing || push!(out, e.int_var::String)
@@ -199,20 +253,52 @@ Return a copy of `e` with `f` applied to each immediate sub-expression, preservi
 `e`'s concrete type and every non-expression field. Leaf nodes (`NumExpr`,
 `IntExpr`, `VarExpr`) are returned unchanged. For `OpExpr`, `f` is applied to every
 expression-bearing field — the SAME set [`child_exprs`](@ref) traverses (`args`,
-`lower`, `upper`, `expr_body`, `filter`, `key`, `values`, `table_axes`, and dense
-`ranges` bounds) — and the node is rebuilt via [`reconstruct`](@ref), so a newly
-added `OpExpr` field can never be silently dropped by a rewrite.
+`lower`, `upper`, `expr_body`, dense `ranges` bounds, `values`, `table_axes`,
+`filter`, `key`, and `bindings` values) — and the node is rebuilt via
+[`reconstruct`](@ref), so a newly added `OpExpr` field can never be silently
+dropped by a rewrite.
 
 This is the ONE field-preserving structural-rewrite primitive: `substitute`,
-`simplify`, and the flatten/lowering rewrites are expressed in terms of it so the
-expression-bearing field list lives in exactly one place (here and its read-only
-twin `child_exprs`).
+`simplify`, and the flatten/lowering rewrites are expressed in terms of it, and
+its field walk is GENERATED from `OPEXPR_FIELD_TABLE` (types.jl) so the
+expression-bearing field list lives in exactly one place.
 """
 map_children(f, e::NumExpr)::ASTExpr = e
 map_children(f, e::IntExpr)::ASTExpr = e
 map_children(f, e::VarExpr)::ASTExpr = e
 
-function map_children(f, e::OpExpr)::ASTExpr
+# Generated per-field rebuild statements + the reconstruct kwargs they feed.
+function _opexpr_map_children_parts()
+    stmts = Expr[]
+    kwargs = Expr[]
+    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+        nf = Symbol(:new_, f)
+        if spec.kind === :expr
+            push!(stmts, :($nf = mapf(e.$f)))
+        elseif spec.kind === :expr_vec
+            if f === :args
+                push!(stmts, :($nf = ASTExpr[mapf(x) for x in e.$f]))
+            else
+                push!(stmts, :($nf = e.$f === nothing ? nothing :
+                    ASTExpr[mapf(x) for x in e.$f]))
+            end
+        elseif spec.kind === :expr_map
+            push!(stmts, :($nf = e.$f === nothing ? nothing :
+                Dict{String,ASTExpr}(k => mapf(v) for (k, v) in e.$f)))
+        elseif spec.kind === :ranges
+            push!(stmts, :($nf = e.$f === nothing ? nothing :
+                Dict{String,Any}(k => (v isa AbstractVector ?
+                        Any[x isa ASTExpr ? mapf(x) : x for x in v] : v)
+                    for (k, v) in e.$f)))
+        else
+            continue
+        end
+        push!(kwargs, Expr(:kw, f, nf))
+    end
+    return stmts, kwargs
+end
+
+@eval function map_children(f, e::OpExpr)::ASTExpr
     # IDENTITY-PRESERVING: when `f` fixes every sub-expression (returns it
     # `===`-identical), the node itself is returned, not a reconstruct-copy.
     # This is what lets a whole-tree rewrite pass (enum lowering, substitute
@@ -223,25 +309,9 @@ function map_children(f, e::OpExpr)::ASTExpr
     changed = false
     mapf(x) = x === nothing ? nothing :
         (r = f(x); r === x || (changed = true); r)
-    new_args = ASTExpr[mapf(arg) for arg in e.args]
-    new_values = e.values === nothing ? nothing :
-        ASTExpr[mapf(v) for v in e.values]
-    new_table_axes = e.table_axes === nothing ? nothing :
-        Dict{String,ASTExpr}(k => mapf(v) for (k, v) in e.table_axes)
-    new_ranges = e.ranges === nothing ? nothing :
-        Dict{String,Any}(k => (v isa AbstractVector ?
-                Any[x isa ASTExpr ? mapf(x) : x for x in v] : v)
-            for (k, v) in e.ranges)
-    new_lower = mapf(e.lower); new_upper = mapf(e.upper)
-    new_expr_body = mapf(e.expr_body); new_filter = mapf(e.filter)
-    new_key = mapf(e.key)
+    $(first(_opexpr_map_children_parts())...)
     changed || return e
-    return reconstruct(e;
-        args = new_args,
-        lower = new_lower, upper = new_upper,
-        expr_body = new_expr_body, filter = new_filter,
-        values = new_values, table_axes = new_table_axes,
-        ranges = new_ranges, key = new_key)
+    return reconstruct(e; $(last(_opexpr_map_children_parts())...))
 end
 
 # ========================================

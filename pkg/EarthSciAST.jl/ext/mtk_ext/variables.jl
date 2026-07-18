@@ -245,27 +245,6 @@ function _affect_to_eq(affect, var_dict::Dict{String,Any}, t_sym, dim_dict,
         rhs = _esm_to_symbolic(affect.rhs, var_dict, t_sym, dim_dict)
         rhs = _wrap_pre_states(rhs, state_syms)
         return target ~ rhs
-    elseif affect isa FunctionalAffect
-        if !haskey(var_dict, affect.target)
-            @warn "Target variable $(affect.target) not found for event affect"
-            return nothing
-        end
-        target = var_dict[affect.target]
-        rhs = _esm_to_symbolic(affect.expression, var_dict, t_sym, dim_dict)
-        rhs = _wrap_pre_states(rhs, state_syms)
-        # For compound operations the LHS target also appears on the RHS
-        # and must refer to its pre-affect value.
-        pre_target = ModelingToolkit.Pre(target)
-        if affect.operation == "set"
-            return target ~ rhs
-        elseif affect.operation == "add"
-            return target ~ pre_target + rhs
-        elseif affect.operation == "multiply"
-            return target ~ pre_target * rhs
-        else
-            @warn "Unknown affect operation: $(affect.operation)"
-            return target ~ rhs
-        end
     end
     return nothing
 end

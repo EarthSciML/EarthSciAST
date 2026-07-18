@@ -1185,22 +1185,14 @@ function _equation_lhs_target(eq::Equation)::Union{String,Nothing}
     return nothing
 end
 
-# Every expression-bearing child of an operator node, in one place: `args` plus
-# the sidecars (`lower`, `upper`, `expr`, `filter`, `values`, `axes`, `key`,
-# `bindings`). The set must stay identical to the one
-# `_check_expression_references!` descends — a walker that misses a sidecar is
-# exactly how a whole class of references went unchecked (finding (h)).
-function _expr_children(e::OpExpr)::Vector{ASTExpr}
-    out = ASTExpr[]
-    append!(out, e.args)
-    for f in (e.lower, e.upper, e.expr_body, e.filter, e.key)
-        f === nothing || push!(out, f)
-    end
-    e.values === nothing || append!(out, e.values)
-    e.table_axes === nothing || append!(out, values(e.table_axes))
-    e.bindings === nothing || append!(out, values(e.bindings))
-    return out
-end
+# Every expression-bearing child of an operator node — the SHARED generated
+# traversal (`child_exprs`, expression.jl, generated from OPEXPR_FIELD_TABLE),
+# so this can never drift from the set `_check_expression_references!` descends
+# (`foreach_child_with_path`, same generator). Historically this was a
+# hand-rolled copy that missed dense `ranges` bounds while the expression.jl
+# copy missed `bindings` — a walker that misses a sidecar is exactly how a
+# whole class of references went unchecked (finding (h)).
+_expr_children(e::OpExpr)::Vector{ASTExpr} = child_exprs(e)
 
 """
     _indep_var(file::EsmFile) -> String
@@ -1306,8 +1298,8 @@ scale a loaded field by a model's declared parameter). Mirrors TS
 function _document_declared_names(file::EsmFile)::Set{String}
     names = Set{String}()
     if file.models !== nothing
+        # `file.models` is `Dict{String,Model}` — no non-Model guard needed.
         for (_, model) in file.models
-            model isa Model || continue
             union!(names, keys(model.variables))
         end
     end
@@ -1536,6 +1528,15 @@ function _collect_index_names!(syms::Vector{String}, e::ASTExpr)
     return syms
 end
 
+# Index symbols the reference checker credits into scope for THIS node's
+# children. DELIBERATELY WIDER than expression.jl's `_bound_symbols` (the
+# `free_variables` binder-subtraction set): validation answers "could this
+# name legally appear here?", so it additionally credits the argmin/argmax
+# `arg` witness, subscript-position index names (`index(u, i+1)`), the
+# `skolem` first-arg binder, and `bindings` KEYS (template formal parameters —
+# the `binds_scope` flag in OPEXPR_FIELD_TABLE). `_bound_symbols` answers the
+# narrower "does this node bind this symbol?" for dependency analysis, where
+# widening would hide real free variables. Both must stay.
 function _bound_index_symbols(op::OpExpr)::Vector{String}
     syms = String[]
     if op.output_idx !== nothing
@@ -1659,33 +1660,18 @@ function _check_expression_references!(errors::Vector{StructuralError}, file::Es
             skip_operator_arg = true
         end
 
-        # Descend the full expression-bearing child set (mirrors Rust
-        # `for_each_child`). `args` first, then the sidecar fields. The `anchor`
-        # (field root) is threaded UNCHANGED so any finding raised deeper still
-        # attaches at the expression FIELD, not the leaf.
-        for (i, arg) in enumerate(expr.args)
-            (skip_operator_arg && i == 1) && continue
-            _check_expression_references!(errors, file, arg, "$path/args/$(i-1)", anchor, child_scope)
-        end
-        expr.lower !== nothing && _check_expression_references!(errors, file, expr.lower, "$path/lower", anchor, child_scope)
-        expr.upper !== nothing && _check_expression_references!(errors, file, expr.upper, "$path/upper", anchor, child_scope)
-        expr.expr_body !== nothing && _check_expression_references!(errors, file, expr.expr_body, "$path/expr", anchor, child_scope)
-        expr.filter !== nothing && _check_expression_references!(errors, file, expr.filter, "$path/filter", anchor, child_scope)
-        if expr.values !== nothing
-            for (i, v) in enumerate(expr.values)
-                _check_expression_references!(errors, file, v, "$path/values/$(i-1)", anchor, child_scope)
-            end
-        end
-        if expr.table_axes !== nothing
-            for (k, v) in expr.table_axes
-                _check_expression_references!(errors, file, v, "$path/axes/$k", anchor, child_scope)
-            end
-        end
-        expr.key !== nothing && _check_expression_references!(errors, file, expr.key, "$path/key", anchor, child_scope)
-        if expr.bindings !== nothing
-            for (k, v) in expr.bindings
-                _check_expression_references!(errors, file, v, "$path/bindings/$k", anchor, child_scope)
-            end
+        # Descend the full expression-bearing child set via the SHARED generated
+        # walker (`foreach_child_with_path`, expression.jl — the same
+        # OPEXPR_FIELD_TABLE-derived set `child_exprs` yields, with wire-key
+        # path segments; mirrors Rust `for_each_child`). The `anchor` (field
+        # root) is threaded UNCHANGED so any finding raised deeper still
+        # attaches at the expression FIELD, not the leaf. The `operator_apply`
+        # operator-name arg is skipped by its path (`args/0`), matching the
+        # hand-written descent this replaces.
+        first_arg_path = "$path/args/0"
+        foreach_child_with_path(expr, path) do child, cpath
+            (skip_operator_arg && cpath == first_arg_path) && return
+            _check_expression_references!(errors, file, child, cpath, anchor, child_scope)
         end
     end
     # NumExpr / IntExpr are literals — no references to validate.
@@ -1948,12 +1934,12 @@ function validate_event_references(file::EsmFile, event::EventType, path::String
         end
 
     elseif isa(event, DiscreteEvent)
-        # Validate functional affect references. The RHS expression field of a
-        # discrete (functional) affect is pinned at `.../affects/i/rhs` (the
-        # cross-binding contract §7.1.3(h); TS emits the same), not `/expression`.
+        # Validate affect references. The RHS expression field of a discrete
+        # affect is pinned at `.../affects/i/rhs` (the cross-binding contract
+        # §7.1.3(h); TS emits the same).
         for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.expression, "$path/affects/$(i-1)/rhs"; scope=scope))
-            # affect.target is a string (variable name) - would need model context to validate
+            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"; scope=scope))
+            # affect.lhs is a string (variable name) - would need model context to validate
         end
 
         # Validate trigger references (if condition-based)
@@ -2405,17 +2391,15 @@ function validate_single_event_consistency(model::Model, event::EventType, event
             # For now, accept all expressions as they could evaluate to boolean
         end
 
-        # Validate functional affect targets. Same pin as the continuous case:
-        # `event_var_undeclared` at the affect's `lhs` field (the corpus pins
-        # `.../affects/j/lhs` even though Julia's discrete affect names it
-        # `target`; TS emits the same pointer).
+        # Validate affect targets. Same pin as the continuous case:
+        # `event_var_undeclared` at the affect's `lhs` field.
         for (j, affect) in enumerate(event.affects)
-            _is_declared_event_target(model, affect.target, is_coupled) && continue
+            _is_declared_event_target(model, affect.lhs, is_coupled) && continue
             push!(errors, StructuralError(
                 "$event_path/affects/$(j-1)/lhs",
-                "Variable '$(affect.target)' in event affects is not declared",
+                "Variable '$(affect.lhs)' in event affects is not declared",
                 "event_var_undeclared",
-                Dict{String,Any}("variable" => affect.target)
+                Dict{String,Any}("variable" => affect.lhs)
             ))
         end
 
@@ -2497,18 +2481,17 @@ const _KNOWN_PHYSICAL_CONSTANTS = (
 )
 
 # Returns true when the expression tree references a variable by exact name
-# (string leaf match). Walks operator arg lists recursively.
+# (VarExpr leaf match). Routed through the shared generated walker
+# (`foreach_subexpr`) so the scan covers EVERY expression-bearing field —
+# not just `args`, which was all the historical hand-rolled recursion walked.
 function _expr_references_name(expr, name::String)::Bool
-    if expr isa VarExpr
-        return expr.name == name
-    elseif expr isa OpExpr
-        for arg in expr.args
-            if _expr_references_name(arg, name)
-                return true
-            end
-        end
+    expr isa ASTExpr || return false
+    found = false
+    foreach_subexpr(expr) do x
+        found || (x isa VarExpr && x.name == name && (found = true))
+        nothing
     end
-    return false
+    return found
 end
 
 """

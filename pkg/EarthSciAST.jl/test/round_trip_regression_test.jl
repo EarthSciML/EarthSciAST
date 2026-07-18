@@ -287,7 +287,7 @@ end
     # schema oneOf and is refused at serialize time.
     bad = DiscreteEvent(
         PeriodicTrigger(1.5),
-        [FunctionalAffect("x", NumExpr(0.5))];
+        [AffectEquation("x", NumExpr(0.5))];
         functional_affect = Dict{String,Any}("handler_id" => "h",
                                              "read_vars" => Any[],
                                              "read_params" => Any[]),

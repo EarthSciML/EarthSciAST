@@ -101,7 +101,7 @@ export
     DiscreteVariable,
     ModelVariable, Model, SubsystemRef, Species, Parameter, Reaction, ReactionSystem,
     # Event types
-    EventType, ContinuousEvent, DiscreteEvent, FunctionalAffect, DiscreteEventTrigger,
+    EventType, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger,
     # Data and operator types
     DataLoader, DataLoaderSource, DataLoaderTemporal,

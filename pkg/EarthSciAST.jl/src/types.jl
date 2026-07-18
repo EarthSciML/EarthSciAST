@@ -292,19 +292,127 @@ mutable struct OpExpr <: ASTExpr
     # kwargs on every call, and `reconstruct` (the one canonical copy-with-changes
     # site, invoked once per rewritten node in `_sub_preserving`/`_resolve_*`)
     # would pay that on every substitution. Routing `reconstruct` through this
-    # positional form drops the per-node NamedTuple allocation entirely. The 33
-    # arguments MUST stay in exact struct-field order; there is no other 33-arg
-    # `OpExpr` method, so the positional call is unambiguous.
-    global _reconstruct_opexpr(op::String, args::Vector{ASTExpr}, wrt, dim, int_var,
-            lower, upper, output_idx, expr_body, reduce, semiring, ranges, regions,
-            values, shape, perm, axis, fn, name, value, table, table_axes, output,
-            join, filter, join_gates, id, manifold, distinct, key, arg, bindings, label) =
-        new(op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
-            semiring, ranges,
-            regions, values, shape, perm, axis, fn, name, value,
-            table, table_axes, output, join, filter, join_gates,
-            id, manifold, distinct, key, arg, bindings, label)
+    # positional form drops the per-node NamedTuple allocation entirely. The
+    # arguments MUST be all fields in exact struct-field order — enforced by the
+    # arity check (compile-time-constant after specialization, so it costs
+    # nothing at runtime). `Vararg{Any,N} where N` (not bare `fields...`) forces
+    # Julia to SPECIALIZE per call-site arity/type instead of applying its
+    # "pass-through varargs" despecialization heuristic — the generated
+    # `reconstruct` below is the hot caller and must stay allocation-free.
+    global _reconstruct_opexpr(fields::Vararg{Any,N}) where {N} =
+        (N === fieldcount(OpExpr) ||
+             throw(ArgumentError("_reconstruct_opexpr requires all $(fieldcount(OpExpr)) OpExpr fields in struct order"));
+         new(fields...))
 end
+
+"""
+    OPEXPR_FIELD_TABLE
+
+THE `OpExpr` field-spec table — the single source of truth for what each of
+the struct's fields IS, from which every field-generic consumer is derived
+(by `@eval` metaprogramming or direct table lookup):
+
+- the wire contract [`OPEXPR_WIRE_KEYS`](@ref) (parse + serialize key set),
+- `_parse_op_optional_fields` (parse.jl, generated field extraction),
+- `_serialize_opexpr_field` (serialize.jl, per-kind wire encoding),
+- [`reconstruct(::OpExpr)`](@ref) (generated below),
+- the expression walkers `child_exprs` / `foreach_child` /
+  `_foreach_subexpr_children` / `map_children` / `foreach_child_with_path`
+  (expression.jl, generated), and validate.jl's `_expr_children`.
+
+One row per struct field, in exact struct-field order (asserted at load).
+Columns:
+
+- `wire`: the JSON key the field is parsed from / serialized to (`nothing`
+  for an internal, never-serialized field). Three fields are spelled
+  differently on the wire: `int_var` ↔ `var`, `expr_body` ↔ `expr`,
+  `table_axes` ↔ `axes`.
+- `kind`: the field's shape class, which determines BOTH its wire encoding
+  and whether/how the expression walkers traverse it:
+    - `:expr`      — optional nested `ASTExpr` (traversed),
+    - `:expr_vec`  — `Vector{ASTExpr}` (traversed; `args` is the one
+                     required instance, the rest are optional),
+    - `:expr_map`  — `Dict{String,ASTExpr}` (values traversed in sorted-key
+                     order). NOTE: `bindings` (template parameter →
+                     argument-expression map) IS traversed like any other
+                     expression-bearing field — historically `child_exprs`
+                     skipped it (while validate's `_expr_children` skipped
+                     `ranges`), leaving `free_variables`/`substitute`/
+                     `contains` blind to names inside binding values.
+    - `:ranges`    — the `ranges` map: `IndexSetRef` or dense bound vectors
+                     whose entries MAY be expression-valued (only those
+                     `ASTExpr` entries are traversed),
+    - `:join`      — the parsed join clauses (column-NAME strings, no
+                     sub-expressions; bespoke wire encoding),
+    - `:scalar`    — plain data (strings/ints/JSON), identity-encoded on the
+                     wire, never traversed,
+    - `:internal`  — build-time only; never parsed, serialized or traversed.
+- `parse`: for `:scalar` fields, the parse-recipe tag `_parse_op_optional_fields`
+  dispatches on (`:string`, `:int`, `:int_vec`, `:bool`, `:json`,
+  `:output_idx`, `:regions`, `:shape`, `:int_or_string`); `nothing` when the
+  `kind` alone determines parsing.
+- `binds_scope`: `true` for the one field whose KEYS validate's
+  `_bound_index_symbols` credits into reference-check scope (`bindings` —
+  template formal-parameter names). A legitimate consumer DIFFERENCE, not a
+  traversal property: `free_variables`' binder subtraction (`_bound_symbols`,
+  expression.jl) deliberately does NOT use it.
+
+Adding an `OpExpr` field without a row here fails the load-time assert below;
+`round_trip_regression_test.jl` then pins its real parse/serialize behavior.
+"""
+const OPEXPR_FIELD_TABLE = (
+    op         = (wire = :op,         kind = :scalar, parse = nothing,          binds_scope = false),
+    args       = (wire = :args,       kind = :expr_vec, parse = nothing,        binds_scope = false),
+    wrt        = (wire = :wrt,        kind = :scalar, parse = :string,          binds_scope = false),
+    dim        = (wire = :dim,        kind = :scalar, parse = :string,          binds_scope = false),
+    int_var    = (wire = :var,        kind = :scalar, parse = :string,          binds_scope = false),
+    lower      = (wire = :lower,      kind = :expr,   parse = nothing,          binds_scope = false),
+    upper      = (wire = :upper,      kind = :expr,   parse = nothing,          binds_scope = false),
+    output_idx = (wire = :output_idx, kind = :scalar, parse = :output_idx,      binds_scope = false),
+    expr_body  = (wire = :expr,       kind = :expr,   parse = nothing,          binds_scope = false),
+    reduce     = (wire = :reduce,     kind = :scalar, parse = :string,          binds_scope = false),
+    semiring   = (wire = :semiring,   kind = :scalar, parse = :string,          binds_scope = false),
+    ranges     = (wire = :ranges,     kind = :ranges, parse = nothing,          binds_scope = false),
+    regions    = (wire = :regions,    kind = :scalar, parse = :regions,         binds_scope = false),
+    values     = (wire = :values,     kind = :expr_vec, parse = nothing,        binds_scope = false),
+    shape      = (wire = :shape,      kind = :scalar, parse = :shape,           binds_scope = false),
+    perm       = (wire = :perm,       kind = :scalar, parse = :int_vec,         binds_scope = false),
+    axis       = (wire = :axis,       kind = :scalar, parse = :int,             binds_scope = false),
+    fn         = (wire = :fn,         kind = :scalar, parse = :string,          binds_scope = false),
+    name       = (wire = :name,       kind = :scalar, parse = :string,          binds_scope = false),
+    value      = (wire = :value,      kind = :scalar, parse = :json,            binds_scope = false),
+    table      = (wire = :table,      kind = :scalar, parse = :string,          binds_scope = false),
+    table_axes = (wire = :axes,       kind = :expr_map, parse = nothing,        binds_scope = false),
+    output     = (wire = :output,     kind = :scalar, parse = :int_or_string,   binds_scope = false),
+    join       = (wire = :join,       kind = :join,   parse = nothing,          binds_scope = false),
+    filter     = (wire = :filter,     kind = :expr,   parse = nothing,          binds_scope = false),
+    join_gates = (wire = nothing,     kind = :internal, parse = nothing,        binds_scope = false),
+    id         = (wire = :id,         kind = :scalar, parse = :string,          binds_scope = false),
+    manifold   = (wire = :manifold,   kind = :scalar, parse = :string,          binds_scope = false),
+    distinct   = (wire = :distinct,   kind = :scalar, parse = :bool,            binds_scope = false),
+    key        = (wire = :key,        kind = :expr,   parse = nothing,          binds_scope = false),
+    arg        = (wire = :arg,        kind = :scalar, parse = :string,          binds_scope = false),
+    bindings   = (wire = :bindings,   kind = :expr_map, parse = nothing,        binds_scope = true),
+    label      = (wire = :label,      kind = :scalar, parse = :string,          binds_scope = false),
+)
+
+# The table must cover EXACTLY the struct's fields, in struct-field order —
+# the walkers/parse/serialize generators iterate it in this order.
+@assert keys(OPEXPR_FIELD_TABLE) == fieldnames(OpExpr) "OPEXPR_FIELD_TABLE rows must match fieldnames(OpExpr) exactly, in order"
+
+"""
+    OPEXPR_WIRE_KEYS
+
+The `OpExpr` field ↔ wire (JSON) key contract, DERIVED from
+[`OPEXPR_FIELD_TABLE`](@ref): every field with a non-`nothing` `wire` column,
+mapped to its JSON key. `join_gates` is the one struct field deliberately
+absent: it is a build-time artifact, never parsed or serialized. Consumed by
+`serialize_expression`'s emit loop and pinned field-by-field by
+`round_trip_regression_test.jl`.
+"""
+const OPEXPR_WIRE_KEYS = (;
+    (f => spec.wire for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+     if spec.wire !== nothing)...)
 
 # Accept any AbstractVector of ASTExpr-subtypes (e.g. Vector{VarExpr},
 # Vector{OpExpr}, mixed Any arrays) and widen to Vector{ASTExpr}. This keeps
@@ -318,7 +426,27 @@ function OpExpr(op::String, args::AbstractVector; kwargs...)
     return OpExpr(op, widened; kwargs...)
 end
 
-"""
+# GENERATED from `fieldnames(OpExpr)` (see OPEXPR_FIELD_TABLE): one kwarg per
+# struct field, each defaulting to the corresponding field of `e`, forwarded
+# positionally (NamedTuple-free on the hot path) to `_reconstruct_opexpr` in
+# struct-field order — so a newly added field is copied by default and can
+# never be silently dropped.
+@eval function reconstruct(e::OpExpr;
+        op::String = e.op,
+        args = e.args,
+        $((Expr(:kw, f, :(e.$f)) for f in fieldnames(OpExpr)
+           if f !== :op && f !== :args)...))
+    # Positional (NamedTuple-free) construction on the hot path. `args` defaults to
+    # the `Vector{ASTExpr}` field and callers overwrite it with `Vector{ASTExpr}`s, so the
+    # `isa` fast path is the norm; the widening branch preserves the historical
+    # acceptance of any `AbstractVector` of `ASTExpr` (matching the keyword ctor's
+    # `OpExpr(op, args::AbstractVector)` widening overload).
+    argv = args isa Vector{ASTExpr} ? args : Vector{ASTExpr}(args)
+    return _reconstruct_opexpr(op, argv,
+        $((f for f in fieldnames(OpExpr) if f !== :op && f !== :args)...))
+end
+
+@doc """
     reconstruct(e::OpExpr; op=…, args=…, <any OpExpr field>=…) -> OpExpr
 
 Rebuild an `OpExpr`, copying EVERY field from `e` by default and overriding only
@@ -334,37 +462,14 @@ subset of keywords — silently dropping whatever they forgot. That made
 `flatten`/`substitute`/`namespace_expr` LOSSY: e.g. a coupling `substitute`
 erased an `intersect_polygon`'s `manifold`, and `namespace_expr` erased a
 `table_lookup`'s `table`. Routing every rewrite through `reconstruct` makes
-field preservation the default and a drop an explicit, visible choice.
+field preservation the default and a drop an explicit, visible choice — and the
+method is GENERATED from `fieldnames(OpExpr)`, so a newly added field is
+preserved automatically.
 
 Callers that transform sub-expressions should pass the already-transformed
 result for the relevant field, e.g. `reconstruct(e; args=new_args)` or
 `reconstruct(e; expr_body=new_body, filter=new_filter)`.
-"""
-function reconstruct(e::OpExpr;
-        op::String = e.op,
-        args = e.args,
-        wrt = e.wrt, dim = e.dim, int_var = e.int_var,
-        lower = e.lower, upper = e.upper,
-        output_idx = e.output_idx, expr_body = e.expr_body,
-        reduce = e.reduce, semiring = e.semiring, ranges = e.ranges,
-        regions = e.regions, values = e.values, shape = e.shape,
-        perm = e.perm, axis = e.axis, fn = e.fn, name = e.name, value = e.value,
-        table = e.table, table_axes = e.table_axes, output = e.output,
-        join = e.join, filter = e.filter, join_gates = e.join_gates,
-        id = e.id, manifold = e.manifold,
-        distinct = e.distinct, key = e.key,
-        arg = e.arg, bindings = e.bindings, label = e.label)
-    # Positional (NamedTuple-free) construction on the hot path. `args` defaults to
-    # the `Vector{ASTExpr}` field and callers overwrite it with `Vector{ASTExpr}`s, so the
-    # `isa` fast path is the norm; the widening branch preserves the historical
-    # acceptance of any `AbstractVector` of `ASTExpr` (matching the keyword ctor's
-    # `OpExpr(op, args::AbstractVector)` widening overload).
-    argv = args isa Vector{ASTExpr} ? args : Vector{ASTExpr}(args)
-    return _reconstruct_opexpr(op, argv, wrt, dim, int_var, lower, upper,
-        output_idx, expr_body, reduce, semiring, ranges, regions, values, shape,
-        perm, axis, fn, name, value, table, table_axes, output, join, filter,
-        join_gates, id, manifold, distinct, key, arg, bindings, label)
-end
+""" reconstruct
 
 # ========================================
 # 2. Equation Types
@@ -449,21 +554,6 @@ struct PresetTimesTrigger <: DiscreteEventTrigger
     times::Vector{Float64}
 end
 
-"""
-    FunctionalAffect
-
-Functional affect for discrete events.
-"""
-struct FunctionalAffect
-    target::String
-    expression::ASTExpr
-    operation::String  # "set", "add", "multiply", etc.
-
-    # Constructor with default operation
-    FunctionalAffect(target::String, expression::ASTExpr; operation="set") =
-        new(target, expression, operation)
-end
-
 # ========================================
 # 4. Event Types
 # ========================================
@@ -486,7 +576,9 @@ end
 """
     DiscreteEvent <: EventType
 
-Event triggered by discrete triggers with functional affects.
+Event triggered by discrete triggers whose symbolic `affects` are
+[`AffectEquation`](@ref)s (`lhs` target name, `rhs` new-value expression) —
+the schema's `AffectEquation` shape, shared with `ContinuousEvent`.
 
 `functional_affect` carries the raw schema `functional_affect` handler
 descriptor (`handler_id`, `read_vars`, `read_params`, optional
@@ -497,7 +589,7 @@ symbolic `affects` or a `functional_affect` descriptor.
 """
 struct DiscreteEvent <: EventType
     trigger::DiscreteEventTrigger
-    affects::Vector{FunctionalAffect}
+    affects::Vector{AffectEquation}
     description::Union{String,Nothing}
     functional_affect::Union{Dict{String,Any},Nothing}
     # Names the event mutates as *discrete parameters* (MTK `discrete_parameters`).
@@ -508,7 +600,7 @@ struct DiscreteEvent <: EventType
     discrete_parameters::Union{Vector{String},Nothing}
 
     # Constructor with optional description / handler descriptor
-    DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{FunctionalAffect};
+    DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{AffectEquation};
                   description=nothing, functional_affect=nothing,
                   discrete_parameters=nothing) =
         new(trigger, affects, description, functional_affect, discrete_parameters)
@@ -783,6 +875,17 @@ struct IndexSetRef
 end
 
 """
+    abstract type SubsystemNode end
+
+Common supertype of the three legal `Model.subsystems` values: a child
+`Model`, a pure-I/O `DataLoader` (RFC pure-io-data-loaders §4.3), or — only
+until references are resolved — a `SubsystemRef`. Exists so
+`Model.subsystems` can be concretely typed `Dict{String,SubsystemNode}` even
+though `DataLoader` is declared later in this file than `Model`.
+"""
+abstract type SubsystemNode end
+
+"""
     SubsystemRef(ref::String)
     SubsystemRef(ref::String, bindings::Dict{String,Int})
 
@@ -800,7 +903,7 @@ PDE leaf); they are threaded into the referenced document's load and consumed by
 the §9.6.3 fixpoint, so a resolved subsystem round-trips as the lowered inline
 component and the field does not survive `parse → emit`.
 """
-struct SubsystemRef
+struct SubsystemRef <: SubsystemNode
     ref::String
     bindings::Dict{String,Int}
     expression_template_imports::Vector{Any}
@@ -818,16 +921,15 @@ SubsystemRef(ref::AbstractString) =
 ODE-based model component containing variables, equations, and optional subsystems.
 Supports hierarchical composition through subsystems. A subsystem value is a
 child `Model`, a pure-I/O `DataLoader` (RFC pure-io-data-loaders §4.3), or — only
-until references are resolved — a `SubsystemRef`; the field is therefore typed
-`Dict{String,Any}` (DataLoader is declared later in this file, so a concrete
-`Union` field type is not available at this point).
+until references are resolved — a `SubsystemRef`; the field is typed by their
+shared supertype, `Dict{String,SubsystemNode}`.
 """
-struct Model
+struct Model <: SubsystemNode
     variables::Dict{String,ModelVariable}
     equations::Vector{Equation}
     discrete_events::Vector{DiscreteEvent}
     continuous_events::Vector{ContinuousEvent}
-    subsystems::Dict{String,Any}
+    subsystems::Dict{String,SubsystemNode}
     tolerance::Union{Tolerance,Nothing}
     tests::Vector{InlineTest}
     initialization_equations::Vector{Equation}
@@ -843,68 +945,24 @@ struct Model
           guesses=Dict{String,Union{Float64,ASTExpr}}(),
           system_kind=nothing) =
         new(Dict{String,ModelVariable}(variables), equations,
-            discrete_events, continuous_events, Dict{String,Any}(subsystems),
+            discrete_events, continuous_events, Dict{String,SubsystemNode}(subsystems),
             tolerance, tests,
             initialization_equations, guesses, system_kind)
 
-    # Convenience constructor with optional events and subsystems.
-    # Accepts legacy `events=` kwarg as a mixed Vector{EventType} and splits
-    # it into discrete/continuous. `events` takes precedence over the typed
-    # `discrete_events`/`continuous_events` kwargs if both are supplied.
-    function Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation};
-                   discrete_events=DiscreteEvent[],
-                   continuous_events=ContinuousEvent[],
-                   events=nothing,
-                   subsystems=Dict{String,Any}(),
-                   tolerance=nothing,
-                   tests=InlineTest[],
-                   initialization_equations=Equation[],
-                   guesses=Dict{String,Union{Float64,ASTExpr}}(),
-                   system_kind=nothing)
-        if events !== nothing
-            discrete_events = DiscreteEvent[]
-            continuous_events = ContinuousEvent[]
-            for event in events
-                if event isa DiscreteEvent
-                    push!(discrete_events, event)
-                elseif event isa ContinuousEvent
-                    push!(continuous_events, event)
-                else
-                    throw(ArgumentError("Unknown event type: $(typeof(event))"))
-                end
-            end
-        end
-        return new(Dict{String,ModelVariable}(variables), equations,
-                   discrete_events, continuous_events, Dict{String,Any}(subsystems),
-                   tolerance, tests,
-                   initialization_equations, guesses, system_kind)
-    end
-end
-
-"""
-    create_model_with_mixed_events(variables, equations, events, subsystems) -> Model
-
-Helper function to create Model from mixed events vector for backwards compatibility.
-"""
-function create_model_with_mixed_events(variables::Dict{String,ModelVariable},
-                                      equations::Vector{Equation},
-                                      events::Vector{EventType},
-                                      subsystems::Dict{String,Model}=Dict{String,Model}())
-    # Split mixed events vector into separate types
-    discrete = DiscreteEvent[]
-    continuous = ContinuousEvent[]
-
-    for event in events
-        if isa(event, DiscreteEvent)
-            push!(discrete, event)
-        elseif isa(event, ContinuousEvent)
-            push!(continuous, event)
-        else
-            throw(ArgumentError("Unknown event type: $(typeof(event))"))
-        end
-    end
-
-    return Model(variables, equations, discrete, continuous, subsystems)
+    # Convenience constructor with optional event arrays and subsystems.
+    Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation};
+          discrete_events=DiscreteEvent[],
+          continuous_events=ContinuousEvent[],
+          subsystems=Dict{String,SubsystemNode}(),
+          tolerance=nothing,
+          tests=InlineTest[],
+          initialization_equations=Equation[],
+          guesses=Dict{String,Union{Float64,ASTExpr}}(),
+          system_kind=nothing) =
+        new(Dict{String,ModelVariable}(variables), equations,
+            discrete_events, continuous_events, Dict{String,SubsystemNode}(subsystems),
+            tolerance, tests,
+            initialization_equations, guesses, system_kind)
 end
 
 """
@@ -1196,7 +1254,7 @@ Fields:
 - `reference`: optional academic/data-source citation
 - `metadata`: optional free-form map (conventionally carries a `tags` array)
 """
-struct DataLoader
+struct DataLoader <: SubsystemNode
     kind::String
     source::DataLoaderSource
     temporal::Union{DataLoaderTemporal,Nothing}
@@ -1838,23 +1896,6 @@ raw_products(r::Reaction) = getfield(r, :products)
 # `.reactants` / `.products` to the Dict view, and `.reversible` to `false`,
 # was removed.)
 
-# Add backwards compatibility property access for Model.events
-Base.getproperty(model::Model, name::Symbol) = begin
-    if name == :events
-        # Return combined events vector for backwards compatibility
-        return vcat(Vector{EventType}(model.discrete_events), Vector{EventType}(model.continuous_events))
-    else
-        return getfield(model, name)
-    end
-end
-
-# Defined on the INSTANCE (not the type object) so `propertynames(model)`
-# reflects the getproperty override above.
-Base.propertynames(::Model, private::Bool=false) = begin
-    names = fieldnames(Model)
-    if private
-        return (names..., :events)
-    else
-        return names
-    end
-end
+# NOTE: `Model` has no `getproperty` override — the legacy `model.events`
+# combined-vector shim was removed; use `model.discrete_events` /
+# `model.continuous_events` directly.
