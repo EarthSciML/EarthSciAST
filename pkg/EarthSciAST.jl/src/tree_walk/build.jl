@@ -2314,8 +2314,8 @@ end
 
 # Does any equation / variable expression of `model` (or a subsystem) carry a
 # surviving `apply_expression_template` node? Build-time guard input; one cheap
-# whole-model walk (`foreach_subexpr` does not descend `bindings`, but the apply
-# node itself is what is being detected).
+# whole-model walk (`foreach_subexpr` descends `bindings` too, which is harmless
+# here — the apply node itself is what is being detected).
 function _model_has_surviving_refs(model::Model)
     found = false
     check(e) = e === nothing || found ? nothing : foreach_subexpr(e) do x

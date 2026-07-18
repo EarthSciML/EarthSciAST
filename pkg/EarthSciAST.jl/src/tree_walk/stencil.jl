@@ -524,6 +524,11 @@ function _scan_refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,B
             end
         end
     end
+    if e.bindings !== nothing
+        for (_, bv) in e.bindings
+            _child_refs_idxset(bv, idxset, memo) && return true
+        end
+    end
     return false
 end
 
