@@ -155,4 +155,43 @@ using EarthSciAST
         @test ContinuousEvent <: EarthSciAST.EventType
         @test DiscreteEvent <: EarthSciAST.EventType
     end
+
+    @testset "MODEL_VARIABLE_TYPE_TABLE (pre-table literal pins)" begin
+        ESM = EarthSciAST
+        # The bidirectional enum ↔ string vocabulary that replaced the three
+        # hand-maintained ladders (parse coerce, serialize, graph kind). The
+        # rows are pinned literal-for-literal so the cut is provably
+        # behavior-neutral; a failure means the vocabulary drifted.
+        @test Tuple((row.enum, row.wire, row.legacy)
+                    for row in ESM.MODEL_VARIABLE_TYPE_TABLE) == (
+            (StateVariable,         "state",     ("StateVariable",)),
+            (ParameterVariable,     "parameter", ("ParameterVariable",)),
+            (ObservedVariable,      "observed",  ("ObservedVariable",)),
+            (ESM.BrownianVariable,  "brownian",  ("BrownianVariable",)),
+            (ESM.DiscreteVariable,  "discrete",  ("DiscreteVariable",)),
+        )
+        # One row per enum member, in order (also asserted at load time).
+        @test [row.enum for row in ESM.MODEL_VARIABLE_TYPE_TABLE] ==
+              collect(instances(ESM.ModelVariableType))
+
+        # Derived lookups: serialize target == graph kind == wire spelling.
+        for row in ESM.MODEL_VARIABLE_TYPE_TABLE
+            @test ESM.serialize_model_variable_type(row.enum) == row.wire
+            @test ESM._MODEL_VARIABLE_TYPE_WIRE[row.enum] == row.wire
+            # Wire spelling and every legacy alias parse back to the member.
+            @test ESM.coerce_model_variable_type(row.wire) == row.enum
+            for alias in row.legacy
+                @test ESM.coerce_model_variable_type(alias) == row.enum
+            end
+        end
+        # Unknown spellings still throw ParseError with the exact message.
+        err = try
+            ESM.coerce_model_variable_type("bogus")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ESM.ParseError
+        @test occursin("Invalid ModelVariableType: bogus", sprint(showerror, err))
+    end
 end

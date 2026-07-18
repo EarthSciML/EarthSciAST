@@ -122,6 +122,87 @@ const ESM = EarthSciAST
         @test length(ESM._OP_TABLE) == length(ESM._OP_INDEX)
     end
 
+    @testset "_BUILTIN_FUNCTION_NAMES membership (pre-registry literal)" begin
+        # validate.jl's reference-checker excused names, now derived from the
+        # registry's `builtin_fn` flag (the :elementary rows + ifelse/Pre).
+        # Mirrors Rust `is_builtin_function` (structural.rs) — a drift here is
+        # a cross-binding divergence, not just a Julia one.
+        @test ESM._BUILTIN_FUNCTION_NAMES == Set{String}([
+            "exp", "log", "log10", "sqrt", "abs", "sign",
+            "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+            "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+            "min", "max", "floor", "ceil", "ifelse", "Pre",
+        ])
+        @test ESM._BUILTIN_FUNCTION_NAMES isa Set{String}
+    end
+
+    @testset "units.jl dimensional-rule op classes (pre-registry literals)" begin
+        # The five op-class sets `_DIMENSION_RULES` is populated from, now
+        # derived from the registry's `dim_class` column. `_TRANSCENDENTAL_OPS`
+        # additionally unions the spec-adjacent spellings ln/log2/expm1, which
+        # deliberately have NO registry row (`_op_in_T` classifies unregistered
+        # ops as open-namespace rewrite targets — a row would change that).
+        @test ESM._TRANSCENDENTAL_OPS == Set{String}([
+            "exp", "log", "ln", "log10", "log2", "expm1",
+            "tanh", "sinh", "cosh", "asinh", "acosh", "atanh",
+        ])
+        # `sqrt` must never be transcendental: it halves its argument's
+        # dimension (`_sqrt_rule`) rather than requiring a dimensionless one.
+        @test !("sqrt" in ESM._TRANSCENDENTAL_OPS)
+        @test ESM._CIRCULAR_OPS == Set{String}(["sin", "cos", "tan"])
+        @test ESM._INVERSE_CIRCULAR_OPS ==
+              Set{String}(["asin", "acos", "atan", "atan2"])
+        @test ESM._COMPARISON_OPS ==
+              Set{String}(["<", ">", "<=", ">=", "==", "!="])
+        @test ESM._BOOLEAN_OPS == Set{String}(["and", "or", "not"])
+        for s in (ESM._TRANSCENDENTAL_OPS, ESM._CIRCULAR_OPS,
+                  ESM._INVERSE_CIRCULAR_OPS, ESM._COMPARISON_OPS,
+                  ESM._BOOLEAN_OPS)
+            @test s isa Set{String}
+        end
+        # The spellings with no registry row stay OUT of the registry (their
+        # rows would silently reclassify them for template lowering).
+        for name in ("ln", "log2", "expm1")
+            @test ESM._op_spec(name) === nothing
+        end
+        @test_throws ArgumentError ESM._ops_with_dim_class(:not_a_class)
+    end
+
+    @testset "display precedence / separator lookups (pre-registry literals)" begin
+        # Display output is contract-pinned (RENDERING_CONTRACT + the display
+        # goldens), so these two lookups are pinned literal-for-literal. Both
+        # derive from the registry (`display_prec` / `infix_sep`) plus the
+        # derivation-site wire alias "=" ↦ the "==" row's values ("=" has no
+        # registry row for the same `_op_in_T` reason as above).
+        @test ESM._DISPLAY_OP_PRECEDENCE == Dict{String,Int}(
+            "or" => 1,
+            "and" => 2,
+            "==" => 3, "=" => 3, "!=" => 3,
+            "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
+            "+" => 4, "-" => 4,
+            "*" => 5, "/" => 5,
+            "not" => 6,
+            "^" => 7,
+        )
+        @test ESM._INFIX_SEPARATORS == Dict(
+            "-"   => (ascii = " - ",   unicode = " − ", latex = " - "),
+            "*"   => (ascii = " * ",   unicode = "·",   latex = " \\cdot "),
+            ">="  => (ascii = " >= ",  unicode = " ≥ ", latex = " \\geq "),
+            "<="  => (ascii = " <= ",  unicode = " ≤ ", latex = " \\leq "),
+            "=="  => (ascii = " == ",  unicode = " = ", latex = " = "),
+            "="   => (ascii = " == ",  unicode = " = ", latex = " = "),
+            "!="  => (ascii = " != ",  unicode = " ≠ ", latex = " \\neq "),
+            "and" => (ascii = " and ", unicode = " ∧ ", latex = " \\land "),
+            "or"  => (ascii = " or ",  unicode = " ∨ ", latex = " \\lor "),
+        )
+        @test ESM._op_spec("=") === nothing
+        # Anything without an explicit infix precedence binds atom-tight.
+        @test ESM._DISPLAY_FUNCTION_PRECEDENCE == 8
+        @test ESM.get_operator_precedence("sin") == 8
+        @test ESM.is_function_call_op("sin")
+        @test !ESM.is_function_call_op("=")
+    end
+
     @testset "_UNARY_ELEMENTWISE_OPS: the mechanical unary ladder arms, in order" begin
         # Exactly the ops with a repetitive one-liner arm in `_eval_node_op` /
         # `_eval_vec_op`, in arm order. `atan` (1-or-2-ary), `neg`, and `not`

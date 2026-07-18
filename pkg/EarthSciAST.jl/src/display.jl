@@ -503,23 +503,26 @@ function format_number(num::Real, format::Symbol)
     return _uni_minus(string(num))
 end
 
-# Display-notation operator precedence (mirrors pretty-print.ts). Hoisted to a
-# module const: `get_operator_precedence` runs for every operand rendered.
-const _DISPLAY_OP_PRECEDENCE = Dict{String,Int}(
-    "or" => 1,
-    "and" => 2,
+# Display-notation operator precedence (mirrors pretty-print.ts), DERIVED
+# from the op registry's `display_prec` column (src/op_registry.jl; pinned
+# literal-for-literal by test/op_registry_test.jl). Hoisted to a module const:
+# `get_operator_precedence` runs for every operand rendered.
+const _DISPLAY_OP_PRECEDENCE = let d = Dict{String,Int}()
+    for s in _OP_TABLE
+        s.display_prec === nothing || (d[s.name] = s.display_prec)
+    end
     # "=" is the wire alias of "==" (rendered identically by
     # `_INFIX_SEPARATORS`) and carries the same precedence in the reference
     # registry (pkg/earthsci-ast-ts/src/op-registry.ts) — without it, an `=`
     # node bound atom-tight and e.g. `not(x = 0)` rendered unparenthesized
     # (`¬x = 0`), diverging from the pinned `¬(x = 0)` of
-    # tests/display/all_operators.json.
-    "==" => 3, "=" => 3, "!=" => 3, "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
-    "+" => 4, "-" => 4,
-    "*" => 5, "/" => 5,
-    "not" => 6,  # Unary
-    "^" => 7
-)
+    # tests/display/all_operators.json. It is an alias HERE rather than an
+    # `_OP_TABLE` row because registry membership is behavior elsewhere
+    # (`_op_in_T` classifies unregistered ops as open-namespace rewrite
+    # targets).
+    d["="] = d["=="]
+    d
+end
 
 # Function calls / atoms bind tightest — anything without an explicit infix
 # precedence above (mirrors codegen.jl's `_CODEGEN_FUNCTION_PRECEDENCE = 8`).
@@ -938,22 +941,23 @@ end
 # helper returns `nothing` for ops it does not handle, falling through to the
 # generic function-call rendering.
 
-# Infix separator per op → (ascii, unicode, latex). Ops with special
-# per-format structure (`/` → \frac, `^` → superscripts) and ops whose
-# separator is uniform across formats ("+", "<", ">") are handled directly in
+# Infix separator per op → (ascii, unicode, latex), DERIVED from the op
+# registry's `infix_sep` column (src/op_registry.jl; pinned literal-for-
+# literal by test/op_registry_test.jl). Ops with special per-format structure
+# (`/` → \frac, `^` → superscripts) and ops whose separator is uniform across
+# formats ("+", "<", ">") have no `infix_sep` and are handled directly in
 # `_format_infix_op`. Field names match the format Symbols so lookups are
-# `getproperty(row, format)`.
-const _INFIX_SEPARATORS = Dict{String,NamedTuple{(:ascii, :unicode, :latex),NTuple{3,String}}}(
-    "-"   => (ascii = " - ",   unicode = " − ", latex = " - "),
-    "*"   => (ascii = " * ",   unicode = "·",   latex = " \\cdot "),
-    ">="  => (ascii = " >= ",  unicode = " ≥ ", latex = " \\geq "),
-    "<="  => (ascii = " <= ",  unicode = " ≤ ", latex = " \\leq "),
-    "=="  => (ascii = " == ",  unicode = " = ", latex = " = "),
-    "="   => (ascii = " == ",  unicode = " = ", latex = " = "),
-    "!="  => (ascii = " != ",  unicode = " ≠ ", latex = " \\neq "),
-    "and" => (ascii = " and ", unicode = " ∧ ", latex = " \\land "),
-    "or"  => (ascii = " or ",  unicode = " ∨ ", latex = " \\lor "),
-)
+# `getproperty(row, format)`. "=" is the wire alias of "==" (see the
+# `_DISPLAY_OP_PRECEDENCE` note): same separators, no registry row.
+const _INFIX_SEPARATORS =
+    let d = Dict{String,NamedTuple{(:ascii, :unicode, :latex),NTuple{3,String}}}()
+        for s in _OP_TABLE
+            s.infix_sep === nothing && continue
+            d[s.name] = NamedTuple{(:ascii, :unicode, :latex)}(s.infix_sep)
+        end
+        d["="] = d["=="]
+        d
+    end
 
 _infix_separator(op::String, format::Symbol) =
     getproperty(_INFIX_SEPARATORS[op], format)

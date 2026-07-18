@@ -809,36 +809,38 @@ function _derivative_rule(expr, var_units, findings)
     return var_dim / wrt_dim
 end
 
-# The transcendental / dimensionless-argument function names. Deliberately NOT
-# derived from the op registry (`_ops_with` / `_op_spec`): the registry's
-# unary `:elementary` rows include dimension-PRESERVING ops (`abs`, `sign`,
-# `floor`, `ceil`) and omit the spec-adjacent spellings this rule has always
-# accepted (`ln`, `log2`, `expm1`), so the memberships differ.
+# The five dimensional-rule op classes, DERIVED from the op registry's
+# `dim_class` column (src/op_registry.jl, `_ops_with_dim_class`); memberships
+# are pinned literal-for-literal by test/op_registry_test.jl.
 #
+# The transcendental / dimensionless-argument function names.
 # `sqrt` is NOT here: it halves its argument's dimension (`_sqrt_rule`) rather
-# than requiring a dimensionless one.
-const _TRANSCENDENTAL_OPS = Set(["exp", "log", "ln", "log10", "log2", "expm1",
-                                 "tanh", "sinh", "cosh",
-                                 "asinh", "acosh", "atanh"])
+# than requiring a dimensionless one. The union adds the spec-adjacent
+# spellings this rule has always accepted (`ln`, `log2`, `expm1`) — they have
+# NO registry row on purpose: an op absent from the registry is classified by
+# `_op_in_T` (lower_expression_templates.jl) as an open-namespace rewrite
+# target, and giving these spellings rows would silently change that.
+const _TRANSCENDENTAL_OPS = union(_ops_with_dim_class(:transcendental),
+                                  Set(["ln", "log2", "expm1"]))
 
 # CIRCULAR functions take an ANGLE. An angle is dimensionless (a ratio of two
 # lengths) — Unitful models `rad` with `NoDims`, and this rule is written so it
 # stays correct under a registry that instead carries `rad` as its own axis:
 # `sin` accepts an angle OR a plain dimensionless number, and REJECTS anything
 # else (`sin(kg)` is still an error).
-const _CIRCULAR_OPS = Set(["sin", "cos", "tan"])
+const _CIRCULAR_OPS = _ops_with_dim_class(:circular)
 
 # INVERSE circular functions RETURN an angle. Asserting they return
 # "dimensionless" is what breaks `solar_zenith_angle: "rad"` in the shipped
 # stdlib (`lib/solar.esm`), where it is computed by `acos(cos_zenith)`: under a
 # registry with `rad` as a base axis that is a GUARANTEED mismatch. Returning
 # `rad` is right under both conventions, since `rad` is dimensionless here.
-const _INVERSE_CIRCULAR_OPS = Set(["asin", "acos", "atan", "atan2"])
+const _INVERSE_CIRCULAR_OPS = _ops_with_dim_class(:inverse_circular)
 
 # Comparisons and the boolean connectives. Their operands must be mutually
 # commensurate (esm-spec §4.8.3) and the RESULT is a dimensionless boolean.
-const _COMPARISON_OPS = Set(["<", ">", "<=", ">=", "==", "!="])
-const _BOOLEAN_OPS = Set(["and", "or", "not"])
+const _COMPARISON_OPS = _ops_with_dim_class(:comparison)
+const _BOOLEAN_OPS = _ops_with_dim_class(:boolean)
 
 # Operator name → dimensional rule. Ops absent from this table have no
 # dimensional rule and degrade silently to `nothing` (see `_expr_dimensions!`).

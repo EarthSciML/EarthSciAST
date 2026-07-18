@@ -404,21 +404,13 @@ function expression_graph(model::Model)::Graph{VariableNode, DependencyEdge}
     # Create mapping from variable name to node
     node_map = Dict{String, VariableNode}()
 
-    # Create nodes for all variables
+    # Create nodes for all variables. The graph node-kind string IS the
+    # variable type's wire spelling by contract (MODEL_VARIABLE_TYPE_TABLE,
+    # types.jl); "unknown" is the fail-soft for a future enum member the
+    # table has not caught up with (the table's load-time assert makes that
+    # unreachable today).
     for (var_name, var) in model.variables
-        kind = if var.type == StateVariable
-            "state"
-        elseif var.type == ParameterVariable
-            "parameter"
-        elseif var.type == ObservedVariable
-            "observed"
-        elseif var.type == BrownianVariable
-            "brownian"
-        elseif var.type == DiscreteVariable
-            "discrete"
-        else
-            "unknown"
-        end
+        kind = get(_MODEL_VARIABLE_TYPE_WIRE, var.type, "unknown")
 
         node = VariableNode(
             var_name,

@@ -35,6 +35,24 @@ Fields:
   additionally map its `Bool` through `1.0`/`0.0` (spec comparison semantics).
   `nothing` where the arm's semantics are not a single Base function
   (`and`/`or`/`not`/`ifelse`/`Pre`, constants, structural ops).
+- `dim_class::Union{Symbol,Nothing}` — the op's dimensional-analysis class,
+  one of [`_DIM_CLASSES`](@ref) (`:transcendental`, `:circular`,
+  `:inverse_circular`, `:comparison`, `:boolean`) or `nothing` for ops with
+  either a bespoke dimensional rule (`sqrt` halves its argument's dimension,
+  `+` demands commensurate operands, …) or none. Derives the five op-class
+  sets units.jl's `_DIMENSION_RULES` is populated from (via
+  [`_ops_with_dim_class`](@ref)).
+- `display_prec::Union{Int,Nothing}` — display-notation infix precedence
+  (1 loosest `or` … 7 tightest `^`, mirrors pretty-print.ts); `nothing` for
+  ops that render as function calls (they bind atom-tight,
+  `_DISPLAY_FUNCTION_PRECEDENCE`). Derives display.jl's
+  `_DISPLAY_OP_PRECEDENCE`.
+- `infix_sep::Union{NTuple{3,String},Nothing}` — the op's infix separator as
+  an `(ascii, unicode, latex)` triple; `nothing` for non-infix ops AND for
+  infix ops whose rendering is not a plain separator join (`+`/`<`/`>` are
+  uniform across formats, `/` renders `\\frac`, `^` superscripts — all
+  handled directly in `_format_infix_op`). Derives display.jl's
+  `_INFIX_SEPARATORS`.
 - flag fields — see [`_OP_FLAG_NAMES`](@ref).
 """
 struct _OpSpec
@@ -42,6 +60,9 @@ struct _OpSpec
     arity::Union{UnitRange{Int},Nothing}
     category::Symbol
     scalar_fn::Union{Function,Nothing}
+    dim_class::Union{Symbol,Nothing}
+    display_prec::Union{Int,Nothing}
+    infix_sep::Union{NTuple{3,String},Nothing}
     ws4_foldable::Bool
     cse_opaque::Bool
     stencil_elementwise::Bool
@@ -51,16 +72,22 @@ struct _OpSpec
     dim_spatial::Bool
     array_producer::Bool
     self_indexed::Bool
+    builtin_fn::Bool
 end
 
 # Compact row constructor for `_OP_TABLE` (keyword flags keep the table
 # readable; every flag defaults to false).
 _op(name::String; arity=nothing, category::Symbol, fn=nothing,
+    dimclass::Union{Symbol,Nothing}=nothing,
+    prec::Union{Int,Nothing}=nothing,
+    sep::Union{NTuple{3,String},Nothing}=nothing,
     ws4::Bool=false, cse::Bool=false, stencil::Bool=false,
     geo::Bool=false, known::Bool=false, spatial::Bool=false,
-    dimsp::Bool=false, arrprod::Bool=false, selfidx::Bool=false) =
-    _OpSpec(name, arity, category, fn, ws4, cse, stencil, geo, known,
-            spatial, dimsp, arrprod, selfidx)
+    dimsp::Bool=false, arrprod::Bool=false, selfidx::Bool=false,
+    builtin::Bool=false) =
+    _OpSpec(name, arity, category, fn, dimclass, prec, sep,
+            ws4, cse, stencil, geo, known,
+            spatial, dimsp, arrprod, selfidx, builtin)
 
 """
     _OP_FLAG_NAMES
@@ -76,10 +103,11 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:dim_spatial`        → `_DIM_SPATIAL_OPS`              (flatten.jl)
 - `:array_producer`     → `_ARRAY_PRODUCER_OPS`           (shape_promotion.jl)
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
+- `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validate.jl)
 """
 const _OP_FLAG_NAMES =
     (:ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known,
-     :spatial, :dim_spatial, :array_producer, :self_indexed)
+     :spatial, :dim_spatial, :array_producer, :self_indexed, :builtin_fn)
 
 """
     _OP_TABLE
@@ -108,6 +136,21 @@ hand:
   array-producing nodes for the shape-promotion / pointwise-lift rewrites,
   and the nodes that carry their own indexing (the producers plus `index`),
   which the leaf-indexing rewrites never descend into.
+- `_BUILTIN_FUNCTION_NAMES` (src/validate.jl) — bare names the reference
+  checker excuses as always-in-scope builtins (mirrors Rust
+  `is_builtin_function`, structural.rs).
+- `_TRANSCENDENTAL_OPS` / `_CIRCULAR_OPS` / `_INVERSE_CIRCULAR_OPS` /
+  `_COMPARISON_OPS` / `_BOOLEAN_OPS` (src/units.jl) — the dimensional-rule
+  op classes (from the `dim_class` column via
+  [`_ops_with_dim_class`](@ref)); `_TRANSCENDENTAL_OPS` additionally unions
+  spec-adjacent spellings with no registry row (`ln`/`log2`/`expm1` — see the
+  note at its definition site).
+- `_DISPLAY_OP_PRECEDENCE` / `_INFIX_SEPARATORS` (src/display.jl) — the
+  display-notation infix precedence and separator lookups (from the
+  `display_prec` / `infix_sep` columns), each extended at the derivation
+  site with the wire alias `"="` ↦ the `"=="` row's values (`=` is
+  deliberately NOT a registry row: `_op_in_T` classifies unregistered ops as
+  open-namespace rewrite targets, and a row would change that).
 - [`_UNARY_ELEMENTWISE_OPS`](@ref), [`_COMPARISON_ELEMENTWISE_OPS`](@ref),
   [`_BINARY_ELEMENTWISE_OPS`](@ref), [`_NARY_MINMAX_OPS`](@ref) — the ordered
   mechanical ladder-arm tables the evaluator ladders generate their arms from
@@ -124,15 +167,20 @@ listed in the `_eval_node_op` / `_eval_vec_op` ladder-arm order.
 const _OP_TABLE = _OpSpec[
     # ── Arithmetic (esm-spec §4.2; `neg`/`pow` are the canonicalize-internal
     #    aliases `canonicalize` may introduce for unary `-` / `^`) ──
-    _op("+";   arity=1:typemax(Int), category=:arithmetic, fn=(+),
+    #    Display: `+`/`<`/`>` have a precedence but no `sep` (uniform
+    #    separator handled directly in `_format_infix_op`), `/` renders
+    #    `\frac`, `^` superscripts; `pow`/`neg` render as function calls.
+    _op("+";   arity=1:typemax(Int), category=:arithmetic, fn=(+), prec=4,
         ws4=true, stencil=true, geo=true, known=true),
-    _op("-";   arity=1:2,            category=:arithmetic, fn=(-),
+    _op("-";   arity=1:2,            category=:arithmetic, fn=(-), prec=4,
+        sep=(" - ", " − ", " - "),
         ws4=true, stencil=true, geo=true, known=true),
-    _op("*";   arity=1:typemax(Int), category=:arithmetic, fn=(*),
+    _op("*";   arity=1:typemax(Int), category=:arithmetic, fn=(*), prec=5,
+        sep=(" * ", "·", " \\cdot "),
         ws4=true, stencil=true, geo=true, known=true),
-    _op("/";   arity=2:2,            category=:arithmetic, fn=(/),
+    _op("/";   arity=2:2,            category=:arithmetic, fn=(/), prec=5,
         ws4=true, stencil=true, geo=true, known=true),
-    _op("^";   arity=2:2,            category=:arithmetic, fn=(^),
+    _op("^";   arity=2:2,            category=:arithmetic, fn=(^), prec=7,
         ws4=true, stencil=true, geo=true, known=true),
     _op("pow"; arity=2:2,            category=:arithmetic, fn=(^),
         ws4=true, stencil=true),
@@ -140,78 +188,107 @@ const _OP_TABLE = _OpSpec[
         ws4=true, stencil=true),
 
     # ── Comparisons → 1.0/0.0 (spec comparison semantics) ──
-    _op("<";  arity=2:2, category=:comparison, fn=(<),
+    _op("<";  arity=2:2, category=:comparison, fn=(<),  dimclass=:comparison,
+        prec=3, stencil=true, geo=true, known=true),
+    _op("<="; arity=2:2, category=:comparison, fn=(<=), dimclass=:comparison,
+        prec=3, sep=(" <= ",  " ≤ ", " \\leq "),
         stencil=true, geo=true, known=true),
-    _op("<="; arity=2:2, category=:comparison, fn=(<=),
+    _op(">";  arity=2:2, category=:comparison, fn=(>),  dimclass=:comparison,
+        prec=3, stencil=true, geo=true, known=true),
+    _op(">="; arity=2:2, category=:comparison, fn=(>=), dimclass=:comparison,
+        prec=3, sep=(" >= ",  " ≥ ", " \\geq "),
         stencil=true, geo=true, known=true),
-    _op(">";  arity=2:2, category=:comparison, fn=(>),
+    _op("=="; arity=2:2, category=:comparison, fn=(==), dimclass=:comparison,
+        prec=3, sep=(" == ",  " = ", " = "),
         stencil=true, geo=true, known=true),
-    _op(">="; arity=2:2, category=:comparison, fn=(>=),
-        stencil=true, geo=true, known=true),
-    _op("=="; arity=2:2, category=:comparison, fn=(==),
-        stencil=true, geo=true, known=true),
-    _op("!="; arity=2:2, category=:comparison, fn=(!=),
+    _op("!="; arity=2:2, category=:comparison, fn=(!=), dimclass=:comparison,
+        prec=3, sep=(" != ",  " ≠ ", " \\neq "),
         stencil=true, geo=true, known=true),
 
     # ── Logical (n-ary and/or fold in child order; no single Base scalar fn —
     #    the arms carry the 0.0/1.0 truth-value convention) ──
-    _op("and"; arity=2:typemax(Int), category=:logical, stencil=true),
-    _op("or";  arity=2:typemax(Int), category=:logical, stencil=true),
-    _op("not"; arity=1:1,            category=:logical, stencil=true),
+    _op("and"; arity=2:typemax(Int), category=:logical, dimclass=:boolean,
+        prec=2, sep=(" and ", " ∧ ", " \\land "), stencil=true),
+    _op("or";  arity=2:typemax(Int), category=:logical, dimclass=:boolean,
+        prec=1, sep=(" or ",  " ∨ ", " \\lor "), stencil=true),
+    _op("not"; arity=1:1,            category=:logical, dimclass=:boolean,
+        prec=6, stencil=true),  # prec 6: unary, binds tighter than infix
 
     # ── Control (`ifelse` tests its condition `!= 0`; `Pre` is the MTK
     #    previous-value marker, a pass-through on the tree-walk path) ──
     _op("ifelse"; arity=3:3, category=:control,
-        stencil=true, geo=true, known=true),
-    _op("Pre";    arity=1:1, category=:control, stencil=true, known=true),
+        stencil=true, geo=true, known=true, builtin=true),
+    _op("Pre";    arity=1:1, category=:control, stencil=true, known=true,
+        builtin=true),
 
     # ── Elementary functions, in `_eval_node_op` / `_eval_vec_op` ladder-arm
     #    order (the derived `_UNARY_ELEMENTWISE_OPS` table preserves this
     #    order). `atan` is 1-or-2-ary (NOT mechanical-unary); `atan2` is the
     #    explicit 2-ary spelling. ──
+    #    All elementary rows are `builtin` (reference-checker excused names).
+    #    `dim_class`: circular ops take an angle, inverse-circular ops return
+    #    one, transcendentals demand a dimensionless argument; `sqrt` (halves
+    #    its dimension) and the dimension-preserving `abs`/`sign`/`floor`/
+    #    `ceil`/`min`/`max` have bespoke rules, not a class (units.jl).
     _op("sin";   arity=1:1, category=:elementary, fn=sin,
+        dimclass=:circular, builtin=true,
         ws4=true, stencil=true, geo=true, known=true),
     _op("cos";   arity=1:1, category=:elementary, fn=cos,
+        dimclass=:circular, builtin=true,
         ws4=true, stencil=true, geo=true, known=true),
     _op("tan";   arity=1:1, category=:elementary, fn=tan,
+        dimclass=:circular, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("asin";  arity=1:1, category=:elementary, fn=asin,
+        dimclass=:inverse_circular, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("acos";  arity=1:1, category=:elementary, fn=acos,
+        dimclass=:inverse_circular, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("atan";  arity=1:2, category=:elementary, fn=atan,
+        dimclass=:inverse_circular, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("atan2"; arity=2:2, category=:elementary, fn=atan,
+        dimclass=:inverse_circular, builtin=true,
         stencil=true, geo=true),
     _op("sinh";  arity=1:1, category=:elementary, fn=sinh,
+        dimclass=:transcendental, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("cosh";  arity=1:1, category=:elementary, fn=cosh,
+        dimclass=:transcendental, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("tanh";  arity=1:1, category=:elementary, fn=tanh,
+        dimclass=:transcendental, builtin=true,
         ws4=true, stencil=true, known=true),
-    _op("asinh"; arity=1:1, category=:elementary, fn=asinh, stencil=true),
-    _op("acosh"; arity=1:1, category=:elementary, fn=acosh, stencil=true),
-    _op("atanh"; arity=1:1, category=:elementary, fn=atanh, stencil=true),
+    _op("asinh"; arity=1:1, category=:elementary, fn=asinh,
+        dimclass=:transcendental, builtin=true, stencil=true),
+    _op("acosh"; arity=1:1, category=:elementary, fn=acosh,
+        dimclass=:transcendental, builtin=true, stencil=true),
+    _op("atanh"; arity=1:1, category=:elementary, fn=atanh,
+        dimclass=:transcendental, builtin=true, stencil=true),
     _op("exp";   arity=1:1, category=:elementary, fn=exp,
+        dimclass=:transcendental, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("log";   arity=1:1, category=:elementary, fn=log,
+        dimclass=:transcendental, builtin=true,
         ws4=true, stencil=true, known=true),
     _op("log10"; arity=1:1, category=:elementary, fn=log10,
+        dimclass=:transcendental, builtin=true,
         ws4=true, stencil=true, known=true),
-    _op("sqrt";  arity=1:1, category=:elementary, fn=sqrt,
+    _op("sqrt";  arity=1:1, category=:elementary, fn=sqrt, builtin=true,
         ws4=true, stencil=true, geo=true, known=true),
-    _op("abs";   arity=1:1, category=:elementary, fn=abs,
+    _op("abs";   arity=1:1, category=:elementary, fn=abs, builtin=true,
         ws4=true, stencil=true, geo=true, known=true),
-    _op("sign";  arity=1:1, category=:elementary, fn=sign,
+    _op("sign";  arity=1:1, category=:elementary, fn=sign, builtin=true,
         ws4=true, stencil=true),
-    _op("floor"; arity=1:1, category=:elementary, fn=floor,
+    _op("floor"; arity=1:1, category=:elementary, fn=floor, builtin=true,
         ws4=true, stencil=true, geo=true),
-    _op("ceil";  arity=1:1, category=:elementary, fn=ceil,
+    _op("ceil";  arity=1:1, category=:elementary, fn=ceil, builtin=true,
         ws4=true, stencil=true, geo=true),
     _op("min"; arity=2:typemax(Int), category=:elementary, fn=min,
-        ws4=true, stencil=true, geo=true, known=true),
+        builtin=true, ws4=true, stencil=true, geo=true, known=true),
     _op("max"; arity=2:typemax(Int), category=:elementary, fn=max,
-        ws4=true, stencil=true, geo=true, known=true),
+        builtin=true, ws4=true, stencil=true, geo=true, known=true),
 
     # ── Niladic constants (`true`/`false` appear only in the geometry-setup
     #    vocabulary — `_geo_compile` folds them to literals; the scalar
@@ -300,6 +377,36 @@ function _ops_with(flag::Symbol)::Set{String}
         throw(ArgumentError("op_registry: unknown flag $flag (expected one of " *
                             "$(join(_OP_FLAG_NAMES, ", "))"))
     return Set{String}(s.name for s in _OP_TABLE if getfield(s, flag))
+end
+
+"""
+    _DIM_CLASSES
+
+The legal values of the `dim_class` column: the dimensional-analysis op
+classes units.jl attaches a shared rule to (`_DIMENSION_RULES`):
+
+- `:transcendental`   → `_TRANSCENDENTAL_OPS`   (dimensionless argument)
+- `:circular`         → `_CIRCULAR_OPS`         (argument is an angle)
+- `:inverse_circular` → `_INVERSE_CIRCULAR_OPS` (result is an angle)
+- `:comparison`       → `_COMPARISON_OPS`       (commensurate operands, boolean result)
+- `:boolean`          → `_BOOLEAN_OPS`          (boolean connective)
+"""
+const _DIM_CLASSES =
+    (:transcendental, :circular, :inverse_circular, :comparison, :boolean)
+
+"""
+    _ops_with_dim_class(class::Symbol) -> Set{String}
+
+The op names whose [`_OpSpec`](@ref) carries `dim_class == class` — the
+derivation behind the five units.jl op-class sets (`class` must be one of
+[`_DIM_CLASSES`](@ref)). Called once per derived const at include time;
+never on a hot path.
+"""
+function _ops_with_dim_class(class::Symbol)::Set{String}
+    class in _DIM_CLASSES ||
+        throw(ArgumentError("op_registry: unknown dim class $class (expected " *
+                            "one of $(join(_DIM_CLASSES, ", "))"))
+    return Set{String}(s.name for s in _OP_TABLE if s.dim_class === class)
 end
 
 """

@@ -30,12 +30,14 @@ using Tullio
 
 # Core data model + validation
 include("types.jl")
-include("validate.jl")
 # Operator-vocabulary registry — single source of truth for the derived op
-# sets (tree-walk fold/CSE/stencil/geometry whitelists + the MTK-ext known-op
-# set). Pure data, no AST dependency; must precede tree_walk.jl, whose derived
-# consts are computed at include time.
+# sets (tree-walk fold/CSE/stencil/geometry whitelists, the MTK-ext known-op
+# set, validate.jl's builtin names, units.jl's dimensional-rule classes, and
+# display.jl's infix precedence/separator lookups). Pure data, no AST
+# dependency; must precede validate.jl/display.jl/units.jl and tree_walk.jl,
+# whose derived consts are computed at include time.
 include("op_registry.jl")
+include("validate.jl")
 # Flattening pipeline (reactions → equations, subsystem flattening, shapes).
 # flatten()'s stages live in sibling files: error taxonomy, namespacing +
 # per-system collection, coupling application, pointwise lift, orchestrator,

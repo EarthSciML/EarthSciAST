@@ -644,6 +644,69 @@ values.
 end
 
 """
+    MODEL_VARIABLE_TYPE_TABLE
+
+The bidirectional `ModelVariableType` ↔ string vocabulary — one row per enum
+member, the single source of truth for every kind-string mapping (previously
+three hand-maintained parallel ladders). It lives here, next to the enum it
+maps, following the [`OPEXPR_FIELD_TABLE`](@ref) precedent (op_registry.jl is
+scoped to the `OpExpr.op` operator vocabulary; a variable-kind enum is not an
+op). Columns:
+
+- `enum`: the `ModelVariableType` member.
+- `wire`: the schema's canonical spelling (`ModelVariable.type` enum values)
+  — the serialize target (`serialize_model_variable_type`, serialize.jl) AND
+  the `expression_graph` node-kind string (graph.jl), which is the wire
+  spelling by contract.
+- `legacy`: parse-only aliases `coerce_model_variable_type` (parse.jl) must
+  keep accepting — the pre-schema CamelCase spellings matching the Julia
+  member names.
+
+Derived (below): [`_MODEL_VARIABLE_TYPE_WIRE`](@ref) and
+[`_MODEL_VARIABLE_TYPE_FROM_STRING`](@ref). Round-trip and legacy-spelling
+behavior is pinned by test/types_test.jl.
+"""
+const MODEL_VARIABLE_TYPE_TABLE = (
+    (enum = StateVariable,     wire = "state",     legacy = ("StateVariable",)),
+    (enum = ParameterVariable, wire = "parameter", legacy = ("ParameterVariable",)),
+    (enum = ObservedVariable,  wire = "observed",  legacy = ("ObservedVariable",)),
+    (enum = BrownianVariable,  wire = "brownian",  legacy = ("BrownianVariable",)),
+    (enum = DiscreteVariable,  wire = "discrete",  legacy = ("DiscreteVariable",)),
+)
+
+# The table must cover EXACTLY the enum's members, in order — a new member
+# without a row would otherwise silently serialize/graph as missing.
+@assert Tuple(row.enum for row in MODEL_VARIABLE_TYPE_TABLE) ==
+        Tuple(instances(ModelVariableType)) "MODEL_VARIABLE_TYPE_TABLE rows must match instances(ModelVariableType) exactly, in order"
+
+"""
+    _MODEL_VARIABLE_TYPE_WIRE
+
+Enum → canonical wire spelling, derived from
+[`MODEL_VARIABLE_TYPE_TABLE`](@ref). Consumers: `serialize_model_variable_type`
+(serialize.jl) and `expression_graph`'s node-kind lookup (graph.jl).
+"""
+const _MODEL_VARIABLE_TYPE_WIRE = Dict{ModelVariableType,String}(
+    row.enum => row.wire for row in MODEL_VARIABLE_TYPE_TABLE)
+
+"""
+    _MODEL_VARIABLE_TYPE_FROM_STRING
+
+String → enum, derived from [`MODEL_VARIABLE_TYPE_TABLE`](@ref): every wire
+spelling plus every legacy alias. Consumer: `coerce_model_variable_type`
+(parse.jl).
+"""
+const _MODEL_VARIABLE_TYPE_FROM_STRING = let d = Dict{String,ModelVariableType}()
+    for row in MODEL_VARIABLE_TYPE_TABLE
+        d[row.wire] = row.enum
+        for alias in row.legacy
+            d[alias] = row.enum
+        end
+    end
+    d
+end
+
+"""
     ModelVariable
 
 Structure defining a model variable with its type, default value, and optional expression.

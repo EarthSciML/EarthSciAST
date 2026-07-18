@@ -139,22 +139,14 @@ end
 """
     serialize_model_variable_type(var_type::ModelVariableType) -> String
 
-Serialize ModelVariableType enum to string.
+Serialize ModelVariableType enum to its canonical wire spelling, per
+[`MODEL_VARIABLE_TYPE_TABLE`](@ref) (types.jl — the derived
+`_MODEL_VARIABLE_TYPE_WIRE` lookup).
 """
 function serialize_model_variable_type(var_type::ModelVariableType)::String
-    if var_type == StateVariable
-        return "state"
-    elseif var_type == ParameterVariable
-        return "parameter"
-    elseif var_type == ObservedVariable
-        return "observed"
-    elseif var_type == BrownianVariable
-        return "brownian"
-    elseif var_type == DiscreteVariable
-        return "discrete"
-    else
-        throw(ArgumentError("Unknown ModelVariableType: $(var_type)"))
-    end
+    s = get(_MODEL_VARIABLE_TYPE_WIRE, var_type, nothing)
+    s === nothing && throw(ArgumentError("Unknown ModelVariableType: $(var_type)"))
+    return s
 end
 
 """

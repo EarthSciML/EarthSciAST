@@ -1488,13 +1488,12 @@ spells as operator (`OpExpr`) names. They normally appear as `OpExpr.op`, not as
 not be mis-reported as an undefined variable. Mirrors Rust
 `is_builtin_function` (structural.rs) so the same names are excused across
 bindings.
+
+DERIVED from the op registry's `builtin_fn` flag (src/op_registry.jl): the
+`:elementary` rows plus `ifelse`/`Pre`. Membership is pinned literal-for-
+literal by test/op_registry_test.jl.
 """
-const _BUILTIN_FUNCTION_NAMES = Set{String}([
-    "exp", "log", "log10", "sqrt", "abs", "sign",
-    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-    "min", "max", "floor", "ceil", "ifelse", "Pre",
-])
+const _BUILTIN_FUNCTION_NAMES = _ops_with(:builtin_fn)
 
 """
     _bound_index_symbols(op::OpExpr) -> Vector{String}

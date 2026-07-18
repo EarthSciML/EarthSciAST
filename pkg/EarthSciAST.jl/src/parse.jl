@@ -414,22 +414,14 @@ end
 """
     coerce_model_variable_type(data::String) -> ModelVariableType
 
-Coerce a string into the ModelVariableType enum.
+Coerce a string into the ModelVariableType enum. Accepts each member's wire
+spelling and its legacy aliases, per [`MODEL_VARIABLE_TYPE_TABLE`](@ref)
+(types.jl — the derived `_MODEL_VARIABLE_TYPE_FROM_STRING` lookup).
 """
 function coerce_model_variable_type(data::String)::ModelVariableType
-    if data == "state" || data == "StateVariable"
-        return StateVariable
-    elseif data == "parameter" || data == "ParameterVariable"
-        return ParameterVariable
-    elseif data == "observed" || data == "ObservedVariable"
-        return ObservedVariable
-    elseif data == "brownian" || data == "BrownianVariable"
-        return BrownianVariable
-    elseif data == "discrete" || data == "DiscreteVariable"
-        return DiscreteVariable
-    else
-        throw(ParseError("Invalid ModelVariableType: $data"))
-    end
+    t = get(_MODEL_VARIABLE_TYPE_FROM_STRING, data, nothing)
+    t === nothing && throw(ParseError("Invalid ModelVariableType: $data"))
+    return t
 end
 
 """
