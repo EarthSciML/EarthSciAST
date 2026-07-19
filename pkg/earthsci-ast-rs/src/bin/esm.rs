@@ -3,6 +3,12 @@
 //! Command-line interface for working with ESM files
 
 use clap::{Parser, Subcommand};
+use earthsci_ast::analysis::{
+    collect_unit_types, collect_variables, contains_common_subexpressions,
+    contains_expensive_operations, contains_redundant_operations, count_expression_nodes,
+    count_numerical_values, count_operations, expression_depth, expressions_numerically_equal,
+    find_longest_dependency_chain, find_strongly_connected_components,
+};
 use earthsci_ast::{
     component_exists, component_graph, load, save, save_compact, validate, validate_complete,
 };
@@ -298,56 +304,6 @@ fn analyze_reaction_system_units(esm_file: &earthsci_ast::EsmFile) {
     }
 }
 
-fn collect_unit_types(esm_file: &earthsci_ast::EsmFile) -> Vec<String> {
-    let mut units = std::collections::HashSet::new();
-
-    if let Some(ref models) = esm_file.models {
-        for model in models.values() {
-            for var in model.variables.values() {
-                if let Some(ref unit_str) = var.units {
-                    units.insert(unit_str.clone());
-                }
-            }
-        }
-    }
-
-    if let Some(ref reaction_systems) = esm_file.reaction_systems {
-        for rs in reaction_systems.values() {
-            for species in rs.species.values() {
-                if let Some(ref unit_str) = species.units {
-                    units.insert(unit_str.clone());
-                }
-            }
-        }
-    }
-
-    let mut unit_list: Vec<String> = units.into_iter().collect();
-    unit_list.sort();
-    unit_list
-}
-
-fn expression_depth(expr: &earthsci_ast::Expr) -> usize {
-    match expr {
-        earthsci_ast::Expr::Number(_)
-        | earthsci_ast::Expr::Integer(_)
-        | earthsci_ast::Expr::Variable(_) => 1,
-        earthsci_ast::Expr::Operator(node) => {
-            1 + node.args.iter().map(expression_depth).max().unwrap_or(0)
-        }
-    }
-}
-
-fn count_expression_nodes(expr: &earthsci_ast::Expr) -> usize {
-    match expr {
-        earthsci_ast::Expr::Number(_)
-        | earthsci_ast::Expr::Integer(_)
-        | earthsci_ast::Expr::Variable(_) => 1,
-        earthsci_ast::Expr::Operator(node) => {
-            1 + node.args.iter().map(count_expression_nodes).sum::<usize>()
-        }
-    }
-}
-
 fn analyze_expression_optimization(esm_file: &earthsci_ast::EsmFile) {
     println!("\n=== EXPRESSION OPTIMIZATION ANALYSIS ===");
 
@@ -614,135 +570,17 @@ fn analyze_performance_optimization(esm_file: &earthsci_ast::EsmFile) {
         .unwrap_or(0);
 
     let total_state_vars = var_count + species_count;
+    let estimated_bytes = total_state_vars * 8; // 8 bytes per double
     println!(
-        "State variables: {} (estimated memory: {} KB)",
-        total_state_vars,
-        total_state_vars * 8 / 1024
-    ); // 8 bytes per double
+        "State variables: {total_state_vars} (estimated memory: {estimated_bytes} bytes / {:.1} KiB)",
+        estimated_bytes as f64 / 1024.0
+    );
 
     println!("\n=== GENERAL RECOMMENDATIONS ===");
     println!("- Use fast numerical integrators for stiff systems");
     println!("- Cache frequently computed expressions");
     println!("- Consider sparse matrix representations for large systems");
     println!("- Profile actual runtime to identify bottlenecks");
-}
-
-fn contains_redundant_operations(expr: &earthsci_ast::Expr) -> bool {
-    match expr {
-        earthsci_ast::Expr::Operator(node) => {
-            // Check for operations like x + 0, x * 1, x^1, etc.
-            match node.op.as_str() {
-                "+" | "-" => node.args.iter().any(|arg| {
-                    if let earthsci_ast::Expr::Number(n) = arg {
-                        *n == 0.0
-                    } else {
-                        false
-                    }
-                }),
-                "*" | "/" => node.args.iter().any(|arg| {
-                    if let earthsci_ast::Expr::Number(n) = arg {
-                        *n == 1.0
-                    } else {
-                        false
-                    }
-                }),
-                "^" => {
-                    if node.args.len() >= 2 {
-                        if let earthsci_ast::Expr::Number(n) = &node.args[1] {
-                            *n == 1.0
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                }
-                _ => node.args.iter().any(contains_redundant_operations),
-            }
-        }
-        _ => false,
-    }
-}
-
-fn contains_common_subexpressions(lhs: &earthsci_ast::Expr, rhs: &earthsci_ast::Expr) -> bool {
-    let mut lhs_subexprs = Vec::new();
-    let mut rhs_subexprs = Vec::new();
-
-    collect_subexpressions(lhs, &mut lhs_subexprs);
-    collect_subexpressions(rhs, &mut rhs_subexprs);
-
-    // Simple heuristic: check if any complex subexpressions appear in both sides
-    lhs_subexprs.iter().any(|lhs_expr| {
-        if expression_depth(lhs_expr) > 2 {
-            rhs_subexprs
-                .iter()
-                .any(|rhs_expr| expressions_equal(lhs_expr, rhs_expr))
-        } else {
-            false
-        }
-    })
-}
-
-fn collect_subexpressions(expr: &earthsci_ast::Expr, subexprs: &mut Vec<earthsci_ast::Expr>) {
-    subexprs.push(expr.clone());
-    if let earthsci_ast::Expr::Operator(node) = expr {
-        for arg in &node.args {
-            collect_subexpressions(arg, subexprs);
-        }
-    }
-}
-
-fn expressions_equal(expr1: &earthsci_ast::Expr, expr2: &earthsci_ast::Expr) -> bool {
-    // Simple structural equality check
-    match (expr1, expr2) {
-        (earthsci_ast::Expr::Number(n1), earthsci_ast::Expr::Number(n2)) => (n1 - n2).abs() < 1e-10,
-        (earthsci_ast::Expr::Variable(v1), earthsci_ast::Expr::Variable(v2)) => v1 == v2,
-        (earthsci_ast::Expr::Operator(op1), earthsci_ast::Expr::Operator(op2)) => {
-            op1.op == op2.op
-                && op1.args.len() == op2.args.len()
-                && op1
-                    .args
-                    .iter()
-                    .zip(op2.args.iter())
-                    .all(|(a1, a2)| expressions_equal(a1, a2))
-        }
-        _ => false,
-    }
-}
-
-fn collect_variables(expr: &earthsci_ast::Expr, vars: &mut std::collections::HashSet<String>) {
-    match expr {
-        earthsci_ast::Expr::Variable(name) => {
-            vars.insert(name.clone());
-        }
-        earthsci_ast::Expr::Operator(node) => {
-            for arg in &node.args {
-                collect_variables(arg, vars);
-            }
-        }
-        earthsci_ast::Expr::Number(_) | earthsci_ast::Expr::Integer(_) => {}
-    }
-}
-
-fn count_operations(expr: &earthsci_ast::Expr) -> usize {
-    match expr {
-        earthsci_ast::Expr::Number(_)
-        | earthsci_ast::Expr::Integer(_)
-        | earthsci_ast::Expr::Variable(_) => 0,
-        earthsci_ast::Expr::Operator(node) => {
-            1 + node.args.iter().map(count_operations).sum::<usize>()
-        }
-    }
-}
-
-fn contains_expensive_operations(expr: &earthsci_ast::Expr) -> bool {
-    match expr {
-        earthsci_ast::Expr::Operator(node) => match node.op.as_str() {
-            "exp" | "log" | "sin" | "cos" | "tan" | "sqrt" | "^" => true,
-            _ => node.args.iter().any(contains_expensive_operations),
-        },
-        _ => false,
-    }
 }
 
 fn perform_structural_comparison(
@@ -1029,74 +867,6 @@ fn perform_numerical_comparison(
     println!("\nNumerical values compared: {total_numbers1} vs {total_numbers2}");
 }
 
-fn expressions_numerically_equal(
-    expr1: &earthsci_ast::Expr,
-    expr2: &earthsci_ast::Expr,
-    tolerance: f64,
-) -> bool {
-    match (expr1, expr2) {
-        (earthsci_ast::Expr::Number(n1), earthsci_ast::Expr::Number(n2)) => {
-            (n1 - n2).abs() <= tolerance
-        }
-        (earthsci_ast::Expr::Variable(v1), earthsci_ast::Expr::Variable(v2)) => v1 == v2,
-        (earthsci_ast::Expr::Operator(op1), earthsci_ast::Expr::Operator(op2)) => {
-            op1.op == op2.op
-                && op1.args.len() == op2.args.len()
-                && op1
-                    .args
-                    .iter()
-                    .zip(op2.args.iter())
-                    .all(|(a1, a2)| expressions_numerically_equal(a1, a2, tolerance))
-        }
-        _ => false,
-    }
-}
-
-fn count_numerical_values(esm_file: &earthsci_ast::EsmFile, count: &mut usize) {
-    if let Some(ref models) = esm_file.models {
-        for model in models.values() {
-            // Count variable defaults
-            for var in model.variables.values() {
-                if var.default.is_some() {
-                    *count += 1;
-                }
-            }
-
-            // Count numbers in expressions
-            for equation in &model.equations {
-                count_numbers_in_expression(&equation.lhs, count);
-                count_numbers_in_expression(&equation.rhs, count);
-            }
-        }
-    }
-
-    if let Some(ref reaction_systems) = esm_file.reaction_systems {
-        for rs in reaction_systems.values() {
-            for reaction in &rs.reactions {
-                // Count coefficients (schema requires integer stoichiometry ≥ 1, so
-                // every entry contributes one counted numeric value).
-                *count += reaction.substrates.as_ref().map(|v| v.len()).unwrap_or(0);
-                *count += reaction.products.as_ref().map(|v| v.len()).unwrap_or(0);
-
-                // Count numbers in rate expressions
-                count_numbers_in_expression(&reaction.rate, count);
-            }
-        }
-    }
-}
-
-fn count_numbers_in_expression(expr: &earthsci_ast::Expr, count: &mut usize) {
-    match expr {
-        earthsci_ast::Expr::Number(_) | earthsci_ast::Expr::Integer(_) => *count += 1,
-        earthsci_ast::Expr::Operator(node) => {
-            for arg in &node.args {
-                count_numbers_in_expression(arg, count);
-            }
-        }
-        earthsci_ast::Expr::Variable(_) => {}
-    }
-}
-
 fn perform_deep_coupling_analysis(esm_file: &earthsci_ast::EsmFile) {
     println!("\n=== DEEP COUPLING DEPENDENCY ANALYSIS ===");
 
@@ -1188,17 +958,25 @@ fn perform_deep_coupling_analysis(esm_file: &earthsci_ast::EsmFile) {
         println!("  {coupling_type}: {count} occurrences");
     }
 
-    // Calculate coupling metrics
-    let coupling_density =
-        graph.edges.len() as f64 / (graph.nodes.len() as f64 * (graph.nodes.len() - 1) as f64);
-    println!("\nCoupling density: {coupling_density:.3} (0=no coupling, 1=fully coupled)");
-
-    if coupling_density > 0.5 {
-        println!("⚠ Very high coupling density - system may be difficult to maintain");
-    } else if coupling_density > 0.2 {
-        println!("- Moderate coupling density - monitor for growth");
+    // Calculate coupling metrics. The density denominator is n*(n-1), the
+    // number of possible directed edges; for a graph with fewer than two
+    // components it is zero, so dividing would print `NaN`. Report N/A instead
+    // (and skip the qualitative verdict, which is meaningless without a pair).
+    // Guarding `n < 2` also keeps the `n - 1` usize subtraction underflow-safe.
+    let n_nodes = graph.nodes.len();
+    if n_nodes < 2 {
+        println!("\nCoupling density: N/A (fewer than two components)");
     } else {
-        println!("✓ Low coupling density - good architectural separation");
+        let coupling_density = graph.edges.len() as f64 / (n_nodes as f64 * (n_nodes - 1) as f64);
+        println!("\nCoupling density: {coupling_density:.3} (0=no coupling, 1=fully coupled)");
+
+        if coupling_density > 0.5 {
+            println!("⚠ Very high coupling density - system may be difficult to maintain");
+        } else if coupling_density > 0.2 {
+            println!("- Moderate coupling density - monitor for growth");
+        } else {
+            println!("✓ Low coupling density - good architectural separation");
+        }
     }
 }
 
@@ -1249,86 +1027,6 @@ fn analyze_coupling_patterns(graph: &earthsci_ast::graph::ComponentGraph) {
         println!("Long dependency chain detected: {chain_length} components");
         println!("  Consider reducing chain length for better parallelization");
     }
-}
-
-/// Tarjan's strongly-connected-components algorithm (iterative) over the
-/// component graph. A component is a genuine dependency cycle iff it has more
-/// than one node, or one node with a self-edge — the caller applies that
-/// filter.
-fn find_strongly_connected_components(
-    graph: &earthsci_ast::graph::ComponentGraph,
-) -> Vec<Vec<String>> {
-    let ids: Vec<&String> = graph.nodes.iter().map(|n| &n.id).collect();
-    let index_of: std::collections::HashMap<&str, usize> = ids
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.as_str(), i))
-        .collect();
-    let n = ids.len();
-    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for edge in &graph.edges {
-        if let (Some(&f), Some(&t)) = (
-            index_of.get(edge.from.as_str()),
-            index_of.get(edge.to.as_str()),
-        ) {
-            adj[f].push(t);
-        }
-    }
-
-    const UNVISITED: usize = usize::MAX;
-    let mut index = vec![UNVISITED; n];
-    let mut low = vec![0usize; n];
-    let mut on_stack = vec![false; n];
-    let mut stack: Vec<usize> = Vec::new();
-    let mut next_index = 0usize;
-    let mut components: Vec<Vec<String>> = Vec::new();
-
-    for root in 0..n {
-        if index[root] != UNVISITED {
-            continue;
-        }
-        // Explicit call stack of (node, next-child position) frames.
-        let mut call: Vec<(usize, usize)> = vec![(root, 0)];
-        while let Some(frame) = call.last_mut() {
-            let (v, ci) = (frame.0, frame.1);
-            if ci == 0 {
-                index[v] = next_index;
-                low[v] = next_index;
-                next_index += 1;
-                stack.push(v);
-                on_stack[v] = true;
-            }
-            if ci < adj[v].len() {
-                frame.1 += 1;
-                let w = adj[v][ci];
-                if index[w] == UNVISITED {
-                    call.push((w, 0));
-                } else if on_stack[w] {
-                    low[v] = low[v].min(index[w]);
-                }
-            } else {
-                call.pop();
-                if let Some(parent) = call.last() {
-                    let pv = parent.0;
-                    low[pv] = low[pv].min(low[v]);
-                }
-                if low[v] == index[v] {
-                    let mut component = Vec::new();
-                    loop {
-                        let w = stack.pop().expect("Tarjan stack tracks open nodes");
-                        on_stack[w] = false;
-                        component.push(ids[w].clone());
-                        if w == v {
-                            break;
-                        }
-                    }
-                    components.push(component);
-                }
-            }
-        }
-    }
-
-    components
 }
 
 fn analyze_coupling_strength(
@@ -1453,43 +1151,6 @@ fn detect_coupling_antipatterns(
             println!("  ⚠ {antipattern}");
         }
     }
-}
-
-fn find_longest_dependency_chain(graph: &earthsci_ast::graph::ComponentGraph) -> usize {
-    let mut max_length = 0;
-
-    // For each node, find the longest path starting from it
-    for node in &graph.nodes {
-        let mut visited = std::collections::HashSet::new();
-        let length = dfs_longest_path(graph, &node.id, &mut visited);
-        max_length = max_length.max(length);
-    }
-
-    max_length
-}
-
-fn dfs_longest_path(
-    graph: &earthsci_ast::graph::ComponentGraph,
-    node_id: &str,
-    visited: &mut std::collections::HashSet<String>,
-) -> usize {
-    if visited.contains(node_id) {
-        return 0; // Avoid cycles
-    }
-
-    visited.insert(node_id.to_string());
-    let mut max_path = 1;
-
-    // Find all outgoing edges
-    for edge in &graph.edges {
-        if edge.from == node_id {
-            let path_length = 1 + dfs_longest_path(graph, &edge.to, visited);
-            max_path = max_path.max(path_length);
-        }
-    }
-
-    visited.remove(node_id);
-    max_path
 }
 
 /// `esm init` project templates. Every template MUST load cleanly with
@@ -1814,616 +1475,814 @@ fn print_complexity_analysis(esm_file: &earthsci_ast::EsmFile) {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+// === CLI helpers ===========================================================
 
-    match cli.command {
-        Commands::Validate { file, verbose } => {
-            let content = read_input(&file)?;
+/// The three expression rendering formats accepted by `pretty --format`.
+#[derive(Clone, Copy)]
+enum DisplayFormat {
+    Unicode,
+    Latex,
+    Ascii,
+}
 
-            // Perform complete validation (schema + structural). Anchor relative
-            // §4.7/§9.7 refs at the input file's own directory when validating a
-            // real path so a document with relative refs is not spuriously
-            // rejected (stdin has no directory → process CWD).
-            let base_dir = file.parent();
-            let validation_result = validate_complete(&content, base_dir);
+/// Parse a `--format` value ONCE, up front, into a typed [`DisplayFormat`]. An
+/// unknown value yields the same "Unsupported format: <value>" message the
+/// per-loop match used to produce, but without ever reaching a rendering loop
+/// (the reaction-rate loop previously fell through to `unreachable!()` and
+/// panicked on a bad format for reaction-only files).
+fn parse_display_format(s: &str) -> Result<DisplayFormat, String> {
+    match s {
+        "unicode" => Ok(DisplayFormat::Unicode),
+        "latex" => Ok(DisplayFormat::Latex),
+        "ascii" => Ok(DisplayFormat::Ascii),
+        other => Err(format!("Unsupported format: {other}")),
+    }
+}
 
-            if validation_result.is_valid {
-                println!("✓ Validation passed");
-                if verbose && !validation_result.unit_warnings.is_empty() {
-                    println!("Warnings:");
-                    for warning in validation_result.unit_warnings {
-                        println!("  ⚠ {warning}");
-                    }
-                }
-            } else {
-                println!("✗ Validation failed");
+/// Print the CLI's standard "Unsupported <noun>: <value>. <hint>" rejection to
+/// stderr and exit with status 1. Consolidates the dozen hand-rolled
+/// reject-unknown blocks that each duplicated this shape and its `exit(1)`.
+fn reject_unknown(noun: &str, value: &str, hint: &str) -> ! {
+    eprintln!("Unsupported {noun}: {value}. {hint}");
+    std::process::exit(1);
+}
 
-                if !validation_result.schema_errors.is_empty() {
-                    println!("Schema errors:");
-                    for error in &validation_result.schema_errors {
-                        println!("  ✗ {}: {}", error.path, error.message);
-                    }
-                }
+// === Per-subcommand handlers ===============================================
 
-                if !validation_result.structural_errors.is_empty() {
-                    println!("Structural errors:");
-                    for error in &validation_result.structural_errors {
-                        if verbose {
-                            println!("  ✗ {} ({}): {}", error.path, error.code, error.message);
-                            if !error.details.is_null() {
-                                println!("    Details: {}", error.details);
-                            }
-                        } else {
-                            println!("  ✗ {}: {}", error.path, error.message);
-                        }
-                    }
-                }
-                std::process::exit(1);
+fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+
+    // Perform complete validation (schema + structural). Anchor relative
+    // §4.7/§9.7 refs at the input file's own directory when validating a
+    // real path so a document with relative refs is not spuriously
+    // rejected (stdin has no directory → process CWD).
+    let base_dir = file.parent();
+    let validation_result = validate_complete(&content, base_dir);
+
+    if validation_result.is_valid {
+        println!("✓ Validation passed");
+        if verbose && !validation_result.unit_warnings.is_empty() {
+            println!("Warnings:");
+            for warning in validation_result.unit_warnings {
+                println!("  ⚠ {warning}");
             }
         }
-        Commands::Pretty { file, format } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
+    } else {
+        println!("✗ Validation failed");
 
-            println!("Displaying expressions in {}:", file.display());
-
-            // Print model equations
-            if let Some(ref models) = esm_file.models {
-                for (model_id, model) in models {
-                    println!(
-                        "\nModel: {} ({})",
-                        model_id,
-                        model.name.as_deref().unwrap_or("unnamed")
-                    );
-                    for (i, equation) in model.equations.iter().enumerate() {
-                        let lhs = match format.as_str() {
-                            "unicode" => earthsci_ast::to_unicode(&equation.lhs),
-                            "latex" => earthsci_ast::to_latex(&equation.lhs),
-                            "ascii" => earthsci_ast::to_ascii(&equation.lhs),
-                            _ => {
-                                eprintln!("Unsupported format: {format}");
-                                std::process::exit(1);
-                            }
-                        };
-                        let rhs = match format.as_str() {
-                            "unicode" => earthsci_ast::to_unicode(&equation.rhs),
-                            "latex" => earthsci_ast::to_latex(&equation.rhs),
-                            "ascii" => earthsci_ast::to_ascii(&equation.rhs),
-                            _ => unreachable!(),
-                        };
-                        println!("  Eq {}: {} = {}", i + 1, lhs, rhs);
-                    }
-                }
-            }
-
-            // Print reaction rates
-            if let Some(ref reaction_systems) = esm_file.reaction_systems {
-                for (rs_id, rs) in reaction_systems {
-                    println!("\nReaction System: {rs_id}");
-                    for (i, reaction) in rs.reactions.iter().enumerate() {
-                        let rate = match format.as_str() {
-                            "unicode" => earthsci_ast::to_unicode(&reaction.rate),
-                            "latex" => earthsci_ast::to_latex(&reaction.rate),
-                            "ascii" => earthsci_ast::to_ascii(&reaction.rate),
-                            _ => unreachable!(),
-                        };
-                        println!("  Reaction {}: rate = {}", i + 1, rate);
-                    }
-                }
+        if !validation_result.schema_errors.is_empty() {
+            println!("Schema errors:");
+            for error in &validation_result.schema_errors {
+                println!("  ✗ {}: {}", error.path, error.message);
             }
         }
-        Commands::Extract {
-            file,
-            component,
-            output,
-        } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
 
-            // Check if component exists
-            if !component_exists(&esm_file, &component) {
-                eprintln!("Component '{component}' not found in the ESM file");
-                std::process::exit(1);
-            }
-
-            // Create a new ESM file with just the requested component
-            let mut extracted_esm = earthsci_ast::EsmFile {
-                coupling_roles: None,
-                // The extracted component is a NEW document. Any template call
-                // sites it had were already expanded at load, and metaparameters
-                // already folded, so it declares neither.
-                expression_templates: None,
-                metaparameters: None,
-                esm: esm_file.esm.clone(),
-                metadata: esm_file.metadata.clone(),
-                // Document-scoped registry (v0.8.0): preserve it on the
-                // extracted component so its `{ "from": <set> }` ranges resolve.
-                index_sets: esm_file.index_sets.clone(),
-                models: None,
-                reaction_systems: None,
-                data_loaders: None,
-                operators: None,
-                enums: None,
-                coupling: None,
-                domain: esm_file.domain.clone(),
-                function_tables: esm_file.function_tables.clone(),
-            };
-
-            // Extract the specific component
-            if let Some(ref models) = esm_file.models
-                && let Some(model) = models.get(&component)
-            {
-                let mut extracted_models = HashMap::new();
-                extracted_models.insert(component.clone(), model.clone());
-                extracted_esm.models = Some(extracted_models);
-            }
-
-            if let Some(ref reaction_systems) = esm_file.reaction_systems
-                && let Some(rs) = reaction_systems.get(&component)
-            {
-                let mut extracted_rs = HashMap::new();
-                extracted_rs.insert(component.clone(), rs.clone());
-                extracted_esm.reaction_systems = Some(extracted_rs);
-            }
-
-            if let Some(ref data_loaders) = esm_file.data_loaders
-                && let Some(dl) = data_loaders.get(&component)
-            {
-                let mut extracted_dl = HashMap::new();
-                extracted_dl.insert(component.clone(), dl.clone());
-                extracted_esm.data_loaders = Some(extracted_dl);
-            }
-
-            if let Some(ref operators) = esm_file.operators
-                && let Some(op) = operators.get(&component)
-            {
-                let mut extracted_op = HashMap::new();
-                extracted_op.insert(component.clone(), op.clone());
-                extracted_esm.operators = Some(extracted_op);
-            }
-
-            let output_content = save(&extracted_esm)?;
-
-            if let Some(output_path) = output {
-                fs::write(&output_path, output_content)?;
-                println!(
-                    "Extracted component '{}' to {}",
-                    component,
-                    output_path.display()
-                );
-            } else {
-                print!("{output_content}");
-            }
-        }
-        Commands::Diff { file1, file2 } => {
-            let content1 = read_input(&file1)?;
-            let content2 = read_input(&file2)?;
-            let esm_file1 = load(&content1)?;
-            let esm_file2 = load(&content2)?;
-
-            println!("Comparing {} and {}:", file1.display(), file2.display());
-
-            if !semantic_compare(&esm_file1, &esm_file2)? {
-                std::process::exit(1);
-            }
-        }
-        Commands::Stoich { file, system } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
-
-            if let Some(ref reaction_systems) = esm_file.reaction_systems {
-                if let Some(rs) = reaction_systems.get(&system) {
-                    println!("Stoichiometric matrix for reaction system '{system}':");
-
-                    // Build a stable (sorted) species order and index map
-                    let mut sorted_species: Vec<&String> = rs.species.keys().collect();
-                    sorted_species.sort();
-                    let species_index: HashMap<String, usize> = sorted_species
-                        .iter()
-                        .enumerate()
-                        .map(|(i, name)| ((*name).clone(), i))
-                        .collect();
-
-                    // Print species header
-                    print!("{:>15}", "");
-                    for name in &sorted_species {
-                        print!("{name:>10}");
-                    }
-                    println!();
-
-                    // Print reaction stoichiometry
-                    for (reaction_idx, reaction) in rs.reactions.iter().enumerate() {
-                        print!("Reaction {:>3}:", reaction_idx + 1);
-
-                        let mut coeffs = vec![0.0; rs.species.len()];
-
-                        // Substrates (negative coefficients)
-                        for substrate in reaction.substrates.iter().flatten() {
-                            if let Some(&idx) = species_index.get(&substrate.species) {
-                                coeffs[idx] -= substrate.coefficient;
-                            }
-                        }
-
-                        // Products (positive coefficients)
-                        for product in reaction.products.iter().flatten() {
-                            if let Some(&idx) = species_index.get(&product.species) {
-                                coeffs[idx] += product.coefficient;
-                            }
-                        }
-
-                        for coeff in coeffs {
-                            print!("{coeff:>10.1}");
-                        }
-                        println!();
+        if !validation_result.structural_errors.is_empty() {
+            println!("Structural errors:");
+            for error in &validation_result.structural_errors {
+                if verbose {
+                    println!("  ✗ {} ({}): {}", error.path, error.code, error.message);
+                    if !error.details.is_null() {
+                        println!("    Details: {}", error.details);
                     }
                 } else {
-                    eprintln!("Reaction system '{system}' not found");
-                    std::process::exit(1);
+                    println!("  ✗ {}: {}", error.path, error.message);
                 }
-            } else {
-                eprintln!("No reaction systems found in the file");
-                std::process::exit(1);
             }
         }
-        Commands::Graph {
-            file,
-            level,
-            format,
-            system,
-        } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
+        std::process::exit(1);
+    }
+    Ok(())
+}
 
-            match level.as_str() {
-                "component" => {
-                    let graph = component_graph(&esm_file);
+fn run_pretty(file: PathBuf, format: String) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
 
-                    match format.as_str() {
-                        "dot" => {
-                            println!("digraph ESMComponents {{");
-                            println!("  rankdir=LR;");
-                            println!("  node [shape=box];");
-                            println!();
+    // Reject an unknown format cleanly BEFORE any rendering loop (bug fix: the
+    // reaction-rate loop used to fall through to `unreachable!()`).
+    let fmt = parse_display_format(&format).unwrap_or_else(|msg| {
+        eprintln!("{msg}");
+        std::process::exit(1);
+    });
+    let render = |expr: &earthsci_ast::Expr| match fmt {
+        DisplayFormat::Unicode => earthsci_ast::to_unicode(expr),
+        DisplayFormat::Latex => earthsci_ast::to_latex(expr),
+        DisplayFormat::Ascii => earthsci_ast::to_ascii(expr),
+    };
 
-                            // Nodes
-                            for node in &graph.nodes {
-                                let label = node.name.as_deref().unwrap_or(&node.id);
-                                let shape = match node.component_type {
-                                    earthsci_ast::graph::ComponentType::Model => "ellipse",
-                                    earthsci_ast::graph::ComponentType::ReactionSystem => "box",
-                                    earthsci_ast::graph::ComponentType::DataLoader => "diamond",
-                                };
-                                println!(
-                                    "  \"{}\" [label=\"{}\", shape={}];",
-                                    node.id, label, shape
-                                );
-                            }
+    println!("Displaying expressions in {}:", file.display());
 
-                            println!();
+    // Print model equations
+    if let Some(ref models) = esm_file.models {
+        for (model_id, model) in models {
+            println!(
+                "\nModel: {} ({})",
+                model_id,
+                model.name.as_deref().unwrap_or("unnamed")
+            );
+            for (i, equation) in model.equations.iter().enumerate() {
+                let lhs = render(&equation.lhs);
+                let rhs = render(&equation.rhs);
+                println!("  Eq {}: {} = {}", i + 1, lhs, rhs);
+            }
+        }
+    }
 
-                            // Edges
-                            for edge in &graph.edges {
-                                println!(
-                                    "  \"{}\" -> \"{}\" [label=\"{}\"];",
-                                    edge.from, edge.to, edge.coupling_type
-                                );
-                            }
+    // Print reaction rates
+    if let Some(ref reaction_systems) = esm_file.reaction_systems {
+        for (rs_id, rs) in reaction_systems {
+            println!("\nReaction System: {rs_id}");
+            for (i, reaction) in rs.reactions.iter().enumerate() {
+                let rate = render(&reaction.rate);
+                println!("  Reaction {}: rate = {}", i + 1, rate);
+            }
+        }
+    }
+    Ok(())
+}
 
-                            println!("}}");
-                        }
-                        "mermaid" => {
-                            println!("graph LR");
+fn run_extract(
+    file: PathBuf,
+    component: String,
+    output: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
 
-                            for node in &graph.nodes {
-                                let label = node.name.as_deref().unwrap_or(&node.id);
-                                let shape_open = match node.component_type {
-                                    earthsci_ast::graph::ComponentType::Model => "(",
-                                    earthsci_ast::graph::ComponentType::ReactionSystem => "[",
-                                    earthsci_ast::graph::ComponentType::DataLoader => "{",
-                                };
-                                let shape_close = match node.component_type {
-                                    earthsci_ast::graph::ComponentType::Model => ")",
-                                    earthsci_ast::graph::ComponentType::ReactionSystem => "]",
-                                    earthsci_ast::graph::ComponentType::DataLoader => "}",
-                                };
-                                println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
-                            }
+    // Check if component exists
+    if !component_exists(&esm_file, &component) {
+        eprintln!("Component '{component}' not found in the ESM file");
+        std::process::exit(1);
+    }
 
-                            for edge in &graph.edges {
-                                println!("  {} -->|{}| {}", edge.from, edge.coupling_type, edge.to);
-                            }
-                        }
-                        "json" => {
-                            let json_graph = serde_json::json!({
-                                "nodes": graph.nodes.iter().map(|n| serde_json::json!({
-                                    "id": n.id,
-                                    "type": match n.component_type {
-                                        earthsci_ast::graph::ComponentType::Model => "model",
-                                        earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
-                                        earthsci_ast::graph::ComponentType::DataLoader => "data_loader",
-                                    },
-                                    "name": n.name
-                                })).collect::<Vec<_>>(),
-                                "edges": graph.edges.iter().map(|e| serde_json::json!({
-                                    "from": e.from,
-                                    "to": e.to,
-                                    "type": e.coupling_type
-                                })).collect::<Vec<_>>()
-                            });
-                            println!("{}", serde_json::to_string_pretty(&json_graph)?);
-                        }
-                        _ => {
-                            eprintln!(
-                                "Unsupported graph format: {format}. Use dot, mermaid, or json."
-                            );
-                            std::process::exit(1);
-                        }
+    // Create a new ESM file with just the requested component
+    let mut extracted_esm = earthsci_ast::EsmFile {
+        coupling_roles: None,
+        // The extracted component is a NEW document. Any template call
+        // sites it had were already expanded at load, and metaparameters
+        // already folded, so it declares neither.
+        expression_templates: None,
+        metaparameters: None,
+        esm: esm_file.esm.clone(),
+        metadata: esm_file.metadata.clone(),
+        // Document-scoped registry (v0.8.0): preserve it on the
+        // extracted component so its `{ "from": <set> }` ranges resolve.
+        index_sets: esm_file.index_sets.clone(),
+        models: None,
+        reaction_systems: None,
+        data_loaders: None,
+        operators: None,
+        enums: None,
+        coupling: None,
+        domain: esm_file.domain.clone(),
+        function_tables: esm_file.function_tables.clone(),
+    };
+
+    // Extract the specific component
+    if let Some(ref models) = esm_file.models
+        && let Some(model) = models.get(&component)
+    {
+        let mut extracted_models = HashMap::new();
+        extracted_models.insert(component.clone(), model.clone());
+        extracted_esm.models = Some(extracted_models);
+    }
+
+    if let Some(ref reaction_systems) = esm_file.reaction_systems
+        && let Some(rs) = reaction_systems.get(&component)
+    {
+        let mut extracted_rs = HashMap::new();
+        extracted_rs.insert(component.clone(), rs.clone());
+        extracted_esm.reaction_systems = Some(extracted_rs);
+    }
+
+    if let Some(ref data_loaders) = esm_file.data_loaders
+        && let Some(dl) = data_loaders.get(&component)
+    {
+        let mut extracted_dl = HashMap::new();
+        extracted_dl.insert(component.clone(), dl.clone());
+        extracted_esm.data_loaders = Some(extracted_dl);
+    }
+
+    if let Some(ref operators) = esm_file.operators
+        && let Some(op) = operators.get(&component)
+    {
+        let mut extracted_op = HashMap::new();
+        extracted_op.insert(component.clone(), op.clone());
+        extracted_esm.operators = Some(extracted_op);
+    }
+
+    let output_content = save(&extracted_esm)?;
+
+    if let Some(output_path) = output {
+        fs::write(&output_path, output_content)?;
+        println!(
+            "Extracted component '{}' to {}",
+            component,
+            output_path.display()
+        );
+    } else {
+        print!("{output_content}");
+    }
+    Ok(())
+}
+
+fn run_diff(file1: PathBuf, file2: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let content1 = read_input(&file1)?;
+    let content2 = read_input(&file2)?;
+    let esm_file1 = load(&content1)?;
+    let esm_file2 = load(&content2)?;
+
+    println!("Comparing {} and {}:", file1.display(), file2.display());
+
+    if !semantic_compare(&esm_file1, &esm_file2)? {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
+
+    if let Some(ref reaction_systems) = esm_file.reaction_systems {
+        if let Some(rs) = reaction_systems.get(&system) {
+            println!("Stoichiometric matrix for reaction system '{system}':");
+
+            // Build a stable (sorted) species order and index map
+            let mut sorted_species: Vec<&String> = rs.species.keys().collect();
+            sorted_species.sort();
+            let species_index: HashMap<String, usize> = sorted_species
+                .iter()
+                .enumerate()
+                .map(|(i, name)| ((*name).clone(), i))
+                .collect();
+
+            // Print species header
+            print!("{:>15}", "");
+            for name in &sorted_species {
+                print!("{name:>10}");
+            }
+            println!();
+
+            // Print reaction stoichiometry
+            for (reaction_idx, reaction) in rs.reactions.iter().enumerate() {
+                print!("Reaction {:>3}:", reaction_idx + 1);
+
+                let mut coeffs = vec![0.0; rs.species.len()];
+
+                // Substrates (negative coefficients)
+                for substrate in reaction.substrates.iter().flatten() {
+                    if let Some(&idx) = species_index.get(&substrate.species) {
+                        coeffs[idx] -= substrate.coefficient;
                     }
                 }
-                "expression" => {
-                    // Expression-level graphs not yet implemented
-                    if let Some(ref _sys) = system {
-                        eprintln!(
-                            "Expression-level graphs for system '{_sys}' not yet implemented"
+
+                // Products (positive coefficients)
+                for product in reaction.products.iter().flatten() {
+                    if let Some(&idx) = species_index.get(&product.species) {
+                        coeffs[idx] += product.coefficient;
+                    }
+                }
+
+                for coeff in coeffs {
+                    print!("{coeff:>10.1}");
+                }
+                println!();
+            }
+        } else {
+            eprintln!("Reaction system '{system}' not found");
+            std::process::exit(1);
+        }
+    } else {
+        eprintln!("No reaction systems found in the file");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn run_graph(
+    file: PathBuf,
+    level: String,
+    format: String,
+    system: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
+
+    match level.as_str() {
+        "component" => {
+            let graph = component_graph(&esm_file);
+
+            match format.as_str() {
+                "dot" => {
+                    println!("digraph ESMComponents {{");
+                    println!("  rankdir=LR;");
+                    println!("  node [shape=box];");
+                    println!();
+
+                    // Nodes
+                    for node in &graph.nodes {
+                        let label = node.name.as_deref().unwrap_or(&node.id);
+                        let shape = match node.component_type {
+                            earthsci_ast::graph::ComponentType::Model => "ellipse",
+                            earthsci_ast::graph::ComponentType::ReactionSystem => "box",
+                            earthsci_ast::graph::ComponentType::DataLoader => "diamond",
+                        };
+                        println!(
+                            "  \"{}\" [label=\"{}\", shape={}];",
+                            node.id, label, shape
                         );
-                    } else {
-                        eprintln!("Expression-level graphs not yet implemented");
                     }
-                    std::process::exit(1);
+
+                    println!();
+
+                    // Edges
+                    for edge in &graph.edges {
+                        println!(
+                            "  \"{}\" -> \"{}\" [label=\"{}\"];",
+                            edge.from, edge.to, edge.coupling_type
+                        );
+                    }
+
+                    println!("}}");
                 }
-                _ => {
-                    eprintln!("Unsupported graph level: {level}. Use component or expression.");
-                    std::process::exit(1);
+                "mermaid" => {
+                    println!("graph LR");
+
+                    for node in &graph.nodes {
+                        let label = node.name.as_deref().unwrap_or(&node.id);
+                        let shape_open = match node.component_type {
+                            earthsci_ast::graph::ComponentType::Model => "(",
+                            earthsci_ast::graph::ComponentType::ReactionSystem => "[",
+                            earthsci_ast::graph::ComponentType::DataLoader => "{",
+                        };
+                        let shape_close = match node.component_type {
+                            earthsci_ast::graph::ComponentType::Model => ")",
+                            earthsci_ast::graph::ComponentType::ReactionSystem => "]",
+                            earthsci_ast::graph::ComponentType::DataLoader => "}",
+                        };
+                        println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
+                    }
+
+                    for edge in &graph.edges {
+                        println!("  {} -->|{}| {}", edge.from, edge.coupling_type, edge.to);
+                    }
                 }
+                "json" => {
+                    let json_graph = serde_json::json!({
+                        "nodes": graph.nodes.iter().map(|n| serde_json::json!({
+                            "id": n.id,
+                            "type": match n.component_type {
+                                earthsci_ast::graph::ComponentType::Model => "model",
+                                earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
+                                earthsci_ast::graph::ComponentType::DataLoader => "data_loader",
+                            },
+                            "name": n.name
+                        })).collect::<Vec<_>>(),
+                        "edges": graph.edges.iter().map(|e| serde_json::json!({
+                            "from": e.from,
+                            "to": e.to,
+                            "type": e.coupling_type
+                        })).collect::<Vec<_>>()
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_graph)?);
+                }
+                _ => reject_unknown("graph format", &format, "Use dot, mermaid, or json."),
             }
         }
-        Commands::Convert { input, output, to } => {
-            let content = read_input(&input)?;
-            let esm_file = load(&content)?;
-
-            let output_content = match to.as_str() {
-                "json" => save(&esm_file)?,
-                "compact-json" => save_compact(&esm_file)?,
-                _ => {
-                    eprintln!("Unsupported format: {to}. Use json or compact-json.");
-                    std::process::exit(1);
-                }
-            };
-
-            if let Some(output_path) = output {
-                fs::write(&output_path, output_content)?;
-                println!("Converted {} to {}", input.display(), output_path.display());
+        "expression" => {
+            // Expression-level graphs not yet implemented
+            if let Some(ref _sys) = system {
+                eprintln!("Expression-level graphs for system '{_sys}' not yet implemented");
             } else {
-                print!("{output_content}");
+                eprintln!("Expression-level graphs not yet implemented");
             }
+            std::process::exit(1);
         }
-        Commands::Analyze {
-            file,
-            analysis_type,
-        } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
+        _ => reject_unknown("graph level", &level, "Use component or expression."),
+    }
+    Ok(())
+}
 
-            println!("System Analysis for: {}", file.display());
-            println!("Analysis Type: {analysis_type}");
+fn run_convert(
+    input: PathBuf,
+    output: Option<PathBuf>,
+    to: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&input)?;
+    let esm_file = load(&content)?;
 
-            if !matches!(
-                analysis_type.as_str(),
-                "all" | "structure" | "complexity" | "coupling"
-            ) {
-                eprintln!(
-                    "Unsupported analysis type: {analysis_type}. Use all, structure, complexity, or coupling."
-                );
-                std::process::exit(1);
-            }
+    let output_content = match to.as_str() {
+        "json" => save(&esm_file)?,
+        "compact-json" => save_compact(&esm_file)?,
+        _ => reject_unknown("format", &to, "Use json or compact-json."),
+    };
 
-            if matches!(analysis_type.as_str(), "all" | "structure") {
-                {
-                    println!("\n=== STRUCTURAL ANALYSIS ===");
+    if let Some(output_path) = output {
+        fs::write(&output_path, output_content)?;
+        println!("Converted {} to {}", input.display(), output_path.display());
+    } else {
+        print!("{output_content}");
+    }
+    Ok(())
+}
 
-                    // Component count analysis
-                    let model_count = esm_file.models.as_ref().map(|m| m.len()).unwrap_or(0);
-                    let rs_count = esm_file
-                        .reaction_systems
-                        .as_ref()
-                        .map(|rs| rs.len())
-                        .unwrap_or(0);
-                    let dl_count = esm_file
-                        .data_loaders
-                        .as_ref()
-                        .map(|dl| dl.len())
-                        .unwrap_or(0);
-                    let op_count = esm_file.operators.as_ref().map(|op| op.len()).unwrap_or(0);
+fn run_analyze(file: PathBuf, analysis_type: String) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
 
-                    println!(
-                        "Components: {model_count} models, {rs_count} reaction systems, {dl_count} data loaders, {op_count} operators"
-                    );
+    println!("System Analysis for: {}", file.display());
+    println!("Analysis Type: {analysis_type}");
 
-                    // Equation and variable analysis
-                    let mut total_vars = 0;
-                    let mut total_eqs = 0;
-                    if let Some(ref models) = esm_file.models {
-                        for (model_id, model) in models {
-                            total_vars += model.variables.len();
-                            total_eqs += model.equations.len();
-                            println!(
-                                "  Model {}: {} variables, {} equations",
-                                model_id,
-                                model.variables.len(),
-                                model.equations.len()
-                            );
-                        }
-                    }
+    if !matches!(
+        analysis_type.as_str(),
+        "all" | "structure" | "complexity" | "coupling"
+    ) {
+        reject_unknown(
+            "analysis type",
+            &analysis_type,
+            "Use all, structure, complexity, or coupling.",
+        );
+    }
 
-                    // Species and reaction analysis
-                    let mut total_species = 0;
-                    let mut total_reactions = 0;
-                    if let Some(ref reaction_systems) = esm_file.reaction_systems {
-                        for (rs_id, rs) in reaction_systems {
-                            total_species += rs.species.len();
-                            total_reactions += rs.reactions.len();
-                            println!(
-                                "  Reaction System {}: {} species, {} reactions",
-                                rs_id,
-                                rs.species.len(),
-                                rs.reactions.len()
-                            );
-                        }
-                    }
+    if matches!(analysis_type.as_str(), "all" | "structure") {
+        {
+            println!("\n=== STRUCTURAL ANALYSIS ===");
 
-                    println!(
-                        "Total: {total_vars} variables, {total_eqs} equations, {total_species} species, {total_reactions} reactions"
-                    );
-                }
-            }
-            if matches!(analysis_type.as_str(), "all" | "complexity") {
-                print_complexity_analysis(&esm_file);
-            }
-            if matches!(analysis_type.as_str(), "all" | "coupling") {
-                {
-                    println!("\n=== COUPLING ANALYSIS ===");
-                    if let Some(ref coupling) = esm_file.coupling {
-                        println!("Coupling rules: {}", coupling.len());
-                        for (i, rule) in coupling.iter().enumerate() {
-                            match rule {
-                                earthsci_ast::CouplingEntry::OperatorCompose {
-                                    systems, ..
-                                } => {
-                                    if systems.len() >= 2 {
-                                        println!(
-                                            "  Rule {}: {} -> {} (OperatorCompose)",
-                                            i + 1,
-                                            systems[0],
-                                            systems[1]
-                                        );
-                                    }
-                                }
-                                earthsci_ast::CouplingEntry::Couple { systems, .. } => {
-                                    if systems.len() >= 2 {
-                                        println!(
-                                            "  Rule {}: {} <-> {} (Couple)",
-                                            i + 1,
-                                            systems[0],
-                                            systems[1]
-                                        );
-                                    }
-                                }
-                                earthsci_ast::CouplingEntry::VariableMap { from, to, .. } => {
-                                    println!("  Rule {}: {} -> {} (VariableMap)", i + 1, from, to);
-                                }
-                                earthsci_ast::CouplingEntry::OperatorApply { operator, .. } => {
-                                    println!("  Rule {}: {} (OperatorApply)", i + 1, operator);
-                                }
-                                earthsci_ast::CouplingEntry::Callback { callback_id, .. } => {
-                                    println!("  Rule {}: {} (Callback)", i + 1, callback_id);
-                                }
-                                earthsci_ast::CouplingEntry::Event { name, affects, .. } => {
-                                    let event_name = name.as_deref().unwrap_or("unnamed_event");
-                                    let systems: Vec<String> = affects
-                                        .as_ref()
-                                        .map(|affects| {
-                                            affects
-                                                .iter()
-                                                .filter_map(|affect| {
-                                                    if affect.lhs.contains('.') {
-                                                        Some(
-                                                            affect
-                                                                .lhs
-                                                                .split('.')
-                                                                .next()
-                                                                .unwrap_or("")
-                                                                .to_string(),
-                                                        )
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .collect()
-                                        })
-                                        .unwrap_or_default();
-                                    println!(
-                                        "  Rule {}: {} -> {:?} (Event)",
-                                        i + 1,
-                                        event_name,
-                                        systems
-                                    );
-                                }
-                                earthsci_ast::CouplingEntry::CouplingImport {
-                                    reference, ..
-                                } => {
-                                    println!("  Rule {}: {} (CouplingImport)", i + 1, reference);
-                                }
-                            }
-                        }
-                    } else {
-                        println!("No coupling rules defined");
-                    }
-                }
-            }
-        }
-        Commands::Simulate { file, time, output } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
-
-            println!("Running simulation for: {}", file.display());
-            println!("Simulation time: 0 → {time}");
-
-            let opts = earthsci_ast::SimulateOptions::default();
-            let params = HashMap::new();
-            let initial_conditions = HashMap::new();
-            let sol =
-                earthsci_ast::simulate(&esm_file, (0.0, time), &params, &initial_conditions, &opts)
-                    .map_err(|e| format!("simulation failed: {e}"))?;
+            // Component count analysis
+            let model_count = esm_file.models.as_ref().map(|m| m.len()).unwrap_or(0);
+            let rs_count = esm_file
+                .reaction_systems
+                .as_ref()
+                .map(|rs| rs.len())
+                .unwrap_or(0);
+            let dl_count = esm_file
+                .data_loaders
+                .as_ref()
+                .map(|dl| dl.len())
+                .unwrap_or(0);
+            let op_count = esm_file.operators.as_ref().map(|op| op.len()).unwrap_or(0);
 
             println!(
-                "✓ Simulation complete: {} output points, solver {}",
-                sol.time.len(),
-                sol.metadata.solver
+                "Components: {model_count} models, {rs_count} reaction systems, {dl_count} data loaders, {op_count} operators"
             );
-            if let Some(&t_final) = sol.time.last() {
-                println!("Final state at t = {t_final}:");
-                for (name, series) in sol.state_variable_names.iter().zip(sol.state.iter()) {
-                    if let Some(v) = series.last() {
-                        println!("  {name} = {v}");
-                    }
+
+            // Equation and variable analysis
+            let mut total_vars = 0;
+            let mut total_eqs = 0;
+            if let Some(ref models) = esm_file.models {
+                for (model_id, model) in models {
+                    total_vars += model.variables.len();
+                    total_eqs += model.equations.len();
+                    println!(
+                        "  Model {}: {} variables, {} equations",
+                        model_id,
+                        model.variables.len(),
+                        model.equations.len()
+                    );
                 }
             }
 
-            if let Some(output_path) = output {
-                let out = serde_json::json!({
-                    "time": sol.time,
-                    "state": sol.state,
-                    "state_variable_names": sol.state_variable_names,
-                    "solver": sol.metadata.solver,
-                });
-                fs::write(&output_path, serde_json::to_string_pretty(&out)?)?;
-                println!("Results written to: {}", output_path.display());
+            // Species and reaction analysis
+            let mut total_species = 0;
+            let mut total_reactions = 0;
+            if let Some(ref reaction_systems) = esm_file.reaction_systems {
+                for (rs_id, rs) in reaction_systems {
+                    total_species += rs.species.len();
+                    total_reactions += rs.reactions.len();
+                    println!(
+                        "  Reaction System {}: {} species, {} reactions",
+                        rs_id,
+                        rs.species.len(),
+                        rs.reactions.len()
+                    );
+                }
+            }
+
+            println!(
+                "Total: {total_vars} variables, {total_eqs} equations, {total_species} species, {total_reactions} reactions"
+            );
+        }
+    }
+    if matches!(analysis_type.as_str(), "all" | "complexity") {
+        print_complexity_analysis(&esm_file);
+    }
+    if matches!(analysis_type.as_str(), "all" | "coupling") {
+        {
+            println!("\n=== COUPLING ANALYSIS ===");
+            if let Some(ref coupling) = esm_file.coupling {
+                println!("Coupling rules: {}", coupling.len());
+                for (i, rule) in coupling.iter().enumerate() {
+                    match rule {
+                        earthsci_ast::CouplingEntry::OperatorCompose { systems, .. } => {
+                            if systems.len() >= 2 {
+                                println!(
+                                    "  Rule {}: {} -> {} (OperatorCompose)",
+                                    i + 1,
+                                    systems[0],
+                                    systems[1]
+                                );
+                            }
+                        }
+                        earthsci_ast::CouplingEntry::Couple { systems, .. } => {
+                            if systems.len() >= 2 {
+                                println!(
+                                    "  Rule {}: {} <-> {} (Couple)",
+                                    i + 1,
+                                    systems[0],
+                                    systems[1]
+                                );
+                            }
+                        }
+                        earthsci_ast::CouplingEntry::VariableMap { from, to, .. } => {
+                            println!("  Rule {}: {} -> {} (VariableMap)", i + 1, from, to);
+                        }
+                        earthsci_ast::CouplingEntry::OperatorApply { operator, .. } => {
+                            println!("  Rule {}: {} (OperatorApply)", i + 1, operator);
+                        }
+                        earthsci_ast::CouplingEntry::Callback { callback_id, .. } => {
+                            println!("  Rule {}: {} (Callback)", i + 1, callback_id);
+                        }
+                        earthsci_ast::CouplingEntry::Event { name, affects, .. } => {
+                            let event_name = name.as_deref().unwrap_or("unnamed_event");
+                            let systems: Vec<String> = affects
+                                .as_ref()
+                                .map(|affects| {
+                                    affects
+                                        .iter()
+                                        .filter_map(|affect| {
+                                            if affect.lhs.contains('.') {
+                                                Some(
+                                                    affect
+                                                        .lhs
+                                                        .split('.')
+                                                        .next()
+                                                        .unwrap_or("")
+                                                        .to_string(),
+                                                )
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            println!("  Rule {}: {} -> {:?} (Event)", i + 1, event_name, systems);
+                        }
+                        earthsci_ast::CouplingEntry::CouplingImport { reference, .. } => {
+                            println!("  Rule {}: {} (CouplingImport)", i + 1, reference);
+                        }
+                    }
+                }
+            } else {
+                println!("No coupling rules defined");
             }
         }
-        Commands::Info { file } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
+    }
+    Ok(())
+}
 
-            println!("ESM File Information for: {}", file.display());
-            println!("ESM Version: {}", esm_file.esm);
+fn run_simulate(
+    file: PathBuf,
+    time: f64,
+    output: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
 
-            if let Some(ref name) = esm_file.metadata.name {
-                println!("Model Name: {name}");
+    println!("Running simulation for: {}", file.display());
+    println!("Simulation time: 0 → {time}");
+
+    let opts = earthsci_ast::SimulateOptions::default();
+    let params = HashMap::new();
+    let initial_conditions = HashMap::new();
+    let sol = earthsci_ast::simulate(&esm_file, (0.0, time), &params, &initial_conditions, &opts)
+        .map_err(|e| format!("simulation failed: {e}"))?;
+
+    println!(
+        "✓ Simulation complete: {} output points, solver {}",
+        sol.time.len(),
+        sol.metadata.solver
+    );
+    if let Some(&t_final) = sol.time.last() {
+        println!("Final state at t = {t_final}:");
+        for (name, series) in sol.state_variable_names.iter().zip(sol.state.iter()) {
+            if let Some(v) = series.last() {
+                println!("  {name} = {v}");
             }
-            if let Some(ref description) = esm_file.metadata.description {
-                println!("Description: {description}");
+        }
+    }
+
+    if let Some(output_path) = output {
+        let out = serde_json::json!({
+            "time": sol.time,
+            "state": sol.state,
+            "state_variable_names": sol.state_variable_names,
+            "solver": sol.metadata.solver,
+        });
+        fs::write(&output_path, serde_json::to_string_pretty(&out)?)?;
+        println!("Results written to: {}", output_path.display());
+    }
+    Ok(())
+}
+
+fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
+
+    println!("ESM File Information for: {}", file.display());
+    println!("ESM Version: {}", esm_file.esm);
+
+    if let Some(ref name) = esm_file.metadata.name {
+        println!("Model Name: {name}");
+    }
+    if let Some(ref description) = esm_file.metadata.description {
+        println!("Description: {description}");
+    }
+    if let Some(ref authors) = esm_file.metadata.authors {
+        println!("Authors: {}", authors.join(", "));
+    }
+
+    if let Some(ref models) = esm_file.models {
+        println!("Models: {} component(s)", models.len());
+        for (id, model) in models {
+            println!(
+                "  - {} ({} vars, {} eqs)",
+                id,
+                model.variables.len(),
+                model.equations.len()
+            );
+        }
+    }
+
+    if let Some(ref reaction_systems) = esm_file.reaction_systems {
+        println!("Reaction Systems: {} component(s)", reaction_systems.len());
+        for (id, rs) in reaction_systems {
+            println!(
+                "  - {} ({} species, {} reactions)",
+                id,
+                rs.species.len(),
+                rs.reactions.len()
+            );
+        }
+    }
+
+    if let Some(ref data_loaders) = esm_file.data_loaders {
+        println!("Data Loaders: {} component(s)", data_loaders.len());
+    }
+
+    if let Some(ref operators) = esm_file.operators {
+        println!("Operators: {} component(s)", operators.len());
+    }
+
+    if let Some(ref coupling) = esm_file.coupling {
+        println!("Coupling Rules: {} rule(s)", coupling.len());
+    }
+    Ok(())
+}
+
+fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
+
+    println!("Units Analysis for: {}", file.display());
+
+    if check {
+        println!("\n=== DIMENSIONAL CONSISTENCY CHECK ===");
+        // Use existing validation for unit checking
+        let validation_result = validate(&esm_file);
+
+        if !validation_result.unit_warnings.is_empty() {
+            println!("Unit warnings:");
+            for warning in &validation_result.unit_warnings {
+                println!("  ⚠ {warning}");
             }
-            if let Some(ref authors) = esm_file.metadata.authors {
-                println!("Authors: {}", authors.join(", "));
+        } else {
+            println!("✓ All units are dimensionally consistent");
+        }
+    } else {
+        println!("\n=== COMPREHENSIVE UNIT ANALYSIS ===");
+
+        // Analyze units in all components
+        analyze_model_units(&esm_file);
+        analyze_reaction_system_units(&esm_file);
+
+        // Unit system summary
+        println!("\n=== UNIT SYSTEM SUMMARY ===");
+        let unit_summary = collect_unit_types(&esm_file);
+
+        if unit_summary.is_empty() {
+            println!("No units specified in the model");
+        } else {
+            println!("Unit types found:");
+            for unit_type in &unit_summary {
+                println!("  - {unit_type}");
             }
+
+            // Unit system recommendations
+            println!("\n=== RECOMMENDATIONS ===");
+            if unit_summary.contains(&"m".to_string()) && unit_summary.contains(&"cm".to_string()) {
+                println!("⚠ Mixed length units detected (m, cm) - consider standardizing");
+            }
+            if unit_summary.contains(&"s".to_string()) && unit_summary.contains(&"min".to_string())
+            {
+                println!("⚠ Mixed time units detected (s, min) - consider standardizing");
+            }
+
+            // Check for SI compliance
+            let si_base_units = ["m", "kg", "s", "A", "K", "mol", "cd"];
+            let using_si = unit_summary
+                .iter()
+                .any(|u| si_base_units.contains(&u.as_str()));
+            if using_si {
+                println!("✓ SI base units detected - good for scientific consistency");
+            } else {
+                println!("ℹ Consider using SI base units for scientific consistency");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_coupling_analysis(file: PathBuf, depth: String) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
+
+    println!("Coupling Dependency Analysis for: {}", file.display());
+    println!("Depth: {depth}");
+
+    let graph = component_graph(&esm_file);
+    println!(
+        "Found {} components with {} coupling relationships",
+        graph.nodes.len(),
+        graph.edges.len()
+    );
+
+    for edge in &graph.edges {
+        println!("  {} --[{}]--> {}", edge.from, edge.coupling_type, edge.to);
+    }
+
+    match depth.as_str() {
+        "shallow" => {
+            println!("Shallow analysis complete");
+        }
+        "deep" => {
+            perform_deep_coupling_analysis(&esm_file);
+        }
+        _ => reject_unknown("depth", &depth, "Use shallow or deep."),
+    }
+    Ok(())
+}
+
+fn run_performance_profile(
+    file: PathBuf,
+    profile_type: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
+
+    println!("Performance Profile for: {}", file.display());
+    println!("Profile type: {profile_type}");
+
+    match profile_type.as_str() {
+        "memory" => {
+            println!("\n=== MEMORY ANALYSIS ===");
+
+            // File size analysis
+            let file_size = content.len();
+            println!(
+                "File size: {} bytes ({:.2} KB)",
+                file_size,
+                file_size as f64 / 1024.0
+            );
+
+            // Component memory estimation
+            let _model_count = esm_file.models.as_ref().map(|m| m.len()).unwrap_or(0);
+            let _rs_count = esm_file
+                .reaction_systems
+                .as_ref()
+                .map(|rs| rs.len())
+                .unwrap_or(0);
+            let _dl_count = esm_file
+                .data_loaders
+                .as_ref()
+                .map(|dl| dl.len())
+                .unwrap_or(0);
+            let _op_count = esm_file.operators.as_ref().map(|op| op.len()).unwrap_or(0);
+
+            // Estimate memory usage
+            let mut estimated_memory = file_size; // Base JSON representation
 
             if let Some(ref models) = esm_file.models {
-                println!("Models: {} component(s)", models.len());
-                for (id, model) in models {
+                for (model_id, model) in models {
+                    let vars_mem = model.variables.len() * 64; // ~64 bytes per variable
+                    let eqs_mem = model.equations.len() * 128; // ~128 bytes per equation
+                    estimated_memory += vars_mem + eqs_mem;
                     println!(
-                        "  - {} ({} vars, {} eqs)",
-                        id,
+                        "  Model {}: ~{} bytes ({} vars, {} eqs)",
+                        model_id,
+                        vars_mem + eqs_mem,
                         model.variables.len(),
                         model.equations.len()
                     );
@@ -2431,570 +2290,442 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if let Some(ref reaction_systems) = esm_file.reaction_systems {
-                println!("Reaction Systems: {} component(s)", reaction_systems.len());
-                for (id, rs) in reaction_systems {
+                for (rs_id, rs) in reaction_systems {
+                    let species_mem = rs.species.len() * 32; // ~32 bytes per species
+                    let reactions_mem = rs.reactions.len() * 256; // ~256 bytes per reaction
+                    estimated_memory += species_mem + reactions_mem;
                     println!(
-                        "  - {} ({} species, {} reactions)",
-                        id,
+                        "  Reaction System {}: ~{} bytes ({} species, {} reactions)",
+                        rs_id,
+                        species_mem + reactions_mem,
                         rs.species.len(),
                         rs.reactions.len()
                     );
                 }
             }
 
-            if let Some(ref data_loaders) = esm_file.data_loaders {
-                println!("Data Loaders: {} component(s)", data_loaders.len());
-            }
-
-            if let Some(ref operators) = esm_file.operators {
-                println!("Operators: {} component(s)", operators.len());
-            }
-
-            if let Some(ref coupling) = esm_file.coupling {
-                println!("Coupling Rules: {} rule(s)", coupling.len());
-            }
-        }
-
-        // ANALYSIS COMMANDS
-        Commands::Units { file, check } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
-
-            println!("Units Analysis for: {}", file.display());
-
-            if check {
-                println!("\n=== DIMENSIONAL CONSISTENCY CHECK ===");
-                // Use existing validation for unit checking
-                let validation_result = validate(&esm_file);
-
-                if !validation_result.unit_warnings.is_empty() {
-                    println!("Unit warnings:");
-                    for warning in &validation_result.unit_warnings {
-                        println!("  ⚠ {warning}");
-                    }
-                } else {
-                    println!("✓ All units are dimensionally consistent");
-                }
-            } else {
-                println!("\n=== COMPREHENSIVE UNIT ANALYSIS ===");
-
-                // Analyze units in all components
-                analyze_model_units(&esm_file);
-                analyze_reaction_system_units(&esm_file);
-
-                // Unit system summary
-                println!("\n=== UNIT SYSTEM SUMMARY ===");
-                let unit_summary = collect_unit_types(&esm_file);
-
-                if unit_summary.is_empty() {
-                    println!("No units specified in the model");
-                } else {
-                    println!("Unit types found:");
-                    for unit_type in &unit_summary {
-                        println!("  - {unit_type}");
-                    }
-
-                    // Unit system recommendations
-                    println!("\n=== RECOMMENDATIONS ===");
-                    if unit_summary.contains(&"m".to_string())
-                        && unit_summary.contains(&"cm".to_string())
-                    {
-                        println!("⚠ Mixed length units detected (m, cm) - consider standardizing");
-                    }
-                    if unit_summary.contains(&"s".to_string())
-                        && unit_summary.contains(&"min".to_string())
-                    {
-                        println!("⚠ Mixed time units detected (s, min) - consider standardizing");
-                    }
-
-                    // Check for SI compliance
-                    let si_base_units = ["m", "kg", "s", "A", "K", "mol", "cd"];
-                    let using_si = unit_summary
-                        .iter()
-                        .any(|u| si_base_units.contains(&u.as_str()));
-                    if using_si {
-                        println!("✓ SI base units detected - good for scientific consistency");
-                    } else {
-                        println!("ℹ Consider using SI base units for scientific consistency");
-                    }
-                }
-            }
-        }
-
-        Commands::CouplingAnalysis { file, depth } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
-
-            println!("Coupling Dependency Analysis for: {}", file.display());
-            println!("Depth: {depth}");
-
-            let graph = component_graph(&esm_file);
             println!(
-                "Found {} components with {} coupling relationships",
-                graph.nodes.len(),
-                graph.edges.len()
+                "Total estimated memory: {} bytes ({:.2} KB)",
+                estimated_memory,
+                estimated_memory as f64 / 1024.0
             );
 
-            for edge in &graph.edges {
-                println!("  {} --[{}]--> {}", edge.from, edge.coupling_type, edge.to);
-            }
-
-            match depth.as_str() {
-                "shallow" => {
-                    println!("Shallow analysis complete");
-                }
-                "deep" => {
-                    perform_deep_coupling_analysis(&esm_file);
-                }
-                _ => {
-                    eprintln!("Unsupported depth: {depth}. Use shallow or deep.");
-                    std::process::exit(1);
-                }
+            // Memory optimization suggestions
+            if file_size > 10000 {
+                // > 10KB
+                println!("\n=== MEMORY OPTIMIZATION SUGGESTIONS ===");
+                println!("- Consider using compact JSON format for smaller file sizes");
+                println!("- Use references instead of duplicating common expressions");
             }
         }
+        "time" => {
+            println!("\n=== TIME ANALYSIS ===");
 
+            // Parsing benchmark
+            let iterations = 100;
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                let _ = load(&content)?;
+            }
+            let parse_duration = start.elapsed();
+            println!(
+                "Parse time: {} iterations in {:?} ({:?}/iter)",
+                iterations,
+                parse_duration,
+                parse_duration / iterations as u32
+            );
+
+            // Validation benchmark
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                let _ = validate(&esm_file);
+            }
+            let validate_duration = start.elapsed();
+            println!(
+                "Validate time: {} iterations in {:?} ({:?}/iter)",
+                iterations,
+                validate_duration,
+                validate_duration / iterations as u32
+            );
+
+            // Expression complexity analysis
+            if let Some(ref models) = esm_file.models {
+                println!("\n=== EXPRESSION COMPLEXITY ===");
+                for (model_id, model) in models {
+                    let mut max_depth = 0;
+                    let mut total_nodes = 0;
+
+                    for equation in &model.equations {
+                        let lhs_depth = expression_depth(&equation.lhs);
+                        let rhs_depth = expression_depth(&equation.rhs);
+                        max_depth = max_depth.max(lhs_depth).max(rhs_depth);
+
+                        total_nodes += count_expression_nodes(&equation.lhs);
+                        total_nodes += count_expression_nodes(&equation.rhs);
+                    }
+
+                    println!(
+                        "  Model {model_id}: max depth = {max_depth}, total nodes = {total_nodes}"
+                    );
+                }
+            }
+
+            // Performance suggestions
+            println!("\n=== PERFORMANCE SUGGESTIONS ===");
+            if parse_duration.as_millis() > 100 {
+                println!("- Parse time is high; consider SIMD JSON parsing for large files");
+            }
+            if validate_duration.as_millis() > 50 {
+                println!("- Validation time is high; consider caching validation results");
+            }
+        }
+        "both" => {
+            // Run both memory and time analysis
+            println!("=== COMBINED PERFORMANCE ANALYSIS ===");
+            // Reuse the above logic for both types
+
+            // Memory analysis (simplified)
+            let file_size = content.len();
+            println!(
+                "File size: {} bytes ({:.2} KB)",
+                file_size,
+                file_size as f64 / 1024.0
+            );
+
+            // Time analysis (simplified)
+            let iterations = 50;
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                let _ = load(&content)?;
+            }
+            let parse_duration = start.elapsed();
+            println!("Parse time: {:?}/iter", parse_duration / iterations as u32);
+
+            // Overall assessment
+            println!("\n=== OVERALL ASSESSMENT ===");
+            if file_size < 1000 {
+                println!("✓ Small file size - good performance expected");
+            } else if file_size < 10000 {
+                println!("- Medium file size - acceptable performance");
+            } else {
+                println!("⚠ Large file size - consider optimization");
+            }
+        }
+        _ => reject_unknown("profile type", &profile_type, "Use memory, time, or both."),
+    }
+    Ok(())
+}
+
+fn run_compare(
+    file1: PathBuf,
+    file2: PathBuf,
+    comparison_type: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content1 = read_input(&file1)?;
+    let content2 = read_input(&file2)?;
+    let esm_file1 = load(&content1)?;
+    let esm_file2 = load(&content2)?;
+
+    println!("Comparing {} and {}:", file1.display(), file2.display());
+    println!("Comparison type: {comparison_type}");
+
+    match comparison_type.as_str() {
+        "semantic" => {
+            // Report-only: unlike `diff`, `compare` does not set a
+            // failing exit code on divergence.
+            let _ = semantic_compare(&esm_file1, &esm_file2)?;
+        }
+        "structural" => {
+            perform_structural_comparison(&esm_file1, &esm_file2);
+        }
+        "numerical" => {
+            perform_numerical_comparison(&esm_file1, &esm_file2);
+        }
+        _ => reject_unknown(
+            "comparison type",
+            &comparison_type,
+            "Use semantic, structural, or numerical.",
+        ),
+    }
+    Ok(())
+}
+
+fn run_optimize(file: PathBuf, opt_type: String) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+    let esm_file = load(&content)?;
+
+    println!("Optimization Analysis for: {}", file.display());
+    println!("Optimization type: {opt_type}");
+
+    match opt_type.as_str() {
+        "expression" => {
+            analyze_expression_optimization(&esm_file);
+        }
+        "structure" => {
+            analyze_structure_optimization(&esm_file);
+        }
+        "performance" => {
+            analyze_performance_optimization(&esm_file);
+        }
+        _ => reject_unknown(
+            "optimization type",
+            &opt_type,
+            "Use expression, structure, or performance.",
+        ),
+    }
+    Ok(())
+}
+
+fn run_init(name: String, template: String) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Creating new ESM project: {name}");
+    println!("Template: {template}");
+
+    let project_dir = PathBuf::from(&name);
+
+    if project_dir.exists() {
+        eprintln!("Directory '{name}' already exists");
+        std::process::exit(1);
+    }
+
+    fs::create_dir(&project_dir)?;
+
+    // Create basic ESM template (see the TEMPLATE_* consts; each is
+    // load()-checked by the `init_templates_are_loadable` unit test).
+    let template_content = match template.as_str() {
+        "minimal" => TEMPLATE_MINIMAL,
+        "atmospheric" => TEMPLATE_ATMOSPHERIC,
+        "ecosystem" => TEMPLATE_ECOSYSTEM,
+        "coupling" => TEMPLATE_COUPLING,
+        _ => reject_unknown(
+            "template",
+            &template,
+            "Use minimal, atmospheric, ecosystem, or coupling.",
+        ),
+    };
+
+    let final_content = template_content.replace("{name}", &name);
+
+    // Defensive self-check: never write a file our own loader rejects.
+    if let Err(e) = load(&final_content) {
+        eprintln!("internal error: generated template does not load: {e}");
+        std::process::exit(1);
+    }
+
+    let esm_file = project_dir.join(format!("{name}.esm"));
+    fs::write(&esm_file, final_content)?;
+
+    println!("Created project '{name}' with template '{template}'");
+    println!("Main file: {}", esm_file.display());
+    Ok(())
+}
+
+fn run_validate_fixtures(
+    directory: PathBuf,
+    recursive: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Validating fixtures in: {}", directory.display());
+    println!("Recursive: {recursive}");
+
+    if !directory.is_dir() {
+        eprintln!("Directory does not exist: {}", directory.display());
+        std::process::exit(1);
+    }
+
+    let mut files = Vec::new();
+    collect_esm_files(&directory, recursive, &mut files)?;
+    files.sort();
+
+    if files.is_empty() {
+        println!("No .esm files found");
+    }
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for path in &files {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("✗ {} (cannot read: {e})", path.display());
+                failed += 1;
+                continue;
+            }
+        };
+        let result = validate_complete(&content, path.parent());
+        if result.is_valid {
+            println!("✓ {}", path.display());
+            passed += 1;
+        } else {
+            let n = result.schema_errors.len() + result.structural_errors.len();
+            println!("✗ {} ({n} error(s))", path.display());
+            failed += 1;
+        }
+    }
+
+    println!("\n{passed} passed, {failed} failed ({} total)", files.len());
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn run_benchmark(
+    file: PathBuf,
+    bench_type: String,
+    iterations: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+
+    println!("Benchmarking: {}", file.display());
+    println!("Type: {bench_type}, Iterations: {iterations}");
+
+    match bench_type.as_str() {
+        "parse" => bench_parse(&content, iterations)?,
+        "validate" => bench_validate(&content, iterations)?,
+        "simulate" => bench_simulate(&content, iterations)?,
+        "all" => {
+            bench_parse(&content, iterations)?;
+            bench_validate(&content, iterations)?;
+            // A file may be valid but not simulatable (e.g. no ODE
+            // system); report that rather than failing the whole run.
+            if let Err(e) = bench_simulate(&content, iterations) {
+                println!("Simulate: skipped ({e})");
+            }
+        }
+        _ => reject_unknown(
+            "benchmark type",
+            &bench_type,
+            "Use all, parse, validate, or simulate.",
+        ),
+    }
+    Ok(())
+}
+
+fn run_schema_check(
+    file: PathBuf,
+    schema_version: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = read_input(&file)?;
+
+    println!("Schema check for: {}", file.display());
+    if let Some(ref version) = schema_version {
+        println!("Target schema version: {version}");
+    }
+
+    // Load performs schema validation
+    match load(&content) {
+        Ok(_) => println!("✓ Schema validation passed"),
+        Err(e) => {
+            println!("✗ Schema validation failed: {e}");
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
+    println!(
+        "Round-trip test for: {} ({} rounds)",
+        file.display(),
+        rounds
+    );
+
+    let original_content = read_input(&file)?;
+    let mut content = original_content.clone();
+
+    for round in 1..=rounds {
+        // Load
+        let esm_file = match load(&content) {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("Round {round}: Load failed: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        // Save
+        content = match save(&esm_file) {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("Round {round}: Save failed: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        println!("Round {round}: OK");
+    }
+
+    // Check if final content matches original (semantically)
+    let original_esm = load(&original_content)?;
+    let final_esm = load(&content)?;
+
+    let original_json = serde_json::to_value(&original_esm)?;
+    let final_json = serde_json::to_value(&final_esm)?;
+
+    if original_json == final_json {
+        println!("✓ Round-trip fidelity maintained");
+    } else {
+        println!("✗ Round-trip fidelity lost");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Validate { file, verbose } => run_validate(file, verbose),
+        Commands::Pretty { file, format } => run_pretty(file, format),
+        Commands::Extract {
+            file,
+            component,
+            output,
+        } => run_extract(file, component, output),
+        Commands::Diff { file1, file2 } => run_diff(file1, file2),
+        Commands::Stoich { file, system } => run_stoich(file, system),
+        Commands::Graph {
+            file,
+            level,
+            format,
+            system,
+        } => run_graph(file, level, format, system),
+        Commands::Convert { input, output, to } => run_convert(input, output, to),
+        Commands::Analyze {
+            file,
+            analysis_type,
+        } => run_analyze(file, analysis_type),
+        Commands::Simulate { file, time, output } => run_simulate(file, time, output),
+        Commands::Info { file } => run_info(file),
+        Commands::Units { file, check } => run_units(file, check),
+        Commands::CouplingAnalysis { file, depth } => run_coupling_analysis(file, depth),
         Commands::PerformanceProfile { file, profile_type } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
-
-            println!("Performance Profile for: {}", file.display());
-            println!("Profile type: {profile_type}");
-
-            match profile_type.as_str() {
-                "memory" => {
-                    println!("\n=== MEMORY ANALYSIS ===");
-
-                    // File size analysis
-                    let file_size = content.len();
-                    println!(
-                        "File size: {} bytes ({:.2} KB)",
-                        file_size,
-                        file_size as f64 / 1024.0
-                    );
-
-                    // Component memory estimation
-                    let _model_count = esm_file.models.as_ref().map(|m| m.len()).unwrap_or(0);
-                    let _rs_count = esm_file
-                        .reaction_systems
-                        .as_ref()
-                        .map(|rs| rs.len())
-                        .unwrap_or(0);
-                    let _dl_count = esm_file
-                        .data_loaders
-                        .as_ref()
-                        .map(|dl| dl.len())
-                        .unwrap_or(0);
-                    let _op_count = esm_file.operators.as_ref().map(|op| op.len()).unwrap_or(0);
-
-                    // Estimate memory usage
-                    let mut estimated_memory = file_size; // Base JSON representation
-
-                    if let Some(ref models) = esm_file.models {
-                        for (model_id, model) in models {
-                            let vars_mem = model.variables.len() * 64; // ~64 bytes per variable
-                            let eqs_mem = model.equations.len() * 128; // ~128 bytes per equation
-                            estimated_memory += vars_mem + eqs_mem;
-                            println!(
-                                "  Model {}: ~{} bytes ({} vars, {} eqs)",
-                                model_id,
-                                vars_mem + eqs_mem,
-                                model.variables.len(),
-                                model.equations.len()
-                            );
-                        }
-                    }
-
-                    if let Some(ref reaction_systems) = esm_file.reaction_systems {
-                        for (rs_id, rs) in reaction_systems {
-                            let species_mem = rs.species.len() * 32; // ~32 bytes per species
-                            let reactions_mem = rs.reactions.len() * 256; // ~256 bytes per reaction
-                            estimated_memory += species_mem + reactions_mem;
-                            println!(
-                                "  Reaction System {}: ~{} bytes ({} species, {} reactions)",
-                                rs_id,
-                                species_mem + reactions_mem,
-                                rs.species.len(),
-                                rs.reactions.len()
-                            );
-                        }
-                    }
-
-                    println!(
-                        "Total estimated memory: {} bytes ({:.2} KB)",
-                        estimated_memory,
-                        estimated_memory as f64 / 1024.0
-                    );
-
-                    // Memory optimization suggestions
-                    if file_size > 10000 {
-                        // > 10KB
-                        println!("\n=== MEMORY OPTIMIZATION SUGGESTIONS ===");
-                        println!("- Consider using compact JSON format for smaller file sizes");
-                        println!("- Use references instead of duplicating common expressions");
-                    }
-                }
-                "time" => {
-                    println!("\n=== TIME ANALYSIS ===");
-
-                    // Parsing benchmark
-                    let iterations = 100;
-                    let start = std::time::Instant::now();
-                    for _ in 0..iterations {
-                        let _ = load(&content)?;
-                    }
-                    let parse_duration = start.elapsed();
-                    println!(
-                        "Parse time: {} iterations in {:?} ({:?}/iter)",
-                        iterations,
-                        parse_duration,
-                        parse_duration / iterations as u32
-                    );
-
-                    // Validation benchmark
-                    let start = std::time::Instant::now();
-                    for _ in 0..iterations {
-                        let _ = validate(&esm_file);
-                    }
-                    let validate_duration = start.elapsed();
-                    println!(
-                        "Validate time: {} iterations in {:?} ({:?}/iter)",
-                        iterations,
-                        validate_duration,
-                        validate_duration / iterations as u32
-                    );
-
-                    // Expression complexity analysis
-                    if let Some(ref models) = esm_file.models {
-                        println!("\n=== EXPRESSION COMPLEXITY ===");
-                        for (model_id, model) in models {
-                            let mut max_depth = 0;
-                            let mut total_nodes = 0;
-
-                            for equation in &model.equations {
-                                let lhs_depth = expression_depth(&equation.lhs);
-                                let rhs_depth = expression_depth(&equation.rhs);
-                                max_depth = max_depth.max(lhs_depth).max(rhs_depth);
-
-                                total_nodes += count_expression_nodes(&equation.lhs);
-                                total_nodes += count_expression_nodes(&equation.rhs);
-                            }
-
-                            println!(
-                                "  Model {model_id}: max depth = {max_depth}, total nodes = {total_nodes}"
-                            );
-                        }
-                    }
-
-                    // Performance suggestions
-                    println!("\n=== PERFORMANCE SUGGESTIONS ===");
-                    if parse_duration.as_millis() > 100 {
-                        println!(
-                            "- Parse time is high; consider SIMD JSON parsing for large files"
-                        );
-                    }
-                    if validate_duration.as_millis() > 50 {
-                        println!("- Validation time is high; consider caching validation results");
-                    }
-                }
-                "both" => {
-                    // Run both memory and time analysis
-                    println!("=== COMBINED PERFORMANCE ANALYSIS ===");
-                    // Reuse the above logic for both types
-
-                    // Memory analysis (simplified)
-                    let file_size = content.len();
-                    println!(
-                        "File size: {} bytes ({:.2} KB)",
-                        file_size,
-                        file_size as f64 / 1024.0
-                    );
-
-                    // Time analysis (simplified)
-                    let iterations = 50;
-                    let start = std::time::Instant::now();
-                    for _ in 0..iterations {
-                        let _ = load(&content)?;
-                    }
-                    let parse_duration = start.elapsed();
-                    println!("Parse time: {:?}/iter", parse_duration / iterations as u32);
-
-                    // Overall assessment
-                    println!("\n=== OVERALL ASSESSMENT ===");
-                    if file_size < 1000 {
-                        println!("✓ Small file size - good performance expected");
-                    } else if file_size < 10000 {
-                        println!("- Medium file size - acceptable performance");
-                    } else {
-                        println!("⚠ Large file size - consider optimization");
-                    }
-                }
-                _ => {
-                    eprintln!(
-                        "Unsupported profile type: {profile_type}. Use memory, time, or both."
-                    );
-                    std::process::exit(1);
-                }
-            }
+            run_performance_profile(file, profile_type)
         }
-
         Commands::Compare {
             file1,
             file2,
             comparison_type,
-        } => {
-            let content1 = read_input(&file1)?;
-            let content2 = read_input(&file2)?;
-            let esm_file1 = load(&content1)?;
-            let esm_file2 = load(&content2)?;
-
-            println!("Comparing {} and {}:", file1.display(), file2.display());
-            println!("Comparison type: {comparison_type}");
-
-            match comparison_type.as_str() {
-                "semantic" => {
-                    // Report-only: unlike `diff`, `compare` does not set a
-                    // failing exit code on divergence.
-                    let _ = semantic_compare(&esm_file1, &esm_file2)?;
-                }
-                "structural" => {
-                    perform_structural_comparison(&esm_file1, &esm_file2);
-                }
-                "numerical" => {
-                    perform_numerical_comparison(&esm_file1, &esm_file2);
-                }
-                _ => {
-                    eprintln!(
-                        "Unsupported comparison type: {comparison_type}. Use semantic, structural, or numerical."
-                    );
-                    std::process::exit(1);
-                }
-            }
-        }
-
-        Commands::Optimize { file, opt_type } => {
-            let content = read_input(&file)?;
-            let esm_file = load(&content)?;
-
-            println!("Optimization Analysis for: {}", file.display());
-            println!("Optimization type: {opt_type}");
-
-            match opt_type.as_str() {
-                "expression" => {
-                    analyze_expression_optimization(&esm_file);
-                }
-                "structure" => {
-                    analyze_structure_optimization(&esm_file);
-                }
-                "performance" => {
-                    analyze_performance_optimization(&esm_file);
-                }
-                _ => {
-                    eprintln!(
-                        "Unsupported optimization type: {opt_type}. Use expression, structure, or performance."
-                    );
-                    std::process::exit(1);
-                }
-            }
-        }
-
-        // DEVELOPMENT COMMANDS
-        Commands::Init { name, template } => {
-            println!("Creating new ESM project: {name}");
-            println!("Template: {template}");
-
-            let project_dir = PathBuf::from(&name);
-
-            if project_dir.exists() {
-                eprintln!("Directory '{name}' already exists");
-                std::process::exit(1);
-            }
-
-            fs::create_dir(&project_dir)?;
-
-            // Create basic ESM template (see the TEMPLATE_* consts; each is
-            // load()-checked by the `init_templates_are_loadable` unit test).
-            let template_content = match template.as_str() {
-                "minimal" => TEMPLATE_MINIMAL,
-                "atmospheric" => TEMPLATE_ATMOSPHERIC,
-                "ecosystem" => TEMPLATE_ECOSYSTEM,
-                "coupling" => TEMPLATE_COUPLING,
-                _ => {
-                    eprintln!(
-                        "Unsupported template: {template}. Use minimal, atmospheric, ecosystem, or coupling."
-                    );
-                    std::process::exit(1);
-                }
-            };
-
-            let final_content = template_content.replace("{name}", &name);
-
-            // Defensive self-check: never write a file our own loader rejects.
-            if let Err(e) = load(&final_content) {
-                eprintln!("internal error: generated template does not load: {e}");
-                std::process::exit(1);
-            }
-
-            let esm_file = project_dir.join(format!("{name}.esm"));
-            fs::write(&esm_file, final_content)?;
-
-            println!("Created project '{name}' with template '{template}'");
-            println!("Main file: {}", esm_file.display());
-        }
-
+        } => run_compare(file1, file2, comparison_type),
+        Commands::Optimize { file, opt_type } => run_optimize(file, opt_type),
+        Commands::Init { name, template } => run_init(name, template),
         Commands::ValidateFixtures {
             directory,
             recursive,
-        } => {
-            println!("Validating fixtures in: {}", directory.display());
-            println!("Recursive: {recursive}");
-
-            if !directory.is_dir() {
-                eprintln!("Directory does not exist: {}", directory.display());
-                std::process::exit(1);
-            }
-
-            let mut files = Vec::new();
-            collect_esm_files(&directory, recursive, &mut files)?;
-            files.sort();
-
-            if files.is_empty() {
-                println!("No .esm files found");
-            }
-
-            let mut passed = 0usize;
-            let mut failed = 0usize;
-            for path in &files {
-                let content = match fs::read_to_string(path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        println!("✗ {} (cannot read: {e})", path.display());
-                        failed += 1;
-                        continue;
-                    }
-                };
-                let result = validate_complete(&content, path.parent());
-                if result.is_valid {
-                    println!("✓ {}", path.display());
-                    passed += 1;
-                } else {
-                    let n = result.schema_errors.len() + result.structural_errors.len();
-                    println!("✗ {} ({n} error(s))", path.display());
-                    failed += 1;
-                }
-            }
-
-            println!("\n{passed} passed, {failed} failed ({} total)", files.len());
-            if failed > 0 {
-                std::process::exit(1);
-            }
-        }
-
+        } => run_validate_fixtures(directory, recursive),
         Commands::Benchmark {
             file,
             bench_type,
             iterations,
-        } => {
-            let content = read_input(&file)?;
-
-            println!("Benchmarking: {}", file.display());
-            println!("Type: {bench_type}, Iterations: {iterations}");
-
-            match bench_type.as_str() {
-                "parse" => bench_parse(&content, iterations)?,
-                "validate" => bench_validate(&content, iterations)?,
-                "simulate" => bench_simulate(&content, iterations)?,
-                "all" => {
-                    bench_parse(&content, iterations)?;
-                    bench_validate(&content, iterations)?;
-                    // A file may be valid but not simulatable (e.g. no ODE
-                    // system); report that rather than failing the whole run.
-                    if let Err(e) = bench_simulate(&content, iterations) {
-                        println!("Simulate: skipped ({e})");
-                    }
-                }
-                _ => {
-                    eprintln!(
-                        "Unsupported benchmark type: {bench_type}. Use all, parse, validate, or simulate."
-                    );
-                    std::process::exit(1);
-                }
-            }
-        }
-
+        } => run_benchmark(file, bench_type, iterations),
         Commands::SchemaCheck {
             file,
             schema_version,
-        } => {
-            let content = read_input(&file)?;
-
-            println!("Schema check for: {}", file.display());
-            if let Some(ref version) = schema_version {
-                println!("Target schema version: {version}");
-            }
-
-            // Load performs schema validation
-            match load(&content) {
-                Ok(_) => println!("✓ Schema validation passed"),
-                Err(e) => {
-                    println!("✗ Schema validation failed: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-
-        Commands::RoundTrip { file, rounds } => {
-            println!(
-                "Round-trip test for: {} ({} rounds)",
-                file.display(),
-                rounds
-            );
-
-            let original_content = read_input(&file)?;
-            let mut content = original_content.clone();
-
-            for round in 1..=rounds {
-                // Load
-                let esm_file = match load(&content) {
-                    Ok(file) => file,
-                    Err(e) => {
-                        eprintln!("Round {round}: Load failed: {e}");
-                        std::process::exit(1);
-                    }
-                };
-
-                // Save
-                content = match save(&esm_file) {
-                    Ok(content) => content,
-                    Err(e) => {
-                        eprintln!("Round {round}: Save failed: {e}");
-                        std::process::exit(1);
-                    }
-                };
-
-                println!("Round {round}: OK");
-            }
-
-            // Check if final content matches original (semantically)
-            let original_esm = load(&original_content)?;
-            let final_esm = load(&content)?;
-
-            let original_json = serde_json::to_value(&original_esm)?;
-            let final_json = serde_json::to_value(&final_esm)?;
-
-            if original_json == final_json {
-                println!("✓ Round-trip fidelity maintained");
-            } else {
-                println!("✗ Round-trip fidelity lost");
-                std::process::exit(1);
-            }
-        }
-
+        } => run_schema_check(file, schema_version),
+        Commands::RoundTrip { file, rounds } => run_round_trip(file, rounds),
         Commands::ConformanceTest { out_dir, manifest } => {
-            run_conformance_test(&out_dir, manifest.as_deref())?;
+            run_conformance_test(&out_dir, manifest.as_deref())
         }
     }
-
-    Ok(())
 }
 
 // === Cross-language conformance PRODUCER ====================================
@@ -3290,28 +3021,19 @@ fn run_conformance_test(
                 record.insert("is_valid".into(), json!(false));
                 // Raw document: the load-phase rejection still yields whatever
                 // structured findings the binding is able to enumerate.
+                // `validate_complete` now itself recovers the typed structural
+                // `(code, path)` records on a load rejection (best-effort raw parse
+                // + typed `validate()`), so a document rejected at load no longer
+                // records `is_valid:false` with an EMPTY `structural_errors`
+                // (CONFORMANCE_SPEC §7.1.2). We must therefore NOT re-run
+                // `validate()` here, or every such record would be duplicated.
                 let raw = validate_complete(&content, path.parent());
-
-                // A load rejection must STILL surface its structured `(code,
-                // path)` findings (CONFORMANCE_SPEC §7.1.2) — otherwise a document
-                // rejected at load records `is_valid:false` with an EMPTY
-                // `structural_errors`, and every pin on it silently misses. Some
-                // structural defects (an undeclared event target, an invalid
-                // discrete parameter, a coupling cycle, an empty-equation model,
-                // an unresolvable coupling scoped ref) reject the load before the
-                // typed `validate()` pass runs, yet the document is otherwise
-                // deserializable — so run the typed structural pass on a
-                // best-effort parse and merge its findings. This never flips the
-                // verdict: `resolve_ok` is already false, so the entry stays
-                // invalid; it only recovers the `(code, path)` records.
                 let mut structural_errors: Vec<earthsci_ast::StructuralError> =
                     raw.structural_errors.clone();
-                if let Ok(esm_file) = serde_json::from_str::<earthsci_ast::EsmFile>(&content) {
-                    structural_errors.extend(validate(&esm_file).structural_errors);
-                }
-                // A subsystem `ref` that could not be resolved (missing file) or
-                // is ambiguous (resolves to a file with != 1 top-level system)
-                // aborts the load before any typed pass; recover those findings
+                // A subsystem `ref` that could not be resolved (missing file) or is
+                // ambiguous (resolves to a file with != 1 top-level system) aborts
+                // the load before any typed pass AND before `validate_complete` can
+                // deserialize the document, so those findings are recovered here
                 // directly from the raw document against the file's own directory.
                 structural_errors.extend(collect_subsystem_ref_errors(&content, &path));
 

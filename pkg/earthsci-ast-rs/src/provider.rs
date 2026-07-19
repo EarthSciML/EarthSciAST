@@ -68,12 +68,15 @@ use std::rc::Rc;
 /// A refresh-executor / classification failure: a malformed loader-fed variable,
 /// a missing provider, a cadence-classification disagreement, or a buffer write error.
 /// Mirrors the lightweight string-wrapped style of [`crate::cadence::CadenceError`].
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("{0}")]
-pub struct ProviderError(pub String);
+///
+/// Alias of the shared [`crate::error::MessageError`] newtype; the public name and
+/// its bare-`{0}` `Display` output are unchanged.
+pub type ProviderError = crate::error::MessageError;
 
 fn err(msg: impl Into<String>) -> ProviderError {
-    ProviderError(msg.into())
+    // Construct via the underlying newtype: a `pub type` alias to a tuple struct
+    // cannot itself be used as a constructor.
+    crate::error::MessageError(msg.into())
 }
 
 /// The PR-1 forcing-buffer handle ([`ArrayCompiled::forcing_handle`]): a shared,

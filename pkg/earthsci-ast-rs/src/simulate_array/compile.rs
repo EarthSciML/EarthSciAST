@@ -10,6 +10,8 @@ use crate::flatten::FlattenedSystem;
 use crate::op_registry::OpError;
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
+use crate::value_invention::{materialize_value_invention, rewrite_derived_index_sets};
+use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 
 // ============================================================================
@@ -498,6 +500,20 @@ impl ArrayCompiled {
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
+        // Materialize genuine relational OUTPUTS — the arg-witness reducer
+        // (`argmin`/`argmax`, RFC §5.7 rule 6) and the grouped/derived SCVT chain
+        // (`group_aggregate`) — to CONSTANT DATA at build setup, then rewrite each
+        // output's defining equation to a `const` literal the per-cell oracle
+        // already evaluates. This runs the byte-conformant [`crate::value_invention`]
+        // engine (the previously-unwired front door) and mirrors the Julia
+        // reference's "materialize to data" and the live Python interpreter, so
+        // `argmin` / `group_aggregate` now SIMULATE end-to-end instead of raising
+        // [`CompileError::UnevaluableOperatorError`]. Runs BEFORE
+        // [`strip_value_invention`] so a bin-skolem `join` feeding an argmin is still
+        // intact when the buffer is computed. A NO-OP (byte-identical) for every
+        // model without an arg-witness op — the conservative-regrid skolem/distinct
+        // path is left entirely to `strip_value_invention` below.
+        materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned)?;
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
@@ -524,6 +540,13 @@ impl ArrayCompiled {
         // (0) Reject spatial differential operators anywhere in the model's
         // equations or observed-variable expressions (esm-i7b).
         reject_unlowered_spatial_ops(model)?;
+
+        // (0b) Reject a reference to a variable bound in NONE of the model's
+        // binding categories — the array-path analogue of the scalar
+        // interpreter's `resolve_expr` "Unknown variable" gate. Without it a
+        // typo'd/undeclared bare name falls through `lookup_variable`'s final
+        // arm to a silent `NaN`, poisoning the trajectory.
+        check_free_variables(model, index_sets)?;
 
         // (1) Collect state / parameter / observed variables.
         let (state_vars, param_vars, observed_vars) = classify_variables(model)?;
@@ -602,6 +625,284 @@ fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
         }
     }
     Ok(())
+}
+
+/// (0b) Reject a reference to a variable that is bound in NONE of the model's
+/// binding categories — the array-path analogue of the scalar interpreter's
+/// [`crate::simulate`] `resolve_expr` "Unknown variable" gate. Without it a
+/// typo'd or undeclared bare name falls through [`lookup_variable`]'s final arm
+/// to a silent `NaN` sentinel, poisoning the whole trajectory instead of failing
+/// loudly at build time. The error variant and message match the scalar path
+/// (`InterpreterBuildError` / `Unknown variable '{name}' referenced in
+/// expression`).
+///
+/// The bound set MIRRORS [`lookup_variable`]'s runtime resolution scope so a
+/// legitimately runtime-bound name is never rejected — a false positive here
+/// would reject a valid model, which is strictly worse than the silent-NaN it
+/// closes:
+///
+///  * `t` — the independent variable (the array path only supports `t`);
+///  * every declared model variable — state / parameter / observed, the keys of
+///    `model.variables` (a discrete variable is rejected earlier, but its key is
+///    still credited);
+///  * every equation LHS-defined target (a name defined by an equation even if
+///    not carried in `variables`);
+///  * `_var` (§6.4 operator placeholder) and the document `index_sets` axis
+///    names;
+///  * spatial-coordinate symbols — the free symbols of every `ic` RHS (§11.4
+///    defines these to BE coordinate expressions) and every spatial-op `dim`;
+///  * loop / index binders introduced anywhere in the equation — `aggregate` /
+///    `makearray` `output_idx` & `ranges`, bare `index(array, i…)` subscript
+///    positions, an `integral` `int_var`, an argmin/argmax `arg`, and
+///    `apply_expression_template` `bindings` keys. Collected over the WHOLE
+///    equation (both sides unioned) so a stencil offset `index(u, i+1)` sees the
+///    `i` bound as a bare position elsewhere in the same equation, and so a
+///    symbol bound on the LHS is in scope on the RHS.
+///
+/// DELIBERATELY CONSERVATIVE SKIPS — a construct here is treated as BOUND, never
+/// rejected, because a genuine typo in it is not provably distinguishable at
+/// build time from a legitimate runtime-bound name:
+///
+///  * a DOTTED name (`A.b`) — a qualified cross-namespace reference or, on the
+///    coupled/flatten path, an external *forcing* channel name (`M.src`,
+///    `Box.scale`) that is UNDECLARED by design and resolved at runtime through
+///    the forcing buffer (see [`lookup_variable`]'s final `forcing` arm and the
+///    `segmented_refresh_solve` / `refresh_conformance` fixtures, which strip the
+///    loader-fed `discrete` declarations precisely so these resolve as bare —
+///    but post-flatten DOTTED — forcing names). A dotted typo is genuinely
+///    indistinguishable from a dotted forcing name, so it is skipped;
+///  * any name used as the HEAD of an `index(name, …)` op ANYWHERE in the model
+///    — an array-valued leaf. On a single-model (`from_file`) path a loader-fed
+///    forcing FIELD stays BARE and undeclared (the `observed_cadence_tier`
+///    fixture's `f`), and a forcing field is always array-valued and read via
+///    `index` (a SCALAR forcing goes through `params`/`set_params`, not the
+///    buffer). Crediting every `index` head therefore keeps a bare forcing field
+///    in scope; the residual conservative cost is that a typo appearing *only* as
+///    an `index` head is not caught (reported as a deliberate skip);
+///  * an `ic` equation — its RHS is a coordinate expression resolved at `u0`
+///    build time by the field evaluator against grid geometry, not by the
+///    per-cell RHS oracle; its free symbols are already credited as coordinates
+///    above;
+///  * a builtin function name spelled as a bare leaf (`exp`, `min`, …).
+fn check_free_variables(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
+    // ---- Build the bound set. ------------------------------------------------
+    let mut bound: HashSet<String> = HashSet::new();
+    bound.insert("t".to_string());
+    bound.insert("_var".to_string());
+    bound.extend(model.variables.keys().cloned());
+    bound.extend(index_sets.keys().cloned());
+    for eq in &model.equations {
+        if let Some(v) = equation_defined_var(&eq.lhs) {
+            bound.insert(v);
+        }
+        // §11.4: an `ic` RHS's free symbols name spatial coordinates that are
+        // implicitly in scope (e.g. the ignition front `psi(x)` over the bare
+        // coordinate `x`). Spatial-op `dim`s name the same axes.
+        if is_ic_lhs(&eq.lhs) {
+            collect_free_bare_symbols(&eq.rhs, &mut bound);
+        }
+        collect_dim_symbols(&eq.lhs, &mut bound);
+        collect_dim_symbols(&eq.rhs, &mut bound);
+        // Array-valued leaves (potential bare forcing FIELDS) — see the doc note.
+        collect_index_head_names(&eq.lhs, &mut bound);
+        collect_index_head_names(&eq.rhs, &mut bound);
+    }
+    for var in model.variables.values() {
+        if let Some(expr) = &var.expression {
+            collect_dim_symbols(expr, &mut bound);
+            collect_index_head_names(expr, &mut bound);
+        }
+    }
+
+    // ---- Check every equation (skipping `ic`) and observed expression. -------
+    for eq in &model.equations {
+        if is_ic_lhs(&eq.lhs) {
+            continue;
+        }
+        let mut scope = bound.clone();
+        collect_binders(&eq.lhs, &mut scope);
+        collect_binders(&eq.rhs, &mut scope);
+        check_expr_free_vars(&eq.lhs, &scope)?;
+        check_expr_free_vars(&eq.rhs, &scope)?;
+    }
+    for var in model.variables.values() {
+        if let Some(expr) = &var.expression {
+            let mut scope = bound.clone();
+            collect_binders(expr, &mut scope);
+            check_expr_free_vars(expr, &scope)?;
+        }
+    }
+    Ok(())
+}
+
+/// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?
+fn is_ic_lhs(lhs: &Expr) -> bool {
+    matches!(lhs, Expr::Operator(op) if op.op == "ic")
+}
+
+/// Elementary math / reduction names that are always valid as a bare leaf even
+/// though they are not declared variables. Mirrors `structural.rs`
+/// `is_builtin_function` so the same names are excused across the two Rust
+/// gates.
+fn is_builtin_fn_name(name: &str) -> bool {
+    matches!(
+        name,
+        "exp" | "log"
+            | "log10"
+            | "sqrt"
+            | "abs"
+            | "sign"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "atan2"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asinh"
+            | "acosh"
+            | "atanh"
+            | "min"
+            | "max"
+            | "floor"
+            | "ceil"
+            | "ifelse"
+            | "Pre"
+    )
+}
+
+/// The index / integration symbols a single node BINDS for its body (mirrors
+/// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
+/// `integral` `int_var`, an argmin/argmax `arg`, the BARE subscript positions of
+/// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
+fn node_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
+    if let Some(idx) = &node.output_idx {
+        out.extend(idx.iter().cloned());
+    }
+    if let Some(ranges) = &node.ranges {
+        out.extend(ranges.keys().cloned());
+    }
+    if let Some(v) = &node.int_var {
+        out.insert(v.clone());
+    }
+    if let Some(a) = &node.arg {
+        out.insert(a.clone());
+    }
+    if node.op == "index" {
+        // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
+        // (`index(u, i+1)`) is a USE of a symbol bound elsewhere and is checked.
+        for arg in node.args.iter().skip(1) {
+            if let Expr::Variable(name) = arg {
+                out.insert(name.clone());
+            }
+        }
+    }
+    if let Some(bindings) = &node.bindings {
+        out.extend(bindings.keys().cloned());
+    }
+}
+
+/// Union every binder introduced anywhere in the subtree (whole-tree, like
+/// `structural.rs` `collect_bound_symbols`). Widening the bound set only ever
+/// prevents a false positive, which is the cardinal requirement here.
+fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
+    if let Expr::Operator(node) = expr {
+        node_binders(node, out);
+        node.for_each_child(&mut |child| collect_binders(child, out));
+    }
+}
+
+/// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
+/// used to credit an `ic` RHS's coordinate symbols into the bound set.
+fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Variable(name) => {
+            if !name.contains('.') && !is_builtin_fn_name(name) {
+                out.insert(name.clone());
+            }
+        }
+        Expr::Operator(node) => {
+            node.for_each_child(&mut |child| collect_free_bare_symbols(child, out));
+        }
+        _ => {}
+    }
+}
+
+/// Collect the bare name at the HEAD (first arg) of every `index(name, …)` op in
+/// the subtree — an array-valued leaf (a declared state/observed, or a bare,
+/// undeclared, loader-fed forcing FIELD read at runtime through the forcing
+/// buffer). Crediting these keeps a legitimate bare forcing field in scope.
+fn collect_index_head_names(expr: &Expr, out: &mut HashSet<String>) {
+    if let Expr::Operator(node) = expr {
+        if node.op == "index"
+            && let Some(Expr::Variable(name)) = node.args.first()
+            && !name.contains('.')
+        {
+            out.insert(name.clone());
+        }
+        node.for_each_child(&mut |child| collect_index_head_names(child, out));
+    }
+}
+
+/// Collect the `dim` axis of every spatial differential operator in the subtree
+/// (defensive: the array path rejects unlowered spatial ops earlier, but a
+/// coordinate an `ic` RHS shares with a `grad` `dim` stays creditable).
+fn collect_dim_symbols(expr: &Expr, out: &mut HashSet<String>) {
+    if let Expr::Operator(node) = expr {
+        if matches!(node.op.as_str(), "grad" | "div" | "curl" | "laplacian")
+            && let Some(dim) = &node.dim
+        {
+            out.insert(dim.clone());
+        }
+        node.for_each_child(&mut |child| collect_dim_symbols(child, out));
+    }
+}
+
+/// Reject the first bare (non-dotted) variable reference bound in none of the
+/// categories in `scope`. Mirrors the scalar path's `resolve_expr` "Unknown
+/// variable" error in both variant and message. The full expression-bearing
+/// child set is descended via [`ExpressionNode::for_each_child`] (args plus the
+/// sidecar fields), so a reference hidden in an aggregate body, filter, integral
+/// bound, table axis, aggregate key, or template binding is not missed. A `fn`
+/// op's callee lives in `node.name` (not a child), so it is never mistaken for a
+/// variable.
+fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), CompileError> {
+    match expr {
+        Expr::Variable(name) => {
+            // A dotted name is a qualified / forcing reference resolved at
+            // runtime; builtins and derivative markers are always valid.
+            if name.contains('.') || is_builtin_fn_name(name) || name.starts_with("d(") {
+                return Ok(());
+            }
+            if scope.contains(name) {
+                return Ok(());
+            }
+            Err(CompileError::InterpreterBuildError {
+                details: format!("Unknown variable '{name}' referenced in expression"),
+            })
+        }
+        Expr::Operator(node) => {
+            let mut first_err: Option<CompileError> = None;
+            node.for_each_child(&mut |child| {
+                if first_err.is_none()
+                    && let Err(e) = check_expr_free_vars(child, scope)
+                {
+                    first_err = Some(e);
+                }
+            });
+            match first_err {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// (1) Collect state / parameter / observed variables (sorted by name for a
@@ -1432,6 +1733,179 @@ pub(super) fn strip_value_invention(
         if let Some(expr) = &mut var.expression {
             strip_vi_joins(expr, &vi_cols);
         }
+    }
+    Ok(())
+}
+
+// ===========================================================================
+// Value-invention OUTPUT front-door — materialize the arg-witness / grouped
+// relational outputs to constant data (the previously-unwired engine).
+// ===========================================================================
+
+/// True iff any equation or observed expression in `model` contains an
+/// arg-witness reducer (`argmin` / `argmax`). Mirrors [`expr_contains_skolem`]:
+/// its presence is the marker of a genuine relational OUTPUT — a per-element
+/// nearest-witness INDEX buffer (RFC §5.7 rule 6) — that the dense evaluator
+/// cannot run and [`strip_value_invention`] does not remove (it is neither a
+/// derived-set-shaped var nor a skolem producer). This gates the build-time
+/// materialize pass so every model WITHOUT one stays byte-identical.
+fn expr_contains_arg_witness(expr: &Expr) -> bool {
+    match expr {
+        Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
+        Expr::Operator(node) => {
+            node.op == "argmin" || node.op == "argmax" || node.any_child(&mut expr_contains_arg_witness)
+        }
+    }
+}
+
+fn model_contains_arg_witness(model: &Model) -> bool {
+    model
+        .equations
+        .iter()
+        .any(|eq| expr_contains_arg_witness(&eq.lhs) || expr_contains_arg_witness(&eq.rhs))
+        || model
+            .variables
+            .values()
+            .any(|v| v.expression.as_ref().is_some_and(expr_contains_arg_witness))
+}
+
+/// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
+/// (`index(gx, g)` etc.): every variable whose `expression` is a `const` op (the
+/// established self-contained build-time array channel — see the geometry
+/// `src_poly`/`tgt_poly` fixtures). Each is evaluated once, with no state /
+/// params / `t` (a `const` literal needs none), into its dense `ArrayD`. This is
+/// the Rust analogue of the Julia reference's `const_arrays` registry and the
+/// Python interpreter's join-free const-observed pre-materialization.
+fn collect_const_factor_arrays(model: &Model) -> HashMap<String, ArrayD<f64>> {
+    let mut out: HashMap<String, ArrayD<f64>> = HashMap::new();
+    for (name, var) in &model.variables {
+        let Some(expr) = var.expression.as_ref() else {
+            continue;
+        };
+        let Expr::Operator(node) = expr else { continue };
+        if node.op != "const" {
+            continue;
+        }
+        match eval_expression(expr, &HashMap::new(), &[], &[], 0.0) {
+            Ok(Value::Array(a)) => {
+                out.insert(name.clone(), *a);
+            }
+            Ok(Value::Scalar(s)) => {
+                out.insert(name.clone(), ArrayD::from_elem(IxDyn(&[]), s));
+            }
+            Err(_) => {}
+        }
+    }
+    out
+}
+
+/// Scalar parameter defaults, the value-invention engine's scalar `params` map
+/// (e.g. the bin width of a broad-phase skolem quantization). Only 0-D
+/// parameters with a `default` contribute — an array parameter carries no inline
+/// data and is supplied (if at all) through [`collect_const_factor_arrays`].
+fn collect_scalar_param_defaults(model: &Model) -> HashMap<String, f64> {
+    let mut out: HashMap<String, f64> = HashMap::new();
+    for (name, var) in &model.variables {
+        if var.var_type == VariableType::Parameter
+            && var.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+            && let Some(d) = var.default
+        {
+            out.insert(name.clone(), d);
+        }
+    }
+    out
+}
+
+/// Rewrite the equation (or observed `expression`) that DEFINES `name` into a
+/// whole-array `const` literal carrying the materialized dense `buf` — the
+/// "materialize to data" step. The relational op (`argmin` / `group_aggregate`)
+/// that produced `name` is thereby replaced by data the existing oracle
+/// evaluates, so it never reaches the run path as an
+/// [`CompileError::UnevaluableOperatorError`]. The LHS collapses to the bare
+/// variable (a whole-array assignment); the eliminated-state machinery then
+/// materializes it as an ordinary constant observed.
+fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
+    let value = JsonValue::Array(
+        buf.iter()
+            .map(|&v| {
+                serde_json::Number::from_f64(v)
+                    .map(JsonValue::Number)
+                    .unwrap_or(JsonValue::Null)
+            })
+            .collect(),
+    );
+    let const_node = Expr::Operator(ExpressionNode {
+        op: "const".to_string(),
+        value: Some(value),
+        ..Default::default()
+    });
+    let mut replaced = false;
+    for eq in &mut model.equations {
+        if equation_defined_var(&eq.lhs).as_deref() == Some(name) {
+            eq.lhs = Expr::Variable(name.to_string());
+            eq.rhs = const_node.clone();
+            replaced = true;
+        }
+    }
+    if !replaced && let Some(var) = model.variables.get_mut(name) {
+        var.expression = Some(const_node);
+    }
+}
+
+/// Wire the value-invention front door into the array run path: run the
+/// byte-conformant [`materialize_value_invention`] engine over the raw-JSON model
+/// and rewrite each materialized relational OUTPUT to constant data
+/// ([`rewrite_equation_to_const`]), so `argmin` / `argmax` / `group_aggregate`
+/// simulate end-to-end. Derived index sets named by a materialized producer are
+/// densified to intervals via [`rewrite_derived_index_sets`] (the same handoff
+/// [`apply_value_invention`] performs). A NO-OP — and byte-identical — for any
+/// model without an arg-witness op (gated by [`model_contains_arg_witness`]), so
+/// the conservative-regrid skolem/distinct path handled by
+/// [`strip_value_invention`] is untouched.
+fn materialize_vi_outputs_to_data(
+    model: &mut Model,
+    index_sets: &mut HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
+    if !model_contains_arg_witness(model) {
+        return Ok(());
+    }
+    let const_arrays = collect_const_factor_arrays(model);
+    let params = collect_scalar_param_defaults(model);
+
+    // The engine walks the RAW `serde_json::Value` document (it preserves the
+    // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
+    // `index_sets` registry merged down as a sibling — mirroring the engine's own
+    // `model_json` fixture helper and `crate::cadence`.
+    let mut model_json = serde_json::to_value(&*model).map_err(|e| {
+        CompileError::InterpreterBuildError {
+            details: format!("value-invention: could not serialize model: {e}"),
+        }
+    })?;
+    if let JsonValue::Object(m) = &mut model_json {
+        let is_json =
+            serde_json::to_value(&*index_sets).map_err(|e| CompileError::InterpreterBuildError {
+                details: format!("value-invention: could not serialize index_sets: {e}"),
+            })?;
+        m.insert("index_sets".to_string(), is_json);
+    }
+
+    let result = materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new())
+        .map_err(|e| CompileError::InterpreterBuildError {
+            details: format!("value-invention materialize failed: {}", e.0),
+        })?;
+
+    // Densify any derived index set named by a materialized producer (§8.1 handoff).
+    rewrite_derived_index_sets(index_sets, &result.extents);
+
+    // Materialize-to-data: the arg-witness assignment (integer nearest-witness
+    // index) and the grouped/derived SCVT chain (num / den / centroid) become
+    // constant observeds.
+    for (name, buf) in &result.assignments {
+        let as_f64: Vec<f64> = buf.iter().map(|&i| i as f64).collect();
+        rewrite_equation_to_const(model, name, &as_f64);
+    }
+    for (name, buf) in &result.groups {
+        rewrite_equation_to_const(model, name, buf);
     }
     Ok(())
 }

@@ -44,14 +44,14 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
         return if a.ndim() == 0 {
             Value::Scalar(a[IxDyn(&[])])
         } else {
-            Value::Array(a.clone())
+            Value::Array(Box::new(a.clone()))
         };
     }
     if let Some(a) = ctx.observed_arrays.get(name) {
         return if a.ndim() == 0 {
             Value::Scalar(a[IxDyn(&[])])
         } else {
-            Value::Array(a.clone())
+            Value::Array(Box::new(a.clone()))
         };
     }
     if let Some(i) = ctx.param_names.iter().position(|p| p == name) {
@@ -69,7 +69,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
         return if a.ndim() == 0 {
             Value::Scalar(a[IxDyn(&[])])
         } else {
-            Value::Array(a.clone())
+            Value::Array(Box::new(a.clone()))
         };
     }
     Value::Scalar(f64::NAN)
@@ -336,7 +336,7 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                 .map(|v| v.as_f64())
                 .unwrap_or(f64::NAN)
         });
-        return Value::Array(out);
+        return Value::Array(Box::new(out));
     }
 
     let mut args: Vec<ClosedArg> = Vec::with_capacity(vals.len());
@@ -424,7 +424,7 @@ pub(super) fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 /// and keeping them would only re-open the divergence if the gate were ever
 /// bypassed. This is now a plain left-fold of [`apply_binary`], identical in
 /// kernel and in order to the vectorized path.
-pub(super) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
+pub(crate) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
     // A zero-arity arithmetic node is not legal (the registry rejects it); the
     // NaN sentinel is the module's convention for an unevaluable node.
     let Some((first, rest)) = vs.split_first() else {
@@ -446,7 +446,7 @@ pub(super) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
 pub(super) fn negate(v: Value) -> Value {
     match v {
         Value::Scalar(s) => Value::Scalar(-s),
-        Value::Array(a) => Value::Array(a.mapv(|x| -x)),
+        Value::Array(a) => Value::Array(Box::new(a.mapv(|x| -x))),
     }
 }
 
@@ -490,7 +490,7 @@ pub(super) fn eval_ifelse(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .and(&a_b)
         .and(&b_b)
         .for_each(|o, &c, &av, &bv| *o = if c != 0.0 { av } else { bv });
-    Value::Array(out)
+    Value::Array(Box::new(out))
 }
 
 /// Row-major flatten of a [`Value`] to a `Vec<f64>` (a scalar → one element) —
@@ -518,16 +518,20 @@ pub(super) fn broadcast_value(v: &Value, target: &[usize]) -> ArrayD<f64> {
 pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
     match (a, b) {
         (Value::Scalar(x), Value::Scalar(y)) => Value::Scalar(apply_binary(op, x, y)),
-        (Value::Scalar(x), Value::Array(ya)) => Value::Array(ya.mapv(|y| apply_binary(op, x, y))),
-        (Value::Array(xa), Value::Scalar(y)) => Value::Array(xa.mapv(|x| apply_binary(op, x, y))),
+        (Value::Scalar(x), Value::Array(ya)) => {
+            Value::Array(Box::new(ya.mapv(|y| apply_binary(op, x, y))))
+        }
+        (Value::Array(xa), Value::Scalar(y)) => {
+            Value::Array(Box::new(xa.mapv(|x| apply_binary(op, x, y))))
+        }
         (Value::Array(xa), Value::Array(ya)) => {
             // Use ndarray broadcasting.
-            Value::Array(broadcast_binary(op, &xa, &ya))
+            Value::Array(Box::new(broadcast_binary(op, &xa, &ya)))
         }
     }
 }
 
-pub(super) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
+pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
     match op {
         "+" => x + y,
         "-" => x - y,
@@ -622,11 +626,11 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     let v = eval(arg0, ctx);
     match v {
         Value::Scalar(s) => Value::Scalar(apply_unary(op, s)),
-        Value::Array(a) => Value::Array(a.mapv(|x| apply_unary(op, x))),
+        Value::Array(a) => Value::Array(Box::new(a.mapv(|x| apply_unary(op, x)))),
     }
 }
 
-pub(super) fn apply_unary(op: &str, x: f64) -> f64 {
+pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
     match op {
         "exp" => x.exp(),
         "log" | "ln" => x.ln(),
@@ -733,7 +737,7 @@ pub(super) fn index_into(arr: &ArrayD<f64>, raw: &[i64], mut in_bounds: bool) ->
         for &ix in &indices {
             view = view.index_axis_move(ndarray::Axis(0), ix);
         }
-        return Value::Array(view.to_owned());
+        return Value::Array(Box::new(view.to_owned()));
     }
     match arr.get(IxDyn(&indices)) {
         Some(v) => Value::Scalar(*v),
@@ -823,7 +827,7 @@ pub(super) fn json_to_value(v: &serde_json::Value) -> Option<Value> {
             collect_json_array(v, 0, &mut shape, &mut flat)?;
             ArrayD::from_shape_vec(IxDyn(&shape), flat)
                 .ok()
-                .map(Value::Array)
+                .map(|a| Value::Array(Box::new(a)))
         }
         _ => None,
     }
@@ -926,7 +930,7 @@ pub(super) fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -
                     .borrow_mut()
                     .insert(id.clone(), arr.clone());
             }
-            Value::Array(arr)
+            Value::Array(Box::new(arr))
         }
         // A degenerate input ring or unavailable backend surfaces as NaN, the
         // same not-a-value sentinel the evaluator uses for unevaluable nodes.
@@ -1317,7 +1321,7 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             // scalar into an owned box buffer, so a plain view→owned suffices.
             let out = vv.view().expect("vectorized arrayop has a view").to_owned();
             vv.release(&mut pool);
-            return Value::Array(out);
+            return Value::Array(Box::new(out));
         }
     }
 
@@ -1364,7 +1368,7 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     if shape.is_empty() {
         Value::Scalar(buf[0])
     } else {
-        Value::Array(col_major_to_arrayd(&buf, &shape))
+        Value::Array(Box::new(col_major_to_arrayd(&buf, &shape)))
     }
 }
 
@@ -1466,7 +1470,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
             arr[ix] = scalar;
         }
     }
-    Value::Array(arr)
+    Value::Array(Box::new(arr))
 }
 
 pub(super) fn eval_reshape(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
@@ -1475,7 +1479,7 @@ pub(super) fn eval_reshape(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     };
     let v = eval(arg0, ctx);
     let arr = match v {
-        Value::Array(a) => a,
+        Value::Array(a) => *a,
         Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
     };
     let target: Vec<usize> = node
@@ -1494,7 +1498,7 @@ pub(super) fn eval_reshape(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     if target.iter().product::<usize>() != flat.len() {
         return Value::Scalar(f64::NAN);
     }
-    Value::Array(col_major_to_arrayd(&flat, &target))
+    Value::Array(Box::new(col_major_to_arrayd(&flat, &target)))
 }
 
 /// True iff `perm` is a permutation of `0..ndim` (correct length, every axis in
@@ -1536,7 +1540,9 @@ pub(super) fn eval_transpose(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     if !is_valid_permutation(&perm, arr.ndim()) {
         return Value::Scalar(f64::NAN);
     }
-    Value::Array(arr.permuted_axes(perm).as_standard_layout().into_owned())
+    Value::Array(Box::new(
+        arr.permuted_axes(perm).as_standard_layout().into_owned(),
+    ))
 }
 
 pub(super) fn eval_concat(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
@@ -1545,14 +1551,22 @@ pub(super) fn eval_concat(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .args
         .iter()
         .map(|a| match eval(a, ctx) {
-            Value::Array(arr) => arr,
+            Value::Array(arr) => *arr,
             Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[1]), s),
         })
         .collect();
     let views: Vec<_> = parts.iter().map(|a| a.view()).collect();
-    let joined = ndarray::concatenate(ndarray::Axis(axis), &views)
-        .unwrap_or_else(|_| ArrayD::zeros(IxDyn(&[0])));
-    Value::Array(joined)
+    // A shape mismatch (unequal extents off the concat axis) or an out-of-range
+    // `axis` makes the join impossible. Mirror the module's NaN-sentinel
+    // convention used by the sibling assembly ops (`eval_reshape`,
+    // `eval_makearray`), which return `Value::Scalar(f64::NAN)` for a malformed
+    // node: the solver reads NaN as a step failure. The former silent
+    // `[0]`-shaped empty array looked like a valid (if degenerate) result and
+    // hid the mismatch.
+    match ndarray::concatenate(ndarray::Axis(axis), &views) {
+        Ok(joined) => Value::Array(Box::new(joined)),
+        Err(_) => Value::Scalar(f64::NAN),
+    }
 }
 
 pub(super) fn eval_broadcast(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {

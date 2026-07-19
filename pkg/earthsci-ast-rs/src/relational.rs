@@ -4,7 +4,7 @@
 //! sets and dense IDs that the numeric stencil then consumes:
 //!
 //! 1. [`distinct`]        — deduplicate tuples (unique mesh edges from face→vertex lists)
-//! 2. [`equijoin`]        — value-equality equi-join (connectivity inversion, *edges of cell i*)
+//! 2. `equijoin`          — value-equality equi-join (connectivity inversion, *edges of cell i*)
 //! 3. [`skolem`] / [`skolem_edge`] — deterministic content-addressed key from a tuple
 //! 4. [`rank`]            — dense integer renumbering of a distinct set
 //! 5. [`group_aggregate`] — group-by + associative/commutative semiring `⊕` (sum/min/max/…)
@@ -346,45 +346,6 @@ pub fn rank_with_base(rows: &[Key], base: i64) -> Ranking {
     Ranking { order, id, base }
 }
 
-// ── Primitive 2: equijoin (value-equality equi-join) ────────────────────────
-
-/// Value-equality equi-join (rule 5): emit every `(l, r)` pair where
-/// `on_left(l) == on_right(r)`. Hashing is used **only** to bucket `right` by key
-/// (via [`IndexMap`], whose iteration order is insertion order, independent of
-/// the hasher); the result is emitted **sorted by the canonical key**
-/// `(joinkey, l, r)`, so the output is independent of bucket iteration order
-/// *and* of input order.
-///
-/// This is the connectivity-inversion primitive — join an edge→cell table
-/// against a cell table on the shared ID to recover the *edges of cell i*.
-pub fn equijoin<FL, FR>(left: &[Key], right: &[Key], on_left: FL, on_right: FR) -> Vec<(Key, Key)>
-where
-    FL: Fn(&Key) -> Key,
-    FR: Fn(&Key) -> Key,
-{
-    let mut buckets: IndexMap<Key, Vec<Key>> = IndexMap::new();
-    for r in right {
-        buckets.entry(on_right(r)).or_default().push(r.clone());
-    }
-    let mut out: Vec<(Key, Key)> = Vec::new();
-    for l in left {
-        if let Some(bucket) = buckets.get(&on_left(l)) {
-            for r in bucket {
-                out.push((l.clone(), r.clone()));
-            }
-        }
-    }
-    // Canonical key first so the order is well defined even when `on_left` is a
-    // projection rather than the identity: sort by (joinkey, l, r).
-    out.sort_by(|p, q| {
-        on_left(&p.0)
-            .cmp(&on_left(&q.0))
-            .then_with(|| p.0.cmp(&q.0))
-            .then_with(|| p.1.cmp(&q.1))
-    });
-    out
-}
-
 // ── Primitive 5: group-by + semiring aggregate ──────────────────────────────
 
 /// Group-by + semiring aggregate (rule 5). Bucket `rows` by their [`Key`]
@@ -484,13 +445,6 @@ mod tests {
     fn tup(items: Vec<Key>) -> Key {
         Key::Tuple(items)
     }
-    /// Extract the `i`-th component of a `Key::Tuple` (test projection helper).
-    fn field(k: &Key, i: usize) -> Key {
-        match k {
-            Key::Tuple(v) => v[i].clone(),
-            _ => panic!("field() on a non-tuple key"),
-        }
-    }
     /// Directed edges of each face (consecutive vertices, with wraparound),
     /// canonicalised to undirected `(min,max)` skolem keys — the mesh-edge
     /// enumeration producer (matches the harness `directed_edges_from_faces` +
@@ -572,29 +526,6 @@ mod tests {
             assert_eq!(rk.id[t] - rk.base, rk1.id[t] - rk1.base);
         }
         assert_eq!(rk1.canonical_dense_ids(), vec![0, 1, 2]);
-    }
-
-    // ── Primitive 2: equijoin ───────────────────────────────────────────────
-    #[test]
-    fn equijoin_emits_sorted_by_canonical_key() {
-        let edges = vec![t2(101, 1), t2(102, 1), t2(103, 2)];
-        let cells = vec![tup(vec![ki(1), ks("A")]), tup(vec![ki(2), ks("B")])];
-        let want = vec![
-            (t2(101, 1), tup(vec![ki(1), ks("A")])),
-            (t2(102, 1), tup(vec![ki(1), ks("A")])),
-            (t2(103, 2), tup(vec![ki(2), ks("B")])),
-        ];
-        let got = equijoin(&edges, &cells, |e| field(e, 1), |c| field(c, 0));
-        assert_eq!(got, want);
-
-        // Reversed inputs → identical output (independent of input + bucket order).
-        let edges_r: Vec<Key> = edges.iter().rev().cloned().collect();
-        let cells_r: Vec<Key> = cells.iter().rev().cloned().collect();
-        let got_r = equijoin(&edges_r, &cells_r, |e| field(e, 1), |c| field(c, 0));
-        assert_eq!(got_r, want);
-
-        // No match → empty.
-        assert!(equijoin(&[t2(1, 99)], &cells, |e| field(e, 1), |c| field(c, 0)).is_empty());
     }
 
     // ── Primitive 5: group_aggregate ────────────────────────────────────────

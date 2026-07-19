@@ -683,197 +683,300 @@ pub struct ExpressionNode {
     pub key: Option<Box<Expr>>,
 }
 
-/// The JSON keys of every child-`Expr`-bearing [`ExpressionNode`] field,
-/// partitioned by wire shape. This is the serde_json mirror of the typed
-/// field set visited by [`ExpressionNode::for_each_child`]; the pre-lowering
-/// walker in [`crate::parse`] iterates these so the raw-JSON and typed
-/// traversals cannot drift (a hand-rolled walker that missed one of these is
-/// exactly the class of bug `for_each_child` was introduced to prevent). Keep
-/// them in lockstep with `for_each_child`: if you add a child-bearing field,
-/// add its JSON key here AND visit it in the `for_each_child` family.
+// ───────────────────────────────────────────────────────────────────────────
+// ExpressionNode child-`Expr` field spec — SINGLE SOURCE OF TRUTH.
+//
+// Every child-`Expr`-bearing field of `ExpressionNode` is declared exactly once,
+// in traversal order, by the `expr_children! { … }` invocation below. From that
+// one ordered spec we generate BOTH the typed walkers (`for_each_child` /
+// `for_each_child_mut` / `any_child` / `map_children`) AND the crate-internal
+// `EXPR_{SCALAR,ARRAY,MAP}_CHILD_KEYS` JSON-key constants that the pre-lowering
+// raw-JSON walker in `crate::parse` iterates. Adding a child field is a one-line
+// spec edit that updates all seven sites at once, so the historical "add a
+// field, forget a walker (or a key constant)" drift class is now impossible.
+//
+// Traversal order is CONTRACT (other crates depend on it): args, lower, upper,
+// expr, filter, values, axes (sorted key), key, bindings (sorted key).
+
+/// Child-field wire-shape tags for each [`EXPR_CHILD_FIELDS`] entry. The two
+/// array shapes (`Vec<Expr>` for `args`, `Option<Vec<Expr>>` for `values`) share
+/// one JSON-key bucket but need different walker code, so they are distinct spec
+/// tokens (`array` / `opt_array`) that both map to `CHILD_ARRAY` here.
+const CHILD_ARRAY: u8 = 0;
+const CHILD_SCALAR: u8 = 1; // `Option<Box<Expr>>`
+const CHILD_MAP: u8 = 2; // `Option<HashMap<String, Expr>>`, visited sorted-key
+
+/// Const-fold the ordered [`EXPR_CHILD_FIELDS`] spec to the JSON keys of one wire
+/// shape, preserving spec order. `N` MUST equal the number of fields carrying
+/// `tag`; a mismatch is a compile-time error (an index-out-of-bounds write or the
+/// `assert!`), which is what keeps the three derived key arrays honest.
+const fn child_keys<const N: usize>(tag: u8) -> [&'static str; N] {
+    let mut out = [""; N];
+    let mut i = 0;
+    let mut j = 0;
+    while i < EXPR_CHILD_FIELDS.len() {
+        if EXPR_CHILD_FIELDS[i].1 == tag {
+            out[j] = EXPR_CHILD_FIELDS[i].0;
+            j += 1;
+        }
+        i += 1;
+    }
+    assert!(j == N, "child-key count does not match the declared array length");
+    out
+}
+
+/// Per-walker, per-shape code fragments. Each `expr_children!`-generated method
+/// body is a repetition of one of these over the ordered spec, so the four
+/// walkers cannot disagree about which fields carry children or in what order.
 ///
-/// Single-child slots (`Option<Box<Expr>>`).
-pub(crate) const EXPR_SCALAR_CHILD_KEYS: [&str; 5] = ["lower", "upper", "expr", "filter", "key"];
+/// The node receiver is threaded through as a `:tt` (matches the `self`
+/// keyword), and the visitor / rebuild target as `:ident`, so both keep the
+/// generated method's hygiene context.
+macro_rules! expr_child_visit {
+    // for_each_child: immutable; maps visited in sorted-key order.
+    (@each array, $node:tt, $f:ident, $field:ident) => {
+        for a in &$node.$field { $f(a); }
+    };
+    (@each opt_array, $node:tt, $f:ident, $field:ident) => {
+        if let Some(vs) = &$node.$field { for v in vs { $f(v); } }
+    };
+    (@each scalar, $node:tt, $f:ident, $field:ident) => {
+        if let Some(e) = $node.$field.as_deref() { $f(e); }
+    };
+    (@each map, $node:tt, $f:ident, $field:ident) => {
+        if let Some(m) = &$node.$field {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            for k in keys { $f(&m[k]); }
+        }
+    };
+
+    // for_each_child_mut: mutable; maps visited in sorted-key order.
+    (@each_mut array, $node:tt, $f:ident, $field:ident) => {
+        for a in &mut $node.$field { $f(a); }
+    };
+    (@each_mut opt_array, $node:tt, $f:ident, $field:ident) => {
+        if let Some(vs) = &mut $node.$field { for v in vs { $f(v); } }
+    };
+    (@each_mut scalar, $node:tt, $f:ident, $field:ident) => {
+        if let Some(e) = $node.$field.as_deref_mut() { $f(e); }
+    };
+    (@each_mut map, $node:tt, $f:ident, $field:ident) => {
+        if let Some(m) = &mut $node.$field {
+            let mut keys: Vec<String> = m.keys().cloned().collect();
+            keys.sort();
+            for k in keys {
+                if let Some(v) = m.get_mut(&k) { $f(v); }
+            }
+        }
+    };
+
+    // any_child: a short-circuiting bool per field (the OR result is
+    // order-independent, so maps need not be sorted here).
+    (@any array, $node:tt, $f:ident, $field:ident) => {
+        $node.$field.iter().any(&mut *$f)
+    };
+    (@any opt_array, $node:tt, $f:ident, $field:ident) => {
+        $node.$field.as_ref().is_some_and(|vs| vs.iter().any(&mut *$f))
+    };
+    (@any scalar, $node:tt, $f:ident, $field:ident) => {
+        $node.$field.as_deref().is_some_and(|e| $f(e))
+    };
+    (@any map, $node:tt, $f:ident, $field:ident) => {
+        $node.$field.as_ref().is_some_and(|m| m.values().any(&mut *$f))
+    };
+
+    // map_children: rebuild each child field onto `$out` (maps not reordered —
+    // a rebuilt `HashMap`'s iteration order is irrelevant).
+    (@map array, $node:tt, $out:ident, $f:ident, $field:ident) => {
+        $out.$field = $node.$field.iter().map(&mut *$f).collect();
+    };
+    (@map opt_array, $node:tt, $out:ident, $f:ident, $field:ident) => {
+        $out.$field = $node.$field.as_ref().map(|vs| vs.iter().map(&mut *$f).collect());
+    };
+    (@map scalar, $node:tt, $out:ident, $f:ident, $field:ident) => {
+        $out.$field = $node.$field.as_deref().map(|e| Box::new($f(e)));
+    };
+    (@map map, $node:tt, $out:ident, $f:ident, $field:ident) => {
+        $out.$field = $node.$field.as_ref().map(|m| m.iter().map(|(k, v)| (k.clone(), $f(v))).collect());
+    };
+
+    // Shape → JSON-key-constant bucket tag.
+    (@tag array) => { CHILD_ARRAY };
+    (@tag opt_array) => { CHILD_ARRAY };
+    (@tag scalar) => { CHILD_SCALAR };
+    (@tag map) => { CHILD_MAP };
+}
+
+/// Declare the ordered child-field spec once; expand it into the flat
+/// [`EXPR_CHILD_FIELDS`] table plus the four `ExpressionNode` walkers.
+macro_rules! expr_children {
+    ($( $field:ident : $shape:ident ),* $(,)?) => {
+        /// The ordered, shape-tagged child-`Expr` field spec — the single source
+        /// the walkers (above, generated) and the [`EXPR_SCALAR_CHILD_KEYS`] /
+        /// [`EXPR_ARRAY_CHILD_KEYS`] / [`EXPR_MAP_CHILD_KEYS`] constants (below,
+        /// derived via [`child_keys`]) are all produced from.
+        const EXPR_CHILD_FIELDS: &[(&str, u8)] = &[
+            $( (stringify!($field), expr_child_visit!(@tag $shape)) ),*
+        ];
+
+        impl ExpressionNode {
+            /// Visit every expression-bearing child of this node, in the
+            /// contractual order: `args` first, then the scalar sidecars `lower`,
+            /// `upper`, `expr`, `filter`, then `values`, then `axes` entries
+            /// sorted by key, then `key`, then `bindings` entries sorted by key.
+            ///
+            /// This is the ONE canonical definition of which fields carry child
+            /// `Expr`s. Every AST traversal in this crate must go through this
+            /// family (or [`Self::map_children`] / [`Self::any_child`]) rather
+            /// than enumerating fields by hand — hand-rolled walkers historically
+            /// each covered a different subset and missed variables hidden in
+            /// aggregate bodies, `filter` predicates, integral bounds,
+            /// `table_lookup` axes, aggregate `key`s, or template `bindings`.
+            ///
+            /// Note: this enumerates children only. `output_idx`, `ranges`,
+            /// `int_var` (and `arg`) *bind* index symbols for the node's body;
+            /// callers that resolve variable names decide how to treat them.
+            pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Expr)) {
+                $( expr_child_visit!(@each $shape, self, f, $field); )*
+            }
+
+            /// Mutable variant of [`Self::for_each_child`], visiting the same
+            /// field set in the same deterministic order.
+            pub fn for_each_child_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+                $( expr_child_visit!(@each_mut $shape, self, f, $field); )*
+            }
+
+            /// Short-circuiting predicate over the same child set as
+            /// [`Self::for_each_child`]: true iff `f` returns true for any
+            /// expression-bearing child.
+            pub fn any_child(&self, f: &mut impl FnMut(&Expr) -> bool) -> bool {
+                $( if expr_child_visit!(@any $shape, self, f, $field) { return true; } )*
+                false
+            }
+
+            /// Rebuild this node with `f` applied to every expression-bearing
+            /// child (the [`Self::for_each_child`] field set), preserving ALL
+            /// other fields by cloning.
+            ///
+            /// This is the safe replacement for the
+            /// `ExpressionNode { op, args, ..Default::default() }` rebuild
+            /// pattern, which silently drops sidecar fields (`expr`, `filter`,
+            /// `values`, `regions`, `ranges`, …) and corrupts array / integral /
+            /// table nodes — see the corruption note on `crate::flatten`'s
+            /// variable substitution.
+            pub fn map_children(&self, f: &mut impl FnMut(&Expr) -> Expr) -> ExpressionNode {
+                let mut out = self.clone();
+                $( expr_child_visit!(@map $shape, self, out, f, $field); )*
+                out
+            }
+        }
+    };
+}
+
+// The single ordered child-field spec. Order here IS the `for_each_child`
+// traversal order (contract); the shape token drives both the walker code and
+// the JSON-key bucket.
+expr_children! {
+    args: array,
+    lower: scalar,
+    upper: scalar,
+    expr: scalar,
+    filter: scalar,
+    values: opt_array,
+    axes: map,
+    key: scalar,
+    bindings: map,
+}
+
+/// Single-child slots (`Option<Box<Expr>>`), derived from [`EXPR_CHILD_FIELDS`].
+pub(crate) const EXPR_SCALAR_CHILD_KEYS: [&str; 5] = child_keys::<5>(CHILD_SCALAR);
 /// Array-of-children slots (`Vec<Expr>` / `Option<Vec<Expr>>`).
-pub(crate) const EXPR_ARRAY_CHILD_KEYS: [&str; 2] = ["args", "values"];
+pub(crate) const EXPR_ARRAY_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_ARRAY);
 /// Name→child-`Expr` map slots (`Option<HashMap<String, Expr>>`), visited in
 /// sorted-key order.
-pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 2] = ["axes", "bindings"];
+pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_MAP);
 
-impl ExpressionNode {
-    /// Visit every expression-bearing child of this node, in deterministic
-    /// order: `args` first, then the single-child sidecar fields `lower`,
-    /// `upper`, `expr`, `filter`, then `values`, then `axes` entries sorted by
-    /// axis name, then `key`, then `bindings` entries sorted by key.
-    ///
-    /// This is the ONE canonical definition of which fields carry child
-    /// `Expr`s. Every AST traversal in this crate must go through this (or
-    /// [`Self::map_children`] / [`Self::any_child`]) rather than enumerating
-    /// fields by hand — hand-rolled walkers have historically each covered a
-    /// different subset and missed variables hidden in aggregate bodies,
-    /// `filter` predicates, integral bounds, `table_lookup` axes, aggregate
-    /// `key`s, or template `bindings`. The raw-JSON counterpart of this field
-    /// set lives in the crate-internal `EXPR_SCALAR_CHILD_KEYS` /
-    /// `EXPR_ARRAY_CHILD_KEYS` / `EXPR_MAP_CHILD_KEYS` constants; keep the two
-    /// in sync.
-    ///
-    /// Note: this enumerates children only. `output_idx`, `ranges`, `int_var`
-    /// (and `arg`) *bind* index symbols for the node's body; callers that
-    /// resolve variable names decide how to treat bound symbols.
-    pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Expr)) {
-        for a in &self.args {
-            f(a);
-        }
-        if let Some(e) = self.lower.as_deref() {
-            f(e);
-        }
-        if let Some(e) = self.upper.as_deref() {
-            f(e);
-        }
-        if let Some(e) = self.expr.as_deref() {
-            f(e);
-        }
-        if let Some(e) = self.filter.as_deref() {
-            f(e);
-        }
-        if let Some(vs) = &self.values {
-            for v in vs {
-                f(v);
-            }
-        }
-        if let Some(axes) = &self.axes {
-            let mut keys: Vec<&String> = axes.keys().collect();
-            keys.sort();
-            for k in keys {
-                f(&axes[k]);
-            }
-        }
-        if let Some(e) = self.key.as_deref() {
-            f(e);
-        }
-        if let Some(bindings) = &self.bindings {
-            let mut keys: Vec<&String> = bindings.keys().collect();
-            keys.sort();
-            for k in keys {
-                f(&bindings[k]);
-            }
-        }
+#[cfg(test)]
+mod expr_child_spec_tests {
+    use super::*;
+
+    /// Drift guard 1: the three shape-partitioned key constants derived from the
+    /// single `EXPR_CHILD_FIELDS` spec still equal the historical, cross-file-
+    /// pinned key sets (the `crate::parse` raw-JSON walker depends on these), and
+    /// every spec entry lands in exactly one bucket (no empty derived key).
+    #[test]
+    fn child_key_constants_match_pinned_sets() {
+        assert_eq!(EXPR_ARRAY_CHILD_KEYS, ["args", "values"]);
+        assert_eq!(EXPR_SCALAR_CHILD_KEYS, ["lower", "upper", "expr", "filter", "key"]);
+        assert_eq!(EXPR_MAP_CHILD_KEYS, ["axes", "bindings"]);
+
+        let bucketed =
+            EXPR_ARRAY_CHILD_KEYS.len() + EXPR_SCALAR_CHILD_KEYS.len() + EXPR_MAP_CHILD_KEYS.len();
+        assert_eq!(bucketed, EXPR_CHILD_FIELDS.len());
+        assert!(EXPR_CHILD_FIELDS.iter().all(|(k, _)| !k.is_empty()));
     }
 
-    /// Mutable variant of [`Self::for_each_child`], visiting the same field
-    /// set in the same deterministic order.
-    pub fn for_each_child_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
-        for a in &mut self.args {
-            f(a);
-        }
-        if let Some(e) = self.lower.as_deref_mut() {
-            f(e);
-        }
-        if let Some(e) = self.upper.as_deref_mut() {
-            f(e);
-        }
-        if let Some(e) = self.expr.as_deref_mut() {
-            f(e);
-        }
-        if let Some(e) = self.filter.as_deref_mut() {
-            f(e);
-        }
-        if let Some(vs) = &mut self.values {
-            for v in vs {
-                f(v);
-            }
-        }
-        if let Some(axes) = &mut self.axes {
-            let mut keys: Vec<String> = axes.keys().cloned().collect();
-            keys.sort();
-            for k in keys {
-                if let Some(v) = axes.get_mut(&k) {
-                    f(v);
-                }
-            }
-        }
-        if let Some(e) = self.key.as_deref_mut() {
-            f(e);
-        }
-        if let Some(bindings) = &mut self.bindings {
-            let mut keys: Vec<String> = bindings.keys().cloned().collect();
-            keys.sort();
-            for k in keys {
-                if let Some(v) = bindings.get_mut(&k) {
-                    f(v);
-                }
-            }
-        }
-    }
+    /// Drift guard 2: `for_each_child` visits exactly one child per
+    /// child-bearing field, in the CONTRACTUAL order (args, lower, upper, expr,
+    /// filter, values, axes sorted, key, bindings sorted). `any_child` and
+    /// `map_children` agree on the same set. Adding a child-bearing field without
+    /// wiring it into the spec changes the visited sequence and fails here.
+    #[test]
+    fn walkers_cover_all_child_fields_in_contract_order() {
+        let mut node = ExpressionNode {
+            op: "probe".into(),
+            args: vec![Expr::Variable("args0".into())],
+            lower: Some(Box::new(Expr::Variable("lower".into()))),
+            upper: Some(Box::new(Expr::Variable("upper".into()))),
+            expr: Some(Box::new(Expr::Variable("expr".into()))),
+            filter: Some(Box::new(Expr::Variable("filter".into()))),
+            values: Some(vec![Expr::Variable("values0".into())]),
+            key: Some(Box::new(Expr::Variable("key".into()))),
+            ..Default::default()
+        };
+        let mut axes = HashMap::new();
+        axes.insert("z_axis".to_string(), Expr::Variable("axes_z".into()));
+        axes.insert("a_axis".to_string(), Expr::Variable("axes_a".into()));
+        node.axes = Some(axes);
+        let mut bindings = HashMap::new();
+        bindings.insert("z_bind".to_string(), Expr::Variable("bind_z".into()));
+        bindings.insert("a_bind".to_string(), Expr::Variable("bind_a".into()));
+        node.bindings = Some(bindings);
 
-    /// Short-circuiting predicate over the same child set as
-    /// [`Self::for_each_child`]: true iff `f` returns true for any
-    /// expression-bearing child.
-    pub fn any_child(&self, f: &mut impl FnMut(&Expr) -> bool) -> bool {
-        if self.args.iter().any(&mut *f) {
-            return true;
-        }
-        for opt in [
-            self.lower.as_deref(),
-            self.upper.as_deref(),
-            self.expr.as_deref(),
-            self.filter.as_deref(),
-            self.key.as_deref(),
-        ] {
-            if let Some(e) = opt
-                && f(e)
-            {
-                return true;
+        let mut seen = Vec::new();
+        node.for_each_child(&mut |c| {
+            if let Expr::Variable(v) = c {
+                seen.push(v.clone());
             }
-        }
-        if let Some(vs) = &self.values
-            && vs.iter().any(&mut *f)
-        {
-            return true;
-        }
-        if let Some(axes) = &self.axes
-            && axes.values().any(&mut *f)
-        {
-            return true;
-        }
-        if let Some(bindings) = &self.bindings
-            && bindings.values().any(&mut *f)
-        {
-            return true;
-        }
-        false
-    }
+        });
+        assert_eq!(
+            seen,
+            vec![
+                "args0", "lower", "upper", "expr", "filter", "values0",
+                "axes_a", "axes_z", // axes: sorted by key
+                "key", "bind_a", "bind_z", // bindings: sorted by key
+            ]
+        );
 
-    /// Rebuild this node with `f` applied to every expression-bearing child
-    /// (the [`Self::for_each_child`] field set), preserving ALL other fields
-    /// by cloning.
-    ///
-    /// This is the safe replacement for the
-    /// `ExpressionNode { op, args, ..Default::default() }` rebuild pattern,
-    /// which silently drops sidecar fields (`expr`, `filter`, `values`,
-    /// `regions`, `ranges`, …) and corrupts array / integral / table nodes —
-    /// see the corruption note on `crate::flatten`'s variable substitution.
-    pub fn map_children(&self, f: &mut impl FnMut(&Expr) -> Expr) -> ExpressionNode {
-        let mut out = self.clone();
-        out.args = self.args.iter().map(&mut *f).collect();
-        out.lower = self.lower.as_deref().map(|e| Box::new(f(e)));
-        out.upper = self.upper.as_deref().map(|e| Box::new(f(e)));
-        out.expr = self.expr.as_deref().map(|e| Box::new(f(e)));
-        out.filter = self.filter.as_deref().map(|e| Box::new(f(e)));
-        out.values = self
-            .values
-            .as_ref()
-            .map(|vs| vs.iter().map(&mut *f).collect());
-        out.axes = self
-            .axes
-            .as_ref()
-            .map(|axes| axes.iter().map(|(k, v)| (k.clone(), f(v))).collect());
-        out.key = self.key.as_deref().map(|e| Box::new(f(e)));
-        out.bindings = self
-            .bindings
-            .as_ref()
-            .map(|b| b.iter().map(|(k, v)| (k.clone(), f(v))).collect());
-        out
+        // for_each_child_mut visits the same set (touch each, then re-read).
+        let mut count_mut = 0usize;
+        node.for_each_child_mut(&mut |_c| count_mut += 1);
+        assert_eq!(count_mut, seen.len());
+
+        // any_child membership matches; map_children preserves every child.
+        assert!(node.any_child(&mut |c| matches!(c, Expr::Variable(v) if v == "filter")));
+        assert!(node.any_child(&mut |c| matches!(c, Expr::Variable(v) if v == "bind_z")));
+        assert!(!node.any_child(&mut |c| matches!(c, Expr::Variable(v) if v == "absent")));
+
+        let rebuilt = node.map_children(&mut |c| c.clone());
+        let mut seen_rebuilt = Vec::new();
+        rebuilt.for_each_child(&mut |c| {
+            if let Expr::Variable(v) = c {
+                seen_rebuilt.push(v.clone());
+            }
+        });
+        assert_eq!(seen, seen_rebuilt);
     }
 }
 

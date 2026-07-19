@@ -30,6 +30,7 @@
 //! ```
 
 use crate::flatten::{FlattenedSystem, flatten, flatten_model};
+use crate::simulate_array::{apply_binary, apply_unary, fold_scalar};
 use crate::types::{EsmFile, Expr, Model};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -1743,112 +1744,70 @@ fn eval_op(
 ) -> f64 {
     let v = |i: usize| interpret(&args[i], state, params, observed, t);
     match op {
-        // n-ary arithmetic
-        "+" => args
-            .iter()
-            .map(|a| interpret(a, state, params, observed, t))
-            .sum(),
-        "*" => args
-            .iter()
-            .map(|a| interpret(a, state, params, observed, t))
-            .product(),
-        "-" => match args.len() {
-            1 => -v(0),
-            2 => v(0) - v(1),
-            _ => f64::NAN,
-        },
-        "/" => v(0) / v(1),
-        "^" => v(0).powf(v(1)),
+        // ------------------------------------------------------------------
+        // Leaf scalar algebra — routed through the ONE shared kernel that also
+        // backs the array runtime's per-cell oracle and vectorized overlay
+        // (`apply_binary` / `apply_unary` / `fold_scalar`, in `simulate_array`).
+        // Defining each operator's numeric meaning once makes the scalar and
+        // array paths impossible to diverge (knot #3a) — the past oracle/overlay
+        // and interpreter divergences (e.g. the `==` EPSILON bug) lived exactly
+        // in this hand-duplicated block.
+        // ------------------------------------------------------------------
 
-        // unary transcendentals
-        "exp" => v(0).exp(),
-        "log" | "ln" => v(0).ln(),
-        "log10" => v(0).log10(),
-        "sqrt" => v(0).sqrt(),
-        "abs" => v(0).abs(),
-        "sign" => {
-            // Mathematical sign convention (sign(0) = 0), matching the spec
-            // and the cross-binding contract. This differs from `f64::signum`,
-            // which returns ±1 for ±0.
-            let x = v(0);
-            if x > 0.0 {
-                1.0
-            } else if x < 0.0 {
-                -1.0
+        // n-ary arithmetic + min/max: left-fold via `fold_scalar` (the same fold
+        // the array oracle uses). `fold_scalar` returns NaN for an empty fold;
+        // the `op_registry` gate makes that arity unreachable here, but preserve
+        // simulate.rs's historical fold identity for it regardless.
+        "+" | "*" | "min" | "max" => {
+            let vs: Vec<f64> = args
+                .iter()
+                .map(|a| interpret(a, state, params, observed, t))
+                .collect();
+            if vs.is_empty() {
+                match op {
+                    "+" => 0.0,
+                    "*" => 1.0,
+                    "min" => f64::INFINITY,
+                    "max" => f64::NEG_INFINITY,
+                    _ => f64::NAN,
+                }
             } else {
-                0.0
+                fold_scalar(op, &vs)
             }
         }
-        "floor" => v(0).floor(),
-        "ceil" => v(0).ceil(),
 
-        // trig
-        "sin" => v(0).sin(),
-        "cos" => v(0).cos(),
-        "tan" => v(0).tan(),
-        "asin" => v(0).asin(),
-        "acos" => v(0).acos(),
-        "atan" => v(0).atan(),
-        "atan2" => v(0).atan2(v(1)),
-        "sinh" => v(0).sinh(),
-        "cosh" => v(0).cosh(),
-        "tanh" => v(0).tanh(),
-        "asinh" => v(0).asinh(),
-        "acosh" => v(0).acosh(),
-        "atanh" => v(0).atanh(),
+        // `-` is unary negate (arity 1) or binary subtract (arity 2). Only the
+        // binary case has a leaf-kernel entry; unary negation is trivial and has
+        // no shared `f64` kernel (the array path negates at the `Value` level).
+        "-" => match args.len() {
+            1 => -v(0),
+            2 => apply_binary("-", v(0), v(1)),
+            _ => f64::NAN,
+        },
 
-        // n-ary min / max (esm-spec §4.2 — arity ≥ 2)
-        "min" => args
-            .iter()
-            .map(|a| interpret(a, state, params, observed, t))
-            .fold(f64::INFINITY, f64::min),
-        "max" => args
-            .iter()
-            .map(|a| interpret(a, state, params, observed, t))
-            .fold(f64::NEG_INFINITY, f64::max),
+        // Strictly-binary arithmetic + comparisons + logicals, all via the shared
+        // `apply_binary`. Comparisons route through `scalar_compare` internally,
+        // so `==`/`!=` stay EXACT equality (`a == b`) — the pinned cross-binding
+        // semantic — and never the old absolute-EPSILON tolerance. Orderings and
+        // `and`/`or` return a strict 1.0/0.0 flag.
+        "/" | "^" | "atan2" | "<" | ">" | "<=" | ">=" | "==" | "!=" | "and" | "or" => {
+            apply_binary(op, v(0), v(1))
+        }
 
-        // conditional
+        // Unary transcendentals / trig / rounding / `sign` / `abs` / `not`, via the
+        // shared `apply_unary` (mathematical `sign(0) = 0`, `not` on the 0/≠0
+        // flag, etc. — one definition shared with the array path).
+        "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
+        | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
+        | "acosh" | "atanh" | "not" => apply_unary(op, v(0)),
+
+        // conditional (not a leaf-kernel op): evaluate the predicate, then only
+        // the taken branch.
         "ifelse" => {
             if v(0) != 0.0 {
                 v(1)
             } else {
                 v(2)
-            }
-        }
-
-        // relational (return 0/1)
-        "<" => f64::from(v(0) < v(1)),
-        ">" => f64::from(v(0) > v(1)),
-        "<=" => f64::from(v(0) <= v(1)),
-        ">=" => f64::from(v(0) >= v(1)),
-        // Exact equality (esm-spec §4.2). The pinned cross-binding semantic is
-        // `a == b` — Python `np.equal` / `np.not_equal` and the array runtime's
-        // shared `scalar_compare` kernel (simulate_array). The former absolute
-        // `EPSILON` tolerance here diverged from every sibling (loose near 0,
-        // exact for operands ≥ 2), so use the native relop and agree with them.
-        "==" => f64::from(v(0) == v(1)),
-        "!=" => f64::from(v(0) != v(1)),
-
-        // logical
-        "and" => {
-            if v(0) != 0.0 && v(1) != 0.0 {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        "or" => {
-            if v(0) != 0.0 || v(1) != 0.0 {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        "not" => {
-            if v(0) == 0.0 {
-                1.0
-            } else {
-                0.0
             }
         }
 

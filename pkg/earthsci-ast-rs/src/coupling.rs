@@ -7,6 +7,7 @@
 //! [`crate::structural`].
 
 use crate::EsmFile;
+use crate::structural::{MissingScopedComponent, resolve_scoped_ref};
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use std::collections::{HashMap, HashSet};
 
@@ -392,37 +393,14 @@ fn validate_scoped_reference(
     coupling_type: &str,
     errors: &mut Vec<StructuralError>,
 ) {
-    // A scoped reference is a dot path of ARBITRARY DEPTH (esm-spec §4.9.2):
-    // `A.B.c` walks A → B and takes `c`. The NAME is the LAST segment and the
-    // SYSTEM is everything before it — taking segment [0] as the system reports
-    // `EarthSystem.Atmosphere.Chemistry.O3` against the top-level `EarthSystem`
-    // rather than the subsystem two levels down. `build_system_reference_map`
-    // registers each nested subsystem under its full dotted path, so the walk is
-    // a single prefix lookup.
-    let Some((system_name, var_name)) = reference.rsplit_once('.') else {
-        return; // Not a scoped reference
-    };
-
-    // Check if system exists
-    if let Some(system) = system_refs.get(system_name) {
-        // Check if variable exists in the system
-        let var_exists = system.variables.contains(var_name)
-            || system.species.contains(var_name)
-            || system.parameters.contains(var_name);
-
-        if !var_exists {
-            errors.push(StructuralError {
-                path: coupling_path.to_string(),
-                code: StructuralErrorCode::UnresolvedScopedRef,
-                message: format!("Scoped reference '{reference}' cannot be resolved"),
-                details: serde_json::json!({
-                    "reference": reference,
-                    "coupling_type": coupling_type,
-                    "missing_component": var_name
-                }),
-            });
-        }
-    } else {
+    // Resolve the scoped reference (arbitrary depth, §4.9.2) against the shared
+    // resolver. On failure it reports which half is missing — the system prefix
+    // or the final component — which is exactly this site's `missing_component`.
+    if let Err(missing) = resolve_scoped_ref(reference, system_refs) {
+        let missing_component = match missing {
+            MissingScopedComponent::System(s) => s,
+            MissingScopedComponent::Component(c) => c,
+        };
         errors.push(StructuralError {
             path: coupling_path.to_string(),
             code: StructuralErrorCode::UnresolvedScopedRef,
@@ -430,7 +408,7 @@ fn validate_scoped_reference(
             details: serde_json::json!({
                 "reference": reference,
                 "coupling_type": coupling_type,
-                "missing_component": system_name
+                "missing_component": missing_component
             }),
         });
     }

@@ -61,8 +61,7 @@
     clippy::too_many_arguments,
     clippy::type_complexity,
     clippy::collapsible_if,
-    clippy::needless_range_loop,
-    clippy::large_enum_variant
+    clippy::needless_range_loop
 )]
 
 mod compile;
@@ -78,6 +77,11 @@ mod vectorized;
 pub(crate) use compile::eval_buildtime_field;
 pub use compile::{file_has_array_ops, file_has_spatial_model};
 pub use eval::eval_expression;
+// The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
+// the vectorized overlay); re-exported crate-wide so the scalar interpreter
+// `crate::simulate::eval_op` routes through the SAME definition instead of
+// re-implementing the arithmetic/comparison/logical algebra (knot #3a).
+pub(crate) use eval::{apply_binary, apply_unary, fold_scalar};
 pub use rhs::RhsScratch;
 
 use compile::*;
@@ -144,7 +148,14 @@ type ValVec = SmallVec<[Value; 4]>;
 #[derive(Debug, Clone)]
 pub enum Value {
     Scalar(f64),
-    Array(ArrayD<f64>),
+    /// Boxed so the whole-array payload lives on the heap and `Value` stays
+    /// ~16 bytes: the per-cell oracle moves a `Value` at every AST node of
+    /// every grid cell, and the vast majority are `Scalar`s — an unboxed
+    /// `ArrayD` (~64 B) would make every one of those scalar moves a large
+    /// memcpy (knot #6). Constructing an `Array` now heap-allocates, but the
+    /// hot zero-allocation RHS paths (scalar ODE, vectorized whole-array) do
+    /// not construct per-cell `Array` values, so they are unaffected.
+    Array(Box<ArrayD<f64>>),
 }
 
 impl Value {

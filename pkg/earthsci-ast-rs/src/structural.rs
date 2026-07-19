@@ -904,6 +904,12 @@ fn known_physical_constants() -> &'static [(&'static str, &'static str, &'static
     ]
 }
 
+/// Message pinned for a physical-constant dimensional error
+/// (`tests/invalid/expected_errors.json`). Named so the same string drives
+/// both the emitted record and the supersession filter below.
+const PHYSICAL_CONSTANT_UNIT_MESSAGE: &str =
+    "Physical constant used with incorrect dimensional analysis";
+
 /// Flag parameters whose name matches a well-known physical constant but whose
 /// declared units are dimensionally incompatible with the canonical form
 /// (e.g., `R` declared as `kcal/mol` — missing temperature — instead of
@@ -951,10 +957,23 @@ fn check_physical_constant_units(
             }
         }
         let target = usage_site.unwrap_or(constant_name);
+        let target_path = format!("/models/{model_name}/variables/{target}");
+        // A wrong-dimensioned physical constant ALSO makes the observed
+        // expression that uses it fail the generic expression-dimension check
+        // (`record_unit_findings`), which already pushed a second
+        // `unit_inconsistency` record at this very path. This physical-constant
+        // diagnostic is the root-cause report and the single record the shared
+        // corpus pins (tests/invalid/expected_errors.json), so it supersedes
+        // the redundant generic one — each (code, path) is emitted exactly once.
+        errors.retain(|e| {
+            !(matches!(e.code, StructuralErrorCode::UnitInconsistency)
+                && e.path == target_path
+                && e.message != PHYSICAL_CONSTANT_UNIT_MESSAGE)
+        });
         errors.push(StructuralError {
-            path: format!("/models/{model_name}/variables/{target}"),
+            path: target_path,
             code: StructuralErrorCode::UnitInconsistency,
-            message: "Physical constant used with incorrect dimensional analysis".to_string(),
+            message: PHYSICAL_CONSTANT_UNIT_MESSAGE.to_string(),
             details: serde_json::json!({
                 "constant_name": constant_name,
                 "constant_description": description,
@@ -1553,6 +1572,52 @@ fn collect_bound_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// Which half of a scoped reference `<system>.<name>` failed to resolve against
+/// the system-reference map. The borrowed slice is the exact segment a caller
+/// reports as its `missing_component`.
+pub(crate) enum MissingScopedComponent<'a> {
+    /// The dotted system prefix is not a known system.
+    System(&'a str),
+    /// The system exists but does not expose the final component.
+    Component(&'a str),
+}
+
+/// Resolve a scoped reference `<system>.<name>` against the system-reference map.
+///
+/// A scoped reference is a dot path of ARBITRARY DEPTH (esm-spec §4.9.2):
+/// `A.B.c` walks A → B and takes `c`, so the NAME is the LAST segment and the
+/// SYSTEM is the entire dotted prefix — splitting on the FIRST dot instead turns
+/// every three-or-more-segment reference into a spurious miss.
+/// `build_system_reference_map` registers each nested subsystem under its full
+/// dotted path, so the walk is a single prefix lookup.
+///
+/// Returns `Ok(())` when the string has no `.` (not a scoped reference) or when
+/// the system exists AND exposes the component; otherwise reports WHICH half is
+/// missing so each caller can build its own `details`/message. This is the one
+/// shared resolver behind the three call sites (equation refs, reaction rates,
+/// coupling refs) — the resolution rule lives here; only the error records differ.
+pub(crate) fn resolve_scoped_ref<'a>(
+    name: &'a str,
+    system_refs: &HashMap<String, SystemInfo>,
+) -> Result<(), MissingScopedComponent<'a>> {
+    let Some((system_name, component)) = name.rsplit_once('.') else {
+        return Ok(()); // Not a scoped reference — nothing to resolve.
+    };
+    match system_refs.get(system_name) {
+        Some(system) => {
+            if system.variables.contains(component)
+                || system.species.contains(component)
+                || system.parameters.contains(component)
+            {
+                Ok(())
+            } else {
+                Err(MissingScopedComponent::Component(component))
+            }
+        }
+        None => Err(MissingScopedComponent::System(system_name)),
+    }
+}
+
 fn validate_rate_expression(
     rate: &crate::Expr,
     defined_parameters: &HashSet<String>,
@@ -1570,15 +1635,9 @@ fn validate_rate_expression(
             // LOCAL reaction system's parameters only — and reporting
             // `undefined_parameter` for anything dotted — is wrong.
             if var_name.contains('.') {
-                // Arbitrary depth (§4.9.2): the NAME is the last segment.
-                let resolved = var_name.rsplit_once('.').is_some_and(|(sys, name)| {
-                    system_refs.get(sys).is_some_and(|s| {
-                        s.variables.contains(name)
-                            || s.species.contains(name)
-                            || s.parameters.contains(name)
-                    })
-                });
-                if !resolved {
+                // Arbitrary depth (§4.9.2): the NAME is the last segment. A rate
+                // ref only cares WHETHER it resolves, not which half is missing.
+                if resolve_scoped_ref(var_name, system_refs).is_err() {
                     errors.push(StructuralError {
                         path: reaction_path.to_string(),
                         code: StructuralErrorCode::UnresolvedScopedRef,
@@ -1718,27 +1777,14 @@ pub(crate) fn validate_expression_references_with_systems(
             // `build_system_reference_map` registers each nested subsystem under
             // its full dotted path, so the walk is a single lookup of the
             // prefix.
-            if let Some((system_name, var_suffix)) = var_name.rsplit_once('.') {
-                // Validate scoped reference
-                if let Some(system) = system_refs.get(system_name) {
-                    let var_exists = system.variables.contains(var_suffix)
-                        || system.species.contains(var_suffix)
-                        || system.parameters.contains(var_suffix);
-
-                    if !var_exists {
-                        errors.push(StructuralError {
-                            path: base_path.to_string(),
-                            code: StructuralErrorCode::UnresolvedScopedRef,
-                            message: format!("Scoped reference '{var_name}' cannot be resolved"),
-                            details: serde_json::json!({
-                                "reference": var_name,
-                                "equation_index": equation_index,
-                                "missing_component": var_suffix
-                            }),
-                        });
-                    }
-                    // If scoped reference is valid, don't generate undefined variable error
-                } else {
+            if var_name.contains('.') {
+                // Scoped reference — resolve against the system map. If it
+                // resolves, DON'T also flag it as an undefined variable.
+                if let Err(missing) = resolve_scoped_ref(var_name, system_refs) {
+                    let missing_component = match missing {
+                        MissingScopedComponent::System(s) => s,
+                        MissingScopedComponent::Component(c) => c,
+                    };
                     errors.push(StructuralError {
                         path: base_path.to_string(),
                         code: StructuralErrorCode::UnresolvedScopedRef,
@@ -1746,7 +1792,7 @@ pub(crate) fn validate_expression_references_with_systems(
                         details: serde_json::json!({
                             "reference": var_name,
                             "equation_index": equation_index,
-                            "missing_component": system_name
+                            "missing_component": missing_component
                         }),
                     });
                 }
@@ -2138,8 +2184,12 @@ fn extract_model_dependencies(
     }
 }
 
-/// Check for cycles using depth-first search
-fn has_cycle_dfs(
+/// Check for cycles using depth-first search.
+///
+/// Shared with the load-time gate in [`crate::parse`], which builds the same
+/// model-dependency graph over raw JSON and must reject circular documents at
+/// load — so the ONE DFS lives here and both stacks call it.
+pub(crate) fn has_cycle_dfs(
     node: &str,
     graph: &HashMap<String, HashSet<String>>,
     visited: &mut HashSet<String>,
@@ -2164,8 +2214,9 @@ fn has_cycle_dfs(
     false
 }
 
-/// Find the actual cycle path for error reporting
-fn find_cycle(graph: &HashMap<String, HashSet<String>>, start: &str) -> Vec<String> {
+/// Find the actual cycle path for error reporting. Shared with [`crate::parse`]'s
+/// load-time cycle gate (see [`has_cycle_dfs`]).
+pub(crate) fn find_cycle(graph: &HashMap<String, HashSet<String>>, start: &str) -> Vec<String> {
     let mut path = vec![];
     let mut visited = HashSet::new();
 
