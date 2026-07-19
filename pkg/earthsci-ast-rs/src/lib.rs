@@ -150,7 +150,7 @@ pub use registered_functions::{
     ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
 };
 pub use relational::{
-    FloatKeyError, Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct, equijoin,
+    FloatKeyError, Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct,
     group_aggregate, rank, rank_with_base, serialize_keys, serialize_pairs, skolem, skolem_edge,
 };
 pub use serialize::{save, save_compact};
