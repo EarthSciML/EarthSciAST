@@ -29,8 +29,6 @@ import importlib
 import re
 import warnings
 
-import pytest
-
 # Import the submodules via importlib: the package ``__init__`` re-exports the
 # ``flatten`` FUNCTION under the name ``flatten``, shadowing the submodule in the
 # package namespace, so ``from earthsci_ast import flatten`` would bind the
@@ -100,14 +98,16 @@ def test_registry_arity_bounds_pin_load_bearing_ops():
     assert reg.OPS["-"].arity_bounds == (1, None)
 
 
-def test_open_tier_sugar_ops_carry_no_arity_privilege():
-    # The demoted open-tier sugar ops carry NO structural arity contract: they are
-    # ordinary rewrite-target ops with no privilege over an unregistered user op,
-    # so structural validation skips their operand count entirely (exactly as it
-    # does for `godunov_hamiltonian`). Re-adding bespoke arity_bounds is a
-    # regression.
+def test_open_tier_sugar_ops_are_unregistered():
+    # The demoted open-tier sugar ops are NOT in the registry at all: they are
+    # ordinary unregistered rewrite-target ops with no privilege over any other
+    # user op (`godunov_hamiltonian`). They therefore carry no structural arity
+    # contract, no evaluator, and no display/codegen registry membership —
+    # structural validation skips their operand count exactly as it does for an
+    # unregistered custom op. Re-registering any of them is a regression.
     for op in ("grad", "div", "laplacian", "curl", "integral"):
-        assert reg.OPS[op].arity_bounds is None, f"{op} must not carry privileged arity bounds"
+        assert op not in reg.OPS, f"{op} must be unregistered (an ordinary open-tier op)"
+        assert not reg.is_known(op), f"{op} must not be a known registry op"
         assert op not in reg.arity_bounds_map()
 
 
@@ -125,15 +125,18 @@ def test_registry_aliases_point_at_canonical_ops():
             )
 
 
-def test_rewrite_target_tier_is_exactly_the_open_category():
-    # The only registered open-tier (no-evaluator) ops are the demoted sugar ops,
-    # now the neutral `open` category — grad/div/laplacian/curl/integral. They
-    # carry NO privilege; registry membership only spares them a display "unknown
-    # op" warning. (Any UNregistered custom op is also a rewrite-target by virtue
-    # of not being evaluable-core, but is not in the registry.)
-    assert set(reg.by_tier("rewrite_target")) == _cat("open")
-    assert _cat("open") == {"grad", "div", "laplacian", "curl", "integral"}
-    # And there is no longer a privileged `spatial_sugar` category.
+def test_no_registered_rewrite_target_ops():
+    # After the demotion, NO op in the registry is a rewrite-target: every
+    # registered op is evaluable-core. The open-tier sugar
+    # (grad/div/laplacian/curl/integral) and every custom op are rewrite-targets
+    # by virtue of NOT being registered, so they need no registry entry — the
+    # display/codegen generic fallback renders them with no warning. The
+    # `rewrite_target` tier label remains a valid (currently unpopulated) member
+    # of the vocabulary.
+    assert set(reg.by_tier("rewrite_target")) == set()
+    assert "rewrite_target" in reg.TIERS
+    # There is no longer a neutral `open` category (nor the old `spatial_sugar`).
+    assert "open" not in reg.CATEGORIES
     assert "spatial_sugar" not in reg.CATEGORIES
 
 
@@ -266,22 +269,30 @@ def _op_literals_in_source(module) -> set[str]:
 
 
 # Registered ops for which display's generic `op(args)` fallback IS the intended
-# rendering (they carry no dedicated math notation): the open-tier spatial sugar,
-# and the build-time relational / boolean-literal ops. Every OTHER registered op
-# must be specifically rendered.
+# rendering (they carry no dedicated math notation): the build-time relational /
+# boolean-literal ops. Every OTHER registered op must be specifically rendered.
+# (The open-tier spatial sugar grad/div/laplacian/curl is UNregistered — it also
+# renders via the generic fallback, but is not a *registered* op, so it is not
+# listed here.)
 DISPLAY_GENERIC_OK = {
-    "grad", "div", "laplacian", "curl",  # open-tier sugar (rewrite-target)
     "ic",                                 # equation-LHS declaration
     "skolem", "rank", "distinct", "join",  # build-time value-invention ops
     "false",                              # display renders `true` but not `false`
 }
 
+# Unregistered ops display nonetheless branches on a source literal for: `integral`
+# is an open-tier rewrite-target op that carries its OWN `var`/`lower`/`upper`
+# sidecar fields, so its ∫ rendering needs a structural `op == "integral"` branch
+# even though the op is not in the registry (exactly like a custom user op).
+DISPLAY_STRUCTURAL_UNREGISTERED = {"integral"}
+
 
 def test_display_covers_every_registered_op():
     handled = _op_literals_in_source(display)
 
-    # 1. Every op display branches on must be registered (no orphan handler/typo).
-    orphan = handled - REG_NAMES
+    # 1. Every op display branches on must be registered (no orphan handler/typo),
+    #    save the unregistered sugar ops with a deliberate structural renderer.
+    orphan = handled - REG_NAMES - DISPLAY_STRUCTURAL_UNREGISTERED
     assert not orphan, f"display renders ops not in the registry: {sorted(orphan)}"
 
     # 2. The generic-fallback allowlist must itself be registered and must not
@@ -343,34 +354,60 @@ def test_codegen_special_cases_are_registered_and_pinned():
 
 
 # ---------------------------------------------------------------------------
-# Loud degradation (step 3): the generic fallbacks warn on unregistered ops
+# No privilege: an open-tier rewrite-target op reaching the generic `op(args)`
+# fallback is a LEGITIMATE document element (lowered before eval), so neither
+# display nor codegen warns — the registered sugar of the past and an arbitrary
+# custom op render identically. (The former "unknown op" RuntimeWarning is gone.)
 # ---------------------------------------------------------------------------
 
 
-def test_display_warns_on_unregistered_op():
-    with pytest.warns(RuntimeWarning, match="op_registry"):
-        display.to_unicode({"op": "totally_made_up_op_xyz", "args": ["x"]})
-
-
-def test_display_does_not_warn_on_registered_generic_op():
-    # `grad` is a registered open-tier op that renders generically — no warning.
+def test_display_does_not_warn_on_any_open_tier_op():
+    # Neither the demoted (now unregistered) sugar `grad` nor an arbitrary custom
+    # op warns; both render via the generic fallback.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        display.to_unicode({"op": "grad", "args": ["x"]})
-        display.to_latex({"op": "grad", "args": ["x"]})
+        for op in ("grad", "totally_made_up_op_xyz"):
+            display.to_unicode({"op": op, "args": ["x"]})
+            display.to_latex({"op": op, "args": ["x"]})
+            display.to_ascii({"op": op, "args": ["x"]})
 
 
-def test_codegen_warns_on_unregistered_op():
-    with pytest.warns(RuntimeWarning, match="op_registry"):
-        codegen._format_expression({"op": "totally_made_up_op_xyz", "args": ["x"]})
-    with pytest.warns(RuntimeWarning, match="op_registry"):
-        codegen._format_python_expression({"op": "totally_made_up_op_xyz", "args": ["x"]})
-
-
-def test_codegen_does_not_warn_on_registered_generic_op():
-    # `sin` is registered; codegen renders it via the generic function-call path
-    # (which is correct Julia/SymPy) — no warning.
+def test_codegen_does_not_warn_on_any_open_tier_op():
+    # `sin` (evaluable-core) and `grad` / a custom op (open-tier rewrite-target)
+    # all render via the generic function-call path with no warning.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        codegen._format_expression({"op": "sin", "args": ["x"]})
-        codegen._format_python_expression({"op": "sin", "args": ["x"]})
+        for op in ("sin", "grad", "totally_made_up_op_xyz"):
+            codegen._format_expression({"op": op, "args": ["x"]})
+            codegen._format_python_expression({"op": op, "args": ["x"]})
+
+
+def test_grad_renders_identically_to_an_arbitrary_user_op():
+    # The core requirement of the despecialization: the demoted spatial sugar
+    # `grad` carries NO privilege over an arbitrary open-tier user op
+    # (`godunov_hamiltonian`) in display OR codegen — same generic `op(args)`
+    # shape, and (crucially) NO warning for either. The ONLY difference is the op
+    # name itself; once substituted the renderings are byte-identical. (In LaTeX
+    # the name passes through `_latex_name`, which escapes `_` — a name-escaping
+    # detail that applies to ANY op, `grad` included, not a privilege; normalize
+    # both the raw and the escaped spelling of the substituted name.)
+    def _sub(rendered: str) -> str:
+        return rendered.replace("godunov\\_hamiltonian", "grad").replace(
+            "godunov_hamiltonian", "grad"
+        )
+
+    renderers = (
+        display.to_unicode,
+        display.to_latex,
+        display.to_ascii,
+        codegen._format_expression,
+        codegen._format_python_expression,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any RuntimeWarning would fail the test
+        for render in renderers:
+            g = render({"op": "grad", "args": ["x", "y"]})
+            u = render({"op": "godunov_hamiltonian", "args": ["x", "y"]})
+            assert g == _sub(u), (
+                f"grad and an arbitrary user op diverge in {render.__name__}: {g!r} vs {u!r}"
+            )

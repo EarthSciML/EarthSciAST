@@ -564,18 +564,14 @@ def _check_surviving_refs(node: Any, templates: dict, scope: str) -> None:
 # rule 3 / RFC out-of-line-expression-templates §7.2)
 # ---------------------------------------------------------------------------
 
-#: The recognized-name members of the rewrite-target tier **T** (§4.2). DERIVED
-#: from the single-source registry — ``by_tier("rewrite_target")`` supplies the
-#: open-tier sugar (grad/div/laplacian/curl/integral) so the set cannot drift
-#: (it formerly omitted ``curl`` and hand-listed the sugar) — UNION the three
-#: evaluable-core registry ops that are ALSO rewrite targets in these positions:
-#: a right-hand-side / spatial ``D`` (core only in its equation-LHS role) and the
-#: two load-eliminated forms ``table_lookup`` / ``enum``. Any op that is NOT in
-#: the registry at all is ALSO in T (an open-namespace custom op no evaluator
-#: implements — see :func:`_op_in_T`); ``apply_expression_template`` is excluded.
-_REWRITE_TARGET_OPS = op_registry.by_tier("rewrite_target") | frozenset(
-    {"D", "table_lookup", "enum"}
-)
+#: The named evaluable-core registry ops that are ALSO rewrite targets in these
+#: positions: a right-hand-side / spatial ``D`` (core only in its equation-LHS
+#: role) and the two load-eliminated forms ``table_lookup`` / ``enum``. The
+#: open-tier sugar (grad/div/laplacian/curl/integral) is UNregistered, so it is
+#: NOT named here — it lands in T through the ``not op_registry.is_known(op)``
+#: fallback in :func:`_op_in_T`, exactly like any open-namespace custom op no
+#: evaluator implements. ``apply_expression_template`` is excluded.
+_REWRITE_TARGET_OPS = frozenset({"D", "table_lookup", "enum"})
 
 
 def _op_in_T(op: str) -> bool:

@@ -8,32 +8,9 @@ from ESM files in multiple target languages:
 """
 from __future__ import annotations
 
-import warnings
 from typing import Any
 
 from . import op_registry
-
-
-def _warn_unregistered_op(op: str, target: str) -> None:
-    """Surface the silent-degradation path the audit flagged (loud, non-fatal).
-
-    ``codegen`` intentionally special-cases only the operator / control-flow
-    subset (see ``tests/test_op_registry.py``) and generic function-call syntax
-    ``op(args)`` is the correct, deliberate rendering for the rest of the
-    registered vocabulary (``sin``, ``log``, ``min``, the array ops, …). But an
-    op that is not even in the canonical vocabulary (:mod:`.op_registry`) reaching
-    generic rendering is a new / mistyped op degrading silently — warn naming it
-    rather than emitting plausible-but-unchecked code with no signal. Raising is
-    avoided so legitimate open-tier user ops still generate.
-    """
-    if not op_registry.is_known(op):
-        warnings.warn(
-            f"codegen ({target}): op {op!r} is not in the canonical op registry "
-            f"(earthsci_ast.op_registry); emitting the generic 'op(args)' "
-            f"fallback. If this is a real op, add a handler and register it.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
 
 
 def to_julia_code(file: dict[str, Any]) -> str:
@@ -414,8 +391,9 @@ def _format_expr_node(node: dict[str, Any], target: str) -> str:
     # `grad`/`div`/`laplacian`/`curl` are no longer special operators here: they
     # are open-tier rewrite-target keywords a discretization template lowers to a
     # stencil before any code-generation. One reaching codegen was never rewritten;
-    # render it via the generic `grad(args)` fallback (it is a registered op, so no
-    # unregistered-op warning) rather than inventing a Differential/Derivative form.
+    # render it via the generic `grad(args)` fallback — an ordinary unregistered
+    # rewrite-target op, treated exactly like a custom user op — rather than
+    # inventing a Differential/Derivative form.
     if op == "ifelse":
         if target == "julia":
             return f"ifelse({', '.join(r(arg) for arg in args)})"
@@ -424,8 +402,11 @@ def _format_expr_node(node: dict[str, Any], target: str) -> str:
             return f"sp.Piecewise(({r(args[1])}, {r(args[0])}), ({r(args[2])}, True))"
         return "sp.Piecewise((0, True))"
 
-    # For other operators, use function call syntax.
-    _warn_unregistered_op(op, target)
+    # For other operators, use function call syntax. This is the correct rendering
+    # both for evaluable-core elementary calls (`sin(x)`, `min(a, b)`) and for
+    # open-tier rewrite-target ops — the sugar `grad`/`div`/… and any custom user
+    # op (`godunov_hamiltonian`), which are legitimate document elements a rewrite
+    # rule lowers before evaluation. No op reaching here is an error, so no warning.
     return f"{op}({', '.join(r(arg) for arg in args)})"
 
 

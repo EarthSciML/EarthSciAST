@@ -19,9 +19,13 @@ added it raises loudly in the SymPy path but **silently degrades** to generic
 ``op(args)`` rendering in ``display`` / ``codegen`` — no error, just wrong-looking
 output. The registry, together with ``tests/test_op_registry.py``, closes that
 gap: the test asserts each renderer/dispatcher stays in sync with this registry,
-so adding an op without updating a renderer fails loudly at test time; and the
-generic fallbacks in ``display`` / ``codegen`` now warn when they meet an op that
-is not even in this registry (a genuinely unregistered op).
+so adding an op to the registry without updating a renderer fails loudly at test
+time. (``display`` / ``codegen`` do NOT warn at runtime: an op reaching the
+generic ``op(args)`` fallback is either an evaluable-core function that renders
+correctly as a call — ``sin(x)`` — or an open-tier rewrite-target op that is a
+legitimate document element lowered before evaluation. Both are correct outputs,
+so neither a registered sugar op like ``grad`` nor an unregistered custom op like
+``godunov_hamiltonian`` is privileged over the other — they render identically.)
 
 **Contract for renderers/dispatchers.** Every op below is part of the accepted
 vocabulary. A renderer/dispatcher is expected to cover the subset appropriate to
@@ -67,27 +71,27 @@ Categories
 ``relational``       value-invention & index-returning reducers: skolem, rank,
                      argmin, argmax, distinct, join (RFC semiring-faq-unified-ir)
 ``geometry``         intersect_polygon, polygon_intersection_area (§8.6 kernels)
-``open``             ordinary open-tier rewrite-target ops the FORMAT documents
-                     but does NOT privilege: grad/div/laplacian/curl/integral
-                     (esm-spec §4.2). They carry NO dimensional rule, NO evaluator,
-                     NO privileged arity, and are NOT used for spatial detection —
-                     exactly like an unregistered user op (``godunov_hamiltonian``).
-                     Registry membership only spares them the "unknown op" display
-                     warning; it confers no semantics. ``integral`` additionally
-                     carries its OWN sidecar fields (``var``/``lower``/``upper``)
-                     for display/structural traversal — a rendering detail, not a
-                     semantic privilege.
+
+The open-tier rewrite-target sugar (grad/div/laplacian/curl/integral, esm-spec
+§4.2) is intentionally **NOT** registered: those ops carry no dimensional rule,
+no evaluator, no privileged arity, and are not used for spatial detection, so
+they are ordinary unregistered rewrite-target ops indistinguishable from a
+custom user op (``godunov_hamiltonian``). ``integral``'s ∫ rendering reads its
+own ``var``/``lower``/``upper`` sidecar fields via a structural ``op ==
+"integral"`` branch in :mod:`.display`, which needs no registry entry.
 
 Tiers
 -----
 
 ``core``            evaluable-core (closed) op — every binding's evaluator
-                    implements it directly (esm-spec §4.2).
+                    implements it directly (esm-spec §4.2). Every registered op
+                    is ``core`` (the default).
 ``rewrite_target``  open-tier op with **no** evaluator; it MUST be eliminated by
                     a rewrite rule before evaluation (``unlowered_operator`` if
-                    not, esm-spec §9.6.6). The ``open`` category ops (and any
-                    unregistered custom op, which is a rewrite-target by virtue of
-                    not being evaluable-core).
+                    not, esm-spec §9.6.6). Every rewrite-target op — the sugar
+                    (grad/div/…) and any custom op — is UNregistered, a
+                    rewrite-target by virtue of not being evaluable-core; the tier
+                    label is retained in :data:`TIERS` for that vocabulary.
 """
 
 from __future__ import annotations
@@ -110,7 +114,6 @@ CATEGORIES: frozenset[str] = frozenset(
         "array",
         "relational",
         "geometry",
-        "open",
     }
 )
 
@@ -258,24 +261,19 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("intersect_polygon", "geometry", "binary", note="clipped overlap ring; carries `manifold`"),
     OpSpec("polygon_intersection_area", "geometry", "binary",
            note="fused scalar overlap area; carries `manifold`"),
-    # --- open-tier rewrite-target sugar (esm-spec §4.2) ---
+    # --- open-tier rewrite-target sugar (esm-spec §4.2) is NOT registered ---
     # grad/div/laplacian/curl/integral are ORDINARY open-tier rewrite-target ops
     # with NO privilege over any other user op (`godunov_hamiltonian`): no
     # dimensional rule (dimension UNDETERMINABLE until lowered, §4.8.3/§4.8.4), no
     # evaluator (a discretization rule MUST lower them, `unlowered_operator`
-    # otherwise), no privileged ARITY (``arity_bounds=None`` — structural
-    # validation skips their operand count exactly as it does for an unregistered
-    # op), and they are NOT used for spatial detection (that is now derived
-    # structurally from variable shapes / the `dim` field — see `flatten`). They
-    # remain in the registry only so the display/codegen fallbacks recognize them
-    # (no "unknown op" warning) — a documentation courtesy, not a semantic
-    # privilege.
-    OpSpec("grad", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
-    OpSpec("div", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
-    OpSpec("laplacian", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
-    OpSpec("curl", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
-    OpSpec("integral", "open", "unary", tier="rewrite_target",
-           note="open-tier PIDE spatial integral; carries own `var`/`lower`/`upper` sidecar fields"),
+    # otherwise), no privileged ARITY (structural validation skips their operand
+    # count exactly as it does for an unregistered op), and they are NOT used for
+    # spatial detection (that is now derived structurally from variable shapes /
+    # the `dim` field — see `flatten`). They are therefore left UNregistered: the
+    # display/codegen generic `op(args)` fallback renders them without warning,
+    # exactly like `godunov_hamiltonian`. `integral`'s ∫ rendering reads its own
+    # `var`/`lower`/`upper` sidecar fields via a structural `op == "integral"`
+    # branch in `display`, which needs no registry entry.
 )
 
 
@@ -339,9 +337,10 @@ def arity_bounds_map() -> dict[str, tuple[int, int | None]]:
 def is_known(op: str) -> bool:
     """True iff ``op`` is part of the canonical AST op vocabulary.
 
-    Used by the ``display`` / ``codegen`` generic fallbacks to decide whether a
-    node reaching generic ``op(args)`` rendering is a known op (grad/div/…, or a
-    relational build-time op — legitimately generic) or a genuinely unregistered
-    op that should be surfaced with a :class:`RuntimeWarning`.
+    Used by :mod:`.lower_expression_templates` to classify an op as an
+    evaluable-core registry op versus an open-namespace rewrite-target op (a
+    custom op, or the unregistered sugar grad/div/laplacian/curl/integral, none
+    of which are in the registry): an op that is not known is a rewrite-target
+    tier **T** member by virtue of having no evaluable-core entry.
     """
     return op in OPS
