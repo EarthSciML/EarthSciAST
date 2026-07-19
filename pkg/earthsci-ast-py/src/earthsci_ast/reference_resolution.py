@@ -38,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .errors import EarthSciAstError
+from .esm_types import AGGREGATE_OPS
 
 __all__ = [
     "ReferenceResolutionError",
@@ -252,8 +253,6 @@ class ReferenceGraph:
 
 # --- the resolution pass ----------------------------------------------------
 
-_AGGREGATE_OPS = ("aggregate",)
-
 
 def _node_key(addr: str) -> str:
     return f"{VertexKind.NODE}:{addr}"
@@ -318,7 +317,7 @@ def build_reference_graph(
         op = node.get("op")
         nid = node.get("id")
         nid = nid if isinstance(nid, str) and nid else None
-        is_agg = op in _AGGREGATE_OPS
+        is_agg = op in AGGREGATE_OPS
         # only nodes that participate in addressing become vertices: the
         # aggregate/FAQ nodes and any node carrying an explicit id.
         if not is_agg and nid is None:

@@ -473,15 +473,6 @@ def _has_array_op(expr: Expr) -> bool:
     return False
 
 
-def _has_spatial_operator(expr: Expr) -> bool:
-    """Return True if ``expr`` contains a spatial derivative operator."""
-    if isinstance(expr, ExprNode):
-        if expr.op in _SPATIAL_OPS:
-            return True
-        return any_child(expr, _has_spatial_operator)
-    return False
-
-
 def _spatial_dims_in_expr(expr: Expr) -> set[str]:
     """Return the set of spatial dimension labels referenced by spatial ops."""
     out: set[str] = set()
@@ -629,6 +620,48 @@ class _ComponentSystem:
     equations: list[FlattenedEquation] = field(default_factory=list)
     loader_fields: list[LoaderField] = field(default_factory=list)
 
+    def merge(self, other: _ComponentSystem) -> None:
+        """Fold ``other``'s tables into this component (last-writer-wins for the
+        variable dicts, order-preserving append for equations/loader fields).
+
+        The single place the five per-system tables are combined — used to pull
+        a subsystem into its parent and, in ``_assemble_system``, to fold every
+        component into one bag. Centralizing it removes the "add a sixth field,
+        forget a merge site" hazard the hand-enumerated versions carried.
+        """
+        self.state_vars.update(other.state_vars)
+        self.parameters.update(other.parameters)
+        self.observed.update(other.observed)
+        self.equations.extend(other.equations)
+        self.loader_fields.extend(other.loader_fields)
+
+
+def _namespace_equations(
+    equations: list,
+    component: _ComponentSystem,
+    prefix: str,
+    leave_alone: set[str],
+    subsystem_keys: set[str] | None = None,
+) -> None:
+    """Namespace both sides of each equation and append it to ``component``.
+
+    Factored out of the model / reaction-system collectors, which otherwise each
+    repeat the "namespace lhs, namespace rhs, append a FlattenedEquation tagged
+    with the system prefix" wire verbatim.
+    """
+    for eq in equations:
+        component.equations.append(
+            FlattenedEquation(
+                lhs=_namespace_expr(
+                    eq.lhs, prefix, leave_alone=leave_alone, subsystem_keys=subsystem_keys
+                ),
+                rhs=_namespace_expr(
+                    eq.rhs, prefix, leave_alone=leave_alone, subsystem_keys=subsystem_keys
+                ),
+                source_system=prefix,
+            )
+        )
+
 
 def _collect_model(name: str, model: Model, prefix: str | None = None) -> _ComponentSystem:
     """Collect a Model (recursively, including subsystems) into a _ComponentSystem."""
@@ -679,20 +712,9 @@ def _collect_model(name: str, model: Model, prefix: str | None = None) -> _Compo
                 source_system=full_prefix,
             )
         )
-    for eq in model.equations:
-        ns_lhs = _namespace_expr(
-            eq.lhs, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys
-        )
-        ns_rhs = _namespace_expr(
-            eq.rhs, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys
-        )
-        component.equations.append(
-            FlattenedEquation(
-                lhs=ns_lhs,
-                rhs=ns_rhs,
-                source_system=full_prefix,
-            )
-        )
+    _namespace_equations(
+        model.equations, component, full_prefix, leave_alone, subsystem_keys=sub_keys
+    )
 
     for sub_name, sub_model in model.subsystems.items():
         # A data-loader subsystem (RFC pure-io-data-loaders §4.3) exposes its
@@ -729,11 +751,7 @@ def _collect_model(name: str, model: Model, prefix: str | None = None) -> _Compo
             continue
         sub_prefix = f"{full_prefix}.{sub_name}"
         sub_component = _collect_model(sub_name, sub_model, sub_prefix)
-        component.state_vars.update(sub_component.state_vars)
-        component.parameters.update(sub_component.parameters)
-        component.observed.update(sub_component.observed)
-        component.equations.extend(sub_component.equations)
-        component.loader_fields.extend(sub_component.loader_fields)
+        component.merge(sub_component)
 
     return component
 
@@ -783,35 +801,14 @@ def _collect_reaction_system(
         )
 
     if derived is not None:
-        for eq in derived.equations:
-            ns_lhs = _namespace_expr(eq.lhs, full_prefix, leave_alone=leave_alone)
-            ns_rhs = _namespace_expr(eq.rhs, full_prefix, leave_alone=leave_alone)
-            component.equations.append(
-                FlattenedEquation(
-                    lhs=ns_lhs,
-                    rhs=ns_rhs,
-                    source_system=full_prefix,
-                )
-            )
+        _namespace_equations(derived.equations, component, full_prefix, leave_alone)
 
-    for eq in rs.constraint_equations:
-        ns_lhs = _namespace_expr(eq.lhs, full_prefix, leave_alone=leave_alone)
-        ns_rhs = _namespace_expr(eq.rhs, full_prefix, leave_alone=leave_alone)
-        component.equations.append(
-            FlattenedEquation(
-                lhs=ns_lhs,
-                rhs=ns_rhs,
-                source_system=full_prefix,
-            )
-        )
+    _namespace_equations(rs.constraint_equations, component, full_prefix, leave_alone)
 
     for sub_name, sub_rs in rs.subsystems.items():
         sub_prefix = f"{full_prefix}.{sub_name}"
         sub_component = _collect_reaction_system(sub_name, sub_rs, sub_prefix)
-        component.state_vars.update(sub_component.state_vars)
-        component.parameters.update(sub_component.parameters)
-        component.observed.update(sub_component.observed)
-        component.equations.extend(sub_component.equations)
+        component.merge(sub_component)
 
     return component
 
@@ -1240,48 +1237,54 @@ def _assemble_system(
     doc_index_sets = getattr(esm_file, "index_sets", None)
     if doc_index_sets:
         flat.index_sets.update(doc_index_sets)
-    seen_lhs: dict[str, FlattenedEquation] = {}
+    # Fold every component into one bag via the shared merge (same last-writer /
+    # order-preserving semantics as the previous per-field loops), then copy its
+    # variable tables into the FlattenedSystem's (differently named) fields.
+    combined = _ComponentSystem(name="")
     for comp in components.values():
-        for name, var in comp.state_vars.items():
-            flat.state_variables[name] = var
-        for name, var in comp.parameters.items():
-            flat.parameters[name] = var
-        for name, var in comp.observed.items():
-            flat.observed_variables[name] = var
-        flat.loader_fields.extend(comp.loader_fields)
-        for eq in comp.equations:
-            dep = _lhs_dependent_var(eq.lhs)
-            # Equations that use array ops may legitimately define different
-            # index subsets of the same state variable (stencil interior + BCs,
-            # block-assembled makearray, etc.). Skip the scalar-only dedup check
-            # in that case — the array simulation path resolves per-element.
-            is_array_eq = _has_array_op(eq.lhs) or _has_array_op(eq.rhs)
-            if dep is not None and not is_array_eq:
-                if dep in seen_lhs:
-                    existing = seen_lhs[dep]
-                    if _expr_to_string(existing.rhs) != _expr_to_string(eq.rhs):
-                        # A single source system that authored two equations
-                        # with the same scalar LHS expressed an algebraic
-                        # constraint on purpose — e.g. an equilibrium model
-                        # where K = f(T) AND K = [H+][OH-]. The second equation
-                        # constrains a different unknown on its RHS. Pass it
-                        # through; structural simplification in the simulation
-                        # tier resolves which variable each equation defines.
-                        # Cross-system conflicts (typically introduced by
-                        # variable_map coupling that unifies two state vars
-                        # without operator_compose merging) remain errors.
-                        if existing.source_system != eq.source_system and not (
-                            _has_array_op(existing.lhs) or _has_array_op(existing.rhs)
-                        ):
-                            raise ConflictingDerivativeError(
-                                f"Two systems define non-additive equations for "
-                                f"variable {dep!r}: "
-                                f"{existing.source_system} vs {eq.source_system}"
-                            )
-                    else:
-                        continue
-                seen_lhs[dep] = eq
-            flat.equations.append(eq)
+        combined.merge(comp)
+    for name, var in combined.state_vars.items():
+        flat.state_variables[name] = var
+    for name, var in combined.parameters.items():
+        flat.parameters[name] = var
+    for name, var in combined.observed.items():
+        flat.observed_variables[name] = var
+    flat.loader_fields.extend(combined.loader_fields)
+
+    seen_lhs: dict[str, FlattenedEquation] = {}
+    for eq in combined.equations:
+        dep = _lhs_dependent_var(eq.lhs)
+        # Equations that use array ops may legitimately define different
+        # index subsets of the same state variable (stencil interior + BCs,
+        # block-assembled makearray, etc.). Skip the scalar-only dedup check
+        # in that case — the array simulation path resolves per-element.
+        is_array_eq = _has_array_op(eq.lhs) or _has_array_op(eq.rhs)
+        if dep is not None and not is_array_eq:
+            if dep in seen_lhs:
+                existing = seen_lhs[dep]
+                if _expr_to_string(existing.rhs) != _expr_to_string(eq.rhs):
+                    # A single source system that authored two equations
+                    # with the same scalar LHS expressed an algebraic
+                    # constraint on purpose — e.g. an equilibrium model
+                    # where K = f(T) AND K = [H+][OH-]. The second equation
+                    # constrains a different unknown on its RHS. Pass it
+                    # through; structural simplification in the simulation
+                    # tier resolves which variable each equation defines.
+                    # Cross-system conflicts (typically introduced by
+                    # variable_map coupling that unifies two state vars
+                    # without operator_compose merging) remain errors.
+                    if existing.source_system != eq.source_system and not (
+                        _has_array_op(existing.lhs) or _has_array_op(existing.rhs)
+                    ):
+                        raise ConflictingDerivativeError(
+                            f"Two systems define non-additive equations for "
+                            f"variable {dep!r}: "
+                            f"{existing.source_system} vs {eq.source_system}"
+                        )
+                else:
+                    continue
+            seen_lhs[dep] = eq
+        flat.equations.append(eq)
     return flat
 
 
