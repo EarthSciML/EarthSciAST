@@ -74,10 +74,7 @@ const (
 // (esm-spec §4.2 / §9). applyExpressionTemplateOp already lives in
 // lower_expression_templates.go and is intentionally not redeclared here. ---
 const (
-	OpDerivative  = "D"            // time/spatial derivative
-	OpGrad        = "grad"         // gradient (spatial sugar, esm-spec §6.3)
-	OpDivergence  = "div"          // divergence  (spatial sugar; NOT the "/" arithmetic op)
-	OpLaplacian   = "laplacian"    // laplacian   (spatial sugar; D(D(u,x),x))
+	OpDerivative  = "D"            // time-derivative op in its structural equation-LHS role
 	OpIC          = "ic"           // initial-condition wrapper
 	OpConst       = "const"        // inline literal payload node
 	OpFn          = "fn"           // closed-registry function call

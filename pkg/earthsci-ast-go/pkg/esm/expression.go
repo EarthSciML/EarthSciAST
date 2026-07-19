@@ -616,20 +616,6 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 				"right-hand-side `D` must be lowered to a stencil by a rewrite rule before evaluation "+
 				"(esm-spec §4.2 / §9.6.8).", wrtDesc),
 		}
-	case "grad", "div", "laplacian":
-		// esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change D):
-		// grad/div/laplacian are NOT evaluable-core ops — they are optional
-		// rewrite-target sugar over `D` that a discretization rule must lower to a
-		// stencil before evaluation. One reaching the evaluator means no rule
-		// lowered it. This format ships no discretization rules; the std-lib lives
-		// in EarthSciDiscretizations. Uniform `unlowered_operator` code (mirrors
-		// the Julia reference `_compile` grad/div/laplacian arm).
-		return 0, &EvaluationError{
-			Code: "unlowered_operator",
-			Message: fmt.Sprintf("unlowered rewrite-target operator '%s' reached evaluation: no rewrite rule "+
-				"lowered it to a stencil (esm-spec §4.2 / §9.6.8). Discretization rules live in "+
-				"EarthSciDiscretizations, not this format.", node.Op),
-		}
 	}
 
 	// Short-circuiting core ops are dispatched BEFORE the eager argument loop:
@@ -667,11 +653,13 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 //
 //   - a CLOSED-core array/query op (aggregate, makearray, index, …) has real
 //     semantics but no scalar evaluator in this binding;
-//   - ANY other identifier is OPEN-tier — a rewrite target (the `integral`
-//     sugar, a user op such as `godunov_hamiltonian`) that a rewrite rule was
-//     supposed to eliminate before evaluation. It gets the spec-pinned,
-//     cross-binding `unlowered_operator` code, exactly as D/grad/div/laplacian
-//     do above, instead of an untyped "unknown operation".
+//   - ANY other identifier is OPEN-tier — a rewrite target (the spatial-calculus
+//     sugar grad/div/laplacian, the `integral` sugar, a user op such as
+//     `godunov_hamiltonian`) that a rewrite rule was supposed to eliminate
+//     before evaluation. It gets the spec-pinned, cross-binding
+//     `unlowered_operator` code — the same one the dedicated `D` arm emits above,
+//     which grad/div/laplacian now reach generically — instead of an untyped
+//     "unknown operation".
 func unevaluableOpError(node ExprNode) error {
 	if _, closed := closedNonScalarOps[node.Op]; closed {
 		return &EvaluationError{

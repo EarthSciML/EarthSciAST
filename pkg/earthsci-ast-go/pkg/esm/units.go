@@ -937,15 +937,17 @@ func findingCode(err error) string {
 // A non-nil error signals a dimensional inconsistency discovered during
 // propagation. The caller decides whether to turn that into a UnitWarning.
 func PropagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
-	return propagateDimensionWithCoords(expr, env, nil)
+	return propagateDimension(expr, env)
 }
 
-// propagateDimensionWithCoords extends PropagateDimension with a coordinate
-// unit environment so grad/div/laplacian can resolve node.Dim against the
-// enclosing model's domain. A nil coordEnv means "no coordinate info
-// available" — grad/div/laplacian falls back to returning an unknown result
-// rather than hard-coding a metre denominator.
-func propagateDimensionWithCoords(expr Expression, env map[string]Unit, coordEnv map[string]*Unit) (*Unit, error) {
+// propagateDimension is the recursive dimension propagator implementing the
+// PropagateDimension contract. Operators with no modeled dimensional rule —
+// including the open-tier rewrite-target sugar grad/div/laplacian, which carry
+// no privileged spatial-calculus semantics here — fall through to the final
+// unknown-op arm and return an indeterminate (nil) dimension: their dimension
+// is undeterminable until a discretization rewrite lowers them (esm-spec §4.2 /
+// §9.6.8), so the units layer reports nothing.
+func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 	switch e := expr.(type) {
 	case nil:
 		return nil, nil
@@ -976,20 +978,20 @@ func propagateDimensionWithCoords(expr Expression, env map[string]Unit, coordEnv
 		// not double-report it.
 		return nil, nil
 	case ExprNode:
-		return propagateExprNode(e, env, coordEnv)
+		return propagateExprNode(e, env)
 	case *ExprNode:
-		return propagateExprNode(*e, env, coordEnv)
+		return propagateExprNode(*e, env)
 	default:
 		return nil, nil
 	}
 }
 
-func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*Unit) (*Unit, error) {
+func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	switch node.Op {
 	case "+", "-":
 		// Unary minus: propagate its single operand.
 		if node.Op == "-" && len(node.Args) == 1 {
-			return propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+			return propagateDimension(node.Args[0], env)
 		}
 		// A bare literal in ADDITIVE position is dimensionally NEUTRAL, not
 		// dimensionless: it adopts the dimension of what it is added to. That is
@@ -1005,7 +1007,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 				continue
 			}
 			sawNonLiteral = true
-			u, err := propagateDimensionWithCoords(arg, env, coordEnv)
+			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1036,7 +1038,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		// a mismatch against the declared µg/m³.
 		result := Unit{Scale: 1}
 		for _, arg := range node.Args {
-			u, err := propagateDimensionWithCoords(arg, env, coordEnv)
+			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1051,11 +1053,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'/' requires exactly 2 arguments, got %d", len(node.Args))
 		}
-		num, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		num, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		den, err := propagateDimensionWithCoords(node.Args[1], env, coordEnv)
+		den, err := propagateDimension(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1069,11 +1071,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'%s' requires exactly 2 arguments, got %d", node.Op, len(node.Args))
 		}
-		base, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		base, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		expDim, err := propagateDimensionWithCoords(node.Args[1], env, coordEnv)
+		expDim, err := propagateDimension(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1106,7 +1108,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("sqrt requires 1 argument, got %d", len(node.Args))
 		}
-		base, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		base, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1128,7 +1130,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		arg, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1145,7 +1147,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		arg, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1160,11 +1162,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'atan2' requires 2 arguments, got %d", len(node.Args))
 		}
-		y, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		y, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		x, err := propagateDimensionWithCoords(node.Args[1], env, coordEnv)
+		x, err := propagateDimension(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1180,7 +1182,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		arg, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1193,13 +1195,13 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		return propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		return propagateDimension(node.Args[0], env)
 
 	case OpDerivative:
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'D' requires 1 argument, got %d", len(node.Args))
 		}
-		varDim, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+		varDim, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1216,7 +1218,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 			// perfectly valid file — 8 of them in tests/valid.
 			//
 			// Coverage is not lost: the equation-level rule
-			// (derivativeTimeMismatch, applied in validateEquationDimensionsCoords)
+			// (derivativeTimeMismatch, applied in ValidateEquationDimensions)
 			// still rejects a derivative equation that NO choice of time unit
 			// could reconcile, which is what the invalid corpus actually pins.
 			return nil, nil
@@ -1224,73 +1226,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
-	case OpGrad, OpDivergence, OpLaplacian:
-		// SPATIAL DIFFERENTIAL OPERATORS (esm-spec §7.1.2). Each divides its
-		// operand's dimension by the dimension of the coordinate `node.Dim` names:
-		//
-		//   grad(u)      over x  →  dim(u) / dim(x)
-		//   div(F)       over x  →  dim(F) / dim(x)
-		//   laplacian(u) over x  →  dim(u) / dim(x)^2   (it is D(D(u,x),x))
-		//
-		// (`curl` is not an operator this format ships — §6.3 lists grad, div,
-		// laplacian and integral — so there is nothing to model here.)
-		//
-		// The coordinate is resolved against the model's DECLARED variables
-		// (coordEnv, three-state — see buildModelCoordEnv). Since the v0.8.0
-		// removal of Domain.spatial, a physical coordinate is an ordinary declared
-		// variable/parameter, so that table IS the coordinate table:
-		//
-		//   declared WITH units    → divide, exactly as above.
-		//   declared WITHOUT units → the operator's dimension is UNDECIDABLE, and
-		//                            the file is wrong to ask for it: report it.
-		//                            This is the defect
-		//                            tests/invalid/units_gradient_operator_mismatch.esm
-		//                            pins at /models/<M>/equations/0.
-		//   NOT declared at all    → INDETERMINATE (nil). The dim names an
-		//                            index-set axis lowered by a discretization
-		//                            rewrite rule (§9.6.8), not a physical
-		//                            coordinate; there is nothing to divide by and
-		//                            nothing to complain about.
-		//
-		// What we must NOT do in the last two cases is invent a metre denominator.
-		// A fabricated dimension under hard-error severity is a false-rejection
-		// factory — the same trap already documented for bare additive literals and
-		// for `D` with an undeclared `wrt`.
-		if len(node.Args) < 1 {
-			return nil, nil
-		}
-		operand, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
-		if err != nil {
-			return nil, err
-		}
-		if operand == nil {
-			return nil, nil
-		}
-		if node.Dim == nil || coordEnv == nil {
-			return nil, nil
-		}
-		coord, declared := coordEnv[*node.Dim]
-		if !declared {
-			return nil, nil
-		}
-		if coord == nil {
-			return nil, mismatchErrf(
-				"%q over coordinate %q: the coordinate is declared without units, so the operator's "+
-					"dimension (%s per unit of %q) is undecidable — declare units on %q",
-				node.Op, *node.Dim, operand.Dim, *node.Dim, *node.Dim)
-		}
-		r := operand.Divide(*coord)
-		if node.Op == OpLaplacian {
-			// laplacian(u) = Σᵢ D(D(u,xᵢ),xᵢ): the coordinate divides TWICE.
-			r = r.Divide(*coord)
-		}
-		return &r, nil
-
 	case "min", "max":
 		// Return dimension of first operand; require others to match.
 		var first *Unit
 		for i, arg := range node.Args {
-			u, err := propagateDimensionWithCoords(arg, env, coordEnv)
+			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1308,8 +1248,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		}
 		return first, nil
 	}
-	// Unknown operator: propagate nothing rather than erroring, matching the
-	// Julia reference which warns and returns nothing.
+	// Unknown / unmodeled operator (including the open-tier rewrite-target sugar
+	// grad/div/laplacian, which have no privileged dimensional rule): propagate
+	// nothing rather than erroring, matching the Julia reference which warns and
+	// returns nothing. Their dimension is undeterminable until a discretization
+	// rewrite lowers them (esm-spec §4.2 / §9.6.8).
 	return nil, nil
 }
 
@@ -1346,39 +1289,6 @@ func buildModelUnitEnv(model *Model) (map[string]Unit, map[string]error) {
 	return BuildUnitEnv(raw)
 }
 
-// buildModelCoordEnv builds the COORDINATE TABLE the spatial operators resolve
-// `node.Dim` against — a THREE-state map, which is the whole point of it:
-//
-//	key present, value non-nil → the coordinate is declared WITH units
-//	key present, value nil     → the coordinate is declared WITHOUT (or with
-//	                             unparseable) units — its dimension is unknown
-//	key ABSENT                 → the name is not a declared variable at all
-//
-// The distinction is what lets grad/div/laplacian tell a coordinate whose units
-// the author FORGOT (a defect: the operator's dimension is undecidable, and
-// tests/invalid/units_gradient_operator_mismatch.esm pins it) apart from a dim
-// that names an INDEX-SET AXIS lowered by a discretization rewrite rule (§9.6.8),
-// which is not a physical coordinate and must not be flagged. A two-state
-// map[string]Unit collapses those two cases into "missing" and cannot.
-//
-// Since v0.8.0 removed Domain.spatial, a physical coordinate has no separate
-// declaration site: it IS an ordinary declared variable/parameter, so the model's
-// variable table is the coordinate table.
-func buildModelCoordEnv(model *Model) map[string]*Unit {
-	env, _ := buildModelUnitEnv(model)
-	coords := make(map[string]*Unit, len(model.Variables))
-	for name := range model.Variables {
-		if u, ok := env[name]; ok {
-			u := u
-			coords[name] = &u
-			continue
-		}
-		// Declared, but with no parseable units: dimension unknown.
-		coords[name] = nil
-	}
-	return coords
-}
-
 // buildSystemUnitEnv builds the unit environment for a reaction system from the
 // declared units of its species and parameters. See BuildUnitEnv for the
 // return-value contract.
@@ -1395,14 +1305,6 @@ func buildSystemUnitEnv(system *ReactionSystem) (map[string]Unit, map[string]err
 		}
 	}
 	return BuildUnitEnv(raw)
-}
-
-// ValidateEquationDimensions checks that the LHS and RHS of an equation have
-// the same dimension. It returns a non-nil UnitWarning iff a concrete
-// inconsistency was detected. Missing annotations are treated as "unknown" and
-// do NOT produce a warning (matching the Python/Julia best-effort semantics).
-func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) *UnitWarning {
-	return validateEquationDimensionsCoords(eq, env, nil, path)
 }
 
 func dimString(u *Unit) string {
@@ -1426,7 +1328,7 @@ func derivativeWrt(node ExprNode) string {
 // rarely given units — it returns the dimension of the differentiated state and
 // true, signalling that the caller must use derivativeTimeMismatch instead of a
 // direct LHS/RHS comparison. Otherwise it returns false.
-func derivativeStateDim(lhs Expression, env map[string]Unit, coordEnv map[string]*Unit) (*Unit, bool) {
+func derivativeStateDim(lhs Expression, env map[string]Unit) (*Unit, bool) {
 	var node ExprNode
 	switch e := lhs.(type) {
 	case ExprNode:
@@ -1442,7 +1344,7 @@ func derivativeStateDim(lhs Expression, env map[string]Unit, coordEnv map[string
 	if _, declared := env[derivativeWrt(node)]; declared {
 		return nil, false
 	}
-	state, err := propagateDimensionWithCoords(node.Args[0], env, coordEnv)
+	state, err := propagateDimension(node.Args[0], env)
 	if err != nil {
 		return nil, false
 	}
@@ -1482,7 +1384,6 @@ func derivativeTimeMismatch(state, rhs *Unit) error {
 // promotes the promotable ones to structural errors.
 func validateModelUnits(modelName string, model *Model, basePath string, file *ESMFile, result *StructuralValidationResult) {
 	env, bad := buildModelUnitEnv(model)
-	coordEnv := buildModelCoordEnv(model)
 	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			// The defect is carried by the VARIABLE declaration, so the pointer
@@ -1496,11 +1397,11 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 	}
 	for i, eq := range model.Equations {
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
-		if w := validateEquationDimensionsCoords(&eq, env, coordEnv, eqPath); w != nil {
+		if w := ValidateEquationDimensions(&eq, env, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
-	validateObservedVariableUnits(model, env, coordEnv, basePath, result)
+	validateObservedVariableUnits(model, env, basePath, result)
 	checkConversionFactorConsistency(modelName, model, result)
 	checkPhysicalConstantUnits(modelName, model, result)
 	checkDefaultUnits(modelName, model, result)
@@ -1521,7 +1422,7 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 //
 // Findings are reported at `/models/<M>/variables/<v>`, the pointer
 // tests/invalid/expected_errors.json pins (and the one TypeScript emits).
-func validateObservedVariableUnits(model *Model, env map[string]Unit, coordEnv map[string]*Unit, basePath string, result *StructuralValidationResult) {
+func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath string, result *StructuralValidationResult) {
 	for _, name := range sortedKeys(model.Variables) {
 		v := model.Variables[name]
 		if v.Type != VarTypeObserved || v.Expression == nil {
@@ -1529,7 +1430,7 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, coordEnv m
 		}
 		path := fmt.Sprintf("%s/variables/%s", basePath, name)
 
-		got, err := propagateDimensionWithCoords(v.Expression, env, coordEnv)
+		got, err := propagateDimension(v.Expression, env)
 		if err != nil {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:     path,
@@ -1573,17 +1474,19 @@ func declaredDimString(units *string) string {
 	return u.Dim.String()
 }
 
-// validateEquationDimensionsCoords mirrors ValidateEquationDimensions but uses
-// the coord-aware propagator so grad/div/laplacian resolves node.Dim against
-// the enclosing model's domain.
+// ValidateEquationDimensions checks that the LHS and RHS of an equation have
+// the same dimension. It returns a non-nil UnitWarning iff a concrete
+// inconsistency was detected. Missing annotations are treated as "unknown" and
+// do NOT produce a warning (matching the Python/Julia best-effort semantics).
+//
 // The reported Path is the EQUATION pointer (`/models/<M>/equations/<i>`) for
 // every finding, including one discovered inside the LHS or RHS. That is the
 // pointer tests/invalid/expected_errors.json pins and the one TypeScript emits;
 // the previous `/lhs` and `/rhs` suffixes pointed at no schema node and did not
 // match the corpus.
-func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEnv map[string]*Unit, path string) *UnitWarning {
-	lhs, lhsErr := propagateDimensionWithCoords(eq.LHS, env, coordEnv)
-	rhs, rhsErr := propagateDimensionWithCoords(eq.RHS, env, coordEnv)
+func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) *UnitWarning {
+	lhs, lhsErr := propagateDimension(eq.LHS, env)
+	rhs, rhsErr := propagateDimension(eq.RHS, env)
 
 	if lhsErr != nil {
 		return &UnitWarning{
@@ -1607,7 +1510,7 @@ func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEn
 	// D(x)/d<wrt> = rhs with an UNDECLARED <wrt>: the LHS dimension is unknown
 	// (see the OpDerivative case), so the sides cannot be compared directly. The
 	// equation is still provably wrong when no time unit could reconcile them.
-	if state, undeclared := derivativeStateDim(eq.LHS, env, coordEnv); undeclared {
+	if state, undeclared := derivativeStateDim(eq.LHS, env); undeclared {
 		if err := derivativeTimeMismatch(state, rhs); err != nil {
 			return &UnitWarning{
 				Path:     path,

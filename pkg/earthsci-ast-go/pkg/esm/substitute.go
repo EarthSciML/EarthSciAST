@@ -111,8 +111,15 @@ func lookupBinding(name string, bindings map[string]Expression, file *ESMFile, c
 }
 
 // substituteNode substitutes into an operator node's children (via the shared
-// field-preserving walker, so every field survives) and then, for D/grad,
-// substitutes the `wrt`/`dim` variable-name slot they carry outside args.
+// field-preserving walker, so every field survives) and then resolves the
+// variable-name slots a node carries OUTSIDE `args`: the `wrt` of a derivative,
+// and the `dim` axis name of ANY node that carries one.
+//
+// The `dim` slot is resolved STRUCTURALLY — by the field, not the op name
+// (esm-spec §4.9.1) — because `dim` is an ordinary axis-naming scalar with no
+// privileged op semantics: grad/div/laplacian all carry it, and so may any
+// open-tier user op. Keying it on the `grad` op (as this did) silently skipped
+// the `dim` of `div`/`laplacian`.
 func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile, currentSystem string, visiting map[string]bool) (Expression, error) {
 	out, err := mapExprChildren(node, func(child Expression) (Expression, error) {
 		return substituteRec(child, bindings, file, currentSystem, visiting)
@@ -123,7 +130,7 @@ func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile
 	if out.Op == OpDerivative {
 		out.Wrt = substituteScalarField(out.Wrt, bindings, file, currentSystem)
 	}
-	if out.Op == OpGrad {
+	if out.Dim != nil {
 		out.Dim = substituteScalarField(out.Dim, bindings, file, currentSystem)
 	}
 	return out, nil
