@@ -724,6 +724,62 @@ fn decl_has_match(decl: &Sv) -> bool {
     matches!(&**decl, SNode::Obj(fields) if obj_get(fields, "match").is_some())
 }
 
+/// Generic transitive-reachability over the `apply_expression_template`
+/// body-reference DAG, shared by [`template_target_bearing`] and
+/// [`template_manifold_bearing`]. For every template in `named` the flag is
+/// `true` iff `direct_pred` holds on the template's own body, OR —
+/// transitively through the §9.7.3-checked acyclic reference DAG — the template
+/// reaches another template whose body satisfies `direct_pred`. Memoized DFS
+/// with a defensive in-progress guard against any cycle the checker somehow
+/// missed, so it terminates on every input. `direct_pred` inspects only a
+/// single body (no ref-following); the transitive step is this walk.
+fn transitive_reachable(
+    named: &Named,
+    direct_pred: impl Fn(&Sv) -> bool,
+) -> std::collections::HashMap<String, bool> {
+    fn visit(
+        name: &str,
+        named: &Named,
+        flag: &mut std::collections::HashMap<String, bool>,
+        inprogress: &mut std::collections::HashSet<String>,
+        direct_pred: &impl Fn(&Sv) -> bool,
+    ) -> bool {
+        if let Some(v) = flag.get(name) {
+            return *v;
+        }
+        // Defensive against a cycle the checker somehow missed.
+        if inprogress.contains(name) {
+            return false;
+        }
+        let Some(decl) = named.get(name) else {
+            flag.insert(name.to_string(), false);
+            return false;
+        };
+        inprogress.insert(name.to_string());
+        let body = decl_body(decl);
+        let mut res = direct_pred(&body);
+        if !res {
+            let mut refs = Vec::new();
+            collect_apply_names_sv(&body, &mut refs, &mut PtrSet::default());
+            for r in refs {
+                if named.contains_key(&r) && visit(&r, named, flag, inprogress, direct_pred) {
+                    res = true;
+                    break;
+                }
+            }
+        }
+        inprogress.remove(name);
+        flag.insert(name.to_string(), res);
+        res
+    }
+    let mut flag: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut inprogress: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for name in named.keys() {
+        visit(name, named, &mut flag, &mut inprogress, &direct_pred);
+    }
+    flag
+}
+
 /// Compute, for every template in `named`, its **target-bearing** flag
 /// (esm-spec §9.6.4 rule 3): a template is target-bearing iff its body contains
 /// an op in **T** anywhere (including inside nested references' `bindings`), OR
@@ -732,46 +788,7 @@ fn decl_has_match(decl: &Sv) -> bool {
 /// `compose_template_bodies`), so a memoized DFS terminates. Mirrors the Julia
 /// reference `_template_target_bearing`.
 fn template_target_bearing(named: &Named) -> std::collections::HashMap<String, bool> {
-    let mut tb: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
-    let mut inprogress: std::collections::HashSet<String> = std::collections::HashSet::new();
-    fn visit(
-        name: &str,
-        named: &Named,
-        tb: &mut std::collections::HashMap<String, bool>,
-        inprogress: &mut std::collections::HashSet<String>,
-    ) -> bool {
-        if let Some(v) = tb.get(name) {
-            return *v;
-        }
-        // Defensive against a cycle the checker somehow missed.
-        if inprogress.contains(name) {
-            return false;
-        }
-        let Some(decl) = named.get(name) else {
-            tb.insert(name.to_string(), false);
-            return false;
-        };
-        inprogress.insert(name.to_string());
-        let body = decl_body(decl);
-        let mut res = direct_t_op(&body, &mut PtrSet::default());
-        if !res {
-            let mut refs = Vec::new();
-            collect_apply_names_sv(&body, &mut refs, &mut PtrSet::default());
-            for r in refs {
-                if named.contains_key(&r) && visit(&r, named, tb, inprogress) {
-                    res = true;
-                    break;
-                }
-            }
-        }
-        inprogress.remove(name);
-        tb.insert(name.to_string(), res);
-        res
-    }
-    for name in named.keys() {
-        visit(name, named, &mut tb, &mut inprogress);
-    }
-    tb
+    transitive_reachable(named, |body| direct_t_op(body, &mut PtrSet::default()))
 }
 
 /// Whether an `apply_expression_template` node (given its object `fields`) is
@@ -2101,45 +2118,7 @@ fn template_manifold_bearing(named: &Named) -> std::collections::HashMap<String,
             _ => false,
         }
     }
-    let mut mb: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
-    let mut inprog: std::collections::HashSet<String> = std::collections::HashSet::new();
-    fn visit(
-        name: &str,
-        named: &Named,
-        mb: &mut std::collections::HashMap<String, bool>,
-        inprog: &mut std::collections::HashSet<String>,
-    ) -> bool {
-        if let Some(v) = mb.get(name) {
-            return *v;
-        }
-        if inprog.contains(name) {
-            return false;
-        }
-        let Some(decl) = named.get(name) else {
-            mb.insert(name.to_string(), false);
-            return false;
-        };
-        inprog.insert(name.to_string());
-        let body = decl_body(decl);
-        let mut res = direct(&body, &mut PtrSet::default());
-        if !res {
-            let mut refs = Vec::new();
-            collect_apply_names_sv(&body, &mut refs, &mut PtrSet::default());
-            for r in refs {
-                if named.contains_key(&r) && visit(&r, named, mb, inprog) {
-                    res = true;
-                    break;
-                }
-            }
-        }
-        inprog.remove(name);
-        mb.insert(name.to_string(), res);
-        res
-    }
-    for n in named.keys() {
-        visit(n, named, &mut mb, &mut inprog);
-    }
-    mb
+    transitive_reachable(named, |body| direct(body, &mut PtrSet::default()))
 }
 
 /// esm-spec §9.6.9: `geometry_manifold_invalid` is discharged per-instantiation
