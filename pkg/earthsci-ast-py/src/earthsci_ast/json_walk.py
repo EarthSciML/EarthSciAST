@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterator
 from typing import Any, Callable
 
 from .errors import EarthSciAstError
@@ -156,6 +157,109 @@ def _walk_json(
                 rec(v, f"{path}/{k}")
 
     rec(node, path)
+
+
+# ---------------------------------------------------------------------------
+# Raw-dict expression child traversal (the dict-form counterpart to
+# :func:`earthsci_ast.expr_walk.iter_children`)
+# ---------------------------------------------------------------------------
+#
+# ``expr_walk`` is the ONE canonical child-field set, but it needs the typed
+# :class:`~earthsci_ast.esm_types.ExprNode` dataclasses. Many passes run on the
+# RAW ``dict`` decoded from JSON (before parsing) and cannot use it, so the
+# child-field set was historically hand-copied at each such pass. These three
+# tuples are that set for the raw-dict form; :func:`iter_child_values` is the
+# single descent every raw-dict expression walker should route through.
+#
+# Relationship to the typed set (``expr_walk._SINGLE_CHILD_FIELDS`` +
+# ``args``/``values``/``table_axes``): the SINGLE/LIST fields and the ``axes``
+# MAP mirror the typed child set exactly (``axes`` is the raw JSON key for the
+# dataclass ``table_axes``). ``bindings`` and ``regions`` are raw-only fields
+# the typed child traversal does NOT visit — an ``apply_expression_template``'s
+# free-variable targets and a ``makearray``'s ``[[lo, hi], …]`` bound
+# expressions. They carry references/loop symbols that the raw-dict
+# reference-integrity walkers must still see, so they are included here and
+# tagged so a caller that wants only the typed-canonical subset can skip them
+# by field name. NOTE: unlike ``expr_walk`` (and ``cadence.child_exprs``), this
+# visits ``axes`` in INSERTION order, not sorted — it matches the raw-dict
+# reference walkers that route through it; a sorted-axes consumer keeps its own
+# traversal.
+
+#: Raw-dict expression child fields carried as LISTS of child expressions.
+DICT_LIST_CHILD_FIELDS = ("args", "values")
+#: Raw-dict expression child fields carrying a SINGLE nested child expression,
+#: the verbatim dict-form of ``expr_walk._SINGLE_CHILD_FIELDS``.
+DICT_SINGLE_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
+#: Raw-dict expression child fields carried as ``{name: child}`` MAPS.
+DICT_MAP_CHILD_FIELDS = ("axes", "bindings")
+
+
+def _iter_region_children(regions: Any) -> Iterator[Any]:
+    """Yield each ``str``/``dict`` bound expression nested in a ``makearray``
+    ``regions`` value — a per-region list of per-axis ``[lo, hi]`` lists whose
+    bounds may be literals, names, or op-nodes. Nested lists are flattened via
+    an explicit LIFO stack; ints/floats/None are skipped. The traversal order is
+    kept byte-for-byte identical to the historical structural-checks
+    ``_iter_region_bounds`` walker so routing through it changes no diagnostic
+    order."""
+    if not isinstance(regions, list):
+        return
+    stack = list(regions)
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, (str, dict)):
+            yield item
+
+
+def iter_child_values(node: Any) -> Iterator[tuple[str, Any]]:
+    """Yield ``(field_name, child_value)`` for every child-bearing field of a
+    raw-dict expression ``node``, driven by the ONE canonical field set above.
+
+    Visit order (matching the raw-dict reference walkers this replaces):
+    ``args`` items, then ``lower``/``upper``/``expr``/``filter``/``key``, then
+    ``values`` items, then ``axes`` then ``bindings`` map values, then
+    ``regions`` bound expressions. Each child is tagged with the name of the
+    field it came from so a caller that treats certain fields specially — a
+    binder-aware walker, or one that wants only the typed-canonical subset and
+    so skips ``bindings``/``regions`` — can filter by name while still sharing
+    this single field list. A non-dict ``node`` yields nothing.
+
+    This is the raw-dict counterpart of
+    :func:`earthsci_ast.expr_walk.iter_children`; see the module notes above for
+    how the two sets relate (``bindings``/``regions`` and insertion-order
+    ``axes`` are the raw-only differences)."""
+    if not isinstance(node, dict):
+        return
+    for arg in node.get("args", []) or []:
+        yield ("args", arg)
+    for field_name in DICT_SINGLE_CHILD_FIELDS:
+        child = node.get(field_name)
+        if child is not None:
+            yield (field_name, child)
+    for val in node.get("values", []) or []:
+        yield ("values", val)
+    axes = node.get("axes")
+    if isinstance(axes, dict):
+        for child in axes.values():
+            yield ("axes", child)
+    bindings = node.get("bindings")
+    if isinstance(bindings, dict):
+        for child in bindings.values():
+            yield ("bindings", child)
+    yield from (("regions", child) for child in _iter_region_children(node.get("regions")))
+
+
+def walk_dict_exprs(node: Any) -> Iterator[Any]:
+    """Pre-order walk over a raw-dict expression tree, yielding every node — the
+    root first, including ``str`` leaves and numeric literals — descending
+    exactly the canonical child set via :func:`iter_child_values`. The raw-dict
+    counterpart to :func:`earthsci_ast.expr_walk.walk`."""
+    yield node
+    if isinstance(node, dict):
+        for _field_name, child in iter_child_values(node):
+            yield from walk_dict_exprs(child)
 
 
 # ---------------------------------------------------------------------------
