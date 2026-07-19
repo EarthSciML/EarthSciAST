@@ -626,14 +626,16 @@ function resolveModelRefs(
  * Recursively resolve refs in a ReactionSystem's subsystems.
  */
 function resolveReactionSystemRefs(
-  rs: ReactionSystem,
+  rs: ReactionSystem | SubsystemRef,
   basePath: string,
   resolving: Set<string>,
   refChain: string[],
   read: SyncRefReader,
   pointer: string,
 ): void {
-  if (!rs.subsystems) return
+  // A bare `{ ref }` stub (SubsystemRef) carries no subsystems to walk; only a
+  // full ReactionSystem does.
+  if (!('subsystems' in rs) || !rs.subsystems) return
   const subsystems = rs.subsystems
 
   walkSubsystemRefs(

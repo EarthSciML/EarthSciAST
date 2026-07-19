@@ -223,9 +223,10 @@ export function findCommonSubexpressionsInEsmFile(
     }
   }
 
-  // Collect rate expressions from reaction systems
+  // Collect rate expressions from reaction systems (unresolved refs carry none)
   if (esmFile.reaction_systems) {
     for (const [systemId, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
+      if ('ref' in reactionSystem) continue
       if (reactionSystem.reactions) {
         reactionSystem.reactions.forEach((reaction, index) => {
           expressions.push({

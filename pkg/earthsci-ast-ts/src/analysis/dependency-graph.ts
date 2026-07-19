@@ -205,6 +205,7 @@ export function buildDependencyGraph(
 
     if (esmFile.reaction_systems) {
       for (const [systemId, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
+        if ('ref' in reactionSystem) continue
         processReactionSystem(reactionSystem, systemId)
       }
     }

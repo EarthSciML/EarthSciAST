@@ -74,7 +74,7 @@ export function validateSubsystemRefs(esmFile: EsmFile): StructuralError[] {
   }
   if (esmFile.reaction_systems) {
     for (const [systemName, system] of Object.entries(esmFile.reaction_systems)) {
-      if (!system.subsystems) continue
+      if ('ref' in system || !system.subsystems) continue
       errors.push(
         ...flagRefSubsystems(
           system.subsystems,

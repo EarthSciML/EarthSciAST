@@ -217,9 +217,11 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
     }
   }
 
-  // Validate reaction systems
+  // Validate reaction systems. Unresolved SubsystemRef entries are reported by
+  // validateSubsystemRefs below; they carry no species/reactions to validate.
   if (esmFile.reaction_systems) {
     for (const [systemName, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
+      if ('ref' in reactionSystem) continue
       const systemPath = `/reaction_systems/${systemName}`
 
       // `esmFile` lets a rate expression's SCOPED references (a cross-system

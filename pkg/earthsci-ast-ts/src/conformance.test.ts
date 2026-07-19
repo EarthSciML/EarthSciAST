@@ -27,7 +27,7 @@ import {
 } from './index.js'
 import * as toolkit from './index.js'
 import { fixturesDir } from './test-helpers.js'
-import type { Expr, Expression } from './types.js'
+import type { Expr, Expression, ReactionSystem } from './types.js'
 
 // The toolkit has never exported a bare `evaluate` helper (evaluation is
 // `evaluateExpression`, which takes Map bindings), so this lookup yields
@@ -574,9 +574,11 @@ describe('Conformance Test Suite', () => {
       // 4. Substitute T=300
       // Find a temperature parameter in the model and substitute it
       let substitutedModel = model
-      if (model.reaction_systems?.SimpleOzone?.parameters?.T) {
+      // SimpleOzone is an inline reaction system here, not a `{ref}` stub.
+      const simpleOzone = model.reaction_systems?.SimpleOzone as ReactionSystem | undefined
+      if (simpleOzone?.parameters?.T) {
         // Create substitution for the reaction rate expression
-        const rateExpr = model.reaction_systems.SimpleOzone.reactions[0].rate
+        const rateExpr = simpleOzone.reactions[0].rate
         if (typeof rateExpr === 'object') {
           // load() (non-canonical) yields plain-number leaves, so the
           // substituted tree stays within the schema Expression type.
@@ -588,13 +590,13 @@ describe('Conformance Test Suite', () => {
             reaction_systems: {
               ...model.reaction_systems,
               SimpleOzone: {
-                ...model.reaction_systems.SimpleOzone,
+                ...simpleOzone,
                 reactions: [
                   {
-                    ...model.reaction_systems.SimpleOzone.reactions[0],
+                    ...simpleOzone.reactions[0],
                     rate: substitutedRate,
                   },
-                  ...model.reaction_systems.SimpleOzone.reactions.slice(1),
+                  ...simpleOzone.reactions.slice(1),
                 ],
               },
             },

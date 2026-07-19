@@ -96,7 +96,7 @@ const file: EsmFile = {
 }
 
 const M1 = file.models!.M1 as Model
-const R1 = file.reaction_systems!.R1
+const R1 = file.reaction_systems!.R1 as ReactionSystem
 
 function collect(opts?: { recurse?: boolean }): ComponentVisit[] {
   const seen: ComponentVisit[] = []

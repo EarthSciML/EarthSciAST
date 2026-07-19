@@ -261,19 +261,21 @@ function extractComponentGraph(esmFile: EsmFile): ComponentGraph {
     }
   }
 
-  // Reaction systems
+  // Reaction systems. Unresolved SubsystemRef entries still appear as nodes but
+  // carry no counts.
   if (esmFile.reaction_systems) {
     for (const [id, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
+      const inline = 'ref' in reactionSystem ? undefined : (reactionSystem as ReactionSystem)
       nodes.push({
         id,
         name: id,
         type: 'reaction_system',
-        description: reactionSystem.reference?.notes,
-        reference: reactionSystem.reference,
+        description: inline?.reference?.notes,
+        reference: inline?.reference,
         metadata: {
           var_count: 0,
-          eq_count: reactionSystem.reactions ? reactionSystem.reactions.length : 0,
-          species_count: reactionSystem.species ? Object.keys(reactionSystem.species).length : 0,
+          eq_count: inline?.reactions ? inline.reactions.length : 0,
+          species_count: inline?.species ? Object.keys(inline.species).length : 0,
         },
       })
     }

@@ -110,9 +110,9 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): Expr | nul
     }
   }
 
-  // Try to find in reaction systems
+  // Try to find in reaction systems (unresolved refs cannot be navigated)
   const rootSystem = esmFile.reaction_systems?.[systemName]
-  if (rootSystem) {
+  if (rootSystem && !('ref' in rootSystem)) {
     let current: ReactionSystem = rootSystem
 
     // Navigate through inline subsystems (unresolved refs cannot be navigated)

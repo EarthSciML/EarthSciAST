@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { validateSchema, load, SchemaValidationError, ParseError } from './index.js'
-import type { Model } from './types.js'
+import type { Model, ReactionSystem } from './types.js'
 
 describe('Schema Edge Cases', () => {
   describe('anyOf constraint: models OR reaction_systems required', () => {
@@ -392,7 +392,9 @@ describe('Schema Edge Cases', () => {
       expect(errors).toEqual([])
 
       const result = load(unicodeReaction)
-      expect(result.reaction_systems?.['unicode_rs'].species?.['CO₂']?.default).toBe(0.0)
+      expect(
+        (result.reaction_systems?.['unicode_rs'] as ReactionSystem).species?.['CO₂']?.default,
+      ).toBe(0.0)
     })
 
     it('should allow unicode in metadata and descriptions', () => {
@@ -476,8 +478,12 @@ describe('Schema Edge Cases', () => {
       expect(errors).toEqual([])
 
       const result = load(nullFields)
-      expect(result.reaction_systems?.['null_rs'].reactions[0].substrates).toBeNull()
-      expect(result.reaction_systems?.['null_rs'].reactions[1].products).toBeNull()
+      expect(
+        (result.reaction_systems?.['null_rs'] as ReactionSystem).reactions[0].substrates,
+      ).toBeNull()
+      expect(
+        (result.reaction_systems?.['null_rs'] as ReactionSystem).reactions[1].products,
+      ).toBeNull()
     })
 
     it('should reject the removed coupletype field (0.8.0 clean break)', () => {

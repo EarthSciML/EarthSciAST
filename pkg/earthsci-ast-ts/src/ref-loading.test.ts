@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { resolveSubsystemRefs, CircularReferenceError, RefLoadError } from './ref-loading.js'
-import type { EsmFile, Model } from './types.js'
+import type { EsmFile, Model, ReactionSystem } from './types.js'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -205,7 +205,7 @@ describe('resolveSubsystemRefs', () => {
     })
 
     await resolveSubsystemRefs(file, tmpDir)
-    const sub = file.reaction_systems!.Chem!.subsystems!.Sub as any
+    const sub = (file.reaction_systems!.Chem as ReactionSystem).subsystems!.Sub as any
     expect(sub.ref).toBeUndefined()
     expect(sub.species.O3).toBeDefined()
   })

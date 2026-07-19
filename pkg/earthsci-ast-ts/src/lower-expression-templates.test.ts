@@ -18,6 +18,7 @@ import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 import { fixturesDir, REPO_ROOT } from './test-helpers.js'
 import { save } from './serialize.js'
 import { validate } from './validate.js'
+import type { ReactionSystem } from './types.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
 // `arrhenius` template and one inline rate, plus an arithmetic check.
@@ -127,7 +128,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
       },
     }
     const file = load(JSON.parse(JSON.stringify(noTemplates)))
-    expect(file.reaction_systems!.chem.reactions[0].rate).toBe('k')
+    expect((file.reaction_systems!.chem as ReactionSystem).reactions[0].rate).toBe('k')
   })
 
   it('rejects apply_expression_template when esm < 0.4.0', () => {
@@ -175,7 +176,10 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
       args: [3, 'T'],
     }
     const file = load(fixture)
-    const rate = file.reaction_systems!.chem.reactions[0].rate as Record<string, unknown>
+    const rate = (file.reaction_systems!.chem as ReactionSystem).reactions[0].rate as Record<
+      string,
+      unknown
+    >
     expect(rate.op).toBe('*')
     // The inner exp's argument should be (-(3*T))/T (post-substitution).
     const args = rate.args as Array<unknown>
@@ -190,7 +194,9 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     )
     const file = load(fs.readFileSync(fixturePath, 'utf8'))
     const expanded = JSON.parse(fs.readFileSync(expandedPath, 'utf8'))
-    expect(file.reaction_systems!.chem.reactions).toEqual(expanded.reaction_systems.chem.reactions)
+    expect((file.reaction_systems!.chem as ReactionSystem).reactions).toEqual(
+      expanded.reaction_systems.chem.reactions,
+    )
   })
 
   it('coupling_transform_expression conformance fixture matches expanded form (esm-spec §10.4)', () => {
@@ -439,7 +445,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       },
     }
     const file = load(fixture)
-    expect(file.reaction_systems!.chem.reactions[0].rate).toEqual({
+    expect((file.reaction_systems!.chem as ReactionSystem).reactions[0].rate).toEqual({
       op: '+',
       args: ['T', 'num_density'],
     })

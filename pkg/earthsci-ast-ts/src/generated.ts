@@ -6,7 +6,7 @@
  */
 
 /**
- * EarthSciML Serialization Format (v0.8.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.
+ * EarthSciML Serialization Format (v0.9.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.9.0 changes no on-disk shape: it replaces the Option A (always-expanded) template round-trip with Option B (reference-preserving; esm-spec §9.6.4, docs/content/rfcs/out-of-line-expression-templates.md). Template references survive load and parse-then-emit; emit materializes each component's referenced templates into its `expression_templates` registry (authored entries first in authored order, materialized entries after in lexicographic UTF-8 name order; registry keys may be dotted post-rename names); eager references (target-bearing, esm-spec §9.6.4 rule 3) still expand at load, so no rewrite-target op survives inside a reference; `emit ∘ load` is a byte-wise fixed point; emitted documents carrying surviving references or materialized registries declare `esm: 0.9.0` or later. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.
  */
 export type ESMFormat = ESMFormat1 & ESMFormat2;
 export type ESMFormat1 = {
@@ -469,7 +469,7 @@ export type CouplingVariableMap = CouplingVariableMap1 & {
    */
   to: string;
   /**
-   * How the mapping is applied: one of the named transforms, or an Expression evaluated on the source value(s) in the flattened coupled system's scope (spec §8.6/§10.4/§10.5 — the regridding form; the expression must reference the entry's `from` variable via a fully-scoped reference and may reference any other in-scope variable, e.g. build-once overlap weights in the receiving component; `apply_expression_template` invocations are legal and expand at load per §9.6.4). The Expression form is an operator node: the degenerate bare-reference and literal Expression spellings are not admissible here (the named string transforms already cover bare replacement, and the string space is reserved for them).
+   * How the mapping is applied: one of the named transforms, or an Expression evaluated on the source value(s) in the flattened coupled system's scope (spec §8.6/§10.4/§10.5 — the regridding form; the expression must reference the entry's `from` variable via a fully-scoped reference and may reference any other in-scope variable, e.g. build-once overlap weights in the receiving component; `apply_expression_template` invocations are legal and resolve at load per §9.6.4 — eager references expand, the rest survive and denote their expansion). The Expression form is an operator node: the degenerate bare-reference and literal Expression spellings are not admissible here (the named string transforms already cover bare replacement, and the string space is reserved for them).
    */
   transform: ("param_to_var" | "identity" | "additive" | "multiplicative" | "conversion_factor") | ExpressionNode1;
   /**
@@ -624,10 +624,10 @@ export interface ESMFormat2 {
     [k: string]: Model | SubsystemRef;
   };
   /**
-   * Reaction network components, keyed by unique identifier.
+   * Reaction network components, keyed by unique identifier. Each component may be defined inline or included by reference to an external ESM file containing exactly one top-level reaction system (esm-spec.md §4.7).
    */
   reaction_systems?: {
-    [k: string]: ReactionSystem;
+    [k: string]: ReactionSystem | SubsystemRef;
   };
   /**
    * External data source registrations (by reference).
@@ -690,7 +690,7 @@ export interface Metadata {
   authors?: string[];
   license?: string;
   /**
-   * ISO 8601 creation timestamp.
+   * ISO 8601 creation timestamp. The pattern duplicates `format: date-time` because `format` is an annotation, not an assertion, in JSON Schema — validators ignore it unless separately configured, so the pattern is what makes the constraint portable across bindings.
    */
   created?: string;
   /**
@@ -734,8 +734,14 @@ export interface Metadata {
  * Academic citation or data source reference.
  */
 export interface Reference {
+  /**
+   * DOI in the standard `10.<registrant>/<suffix>` form.
+   */
   doi?: string;
   citation?: string;
+  /**
+   * Absolute URI. The pattern duplicates `format: uri` because `format` is an annotation, not an assertion, in JSON Schema.
+   */
   url?: string;
   notes?: string;
 }
@@ -786,7 +792,7 @@ export interface Model {
    */
   examples?: Example[];
   /**
-   * Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. Loaders MUST expand `apply_expression_template` to a fully-substituted Expression AST at load time (Option A round-trip; the canonical AST after parse-then-emit is the expanded form). Templates do NOT call other templates and do NOT recurse.
+   * Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.
    */
   expression_templates?: {
     [k: string]: ExpressionTemplate;
@@ -989,13 +995,17 @@ export interface DataLoaderVariable {
  */
 export interface SubsystemRef {
   /**
-   * Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model, reaction system, or data loader (unless `model` selects one of several), which is used as the subsystem definition (esm-spec.md §4.7). A single top-level data loader is named by the parent's subsystem key; no fragment selector is needed because the file is single-component.
+   * Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model, reaction system, or data loader (unless `model` / `reaction_system` selects one of several), which is used as the subsystem definition (esm-spec.md §4.7). A single top-level data loader is named by the parent's subsystem key; no fragment selector is needed because the file is single-component.
    */
   ref: string;
   /**
    * Optional model selector. When the referenced file defines more than one top-level model, names which one to splice in. Omit for single-model files. Lets a multi-model component library (e.g. an ESD regridder file holding several kernels) be referenced by one of its models.
    */
   model?: string;
+  /**
+   * Optional reaction-system selector. When the referenced file defines more than one top-level reaction system, names which one to splice in. Omit for single-reaction-system files. The reaction-system analogue of `model`, used when a top-level `reaction_systems` entry is a `{ref}` stub (esm-spec.md §4.7).
+   */
+  reaction_system?: string;
   /**
    * Bindings closing the referenced document's metaparameters (esm-spec §9.7.6 site 3). Each value is a metaparameter expression over the MOUNTING document's metaparameters (an integer literal, or e.g. `NX*NY`), folded to a concrete integer at the mount.
    */
@@ -1225,7 +1235,7 @@ export interface PlotSeries {
   variable: string;
 }
 /**
- * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are resolved at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep') and inlined by pure substitution before the fixpoint runs (esm-spec §9.7.3). `match` patterns MUST NOT contain `apply_expression_template` nodes. An optional `where` block adds static match-scoping constraints on the captured parameters (declared-shape/index-set scoping, filtered before priority selection — see the `where` property and esm-spec §9.6.1).
+ * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are checked at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep'); from esm 0.9.0 they are preserved uninlined and denote their expansion (Option B, esm-spec §9.6.4; pre-0.9.0 loaders inlined them here by pure substitution). `match` patterns MUST NOT contain `apply_expression_template` nodes. An optional `where` block adds static match-scoping constraints on the captured parameters (declared-shape/index-set scoping, filtered before priority selection — see the `where` property and esm-spec §9.6.1).
  */
 export interface ExpressionTemplate {
   /**
@@ -1304,7 +1314,7 @@ export interface ReactionSystem {
    */
   examples?: Example[];
   /**
-   * Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component (typically inside `reactions[*].rate`) reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this reaction system's expression positions. Loaders MUST expand `apply_expression_template` to a fully-substituted Expression AST at load time (Option A round-trip; the canonical AST after parse-then-emit is the expanded form). Templates do NOT call other templates and do NOT recurse.
+   * Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component (typically inside `reactions[*].rate`) reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this reaction system's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.
    */
   expression_templates?: {
     [k: string]: ExpressionTemplate;
