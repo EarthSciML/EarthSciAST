@@ -80,25 +80,11 @@ def to_julia_code(file: dict[str, Any]) -> str:
             lines.extend(_generate_reaction_system_code(name, reaction_system))
             lines.append("")
 
-    # Generate events
-    if file.get("events"):
-        lines.append("# Events")
-        for name, event in file["events"].items():
-            lines.extend(_generate_event_code(name, event))
-            lines.append("")
-
     # Generate coupling placeholders (codegen not yet implemented)
     if file.get("coupling"):
         lines.append("# Coupling (codegen not yet implemented)")
         for coupling in file["coupling"]:
             lines.extend(_generate_coupling_comment(coupling))
-        lines.append("")
-
-    # Generate domain placeholders (codegen not yet implemented)
-    if file.get("domains"):
-        for domain_name, domain_data in file["domains"].items():
-            lines.append(f"# Domain '{domain_name}' (codegen not yet implemented)")
-            lines.extend(_generate_domain_comment(domain_data))
         lines.append("")
 
     # Generate data loader placeholders (codegen not yet implemented)
@@ -169,12 +155,6 @@ def to_python_code(file: dict[str, Any]) -> str:
         lines.append("# Coupling (codegen not yet implemented)")
         for coupling in file["coupling"]:
             lines.extend(_generate_python_coupling_comment(coupling))
-        lines.append("")
-
-    if file.get("domains"):
-        for domain_name, domain_data in file["domains"].items():
-            lines.append(f"# Domain '{domain_name}' (codegen not yet implemented)")
-            lines.extend(_generate_python_domain_comment(domain_data))
         lines.append("")
 
     return "\n".join(lines)
@@ -263,23 +243,6 @@ def _generate_reaction_system_code(name: str, reaction_system: dict[str, Any]) -
     return lines
 
 
-def _generate_event_code(name: str, event: dict[str, Any]) -> list[str]:
-    lines = []
-
-    if "condition" in event:  # Continuous event
-        lines.append(f"# Continuous Event: {name}")
-        condition = _format_expression(event["condition"])
-        affect = _format_affect(event.get("affect"))
-        lines.append(f"{name}_event = SymbolicContinuousCallback({condition}, {affect})")
-    else:  # Discrete event
-        lines.append(f"# Discrete Event: {name}")
-        trigger = _format_discrete_trigger(event.get("trigger", {}))
-        affect = _format_affect(event.get("affect"))
-        lines.append(f"{name}_event = DiscreteCallback({trigger}, {affect})")
-
-    return lines
-
-
 def _generate_coupling_comment(coupling: dict[str, Any]) -> list[str]:
     lines = []
     lines.append(f"# Coupling: {coupling.get('type', 'unknown')}")
@@ -287,15 +250,6 @@ def _generate_coupling_comment(coupling: dict[str, Any]) -> list[str]:
         lines.append(f"#   From: {coupling['from']}")
     if coupling.get("to"):
         lines.append(f"#   To: {coupling['to']}")
-    return lines
-
-
-def _generate_domain_comment(domain: dict[str, Any]) -> list[str]:
-    lines = []
-    lines.append("# Domain")
-    if domain.get("spatial", {}).get("coordinates"):
-        coords = domain["spatial"]["coordinates"]
-        lines.append(f"#   Spatial coordinates: {', '.join(coords)}")
     return lines
 
 
@@ -379,82 +333,111 @@ def _format_reaction(reaction: dict[str, Any]) -> str:
     return f"Reaction({rate}, [{reactants}], [{products}])"
 
 
-def _format_expression(expr: str | int | float | dict[str, Any]) -> str:
+# ---------------------------------------------------------------------------
+# Unified per-op expression renderer.
+#
+# Julia and Python differ only in *operator spellings*, so a single dispatch
+# keyed by ``target`` ("julia" / "python") replaces what were two structurally
+# identical renderers. Ops whose rendered *shape* is the same across targets
+# (variadic infix joins, unary minus/negation, the generic call fallback) read
+# their spelling from these tables; the handful whose shape genuinely differs
+# (D, grad, ifelse) keep an explicit per-target branch in ``_format_expr_node``.
+# ---------------------------------------------------------------------------
+
+# Variadic infix operators: op -> per-target join separator.
+_INFIX_SEP = {
+    "+": {"julia": " + ", "python": " + "},
+    "*": {"julia": " * ", "python": " * "},
+    "/": {"julia": " / ", "python": " / "},
+    "^": {"julia": " ^ ", "python": " ** "},
+    "**": {"julia": " ^ ", "python": " ** "},
+    "pow": {"julia": " ^ ", "python": " ** "},
+    "and": {"julia": " && ", "python": " & "},
+    "or": {"julia": " || ", "python": " | "},
+}
+
+# Comparison operators render with the op token itself as the separator.
+_COMPARISON_OPS = ("<", ">", "<=", ">=", "==", "!=")
+
+# Plain ``name(args...)`` ops with a per-target callee name.
+_CALL_NAME = {
+    "exp": {"julia": "exp", "python": "sp.exp"},
+    "Pre": {"julia": "Pre", "python": "sp.Function('Pre')"},
+}
+
+# Logical-negation prefix: ``!(x)`` (Julia) / ``~(x)`` (Python).
+_NOT_PREFIX = {"julia": "!", "python": "~"}
+
+
+def _format_expr(expr: str | int | float | dict[str, Any], target: str) -> str:
     if isinstance(expr, (int, float)):
         return str(expr)
     if isinstance(expr, str):
         return expr
     if isinstance(expr, dict) and "op" in expr:
-        return _format_expression_node(expr)
+        return _format_expr_node(expr, target)
     return str(expr)
 
 
-def _format_expression_node(node: dict[str, Any]) -> str:
+def _format_expr_node(node: dict[str, Any], target: str) -> str:
     op = node["op"]
     args = node.get("args", [])
 
-    # Apply expression mappings for Julia
-    if op == "+":
-        return " + ".join(_format_expression(arg) for arg in args)
-    if op == "*":
-        return " * ".join(_format_expression(arg) for arg in args)
-    if op == "D":
-        # D(x,t) → D(x) (remove time parameter)
-        if args:
-            return f"D({_format_expression(args[0])})"
-        return "D()"
-    if op == "exp":
-        return f"exp({', '.join(_format_expression(arg) for arg in args)})"
-    if op == "ifelse":
-        return f"ifelse({', '.join(_format_expression(arg) for arg in args)})"
-    if op == "Pre":
-        return f"Pre({', '.join(_format_expression(arg) for arg in args)})"
-    if op in ("^", "**", "pow"):
-        return " ^ ".join(_format_expression(arg) for arg in args)
-    if op == "grad":
-        # grad(x,y) → Differential(y)(x)
-        if len(args) >= 2:
-            return f"Differential({_format_expression(args[1])})({_format_expression(args[0])})"
-        if len(args) == 1:
-            return f"Differential(x)({_format_expression(args[0])})"
-        return "Differential(x)()"
+    def r(arg: Any) -> str:
+        return _format_expr(arg, target)
+
+    # Table-driven ops (same shape across targets).
+    if op in _INFIX_SEP:
+        return _INFIX_SEP[op][target].join(r(arg) for arg in args)
+    if op in _COMPARISON_OPS:
+        return f" {op} ".join(r(arg) for arg in args)
     if op == "-":
         if len(args) == 1:
-            return f"-{_format_expression(args[0])}"
-        return " - ".join(_format_expression(arg) for arg in args)
-    if op == "/":
-        return " / ".join(_format_expression(arg) for arg in args)
-    if op in ["<", ">", "<=", ">=", "==", "!="]:
-        return f" {op} ".join(_format_expression(arg) for arg in args)
-    if op == "and":
-        return " && ".join(_format_expression(arg) for arg in args)
-    if op == "or":
-        return " || ".join(_format_expression(arg) for arg in args)
+            return f"-{r(args[0])}"
+        return " - ".join(r(arg) for arg in args)
     if op == "not":
-        return f"!({_format_expression(args[0])})" if args else "!()"
-    # For other operators, use function call syntax
-    _warn_unregistered_op(op, "julia")
-    return f"{op}({', '.join(_format_expression(arg) for arg in args)})"
+        pfx = _NOT_PREFIX[target]
+        return f"{pfx}({r(args[0])})" if args else f"{pfx}()"
+    if op in _CALL_NAME:
+        return f"{_CALL_NAME[op][target]}({', '.join(r(arg) for arg in args)})"
+
+    # Shape-divergent ops (explicit per-target branch).
+    if op == "D":
+        if target == "julia":
+            # D(x,t) → D(x) (drop the time parameter)
+            return f"D({r(args[0])})" if args else "D()"
+        # D(x,t) → sp.Derivative(x(t), t)
+        return f"sp.Derivative({r(args[0])}(t), t)" if args else "sp.Derivative()"
+    if op == "grad":
+        if target == "julia":
+            # grad(x,y) → Differential(y)(x)
+            if len(args) >= 2:
+                return f"Differential({r(args[1])})({r(args[0])})"
+            if len(args) == 1:
+                return f"Differential(x)({r(args[0])})"
+            return "Differential(x)()"
+        # grad(x,y) → sp.Derivative(x, y)
+        if len(args) >= 2:
+            return f"sp.Derivative({r(args[0])}, {r(args[1])})"
+        if len(args) == 1:
+            return f"sp.Derivative({r(args[0])}, x)"
+        return "sp.Derivative()"
+    if op == "ifelse":
+        if target == "julia":
+            return f"ifelse({', '.join(r(arg) for arg in args)})"
+        # ifelse(cond, t, f) → sp.Piecewise((t, cond), (f, True))
+        if len(args) >= 3:
+            return f"sp.Piecewise(({r(args[1])}, {r(args[0])}), ({r(args[2])}, True))"
+        return "sp.Piecewise((0, True))"
+
+    # For other operators, use function call syntax.
+    _warn_unregistered_op(op, target)
+    return f"{op}({', '.join(r(arg) for arg in args)})"
 
 
-def _format_affect(affect) -> str:
-    if isinstance(affect, list):
-        return f"[{', '.join(_format_affect_equation(a) for a in affect)}]"
-    if affect and isinstance(affect, dict):
-        return _format_affect_equation(affect)
-    return "nothing"
-
-
-def _format_affect_equation(affect: dict[str, Any]) -> str:
-    if affect.get("lhs") and affect.get("rhs"):
-        return f"{_format_expression(affect['lhs'])} ~ {_format_expression(affect['rhs'])}"
-    return "nothing"
-
-
-def _format_discrete_trigger(trigger: dict[str, Any]) -> str:
-    if trigger.get("condition"):
-        return _format_expression(trigger["condition"])
-    return "true"
+def _format_expression(expr: str | int | float | dict[str, Any]) -> str:
+    """Render an expression for the Julia target."""
+    return _format_expr(expr, "julia")
 
 
 def _extract_parameter_names(expr: str | int | float | dict[str, Any]) -> set:
@@ -595,80 +578,9 @@ def _generate_python_coupling_comment(coupling: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _generate_python_domain_comment(domain: dict[str, Any]) -> list[str]:
-    lines = []
-    lines.append("# Domain")
-    if domain.get("spatial", {}).get("coordinates"):
-        coords = domain["spatial"]["coordinates"]
-        lines.append(f"#   Spatial coordinates: {', '.join(coords)}")
-    return lines
-
-
 def _format_python_expression(expr: str | int | float | dict[str, Any]) -> str:
-    if isinstance(expr, (int, float)):
-        return str(expr)
-    if isinstance(expr, str):
-        return expr
-    if isinstance(expr, dict) and "op" in expr:
-        return _format_python_expression_node(expr)
-    return str(expr)
-
-
-def _format_python_expression_node(node: dict[str, Any]) -> str:
-    op = node["op"]
-    args = node.get("args", [])
-
-    # Apply expression mappings for Python
-    if op == "+":
-        return " + ".join(_format_python_expression(arg) for arg in args)
-    if op == "*":
-        return " * ".join(_format_python_expression(arg) for arg in args)
-    if op == "D":
-        # D(x,t) → Derivative(x(t), t)
-        if args:
-            var_name = _format_python_expression(args[0])
-            return f"sp.Derivative({var_name}(t), t)"
-        return "sp.Derivative()"
-    if op == "exp":
-        return f"sp.exp({', '.join(_format_python_expression(arg) for arg in args)})"
-    if op == "ifelse":
-        # ifelse(condition, true_val, false_val) → sp.Piecewise((true_val, condition), (false_val, True))
-        if len(args) >= 3:
-            condition = _format_python_expression(args[0])
-            true_val = _format_python_expression(args[1])
-            false_val = _format_python_expression(args[2])
-            return f"sp.Piecewise(({true_val}, {condition}), ({false_val}, True))"
-        return "sp.Piecewise((0, True))"
-    if op == "Pre":
-        return f"sp.Function('Pre')({', '.join(_format_python_expression(arg) for arg in args)})"
-    if op in ("^", "**", "pow"):
-        return " ** ".join(_format_python_expression(arg) for arg in args)
-    if op == "grad":
-        # grad(x,y) → sp.Derivative(x, y)
-        if len(args) >= 2:
-            func = _format_python_expression(args[0])
-            var = _format_python_expression(args[1])
-            return f"sp.Derivative({func}, {var})"
-        if len(args) == 1:
-            return f"sp.Derivative({_format_python_expression(args[0])}, x)"
-        return "sp.Derivative()"
-    if op == "-":
-        if len(args) == 1:
-            return f"-{_format_python_expression(args[0])}"
-        return " - ".join(_format_python_expression(arg) for arg in args)
-    if op == "/":
-        return " / ".join(_format_python_expression(arg) for arg in args)
-    if op in ["<", ">", "<=", ">=", "==", "!="]:
-        return f" {op} ".join(_format_python_expression(arg) for arg in args)
-    if op == "and":
-        return " & ".join(_format_python_expression(arg) for arg in args)
-    if op == "or":
-        return " | ".join(_format_python_expression(arg) for arg in args)
-    if op == "not":
-        return f"~({_format_python_expression(args[0])})" if args else "~()"
-    # For other operators, use function call syntax
-    _warn_unregistered_op(op, "python")
-    return f"{op}({', '.join(_format_python_expression(arg) for arg in args)})"
+    """Render an expression for the Python target."""
+    return _format_expr(expr, "python")
 
 
 def _has_derivative_in_expression(expr: str | int | float | dict[str, Any]) -> bool:

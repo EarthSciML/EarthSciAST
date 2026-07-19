@@ -231,6 +231,13 @@ CODEGEN_HANDLED = {
 
 def test_codegen_special_cases_are_registered_and_pinned():
     handled = _op_literals_in_source(codegen)
+    # codegen dispatches the arithmetic / comparison / call ops through
+    # per-target spelling tables rather than inline ``op ==`` branches, so
+    # harvest those op keys too (``_NOT_PREFIX`` is keyed by target, not op —
+    # its ``not`` op still has an explicit branch the source scan catches).
+    handled |= set(codegen._INFIX_SEP)
+    handled |= set(codegen._COMPARISON_OPS)
+    handled |= set(codegen._CALL_NAME)
 
     # Every op codegen special-cases must be registered (no orphan / typo).
     orphan = handled - REG_NAMES
