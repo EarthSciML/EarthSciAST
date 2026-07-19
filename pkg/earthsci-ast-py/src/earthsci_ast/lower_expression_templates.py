@@ -564,13 +564,17 @@ def _check_surviving_refs(node: Any, templates: dict, scope: str) -> None:
 # rule 3 / RFC out-of-line-expression-templates §7.2)
 # ---------------------------------------------------------------------------
 
-#: The rewrite-target ops explicitly named by §4.2 as the open rewrite-target
-#: tier plus the two load-eliminated forms — the members of **T** that carry a
-#: recognized op name. Any op that is NOT in the evaluable-core registry
-#: (:mod:`earthsci_ast.op_registry`) is ALSO in T (an open-namespace custom op
-#: no evaluator implements); ``apply_expression_template`` itself is excluded.
-_REWRITE_TARGET_OPS = frozenset(
-    {"D", "grad", "div", "laplacian", "integral", "table_lookup", "enum"}
+#: The recognized-name members of the rewrite-target tier **T** (§4.2). DERIVED
+#: from the single-source registry — ``by_tier("rewrite_target")`` supplies the
+#: open-tier sugar (grad/div/laplacian/curl/integral) so the set cannot drift
+#: (it formerly omitted ``curl`` and hand-listed the sugar) — UNION the three
+#: evaluable-core registry ops that are ALSO rewrite targets in these positions:
+#: a right-hand-side / spatial ``D`` (core only in its equation-LHS role) and the
+#: two load-eliminated forms ``table_lookup`` / ``enum``. Any op that is NOT in
+#: the registry at all is ALSO in T (an open-namespace custom op no evaluator
+#: implements — see :func:`_op_in_T`); ``apply_expression_template`` is excluded.
+_REWRITE_TARGET_OPS = op_registry.by_tier("rewrite_target") | frozenset(
+    {"D", "table_lookup", "enum"}
 )
 
 

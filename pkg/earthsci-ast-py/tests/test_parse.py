@@ -163,14 +163,14 @@ def test_operator_field_requirements():
     with pytest.raises(ValueError, match="Operator 'D' requires 'wrt' field to be specified"):
         _parse_expression(expr_data_d_no_wrt)
 
-    # Test that grad operator requires dim field
-    expr_data_grad_no_dim = {
-        "op": "grad",
-        "args": ["T"],
-        # Missing dim field
-    }
-    with pytest.raises(ValueError, match="Operator 'grad' requires 'dim' field to be specified"):
-        _parse_expression(expr_data_grad_no_dim)
+    # `grad` is an ordinary open-tier rewrite-target op with NO per-op field
+    # mandate: `dim` is an OPTIONAL axis-naming scalar field (esm-spec §4.2 /
+    # §4.9.1), so a `grad` without `dim` now parses cleanly — exactly like any
+    # unregistered user op. Re-adding a bespoke `grad`-requires-`dim` check is a
+    # regression.
+    expr_grad_no_dim = _parse_expression({"op": "grad", "args": ["T"]})
+    assert expr_grad_no_dim.op == "grad"
+    assert expr_grad_no_dim.dim is None
 
     # Test that other operators work without these fields
     expr_data_other = {"op": "+", "args": [1, 2]}

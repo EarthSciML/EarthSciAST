@@ -263,11 +263,14 @@ def _parse_expression(
                         [rec(v) for v in expr_data[wire]] if wire in expr_data else None
                     )
 
-        # Validate operator-specific field requirements (unchanged semantics).
+        # Validate operator-specific field requirements. `D` genuinely requires
+        # `wrt` (its structural differentiation variable). The open-tier sugar
+        # ops carry NO per-op field mandate: `dim` is an OPTIONAL axis-naming
+        # scalar field (like `wrt`), so `grad`/`div`/`laplacian` are NOT forced to
+        # supply one — they are ordinary rewrite-target ops with no privilege, and
+        # the schema mandates no `dim` per op (esm-spec §4.2 / §4.9.1).
         if op == "D" and kwargs["wrt"] is None:
             raise ParseError("Operator 'D' requires 'wrt' field to be specified")
-        if op == "grad" and kwargs["dim"] is None:
-            raise ParseError("Operator 'grad' requires 'dim' field to be specified")
         # Geometry-kernel manifold (RFC §8.1, esm-spec.md §8.6.1). Both geometry
         # leaves — the array-valued `intersect_polygon` clip and the fused scalar
         # `polygon_intersection_area` — are strictly binary with a REQUIRED

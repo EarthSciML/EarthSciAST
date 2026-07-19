@@ -383,6 +383,15 @@ _BINARY_SYMPY: dict[str, tuple] = {
     for op in {"/", "atan2"} | (op_registry.by_category("comparison") & op_registry.canonical_names())
 }
 
+#: The evaluable-core op vocabulary (esm-spec §4.2), DERIVED from the single-source
+#: registry. An op that is NOT core is an open-tier rewrite-target — the sugar ops
+#: grad/div/laplacian/curl/integral OR a custom op such as ``godunov_hamiltonian``
+#: — and the SymPy bridge treats them all UNIFORMLY (no privilege): opaque
+#: ``sp.Function`` placeholders under the symbolic ``to_sympy`` contract, and an
+#: ``unlowered_operator`` error under the lambdify path. ``D`` is core and keeps
+#: its genuine derivative handling.
+_EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
+
 
 def _expr_to_sympy(
     expr: Expr,
@@ -419,15 +428,18 @@ def _expr_to_sympy(
         fn_callable_map: Mutable map populated with ``synthetic_name → callable``
             for every ``fn``-op call site encountered. Required when ``expr``
             contains ``fn`` ops; ``None`` raises with a clear diagnostic.
-        structural_ops: When False (the simulation-lowering default), the
-            rewrite-target operators ``D``/``grad``/``div``/``laplacian``
-            raise :class:`UnreachableSpatialOperatorError` (they must have
-            been consumed structurally or rewritten to a stencil before the
-            lambdify path) and ``Pre`` is unsupported. When True (the public
+        structural_ops: When False (the simulation-lowering default), a genuine
+            ``D`` and every non-evaluable-core op — the open-tier sugar
+            ``grad``/``div``/``laplacian``/``curl``/``integral`` and any custom
+            op, treated identically with no privilege — raise
+            :class:`UnreachableSpatialOperatorError` (they must have been
+            consumed structurally or rewritten to a stencil before the lambdify
+            path) and ``Pre`` is unsupported. When True (the public
             :func:`to_sympy` contract, used for symbolic analysis such as
-            :func:`symbolic_jacobian`), ``D``/``grad`` become
-            :class:`sympy.Derivative` and ``div``/``laplacian``/``Pre``
-            become opaque :class:`sympy.Function` placeholders.
+            :func:`symbolic_jacobian`), ``D`` becomes a genuine
+            :class:`sympy.Derivative`, while every non-core op (the sugar ops and
+            any custom op) plus ``Pre`` becomes an opaque
+            :class:`sympy.Function` placeholder that preserves structure.
 
     Returns:
         SymPy expression
@@ -445,16 +457,12 @@ def _expr_to_sympy(
             symbol_map[expr] = sp.Symbol(expr)
             return symbol_map[expr]
     elif isinstance(expr, ExprNode):
-        # Unlowered rewrite-target operators (esm-spec §4.2 / §9.6.8) must be
-        # rewritten to a stencil by a discretization rule before reaching the
-        # SymPy/lambdify path: a spatial/right-hand-side `D`, or the
-        # `grad`/`div`/`laplacian` sugar ops. `D` in an equation LHS is consumed
-        # structurally by `_flat_to_sympy_rhs` (never routed here), so any `D`
-        # this recursion sees is an unlowered RHS derivative. Surface the uniform
-        # `unlowered_operator` diagnostic instead of letting SymPy invent a
-        # symbolic placeholder. Under ``structural_ops=True`` these ops are
-        # instead converted symbolically (public ``to_sympy`` contract).
-        if expr.op in ("grad", "div", "laplacian", "D"):
+        # `D` is the one genuine calculus form-op the bridge understands: a
+        # spatial/right-hand-side `D` reaching the lambdify path is an unlowered
+        # rewrite-target (`D` in an equation LHS is consumed structurally by
+        # `_flat_to_sympy_rhs` and never routed here), and under the symbolic
+        # `to_sympy` contract it becomes a genuine `sp.Derivative`.
+        if expr.op == "D":
             if not structural_ops:
                 raise UnreachableSpatialOperatorError(expr.op)
             sympy_args = [
@@ -462,24 +470,30 @@ def _expr_to_sympy(
             ]
             if len(sympy_args) != 1:
                 raise SimulationError(
-                    f"{expr.op} requires exactly 1 argument, got {len(sympy_args)}"
+                    f"D requires exactly 1 argument, got {len(sympy_args)}"
                 )
-            if expr.op == "D":
-                if not expr.wrt:
-                    raise SimulationError("D operator requires a `wrt` field")
-                wrt_symbol = _expr_to_sympy(expr.wrt, symbol_map, fn_callable_map, structural_ops)
-                return sp.Derivative(sympy_args[0], wrt_symbol)
-            if expr.op == "grad":
-                # Gradient - represent as a derivative over the dimension when
-                # one is declared; otherwise pass the operand through.
-                if expr.dim:
-                    dim_symbol = _expr_to_sympy(
-                        expr.dim, symbol_map, fn_callable_map, structural_ops
-                    )
-                    return sp.Derivative(sympy_args[0], dim_symbol)
-                return sympy_args[0]
-            # div / laplacian: opaque placeholders that preserve structure.
-            return sp.Function(expr.op)(sympy_args[0])
+            if not expr.wrt:
+                raise SimulationError("D operator requires a `wrt` field")
+            wrt_symbol = _expr_to_sympy(expr.wrt, symbol_map, fn_callable_map, structural_ops)
+            return sp.Derivative(sympy_args[0], wrt_symbol)
+
+        # Every OTHER non-evaluable-core op is an ordinary open-tier
+        # rewrite-target with NO privilege — the sugar ops
+        # grad/div/laplacian/curl/integral AND any custom op such as
+        # `godunov_hamiltonian` are handled by the SAME path (esm-spec §4.2). On
+        # the lambdify path (`structural_ops=False`) one reaching here was never
+        # lowered to a stencil: surface the uniform `unlowered_operator`
+        # diagnostic. Under the symbolic `to_sympy` contract (`structural_ops=
+        # True`) preserve it as an opaque `sp.Function` placeholder so structure
+        # survives for analysis — no arity privilege, no coordinate-derivative
+        # rewrite (grad is no longer special-cased into an `sp.Derivative`).
+        if expr.op not in _EVALUABLE_CORE_OPS:
+            if not structural_ops:
+                raise UnreachableSpatialOperatorError(expr.op)
+            sympy_args = [
+                _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops) for a in expr.args
+            ]
+            return sp.Function(expr.op)(*sympy_args)
 
         # Closed-function registry (esm-spec §9.2 / §9.3) and inline const
         # values must be handled before the generic argument recursion below,
@@ -658,10 +672,12 @@ def to_sympy(expr: Expr, symbol_map: dict[str, sp.Symbol] | None = None) -> sp.E
 
     Thin wrapper over :func:`_expr_to_sympy` — the single ESM→SymPy
     converter shared with the simulation tier (``sympy_bridge.py``) — run
-    with ``structural_ops=True`` so ``D``/``grad`` convert to
-    :class:`sympy.Derivative` and ``div``/``laplacian``/``Pre`` become
-    opaque :class:`sympy.Function` placeholders (symbolic-analysis
-    semantics, e.g. for :func:`symbolic_jacobian`).
+    with ``structural_ops=True`` so the genuine ``D`` converts to a
+    :class:`sympy.Derivative` while every open-tier rewrite-target op
+    (``grad``/``div``/``laplacian``/``curl``/``integral`` and any custom op,
+    all unprivileged) plus ``Pre`` becomes an opaque :class:`sympy.Function`
+    placeholder (symbolic-analysis semantics, e.g. for
+    :func:`symbolic_jacobian`).
 
     Bare string variable names auto-create symbols: any name not present in
     ``symbol_map`` gets a fresh :class:`sympy.Symbol` which is also recorded

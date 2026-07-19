@@ -42,7 +42,6 @@ from .expr_walk import any_child, iter_children, map_children, walk
 # original name for backward compatibility — ``simulation_array`` and callers in
 # this module still import ``_expand_range`` from :mod:`.flatten`.
 from .index_ranges import expand_range as _expand_range
-from .op_registry import by_category as _by_category
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
@@ -295,11 +294,6 @@ class FlattenedSystem:
 # ============================================================================
 
 
-# The differential spatial-sugar ops (grad/div/laplacian/curl), DERIVED from the
-# canonical op registry: the ``spatial_sugar`` category minus ``integral`` (which
-# is spatial sugar but carries no ``.dim`` differential — this detector excludes
-# it). Single-sourced so it cannot drift from op_registry.
-_SPATIAL_OPS = _by_category("spatial_sugar") - {"integral"}
 # The canonical array-op set lives in esm_types (shared with
 # numpy_interpreter.expr_contains_array_op); keep the module-local alias for
 # existing references.
@@ -326,10 +320,13 @@ def _expr_to_string(expr: Expr) -> str:
             inner = args[0] if args else ""
             return f"D({inner}, {expr.wrt})"
 
-        if op in _SPATIAL_OPS:
+        # An op carrying a `dim` axis field (the open-tier differential sugar
+        # grad/div/laplacian/curl, or any custom rewrite-target op with a `dim`)
+        # renders as `op(inner, dim)`. Keyed STRUCTURALLY on the `dim` field, not
+        # on an op-name list — the sugar ops carry no rendering privilege.
+        if expr.dim is not None:
             inner = args[0] if args else ""
-            dim = expr.dim or ""
-            return f"{op}({inner}, {dim})" if dim else f"{op}({inner})"
+            return f"{op}({inner}, {expr.dim})"
 
         if op == "aggregate":
             body = _expr_to_string(expr.expr) if expr.expr is not None else ""
@@ -479,10 +476,21 @@ def _has_array_op(expr: Expr) -> bool:
 
 
 def _spatial_dims_in_expr(expr: Expr) -> set[str]:
-    """Return the set of spatial dimension labels referenced by spatial ops."""
+    """Return the set of spatial dimension labels named by an unlowered spatial
+    differential in ``expr``.
+
+    Harvested STRUCTURALLY from every node's ``dim`` axis field (esm-spec §4.9.1),
+    NOT from a list of op names: the open-tier sugar ops grad/div/laplacian/curl
+    carry no spatial-detection privilege, so the signal is the ordinary
+    axis-naming ``dim`` scalar field (which only an undiscretized differential
+    node carries — no evaluable-core op uses it). A discretized system has already
+    folded its spatial axes into array dimensions and carries no ``dim`` node, so
+    it yields the empty set and stays a pure ODE (``independent_variables ==
+    ["t"]``), exactly as before.
+    """
     out: set[str] = set()
     for node in walk(expr):
-        if isinstance(node, ExprNode) and node.op in _SPATIAL_OPS and node.dim:
+        if isinstance(node, ExprNode) and node.dim:
             out.add(node.dim)
     return out
 
@@ -1355,8 +1363,12 @@ def _apply_domain(esm_file: EsmFile, flat: FlattenedSystem) -> None:
 def _derive_independent_vars(flat: FlattenedSystem) -> None:
     """Derive independent variables from the equation set.
 
-    Time is always present; spatial dimensions are added when grad/div/laplacian
-    operators reference them.
+    Time is always present; a spatial dimension is added when an UNDISCRETIZED
+    spatial differential still names it. That signal is derived STRUCTURALLY from
+    the ``dim`` axis field carried by such a node (esm-spec §4.9.1) — never from a
+    hardcoded op-name list — so no sugar op is privileged over a custom
+    rewrite-target op. A discretized (array) system carries no such ``dim`` node
+    and correctly stays a pure ODE (``independent_variables == ["t"]``).
     """
     independent: list[str] = ["t"]
     spatial_dims: set[str] = set()

@@ -13,7 +13,6 @@ tables / dispatch chains that could (and did) drift apart:
 * :mod:`earthsci_ast.numpy_interpreter` — ``_SCALAR_FUNCS`` / ``_CMP_UFUNCS`` /
   ``_broadcast_fn`` and the ``eval_expr`` dispatch.
 * :mod:`earthsci_ast.cadence` — ``RELATIONAL_OPS`` (the value-invention guard).
-* :mod:`earthsci_ast.flatten` — ``_SPATIAL_OPS`` (the spatial-sugar detector).
 
 The historical failure mode (flagged by the Python audit): when a new op is
 added it raises loudly in the SymPy path but **silently degrades** to generic
@@ -32,7 +31,6 @@ This registry is the **single source** for the op VOCABULARY and each op's arity
 bounds: the pure op-SET tables now DERIVE their contents from it rather than
 re-authoring them, so drift is impossible by construction —
 ``structural_checks._OPERATOR_ARITY`` (:func:`arity_bounds_map`),
-``flatten._SPATIAL_OPS`` (``by_category("spatial_sugar") - {"integral"}``),
 ``cadence.RELATIONAL_OPS`` (``by_category("relational")``), ``esm_types.ARRAY_OPS``
 (``by_category("array") | by_category("geometry")``), and ``codegen._COMPARISON_OPS``.
 The heterogeneous VALUE tables keep their local values (a SymPy class, a numpy
@@ -69,8 +67,16 @@ Categories
 ``relational``       value-invention & index-returning reducers: skolem, rank,
                      argmin, argmax, distinct, join (RFC semiring-faq-unified-ir)
 ``geometry``         intersect_polygon, polygon_intersection_area (§8.6 kernels)
-``spatial_sugar``    rewrite-target open-tier sugar: grad/div/laplacian/curl and
-                     ``integral`` (no evaluator; lowered by a discretization rule)
+``open``             ordinary open-tier rewrite-target ops the FORMAT documents
+                     but does NOT privilege: grad/div/laplacian/curl/integral
+                     (esm-spec §4.2). They carry NO dimensional rule, NO evaluator,
+                     NO privileged arity, and are NOT used for spatial detection —
+                     exactly like an unregistered user op (``godunov_hamiltonian``).
+                     Registry membership only spares them the "unknown op" display
+                     warning; it confers no semantics. ``integral`` additionally
+                     carries its OWN sidecar fields (``var``/``lower``/``upper``)
+                     for display/structural traversal — a rendering detail, not a
+                     semantic privilege.
 
 Tiers
 -----
@@ -79,7 +85,9 @@ Tiers
                     implements it directly (esm-spec §4.2).
 ``rewrite_target``  open-tier op with **no** evaluator; it MUST be eliminated by
                     a rewrite rule before evaluation (``unlowered_operator`` if
-                    not, esm-spec §9.6.6). The ``spatial_sugar`` ops.
+                    not, esm-spec §9.6.6). The ``open`` category ops (and any
+                    unregistered custom op, which is a rewrite-target by virtue of
+                    not being evaluable-core).
 """
 
 from __future__ import annotations
@@ -102,7 +110,7 @@ CATEGORIES: frozenset[str] = frozenset(
         "array",
         "relational",
         "geometry",
-        "spatial_sugar",
+        "open",
     }
 )
 
@@ -250,20 +258,24 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("intersect_polygon", "geometry", "binary", note="clipped overlap ring; carries `manifold`"),
     OpSpec("polygon_intersection_area", "geometry", "binary",
            note="fused scalar overlap area; carries `manifold`"),
-    # --- spatial-sugar (open tier, esm-spec §4.2 rewrite-target) ---
-    # grad/div accept an optional second operand — a per-field boundary
-    # (Dirichlet inflow) metavariable bound by a two-arg `grad(f, inflow, dim)`
-    # expression-template `match` (esm-spec §9.6); hence bounds (1, 2). The schema
-    # does not constrain grad/div arity, so the registry supplies it. Corpus-pinned.
-    OpSpec("grad", "spatial_sugar", "unary", arity_bounds=(1, 2),
-           tier="rewrite_target", note="sugar over D; optional boundary metavariable"),
-    OpSpec("div", "spatial_sugar", "unary", arity_bounds=(1, 2),
-           tier="rewrite_target", note="sugar over D; optional boundary metavariable"),
-    OpSpec("laplacian", "spatial_sugar", "unary", arity_bounds=(1, 1),
-           tier="rewrite_target", note="sugar over D"),
-    OpSpec("curl", "spatial_sugar", "unary", tier="rewrite_target", note="sugar over D"),
-    OpSpec("integral", "spatial_sugar", "unary", tier="rewrite_target",
-           note="PIDE spatial integral; carries `var`/`lower`/`upper`"),
+    # --- open-tier rewrite-target sugar (esm-spec §4.2) ---
+    # grad/div/laplacian/curl/integral are ORDINARY open-tier rewrite-target ops
+    # with NO privilege over any other user op (`godunov_hamiltonian`): no
+    # dimensional rule (dimension UNDETERMINABLE until lowered, §4.8.3/§4.8.4), no
+    # evaluator (a discretization rule MUST lower them, `unlowered_operator`
+    # otherwise), no privileged ARITY (``arity_bounds=None`` — structural
+    # validation skips their operand count exactly as it does for an unregistered
+    # op), and they are NOT used for spatial detection (that is now derived
+    # structurally from variable shapes / the `dim` field — see `flatten`). They
+    # remain in the registry only so the display/codegen fallbacks recognize them
+    # (no "unknown op" warning) — a documentation courtesy, not a semantic
+    # privilege.
+    OpSpec("grad", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
+    OpSpec("div", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
+    OpSpec("laplacian", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
+    OpSpec("curl", "open", "unary", tier="rewrite_target", note="open-tier sugar over D"),
+    OpSpec("integral", "open", "unary", tier="rewrite_target",
+           note="open-tier PIDE spatial integral; carries own `var`/`lower`/`upper` sidecar fields"),
 )
 
 

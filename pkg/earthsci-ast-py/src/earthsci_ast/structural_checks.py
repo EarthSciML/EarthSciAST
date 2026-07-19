@@ -1754,62 +1754,6 @@ def _walk_expression_for_dimensionless_arg_checks(
         )
 
 
-_GRAD_OPS = frozenset({"grad", "div", "laplacian"})
-
-
-def _iter_grad_coords(expr: Any):
-    """Yield the coordinate name of every ``grad``/``div``/``laplacian`` node in
-    ``expr`` (the differentiation axis carried in the node's ``dim`` field)."""
-    if not isinstance(expr, dict):
-        return
-    if expr.get("op") in _GRAD_OPS:
-        dim = expr.get("dim")
-        if isinstance(dim, str):
-            yield dim
-    for arg in expr.get("args", []) or []:
-        yield from _iter_grad_coords(arg)
-    inner = expr.get("expr")
-    if inner is not None:
-        yield from _iter_grad_coords(inner)
-
-
-def _check_grad_coordinate_units(
-    data: dict[str, Any], errors: list
-) -> None:
-    """A spatial operator (``grad``/``div``/``laplacian``) differentiates with
-    respect to a COORDINATE, so the coordinate's units set the operator's
-    dimension. When the coordinate is a DECLARED model variable/parameter that
-    carries NO units, the equation is dimensionally undetermined — a provable
-    ``unit_inconsistency`` reported at the equation the operator lives in
-    (esm-spec §4.8; TypeScript reference).
-
-    Conservative: a coordinate that is NOT a declared model symbol (a bare axis
-    like ``lon`` from ``index_sets``) is left alone — its units are simply not
-    a model-level fact, so nothing is provably wrong.
-    """
-    for mname, m in data.get("models", {}).items():
-        variables = m.get("variables", {}) or {}
-        for i, eq in enumerate(m.get("equations", []) or []):
-            if not isinstance(eq, dict):
-                continue
-            flagged: set[str] = set()
-            for side in ("lhs", "rhs"):
-                for coord in _iter_grad_coords(eq.get(side)):
-                    if coord in flagged:
-                        continue
-                    vdef = variables.get(coord)
-                    if isinstance(vdef, dict) and not vdef.get("units"):
-                        flagged.add(coord)
-                        errors.append(
-                            (
-                                f"/models/{mname}/equations/{i}",
-                                f"Gradient operator applied over spatial coordinate "
-                                f"'{coord}' with no declared units",
-                                {"coordinate": coord, "equation_index": i},
-                            )
-                        )
-
-
 def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors: list) -> None:
     """
     Check unit compatibility in equations.
@@ -1825,10 +1769,15 @@ def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors
     ``unit_inconsistency`` code lands at the path
     ``tests/invalid/expected_errors.json`` pins for it.
 
-    (A former check for grad/div/laplacian spatial-coordinate units was
-    removed with the v0.8.0 geometry rewrite: it read the deleted
-    ``Domain.spatial`` / per-model ``domain`` / top-level ``domains`` schema
-    constructs and could never fire.)
+    (No grad/div/laplacian spatial-coordinate-units rule lives here. The sugar
+    ops grad/div/laplacian/curl/integral are ORDINARY open-tier rewrite-target
+    ops with NO dimensional rule: their result dimension is UNDETERMINABLE until
+    a discretization rule lowers them (esm-spec §4.8.3 "any other op" / §4.8.4),
+    so a checker must report ``unknown`` and skip — never invent a
+    coordinate-divided dimension. The bespoke ``_check_grad_coordinate_units``
+    that formerly flagged a grad over a units-less coordinate was deleted when
+    these ops were demoted; ``units_gradient_operator_mismatch.esm`` now GUARDS
+    that it is not re-added.)
     """
     var_units = _collect_var_units(tables)
 
@@ -2223,7 +2172,6 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # to fix a spelling, the second to fix the physics.
     collect("unit_parse_error", lambda sub: _check_unparseable_units(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
-    collect("unit_inconsistency", lambda sub: _check_grad_coordinate_units(data, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_physical_constant_units(data, sub))

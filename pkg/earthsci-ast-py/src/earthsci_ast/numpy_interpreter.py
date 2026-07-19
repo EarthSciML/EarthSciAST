@@ -194,8 +194,10 @@ class NumpyInterpreterError(EarthSciAstError):
 
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
     """Raised when an unlowered rewrite-target operator reaches the simulator's
-    RHS evaluator — a spatial/right-hand-side ``D`` or a ``grad``/``div``/
-    ``laplacian`` sugar op (esm-spec §4.2 / §9.6.8).
+    RHS evaluator — a spatial/right-hand-side ``D``, one of the open-tier sugar
+    ops (``grad``/``div``/``laplacian``/``curl``/``integral``), or any other
+    op that is not evaluable-core such as a custom ``godunov_hamiltonian``
+    (esm-spec §4.2 / §9.6.8). All are treated identically — none is privileged.
 
     These ops carry NO evaluator: a discretization rule MUST rewrite them into an
     ``aggregate``/``makearray`` stencil before evaluation. Encountering one here
@@ -214,8 +216,9 @@ class UnreachableSpatialOperatorError(NumpyInterpreterError):
         self.op = op
         super().__init__(
             f"unlowered_operator: rewrite-target op '{op}' reached simulation "
-            f"evaluation with no rule to lower it to a stencil. Such ops "
-            f"(a spatial/right-hand-side `D`, or `grad`/`div`/`laplacian` sugar) "
+            f"evaluation with no rule to lower it to a stencil. Any op that is "
+            f"not evaluable-core (a spatial/right-hand-side `D`, the open-tier "
+            f"sugar `grad`/`div`/`laplacian`/`curl`/`integral`, or a custom op) "
             f"must be rewritten by a discretization rule before evaluation "
             f"(esm-spec §4.2 / §9.6.8). Pipeline contract violated."
         )
@@ -328,6 +331,15 @@ _CMP_UFUNCS: dict[str, Callable] = {
     op: _CMP_UFUNCS_IMPL[op]
     for op in op_registry.by_category("comparison") & op_registry.canonical_names()
 }
+
+#: The evaluable-core op vocabulary (esm-spec §4.2), DERIVED from the single-source
+#: registry rather than a hand-list. Any op reaching the RHS evaluator that is NOT
+#: in this set is an unlowered rewrite-target — the open-tier sugar
+#: grad/div/laplacian/curl/integral, a spatial `D`, OR a custom user op such as
+#: `godunov_hamiltonian`, all treated identically — and is surfaced with the
+#: uniform ``unlowered_operator`` diagnostic. No per-op list, so no op is
+#: privileged and none can be forgotten.
+_EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
 
 
 def _broadcast_fn(fn: str) -> Callable:
@@ -748,14 +760,6 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         # evaluation, with the uniform `unlowered_operator` code (never the old
         # silently-evaluate-inner behaviour).
         raise UnreachableSpatialOperatorError("D")
-    if op in ("grad", "div", "laplacian"):
-        # grad/div/laplacian are NOT evaluable-core ops — they are optional
-        # rewrite-target sugar over `D` that a discretization rule must lower to
-        # an `aggregate`/`makearray` stencil before evaluation. One reaching the
-        # evaluator means no rule lowered it. This format ships no discretization
-        # rules (they live in EarthSciDiscretizations). Surface the violation
-        # rather than substituting zero. Uniform `unlowered_operator` code.
-        raise UnreachableSpatialOperatorError(op)
 
     # --- array ops --- (`index` is dispatched at the top of eval_expr)
     # "aggregate" is the canonical Functional Aggregate Query op tag.
@@ -783,6 +787,17 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         return 1.0
     if op == "false":
         return 0.0
+
+    # Generic unlowered-rewrite-target gate (esm-spec §4.2 / §9.6.8). Any op that
+    # is NOT evaluable-core reaching the RHS evaluator is an unlowered
+    # rewrite-target that a discretization rule should have eliminated: the
+    # open-tier sugar (grad/div/laplacian/curl/integral) AND a custom user op
+    # (`godunov_hamiltonian`) are handled by the SAME path — no op is privileged
+    # over any other. Surface the uniform `unlowered_operator` diagnostic rather
+    # than a bespoke fallback. (A `D` on the RHS is gated explicitly above, since
+    # `D` is evaluable-core in its equation-LHS role.)
+    if op not in _EVALUABLE_CORE_OPS:
+        raise UnreachableSpatialOperatorError(op)
 
     raise NumpyInterpreterError(f"Unsupported op in NumPy interpreter: {op!r}")
 

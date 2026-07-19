@@ -241,13 +241,24 @@ class TestSymPyBridge:
         assert isinstance(back_to_esm, ExprNode)
         assert back_to_esm.op == "+"
 
-    def test_to_sympy_unsupported_operation(self):
-        """Test to_sympy with unsupported operations.
-
-        The unified converter raises ``SimulationError`` (the shared
-        bridge semantics), not ``TypeError``.
+    def test_to_sympy_open_tier_op_is_opaque_placeholder(self):
+        """An open-tier op with no evaluable-core meaning — a custom user op or
+        the demoted sugar ops — is preserved by ``to_sympy`` as an opaque
+        :class:`sympy.Function` placeholder (structure survives for symbolic
+        analysis). They are all treated UNIFORMLY with no privilege: `grad` is no
+        longer special-cased into an `sp.Derivative`.
         """
-        expr = ExprNode(op="unsupported_op", args=["x"])
+        x = sp.Symbol("x")
+        for op in ("godunov_hamiltonian", "grad", "div", "laplacian", "curl"):
+            result = to_sympy(ExprNode(op=op, args=["x"]))
+            assert result == sp.Function(op)(x)
+            assert result.func.__name__ == op
+
+    def test_to_sympy_unsupported_core_op(self):
+        """A CORE op the scalar SymPy bridge has no representation for still
+        raises ``SimulationError`` (the shared bridge semantics), not ``TypeError``
+        — only genuinely non-representable core ops reach that path now."""
+        expr = ExprNode(op="aggregate", args=[])
         with pytest.raises(SimulationError, match="Unsupported operation"):
             to_sympy(expr)
 

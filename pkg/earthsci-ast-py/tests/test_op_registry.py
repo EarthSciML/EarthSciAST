@@ -5,7 +5,7 @@ verifies those derivations are well-formed and that the tables the registry does
 NOT drive stay in sync with it:
 
 * the pure op-SET tables — ``structural_checks._OPERATOR_ARITY`` (arity bounds),
-  ``flatten._SPATIAL_OPS``, ``cadence.RELATIONAL_OPS``, ``esm_types.ARRAY_OPS``,
+  ``cadence.RELATIONAL_OPS``, ``esm_types.ARRAY_OPS``,
   ``codegen._COMPARISON_OPS`` — are derived FROM the registry; the checks here
   confirm each derives to the intended registry subset (and catch a regression
   that re-hardcodes one to a stale set);
@@ -96,12 +96,19 @@ def test_registry_arity_bounds_are_well_formed():
 
 def test_registry_arity_bounds_pin_load_bearing_ops():
     # Corpus-pinned bounds confirmed load-bearing in the prior wave: `-` is n-ary
-    # (a valid 3-operand subtraction exists), grad/div accept an optional boundary
-    # metavariable, laplacian is strictly unary.
+    # (a valid 3-operand subtraction exists).
     assert reg.OPS["-"].arity_bounds == (1, None)
-    assert reg.OPS["grad"].arity_bounds == (1, 2)
-    assert reg.OPS["div"].arity_bounds == (1, 2)
-    assert reg.OPS["laplacian"].arity_bounds == (1, 1)
+
+
+def test_open_tier_sugar_ops_carry_no_arity_privilege():
+    # The demoted open-tier sugar ops carry NO structural arity contract: they are
+    # ordinary rewrite-target ops with no privilege over an unregistered user op,
+    # so structural validation skips their operand count entirely (exactly as it
+    # does for `godunov_hamiltonian`). Re-adding bespoke arity_bounds is a
+    # regression.
+    for op in ("grad", "div", "laplacian", "curl", "integral"):
+        assert reg.OPS[op].arity_bounds is None, f"{op} must not carry privileged arity bounds"
+        assert op not in reg.arity_bounds_map()
 
 
 def test_registry_has_no_duplicate_entries():
@@ -118,9 +125,16 @@ def test_registry_aliases_point_at_canonical_ops():
             )
 
 
-def test_rewrite_target_tier_is_exactly_spatial_sugar():
-    # The only open-tier (no-evaluator) ops are the spatial-sugar family.
-    assert set(reg.by_tier("rewrite_target")) == _cat("spatial_sugar")
+def test_rewrite_target_tier_is_exactly_the_open_category():
+    # The only registered open-tier (no-evaluator) ops are the demoted sugar ops,
+    # now the neutral `open` category — grad/div/laplacian/curl/integral. They
+    # carry NO privilege; registry membership only spares them a display "unknown
+    # op" warning. (Any UNregistered custom op is also a rewrite-target by virtue
+    # of not being evaluable-core, but is not in the registry.)
+    assert set(reg.by_tier("rewrite_target")) == _cat("open")
+    assert _cat("open") == {"grad", "div", "laplacian", "curl", "integral"}
+    # And there is no longer a privileged `spatial_sugar` category.
+    assert "spatial_sugar" not in reg.CATEGORIES
 
 
 def test_unary_elementary_helper_agrees_with_raw_scan():
@@ -217,17 +231,18 @@ def test_cadence_relational_ops_matches_registry():
 
 
 # ---------------------------------------------------------------------------
-# flatten.py — the spatial-operator detector
+# flatten.py — spatial detection is now STRUCTURAL, not an op-name list
 # ---------------------------------------------------------------------------
 
 
-def test_flatten_spatial_ops_matches_registry():
-    # _SPATIAL_OPS DERIVES from the spatial-sugar category minus `integral`:
-    # the differential spatial sugar (grad/div/laplacian/curl). `integral` is
-    # spatial-sugar too but is NOT a differential operator node (no `.dim`), so
-    # this detector legitimately excludes it. Guards the derivation formula.
-    expected = _cat("spatial_sugar") - {"integral"}
-    assert set(flatten._SPATIAL_OPS) == expected
+def test_flatten_has_no_op_name_spatial_detector():
+    # The despecialization removed flatten's `_SPATIAL_OPS` op-name table: spatial
+    # dimensions are now harvested STRUCTURALLY from any node's `dim` axis field
+    # (esm-spec §4.9.1), so the sugar ops confer no spatial-detection privilege
+    # and cannot drift from a hardcoded list. Guard that the op-name table is gone
+    # and that flatten no longer imports the registry category helper for it.
+    assert not hasattr(flatten, "_SPATIAL_OPS")
+    assert not hasattr(flatten, "_by_category")
 
 
 # ---------------------------------------------------------------------------
