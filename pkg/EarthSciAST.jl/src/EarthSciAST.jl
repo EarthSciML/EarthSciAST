@@ -137,7 +137,7 @@ export
     serialize_coupling_entry, coerce_coupling_entry,
     # Structural validation
     StructuralError, ValidationResult, validate_structural, validate,
-    validate_reaction_rate_units, validate_model_gradient_units,
+    validate_reaction_rate_units,
     # Expression operations. Expression containment extends `Base.contains`
     # (always in scope for consumers), so `contains` is not re-exported.
     substitute, free_variables, simplify, UnboundVariableError,

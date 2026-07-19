@@ -51,8 +51,9 @@ import Symbolics
     end
 
     @testset "ModelingToolkit.System(::Model) errors on PDE model with pointer to PDESystem" begin
-        # The spatial dimension `z` is derived from the grad operators'
-        # `dim="z"` (esm-spec v0.8.0 removed the Domain.spatial table).
+        # The spatial dimension `z` is harvested STRUCTURALLY from the `dim="z"`
+        # scalar field carried on the operator nodes (esm-spec §4.9.1(ii)) — by
+        # field, not by op name; the `grad` sugar has no privilege (§4.2).
         vars = Dict{String,ModelVariable}(
             "u" => ModelVariable(StateVariable; default=1.0),
             "D" => ModelVariable(ParameterVariable; default=0.1),

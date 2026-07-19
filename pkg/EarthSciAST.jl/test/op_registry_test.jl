@@ -37,6 +37,12 @@ const ESM = EarthSciAST
         # subexpressions beneath it. Keeping it opaque made every `interp.*` /
         # `datetime.*` call a sharing barrier, which is what let an inlined
         # observed chain under an `interp.*` lookup be re-walked per occurrence.
+        # grad/div/laplacian KEEP `cse=true` (esm-spec §4.2): a rewrite-target
+        # op is a NON-hoistable CSE barrier, so CSE-opacity is what routes it
+        # through `_compile_op` and its `unlowered_operator` rejection gate
+        # (tree_walk/compile.jl §340) instead of the guardless `_cse_rebuild`
+        # generic-node path. Their `known`/`spatial`/`dim_spatial` PRIVILEGE
+        # flags were dropped; this membership is rejection-routing, not privilege.
         @test ESM._CSE_OPAQUE_OPS == Set{String}([
             "const", "enum", "call", "D", "ic", "grad", "div", "laplacian",
             "arrayop", "aggregate", "makearray", "broadcast", "reshape",
@@ -82,7 +88,7 @@ const ESM = EarthSciAST
             "asin", "acos", "atan", "sqrt", "abs",
             "min", "max",
             ">", "<", ">=", "<=", "==", "!=",
-            "D", "grad", "div", "laplacian",
+            "D",  # grad/div/laplacian dropped (§4.2): unregistered user-op tier
             "arrayop", "aggregate", "makearray", "index", "broadcast",
             "reshape", "transpose",
             "concat", "Pre", "ifelse", "call", "fn", "ic",
@@ -90,15 +96,28 @@ const ESM = EarthSciAST
         @test ESM._ops_with(:mtk_known) isa Set{String}
     end
 
-    @testset "_SPATIAL_OPS / _DIM_SPATIAL_OPS membership (pre-registry literal)" begin
-        # flatten.jl's spatial-operator detection (plus `D` with a spatial
-        # `wrt`, which is checked separately at the use sites).
-        @test ESM._SPATIAL_OPS == Set{String}(["grad", "div", "laplacian"])
-        @test ESM._SPATIAL_OPS isa Set{String}
-        # The spatial operators carrying an explicit `dim` field (`laplacian`
-        # does not — it implies the domain's full spatial axes).
-        @test ESM._DIM_SPATIAL_OPS == Set{String}(["grad", "div"])
-        @test ESM._DIM_SPATIAL_OPS isa Set{String}
+    @testset "grad/div/laplacian are demoted to unprivileged rewrite targets (§4.2)" begin
+        # esm-spec §4.2: the spatial-calculus sugar carries NO dimensional /
+        # spatial / coordinate privilege. The former `known`/`spatial`/
+        # `dim_spatial` flags were dropped — dimension is UNDETERMINABLE until
+        # lowered (§4.8.3/§4.8.4, units.jl has no rule), and spatial axes are
+        # harvested structurally from the `dim`/`wrt` FIELDS (flatten.jl), not
+        # from an op-name set. They retain ONLY `cse=true`: the non-hoistable
+        # rewrite-target-barrier routing that makes the `unlowered_operator`
+        # gate fire (pinned by the _CSE_OPAQUE_OPS pin above and by
+        # tree_walk_test.jl) — rejection handling, not privilege.
+        for op in ("grad", "div", "laplacian")
+            @test !(op in ESM._ops_with(:mtk_known))   # no MTK "known" privilege
+            @test op in ESM._CSE_OPAQUE_OPS            # rejection-gate routing only
+        end
+        # The `spatial` / `dim_spatial` registry flags were removed entirely,
+        # and there is no `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` op-name set.
+        @test !(:spatial in ESM._OP_FLAG_NAMES)
+        @test !(:dim_spatial in ESM._OP_FLAG_NAMES)
+        @test_throws ArgumentError ESM._ops_with(:spatial)
+        @test_throws ArgumentError ESM._ops_with(:dim_spatial)
+        @test !isdefined(ESM, :_SPATIAL_OPS)
+        @test !isdefined(ESM, :_DIM_SPATIAL_OPS)
     end
 
     @testset "_ARRAY_PRODUCER_OPS / _SELF_INDEXED_OPS membership (pre-registry literal)" begin

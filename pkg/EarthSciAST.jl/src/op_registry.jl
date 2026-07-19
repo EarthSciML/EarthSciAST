@@ -68,8 +68,6 @@ struct _OpSpec
     stencil_elementwise::Bool
     geo_eval::Bool
     mtk_known::Bool
-    spatial::Bool
-    dim_spatial::Bool
     array_producer::Bool
     self_indexed::Bool
     builtin_fn::Bool
@@ -82,12 +80,12 @@ _op(name::String; arity=nothing, category::Symbol, fn=nothing,
     prec::Union{Int,Nothing}=nothing,
     sep::Union{NTuple{3,String},Nothing}=nothing,
     ws4::Bool=false, cse::Bool=false, stencil::Bool=false,
-    geo::Bool=false, known::Bool=false, spatial::Bool=false,
-    dimsp::Bool=false, arrprod::Bool=false, selfidx::Bool=false,
+    geo::Bool=false, known::Bool=false,
+    arrprod::Bool=false, selfidx::Bool=false,
     builtin::Bool=false) =
     _OpSpec(name, arity, category, fn, dimclass, prec, sep,
             ws4, cse, stencil, geo, known,
-            spatial, dimsp, arrprod, selfidx, builtin)
+            arrprod, selfidx, builtin)
 
 """
     _OP_FLAG_NAMES
@@ -99,15 +97,13 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:stencil_elementwise`→ `_STENCIL_ELEMENTWISE_OPS`      (tree_walk/stencil.jl)
 - `:geo_eval`           → `_GEO_EVAL_OPS`                 (tree_walk/geometry_setup.jl)
 - `:mtk_known`          → `_KNOWN_OPS`                    (ext/EarthSciASTMTKExt.jl)
-- `:spatial`            → `_SPATIAL_OPS`                  (flatten.jl)
-- `:dim_spatial`        → `_DIM_SPATIAL_OPS`              (flatten.jl)
 - `:array_producer`     → `_ARRAY_PRODUCER_OPS`           (shape_promotion.jl)
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
 - `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validate.jl)
 """
 const _OP_FLAG_NAMES =
     (:ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known,
-     :spatial, :dim_spatial, :array_producer, :self_indexed, :builtin_fn)
+     :array_producer, :self_indexed, :builtin_fn)
 
 """
     _OP_TABLE
@@ -128,10 +124,6 @@ hand:
   src/tree_walk/geometry_compile.jl).
 - `_KNOWN_OPS` (ext/EarthSciASTMTKExt.jl) — ops the MTK exporter recognizes;
   anything else is flagged as a likely registered-function gap (gt-p3ep).
-- `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` (src/flatten.jl) — the spatial
-  differential operators the flatten pipeline detects (`_DIM_SPATIAL_OPS` are
-  the subset carrying an explicit `dim` field; `laplacian` does not — it
-  implies the domain's full spatial axes).
 - `_ARRAY_PRODUCER_OPS` / `_SELF_INDEXED_OPS` (src/shape_promotion.jl) —
   array-producing nodes for the shape-promotion / pointwise-lift rewrites,
   and the nodes that carry their own indexing (the producers plus `index`),
@@ -317,13 +309,28 @@ const _OP_TABLE = _OpSpec[
 
     # ── Calculus / initial-condition markers (resolved or rejected at build
     #    time; never scalar-evaluated) ──
+    #    The spatial-calculus sugar `grad`/`div`/`laplacian` carry NO
+    #    dimensional / spatial / coordinate privilege (esm-spec §4.2): they have
+    #    no dimensional rule (§4.8.3 "any other op" ⇒ UNDETERMINABLE — units.jl
+    #    has no rule for them), and spatial axes / system dimensionality are
+    #    derived STRUCTURALLY from the `dim`/`wrt` FIELDS and variable shapes
+    #    over `index_sets` (§4.9.1(ii), §11.2, flatten.jl), never from these op
+    #    names — so the former `known`/`spatial`/`dim_spatial` flags were
+    #    dropped. They keep ONLY `cse=true`: like a spatial `D` (and unlike a
+    #    hoistable arithmetic op), a rewrite-target op is a NON-hoistable CSE
+    #    barrier, so `_CSE_OPAQUE_OPS` routes it through `_compile_op` — the one
+    #    path that carries the `unlowered_operator` rejection gate
+    #    (tree_walk/compile.jl; a non-opaque op would instead be rebuilt as a
+    #    guardless generic node by `_cse_rebuild` and mis-fail at evaluation).
+    #    This is special COMPILE handling that REJECTS them, not a privilege.
+    #    Pinned by tree_walk_test.jl ("unlowered rewrite-target op surfaced
+    #    before evaluation"). Being in the open rewrite-target tier T is via
+    #    `_REWRITE_TARGET_OPS` (lower_expression_templates.jl), exactly as `D`.
     _op("D";         category=:calculus, cse=true, known=true),
     _op("ic";        category=:calculus, cse=true, known=true),
-    _op("grad";      category=:calculus, cse=true, known=true,
-        spatial=true, dimsp=true),
-    _op("div";       category=:calculus, cse=true, known=true,
-        spatial=true, dimsp=true),
-    _op("laplacian"; category=:calculus, cse=true, known=true, spatial=true),
+    _op("grad";      category=:calculus, cse=true),
+    _op("div";       category=:calculus, cse=true),
+    _op("laplacian"; category=:calculus, cse=true),
 
     # ── Array producers / gathers / reshapes ──
     _op("index";     category=:array, cse=true, geo=true, known=true,

@@ -271,57 +271,27 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
 end
 
 # ========================================
-# Spatial-operator detection
+# Spatial-axis detection (structural, esm-spec §4.2 / §4.9.1(ii) / §11.2)
 # ========================================
 
-# Op-class memberships used by the flatten pipeline's spatial detection,
-# derived from the registry flags (src/op_registry.jl); memberships are
-# pinned literal-for-literal by test/op_registry_test.jl.
-#
-# All spatial differential operators (plus `D` with a spatial `wrt`, which is
-# checked separately since it depends on the `wrt` value).
-const _SPATIAL_OPS = _ops_with(:spatial)
-# The spatial operators that carry an explicit `dim` field (`laplacian` does
-# not — it implies the domain's full spatial axes).
-const _DIM_SPATIAL_OPS = _ops_with(:dim_spatial)
-
-"""
-    has_spatial_operator(expr) -> Bool
-
-True if the expression contains any spatial operator (`grad`, `div`,
-`laplacian`, or `D` with `wrt != "t"`).
-"""
-function has_spatial_operator(expr::ASTExpr)::Bool
-    return _has_spatial_operator(expr, IdDict{OpExpr,Nothing}())
-end
-
-# `seen` visits each unique node once: a structurally-shared expression DAG
-# (template expansion) hangs the same subtree under exponentially many paths,
-# and this is a pure query of the node.
-function _has_spatial_operator(expr::ASTExpr, seen::IdDict{OpExpr,Nothing})::Bool
-    if expr isa NumExpr || expr isa IntExpr || expr isa VarExpr
-        return false
-    end
-    if expr isa OpExpr
-        haskey(seen, expr) && return false
-        seen[expr] = nothing
-        if expr.op in _SPATIAL_OPS
-            return true
-        end
-        if expr.op == "D" && expr.wrt !== nothing && expr.wrt != "t"
-            return true
-        end
-        for a in expr.args
-            _has_spatial_operator(a, seen) && return true
-        end
-    end
-    return false
-end
+# The spatial-calculus sugar `grad`/`div`/`laplacian` carry NO privilege: they
+# are ordinary open-tier rewrite-target ops (op_registry.jl leaves them
+# unregistered). Spatial axes are harvested STRUCTURALLY from the `dim`/`wrt`
+# scalar FIELDS of any node — never from a hand-maintained op-name list — so
+# there is no `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` set anymore, and a user
+# rewrite-target op carrying a `dim` contributes its axis exactly as `grad`
+# does. (A fully shape-derived rederivation over `index_sets`, §11.2, is the
+# other admissible structural signal; the by-field `dim`/`wrt` harvest is the
+# smaller one and is what §4.9.1(ii) pins for coordinate-name resolution.)
 
 """
     spatial_dims_in_expr(expr) -> Set{Symbol}
 
-Collect all spatial dimension names referenced by spatial operators in `expr`.
+Collect every spatial-axis name referenced in `expr`, resolved STRUCTURALLY by
+field (esm-spec §4.9.1(ii)): the value of a `dim` field on ANY Expression node
+(a user rewrite-target op's `dim` names an axis exactly as `grad`'s does), plus
+a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on
+a `D` node. No op name is privileged.
 """
 function spatial_dims_in_expr(expr::ASTExpr)::Set{Symbol}
     dims = Set{Symbol}()
@@ -329,19 +299,24 @@ function spatial_dims_in_expr(expr::ASTExpr)::Set{Symbol}
     return dims
 end
 
-# `seen` visits each unique node once — see `_has_spatial_operator`.
+# `seen` visits each unique node once: a structurally-shared expression DAG
+# (template expansion) hangs the same subtree under exponentially many paths,
+# and this is a pure query of the node.
 function _collect_spatial_dims!(dims::Set{Symbol}, expr::ASTExpr,
                                 seen::IdDict{OpExpr,Nothing})
     if expr isa OpExpr
         haskey(seen, expr) && return
         seen[expr] = nothing
-        if expr.op in _DIM_SPATIAL_OPS && expr.dim !== nothing
+        # A `dim` scalar field names a spatial axis regardless of the op
+        # carrying it (grad/div sugar or any user rewrite-target op). A spatial
+        # `D` names its axis via `wrt` — the independent variable `t` is
+        # temporal, not spatial, and `D`'s structural time-derivative handling
+        # is untouched; only a spatial `wrt` contributes an axis here.
+        if expr.dim !== nothing
             push!(dims, Symbol(expr.dim))
-        elseif expr.op == "D" && expr.wrt !== nothing && expr.wrt != "t"
+        end
+        if expr.op == "D" && expr.wrt !== nothing && expr.wrt != "t"
             push!(dims, Symbol(expr.wrt))
-        elseif expr.op == "laplacian"
-            # laplacian doesn't carry dim; caller assumes domain's full spatial
-            # axes. We'll fill that in from the domain spec below.
         end
         for a in expr.args
             _collect_spatial_dims!(dims, a, seen)

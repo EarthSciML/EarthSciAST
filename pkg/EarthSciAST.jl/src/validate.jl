@@ -429,7 +429,6 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         for (model_name, model) in file.models
             append!(errors, validate_event_consistency(model, "/models/$model_name";
                                                        is_coupled = model_name ∈ coupled_ev))
-            append!(errors, validate_model_gradient_units(file, model, "/models/$model_name"))
             append!(errors, validate_physical_constant_units(model, "/models/$model_name"))
             append!(errors, validate_conversion_factor_consistency(model, "/models/$model_name"))
             # Dimensional analysis over equations and variable definitions. This
@@ -2166,102 +2165,15 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{
     return errors
 end
 
-"""
-    validate_model_gradient_units(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
-
-Flag `grad` / `div` / `laplacian` operators whose spatial coordinate is
-declared in the enclosing model but carries no units. Since the v0.8.0
-removal of the `Domain.spatial` table, a domain carries no spatial-grid
-geometry: a PDE's axes are `index_sets` entries and their physical
-coordinates are ordinary data — declared as model variables/parameters or
-loaded fields (esm-spec §"The domain object"). The operator node's `dim` is
-therefore resolved against the enclosing model's declared variables:
-
-- `dim` names a variable declared WITH units → resolvable; no error.
-- `dim` names a variable declared WITHOUT units → dimensionally ambiguous;
-  `unit_inconsistency` (a validator must not silently assume a metre
-  denominator — see `tests/invalid/units_gradient_operator_mismatch.esm`).
-- `dim` names no declared variable — an index-set axis whose physical
-  coordinate is bound elsewhere, e.g. by a discretization rewrite rule
-  (esm-spec §9.6.8) — → left alone (legacy metre-denominator fallback).
-
-Mirrors the TypeScript binding's grad/div/laplacian dimension rule
-(`pkg/earthsci-ast-ts/src/units.ts`: a coordinate present in the
-binding table but dimensionless is flagged; one absent falls back) and the
-Rust binding's `validate_model_gradient_units`. Recurses into subsystems.
-"""
-function validate_model_gradient_units(file::EsmFile, model::Model, path::String)::Vector{StructuralError}
-    errors = StructuralError[]
-
-    # Coordinate → units-string map from the model's declared variables. A
-    # model with no variables short-circuits: there is nothing to resolve a
-    # `dim` against, so child operators fall back to legacy behaviour.
-    # Subsystems still recurse so each resolves against its own declarations.
-    coord_units = _collect_coordinate_units(file, model)
-
-    if coord_units !== nothing
-        for (i, eq) in enumerate(model.equations)
-            eq_path = "$path/equations/$(i-1)"
-            append!(errors, _check_gradient_ops(eq.lhs, coord_units, eq_path))
-            append!(errors, _check_gradient_ops(eq.rhs, coord_units, eq_path))
-        end
-    end
-
-    for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_model_gradient_units(file, subsys, "$path/subsystems/$subsys_name"))
-    end
-
-    return errors
-end
-
-# Returns a Dict{String, Union{String,Nothing}} mapping declared-variable name
-# → declared units (`nothing` when the variable has no — or an empty — `units`
-# field), or `nothing` when the model declares no variables at all. The model's
-# own variable declarations are the coordinate source: "their physical
-# coordinates, spacing, and CRS parameters are ordinary data — loaded from a
-# `data_loaders` primitive or declared as variables/parameters" (esm-spec,
-# domain section). The `file` argument is kept for signature parity with the
-# Rust binding and for a future loader-declared-coordinate resolution path.
-function _collect_coordinate_units(file::EsmFile, model::Model)::Union{Dict{String,Union{String,Nothing}},Nothing}
-    isempty(model.variables) && return nothing
-    coord_units = Dict{String,Union{String,Nothing}}()
-    for (name, v) in model.variables
-        units = v.units
-        coord_units[name] = (units === nothing || isempty(units)) ? nothing : units
-    end
-    return coord_units
-end
-
-function _check_gradient_ops(expr::ASTExpr, coord_units::Dict{String,Union{String,Nothing}},
-                             eq_path::String)::Vector{StructuralError}
-    errors = StructuralError[]
-    if expr isa OpExpr
-        if expr.op in ("grad", "div", "laplacian") && expr.dim !== nothing
-            dim_name = expr.dim
-            if haskey(coord_units, dim_name) && coord_units[dim_name] === nothing
-                # Describe the operand for the error message: use the variable
-                # name if it's a bare reference, otherwise fall back to the
-                # operator's own label. Matches the TS binding's user-visible
-                # framing without committing to a fully-rendered expression.
-                operand_label = if !isempty(expr.args) && expr.args[1] isa VarExpr
-                    "variable '$(expr.args[1].name)'"
-                else
-                    "$(expr.op) operand"
-                end
-                push!(errors, StructuralError(
-                    eq_path,
-                    "Gradient operator applied to $operand_label with incompatible spatial " *
-                    "units: coordinate '$dim_name' has no declared units",
-                    "unit_inconsistency",
-                ))
-            end
-        end
-        for arg in expr.args
-            append!(errors, _check_gradient_ops(arg, coord_units, eq_path))
-        end
-    end
-    return errors
-end
+# NOTE: the bespoke `grad`/`div`/`laplacian` gradient-units rule
+# (`validate_model_gradient_units` and helpers) was REMOVED (esm-spec §4.2 /
+# §4.8.3 / §4.8.4). These sugar ops are ordinary open-tier rewrite-target ops
+# with NO dimensional rule — "any other op ⇒ UNDETERMINABLE" — so the units
+# engine (units.jl) reports their dimension as unknown and skips the enclosing
+# check, exactly as it does for any unregistered op. A binding must NOT re-add a
+# coordinate-divided gradient rule (guarded by
+# `tests/invalid/units_gradient_operator_mismatch.esm`, whose sole pinned
+# finding is now the genuine `m + kg` addition mismatch).
 
 """
     system_exists_in_file(file::EsmFile, system_name::String) -> Bool

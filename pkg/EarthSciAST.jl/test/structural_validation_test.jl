@@ -465,12 +465,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
-    @testset "Gradient operator spatial-coordinate units" begin
-        # Since the v0.8.0 Domain.spatial removal, a grad/div/laplacian node's
-        # `dim` resolves against the enclosing model's declared variables (the
-        # physical coordinate is ordinary declared data, esm-spec domain
-        # section). Declared WITHOUT units → unit_inconsistency; declared WITH
-        # units → fine; undeclared → legacy metre fallback, never flagged.
+    @testset "grad/div/laplacian carry no gradient-units rule (§4.2/§4.8.3)" begin
+        # esm-spec §4.2: the spatial-calculus sugar is an ordinary open-tier
+        # rewrite-target op with NO dimensional rule — "any other op ⇒
+        # UNDETERMINABLE" (§4.8.3/§4.8.4). The former bespoke gradient-units
+        # rule (`validate_model_gradient_units`, which divided the operand's
+        # units by the coordinate's) was REMOVED, so a grad over a coordinate
+        # declared without units is DELIBERATELY not an error — the units engine
+        # reports the grad dimension as unknown and skips the enclosing check.
         metadata = EarthSciAST.Metadata("test-grad-units")
 
         grad_model(x_var) = begin
@@ -489,45 +491,41 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             EarthSciAST.Model(variables, equations)
         end
 
-        @testset "Coordinate declared without units is rejected" begin
-            model = grad_model(EarthSciAST.ModelVariable(
-                EarthSciAST.ParameterVariable, default=0.0))
-            file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("M" => model))
-            errors = EarthSciAST.validate_model_gradient_units(file, model, "/models/M")
-            @test length(errors) == 1
-            @test errors[1].error_type == "unit_inconsistency"
-            @test errors[1].path == "/models/M/equations/0"
-            @test occursin("coordinate 'x' has no declared units", errors[1].message)
-            @test occursin("variable 'c'", errors[1].message)
+        # The removed rule is gone as a callable/exported symbol.
+        @test !isdefined(EarthSciAST, :validate_model_gradient_units)
+
+        @testset "grad over a units-less / units-bearing / undeclared coordinate is never flagged" begin
+            for x_var in (
+                    EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.0),
+                    EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.0, units="m"),
+                    nothing)
+                model = grad_model(x_var)
+                file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("M" => model))
+                result = EarthSciAST.validate(file)
+                grad_errs = filter(e -> e.error_type == "unit_inconsistency" &&
+                                        e.path == "/models/M/equations/0",
+                                   result.structural_errors)
+                @test isempty(grad_errs)
+            end
         end
 
-        @testset "Coordinate declared with units passes" begin
-            model = grad_model(EarthSciAST.ModelVariable(
-                EarthSciAST.ParameterVariable, default=0.0, units="m"))
-            file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("M" => model))
-            @test isempty(EarthSciAST.validate_model_gradient_units(file, model, "/models/M"))
-        end
-
-        @testset "Undeclared dim is left to the legacy fallback" begin
-            # `x` is not declared as a variable — an index-set axis whose
-            # physical coordinate is bound elsewhere (e.g. a discretization
-            # rewrite rule, esm-spec §9.6.8) must not be flagged.
-            model = grad_model(nothing)
-            file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("M" => model))
-            @test isempty(EarthSciAST.validate_model_gradient_units(file, model, "/models/M"))
-        end
-
-        @testset "Invalid fixture units_gradient_operator_mismatch.esm surfaces the grad error" begin
+        @testset "Invalid fixture units_gradient_operator_mismatch.esm: only the bad_sum finding" begin
+            # The reconciled corpus pins ONLY the genuine `m + kg` addition
+            # mismatch at .../variables/bad_sum; the grad over the units-less
+            # coordinate 'x' MUST NOT be flagged (a binding that emits it is now
+            # the one regressing — CONFORMANCE_SPEC §7.1.2 note).
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_gradient_operator_mismatch.esm")
             if _require_fixture(fixture_path)
                 esm_data = EarthSciAST.load(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
-                matching = filter(e -> e.error_type == "unit_inconsistency" &&
-                                       e.path == "/models/SpatialModel/equations/0" &&
-                                       occursin("coordinate 'x' has no declared units", e.message),
-                                  result.structural_errors)
-                @test length(matching) == 1
+                bad_sum = filter(e -> e.error_type == "unit_inconsistency" &&
+                                      e.path == "/models/SpatialModel/variables/bad_sum",
+                                 result.structural_errors)
+                @test length(bad_sum) == 1
+                grad_errs = filter(e -> e.path == "/models/SpatialModel/equations/0",
+                                   result.structural_errors)
+                @test isempty(grad_errs)
             end
         end
     end
