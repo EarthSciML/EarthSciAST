@@ -3021,28 +3021,19 @@ fn run_conformance_test(
                 record.insert("is_valid".into(), json!(false));
                 // Raw document: the load-phase rejection still yields whatever
                 // structured findings the binding is able to enumerate.
+                // `validate_complete` now itself recovers the typed structural
+                // `(code, path)` records on a load rejection (best-effort raw parse
+                // + typed `validate()`), so a document rejected at load no longer
+                // records `is_valid:false` with an EMPTY `structural_errors`
+                // (CONFORMANCE_SPEC §7.1.2). We must therefore NOT re-run
+                // `validate()` here, or every such record would be duplicated.
                 let raw = validate_complete(&content, path.parent());
-
-                // A load rejection must STILL surface its structured `(code,
-                // path)` findings (CONFORMANCE_SPEC §7.1.2) — otherwise a document
-                // rejected at load records `is_valid:false` with an EMPTY
-                // `structural_errors`, and every pin on it silently misses. Some
-                // structural defects (an undeclared event target, an invalid
-                // discrete parameter, a coupling cycle, an empty-equation model,
-                // an unresolvable coupling scoped ref) reject the load before the
-                // typed `validate()` pass runs, yet the document is otherwise
-                // deserializable — so run the typed structural pass on a
-                // best-effort parse and merge its findings. This never flips the
-                // verdict: `resolve_ok` is already false, so the entry stays
-                // invalid; it only recovers the `(code, path)` records.
                 let mut structural_errors: Vec<earthsci_ast::StructuralError> =
                     raw.structural_errors.clone();
-                if let Ok(esm_file) = serde_json::from_str::<earthsci_ast::EsmFile>(&content) {
-                    structural_errors.extend(validate(&esm_file).structural_errors);
-                }
-                // A subsystem `ref` that could not be resolved (missing file) or
-                // is ambiguous (resolves to a file with != 1 top-level system)
-                // aborts the load before any typed pass; recover those findings
+                // A subsystem `ref` that could not be resolved (missing file) or is
+                // ambiguous (resolves to a file with != 1 top-level system) aborts
+                // the load before any typed pass AND before `validate_complete` can
+                // deserialize the document, so those findings are recovered here
                 // directly from the raw document against the file's own directory.
                 structural_errors.extend(collect_subsystem_ref_errors(&content, &path));
 
