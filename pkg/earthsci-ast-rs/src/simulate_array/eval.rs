@@ -424,7 +424,7 @@ pub(super) fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 /// and keeping them would only re-open the divergence if the gate were ever
 /// bypassed. This is now a plain left-fold of [`apply_binary`], identical in
 /// kernel and in order to the vectorized path.
-pub(super) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
+pub(crate) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
     // A zero-arity arithmetic node is not legal (the registry rejects it); the
     // NaN sentinel is the module's convention for an unevaluable node.
     let Some((first, rest)) = vs.split_first() else {
@@ -531,7 +531,7 @@ pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
     }
 }
 
-pub(super) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
+pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
     match op {
         "+" => x + y,
         "-" => x - y,
@@ -630,7 +630,7 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     }
 }
 
-pub(super) fn apply_unary(op: &str, x: f64) -> f64 {
+pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
     match op {
         "exp" => x.exp(),
         "log" | "ln" => x.ln(),
