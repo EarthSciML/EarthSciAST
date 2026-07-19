@@ -47,7 +47,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from .diagnostics import (
+from .error_handling import (
     CLOSED_FUNCTION_ARITY,
     CLOSED_FUNCTION_OVERFLOW,
     INTERP_AXIS_LENGTH_MISMATCH,
@@ -82,7 +82,7 @@ class ClosedFunctionError(EarthSciAstError):
     - ``searchsorted_nan_in_table`` — ``xs`` contains a NaN entry.
 
     The code constants themselves are defined in
-    :mod:`earthsci_ast.diagnostics`; their string values are part of the
+    :mod:`earthsci_ast.error_handling`; their string values are part of the
     cross-binding contract and must never change.
     """
 

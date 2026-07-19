@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 import jsonschema
 from jsonschema import validate
 
-from .diagnostics import (
+from .error_handling import (
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
 )

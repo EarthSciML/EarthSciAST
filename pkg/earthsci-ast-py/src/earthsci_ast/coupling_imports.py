@@ -22,7 +22,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Callable
 
-from .diagnostics import (
+from .error_handling import (
     COUPLING_EDGE_UNKNOWN_ROLE,
     COUPLING_IMPORT_BIND_NOT_A_COMPONENT,
     COUPLING_IMPORT_NOT_LIBRARY,

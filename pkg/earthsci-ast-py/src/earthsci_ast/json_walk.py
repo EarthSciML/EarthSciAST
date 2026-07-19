@@ -78,7 +78,7 @@ class ExpressionTemplateError(EarthSciAstError):
     ``template_import_is_coupling_library``.
 
     The code constants themselves are defined in
-    :mod:`earthsci_ast.diagnostics`; their string values are part of the
+    :mod:`earthsci_ast.error_handling`; their string values are part of the
     cross-binding contract and must never change.
     """
 
