@@ -1130,54 +1130,26 @@ fn namespace_expr_scoped(
                 child_bound.insert(int_var.clone());
             }
 
-            // Clone to preserve EVERY structural/metadata field verbatim, then
-            // re-namespace only the expression-bearing children. The previous
-            // `..Default::default()` form silently dropped `expr`, `ranges`,
-            // `output_idx`, `reduce`, … — corrupting every array node the
-            // moment a model was flattened.
-            let mut out = node.clone();
-            out.args = node
-                .args
-                .iter()
-                .map(|a| namespace_expr_scoped(a, system_name, &child_bound, subsys))
-                .collect();
+            // Re-namespace every expression-bearing child through the crate's
+            // ONE canonical child-walker (`ExpressionNode::map_children`) rather
+            // than hand-listing fields. `map_children` clones the node first —
+            // preserving EVERY structural/metadata field verbatim, just like the
+            // old explicit clone — and covers the FULL child set, including the
+            // aggregate grouping `key` and template `bindings` that the previous
+            // hand-rolled enumeration silently omitted (leaving their variable
+            // references un-namespaced when flattening a coupled system).
+            let mut out = node
+                .map_children(&mut |c| namespace_expr_scoped(c, system_name, &child_bound, subsys));
+
+            // `wrt` is a differentiation-variable *string*, not a child `Expr`,
+            // so it is a node-local rewrite the child-walker does not (and must
+            // not) cover; apply it to the rebuilt node exactly as before.
             out.wrt = node.wrt.as_ref().map(|w| {
                 if w.contains('.') || w == "t" || child_bound.contains(w) {
                     w.clone()
                 } else {
                     format!("{system_name}.{w}")
                 }
-            });
-            out.expr = node
-                .expr
-                .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
-            out.filter = node
-                .filter
-                .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
-            out.lower = node
-                .lower
-                .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
-            out.upper = node
-                .upper
-                .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
-            out.values = node.values.as_ref().map(|vs| {
-                vs.iter()
-                    .map(|v| namespace_expr_scoped(v, system_name, &child_bound, subsys))
-                    .collect()
-            });
-            out.axes = node.axes.as_ref().map(|axes| {
-                axes.iter()
-                    .map(|(k, v)| {
-                        (
-                            k.clone(),
-                            namespace_expr_scoped(v, system_name, &child_bound, subsys),
-                        )
-                    })
-                    .collect()
             });
             Expr::Operator(out)
         }
@@ -1276,10 +1248,26 @@ fn reject_spatial_operators(expr: &Expr) -> Result<(), FlattenError> {
                 }
                 _ => {}
             }
-            for arg in &node.args {
-                reject_spatial_operators(arg)?;
+            // Recurse through the crate's ONE canonical child-walker so the gate
+            // sees operators hidden in EVERY expression-bearing sidecar field
+            // (`aggregate.expr` bodies, `filter` predicates, integral `lower`/
+            // `upper` bounds, `makearray.values`, `key`, `axes`, `bindings`) and
+            // not merely `args` — an `args`-only walk let a spatial/sugar op
+            // buried in a sidecar escape the gate entirely. The first error is
+            // captured and propagated unchanged, preserving the byte-identical
+            // `FlattenError::UnloweredOperator` diagnostic the callers expect.
+            let mut first_err: Option<FlattenError> = None;
+            node.for_each_child(&mut |child| {
+                if first_err.is_none()
+                    && let Err(e) = reject_spatial_operators(child)
+                {
+                    first_err = Some(e);
+                }
+            });
+            match first_err {
+                Some(e) => Err(e),
+                None => Ok(()),
             }
-            Ok(())
         }
     }
 }
@@ -2339,6 +2327,96 @@ mod tests {
                 assert!(message.contains("'C'"), "message: {message}");
             }
             other => panic!("expected DimensionPromotion, got {other:?}"),
+        }
+    }
+
+    // Bug F regression: the unlowered-operator gate must descend into
+    // expression-bearing sidecar fields, not merely `args`. A spatial/sugar op
+    // buried in an `aggregate.expr` body — unreachable from `args` — previously
+    // escaped `reject_spatial_operators` entirely. It must now be rejected with
+    // the byte-identical `UnloweredOperator` diagnostic.
+    #[test]
+    fn test_reject_spatial_operator_hidden_in_aggregate_body() {
+        let grad = Expr::Operator(ExpressionNode {
+            op: "grad".to_string(),
+            args: vec![Expr::Variable("u".to_string())],
+            ..Default::default()
+        });
+        let aggregate = Expr::Operator(ExpressionNode {
+            op: "aggregate".to_string(),
+            // Nothing reachable through `args`; the op lives only in `expr`.
+            args: vec![],
+            expr: Some(Box::new(grad)),
+            output_idx: Some(vec!["i".to_string()]),
+            reduce: Some("+".to_string()),
+            ..Default::default()
+        });
+        let err = reject_spatial_operators(&aggregate).unwrap_err();
+        assert!(
+            matches!(&err, FlattenError::UnloweredOperator { op } if op == "grad"),
+            "expected UnloweredOperator{{grad}}, got {err:?}"
+        );
+
+        // A spatial `D` (wrt a spatial axis) hidden in a `filter` predicate is
+        // likewise caught now that recursion goes through `for_each_child`.
+        let spatial_d = Expr::Operator(ExpressionNode {
+            op: "D".to_string(),
+            args: vec![Expr::Variable("u".to_string())],
+            wrt: Some("x".to_string()),
+            ..Default::default()
+        });
+        let filtered = Expr::Operator(ExpressionNode {
+            op: "aggregate".to_string(),
+            args: vec![Expr::Variable("w".to_string())],
+            filter: Some(Box::new(spatial_d)),
+            reduce: Some("+".to_string()),
+            ..Default::default()
+        });
+        let err = reject_spatial_operators(&filtered).unwrap_err();
+        assert!(
+            matches!(&err, FlattenError::UnloweredOperator { op } if op == "D"),
+            "expected UnloweredOperator{{D}}, got {err:?}"
+        );
+    }
+
+    // Bug E regression: `namespace_expr_scoped` must namespace variable
+    // references inside an aggregate grouping `key` (a sidecar the previous
+    // hand-rolled field enumeration omitted), while still honoring the bound
+    // loop indices introduced by `output_idx`.
+    #[test]
+    fn test_namespace_expr_covers_aggregate_key() {
+        let key = Expr::Operator(ExpressionNode {
+            op: "+".to_string(),
+            args: vec![
+                // A model variable — must be namespaced.
+                Expr::Variable("region".to_string()),
+                // A bound loop index — must stay bare.
+                Expr::Variable("i".to_string()),
+            ],
+            ..Default::default()
+        });
+        let aggregate = Expr::Operator(ExpressionNode {
+            op: "aggregate".to_string(),
+            args: vec![Expr::Variable("w".to_string())],
+            output_idx: Some(vec!["i".to_string()]),
+            key: Some(Box::new(key)),
+            reduce: Some("+".to_string()),
+            ..Default::default()
+        });
+        let out = namespace_expr(&aggregate, "sys");
+        match out {
+            Expr::Operator(node) => {
+                assert_eq!(node.args[0], Expr::Variable("sys.w".to_string()));
+                let key = node.key.expect("aggregate key preserved");
+                match *key {
+                    Expr::Operator(k) => {
+                        assert_eq!(k.args[0], Expr::Variable("sys.region".to_string()));
+                        assert_eq!(k.args[1], Expr::Variable("i".to_string()));
+                    }
+                    other => panic!("expected operator key, got {other:?}"),
+                }
+            }
+            other => panic!("expected operator node, got {other:?}"),
         }
     }
 }
