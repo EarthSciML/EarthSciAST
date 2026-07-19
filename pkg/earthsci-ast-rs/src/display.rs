@@ -344,7 +344,7 @@ impl Expr {
             Expr::Integer(n) => format_number_unicode(*n as f64),
             Expr::Variable(name) => nonfinite_string(name, Fmt::Unicode)
                 .unwrap_or_else(|| format_chemical_subscripts(name)),
-            Expr::Operator(node) => format_operator_unicode(node, parent_prec),
+            Expr::Operator(node) => format_operator(node, Fmt::Unicode, parent_prec),
         }
     }
 }
@@ -361,6 +361,42 @@ fn call_form(op_symbol: &str, args: &[Expr], render: impl Fn(&Expr) -> String) -
         op_symbol,
         args.iter().map(render).collect::<Vec<_>>().join(", ")
     )
+}
+
+/// Select the backend-specific spelling of a symbol that differs only by text
+/// (`·`/`\cdot`/`*`, `≥`/`\geq`/`>=`, …). The symbol table that lets the three
+/// operator printers share one traversal.
+fn pick(fmt: Fmt, unicode: &'static str, latex: &'static str, ascii: &'static str) -> &'static str {
+    match fmt {
+        Fmt::Unicode => unicode,
+        Fmt::Latex => latex,
+        Fmt::Ascii => ascii,
+    }
+}
+
+/// Render a binary infix op `a SYM b`, or fall back to a call form at any other
+/// arity. `infix`/`call` are the already-selected backend symbols.
+fn binary_or_call(
+    args: &[Expr],
+    infix: &str,
+    call: &str,
+    render: impl Fn(&Expr) -> String,
+) -> String {
+    if args.len() == 2 {
+        format!("{} {} {}", render(&args[0]), infix, render(&args[1]))
+    } else {
+        call_form(call, args, render)
+    }
+}
+
+/// Render an n-ary op by joining its (≥2) operands with `sep`, or fall back to a
+/// call form. `sep`/`call` are the already-selected backend symbols.
+fn join_or_call(args: &[Expr], sep: &str, call: &str, render: impl Fn(&Expr) -> String) -> String {
+    if args.len() >= 2 {
+        args.iter().map(&render).collect::<Vec<_>>().join(sep)
+    } else {
+        call_form(call, args, render)
+    }
 }
 
 /// The three text-rendering backends. Shared by the structural / array-query
@@ -385,11 +421,7 @@ fn render_fmt(expr: &Expr, fmt: Fmt) -> String {
 /// Render an operator node as a scalar expression in the requested backend
 /// (used by `broadcast`, which renders identically to its elementwise `fn`).
 fn render_operator(node: &ExpressionNode, fmt: Fmt) -> String {
-    match fmt {
-        Fmt::Unicode => format_operator_unicode(node, 0),
-        Fmt::Latex => format_operator_latex(node, 0),
-        Fmt::Ascii => format_operator_ascii(node, 0),
-    }
+    format_operator(node, fmt, 0)
 }
 
 /// Escape LaTeX-special underscores in a bare operator / identifier name.
@@ -1034,10 +1066,17 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
     }
 }
 
-fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
+/// Render a scalar operator node (arithmetic, comparisons, boolean ops,
+/// elementary functions, `D`, `Pre`, and the generic call fallback) in the
+/// requested backend. The three backends share one traversal and per-op symbol
+/// table (`pick`); only genuinely shape-divergent ops keep a per-`fmt` leaf:
+/// LaTeX `\frac`/`\begin{cases}`/`\exp`/juxtaposition-multiplication, and the
+/// Unicode integer-exponent superscripts and `⌊⌋`/`⌈⌉`/`|·|`/`√` delimiters.
+/// Mirrors the `format_structural_op` unification for closed-core ops.
+fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String {
     // Closed-core structural / array-query ops (and `integral`) render from
     // their non-`args` fields and are never parenthesized by precedence.
-    if let Some(s) = format_structural_op(node, Fmt::Unicode) {
+    if let Some(s) = format_structural_op(node, fmt) {
         return s;
     }
 
@@ -1047,15 +1086,21 @@ fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
     let op_prec = get_precedence(op);
     let needs_parens = op_prec > 0 && op_prec <= parent_prec;
     // Renders an argument at precedence 0 (used inside delimited contexts).
-    let r0 = |arg: &Expr| arg.to_unicode_with_precedence(0);
+    let r0 = |arg: &Expr| render_at(arg, fmt, 0);
+
+    // `\frac{...}{...}` groups visually, so the LaTeX fraction itself never
+    // needs parentheses and its numerator/denominator render at precedence 0.
+    if fmt == Fmt::Latex && op == "/" && args.len() == 2 {
+        return format!("\\frac{{{}}}{{{}}}", r0(&args[0]), r0(&args[1]));
+    }
 
     let result = match op {
         "+" => {
-            if let Some(s) = sum_as_difference(args, op_prec, Fmt::Unicode) {
+            if let Some(s) = sum_as_difference(args, op_prec, fmt) {
                 s
             } else if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| render_assoc_operand(arg, "+", op_prec, Fmt::Unicode))
+                    .map(|arg| render_assoc_operand(arg, "+", op_prec, fmt))
                     .collect::<Vec<_>>()
                     .join(" + ")
             } else {
@@ -1063,59 +1108,83 @@ fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
             }
         }
         "-" => {
+            let minus = pick(fmt, "−", "-", "-");
             if args.len() == 1 {
-                format!("−{}", args[0].to_unicode_with_precedence(op_prec))
+                format!("{minus}{}", render_at(&args[0], fmt, op_prec))
             } else if args.len() == 2 {
                 // Left-associative: the right operand renders at op_prec + 1
                 // so `a − (b − c)` keeps its parentheses.
                 format!(
-                    "{} − {}",
-                    args[0].to_unicode_with_precedence(op_prec),
-                    args[1].to_unicode_with_precedence(op_prec + 1)
+                    "{} {minus} {}",
+                    render_at(&args[0], fmt, op_prec),
+                    render_at(&args[1], fmt, op_prec + 1)
                 )
             } else {
-                call_form("−", args, r0)
+                call_form(minus, args, r0)
             }
         }
         "*" => {
             if args.len() >= 2 {
+                // A LaTeX product of already-typeset factors uses implicit
+                // juxtaposition; the other backends use their explicit symbol.
+                let sep: &str = match fmt {
+                    Fmt::Unicode => "·",
+                    Fmt::Ascii => " * ",
+                    Fmt::Latex if latex_mul_juxtapose(args) => " ",
+                    Fmt::Latex => " \\cdot ",
+                };
                 args.iter()
-                    .map(|arg| render_assoc_operand(arg, "*", op_prec, Fmt::Unicode))
+                    .map(|arg| render_assoc_operand(arg, "*", op_prec, fmt))
                     .collect::<Vec<_>>()
-                    .join("·")
+                    .join(sep)
             } else {
-                call_form("·", args, r0)
+                call_form(pick(fmt, "·", "\\cdot", "*"), args, r0)
             }
         }
         "/" => {
+            // Binary LaTeX `/` is handled by the `\frac` early return above.
             if args.len() == 2 {
                 // The left operand of a left-associative `/` only needs parens
                 // when it binds *strictly* looser (op_prec - 1), so `a·b/c`
                 // stays unparenthesized while `(a + b)/c` does not.
                 format!(
-                    "{}/{}",
-                    args[0].to_unicode_with_precedence(op_prec - 1),
-                    args[1].to_unicode_with_precedence(op_prec + 1)
+                    "{}{}{}",
+                    render_at(&args[0], fmt, op_prec - 1),
+                    pick(fmt, "/", "/", " / "),
+                    render_at(&args[1], fmt, op_prec + 1)
                 )
             } else {
-                call_form("÷", args, r0)
+                call_form(pick(fmt, "÷", "\\div", "/"), args, r0)
             }
         }
         "^" => {
             if args.len() == 2 {
-                // Integer exponents render as Unicode superscripts.
-                if let Some(n) = integer_exponent(&args[1]) {
-                    format!(
-                        "{}{}",
-                        args[0].to_unicode_with_precedence(op_prec),
-                        to_superscript_str(&n.to_string())
-                    )
-                } else {
-                    format!(
+                match fmt {
+                    // Integer exponents render as Unicode superscripts.
+                    Fmt::Unicode => match integer_exponent(&args[1]) {
+                        Some(n) => format!(
+                            "{}{}",
+                            render_at(&args[0], fmt, op_prec),
+                            to_superscript_str(&n.to_string())
+                        ),
+                        None => format!(
+                            "{}^{}",
+                            render_at(&args[0], fmt, op_prec),
+                            render_at(&args[1], fmt, op_prec + 1)
+                        ),
+                    },
+                    // The exponent sits inside `^{...}`, which groups visually,
+                    // so it renders at precedence 0.
+                    Fmt::Latex => format!(
+                        "{}^{{{}}}",
+                        render_at(&args[0], fmt, op_prec),
+                        r0(&args[1])
+                    ),
+                    Fmt::Ascii => format!(
                         "{}^{}",
-                        args[0].to_unicode_with_precedence(op_prec),
-                        args[1].to_unicode_with_precedence(op_prec + 1)
-                    )
+                        render_at(&args[0], fmt, op_prec),
+                        render_at(&args[1], fmt, op_prec + 1)
+                    ),
                 }
             } else {
                 call_form("^", args, r0)
@@ -1125,179 +1194,238 @@ fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
             // Derivative operator; the operand is parenthesized when it is an
             // operator node (`∂(x + y)/∂t`, never `∂x + y/∂t`).
             if let (Some(wrt_var), [arg]) = (wrt, args) {
-                format!(
-                    "∂{}/∂{}",
-                    wrap_if_op(arg, Fmt::Unicode),
-                    format_chemical_subscripts(wrt_var)
-                )
+                match fmt {
+                    Fmt::Unicode => format!(
+                        "∂{}/∂{}",
+                        wrap_if_op(arg, fmt),
+                        format_chemical_subscripts(wrt_var)
+                    ),
+                    Fmt::Latex => format!(
+                        "\\frac{{\\partial {}}}{{\\partial {}}}",
+                        wrap_if_op(arg, fmt),
+                        wrt_var
+                    ),
+                    // ASCII fraction form `D(operand)/Dt`.
+                    Fmt::Ascii => format!("D({})/D{wrt_var}", r0(arg)),
+                }
             } else {
                 call_form("D", args, r0)
             }
         }
-        ">" => {
-            if args.len() == 2 {
-                format!("{} > {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form(">", args, r0)
-            }
-        }
-        "<" => {
-            if args.len() == 2 {
-                format!("{} < {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("<", args, r0)
-            }
-        }
-        ">=" => {
-            if args.len() == 2 {
-                format!("{} ≥ {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form(">=", args, r0)
-            }
-        }
-        "<=" => {
-            if args.len() == 2 {
-                format!("{} ≤ {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("<=", args, r0)
-            }
-        }
-        "=" | "==" => {
-            if args.len() == 2 {
-                format!("{} = {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("=", args, r0)
-            }
-        }
-        "!=" => {
-            if args.len() == 2 {
-                format!("{} ≠ {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("!=", args, r0)
-            }
-        }
-        "and" => {
-            if args.len() >= 2 {
-                args.iter().map(r0).collect::<Vec<_>>().join(" ∧ ")
-            } else {
-                call_form("and", args, r0)
-            }
-        }
-        "or" => {
-            if args.len() >= 2 {
-                args.iter().map(r0).collect::<Vec<_>>().join(" ∨ ")
-            } else {
-                call_form("or", args, r0)
-            }
-        }
+        ">" => binary_or_call(args, ">", ">", r0),
+        "<" => binary_or_call(args, "<", "<", r0),
+        ">=" => binary_or_call(
+            args,
+            pick(fmt, "≥", "\\geq", ">="),
+            pick(fmt, ">=", "\\geq", ">="),
+            r0,
+        ),
+        "<=" => binary_or_call(
+            args,
+            pick(fmt, "≤", "\\leq", "<="),
+            pick(fmt, "<=", "\\leq", "<="),
+            r0,
+        ),
+        "=" | "==" => binary_or_call(
+            args,
+            pick(fmt, "=", "=", "=="),
+            pick(fmt, "=", "=", "=="),
+            r0,
+        ),
+        "!=" => binary_or_call(
+            args,
+            pick(fmt, "≠", "\\neq", "!="),
+            pick(fmt, "!=", "\\neq", "!="),
+            r0,
+        ),
+        "and" => join_or_call(
+            args,
+            pick(fmt, " ∧ ", " \\land ", " and "),
+            pick(fmt, "and", "\\land", "and"),
+            r0,
+        ),
+        "or" => join_or_call(
+            args,
+            pick(fmt, " ∨ ", " \\lor ", " or "),
+            pick(fmt, "or", "\\lor", "or"),
+            r0,
+        ),
         "not" => {
             if args.len() == 1 {
-                // Add parentheses for complex expressions
+                // Parenthesize a complex operand (`¬(x == 0)`).
+                let prefix = pick(fmt, "¬", "\\neg ", "not ");
                 if matches!(&args[0], Expr::Operator(_)) {
-                    format!("¬({})", r0(&args[0]))
+                    format!("{prefix}({})", r0(&args[0]))
                 } else {
-                    format!("¬{}", r0(&args[0]))
+                    format!("{prefix}{}", r0(&args[0]))
                 }
             } else {
-                call_form("not", args, r0)
+                call_form(pick(fmt, "not", "\\neg", "not"), args, r0)
             }
         }
+        "exp" => match fmt {
+            // LaTeX wraps a compound argument in `\left(…\right)`.
+            Fmt::Latex => {
+                if let [arg] = args {
+                    if matches!(arg, Expr::Operator(_)) {
+                        format!("\\exp\\left({}\\right)", r0(arg))
+                    } else {
+                        format!("\\exp({})", r0(arg))
+                    }
+                } else {
+                    call_form("\\exp", args, r0)
+                }
+            }
+            _ => call_form("exp", args, r0),
+        },
+        "ifelse" => match fmt {
+            Fmt::Latex if args.len() == 3 => format!(
+                "\\begin{{cases}} {} & \\text{{if }} {} \\\\ {} & \\text{{otherwise}} \\end{{cases}}",
+                r0(&args[1]),
+                r0(&args[0]),
+                r0(&args[2])
+            ),
+            Fmt::Latex => call_form("\\mathrm{ifelse}", args, r0),
+            _ => call_form("ifelse", args, r0),
+        },
         "log" => {
             if args.len() == 1 {
-                call_form("ln", args, r0)
+                call_form(pick(fmt, "ln", "\\ln", "log"), args, r0)
             } else {
-                call_form("log", args, r0)
+                call_form(pick(fmt, "log", "\\log", "log"), args, r0)
             }
         }
         "log10" => {
-            if args.len() == 1 {
-                call_form("log₁₀", args, r0)
+            let sym = if args.len() == 1 {
+                pick(fmt, "log₁₀", "\\log_{10}", "log10")
             } else {
-                call_form("log10", args, r0)
-            }
+                pick(fmt, "log10", "\\log_{10}", "log10")
+            };
+            call_form(sym, args, r0)
         }
-        "sqrt" => {
-            if let [arg] = args {
-                // Parenthesize a compound radicand for clarity.
-                if matches!(arg, Expr::Operator(_)) {
-                    format!("√({})", r0(arg))
+        "sqrt" => match fmt {
+            Fmt::Unicode => {
+                if let [arg] = args {
+                    // Parenthesize a compound radicand for clarity.
+                    if matches!(arg, Expr::Operator(_)) {
+                        format!("√({})", r0(arg))
+                    } else {
+                        format!("√{}", r0(arg))
+                    }
                 } else {
-                    format!("√{}", r0(arg))
+                    call_form("sqrt", args, r0)
                 }
-            } else {
-                call_form("sqrt", args, r0)
             }
-        }
+            Fmt::Latex => format!(
+                "\\sqrt{{{}}}",
+                args.iter().map(&r0).collect::<Vec<_>>().join(", ")
+            ),
+            Fmt::Ascii => call_form("sqrt", args, r0),
+        },
         "asin" => {
-            if args.len() == 1 {
-                call_form("arcsin", args, r0)
+            let sym = if args.len() == 1 {
+                pick(fmt, "arcsin", "\\arcsin", "asin")
             } else {
-                call_form("asin", args, r0)
-            }
+                pick(fmt, "asin", "\\arcsin", "asin")
+            };
+            call_form(sym, args, r0)
         }
         "acos" => {
-            if args.len() == 1 {
-                call_form("arccos", args, r0)
+            let sym = if args.len() == 1 {
+                pick(fmt, "arccos", "\\arccos", "acos")
             } else {
-                call_form("acos", args, r0)
-            }
+                pick(fmt, "acos", "\\arccos", "acos")
+            };
+            call_form(sym, args, r0)
         }
         "atan" => {
-            if args.len() == 1 {
-                call_form("arctan", args, r0)
+            let sym = if args.len() == 1 {
+                pick(fmt, "arctan", "\\arctan", "atan")
             } else {
-                call_form("atan", args, r0)
-            }
+                pick(fmt, "atan", "\\arctan", "atan")
+            };
+            call_form(sym, args, r0)
         }
-        "abs" => {
-            if args.len() == 1 {
-                format!("|{}|", r0(&args[0]))
-            } else {
-                call_form("abs", args, r0)
+        "abs" => match fmt {
+            Fmt::Unicode => {
+                if args.len() == 1 {
+                    format!("|{}|", r0(&args[0]))
+                } else {
+                    call_form("abs", args, r0)
+                }
             }
-        }
-        "sign" => call_form("sgn", args, r0),
-        "floor" => {
-            if args.len() == 1 {
-                format!("⌊{}⌋", r0(&args[0]))
-            } else {
-                call_form("floor", args, r0)
+            Fmt::Latex => format!("|{}|", args.iter().map(&r0).collect::<Vec<_>>().join(", ")),
+            Fmt::Ascii => call_form("abs", args, r0),
+        },
+        "sign" => call_form(pick(fmt, "sgn", "\\mathrm{sgn}", "sign"), args, r0),
+        "floor" => match fmt {
+            Fmt::Unicode => {
+                if args.len() == 1 {
+                    format!("⌊{}⌋", r0(&args[0]))
+                } else {
+                    call_form("floor", args, r0)
+                }
             }
-        }
-        "ceil" => {
-            if args.len() == 1 {
-                format!("⌈{}⌉", r0(&args[0]))
-            } else {
-                call_form("ceil", args, r0)
+            Fmt::Latex => format!(
+                "\\lfloor {} \\rfloor",
+                args.iter().map(&r0).collect::<Vec<_>>().join(", ")
+            ),
+            Fmt::Ascii => call_form("floor", args, r0),
+        },
+        "ceil" => match fmt {
+            Fmt::Unicode => {
+                if args.len() == 1 {
+                    format!("⌈{}⌉", r0(&args[0]))
+                } else {
+                    call_form("ceil", args, r0)
+                }
             }
-        }
+            Fmt::Latex => format!(
+                "\\lceil {} \\rceil",
+                args.iter().map(&r0).collect::<Vec<_>>().join(", ")
+            ),
+            Fmt::Ascii => call_form("ceil", args, r0),
+        },
         "asinh" => {
-            if args.len() == 1 {
-                call_form("sinh⁻¹", args, r0)
+            let sym = if args.len() == 1 {
+                pick(fmt, "sinh⁻¹", "\\sinh^{-1}", "asinh")
             } else {
-                call_form("asinh", args, r0)
-            }
+                pick(fmt, "asinh", "\\sinh^{-1}", "asinh")
+            };
+            call_form(sym, args, r0)
         }
         "acosh" => {
-            if args.len() == 1 {
-                call_form("cosh⁻¹", args, r0)
+            let sym = if args.len() == 1 {
+                pick(fmt, "cosh⁻¹", "\\cosh^{-1}", "acosh")
             } else {
-                call_form("acosh", args, r0)
-            }
+                pick(fmt, "acosh", "\\cosh^{-1}", "acosh")
+            };
+            call_form(sym, args, r0)
         }
         "atanh" => {
-            if args.len() == 1 {
-                call_form("tanh⁻¹", args, r0)
+            let sym = if args.len() == 1 {
+                pick(fmt, "tanh⁻¹", "\\tanh^{-1}", "atanh")
             } else {
-                call_form("atanh", args, r0)
-            }
+                pick(fmt, "atanh", "\\tanh^{-1}", "atanh")
+            };
+            call_form(sym, args, r0)
+        }
+        "min" => call_form(pick(fmt, "min", "\\min", "min"), args, r0),
+        "max" => call_form(pick(fmt, "max", "\\max", "max"), args, r0),
+        "atan2" => call_form(pick(fmt, "atan2", "\\mathrm{atan2}", "atan2"), args, r0),
+        "sin" | "cos" | "tan" | "sinh" | "cosh" | "tanh" => {
+            // LaTeX prefixes a backslash (`\sin`); the others use the bare name.
+            let latex = format!("\\{op}");
+            call_form(if fmt == Fmt::Latex { latex.as_str() } else { op }, args, r0)
         }
         // `Pre` renders as a call form, matching the cross-language contract.
-        "Pre" => call_form("Pre", args, r0),
-        // Genuinely call-shaped operators (exp, ifelse, min/max, trig,
-        // hyperbolics, atan2, ...) and unknown operators (including the
-        // open-tier rewrite-target sugar grad/div/laplacian).
-        _ => call_form(op, args, r0),
+        "Pre" => call_form(pick(fmt, "Pre", "\\mathrm{Pre}", "Pre"), args, r0),
+        // Generic fallback: open-tier sugar (grad/div/laplacian) and any
+        // unknown user op. LaTeX wraps in `\mathrm{…}`, escaping underscores.
+        _ => {
+            let latex = format!("\\mathrm{{{}}}", latex_name(op));
+            call_form(if fmt == Fmt::Latex { latex.as_str() } else { op }, args, r0)
+        }
     };
 
     if needs_parens {
@@ -1329,7 +1457,7 @@ fn to_latex_prec(expr: &Expr, parent_prec: i32) -> String {
         Expr::Variable(name) => {
             nonfinite_string(name, Fmt::Latex).unwrap_or_else(|| format_variable_latex(name))
         }
-        Expr::Operator(node) => format_operator_latex(node, parent_prec),
+        Expr::Operator(node) => format_operator(node, Fmt::Latex, parent_prec),
     }
 }
 
@@ -1599,233 +1727,6 @@ fn format_chemical_latex(variable: &str) -> String {
     format!("\\mathrm{{{variable}}}")
 }
 
-fn format_operator_latex(node: &ExpressionNode, parent_prec: i32) -> String {
-    // Closed-core structural / array-query ops (and `integral`) render from
-    // their non-`args` fields and are never parenthesized by precedence.
-    if let Some(s) = format_structural_op(node, Fmt::Latex) {
-        return s;
-    }
-
-    let op = node.op.as_str();
-    let args = node.args.as_slice();
-    let wrt = &node.wrt;
-    let op_prec = get_precedence(op);
-    let needs_parens = op_prec > 0 && op_prec <= parent_prec;
-    // Renders an argument at precedence 0 (used inside delimited contexts).
-    let r0 = |arg: &Expr| to_latex_prec(arg, 0);
-
-    // `\frac{...}{...}` groups visually, so the fraction itself never needs
-    // parentheses and its numerator/denominator render at precedence 0.
-    if op == "/" && args.len() == 2 {
-        return format!("\\frac{{{}}}{{{}}}", r0(&args[0]), r0(&args[1]));
-    }
-
-    let result = match op {
-        "+" => {
-            if let Some(s) = sum_as_difference(args, op_prec, Fmt::Latex) {
-                s
-            } else if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| render_assoc_operand(arg, "+", op_prec, Fmt::Latex))
-                    .collect::<Vec<_>>()
-                    .join(" + ")
-            } else {
-                call_form("+", args, r0)
-            }
-        }
-        "-" => {
-            if args.len() == 1 {
-                format!("-{}", to_latex_prec(&args[0], op_prec))
-            } else if args.len() == 2 {
-                // Left-associative: the right operand renders at op_prec + 1
-                // so `a - (b - c)` keeps its parentheses.
-                format!(
-                    "{} - {}",
-                    to_latex_prec(&args[0], op_prec),
-                    to_latex_prec(&args[1], op_prec + 1)
-                )
-            } else {
-                call_form("-", args, r0)
-            }
-        }
-        "*" => {
-            if args.len() >= 2 {
-                // A product of already-typeset factors (`\mathrm{O_3}`) uses
-                // implicit juxtaposition; plain symbols use `\cdot`.
-                let sep = if latex_mul_juxtapose(args) {
-                    " "
-                } else {
-                    " \\cdot "
-                };
-                args.iter()
-                    .map(|arg| render_assoc_operand(arg, "*", op_prec, Fmt::Latex))
-                    .collect::<Vec<_>>()
-                    .join(sep)
-            } else {
-                call_form("\\cdot", args, r0)
-            }
-        }
-        // Binary `/` renders as `\frac` above; anything else falls back.
-        "/" => call_form("\\div", args, r0),
-        "^" => {
-            if args.len() == 2 {
-                // The base is parenthesized by the precedence rule (so
-                // `(a + b)^{2}` keeps visible parens); the exponent sits
-                // inside `^{...}`, which groups visually, at precedence 0.
-                format!("{}^{{{}}}", to_latex_prec(&args[0], op_prec), r0(&args[1]))
-            } else {
-                call_form("^", args, r0)
-            }
-        }
-        "D" => {
-            if let (Some(wrt_var), [arg]) = (wrt, args) {
-                // Operand parenthesized when it is an operator node.
-                format!(
-                    "\\frac{{\\partial {}}}{{\\partial {}}}",
-                    wrap_if_op(arg, Fmt::Latex),
-                    wrt_var
-                )
-            } else {
-                call_form("D", args, r0)
-            }
-        }
-        "exp" => {
-            if let [arg] = args {
-                if matches!(arg, Expr::Operator(_)) {
-                    format!("\\exp\\left({}\\right)", r0(arg))
-                } else {
-                    format!("\\exp({})", r0(arg))
-                }
-            } else {
-                call_form("\\exp", args, r0)
-            }
-        }
-        "ifelse" => {
-            if args.len() == 3 {
-                format!(
-                    "\\begin{{cases}} {} & \\text{{if }} {} \\\\ {} & \\text{{otherwise}} \\end{{cases}}",
-                    r0(&args[1]),
-                    r0(&args[0]),
-                    r0(&args[2])
-                )
-            } else {
-                call_form("\\mathrm{ifelse}", args, r0)
-            }
-        }
-        "and" => {
-            if args.len() >= 2 {
-                args.iter().map(r0).collect::<Vec<_>>().join(" \\land ")
-            } else {
-                call_form("\\land", args, r0)
-            }
-        }
-        "or" => {
-            if args.len() >= 2 {
-                args.iter().map(r0).collect::<Vec<_>>().join(" \\lor ")
-            } else {
-                call_form("\\lor", args, r0)
-            }
-        }
-        "not" => {
-            if args.len() == 1 {
-                // Add parentheses for complex expressions
-                if matches!(&args[0], Expr::Operator(_)) {
-                    format!("\\neg ({})", r0(&args[0]))
-                } else {
-                    format!("\\neg {}", r0(&args[0]))
-                }
-            } else {
-                call_form("\\neg", args, r0)
-            }
-        }
-        ">" => {
-            if args.len() == 2 {
-                format!("{} > {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form(">", args, r0)
-            }
-        }
-        "<" => {
-            if args.len() == 2 {
-                format!("{} < {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("<", args, r0)
-            }
-        }
-        ">=" => {
-            if args.len() == 2 {
-                format!("{} \\geq {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("\\geq", args, r0)
-            }
-        }
-        "<=" => {
-            if args.len() == 2 {
-                format!("{} \\leq {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("\\leq", args, r0)
-            }
-        }
-        "=" | "==" => {
-            if args.len() == 2 {
-                format!("{} = {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("=", args, r0)
-            }
-        }
-        "!=" => {
-            if args.len() == 2 {
-                format!("{} \\neq {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("\\neq", args, r0)
-            }
-        }
-        "log" => {
-            if args.len() == 1 {
-                call_form("\\ln", args, r0)
-            } else {
-                call_form("\\log", args, r0)
-            }
-        }
-        "log10" => call_form("\\log_{10}", args, r0),
-        "sqrt" => format!(
-            "\\sqrt{{{}}}",
-            args.iter().map(r0).collect::<Vec<_>>().join(", ")
-        ),
-        "asin" => call_form("\\arcsin", args, r0),
-        "acos" => call_form("\\arccos", args, r0),
-        "atan" => call_form("\\arctan", args, r0),
-        "abs" => format!("|{}|", args.iter().map(r0).collect::<Vec<_>>().join(", ")),
-        "sign" => call_form("\\mathrm{sgn}", args, r0),
-        "floor" => format!(
-            "\\lfloor {} \\rfloor",
-            args.iter().map(r0).collect::<Vec<_>>().join(", ")
-        ),
-        "ceil" => format!(
-            "\\lceil {} \\rceil",
-            args.iter().map(r0).collect::<Vec<_>>().join(", ")
-        ),
-        "min" => call_form("\\min", args, r0),
-        "max" => call_form("\\max", args, r0),
-        "atan2" => call_form("\\mathrm{atan2}", args, r0),
-        "sin" | "cos" | "tan" | "sinh" | "cosh" | "tanh" => call_form(&format!("\\{op}"), args, r0),
-        "asinh" => call_form("\\sinh^{-1}", args, r0),
-        "acosh" => call_form("\\cosh^{-1}", args, r0),
-        "atanh" => call_form("\\tanh^{-1}", args, r0),
-        // `Pre` renders as a call form, matching the cross-language contract.
-        "Pre" => call_form("\\mathrm{Pre}", args, r0),
-        // Generic fallback for open-tier sugar (grad/div/laplacian) and any
-        // unknown user op: `\mathrm{ESC(name)}(args)`, escaping underscores.
-        _ => call_form(&format!("\\mathrm{{{}}}", latex_name(op)), args, r0),
-    };
-
-    if needs_parens {
-        format!("({result})")
-    } else {
-        result
-    }
-}
-
 /// Convert an expression to ASCII representation
 pub fn to_ascii(expr: &Expr) -> String {
     to_ascii_prec(expr, 0)
@@ -1844,177 +1745,7 @@ fn to_ascii_prec(expr: &Expr, parent_prec: i32) -> String {
         Expr::Variable(name) => {
             nonfinite_string(name, Fmt::Ascii).unwrap_or_else(|| greek_to_ascii(name))
         }
-        Expr::Operator(node) => format_operator_ascii(node, parent_prec),
-    }
-}
-
-fn format_operator_ascii(node: &ExpressionNode, parent_prec: i32) -> String {
-    // Closed-core structural / array-query ops (and `integral`) render from
-    // their non-`args` fields and are never parenthesized by precedence.
-    if let Some(s) = format_structural_op(node, Fmt::Ascii) {
-        return s;
-    }
-
-    let op = node.op.as_str();
-    let args = node.args.as_slice();
-    let wrt = &node.wrt;
-    let op_prec = get_precedence(op);
-    let needs_parens = op_prec > 0 && op_prec <= parent_prec;
-    // Renders an argument at precedence 0 (used inside delimited contexts).
-    let r0 = |arg: &Expr| to_ascii_prec(arg, 0);
-
-    let result = match op {
-        "+" => {
-            if let Some(s) = sum_as_difference(args, op_prec, Fmt::Ascii) {
-                s
-            } else if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| render_assoc_operand(arg, "+", op_prec, Fmt::Ascii))
-                    .collect::<Vec<_>>()
-                    .join(" + ")
-            } else {
-                call_form("+", args, r0)
-            }
-        }
-        "-" => {
-            if args.len() == 1 {
-                format!("-{}", to_ascii_prec(&args[0], op_prec))
-            } else if args.len() == 2 {
-                // Left-associative: the right operand renders at op_prec + 1
-                // so `a - (b - c)` keeps its parentheses.
-                format!(
-                    "{} - {}",
-                    to_ascii_prec(&args[0], op_prec),
-                    to_ascii_prec(&args[1], op_prec + 1)
-                )
-            } else {
-                call_form("-", args, r0)
-            }
-        }
-        "*" => {
-            if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| render_assoc_operand(arg, "*", op_prec, Fmt::Ascii))
-                    .collect::<Vec<_>>()
-                    .join(" * ")
-            } else {
-                call_form("*", args, r0)
-            }
-        }
-        "/" => {
-            if args.len() == 2 {
-                // Left operand needs parens only when strictly looser-binding
-                // (op_prec - 1), so `a * b / c` stays unparenthesized.
-                format!(
-                    "{} / {}",
-                    to_ascii_prec(&args[0], op_prec - 1),
-                    to_ascii_prec(&args[1], op_prec + 1)
-                )
-            } else {
-                call_form("/", args, r0)
-            }
-        }
-        "^" => {
-            if args.len() == 2 {
-                format!(
-                    "{}^{}",
-                    to_ascii_prec(&args[0], op_prec),
-                    to_ascii_prec(&args[1], op_prec + 1)
-                )
-            } else {
-                call_form("^", args, r0)
-            }
-        }
-        "D" => {
-            if let (Some(wrt_var), [arg]) = (wrt, args) {
-                // ASCII derivative uses the fraction form `D(operand)/Dt`
-                // (mirrors unicode/latex `∂x/∂t`); the operand sits inside the
-                // `D(...)` parentheses, so `D(x + y)/Dt`.
-                format!("D({})/D{wrt_var}", r0(arg))
-            } else {
-                call_form("D", args, r0)
-            }
-        }
-        ">" => {
-            if args.len() == 2 {
-                format!("{} > {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form(">", args, r0)
-            }
-        }
-        "<" => {
-            if args.len() == 2 {
-                format!("{} < {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("<", args, r0)
-            }
-        }
-        ">=" => {
-            if args.len() == 2 {
-                format!("{} >= {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form(">=", args, r0)
-            }
-        }
-        "<=" => {
-            if args.len() == 2 {
-                format!("{} <= {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("<=", args, r0)
-            }
-        }
-        "=" | "==" => {
-            if args.len() == 2 {
-                format!("{} == {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("==", args, r0)
-            }
-        }
-        "!=" => {
-            if args.len() == 2 {
-                format!("{} != {}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("!=", args, r0)
-            }
-        }
-        "and" => {
-            if args.len() >= 2 {
-                args.iter().map(r0).collect::<Vec<_>>().join(" and ")
-            } else {
-                call_form("and", args, r0)
-            }
-        }
-        "or" => {
-            if args.len() >= 2 {
-                args.iter().map(r0).collect::<Vec<_>>().join(" or ")
-            } else {
-                call_form("or", args, r0)
-            }
-        }
-        "not" => {
-            if args.len() == 1 {
-                // Parenthesize a complex operand: `not (x == 0)`.
-                if matches!(&args[0], Expr::Operator(_)) {
-                    format!("not ({})", r0(&args[0]))
-                } else {
-                    format!("not {}", r0(&args[0]))
-                }
-            } else {
-                call_form("not", args, r0)
-            }
-        }
-        // `Pre` renders as a call form, matching the cross-language contract.
-        "Pre" => call_form("Pre", args, r0),
-        // Genuinely call-shaped operators (log, sqrt, trig, min/max, ...) and
-        // unknown operators (including the open-tier rewrite-target sugar
-        // grad/div/laplacian).
-        _ => call_form(op, args, r0),
-    };
-
-    if needs_parens {
-        format!("({result})")
-    } else {
-        result
+        Expr::Operator(node) => format_operator(node, Fmt::Ascii, parent_prec),
     }
 }
 
@@ -2596,5 +2327,132 @@ mod tests {
         let big_int = Expr::Integer(15000);
         assert_eq!(to_unicode(&big_int), "1.5×10⁴");
         assert_eq!(to_ascii(&big_int), "1.5e4");
+    }
+
+    /// Byte-for-byte guard for the unified `format_operator` path: exercises
+    /// every per-`fmt` symbol-table entry and every shape-divergent leaf
+    /// (LaTeX `\frac`/`\begin{cases}`/`\exp`/juxtaposition, Unicode
+    /// superscripts and `⌊⌋`/`⌈⌉`/`|·|`/`√`, the three `D` forms, and the
+    /// infix-vs-call symbol split for `≥`/`≤`/`≠`) across all three backends.
+    #[test]
+    fn test_operator_matrix_all_backends() {
+        fn opn(op: &str, args: Vec<Expr>) -> Expr {
+            Expr::Operator(ExpressionNode {
+                op: op.to_string(),
+                args,
+                ..Default::default()
+            })
+        }
+        fn dop(wrt: &str, arg: Expr) -> Expr {
+            Expr::Operator(ExpressionNode {
+                op: "D".to_string(),
+                args: vec![arg],
+                wrt: Some(wrt.to_string()),
+                ..Default::default()
+            })
+        }
+        let a = || var("a");
+        let b = || var("b");
+        let c = || var("c");
+        let ab = || opn("+", vec![a(), b()]);
+        // (node, unicode, latex, ascii) — expected values captured from the
+        // three pre-unification printers, so any drift fails loudly.
+        let chk = |e: Expr, u: &str, l: &str, s: &str| {
+            assert_eq!(to_unicode(&e), u, "unicode");
+            assert_eq!(to_latex(&e), l, "latex");
+            assert_eq!(to_ascii(&e), s, "ascii");
+        };
+
+        // multiplication (·/juxtaposition/*) and precedence parens
+        chk(opn("*", vec![a(), b()]), "a·b", r"a \cdot b", "a * b");
+        chk(opn("*", vec![ab(), c()]), "(a + b)·c", r"(a + b) \cdot c", "(a + b) * c");
+        chk(
+            opn("*", vec![var("\\mathrm{O_3}"), var("\\mathrm{N_2}")]),
+            r"\mathrm{O_3}·\mathrm{N_2}",
+            r"\mathrm{O_3} \mathrm{N_2}",
+            r"\mathrm{O_3} * \mathrm{N_2}",
+        );
+        // division (`\frac` is the LaTeX shape-divergent leaf)
+        chk(opn("/", vec![a(), b()]), "a/b", r"\frac{a}{b}", "a / b");
+        chk(opn("/", vec![ab(), c()]), "(a + b)/c", r"\frac{a + b}{c}", "(a + b) / c");
+        chk(
+            opn("*", vec![a(), opn("/", vec![b(), c()])]),
+            "a·(b/c)",
+            r"a \cdot \frac{b}{c}",
+            "a * (b / c)",
+        );
+        // powers: LaTeX braces, Unicode integer superscripts
+        chk(opn("^", vec![a(), b()]), "a^b", r"a^{b}", "a^b");
+        chk(opn("^", vec![a(), Expr::Integer(2)]), "a²", r"a^{2}", "a^2");
+        chk(opn("^", vec![a(), Expr::Number(2.0)]), "a²", r"a^{2}", "a^2");
+        chk(opn("^", vec![a(), Expr::Number(2.5)]), "a^2.5", r"a^{2.5}", "a^2.5");
+        chk(opn("^", vec![ab(), Expr::Integer(2)]), "(a + b)²", r"(a + b)^{2}", "(a + b)^2");
+        chk(opn("^", vec![a(), Expr::Integer(-3)]), "a⁻³", r"a^{-3}", "a^-3");
+        // subtraction: Unicode U+2212 minus, right-operand parens, `+(-b)` sugar
+        chk(opn("-", vec![a()]), "−a", "-a", "-a");
+        chk(
+            opn("-", vec![a(), opn("-", vec![b(), c()])]),
+            "a − (b − c)",
+            "a - (b - c)",
+            "a - (b - c)",
+        );
+        chk(opn("+", vec![a(), opn("-", vec![b()])]), "a − b", "a - b", "a - b");
+        // derivative: three divergent forms + call fallback
+        chk(dop("t", a()), "∂a/∂t", r"\frac{\partial a}{\partial t}", "D(a)/Dt");
+        chk(
+            dop("t", ab()),
+            "∂(a + b)/∂t",
+            r"\frac{\partial (a + b)}{\partial t}",
+            "D(a + b)/Dt",
+        );
+        chk(opn("D", vec![a()]), "D(a)", "D(a)", "D(a)");
+        // comparisons: infix symbol AND the call-form symbol (they diverge)
+        chk(opn(">", vec![a(), b()]), "a > b", "a > b", "a > b");
+        chk(opn(">=", vec![a(), b()]), "a ≥ b", r"a \geq b", "a >= b");
+        chk(opn(">=", vec![a()]), ">=(a)", r"\geq(a)", ">=(a)");
+        chk(opn("<=", vec![a(), b()]), "a ≤ b", r"a \leq b", "a <= b");
+        chk(opn("=", vec![a(), b()]), "a = b", "a = b", "a == b");
+        chk(opn("==", vec![a()]), "=(a)", "=(a)", "==(a)");
+        chk(opn("!=", vec![a(), b()]), "a ≠ b", r"a \neq b", "a != b");
+        chk(opn("!=", vec![a()]), "!=(a)", r"\neq(a)", "!=(a)");
+        // boolean ops
+        chk(opn("and", vec![a(), b()]), "a ∧ b", r"a \land b", "a and b");
+        chk(opn("or", vec![a(), b()]), "a ∨ b", r"a \lor b", "a or b");
+        chk(opn("not", vec![a()]), "¬a", r"\neg a", "not a");
+        chk(opn("not", vec![opn("==", vec![a(), b()])]), "¬(a = b)", r"\neg (a = b)", "not (a == b)");
+        chk(opn("not", vec![a(), b()]), "not(a, b)", r"\neg(a, b)", "not(a, b)");
+        // elementary functions: unicode name vs LaTeX command vs bare ASCII
+        chk(opn("log", vec![a()]), "ln(a)", r"\ln(a)", "log(a)");
+        chk(opn("log", vec![a(), b()]), "log(a, b)", r"\log(a, b)", "log(a, b)");
+        chk(opn("log10", vec![a()]), "log₁₀(a)", r"\log_{10}(a)", "log10(a)");
+        chk(opn("log10", vec![a(), b()]), "log10(a, b)", r"\log_{10}(a, b)", "log10(a, b)");
+        chk(opn("sqrt", vec![a()]), "√a", r"\sqrt{a}", "sqrt(a)");
+        chk(opn("sqrt", vec![a(), b()]), "sqrt(a, b)", r"\sqrt{a, b}", "sqrt(a, b)");
+        chk(opn("sqrt", vec![ab()]), "√(a + b)", r"\sqrt{a + b}", "sqrt(a + b)");
+        chk(opn("asin", vec![a()]), "arcsin(a)", r"\arcsin(a)", "asin(a)");
+        chk(opn("abs", vec![a()]), "|a|", "|a|", "abs(a)");
+        chk(opn("abs", vec![a(), b()]), "abs(a, b)", "|a, b|", "abs(a, b)");
+        chk(opn("sign", vec![a()]), "sgn(a)", r"\mathrm{sgn}(a)", "sign(a)");
+        chk(opn("floor", vec![a()]), "⌊a⌋", r"\lfloor a \rfloor", "floor(a)");
+        chk(opn("floor", vec![a(), b()]), "floor(a, b)", r"\lfloor a, b \rfloor", "floor(a, b)");
+        chk(opn("ceil", vec![a()]), "⌈a⌉", r"\lceil a \rceil", "ceil(a)");
+        chk(opn("asinh", vec![a()]), "sinh⁻¹(a)", r"\sinh^{-1}(a)", "asinh(a)");
+        chk(opn("exp", vec![a()]), "exp(a)", r"\exp(a)", "exp(a)");
+        chk(opn("exp", vec![ab()]), "exp(a + b)", r"\exp\left(a + b\right)", "exp(a + b)");
+        chk(opn("min", vec![a()]), "min(a)", r"\min(a)", "min(a)");
+        chk(opn("atan2", vec![a()]), "atan2(a)", r"\mathrm{atan2}(a)", "atan2(a)");
+        chk(opn("sin", vec![a()]), "sin(a)", r"\sin(a)", "sin(a)");
+        chk(opn("Pre", vec![a()]), "Pre(a)", r"\mathrm{Pre}(a)", "Pre(a)");
+        // ifelse: LaTeX `\begin{cases}` leaf vs the call fallback everywhere else
+        chk(
+            opn("ifelse", vec![a(), b(), c()]),
+            "ifelse(a, b, c)",
+            r"\begin{cases} b & \text{if } a \\ c & \text{otherwise} \end{cases}",
+            "ifelse(a, b, c)",
+        );
+        chk(opn("ifelse", vec![a(), b()]), "ifelse(a, b)", r"\mathrm{ifelse}(a, b)", "ifelse(a, b)");
+        // unknown ops: generic fallback + LaTeX underscore escaping
+        chk(opn("grad", vec![a()]), "grad(a)", r"\mathrm{grad}(a)", "grad(a)");
+        chk(opn("my_op", vec![a(), b()]), "my_op(a, b)", r"\mathrm{my\_op}(a, b)", "my_op(a, b)");
     }
 }
