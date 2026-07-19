@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 use diffsol::{
-    Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, OdeSolverMethod, Sdirk, VectorHost,
+    Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, OdeSolverMethod, Op, Sdirk, VectorHost,
 };
 
 // ============================================================================
@@ -361,7 +361,7 @@ impl Compiled {
         let mut ic_vec = self.build_initial_state(initial_conditions)?;
         self.apply_algebraic_ics(&mut ic_vec, &param_vec, t0);
 
-        let (time, mut state) = self.integrate(t0, t_end, &param_vec, &ic_vec, opts)?;
+        let (time, mut state, stats) = self.integrate(t0, t_end, &param_vec, &ic_vec, opts)?;
         self.reconstruct_algebraic_trajectory(&time, &mut state, &param_vec);
 
         Ok(Solution {
@@ -370,7 +370,10 @@ impl Compiled {
             state_variable_names: self.state_names.clone(),
             metadata: SolutionMetadata {
                 solver: solver_name(opts.solver).to_string(),
-                ..Default::default()
+                n_rhs_calls: stats.n_rhs_calls,
+                n_jacobian_calls: stats.n_jacobian_calls,
+                n_accepted_steps: stats.n_accepted_steps,
+                n_rejected_steps: stats.n_rejected_steps,
             },
         })
     }
@@ -584,7 +587,7 @@ impl Compiled {
         param_vec: &[f64],
         ic_vec: &[f64],
         opts: &SimulateOptions,
-    ) -> Result<(Vec<f64>, Vec<Vec<f64>>), SimulateError> {
+    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats), SimulateError> {
         let n_states = self.state_names.len();
         let rhs_closure = self.make_rhs_closure();
         let jac_closure = self.make_jac_closure();
@@ -615,14 +618,26 @@ impl Compiled {
         })?;
 
         // ----- Solver dispatch -----
-        let trajectory = match opts.solver {
+        // Each arm runs the solver, then reads the real step/eval counters out of
+        // diffsol before the concrete solver is dropped: RHS + Jacobian evals from
+        // the equations' per-op `OpStatistics` (via `eqn_eval_stats`, available on
+        // any `OdeSolverMethod`), accepted/rejected steps from each solver's
+        // concrete `get_statistics()` (`BdfStatistics`, shared by Bdf/Sdirk/Erk).
+        let (time, state, stats) = match opts.solver {
             SolverChoice::Bdf => {
                 let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
                     .bdf::<FaerLU<f64>>()
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                run_solver(&mut solver, t_end, opts)?
+                let (time, state) = run_solver(&mut solver, t_end, opts)?;
+                let bs = solver.get_statistics();
+                let stats = SolveStats::from_solver(
+                    &solver,
+                    bs.number_of_steps,
+                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                );
+                (time, state, stats)
             }
             SolverChoice::Sdirk => {
                 let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
@@ -630,16 +645,30 @@ impl Compiled {
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                run_solver(&mut solver, t_end, opts)?
+                let (time, state) = run_solver(&mut solver, t_end, opts)?;
+                let bs = solver.get_statistics();
+                let stats = SolveStats::from_solver(
+                    &solver,
+                    bs.number_of_steps,
+                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                );
+                (time, state, stats)
             }
             SolverChoice::Erk => {
                 let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                     details: e.to_string(),
                 })?;
-                run_solver(&mut solver, t_end, opts)?
+                let (time, state) = run_solver(&mut solver, t_end, opts)?;
+                let bs = solver.get_statistics();
+                let stats = SolveStats::from_solver(
+                    &solver,
+                    bs.number_of_steps,
+                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                );
+                (time, state, stats)
             }
         };
-        Ok(trajectory)
+        Ok((time, state, stats))
     }
 
     /// Reconstruct algebraic-state values along the output trajectory
@@ -685,6 +714,57 @@ fn solver_name(choice: SolverChoice) -> &'static str {
         SolverChoice::Bdf => "Bdf",
         SolverChoice::Sdirk => "Sdirk",
         SolverChoice::Erk => "Erk",
+    }
+}
+
+/// Best-effort solver step / evaluation counters read out of diffsol after a
+/// solve, surfaced through [`SolutionMetadata`].
+///
+/// RHS and Jacobian evaluation counts come from the equations' per-op
+/// [`diffsol::OpStatistics`] (`number_of_calls` / `number_of_matrix_evals`),
+/// which any [`OdeSolverMethod`] exposes via `problem().eqn.rhs()`. Accepted and
+/// rejected step counts come from each concrete solver's `get_statistics()`
+/// (a `BdfStatistics`, shared by the Bdf/Sdirk/Erk solvers): `number_of_steps`
+/// for accepted steps, and error-test + nonlinear-solver failures for rejected
+/// steps. `get_statistics()` is not on the `OdeSolverMethod` trait, so the
+/// caller reads those two counts off the concrete solver and passes them in.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SolveStats {
+    pub n_rhs_calls: usize,
+    pub n_jacobian_calls: usize,
+    pub n_accepted_steps: usize,
+    pub n_rejected_steps: usize,
+}
+
+impl SolveStats {
+    /// Assemble from a solver's equation-eval statistics (`problem().eqn.rhs()`)
+    /// plus the accepted/rejected step counts the caller pulled from the
+    /// concrete solver's `get_statistics()`.
+    pub(crate) fn from_solver<'a, S, Eqn>(
+        solver: &S,
+        n_accepted_steps: usize,
+        n_rejected_steps: usize,
+    ) -> Self
+    where
+        S: OdeSolverMethod<'a, Eqn>,
+        Eqn: diffsol::OdeEquations<T = f64, V = diffsol::FaerVec<f64>> + 'a,
+    {
+        let op = solver.problem().eqn.rhs().statistics();
+        Self {
+            n_rhs_calls: op.number_of_calls,
+            n_jacobian_calls: op.number_of_matrix_evals,
+            n_accepted_steps,
+            n_rejected_steps,
+        }
+    }
+}
+
+impl std::ops::AddAssign for SolveStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.n_rhs_calls += rhs.n_rhs_calls;
+        self.n_jacobian_calls += rhs.n_jacobian_calls;
+        self.n_accepted_steps += rhs.n_accepted_steps;
+        self.n_rejected_steps += rhs.n_rejected_steps;
     }
 }
 

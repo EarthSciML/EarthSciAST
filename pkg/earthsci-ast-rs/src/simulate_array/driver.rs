@@ -4,7 +4,9 @@
 //! handle ([`ArrayCompiled::forcing_handle`]).
 
 use super::*;
-use crate::simulate::{SimulateError, SimulateOptions, Solution, SolutionMetadata, SolverChoice};
+use crate::simulate::{
+    SimulateError, SimulateOptions, SolveStats, Solution, SolutionMetadata, SolverChoice,
+};
 use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 use std::collections::HashSet;
 
@@ -515,7 +517,7 @@ impl ArrayCompiled {
         // the original un-segmented run — byte-identical to the pre-segmentation
         // driver (one `run_one_segment` over the whole span with `opts` verbatim).
         if boundaries.is_empty() || opts.output_times.is_none() {
-            let (time, mut state) = self.run_one_segment(
+            let (time, mut state, stats) = self.run_one_segment(
                 t0,
                 t_end,
                 &ic_vec,
@@ -540,7 +542,10 @@ impl ArrayCompiled {
                 state_variable_names,
                 metadata: SolutionMetadata {
                     solver: solver_name.to_string(),
-                    ..Default::default()
+                    n_rhs_calls: stats.n_rhs_calls,
+                    n_jacobian_calls: stats.n_jacobian_calls,
+                    n_accepted_steps: stats.n_accepted_steps,
+                    n_rejected_steps: stats.n_rejected_steps,
                 },
             });
         }
@@ -561,6 +566,9 @@ impl ArrayCompiled {
         let mut u0 = ic_vec.clone();
         let mut time: Vec<f64> = Vec::new();
         let mut state: Vec<Vec<f64>> = vec![Vec::new(); n_states];
+        // Each segment integrates with its own fresh diffsol solver, so the
+        // reported step/eval counts are the sum across all segments.
+        let mut stats = SolveStats::default();
 
         for w in endpoints.windows(2) {
             let (a, b) = (w[0], w[1]);
@@ -585,7 +593,7 @@ impl ArrayCompiled {
                 output_times: Some(grid),
                 ..opts.clone()
             };
-            let (seg_time, seg_state) = self.run_one_segment(
+            let (seg_time, seg_state, seg_stats) = self.run_one_segment(
                 a,
                 b,
                 &u0,
@@ -595,6 +603,7 @@ impl ArrayCompiled {
                 &continuous_rules,
                 &seg_opts,
             )?;
+            stats += seg_stats;
             // `run_solver` pushes the REQUESTED grid time verbatim, so a float
             // equality against `requested`/`b` is exact.
             for (i, &t) in seg_time.iter().enumerate() {
@@ -632,7 +641,10 @@ impl ArrayCompiled {
             state_variable_names,
             metadata: SolutionMetadata {
                 solver: solver_name.to_string(),
-                ..Default::default()
+                n_rhs_calls: stats.n_rhs_calls,
+                n_jacobian_calls: stats.n_jacobian_calls,
+                n_accepted_steps: stats.n_accepted_steps,
+                n_rejected_steps: stats.n_rejected_steps,
             },
         })
     }
@@ -653,7 +665,7 @@ impl ArrayCompiled {
         segment_static_rules: &[AlgebraicRule],
         continuous_rules: &[AlgebraicRule],
         opts: &SimulateOptions,
-    ) -> Result<(Vec<f64>, Vec<Vec<f64>>), SimulateError> {
+    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats), SimulateError> {
         let n_states = self.n_states;
         let rhs_rules = self.rhs_rules.clone();
         let var_shapes = self.var_shapes.clone();
@@ -824,14 +836,24 @@ impl ArrayCompiled {
             details: e.to_string(),
         })?;
 
-        let out = match opts.solver {
+        // Mirror the scalar `Compiled::integrate` dispatch: run the solver, then
+        // read the real step/eval counters out of diffsol before the concrete
+        // solver is dropped (see [`SolveStats::from_solver`]).
+        let (time, state, stats) = match opts.solver {
             SolverChoice::Bdf => {
                 let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
                     .bdf::<FaerLU<f64>>()
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                crate::simulate::run_solver(&mut solver, t_end, opts)?
+                let (time, state) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                let bs = solver.get_statistics();
+                let stats = SolveStats::from_solver(
+                    &solver,
+                    bs.number_of_steps,
+                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                );
+                (time, state, stats)
             }
             SolverChoice::Sdirk => {
                 let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
@@ -839,16 +861,30 @@ impl ArrayCompiled {
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                crate::simulate::run_solver(&mut solver, t_end, opts)?
+                let (time, state) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                let bs = solver.get_statistics();
+                let stats = SolveStats::from_solver(
+                    &solver,
+                    bs.number_of_steps,
+                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                );
+                (time, state, stats)
             }
             SolverChoice::Erk => {
                 let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                     details: e.to_string(),
                 })?;
-                crate::simulate::run_solver(&mut solver, t_end, opts)?
+                let (time, state) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                let bs = solver.get_statistics();
+                let stats = SolveStats::from_solver(
+                    &solver,
+                    bs.number_of_steps,
+                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                );
+                (time, state, stats)
             }
         };
-        Ok(out)
+        Ok((time, state, stats))
     }
 
     /// Expose scalar observed trajectories (e.g. an `area` FAQ) alongside the
