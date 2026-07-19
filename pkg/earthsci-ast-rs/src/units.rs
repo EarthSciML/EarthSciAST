@@ -189,9 +189,15 @@ pub enum UnitError {
 ///
 /// * [`UnitSeverity::Analysis`] — the checker could not DETERMINE a dimension
 ///   (unknown variable, unparseable unit string, symbolic/non-literal exponent,
-///   an operator with no dimensional rule). This reports what the checker could
-///   not conclude, NOT a defect in the file, so it stays a non-blocking warning
-///   and the affected subexpression propagates as [`Dim::Unknown`].
+///   wrong arity, a broadcast missing its `fn`). This reports what the checker
+///   could not conclude, NOT a defect in the file, so it stays a non-blocking
+///   warning and the affected subexpression propagates as [`Dim::Unknown`].
+///
+/// An operator with NO dimensional rule (a rewrite-target sugar op such as
+/// `grad`/`div`/`laplacian`, or any unregistered user op) is the one
+/// undeterminable case that emits NO finding at all: per esm-spec §4.8.4 the
+/// checker reports UNKNOWN and skips silently, matching the other four bindings
+/// (Julia/TS/Python/Go). See [`propagate_operator_dim`].
 ///
 /// An unknown *variable* stays `Analysis` here only because it is already a
 /// hard `undefined_variable` structural error — the file is still rejected; we
@@ -248,7 +254,9 @@ impl UnitFinding {
 enum Dim {
     /// Dimension determined.
     Known(Unit),
-    /// Dimension could not be determined; an `Analysis` finding was recorded.
+    /// Dimension could not be determined. Most undeterminable causes record an
+    /// `Analysis` finding; an op with no dimensional rule records none (it is
+    /// reported as unknown and skipped, per esm-spec §4.8.4).
     Unknown,
 }
 
@@ -535,16 +543,17 @@ fn propagate_operator_dim(
         "aggregate" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
             propagate_array_dim(op, env, findings)
         }
-        // No dimensional rule for this operator. We cannot conclude anything
-        // about the file, so this is an `Analysis` finding and the node's
-        // dimension is unknown — NOT a silent `dimensionless`, which would
-        // manufacture false mismatches in the enclosing expression.
-        other => {
-            findings.push(UnitFinding::analysis(format!(
-                "Operator '{other}' has no dimensional rule; its dimension is unknown"
-            )));
-            Dim::Unknown
-        }
+        // No dimensional rule for this operator — an unregistered user op, or a
+        // rewrite-target sugar op (`grad`/`div`/`laplacian`/`fn`/`table_lookup`/
+        // `godunov_hamiltonian`/…) whose dimension is UNDETERMINABLE until a
+        // discretization rule lowers it (esm-spec §4.8.4). The checker reports
+        // UNKNOWN and SKIPS: it emits NO finding, matching the other four
+        // bindings (Julia/TS/Python/Go), which return an unknown dimension and
+        // let their callers skip the check. The node's dimension is `Unknown` —
+        // NOT a silent `dimensionless`, which would manufacture false mismatches
+        // in the enclosing expression. `findings` is left untouched so nothing
+        // is singled out; `_` treats `grad` exactly like any other no-rule op.
+        _ => Dim::Unknown,
     }
 }
 
@@ -2516,9 +2525,11 @@ mod tests {
     /// `∇` / `integral`) are ORDINARY open-tier rewrite targets with NO
     /// privileged dimensional rule (esm-spec §4.2 / §4.8.3). Their dimension is
     /// UNDETERMINABLE until a discretization rule lowers them, so propagation
-    /// reports an `Analysis` finding (non-blocking) and yields an unknown
-    /// dimension via the same no-rule path as any unregistered user op — never
-    /// the old bespoke "divide by a metre denominator" behaviour.
+    /// yields an unknown dimension via the same no-rule path as any unregistered
+    /// user op — never the old bespoke "divide by a metre denominator"
+    /// behaviour. Per esm-spec §4.8.4 an unlowered op is reported as UNKNOWN and
+    /// SKIPPED: it emits NO finding at all, matching the other four bindings
+    /// (Julia/TS/Python/Go). `grad` is not singled out.
     #[test]
     fn propagate_spatial_sugar_ops_are_undeterminable() {
         let env = env_of(&[("c", "mol/m^3")]);
@@ -2530,18 +2541,13 @@ mod tests {
                 matches!(Unit::propagate(&e, &env), Err(UnitError::UnknownUnit(_))),
                 "{op_name} must have an undeterminable dimension"
             );
-            // And the finding is a non-blocking `Analysis`, not a promotable
-            // `Error` — the checker cannot conclude, which is not a file defect.
+            // Report-unknown-and-skip: NO finding at all — not a promotable
+            // `Error`, and not even a non-blocking `Analysis`. The checker just
+            // declines to fabricate a dimension it cannot know.
             let findings = check_expression_dimensions(&e, None, &env);
             assert!(
-                findings.iter().all(|f| !f.is_error()),
-                "{op_name} must not raise a provable mismatch: {findings:?}"
-            );
-            assert!(
-                findings
-                    .iter()
-                    .any(|f| f.severity == UnitSeverity::Analysis),
-                "{op_name} must report an Analysis finding: {findings:?}"
+                findings.is_empty(),
+                "{op_name} must emit no finding (report unknown + skip): {findings:?}"
             );
         }
     }
@@ -2600,17 +2606,16 @@ mod tests {
     }
 
     #[test]
-    fn propagate_unknown_operator_is_analysis_not_error() {
+    fn propagate_unknown_operator_reports_unknown_and_skips() {
         // An operator with no dimensional rule means the CHECKER cannot
-        // conclude anything — it is not a defect in the file. So it yields an
-        // `Analysis` finding (non-blocking) and an unknown dimension, never a
-        // promotable `Error` and never a silent `dimensionless`.
+        // conclude anything — it is not a defect in the file. Per esm-spec
+        // §4.8.4 it reports UNKNOWN and SKIPS: an unknown dimension and NO
+        // finding at all (matching Julia/TS/Python/Go), never a promotable
+        // `Error` and never a silent `dimensionless`.
         let env = HashMap::new();
         let e = op("zorp", vec![Expr::Number(1.0)]);
         let findings = check_expression_dimensions(&e, None, &env);
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, UnitSeverity::Analysis);
-        assert!(!findings[0].is_error());
+        assert!(findings.is_empty(), "expected no finding, got {findings:?}");
         assert!(matches!(
             Unit::propagate(&e, &env),
             Err(UnitError::UnknownUnit(_))
@@ -2618,13 +2623,14 @@ mod tests {
     }
 
     /// An undeterminable operand must not SUPPRESS a provable mismatch
-    /// elsewhere in the same expression: propagation records the finding and
+    /// elsewhere in the same expression: propagation yields `Unknown` for it and
     /// keeps walking instead of bailing at the first one.
     #[test]
-    fn analysis_finding_does_not_hide_a_real_mismatch() {
+    fn undeterminable_operand_does_not_hide_a_real_mismatch() {
         let env = env_of(&[("len", "m"), ("mass", "kg")]);
-        // (zorp(1) + len) + mass — the unknown op is undeterminable, but the
-        // `len` vs `mass` mismatch after it is still proven.
+        // (zorp(1) + len) + mass — the unknown op is undeterminable (reported as
+        // unknown and skipped, so it emits NO finding of its own), but the `len`
+        // vs `mass` mismatch after it is still proven.
         let expr = op(
             "+",
             vec![
@@ -2635,14 +2641,13 @@ mod tests {
         );
         let findings = check_expression_dimensions(&expr, None, &env);
         assert!(
-            findings
-                .iter()
-                .any(|f| f.severity == UnitSeverity::Analysis),
-            "expected the unknown operator to be reported: {findings:?}"
-        );
-        assert!(
             findings.iter().any(UnitFinding::is_error),
             "the m-vs-kg mismatch must still be proven: {findings:?}"
+        );
+        // The no-rule op adds nothing: the only finding is the real mismatch.
+        assert!(
+            findings.iter().all(UnitFinding::is_error),
+            "the undeterminable op must not add a finding of its own: {findings:?}"
         );
     }
 
