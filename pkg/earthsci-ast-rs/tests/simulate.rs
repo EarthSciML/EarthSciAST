@@ -982,6 +982,90 @@ fn test_error_grad_in_array_simulator_rejected() {
     );
 }
 
+#[test]
+fn test_error_unknown_variable_in_array_model_rejected() {
+    // The array-op build path (`ArrayCompiled::from_model`) must reject a
+    // reference to a genuinely-undeclared variable at BUILD time — the same
+    // contract the scalar interpreter enforces in `resolve_expr` (mirrors
+    // tests/invalid/unknown_variable_ref.esm, whose RHS is `undefined_var * 2`).
+    // Without the free-variable gate this name would fall through
+    // `lookup_variable` to a silent `NaN`, poisoning the trajectory instead of
+    // failing loudly. `undefined_var` is bare, undeclared, and in a SCALAR
+    // arithmetic position (NOT an `index` head), so it is provably a typo — not a
+    // bare loader-fed forcing field.
+    use earthsci_ast::simulate_array::ArrayCompiled;
+
+    // Force the array path with a trivial arrayop equation for a real state, so
+    // the dispatcher/build reaches the array runtime, then add the bad equation.
+    let mut ranges = HashMap::new();
+    ranges.insert(
+        "i".to_string(),
+        earthsci_ast::types::RangeSpec::Interval([1i64, 2i64]),
+    );
+    let good_lhs = Expr::Operator(ExpressionNode {
+        op: "aggregate".to_string(),
+        args: vec![],
+        expr: Some(Box::new(op(
+            "D",
+            vec![op("index", vec![var("u"), var("i")])],
+        ))),
+        output_idx: Some(vec!["i".to_string()]),
+        ranges: Some(ranges.clone()),
+        ..Default::default()
+    });
+    let good_rhs = Expr::Operator(ExpressionNode {
+        op: "aggregate".to_string(),
+        args: vec![],
+        expr: Some(Box::new(op(
+            "*",
+            vec![op("index", vec![var("u"), var("i")]), num(-1.0)],
+        ))),
+        output_idx: Some(vec!["i".to_string()]),
+        ranges: Some(ranges),
+        ..Default::default()
+    });
+
+    let mut u = state("u", 0.0).1;
+    u.shape = Some(vec!["i".to_string()]);
+    let mut variables = std::collections::HashMap::new();
+    variables.insert("u".to_string(), u);
+    let model = Model {
+        name: Some("ArrUnknown".to_string()),
+        subsystems: None,
+        reference: None,
+        variables,
+        // Second equation references the undeclared scalar `undefined_var`.
+        equations: vec![
+            Equation {
+                lhs: good_lhs,
+                rhs: good_rhs,
+            },
+            ddt("u", op("*", vec![var("undefined_var"), num(2.0)])),
+        ],
+        discrete_events: None,
+        continuous_events: None,
+        description: None,
+        tolerance: None,
+        tests: None,
+        initialization_equations: None,
+        guesses: None,
+        system_kind: None,
+    };
+
+    let err = match ArrayCompiled::from_model(&model, &std::collections::HashMap::new()) {
+        Ok(_) => panic!("expected error for undeclared variable, got Ok"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(
+            err,
+            CompileError::InterpreterBuildError { ref details }
+                if details.contains("Unknown variable 'undefined_var'")
+        ),
+        "expected InterpreterBuildError(Unknown variable 'undefined_var') from array path, got: {err}"
+    );
+}
+
 // ============================================================================
 // Helper required for the error-path flat builder above
 // ============================================================================

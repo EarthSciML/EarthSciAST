@@ -525,6 +525,13 @@ impl ArrayCompiled {
         // equations or observed-variable expressions (esm-i7b).
         reject_unlowered_spatial_ops(model)?;
 
+        // (0b) Reject a reference to a variable bound in NONE of the model's
+        // binding categories — the array-path analogue of the scalar
+        // interpreter's `resolve_expr` "Unknown variable" gate. Without it a
+        // typo'd/undeclared bare name falls through `lookup_variable`'s final
+        // arm to a silent `NaN`, poisoning the trajectory.
+        check_free_variables(model, index_sets)?;
+
         // (1) Collect state / parameter / observed variables.
         let (state_vars, param_vars, observed_vars) = classify_variables(model)?;
 
@@ -602,6 +609,284 @@ fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
         }
     }
     Ok(())
+}
+
+/// (0b) Reject a reference to a variable that is bound in NONE of the model's
+/// binding categories — the array-path analogue of the scalar interpreter's
+/// [`crate::simulate`] `resolve_expr` "Unknown variable" gate. Without it a
+/// typo'd or undeclared bare name falls through [`lookup_variable`]'s final arm
+/// to a silent `NaN` sentinel, poisoning the whole trajectory instead of failing
+/// loudly at build time. The error variant and message match the scalar path
+/// (`InterpreterBuildError` / `Unknown variable '{name}' referenced in
+/// expression`).
+///
+/// The bound set MIRRORS [`lookup_variable`]'s runtime resolution scope so a
+/// legitimately runtime-bound name is never rejected — a false positive here
+/// would reject a valid model, which is strictly worse than the silent-NaN it
+/// closes:
+///
+///  * `t` — the independent variable (the array path only supports `t`);
+///  * every declared model variable — state / parameter / observed, the keys of
+///    `model.variables` (a discrete variable is rejected earlier, but its key is
+///    still credited);
+///  * every equation LHS-defined target (a name defined by an equation even if
+///    not carried in `variables`);
+///  * `_var` (§6.4 operator placeholder) and the document `index_sets` axis
+///    names;
+///  * spatial-coordinate symbols — the free symbols of every `ic` RHS (§11.4
+///    defines these to BE coordinate expressions) and every spatial-op `dim`;
+///  * loop / index binders introduced anywhere in the equation — `aggregate` /
+///    `makearray` `output_idx` & `ranges`, bare `index(array, i…)` subscript
+///    positions, an `integral` `int_var`, an argmin/argmax `arg`, and
+///    `apply_expression_template` `bindings` keys. Collected over the WHOLE
+///    equation (both sides unioned) so a stencil offset `index(u, i+1)` sees the
+///    `i` bound as a bare position elsewhere in the same equation, and so a
+///    symbol bound on the LHS is in scope on the RHS.
+///
+/// DELIBERATELY CONSERVATIVE SKIPS — a construct here is treated as BOUND, never
+/// rejected, because a genuine typo in it is not provably distinguishable at
+/// build time from a legitimate runtime-bound name:
+///
+///  * a DOTTED name (`A.b`) — a qualified cross-namespace reference or, on the
+///    coupled/flatten path, an external *forcing* channel name (`M.src`,
+///    `Box.scale`) that is UNDECLARED by design and resolved at runtime through
+///    the forcing buffer (see [`lookup_variable`]'s final `forcing` arm and the
+///    `segmented_refresh_solve` / `refresh_conformance` fixtures, which strip the
+///    loader-fed `discrete` declarations precisely so these resolve as bare —
+///    but post-flatten DOTTED — forcing names). A dotted typo is genuinely
+///    indistinguishable from a dotted forcing name, so it is skipped;
+///  * any name used as the HEAD of an `index(name, …)` op ANYWHERE in the model
+///    — an array-valued leaf. On a single-model (`from_file`) path a loader-fed
+///    forcing FIELD stays BARE and undeclared (the `observed_cadence_tier`
+///    fixture's `f`), and a forcing field is always array-valued and read via
+///    `index` (a SCALAR forcing goes through `params`/`set_params`, not the
+///    buffer). Crediting every `index` head therefore keeps a bare forcing field
+///    in scope; the residual conservative cost is that a typo appearing *only* as
+///    an `index` head is not caught (reported as a deliberate skip);
+///  * an `ic` equation — its RHS is a coordinate expression resolved at `u0`
+///    build time by the field evaluator against grid geometry, not by the
+///    per-cell RHS oracle; its free symbols are already credited as coordinates
+///    above;
+///  * a builtin function name spelled as a bare leaf (`exp`, `min`, …).
+fn check_free_variables(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
+    // ---- Build the bound set. ------------------------------------------------
+    let mut bound: HashSet<String> = HashSet::new();
+    bound.insert("t".to_string());
+    bound.insert("_var".to_string());
+    bound.extend(model.variables.keys().cloned());
+    bound.extend(index_sets.keys().cloned());
+    for eq in &model.equations {
+        if let Some(v) = equation_defined_var(&eq.lhs) {
+            bound.insert(v);
+        }
+        // §11.4: an `ic` RHS's free symbols name spatial coordinates that are
+        // implicitly in scope (e.g. the ignition front `psi(x)` over the bare
+        // coordinate `x`). Spatial-op `dim`s name the same axes.
+        if is_ic_lhs(&eq.lhs) {
+            collect_free_bare_symbols(&eq.rhs, &mut bound);
+        }
+        collect_dim_symbols(&eq.lhs, &mut bound);
+        collect_dim_symbols(&eq.rhs, &mut bound);
+        // Array-valued leaves (potential bare forcing FIELDS) — see the doc note.
+        collect_index_head_names(&eq.lhs, &mut bound);
+        collect_index_head_names(&eq.rhs, &mut bound);
+    }
+    for var in model.variables.values() {
+        if let Some(expr) = &var.expression {
+            collect_dim_symbols(expr, &mut bound);
+            collect_index_head_names(expr, &mut bound);
+        }
+    }
+
+    // ---- Check every equation (skipping `ic`) and observed expression. -------
+    for eq in &model.equations {
+        if is_ic_lhs(&eq.lhs) {
+            continue;
+        }
+        let mut scope = bound.clone();
+        collect_binders(&eq.lhs, &mut scope);
+        collect_binders(&eq.rhs, &mut scope);
+        check_expr_free_vars(&eq.lhs, &scope)?;
+        check_expr_free_vars(&eq.rhs, &scope)?;
+    }
+    for var in model.variables.values() {
+        if let Some(expr) = &var.expression {
+            let mut scope = bound.clone();
+            collect_binders(expr, &mut scope);
+            check_expr_free_vars(expr, &scope)?;
+        }
+    }
+    Ok(())
+}
+
+/// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?
+fn is_ic_lhs(lhs: &Expr) -> bool {
+    matches!(lhs, Expr::Operator(op) if op.op == "ic")
+}
+
+/// Elementary math / reduction names that are always valid as a bare leaf even
+/// though they are not declared variables. Mirrors `structural.rs`
+/// `is_builtin_function` so the same names are excused across the two Rust
+/// gates.
+fn is_builtin_fn_name(name: &str) -> bool {
+    matches!(
+        name,
+        "exp" | "log"
+            | "log10"
+            | "sqrt"
+            | "abs"
+            | "sign"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "atan2"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asinh"
+            | "acosh"
+            | "atanh"
+            | "min"
+            | "max"
+            | "floor"
+            | "ceil"
+            | "ifelse"
+            | "Pre"
+    )
+}
+
+/// The index / integration symbols a single node BINDS for its body (mirrors
+/// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
+/// `integral` `int_var`, an argmin/argmax `arg`, the BARE subscript positions of
+/// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
+fn node_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
+    if let Some(idx) = &node.output_idx {
+        out.extend(idx.iter().cloned());
+    }
+    if let Some(ranges) = &node.ranges {
+        out.extend(ranges.keys().cloned());
+    }
+    if let Some(v) = &node.int_var {
+        out.insert(v.clone());
+    }
+    if let Some(a) = &node.arg {
+        out.insert(a.clone());
+    }
+    if node.op == "index" {
+        // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
+        // (`index(u, i+1)`) is a USE of a symbol bound elsewhere and is checked.
+        for arg in node.args.iter().skip(1) {
+            if let Expr::Variable(name) = arg {
+                out.insert(name.clone());
+            }
+        }
+    }
+    if let Some(bindings) = &node.bindings {
+        out.extend(bindings.keys().cloned());
+    }
+}
+
+/// Union every binder introduced anywhere in the subtree (whole-tree, like
+/// `structural.rs` `collect_bound_symbols`). Widening the bound set only ever
+/// prevents a false positive, which is the cardinal requirement here.
+fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
+    if let Expr::Operator(node) = expr {
+        node_binders(node, out);
+        node.for_each_child(&mut |child| collect_binders(child, out));
+    }
+}
+
+/// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
+/// used to credit an `ic` RHS's coordinate symbols into the bound set.
+fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Variable(name) => {
+            if !name.contains('.') && !is_builtin_fn_name(name) {
+                out.insert(name.clone());
+            }
+        }
+        Expr::Operator(node) => {
+            node.for_each_child(&mut |child| collect_free_bare_symbols(child, out));
+        }
+        _ => {}
+    }
+}
+
+/// Collect the bare name at the HEAD (first arg) of every `index(name, …)` op in
+/// the subtree — an array-valued leaf (a declared state/observed, or a bare,
+/// undeclared, loader-fed forcing FIELD read at runtime through the forcing
+/// buffer). Crediting these keeps a legitimate bare forcing field in scope.
+fn collect_index_head_names(expr: &Expr, out: &mut HashSet<String>) {
+    if let Expr::Operator(node) = expr {
+        if node.op == "index"
+            && let Some(Expr::Variable(name)) = node.args.first()
+            && !name.contains('.')
+        {
+            out.insert(name.clone());
+        }
+        node.for_each_child(&mut |child| collect_index_head_names(child, out));
+    }
+}
+
+/// Collect the `dim` axis of every spatial differential operator in the subtree
+/// (defensive: the array path rejects unlowered spatial ops earlier, but a
+/// coordinate an `ic` RHS shares with a `grad` `dim` stays creditable).
+fn collect_dim_symbols(expr: &Expr, out: &mut HashSet<String>) {
+    if let Expr::Operator(node) = expr {
+        if matches!(node.op.as_str(), "grad" | "div" | "curl" | "laplacian")
+            && let Some(dim) = &node.dim
+        {
+            out.insert(dim.clone());
+        }
+        node.for_each_child(&mut |child| collect_dim_symbols(child, out));
+    }
+}
+
+/// Reject the first bare (non-dotted) variable reference bound in none of the
+/// categories in `scope`. Mirrors the scalar path's `resolve_expr` "Unknown
+/// variable" error in both variant and message. The full expression-bearing
+/// child set is descended via [`ExpressionNode::for_each_child`] (args plus the
+/// sidecar fields), so a reference hidden in an aggregate body, filter, integral
+/// bound, table axis, aggregate key, or template binding is not missed. A `fn`
+/// op's callee lives in `node.name` (not a child), so it is never mistaken for a
+/// variable.
+fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), CompileError> {
+    match expr {
+        Expr::Variable(name) => {
+            // A dotted name is a qualified / forcing reference resolved at
+            // runtime; builtins and derivative markers are always valid.
+            if name.contains('.') || is_builtin_fn_name(name) || name.starts_with("d(") {
+                return Ok(());
+            }
+            if scope.contains(name) {
+                return Ok(());
+            }
+            Err(CompileError::InterpreterBuildError {
+                details: format!("Unknown variable '{name}' referenced in expression"),
+            })
+        }
+        Expr::Operator(node) => {
+            let mut first_err: Option<CompileError> = None;
+            node.for_each_child(&mut |child| {
+                if first_err.is_none()
+                    && let Err(e) = check_expr_free_vars(child, scope)
+                {
+                    first_err = Some(e);
+                }
+            });
+            match first_err {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// (1) Collect state / parameter / observed variables (sorted by name for a
