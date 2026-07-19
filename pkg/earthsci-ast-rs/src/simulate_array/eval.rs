@@ -424,7 +424,7 @@ pub(super) fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 /// and keeping them would only re-open the divergence if the gate were ever
 /// bypassed. This is now a plain left-fold of [`apply_binary`], identical in
 /// kernel and in order to the vectorized path.
-pub(super) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
+pub(crate) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
     // A zero-arity arithmetic node is not legal (the registry rejects it); the
     // NaN sentinel is the module's convention for an unevaluable node.
     let Some((first, rest)) = vs.split_first() else {
@@ -531,7 +531,7 @@ pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
     }
 }
 
-pub(super) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
+pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
     match op {
         "+" => x + y,
         "-" => x - y,
@@ -630,7 +630,7 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     }
 }
 
-pub(super) fn apply_unary(op: &str, x: f64) -> f64 {
+pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
     match op {
         "exp" => x.exp(),
         "log" | "ln" => x.ln(),
@@ -1556,9 +1556,17 @@ pub(super) fn eval_concat(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         })
         .collect();
     let views: Vec<_> = parts.iter().map(|a| a.view()).collect();
-    let joined = ndarray::concatenate(ndarray::Axis(axis), &views)
-        .unwrap_or_else(|_| ArrayD::zeros(IxDyn(&[0])));
-    Value::Array(Box::new(joined))
+    // A shape mismatch (unequal extents off the concat axis) or an out-of-range
+    // `axis` makes the join impossible. Mirror the module's NaN-sentinel
+    // convention used by the sibling assembly ops (`eval_reshape`,
+    // `eval_makearray`), which return `Value::Scalar(f64::NAN)` for a malformed
+    // node: the solver reads NaN as a step failure. The former silent
+    // `[0]`-shaped empty array looked like a valid (if degenerate) result and
+    // hid the mismatch.
+    match ndarray::concatenate(ndarray::Axis(axis), &views) {
+        Ok(joined) => Value::Array(Box::new(joined)),
+        Err(_) => Value::Scalar(f64::NAN),
+    }
 }
 
 pub(super) fn eval_broadcast(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {

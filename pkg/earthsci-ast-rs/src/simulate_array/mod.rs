@@ -77,6 +77,11 @@ mod vectorized;
 pub(crate) use compile::eval_buildtime_field;
 pub use compile::{file_has_array_ops, file_has_spatial_model};
 pub use eval::eval_expression;
+// The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
+// the vectorized overlay); re-exported crate-wide so the scalar interpreter
+// `crate::simulate::eval_op` routes through the SAME definition instead of
+// re-implementing the arithmetic/comparison/logical algebra (knot #3a).
+pub(crate) use eval::{apply_binary, apply_unary, fold_scalar};
 pub use rhs::RhsScratch;
 
 use compile::*;
