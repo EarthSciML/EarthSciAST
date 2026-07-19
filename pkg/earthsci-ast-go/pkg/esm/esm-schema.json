@@ -2308,6 +2308,13 @@
           "additionalProperties": {
             "type": "number"
           }
+        },
+        "contours": {
+          "type": "array",
+          "description": "Optional iso-levels to overlay as contour lines on a field plot (field_slice / field_snapshot / heatmap). Each number is a value of the plotted field at which to draw a contour line — e.g. [0] draws the zero level-set front. Purely a viewer overlay; ignored for line/scatter.",
+          "items": {
+            "type": "number"
+          }
         }
       },
       "allOf": [
@@ -2383,11 +2390,27 @@
           "description": "Human-readable description of what this example illustrates."
         },
         "initial_state": {
-          "type": "object",
-          "description": "Scalar initial-value overrides for this example run, keyed by state-variable name. A component's initial fields are declared with `ic` equations in the model (esm-spec §11.4); this map overrides their scalar values for this run.",
-          "additionalProperties": {
-            "type": "number"
-          }
+          "description": "Initial state for this example run. Either (legacy) a flat map of scalar overrides keyed by state-variable name, or the esm-spec §11.4 discriminated union: {type:\"per_variable\", values:{name:number}} for scalar ICs, or {type:\"expression\", values:{name:<expression>}} for closed-form spatial FIELD initial conditions (per-cell coordinate expressions). Field ICs may also be declared with `ic` equations in the model.",
+          "oneOf": [
+            {
+              "type": "object",
+              "description": "Legacy flat scalar-override map (state-variable name -> value).",
+              "additionalProperties": { "type": "number" }
+            },
+            {
+              "type": "object",
+              "description": "Discriminated union (esm-spec §11.4).",
+              "additionalProperties": false,
+              "required": ["type", "values"],
+              "properties": {
+                "type": { "enum": ["per_variable", "expression"] },
+                "values": {
+                  "type": "object",
+                  "description": "For type=per_variable each value is a scalar number; for type=expression each value is an expression AST (a closed-form per-cell field over the state's index sets)."
+                }
+              }
+            }
+          ]
         },
         "parameters": {
           "type": "object",
