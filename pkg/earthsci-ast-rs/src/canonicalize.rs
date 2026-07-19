@@ -100,77 +100,132 @@ fn validate_emissible(e: &Expr) -> Result<(), CanonicalizeError> {
 /// EMISSIBLE (have a wire slot): `op`, `args`, `wrt`, `dim`, `fn`
 /// (`broadcast_fn`), `name`, `value`. TOLERATED-AND-IGNORED (may be present, no
 /// wire slot, NOT an error — matching Julia's `_CANONICAL_IGNORED_FIELDS`):
-/// `arg`, `bindings`. Every OTHER `ExpressionNode` field is NON-EMISSIBLE and
-/// listed below; a field newly added to `ExpressionNode` therefore fails closed
-/// (until deliberately classified) rather than being silently dropped. Kept in
-/// lockstep with Julia's `_NON_EMISSIBLE_FIELDS`.
+/// `arg`, `bindings`. Every OTHER `ExpressionNode` field is NON-EMISSIBLE.
+///
+/// SINGLE-SOURCE / FAIL-CLOSED: the leading `let ExpressionNode { … } = n;`
+/// destructures EVERY field with no `..` rest pattern, so classifying each field
+/// into one of the three groups is mandatory — adding a field to
+/// `ExpressionNode` produces a missing-field compile error here until it is
+/// deliberately classified, and therefore can never be silently dropped from
+/// (nor wrongly slipped into) the canonical form. This is the Rust analogue of
+/// Julia's derived `_NON_EMISSIBLE_FIELDS = setdiff(fieldnames(OpExpr),
+/// emissible ∪ ignored)`; kept in lockstep with it.
 fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
+    let ExpressionNode {
+        // EMISSIBLE — pinned wire slot, emitted by `emit_node_json`.
+        op: _,
+        args: _,
+        wrt: _,
+        dim: _,
+        broadcast_fn: _, // JSON key `fn`
+        name: _,
+        value: _,
+        // TOLERATED-AND-IGNORED — no wire slot, presence is NOT an error
+        // (Julia's `_CANONICAL_IGNORED_FIELDS`).
+        arg: _,
+        bindings: _,
+        // NON-EMISSIBLE — no wire slot; a set value fails canonical emission
+        // closed. Checked below in struct-declaration order.
+        int_var,
+        lower,
+        upper,
+        expr,
+        output_idx,
+        ranges,
+        reduce,
+        semiring,
+        join,
+        filter,
+        regions,
+        values,
+        shape,
+        perm,
+        axis,
+        label,
+        table,
+        axes,
+        output,
+        id,
+        manifold,
+        distinct,
+        key,
+    } = n;
+
     // JSON wire name reported where it differs from the Rust field name
     // (`int_var` serializes as `var`).
-    if n.int_var.is_some() {
+    if int_var.is_some() {
         return Some("var");
     }
-    if n.lower.is_some() {
+    if lower.is_some() {
         return Some("lower");
     }
-    if n.upper.is_some() {
+    if upper.is_some() {
         return Some("upper");
     }
-    if n.expr.is_some() {
+    if expr.is_some() {
         return Some("expr");
     }
-    if n.output_idx.is_some() {
+    if output_idx.is_some() {
         return Some("output_idx");
     }
-    if n.ranges.is_some() {
+    if ranges.is_some() {
         return Some("ranges");
     }
-    if n.reduce.is_some() {
+    if reduce.is_some() {
         return Some("reduce");
     }
-    if n.semiring.is_some() {
+    if semiring.is_some() {
         return Some("semiring");
     }
-    if n.join.is_some() {
+    if join.is_some() {
         return Some("join");
     }
-    if n.filter.is_some() {
+    if filter.is_some() {
         return Some("filter");
     }
-    if n.regions.is_some() {
+    if regions.is_some() {
         return Some("regions");
     }
-    if n.values.is_some() {
+    if values.is_some() {
         return Some("values");
     }
-    if n.shape.is_some() {
+    if shape.is_some() {
         return Some("shape");
     }
-    if n.perm.is_some() {
+    if perm.is_some() {
         return Some("perm");
     }
-    if n.axis.is_some() {
+    if axis.is_some() {
         return Some("axis");
     }
-    if n.table.is_some() {
+    // `label` (skolem documentary relation tag) has NO canonical wire slot. It is
+    // non-emissible in every sibling binding's derived set (it is a field of
+    // Julia's `OpExpr`, so `setdiff` lands it in `_NON_EMISSIBLE_FIELDS`), so a
+    // node carrying it must fail closed — previously `label` was omitted here and
+    // silently DROPPED, making two `skolem` nodes that differ only in `label`
+    // canonicalize to byte-identical JSON (bug fix).
+    if label.is_some() {
+        return Some("label");
+    }
+    if table.is_some() {
         return Some("table");
     }
-    if n.axes.is_some() {
+    if axes.is_some() {
         return Some("axes");
     }
-    if n.output.is_some() {
+    if output.is_some() {
         return Some("output");
     }
-    if n.id.is_some() {
+    if id.is_some() {
         return Some("id");
     }
-    if n.manifold.is_some() {
+    if manifold.is_some() {
         return Some("manifold");
     }
-    if n.distinct.is_some() {
+    if distinct.is_some() {
         return Some("distinct");
     }
-    if n.key.is_some() {
+    if key.is_some() {
         return Some("key");
     }
     None
@@ -809,6 +864,33 @@ mod tests {
             );
             assert_eq!(err.to_string(), "E_CANONICAL_UNSUPPORTED_FIELD");
         }
+    }
+
+    /// Regression (bug A): a `skolem` node's documentary `label` tag has no
+    /// canonical wire slot, so a node carrying it MUST fail closed (matching
+    /// Julia's derived `_NON_EMISSIBLE_FIELDS`). Previously `label` was omitted
+    /// from the guard and silently DROPPED, so two `skolem` nodes differing only
+    /// in `label` canonicalized to byte-identical JSON.
+    #[test]
+    fn skolem_label_fails_closed() {
+        let edge = Expr::Operator(ExpressionNode {
+            op: "skolem".into(),
+            args: vec![Expr::Variable("u".into()), Expr::Variable("v".into())],
+            label: Some("edge".into()),
+            ..ExpressionNode::default()
+        });
+        let err = canonical_json(&edge).unwrap_err();
+        assert_eq!(err, CanonicalizeError::UnsupportedField("label".into()));
+        assert_eq!(err.to_string(), "E_CANONICAL_UNSUPPORTED_FIELD");
+
+        // The bare (label-less) skolem node still canonicalizes fine, so it is
+        // specifically the `label` tag that fails closed — not the `skolem` op.
+        let bare = Expr::Operator(ExpressionNode {
+            op: "skolem".into(),
+            args: vec![Expr::Variable("u".into()), Expr::Variable("v".into())],
+            ..ExpressionNode::default()
+        });
+        assert!(canonical_json(&bare).is_ok());
     }
 
     /// A non-emissible field on a node reached through the `args` spine (not
