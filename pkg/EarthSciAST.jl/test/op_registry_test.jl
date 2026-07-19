@@ -37,14 +37,16 @@ const ESM = EarthSciAST
         # subexpressions beneath it. Keeping it opaque made every `interp.*` /
         # `datetime.*` call a sharing barrier, which is what let an inlined
         # observed chain under an `interp.*` lookup be re-walked per occurrence.
-        # grad/div/laplacian KEEP `cse=true` (esm-spec §4.2): a rewrite-target
-        # op is a NON-hoistable CSE barrier, so CSE-opacity is what routes it
-        # through `_compile_op` and its `unlowered_operator` rejection gate
-        # (tree_walk/compile.jl §340) instead of the guardless `_cse_rebuild`
-        # generic-node path. Their `known`/`spatial`/`dim_spatial` PRIVILEGE
-        # flags were dropped; this membership is rejection-routing, not privilege.
+        # grad/div/laplacian are NO LONGER here (esm-spec §4.2): they carry no
+        # bespoke registry flag at all. What routes a rewrite-target op through
+        # `_compile_op`'s `unlowered_operator` gate (instead of the guardless
+        # `_cse_rebuild` generic-node path) is now the GENERIC tier predicate
+        # `_op_in_T` inside `_cse_hoistable` — a member of `_REWRITE_TARGET_OPS`
+        # or an unregistered custom op is non-hoistable uniformly, by predicate,
+        # not by a `cse=true` flag or an op-name list. `D`/`ic` KEEP `cse=true`
+        # (they stay CSE barriers via their own `_compile_op` arms).
         @test ESM._CSE_OPAQUE_OPS == Set{String}([
-            "const", "enum", "call", "D", "ic", "grad", "div", "laplacian",
+            "const", "enum", "call", "D", "ic",
             "arrayop", "aggregate", "makearray", "broadcast", "reshape",
             "transpose", "concat", "index",
         ])
@@ -102,13 +104,16 @@ const ESM = EarthSciAST
         # `dim_spatial` flags were dropped — dimension is UNDETERMINABLE until
         # lowered (§4.8.3/§4.8.4, units.jl has no rule), and spatial axes are
         # harvested structurally from the `dim`/`wrt` FIELDS (flatten.jl), not
-        # from an op-name set. They retain ONLY `cse=true`: the non-hoistable
-        # rewrite-target-barrier routing that makes the `unlowered_operator`
-        # gate fire (pinned by the _CSE_OPAQUE_OPS pin above and by
-        # tree_walk_test.jl) — rejection handling, not privilege.
+        # from an op-name set. They now carry NO bespoke registry flag at all —
+        # NOT EVEN `cse=true`. What routes them to the `unlowered_operator` gate
+        # is their membership in the open rewrite-target tier T (`_op_in_T`):
+        # `_cse_hoistable` makes every T op a non-hoistable CSE barrier, so it
+        # reaches `_compile_op`'s GENERIC gate, exactly like an arbitrary user
+        # op (pinned by tree_walk_test.jl). They are NOT `_CSE_OPAQUE_OPS`.
         for op in ("grad", "div", "laplacian")
             @test !(op in ESM._ops_with(:mtk_known))   # no MTK "known" privilege
-            @test op in ESM._CSE_OPAQUE_OPS            # rejection-gate routing only
+            @test !(op in ESM._CSE_OPAQUE_OPS)         # no bespoke cse flag
+            @test ESM._op_in_T(op)                     # in the open rewrite-target tier
         end
         # The `spatial` / `dim_spatial` registry flags were removed entirely,
         # and there is no `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` op-name set.

@@ -337,19 +337,6 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # never appear in an RHS / general expression position.
         throw(TreeWalkError("E_TREEWALK_IC_IN_RHS",
                             "ic(...) only allowed in equation LHS"))
-    elseif op_sym === :grad || op_sym === :div || op_sym === :laplacian
-        # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change D):
-        # grad/div/laplacian are NOT evaluable-core ops — they are optional
-        # rewrite-target sugar over `D` that a discretization rule must lower to
-        # an `aggregate`/`makearray` stencil before evaluation. One reaching
-        # `_compile` means no rule lowered it. This format ships no
-        # discretization rules; the std-lib lives in EarthSciDiscretizations.
-        # Surface the violation rather than substituting zero (the historical
-        # stub behaviour in other bindings). Uniform `unlowered_operator` code.
-        throw(TreeWalkError("unlowered_operator",
-            "unlowered rewrite-target operator '$(expr.op)' reached evaluation: " *
-            "no rewrite rule lowered it to a stencil (esm-spec §4.2 / §9.6.8). " *
-            "Discretization rules live in EarthSciDiscretizations, not this format."))
     elseif op_sym === :arrayop || op_sym === :aggregate
         # If _resolve_indices ran, scalar aggregate (empty output_idx) was
         # already expanded to a plain arithmetic tree and never reaches here.
@@ -388,6 +375,28 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
                             "$(expr.op) reached _compile unresolved — " *
                             "_resolve_indices must run first"))
+    end
+    # ── Generic open-tier rejection gate (esm-spec §4.2 / §9.6.6, the uniform
+    #    `unlowered_operator` rule) ──
+    # Any op that is NOT evaluable-core, reaching compilation, is an unlowered
+    # rewrite target: the spatial-calculus sugar `grad`/`div`/`laplacian`, a
+    # named rewrite-target like `integral`/`table_lookup`, OR any unregistered
+    # open-namespace custom op (`godunov_hamiltonian`, …). The decision is the
+    # registry-sourced tier predicate `_op_in_T` (a member of `_REWRITE_TARGET_OPS`
+    # or an op with no registry row) — NOT a hardcoded op-name list — so a user's
+    # own open-tier op is rejected identically to grad/div/laplacian, by predicate.
+    # Mirrors the other bindings: unregistered/open-tier op → `unlowered_operator`;
+    # a registered-but-non-scalar CORE form (const/arrayop/makearray/broadcast/…)
+    # keeps its distinct `E_TREEWALK_UNSUPPORTED_OP`, handled by the arms above and
+    # never reaching here. The `D` arm (bespoke `wrt` detail) likewise handles its
+    # own T member above. The gate fires before evaluation; the op is lowered to a
+    # stencil by a discretization rule (e.g. EarthSciDiscretizations), not here.
+    if _op_in_T(expr.op)
+        throw(TreeWalkError("unlowered_operator",
+            "unlowered rewrite-target operator '$(expr.op)' reached evaluation: " *
+            "no rewrite rule lowered it to a stencil before evaluation " *
+            "(esm-spec §4.2 / §9.6.8). Open-tier ops are lowered by discretization " *
+            "rules (e.g. EarthSciDiscretizations), not evaluated directly."))
     end
     return _mknode(kind=_NK_OP, op=op_sym, children=children, payload=payload)
 end
@@ -540,10 +549,22 @@ end
 # and pinned by op_registry_test.jl.
 const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 
-# A node is a CSE hoist/recurse candidate iff it is an OpExpr whose op is not
-# opaque. Leaves (state/param/literal/time) are never hoisted — caching a leaf
-# costs more than the bare read it would replace.
-_cse_hoistable(e::OpExpr) = !(e.op in _CSE_OPAQUE_OPS)
+# A node is a CSE hoist/recurse candidate iff it is an OpExpr whose op is
+# evaluable-core (`+`, `sin`, `fn`, …). Two disjoint reasons disqualify a node:
+#   (1) it is a CSE-opaque core form (`_CSE_OPAQUE_OPS` — `const`/`index`/`D`/…,
+#       structural ops `_compile` lowers or rejects specially); or
+#   (2) it is an open-tier rewrite-target op (`_op_in_T`: a named
+#       `grad`/`div`/`laplacian`/`D`/… OR any unregistered custom op).
+# A rewrite-target op is NOT evaluable — a discretization rule must lower it
+# first — so it must never be hoisted into a guardless generic `_cse_rebuild`
+# node (which would defer to a bare `E_TREEWALK_UNSUPPORTED_OP` at eval).
+# Keeping every T op non-hoistable routes it to `_compile`/`_compile_op`, the
+# one path carrying the GENERIC `unlowered_operator` rejection gate. This is why
+# the grad/div/laplacian registry rows need no bespoke `cse=true`: their tier
+# membership already makes them non-hoistable, uniformly with an arbitrary user
+# op. Leaves (state/param/literal/time) are never hoisted — caching a leaf costs
+# more than the bare read it would replace.
+_cse_hoistable(e::OpExpr) = !(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op)
 _cse_hoistable(::ASTExpr) = false
 
 # ---- Keying an expression built over a live forcing buffer (ess-qic) ----------

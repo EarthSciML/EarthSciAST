@@ -315,22 +315,26 @@ const _OP_TABLE = _OpSpec[
     #    has no rule for them), and spatial axes / system dimensionality are
     #    derived STRUCTURALLY from the `dim`/`wrt` FIELDS and variable shapes
     #    over `index_sets` (§4.9.1(ii), §11.2, flatten.jl), never from these op
-    #    names — so the former `known`/`spatial`/`dim_spatial` flags were
-    #    dropped. They keep ONLY `cse=true`: like a spatial `D` (and unlike a
-    #    hoistable arithmetic op), a rewrite-target op is a NON-hoistable CSE
-    #    barrier, so `_CSE_OPAQUE_OPS` routes it through `_compile_op` — the one
-    #    path that carries the `unlowered_operator` rejection gate
-    #    (tree_walk/compile.jl; a non-opaque op would instead be rebuilt as a
-    #    guardless generic node by `_cse_rebuild` and mis-fail at evaluation).
-    #    This is special COMPILE handling that REJECTS them, not a privilege.
-    #    Pinned by tree_walk_test.jl ("unlowered rewrite-target op surfaced
-    #    before evaluation"). Being in the open rewrite-target tier T is via
-    #    `_REWRITE_TARGET_OPS` (lower_expression_templates.jl), exactly as `D`.
+    #    names. They carry NO bespoke registry flag AT ALL — not even `cse=true`.
+    #    Their membership in the open rewrite-target tier T (`_op_in_T`, via
+    #    `_REWRITE_TARGET_OPS`, lower_expression_templates.jl) is the SINGLE
+    #    source of both behaviours that used to need `cse=true`: (1)
+    #    `_cse_hoistable` treats every T op as a non-hoistable CSE barrier,
+    #    routing it to `_compile`/`_compile_op` instead of the guardless
+    #    `_cse_rebuild` generic-node path; and (2) that path's GENERIC
+    #    `unlowered_operator` gate rejects any non-evaluable-core op uniformly —
+    #    so an arbitrary open-tier USER op is rejected identically to
+    #    grad/div/laplacian, by predicate, not by an op-name list
+    #    (tree_walk/compile.jl; pinned by tree_walk_test.jl "unlowered
+    #    rewrite-target op surfaced before evaluation"). This is special COMPILE
+    #    handling that REJECTS them, not a privilege. `D`/`ic` keep `cse=true`:
+    #    `D` is in T but `ic` is not, and both stay CSE barriers via their own
+    #    `_compile_op` arms regardless.
     _op("D";         category=:calculus, cse=true, known=true),
     _op("ic";        category=:calculus, cse=true, known=true),
-    _op("grad";      category=:calculus, cse=true),
-    _op("div";       category=:calculus, cse=true),
-    _op("laplacian"; category=:calculus, cse=true),
+    _op("grad";      category=:calculus),
+    _op("div";       category=:calculus),
+    _op("laplacian"; category=:calculus),
 
     # ── Array producers / gathers / reshapes ──
     _op("index";     category=:array, cse=true, geo=true, known=true,
