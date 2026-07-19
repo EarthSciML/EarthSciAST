@@ -24,9 +24,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .esm_types import (
-    ContinuousEvent,
     EsmFile,
-    ReactionSystem,
 )
 from .flatten import (
     FlattenedSystem,
@@ -36,7 +34,6 @@ from .flatten import (
 )
 from .simulation_array import (  # noqa: F401
     BuildInspection,
-    _aggregate_needs_interpreter,
     _apply_equation_to_dy,
     _apply_initial_conditions,
     _build_numpy_rhs,
@@ -88,15 +85,6 @@ from .simulation_common import (  # noqa: F401
 # historically importable from ``earthsci_ast.simulation`` keeps working.
 # Import direction is acyclic: the submodules never import this module.
 # ---------------------------------------------------------------------------
-from .simulation_legacy import (  # noqa: F401
-    _apply_discrete_event_effects,
-    _check_discrete_event_condition,
-    _create_event_functions,
-    _evaluate_expression_at_state,
-    _generate_mass_action_odes,
-    simulate_reaction_system,
-    simulate_with_discrete_events,
-)
 from .simulation_loaders import (  # noqa: F401
     LoaderProvider,
     _coerce_field_values,
@@ -116,26 +104,13 @@ from .simulation_loaders import (  # noqa: F401
     _simulate_with_loaders,
 )
 from .simulation_scalar import (  # noqa: F401
+    _create_event_functions,
     _resolve_parameter_values,
     _simulate_scalar,
 )
 from .sympy_bridge import (
     SimulationError,  # noqa: F401 — re-exported (earthsci_ast.__init__ imports it here)
 )
-
-
-# Backward compatibility: provide old function signature as alias
-def simulate_legacy(
-    reaction_system: ReactionSystem,
-    initial_conditions: dict[str, float],
-    time_span: tuple[float, float],
-    events: list[ContinuousEvent] | None = None,
-    **solver_options,
-) -> SimulationResult:
-    """Legacy simulate function for backward compatibility."""
-    return simulate_reaction_system(
-        reaction_system, initial_conditions, time_span, events, **solver_options
-    )
 
 
 def simulate(

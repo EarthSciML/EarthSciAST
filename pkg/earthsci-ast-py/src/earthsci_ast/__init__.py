@@ -244,7 +244,6 @@ _has_simulation = False
 try:
     from .simulation import (  # noqa: F401 — re-exported via __all__ below
         simulate,
-        simulate_with_discrete_events,
         evaluate_rhs,
         BuildInspection,
         SimulationResult,
@@ -532,7 +531,6 @@ if _has_simulation:
     __all__.extend(
         [
             "simulate",
-            "simulate_with_discrete_events",
             "evaluate_rhs",
             "BuildInspection",
             "SimulationResult",
