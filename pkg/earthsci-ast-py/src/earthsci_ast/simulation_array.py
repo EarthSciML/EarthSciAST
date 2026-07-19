@@ -18,7 +18,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
-from .expr_walk import map_children
+from .expr_walk import iter_children, map_children
 from .flatten import (
     FlattenedEquation,
     FlattenedSystem,
@@ -44,17 +44,6 @@ from .simulation_common import (
     solve_ivp,
 )
 from .sympy_bridge import SimulationError
-
-# Reduction identity for each combine op, used when unrolling the contracted
-# (reduced) arrayop indices in :func:`_apply_aggregate_ode_to_dy`. Hoisted to
-# module scope so it is built once at import instead of rebuilt inside the
-# per-cell reduction loop.
-_REDUCE_INIT = {
-    "+": 0.0,
-    "*": 1.0,
-    "max": float("-inf"),
-    "min": float("inf"),
-}
 
 
 def _linear_pos(shape: tuple[int, ...], one_based: list[int]) -> int:
@@ -317,25 +306,6 @@ def _iter_arrayop_points(lhs: ExprNode, ctx: EvalContext) -> tuple[list[str], li
     return syms, ranges
 
 
-def _aggregate_needs_interpreter(node: Any) -> bool:
-    """True if an aggregate / arrayop node uses a feature beyond the simulation
-    fast path's reach — a named ``semiring`` or any ``{"from": ...}`` index-set
-    range reference (RFC §5.1 / §5.2), or a value-equality ``join`` / ``filter``
-    predicate (RFC §5.3 / §7.2). Such nodes are evaluated through the full NumPy
-    interpreter, which carries the semiring, index-set, and join/filter
-    semantics, rather than the hand-rolled einsum unroll below. (The einsum fast
-    path has no way to express a join/filter gate, so missing this routing would
-    silently drop the join — see _eval_arrayop.)
-    """
-    if not isinstance(node, ExprNode):
-        return False
-    if getattr(node, "semiring", None) is not None:
-        return True
-    if getattr(node, "join", None) or getattr(node, "filter", None) is not None:
-        return True
-    return any(isinstance(v, dict) for v in (node.ranges or {}).values())
-
-
 def _scatter_arrayop_rhs(
     lhs: ExprNode,
     rhs: Expr,
@@ -346,19 +316,38 @@ def _scatter_arrayop_rhs(
     state_layout: dict[str, slice],
     dy: np.ndarray,
 ) -> None:
-    """Evaluate an aggregate RHS through the interpreter and scatter into ``dy``.
+    """Evaluate an aggregate / arrayop ODE RHS through the interpreter and scatter
+    it into ``dy`` — the single evaluation path for the
+    ``aggregate(D(index(var, i…)), ranges) = <rhs>`` array-state derivative form.
 
-    Used for the ``aggregate(D(index(var, i…)), ranges) = aggregate(…)`` ODE form
-    when the RHS carries a named semiring or index-set range references: the full
-    interpreter produces the output-box array and each element is written to the
-    matching flat-state slot. The LHS and RHS output boxes share index symbols,
-    so element ``multi`` of the result maps to ``var[idx_exprs(multi)]``.
+    Two RHS shapes are supported:
+
+    * A SELF-CONTAINED aggregate RHS (the discretized-stencil / sum-product form,
+      possibly carrying a named ``semiring``, ``{"from": ...}`` index sets, a
+      ``join`` / ``filter`` gate, or contracted reduction indices): the full NumPy
+      interpreter materializes the whole output-box array in ONE pass — reductions
+      and gates included — and each element is written to the matching flat-state
+      slot. The LHS and RHS output boxes share index symbols, so element ``multi``
+      of the result maps to ``var[idx_exprs(multi)]`` (a scalar result broadcasts
+      to every cell).
+    * A BARE-expression RHS that references the LHS output-index symbols: it is
+      evaluated PER output cell with those symbols bound to the cell's index
+      values, yielding one scalar per cell.
+
+    Evaluating the RHS through the interpreter (rather than a hand-rolled unroll)
+    keeps the reduction / semiring / index-set / join / filter semantics in ONE
+    place — the interpreter's vectorized materialization is contractually
+    byte-for-byte identical to its scalar fallback.
     """
-    result = np.asarray(eval_expr(rhs, ctx), dtype=float)
     syms, ranges = _iter_arrayop_points(lhs, ctx)
     shape = shapes[head]
     layout_start = state_layout[head].start
     it = np.ndindex(*(len(r) for r in ranges)) if ranges else [()]
+    # A self-contained aggregate binds its own output_idx internally and
+    # materializes the whole output box in one pass; a bare expression references
+    # the LHS output-index symbols and must be evaluated per cell with them bound.
+    rhs_is_box = isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op)
+    result = np.asarray(eval_expr(rhs, ctx), dtype=float) if rhs_is_box else None
     prev_locals = dict(ctx.locals)
     try:
         for multi in it:
@@ -366,7 +355,10 @@ def _scatter_arrayop_rhs(
                 ctx.locals[s] = ranges[syms.index(s)][pos]
             idx_vals = [int(round(float(eval_expr(e, ctx)))) for e in idx_exprs]
             flat_pos = layout_start + _linear_pos(shape, idx_vals)
-            dy[flat_pos] = float(result[multi]) if result.ndim else float(result)
+            if rhs_is_box:
+                dy[flat_pos] = float(result[multi]) if result.ndim else float(result)
+            else:
+                dy[flat_pos] = float(eval_expr(rhs, ctx))
     finally:
         ctx.locals = prev_locals
 
@@ -386,10 +378,11 @@ def _apply_aggregate_ode_to_dy(
     this shape (and its contribution was written into ``dy``), ``False`` otherwise
     so :func:`_apply_equation_to_dy` can fall through to its remaining cases.
 
-    Nodes using a named semiring or ``{"from": ...}`` index sets are routed
-    through the full interpreter (:func:`_scatter_arrayop_rhs`); the dense
-    sum-product / generalized-einsum fast paths below are the hand-rolled unroll
-    preserved byte-for-byte for existing fixtures.
+    Every matching node is evaluated through the full NumPy interpreter via
+    :func:`_scatter_arrayop_rhs` — the interpreter carries the reduction /
+    semiring / index-set / join / filter semantics (and its vectorized
+    materialization is contractually byte-for-byte identical to its scalar
+    fallback), so there is no hand-rolled unroll to keep in sync.
     """
     if isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op) and lhs.expr is not None:
         body = lhs.expr
@@ -398,116 +391,16 @@ def _apply_aggregate_ode_to_dy(
             if isinstance(inner, ExprNode) and inner.op == "index" and inner.args:
                 head = inner.args[0]
                 if isinstance(head, str) and head in state_layout:
-                    # Nodes using a named semiring or {"from": ...} index sets are
-                    # evaluated through the full interpreter (which carries those
-                    # semantics) and scattered into dy; the dense sum-product fast
-                    # path below is preserved byte-for-byte for existing fixtures.
-                    if _aggregate_needs_interpreter(rhs) or _aggregate_needs_interpreter(lhs):
-                        _scatter_arrayop_rhs(
-                            lhs,
-                            rhs,
-                            inner.args[1:],
-                            head,
-                            ctx,
-                            shapes,
-                            state_layout,
-                            dy,
-                        )
-                        return True
-                    syms, ranges = _iter_arrayop_points(lhs, ctx)
-                    idx_exprs = inner.args[1:]
-                    # RHS is typically an arrayop with the same ranges — the
-                    # body is what we evaluate point-by-point. Fall through to
-                    # plain eval if it's a bare expression.
-                    # Generalized einsum: detect contracted (reduction) indices
-                    # in the RHS — keys in rhs.ranges not in rhs.output_idx.
-                    rhs_body: Expr | None
-                    rhs_reduce = "+"
-                    rhs_contract_syms: list[str] = []
-                    rhs_contract_ranges: list[list[int]] = []
-                    if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op):
-                        rhs_body = rhs.expr
-                        rhs_reduce = rhs.reduce if rhs.reduce is not None else "+"
-                        rhs_out_syms = {s for s in (rhs.output_idx or []) if isinstance(s, str)}
-                        for k_sym, k_rng in sorted((rhs.ranges or {}).items()):
-                            if k_sym not in rhs_out_syms:
-                                rhs_contract_syms.append(k_sym)
-                                rhs_contract_ranges.append(_expand_range(k_rng))
-                    else:
-                        rhs_body = rhs
-                    shape = shapes[head]
-                    layout_start = state_layout[head].start
-                    it = np.ndindex(*(len(r) for r in ranges)) if ranges else [()]
-                    sym_pos = {s: i for i, s in enumerate(syms)}
-
-                    # Vectorized fast path: a pure (non-contracted) arrayop RHS —
-                    # the discretized stencil form — materializes its whole output
-                    # box in one pass (see numpy_interpreter._materialize_map),
-                    # rather than rebuilding the region-wise makearray once per
-                    # grid point. The materialized array is then scattered into dy.
-                    # Falls through to the per-point loop on any shape mismatch.
-                    if (
-                        not rhs_contract_syms
-                        and isinstance(rhs, ExprNode)
-                        and is_aggregate_op(rhs.op)
-                    ):
-                        full = np.asarray(eval_expr(rhs, ctx), dtype=float)
-                        exp_shape = tuple(len(r) for r in ranges)
-                        if full.shape == exp_shape:
-                            prev_locals = dict(ctx.locals)
-                            try:
-                                for multi in np.ndindex(*exp_shape) if exp_shape else [()]:
-                                    for s, pos in zip(syms, multi):
-                                        ctx.locals[s] = ranges[sym_pos[s]][pos]
-                                    idx_vals = [
-                                        int(round(float(eval_expr(e, ctx)))) for e in idx_exprs
-                                    ]
-                                    flat_pos = layout_start + _linear_pos(shape, idx_vals)
-                                    dy[flat_pos] = full[multi]
-                            finally:
-                                ctx.locals = prev_locals
-                            return True
-
-                    prev_locals = dict(ctx.locals)
-                    try:
-                        for multi in it:
-                            for s, pos in zip(syms, multi):
-                                ctx.locals[s] = ranges[sym_pos[s]][pos]
-                            idx_vals = [int(round(float(eval_expr(e, ctx)))) for e in idx_exprs]
-                            flat_pos = layout_start + _linear_pos(shape, idx_vals)
-                            if not rhs_contract_syms:
-                                val = float(eval_expr(rhs_body, ctx))
-                            else:
-                                # Unroll contracted indices and combine with the
-                                # reduce op. An unknown reducer is refused (parity
-                                # with numpy_interpreter._reduce_step), never
-                                # silently treated as ``min``. `_REDUCE_INIT` is the
-                                # shared identity + validity table.
-                                if rhs_reduce not in _REDUCE_INIT:
-                                    raise SimulationError(
-                                        f"Unsupported reduce op {rhs_reduce!r} in "
-                                        f"contracted arrayop ODE"
-                                    )
-                                acc = _REDUCE_INIT[rhs_reduce]
-                                k_it = np.ndindex(*(len(r) for r in rhs_contract_ranges))
-                                for k_multi in k_it:
-                                    for k_s, k_r, k_i in zip(
-                                        rhs_contract_syms, rhs_contract_ranges, k_multi
-                                    ):
-                                        ctx.locals[k_s] = k_r[k_i]
-                                    term = float(eval_expr(rhs_body, ctx))
-                                    if rhs_reduce == "+":
-                                        acc += term
-                                    elif rhs_reduce == "*":
-                                        acc *= term
-                                    elif rhs_reduce == "max":
-                                        acc = max(acc, term)
-                                    else:  # "min" — the only remaining validated op
-                                        acc = min(acc, term)
-                                val = acc
-                            dy[flat_pos] = val
-                    finally:
-                        ctx.locals = prev_locals
+                    _scatter_arrayop_rhs(
+                        lhs,
+                        rhs,
+                        inner.args[1:],
+                        head,
+                        ctx,
+                        shapes,
+                        state_layout,
+                        dy,
+                    )
                     return True
     return False
 
@@ -598,8 +491,12 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
 
     Index symbols and other non-variable strings are gathered too; callers
     intersect the result with a known name set to keep only the meaningful
-    references. Walks ``args``, the aggregate ``expr`` body, ``values``, and the
-    join ``filter`` / ``key`` predicates so a dependency edge is never missed.
+    references. Traversal goes through :func:`earthsci_ast.expr_walk.iter_children`,
+    the single canonical child enumeration, so EVERY expression-bearing slot is
+    covered — ``args``, the integral bounds ``lower`` / ``upper``, the aggregate
+    ``expr`` body, the join ``filter`` / ``key`` predicates, ``values``, and the
+    ``table_lookup`` ``table_axes`` — and a dependency edge hidden in a bound or
+    a lookup axis is never dropped.
     """
     refs: set[str] = set()
     stack: list[Any] = [expr]
@@ -608,15 +505,7 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
         if isinstance(e, str):
             refs.add(e)
         elif isinstance(e, ExprNode):
-            stack.extend(e.args)
-            if e.expr is not None:
-                stack.append(e.expr)
-            if e.values:
-                stack.extend(e.values)
-            if e.filter is not None:
-                stack.append(e.filter)
-            if e.key is not None:
-                stack.append(e.key)
+            stack.extend(iter_children(e))
     return refs
 
 
