@@ -36,7 +36,6 @@ from .simulation_array import (  # noqa: F401
     BuildInspection,
     _build_numpy_rhs,
     _eval_buildtime_field,
-    _materialize_join_key_buffers,
     _order_observed_equations,
     _simulate_with_numpy,
     _time_varying_observeds,

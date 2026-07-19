@@ -986,6 +986,46 @@ def _vi_classification_model(
 
 
 # --------------------------------------------------------------------------- #
+# Join-key bin buffers (the broad-phase equi-join column)
+# --------------------------------------------------------------------------- #
+
+
+def _vi_map_skolem(node: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The skolem key / body expr of a value-invention BIN map (its join-key
+    generator), or ``None`` for an arg-witness map (which produces an integer
+    nearest-generator INDEX, not a join key). Only a bin map — a skolem-bodied or
+    skolem-keyed per-element map — mints a :attr:`ValueInventionResult.join_key_buffers`
+    column."""
+    body = node.get("expr")
+    if isinstance(body, Mapping) and body.get("op") == "skolem":
+        return body
+    key = node.get("key")
+    if isinstance(key, Mapping) and key.get("op") == "skolem":
+        return key
+    return None
+
+
+def _vi_join_key_code(key: Any) -> float:
+    """Encode a materialised skolem bin key — a canonical tuple, or a scalar for a
+    single-component key (:func:`_vi_skolem`) — to the SAME 48-bit float bin code
+    the numeric interpreter emits for the equivalent ``skolem`` node
+    (:func:`numpy_interpreter._skolem_code`).
+
+    This is the byte-identity bridge that lets the front-door surface the join-key
+    buffers the retired per-cell mirror produced: the join column is only ever
+    COMPARED (the §5.3 equi-join re-buckets it), so any injective encoding suffices
+    for correctness — but reusing the interpreter's own encoding makes the buffer
+    byte-for-byte identical to the mirror's. Every component is an exact integer
+    key ID (guaranteed by :func:`_vi_key_int`), so ``_skolem_atom(float(c))``
+    canonicalises to ``("i", c)`` — matching the interpreter, whose skolem args
+    (``floor(...)``) evaluate to integral floats."""
+    from .numpy_interpreter import _skolem_atom, _skolem_code
+
+    comps = key if isinstance(key, tuple) else (key,)
+    return _skolem_code([_skolem_atom(float(c)) for c in comps])
+
+
+# --------------------------------------------------------------------------- #
 # Public entrypoint
 # --------------------------------------------------------------------------- #
 
@@ -1006,6 +1046,18 @@ class ValueInventionResult:
       (``num[g] = Σ_{p:assign=g} rho_p·x_p``, run through
       :func:`relational.group_aggregate`, §5.5 rule 5) and an elementwise derived
       buffer (``centroid[g] = num[g]/den[g]``) — the SCVT centroid-update step.
+    - ``join_key_buffers`` — skolem BIN map var → the dense per-cell 48-bit bin
+      code buffer (a list of floats, dense in output-index order), the broad-phase
+      equi-join column ``rg_src_bin`` / ``rg_tgt_bin`` an aggregate ``join.on``
+      gates on. Each code is the interpreter's own
+      :func:`numpy_interpreter._skolem_code` of the materialised skolem key, so a
+      buffer is **byte-identical** to what the retired ``simulation_array``
+      per-cell mirror produced (:attr:`EvalContext.join_key_buffers`). The
+      distinct value-invention primitives (distinct / rank) return SETS and
+      arg-witness returns an ARG; this is the setup-materialised join column.
+    - ``join_key_index_sets`` — skolem BIN map var → its 1-D declared-shape index
+      set name, so the join resolver maps the key column to the range symbol whose
+      ``{"from": <set>}`` matches (:attr:`EvalContext.join_key_index_sets`).
     - ``vi_var_names`` — value-invention LHS vars to drop from the ODE.
     """
 
@@ -1013,6 +1065,8 @@ class ValueInventionResult:
     members: dict[str, list[Any]] = field(default_factory=dict)
     assignments: dict[str, list[int]] = field(default_factory=dict)
     groups: dict[str, list[float]] = field(default_factory=dict)
+    join_key_buffers: dict[str, list[float]] = field(default_factory=dict)
+    join_key_index_sets: dict[str, str] = field(default_factory=dict)
     vi_var_names: set[str] = field(default_factory=set)
 
 
@@ -1022,12 +1076,23 @@ def materialize_value_invention(
     params: Mapping[str, Any] | None = None,
     const_array_boundaries: Mapping[str, Sequence[str]] | None = None,
     index_sets: Mapping[str, Any] | None = None,
+    maps_only: bool = False,
 ) -> ValueInventionResult:
     """Run the build-time value-invention engine over a raw model document.
 
     ``const_arrays`` supplies the build-time factor arrays (the connectivity /
     coordinates the keys are computed from); ``params`` supplies scalar parameter
     overrides. A producer that classifies CONTINUOUS is rejected (§5.7 guard 2).
+
+    ``maps_only`` restricts the pass to the skolem BIN maps and their surfaced
+    :attr:`ValueInventionResult.join_key_buffers` — the arg-witness maps, the
+    grouped / derived chain, and the index-set producers are all skipped. This is
+    the build's join-key PRE-PASS (:func:`simulation_array._build_numpy_rhs`),
+    which needs the broad-phase equi-join columns available BEFORE the full
+    observed hoist that the join-carrying observeds ride: it is fed only the
+    binning-coordinate closure, so a full producer materialisation (which may read
+    a wider const factor) could raise — ``maps_only`` guarantees the bins are
+    produced regardless.
 
     ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
     as of v0.8.0 lives at the top level of the document rather than on each
@@ -1080,20 +1145,45 @@ def materialize_value_invention(
     # §5.7 guard 2 for arg-witness assignments: a state-dependent nearest-generator
     # buffer (continuous cadence) may not be materialised at build time — its
     # topology would change every step (out of scope for v1, like a continuous
-    # `distinct`).
-    for vname, node in det.maps:
-        body = node.get("expr")
-        if not (isinstance(body, Mapping) and body.get("op") in _VI_ARGWITNESS_OPS):
-            continue
-        if cadence.classify(node, cls_model) == "continuous":
-            raise ValueInventionError(
-                f"arg-witness map {vname!r} classifies CONTINUOUS — a build-time assignment "
-                f"buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"
-            )
+    # `distinct`). Skipped in ``maps_only`` — the join-key pre-pass materialises
+    # only the skolem bins, never arg-witness maps.
+    if not maps_only:
+        for vname, node in det.maps:
+            body = node.get("expr")
+            if not (isinstance(body, Mapping) and body.get("op") in _VI_ARGWITNESS_OPS):
+                continue
+            if cadence.classify(node, cls_model) == "continuous":
+                raise ValueInventionError(
+                    f"arg-witness map {vname!r} classifies CONTINUOUS — a build-time assignment "
+                    f"buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"
+                )
 
-    # Maps first (a producer's join / key — or an arg-witness `join` — may reference them).
+    # Maps first (a producer's join / key — or an arg-witness `join` — may
+    # reference them). Each skolem BIN map ALSO surfaces its dense per-cell join-key
+    # code buffer (dense in output-index order, byte-identical to the retired
+    # per-cell mirror ``simulation_array._materialize_join_key_buffers``) plus its
+    # 1-D declared-shape index set. In ``maps_only`` the arg-witness maps are
+    # skipped — the join-key pre-pass needs only the bins (and cannot then fail on
+    # an arg-witness reduction that would need the full hoist).
     for vname, node in det.maps:
+        skexpr = _vi_map_skolem(node)
+        if maps_only and skexpr is None:
+            continue  # arg-witness map — not a join key
         _vi_materialize_map(ctx, vname, node)
+        if skexpr is not None:
+            m = ctx.maps[vname]
+            result.join_key_buffers[vname] = [_vi_join_key_code(m[k]) for k in sorted(m.keys())]
+            v = ctx.variables.get(vname)
+            shape = (v.get("shape") if isinstance(v, Mapping) else None) or []
+            if len(shape) == 1:
+                result.join_key_index_sets[vname] = str(shape[0])
+
+    # ``maps_only``: the build's join-key pre-pass — the bins (and their surfaced
+    # ``join_key_buffers``) are ready; skip the arg-witness assignments, the
+    # grouped / derived chain, and the index-set producers (any of which may need
+    # the full observed hoist the pre-pass runs before).
+    if maps_only:
+        return result
 
     # Surface the arg-witness buffers (the integer nearest-generator INDEX
     # assignment), dense in output-index order, for byte-identity assertions and

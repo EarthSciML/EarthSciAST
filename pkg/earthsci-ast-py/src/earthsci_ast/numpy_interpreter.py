@@ -109,8 +109,11 @@ class EvalContext:
     # 0-based ndarray of integer bin codes; ``join_key_index_sets`` records the
     # buffer's 1-D declared-shape index set so the join resolver can map the key
     # column to the range symbol whose ``{"from": <set>}`` matches. Materialized
-    # ONCE at setup (:func:`simulation._materialize_join_key_buffers`) — the
-    # skolem/floor bins run off the per-step hot path. Empty ⇒ no buffer joins.
+    # ONCE at setup by the value-invention front-door
+    # (:func:`value_invention.materialize_value_invention`, surfaced as
+    # :attr:`ValueInventionResult.join_key_buffers` and consumed by
+    # :func:`simulation_array._frontdoor_join_keys_and_extents`) — the skolem/floor
+    # bins run off the per-step hot path. Empty ⇒ no buffer joins.
     join_key_buffers: dict[str, np.ndarray] = field(default_factory=dict)
     join_key_index_sets: dict[str, str] = field(default_factory=dict)
     # Keyed-factor scope map (esm-spec §5.4 / RFC semiring-faq-unified-ir §5.2):
