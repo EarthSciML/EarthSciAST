@@ -591,7 +591,7 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
         check_data_loader_temporal_durations(obj, &mut errors);
         check_model_state_has_derivatives(obj, &mut errors);
         check_coupling_references(obj, &mut errors);
-        check_circular_model_dependencies(obj, &mut errors);
+        check_circular_model_dependencies_typed(json_value, &mut errors);
         check_event_variable_references(obj, &mut errors);
         check_event_discrete_parameters(obj, &mut errors);
         check_reaction_stoichiometries(obj, &mut errors);
@@ -905,72 +905,46 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
     }
 }
 
-/// Detect cycles in model-to-model dependency edges derived from equation
-/// RHS cross-system references. Mirrors Python's `_check_circular_references`.
-fn check_circular_model_dependencies(
-    obj: &serde_json::Map<String, Value>,
-    errors: &mut Vec<String>,
-) {
-    let Some(models) = obj.get("models").and_then(|v| v.as_object()) else {
+/// Detect cycles in model-to-model dependency edges by delegating WHOLE-RULE to
+/// the typed `crate::structural::check_circular_dependencies_in_models` — the
+/// SAME edge-building + shared-DFS the typed `validate()` pass runs — instead of
+/// re-deriving the edge set over raw JSON (deferred knot #2, completing the
+/// prior wave that already delegated only the cycle SEARCH).
+///
+/// The load-time gate needs only the binary reject decision; the pinned
+/// `(circular_dependency, /models)` record is recovered from `validate()` in the
+/// conformance runner, so this is verdict-invariant: no currently-loading
+/// document carries a model cycle (else `validate()` would already class it
+/// invalid), and the one rejected fixture (`circular_coupling.esm`) is caught
+/// identically. Deserializing to `EsmFile` here is safe — schema validation has
+/// already passed at this point; a document that fails to type (e.g. an
+/// unlowered template node) carries no model cycle in the corpus, so skipping it
+/// cannot miss a rejection.
+fn check_circular_model_dependencies_typed(json_value: &Value, errors: &mut Vec<String>) {
+    let Ok(esm_file) = serde_json::from_value::<EsmFile>(json_value.clone()) else {
         return;
     };
-    let model_names: std::collections::HashSet<&str> = models.keys().map(String::as_str).collect();
-    if model_names.len() < 2 {
+    let Some(models) = esm_file.models.as_ref() else {
         return;
-    }
-
-    // Build system -> set of system names it references. The edge set is exactly
-    // as before (equation lhs+rhs scoped refs into OTHER models); only the cycle
-    // search itself is delegated to the typed stack's shared DFS
-    // (`structural::has_cycle_dfs` / `find_cycle`) so the algorithm lives in ONE
-    // place. Keys are owned to match that shared signature.
-    let mut deps: std::collections::HashMap<String, std::collections::HashSet<String>> =
-        std::collections::HashMap::new();
-    for mname in &model_names {
-        deps.insert((*mname).to_string(), std::collections::HashSet::new());
-    }
-
-    for (mname, mv) in models {
-        let Some(m) = mv.as_object() else { continue };
-        let Some(eqs) = m.get("equations").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for eq in eqs {
-            let mut refs: Vec<String> = Vec::new();
-            if let Some(lhs) = eq.get("lhs") {
-                collect_variable_refs(lhs, &mut refs);
-            }
-            if let Some(rhs) = eq.get("rhs") {
-                collect_variable_refs(rhs, &mut refs);
-            }
-            for r in refs {
-                if let Some((system, _var)) = r.split_once('.')
-                    && system != mname.as_str()
-                    && let Some(target) = model_names.get(system)
-                    && let Some(set) = deps.get_mut(mname.as_str())
-                {
-                    set.insert((*target).to_string());
-                }
-            }
-        }
-    }
-
-    // Delegate cycle detection to the shared DFS in `crate::structural` (the same
-    // primitives the typed `validate()` pass uses), preserving the pinned
-    // load-time rejection wording.
-    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut rec_stack: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for node in deps.keys() {
-        if !visited.contains(node)
-            && crate::structural::has_cycle_dfs(node, &deps, &mut visited, &mut rec_stack)
-        {
-            let cycle = crate::structural::find_cycle(&deps, node);
-            errors.push(format!(
-                "circular reference (cycle) detected: {}",
-                cycle.join(" -> ")
-            ));
-            break;
-        }
+    };
+    let mut typed_errors: Vec<crate::validate::StructuralError> = Vec::new();
+    crate::structural::check_circular_dependencies_in_models(models, &mut typed_errors);
+    for e in typed_errors {
+        // Preserve the load-time wording — the string must name a "cycle" and
+        // list the participating models — by reading the cycle path back off the
+        // typed error's `details`.
+        let cycle = e
+            .details
+            .get("cycle")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            })
+            .unwrap_or_default();
+        errors.push(format!("circular reference (cycle) detected: {cycle}"));
     }
 }
 
@@ -1175,7 +1149,7 @@ fn check_event_discrete_parameters(obj: &serde_json::Map<String, Value>, errors:
 /// names, not variable references.
 ///
 /// This runs at LOAD time, BEFORE `apply_expression_template` lowering — it
-/// feeds `check_event_variable_references` / `check_circular_model_dependencies`.
+/// feeds `check_event_variable_references`.
 /// It therefore also collects the argument strings inside a `bindings` map and
 /// any bound index symbols inside a `key`/body. A caller that flags bare
 /// undeclared names (`check_event_variable_references`) must exclude names that
