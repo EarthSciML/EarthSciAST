@@ -35,6 +35,7 @@ from .numpy_interpreter import (
     eval_expr,
     ragged_factor_scope,
 )
+from .serialize import _serialize_expression
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
     SimulationResult,
@@ -44,6 +45,11 @@ from .simulation_common import (
     solve_ivp,
 )
 from .sympy_bridge import SimulationError
+from .value_invention import (
+    ValueInventionError,
+    _vi_lhs_base,
+    materialize_value_invention,
+)
 
 
 def _linear_pos(shape: tuple[int, ...], one_based: list[int]) -> int:
@@ -733,6 +739,14 @@ class _NumpyRhsBuild:
     # variable; see numpy_interpreter.ragged_factor_scope). Threaded into every
     # EvalContext this build spawns. Empty without ragged index sets.
     factor_scope: dict[str, str] = field(default_factory=dict)
+    # Value-invention derived-index-set extents (RFC §6.1), keyed by the producing
+    # aggregate's `id` (the `from_faq` target): the build-time skolem/distinct/rank
+    # front-door's distinct-set cardinality, materialized ONCE at setup by
+    # :func:`value_invention.materialize_value_invention` and threaded into every
+    # EvalContext as :attr:`EvalContext.derived_extents` so a `kind:"derived"` set
+    # resolves through the DESIGNED relational path. Empty when the system has no
+    # value-invention producer (byte-identical to before).
+    derived_extents: dict[str, int] = field(default_factory=dict)
 
 
 def _resolve_field_ic(
@@ -906,14 +920,11 @@ def _resolve_index_set_shape(
     return tuple(dims)
 
 
-def _vi_lhs_base(lhs: Expr) -> str | None:
-    """Base variable name written by an equation LHS: ``name``,
-    ``index(name, …)`` or ``D(name, …)``. ``None`` if unrecognised."""
-    if isinstance(lhs, str):
-        return lhs
-    if isinstance(lhs, ExprNode) and lhs.op in ("index", "D") and lhs.args:
-        return _vi_lhs_base(lhs.args[0])
-    return None
+# ``_vi_lhs_base`` — the base variable name written by an equation LHS — is the
+# SINGLE definition in :mod:`earthsci_ast.value_invention` (it handles the typed
+# ``ExprNode`` LHS this module passes AND the raw-JSON Mapping the front-door
+# detector walks). Imported at module top; re-exported here for the
+# :mod:`earthsci_ast.simulation` facade.
 
 
 def _detect_value_invention_states(
@@ -1022,6 +1033,93 @@ def _materialize_join_key_buffers(
         if idx_set is not None:
             idx_sets[name] = idx_set
     return buffers, idx_sets
+
+
+def _reconstruct_model_json(flat: FlattenedSystem) -> dict[str, Any]:
+    """Rebuild the RAW JSON model document the value-invention front-door
+    (:func:`value_invention.materialize_value_invention`) consumes from a typed
+    :class:`FlattenedSystem`.
+
+    The front-door detects / evaluates over the value-invention vocabulary
+    (``distinct`` / ``key`` / ``skolem`` / ``join``) in fields the typed
+    ``ExprNode`` carries but the numeric interpreter never consumes, so it works
+    on raw JSON (mirroring :mod:`earthsci_ast.cadence`). Every flattened variable
+    becomes a ``{type, shape?, default?}`` entry and every flattened equation is
+    serialized back to raw JSON via :func:`serialize._serialize_expression` (an
+    observed's defining expression already rides the equation list as
+    ``name = <body>``). The document index-set registry is threaded verbatim."""
+    variables: dict[str, Any] = {}
+    for name, v in (
+        list(flat.state_variables.items())
+        + list(flat.parameters.items())
+        + list(flat.observed_variables.items())
+    ):
+        entry: dict[str, Any] = {"type": v.type}
+        if v.shape:
+            entry["shape"] = list(v.shape)
+        if v.default is not None:
+            entry["default"] = v.default
+        variables[name] = entry
+    equations = [
+        {"lhs": _serialize_expression(eq.lhs), "rhs": _serialize_expression(eq.rhs)}
+        for eq in flat.equations
+    ]
+    return {"variables": variables, "equations": equations, "index_sets": flat.index_sets}
+
+
+def _value_invention_extents(
+    flat: FlattenedSystem,
+    param_values: dict[str, float],
+    static_derived_rings: dict[str, np.ndarray],
+    loader_arrays: dict[str, np.ndarray] | None,
+) -> dict[str, int]:
+    """Run the value-invention front-door ONCE at setup and return its derived-
+    index-set extents (RFC §6.1) — ``from_faq`` producer id → distinct-set
+    cardinality — for threading into :attr:`EvalContext.derived_extents`.
+
+    This closes the designed seam the ``numpy_interpreter`` resolver reads: a
+    ``kind:"derived"`` index set whose ``from_faq`` names a skolem / distinct /
+    rank producer resolves to the dense extent ``[1, n]`` through the relational
+    engine, exactly as the ``intersect_polygon`` clip case resolves through
+    ``derived_rings`` (the geometry handoff, now generalized to the relational
+    engine).
+
+    The front-door's build-time evaluator reads its coordinate / connectivity
+    factors from ``const_arrays``; in a flattened simulate build those factors are
+    the STATE-FREE array observeds the const-geometry hoist already materialized
+    (``static_derived_rings`` — e.g. the regrid ``rg_src_lon`` binning
+    coordinates), plus any bound loader arrays. Scalar parameters (``rg_dx`` /
+    ``rg_dy``) come from ``param_values``. A factor the front-door cannot resolve
+    (a genuinely per-step observed, or a producer join it cannot reconcile) raises
+    :class:`ValueInventionError`; that is caught and degrades to no extents — the
+    per-step ``derived_rings`` path is untouched and results stay byte-identical,
+    since a fixture that truly ranges an ODE over a value-invention-derived set
+    supplies the front-door build-time-resolvable factors by construction. Empty
+    ``{}`` for a model with no value-invention producer (the common case)."""
+    # Cheap gate: ``derived_extents`` is read ONLY to resolve a ``kind:"derived"``
+    # index set. With none present the front-door output could never be consumed,
+    # so skip the model reconstruction entirely — the overwhelmingly common
+    # (non-value-invention) array/PDE build pays nothing.
+    if not any(
+        isinstance(s, dict) and s.get("kind") == "derived" and s.get("from_faq") is not None
+        for s in flat.index_sets.values()
+    ):
+        return {}
+    const_arrays: dict[str, np.ndarray] = {
+        k: np.asarray(v) for k, v in static_derived_rings.items()
+    }
+    for k, v in (loader_arrays or {}).items():
+        const_arrays[k] = np.asarray(v)
+    try:
+        result = materialize_value_invention(
+            _reconstruct_model_json(flat),
+            const_arrays,
+            param_values,
+            index_sets=flat.index_sets,
+        )
+    except ValueInventionError:
+        return {}
+    return dict(result.extents)
 
 
 def _fill_build_inspection(
@@ -1399,6 +1497,19 @@ def _build_numpy_rhs(
         )
     )
 
+    # Value-invention front-door (RFC §6.1): materialize the data-derived
+    # index-set extents ONCE at setup through the relational engine and hand them
+    # to the resolver via ``EvalContext.derived_extents`` — the DESIGNED path for
+    # a ``kind:"derived"`` set whose ``from_faq`` names a skolem/distinct/rank
+    # producer, generalizing the geometry clip-ring ``derived_rings`` handoff. The
+    # producer's binning coordinates are the state-free array observeds the hoist
+    # above just materialized (``static_derived_rings``); ``rg_dx``/``rg_dy`` are
+    # ``param_values``. Empty ``{}`` when there is no value-invention producer, so
+    # a plain model is byte-identical.
+    derived_extents = _value_invention_extents(
+        flat, param_values, static_derived_rings, loader_arrays
+    )
+
     # Per-call buffers hoisted out of rhs_function and reused across every
     # solver step, eliminating the two guaranteed per-step allocations.
     # solve_ivp's RK/BDF/LSODA integrators copy the returned dydt into their
@@ -1427,6 +1538,11 @@ def _build_numpy_rhs(
             t=t,
             index_sets=flat.index_sets,
             derived_rings=dict(static_derived_rings),
+            # Value-invention derived-index-set extents, materialized once at
+            # setup by the relational front-door (above): the DESIGNED resolution
+            # for a `kind:"derived"` set whose `from_faq` names a skolem/distinct/
+            # rank producer. Constant for the run, so bound by reference.
+            derived_extents=derived_extents,
             # Bind the SHARED loader-array registry by reference. Within a cadence
             # segment its contents are fixed, so the RHS is pure; the segmenting
             # driver mutates it in place between segments to advance the cadence.
@@ -1485,6 +1601,7 @@ def _build_numpy_rhs(
         join_key_buffers=join_key_buffers,
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
+        derived_extents=derived_extents,
     )
 
 
@@ -1584,6 +1701,7 @@ def _simulate_with_numpy(
                         y=y_out[:, 0],
                         t=float(t_out[0]),
                         index_sets=flat.index_sets,
+                        derived_extents=build.derived_extents,
                         join_key_buffers=build.join_key_buffers,
                         join_key_index_sets=build.join_key_index_sets,
                         factor_scope=build.factor_scope,
@@ -1618,6 +1736,7 @@ def _simulate_with_numpy(
                             t=float(t_out[j]),
                             index_sets=flat.index_sets,
                             derived_rings=dict(build.static_derived_rings),
+                            derived_extents=build.derived_extents,
                             join_key_buffers=build.join_key_buffers,
                             join_key_index_sets=build.join_key_index_sets,
                             factor_scope=build.factor_scope,

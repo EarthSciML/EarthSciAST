@@ -35,6 +35,7 @@ import numpy as np
 
 from . import cadence, relational
 from .errors import EarthSciAstError
+from .esm_types import ExprNode
 
 
 class ValueInventionError(EarthSciAstError):
@@ -96,17 +97,52 @@ def _vi_node_kind(node: Any) -> str:
 
 
 def _vi_lhs_base(lhs: Any) -> str | None:
-    """Base variable name written by a raw LHS node: ``name``,
-    ``{op:index,args:[name,…]}`` or ``{op:D,args:[name,…]}``. ``None`` if
-    unrecognised."""
+    """Base variable name written by a LHS node — the SINGLE shared definition.
+
+    Handles all three LHS spellings so both front-doors reuse one function: a
+    bare ``name`` string, a raw-JSON ``{op:index|D, args:[name,…]}`` Mapping (the
+    :func:`_vi_detect` path), and the typed :class:`ExprNode` equivalent (the
+    :mod:`earthsci_ast.simulation_array` simulate-build detector imports this).
+    ``None`` if unrecognised."""
     if isinstance(lhs, str):
         return lhs
+    if isinstance(lhs, ExprNode):
+        if lhs.op in ("index", "D") and lhs.args:
+            return _vi_lhs_base(lhs.args[0])
+        return None
     if isinstance(lhs, Mapping):
         op = lhs.get("op")
         if op in ("index", "D"):
             args = lhs.get("args") or []
             if args:
                 return _vi_lhs_base(args[0])
+    return None
+
+
+def _vi_scope_get(mapping: Mapping[str, Any], name: Any) -> tuple[str, Any] | None:
+    """Resolve ``name`` against a possibly flattening-namespaced ``mapping``.
+
+    An exact key wins; otherwise the UNIQUE dot-suffix (``*.name``) match at the
+    shallowest namespace depth — the identical scope rule
+    :func:`_vi_keyed_factor` / :func:`numpy_interpreter.ragged_factor_scope`
+    already use. Returns ``(resolved_key, value)`` or ``None``.
+
+    This lets the front-door resolve a bin / producer join column named by its
+    BARE authored name (``rg_src_bin``) against the namespaced variable and map
+    registries a FLATTENED simulate build carries (``OceanDynamics.rg_src_bin``),
+    while a raw per-model document (bare names throughout) always takes the
+    exact-match branch — byte-identical, and only the LOOKUP is affected, never a
+    computed key / member / extent."""
+    if name in mapping:
+        return name, mapping[name]
+    suffix = "." + str(name)
+    cands = [k for k in mapping if isinstance(k, str) and k.endswith(suffix)]
+    if not cands:
+        return None
+    mindepth = min(k.count(".") for k in cands)
+    best = [k for k in cands if k.count(".") == mindepth]
+    if len(best) == 1:
+        return best[0], mapping[best[0]]
     return None
 
 
@@ -462,7 +498,14 @@ def _vi_skolem(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) -
     component (e.g. a bound range symbol) — never silently discarded as a tag."""
     _label = node.get("label")  # documentary relation tag; NOT part of the key
     comps = [_vi_eval(a, ctx, bindings) for a in (node.get("args") or [])]
-    key = tuple(_vi_key_int(c) for c in comps)
+    # Each component is first coerced to an exact integer key ID (`_vi_key_int`
+    # rejects a non-integral float / unresolved name — the VI-specific §5.5.1
+    # rule-1 gate), then the canonical DIRECTED tuple is built by the SINGLE
+    # relational definition `relational.skolem` (order-preserving; the emitted
+    # tuple is unchanged). A single component degrades to a scalar key — the one
+    # difference from `relational.skolem` (which always returns a 1-tuple), which
+    # tests/test_value_invention_skolem_label.py pins.
+    key = relational.skolem([_vi_key_int(c) for c in comps])
     if len(key) == 1:
         return key[0]
     return key
@@ -576,9 +619,10 @@ def _vi_join_index_sym(vname: str, producer_ranges: Mapping[str, Any], ctx: _ViC
     """The index range symbol of a join-key variable within the producer's
     ranges: the producer range whose ``from`` equals the variable's (1-D) shape
     index set."""
-    v = ctx.variables.get(vname)
-    if v is None:
+    got = _vi_scope_get(ctx.variables, vname)
+    if got is None:
         raise ValueInventionError(f"join references unknown variable {vname!r}")
+    v = got[1]
     shape = v.get("shape") or []
     if len(shape) != 1:
         raise ValueInventionError(
@@ -604,9 +648,13 @@ def _vi_join_ok(
             lname, rname = pair[0], pair[1]
             ls = _vi_join_index_sym(lname, producer_ranges, ctx)
             rs = _vi_join_index_sym(rname, producer_ranges, ctx)
-            lval = ctx.maps[lname][bindings[ls]]
-            rval = ctx.maps[rname][bindings[rs]]
-            if lval != rval:
+            lbuf = _vi_scope_get(ctx.maps, lname)
+            rbuf = _vi_scope_get(ctx.maps, rname)
+            if lbuf is None:
+                raise ValueInventionError(f"join key buffer {lname!r} is not materialised")
+            if rbuf is None:
+                raise ValueInventionError(f"join key buffer {rname!r} is not materialised")
+            if lbuf[1][bindings[ls]] != rbuf[1][bindings[rs]]:
                 return False
     return True
 
@@ -853,9 +901,9 @@ def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
         for pair in clause.get("on", []):
             if isinstance(pair, (list, tuple)) and len(pair) == 2:
                 a, b = pair[0], pair[1]
-                if b == gsym and a in ctx.maps:
+                if b == gsym and _vi_scope_get(ctx.maps, a) is not None:
                     keyvar = a
-                if a == gsym and b in ctx.maps:
+                if a == gsym and _vi_scope_get(ctx.maps, b) is not None:
                     keyvar = b
     if keyvar is None:
         raise ValueInventionError(
@@ -863,12 +911,13 @@ def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
             f"buffer with the output index {gsym!r}"
         )
     keysym = _vi_join_index_sym(keyvar, ranges, ctx)
+    keybuf = _vi_scope_get(ctx.maps, keyvar)[1]  # exists — the keyvar check above passed
     op, zerobar = _vi_oplus(node)
     contract = {s: spec for s, spec in ranges.items() if s != gsym}
     rows: list[tuple[int, float]] = []
 
     def visit(bindings: dict[str, Any]) -> None:
-        k = _vi_key_int(ctx.maps[keyvar][bindings[keysym]])
+        k = _vi_key_int(keybuf[bindings[keysym]])
         rows.append((k, float(_vi_eval(body, ctx, bindings))))
 
     _vi_enumerate(contract, ctx, visit)
