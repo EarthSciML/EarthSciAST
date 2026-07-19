@@ -44,6 +44,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import op_registry
 from .json_walk import iter_child_values
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -167,60 +168,18 @@ def _pint_unverifiable_errors():
     return _PINT_UNVERIFIABLE_ERRORS
 
 
-_OPERATOR_ARITY = {
-    "+": (2, None),
-    "-": (1, None),
-    "*": (2, None),
-    "/": (2, 2),
-    # `grad`/`div` accept an optional second operand: a per-field boundary
-    # (Dirichlet inflow) metavariable bound by a two-arg `grad(f, inflow, dim)`
-    # expression-template `match` (esm-spec §9.6; the schema does not constrain
-    # grad/div arity — the second arg supplies that field's own loaded BC).
-    "^": (2, 2),
-    "D": (1, 1),
-    "ic": (1, 1),
-    "grad": (1, 2),
-    "div": (1, 2),
-    "laplacian": (1, 1),
-    "exp": (1, 1),
-    "log": (1, 1),
-    "log10": (1, 1),
-    "sqrt": (1, 1),
-    "abs": (1, 1),
-    "sin": (1, 1),
-    "cos": (1, 1),
-    "tan": (1, 1),
-    "asin": (1, 1),
-    "acos": (1, 1),
-    "atan": (1, 1),
-    "atan2": (2, 2),
-    "sinh": (1, 1),
-    "cosh": (1, 1),
-    "tanh": (1, 1),
-    "asinh": (1, 1),
-    "acosh": (1, 1),
-    "atanh": (1, 1),
-    "min": (2, None),
-    "max": (2, None),
-    "floor": (1, 1),
-    "ceil": (1, 1),
-    "ifelse": (3, 3),
-    ">": (2, 2),
-    "<": (2, 2),
-    ">=": (2, 2),
-    "<=": (2, 2),
-    "==": (2, 2),
-    "!=": (2, 2),
-    "and": (2, None),
-    "or": (2, None),
-    "not": (1, 1),
-    "Pre": (1, 1),
-    "sign": (1, 1),
-    # Closed function registry (esm-spec §9.2 / §9.3). `fn` arity is checked
-    # by the dispatcher (1 for datetime.*, 2 for interp.searchsorted).
-    "enum": (2, 2),
-    "const": (0, 0),
-}
+# Operator arity bounds ``op -> (min_args, max_args)`` (``max_args`` None =
+# unbounded). DERIVED from the canonical op registry
+# (:mod:`earthsci_ast.op_registry`), the single source for the AST op vocabulary
+# and each op's arity contract, so this table cannot drift from it. The registry
+# supplies exactly the ops that carry a structural arity check — array /
+# relational / geometry ops (index-set-driven shapes), spelling aliases, boolean
+# literals, and the closed-registry ops whose args live in dedicated fields (`fn`
+# arity is checked by its dispatcher; `table_lookup`/`apply_expression_template`
+# carry no `args`) are intentionally absent, exactly as before. Notably `grad`/
+# `div` are (1, 2): they accept an optional per-field boundary metavariable bound
+# by a two-arg `grad(f, inflow, dim)` expression-template `match` (esm-spec §9.6).
+_OPERATOR_ARITY = op_registry.arity_bounds_map()
 
 # Built-in symbols always available in expressions.
 #

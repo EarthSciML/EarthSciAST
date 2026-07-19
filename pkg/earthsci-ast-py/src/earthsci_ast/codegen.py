@@ -356,8 +356,11 @@ _INFIX_SEP = {
     "or": {"julia": " || ", "python": " | "},
 }
 
-# Comparison operators render with the op token itself as the separator.
-_COMPARISON_OPS = ("<", ">", "<=", ">=", "==", "!=")
+# Comparison operators render with the op token itself as the separator (so no
+# per-target spelling is needed — this is a pure op-SET, not a value map). DERIVED
+# from the canonical op registry's (non-alias) comparison category so it cannot
+# drift: <, >, <=, >=, ==, !=.
+_COMPARISON_OPS = op_registry.by_category("comparison") & op_registry.canonical_names()
 
 # Plain ``name(args...)`` ops with a per-target callee name.
 _CALL_NAME = {

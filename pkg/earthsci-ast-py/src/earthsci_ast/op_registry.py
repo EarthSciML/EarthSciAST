@@ -26,10 +26,23 @@ is not even in this registry (a genuinely unregistered op).
 
 **Contract for renderers/dispatchers.** Every op below is part of the accepted
 vocabulary. A renderer/dispatcher is expected to cover the subset appropriate to
-its role (see the per-table scoping in ``tests/test_op_registry.py``). This
-registry is **additive** — it documents and cross-checks the existing tables; it
-does not replace them, and none of the working dispatch tables were rewritten to
-route through it.
+its role (see the per-table scoping in ``tests/test_op_registry.py``).
+
+This registry is the **single source** for the op VOCABULARY and each op's arity
+bounds: the pure op-SET tables now DERIVE their contents from it rather than
+re-authoring them, so drift is impossible by construction —
+``structural_checks._OPERATOR_ARITY`` (:func:`arity_bounds_map`),
+``flatten._SPATIAL_OPS`` (``by_category("spatial_sugar") - {"integral"}``),
+``cadence.RELATIONAL_OPS`` (``by_category("relational")``), ``esm_types.ARRAY_OPS``
+(``by_category("array") | by_category("geometry")``), and ``codegen._COMPARISON_OPS``.
+The heterogeneous VALUE tables keep their local values (a SymPy class, a numpy
+ufunc, a target-language spelling, a precedence int — none of which may enter this
+sympy/numpy-free leaf) but derive their KEY SETS from the registry categories:
+``expression._UNARY_SYMPY`` / ``_BINARY_SYMPY`` and
+``numpy_interpreter._SCALAR_FUNCS`` / ``_CMP_UFUNCS`` (via :func:`unary_elementary`,
+:func:`by_category`, :func:`canonical_names`). The remaining per-op VALUE maps whose
+key sets are NOT a clean registry category — ``codegen._INFIX_SEP`` / ``_CALL_NAME``
+and ``display``'s precedence map — stay hand-authored and are cross-checked here.
 
 **Derivation.** The set is the union of esm-spec.md §4.2's op vocabulary and
 every one of the six tables above (read exhaustively). It is intentionally the
@@ -97,8 +110,9 @@ CATEGORIES: frozenset[str] = frozenset(
 TIERS: frozenset[str] = frozenset({"core", "rewrite_target"})
 
 #: The closed set of arity descriptors. These are documentation-grade labels; the
-#: authoritative numeric arity bounds live in
-#: ``structural_checks._OPERATOR_ARITY`` (which this mirrors in prose).
+#: authoritative NUMERIC arity bounds are :attr:`OpSpec.arity_bounds` (a
+#: ``(min_args, max_args)`` tuple), which ``structural_checks._OPERATOR_ARITY``
+#: now DERIVES from — see :func:`arity_bounds_map`.
 ARITIES: frozenset[str] = frozenset(
     {
         "nullary",  # args == []; the payload lives in dedicated fields
@@ -106,8 +120,7 @@ ARITIES: frozenset[str] = frozenset(
         "binary",
         "ternary",
         "nary",  # variadic, >= 2 operands (n-ary fold)
-        "variadic",  # variadic, >= 1 operand
-        "unary_or_binary",  # `-` (negation vs subtraction)
+        "variadic",  # variadic, >= 1 operand (e.g. `-`: negation .. n-ary subtraction)
         "special",  # bespoke shape (aggregate-family; index-set-driven)
     }
 )
@@ -120,7 +133,14 @@ class OpSpec:
     Attributes:
         name: The op string as it appears in an ``ExprNode.op``.
         category: One of :data:`CATEGORIES`.
-        arity: One of :data:`ARITIES` (documentation-grade; see note there).
+        arity: One of :data:`ARITIES` (documentation-grade prose label).
+        arity_bounds: The AUTHORITATIVE numeric operand-count contract, a
+            ``(min_args, max_args)`` tuple (``max_args`` ``None`` = unbounded),
+            or ``None`` for an op that carries no structural arity check (array /
+            relational / geometry ops with index-set-driven shapes, closed-registry
+            ops whose args live in dedicated fields, spelling aliases, boolean
+            literals). This is the single source ``structural_checks._OPERATOR_ARITY``
+            derives from (:func:`arity_bounds_map`).
         tier: One of :data:`TIERS` — ``core`` (evaluable) or ``rewrite_target``.
         alias_of: For a pure spelling alias, the canonical op it spells (e.g.
             ``**`` → ``^``); ``None`` for a canonical op.
@@ -130,6 +150,7 @@ class OpSpec:
     name: str
     category: str
     arity: str
+    arity_bounds: tuple[int, int | None] | None = None
     tier: str = "core"
     alias_of: str | None = None
     note: str = ""
@@ -139,70 +160,76 @@ class OpSpec:
 # through the OPS dict below.
 _ALL: tuple[OpSpec, ...] = (
     # --- arithmetic (esm-spec §4.2 Arithmetic) ---
-    OpSpec("+", "arithmetic", "nary"),
-    OpSpec("-", "arithmetic", "unary_or_binary", note="unary negation or binary subtraction"),
-    OpSpec("*", "arithmetic", "nary"),
-    OpSpec("/", "arithmetic", "binary"),
-    OpSpec("^", "arithmetic", "binary", note="power"),
+    OpSpec("+", "arithmetic", "nary", arity_bounds=(2, None)),
+    OpSpec("-", "arithmetic", "variadic", arity_bounds=(1, None),
+           note="unary negation .. n-ary subtraction (corpus has a 3-operand `-`)"),
+    OpSpec("*", "arithmetic", "nary", arity_bounds=(2, None)),
+    OpSpec("/", "arithmetic", "binary", arity_bounds=(2, 2)),
+    OpSpec("^", "arithmetic", "binary", arity_bounds=(2, 2), note="power"),
     OpSpec("**", "arithmetic", "binary", alias_of="^", note="Python-style power spelling"),
     OpSpec("pow", "arithmetic", "binary", alias_of="^", note="word spelling of power"),
     # --- elementary functions (esm-spec §4.2 Elementary Functions) ---
-    OpSpec("exp", "elementary", "unary"),
-    OpSpec("log", "elementary", "unary", note="natural log"),
-    OpSpec("log10", "elementary", "unary"),
-    OpSpec("sqrt", "elementary", "unary"),
-    OpSpec("abs", "elementary", "unary"),
-    OpSpec("sign", "elementary", "unary"),
-    OpSpec("sin", "elementary", "unary"),
-    OpSpec("cos", "elementary", "unary"),
-    OpSpec("tan", "elementary", "unary"),
-    OpSpec("asin", "elementary", "unary"),
-    OpSpec("acos", "elementary", "unary"),
-    OpSpec("atan", "elementary", "unary"),
-    OpSpec("atan2", "elementary", "binary"),
-    OpSpec("sinh", "elementary", "unary"),
-    OpSpec("cosh", "elementary", "unary"),
-    OpSpec("tanh", "elementary", "unary"),
-    OpSpec("asinh", "elementary", "unary"),
-    OpSpec("acosh", "elementary", "unary"),
-    OpSpec("atanh", "elementary", "unary"),
-    OpSpec("min", "elementary", "nary", note="n-ary (>= 2); clamp/clip primitive"),
-    OpSpec("max", "elementary", "nary", note="n-ary (>= 2); clamp/clip primitive"),
-    OpSpec("floor", "elementary", "unary"),
-    OpSpec("ceil", "elementary", "unary"),
+    OpSpec("exp", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("log", "elementary", "unary", arity_bounds=(1, 1), note="natural log"),
+    OpSpec("log10", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("sqrt", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("abs", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("sign", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("sin", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("cos", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("tan", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("asin", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("acos", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("atan", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("atan2", "elementary", "binary", arity_bounds=(2, 2)),
+    OpSpec("sinh", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("cosh", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("tanh", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("asinh", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("acosh", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("atanh", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("min", "elementary", "nary", arity_bounds=(2, None),
+           note="n-ary (>= 2); clamp/clip primitive"),
+    OpSpec("max", "elementary", "nary", arity_bounds=(2, None),
+           note="n-ary (>= 2); clamp/clip primitive"),
+    OpSpec("floor", "elementary", "unary", arity_bounds=(1, 1)),
+    OpSpec("ceil", "elementary", "unary", arity_bounds=(1, 1)),
     # --- comparison (esm-spec §4.2 Conditionals) ---
-    OpSpec(">", "comparison", "binary"),
-    OpSpec("<", "comparison", "binary"),
-    OpSpec(">=", "comparison", "binary"),
-    OpSpec("<=", "comparison", "binary"),
-    OpSpec("==", "comparison", "binary"),
-    OpSpec("!=", "comparison", "binary"),
+    OpSpec(">", "comparison", "binary", arity_bounds=(2, 2)),
+    OpSpec("<", "comparison", "binary", arity_bounds=(2, 2)),
+    OpSpec(">=", "comparison", "binary", arity_bounds=(2, 2)),
+    OpSpec("<=", "comparison", "binary", arity_bounds=(2, 2)),
+    OpSpec("==", "comparison", "binary", arity_bounds=(2, 2)),
+    OpSpec("!=", "comparison", "binary", arity_bounds=(2, 2)),
     OpSpec("=", "comparison", "binary", alias_of="==",
            note="equality spelling used by the equation/display layer"),
     # --- logical (esm-spec §4.2 Conditionals + boolean literals) ---
-    OpSpec("and", "logical", "nary"),
-    OpSpec("or", "logical", "nary"),
-    OpSpec("not", "logical", "unary"),
+    OpSpec("and", "logical", "nary", arity_bounds=(2, None)),
+    OpSpec("or", "logical", "nary", arity_bounds=(2, None)),
+    OpSpec("not", "logical", "unary", arity_bounds=(1, 1)),
     OpSpec("true", "logical", "nullary", note="boolean-literal constant (spec §4.2)"),
     OpSpec("false", "logical", "nullary", note="boolean-literal constant"),
     # --- conditional ---
-    OpSpec("ifelse", "conditional", "ternary"),
+    OpSpec("ifelse", "conditional", "ternary", arity_bounds=(3, 3)),
     # --- calculus (esm-spec §4.2 Calculus) ---
-    OpSpec("D", "calculus", "unary",
+    OpSpec("D", "calculus", "unary", arity_bounds=(1, 1),
            note="structural time-derivative LHS; a spatial/RHS D is rewrite-target"),
-    OpSpec("ic", "calculus", "unary", note="initial-condition declaration (esm-spec §11.4)"),
+    OpSpec("ic", "calculus", "unary", arity_bounds=(1, 1),
+           note="initial-condition declaration (esm-spec §11.4)"),
     # --- event-specific (esm-spec §4.2 Event-specific / §5) ---
-    OpSpec("Pre", "event", "unary"),
+    OpSpec("Pre", "event", "unary", arity_bounds=(1, 1)),
     # --- closed-registry invocation (esm-spec §4.4 / §4.5 / §9.5) ---
     OpSpec("fn", "closed_registry", "variadic", note="closed function call; carries `name`"),
-    OpSpec("enum", "closed_registry", "binary", note="[enum_name, symbol]; lowered at load"),
+    OpSpec("enum", "closed_registry", "binary", arity_bounds=(2, 2),
+           note="[enum_name, symbol]; lowered at load"),
     OpSpec("table_lookup", "closed_registry", "nullary",
            note="args empty; `table`/`axes` fields; lowered at load"),
     # --- expression templates (esm-spec §9.6) ---
     OpSpec("apply_expression_template", "template", "nullary",
            note="args empty; `name`/`bindings` fields; expanded at load"),
     # --- inline constants (esm-spec §4.2 Inline Constants) ---
-    OpSpec("const", "constant", "nullary", note="args empty; literal in `value`"),
+    OpSpec("const", "constant", "nullary", arity_bounds=(0, 0),
+           note="args empty; literal in `value`"),
     # --- array / tensor (esm-spec §4.2 Array / Tensor, §4.3) ---
     OpSpec("aggregate", "array", "special", note="FAQ semiring aggregate"),
     OpSpec("makearray", "array", "special"),
@@ -224,9 +251,16 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("polygon_intersection_area", "geometry", "binary",
            note="fused scalar overlap area; carries `manifold`"),
     # --- spatial-sugar (open tier, esm-spec §4.2 rewrite-target) ---
-    OpSpec("grad", "spatial_sugar", "unary", tier="rewrite_target", note="sugar over D"),
-    OpSpec("div", "spatial_sugar", "unary", tier="rewrite_target", note="sugar over D"),
-    OpSpec("laplacian", "spatial_sugar", "unary", tier="rewrite_target", note="sugar over D"),
+    # grad/div accept an optional second operand — a per-field boundary
+    # (Dirichlet inflow) metavariable bound by a two-arg `grad(f, inflow, dim)`
+    # expression-template `match` (esm-spec §9.6); hence bounds (1, 2). The schema
+    # does not constrain grad/div arity, so the registry supplies it. Corpus-pinned.
+    OpSpec("grad", "spatial_sugar", "unary", arity_bounds=(1, 2),
+           tier="rewrite_target", note="sugar over D; optional boundary metavariable"),
+    OpSpec("div", "spatial_sugar", "unary", arity_bounds=(1, 2),
+           tier="rewrite_target", note="sugar over D; optional boundary metavariable"),
+    OpSpec("laplacian", "spatial_sugar", "unary", arity_bounds=(1, 1),
+           tier="rewrite_target", note="sugar over D"),
     OpSpec("curl", "spatial_sugar", "unary", tier="rewrite_target", note="sugar over D"),
     OpSpec("integral", "spatial_sugar", "unary", tier="rewrite_target",
            note="PIDE spatial integral; carries `var`/`lower`/`upper`"),
@@ -256,6 +290,38 @@ def by_category(category: str) -> frozenset[str]:
 def by_tier(tier: str) -> frozenset[str]:
     """All op names in ``tier`` (``"core"`` or ``"rewrite_target"``)."""
     return frozenset(name for name, spec in OPS.items() if spec.tier == tier)
+
+
+def unary_elementary() -> frozenset[str]:
+    """The elementary-function ops that take a single argument.
+
+    These are exactly the ops that dispatch through a single unary callable in
+    the evaluator (``numpy_interpreter._SCALAR_FUNCS``) and the SymPy bridge
+    (``expression._UNARY_SYMPY``, which additionally excludes ``abs`` and adds
+    the unary logical ``not``). Excludes ``atan2`` (binary) and ``min``/``max``
+    (n-ary). The single source those two value-tables derive their key sets from.
+    """
+    return frozenset(
+        name for name, spec in OPS.items()
+        if spec.category == "elementary" and spec.arity == "unary"
+    )
+
+
+def arity_bounds_map() -> dict[str, tuple[int, int | None]]:
+    """``op -> (min_args, max_args)`` for every op that carries a structural
+    arity contract (``max_args`` ``None`` = unbounded).
+
+    This is the single source ``structural_checks._OPERATOR_ARITY`` derives from:
+    exactly the ops whose :attr:`OpSpec.arity_bounds` is set (array / relational /
+    geometry / closed-registry-field ops, spelling aliases, and boolean literals
+    have no fixed operand count and are absent, so structural validation skips
+    their arity exactly as before).
+    """
+    return {
+        name: spec.arity_bounds
+        for name, spec in OPS.items()
+        if spec.arity_bounds is not None
+    }
 
 
 def is_known(op: str) -> bool:

@@ -8,6 +8,8 @@ from dataclasses import fields as _dataclass_fields
 from enum import Enum
 from typing import Any, Literal, Union
 
+from .op_registry import by_category as _by_category
+
 # ========================================
 # 1. Expression Types
 # ========================================
@@ -204,27 +206,15 @@ def is_aggregate_op(op: Any) -> bool:
 # array simulation path (the SymPy/lambdify path is scalar-only). Shared by
 # flatten's equation classification and numpy_interpreter's containment check
 # so the set is defined exactly once.
-ARRAY_OPS = frozenset(
-    {
-        "aggregate",
-        "makearray",
-        "index",
-        "broadcast",
-        "reshape",
-        "transpose",
-        "concat",
-        # The conservative-regridding geometry kernel leaf (RFC §8.1): its clipped
-        # overlap ring is array-valued, so a model carrying only an intersect_polygon
-        # observed (no aggregate) must still route to the NumPy simulate path.
-        "intersect_polygon",
-        # The fused geometry leaf (esm-spec.md §8.6.1): a scalar-valued
-        # polygon_area(intersect_polygon(a, b)), but its polygon-ring operands are
-        # array-valued, so a model carrying only a polygon_intersection_area observed
-        # must likewise route to the NumPy path (the SymPy path cannot clip/area a
-        # vertex ring).
-        "polygon_intersection_area",
-    }
-)
+#
+# DERIVED from the canonical op registry so it cannot drift: the ``array``
+# category (aggregate/makearray/index/broadcast/reshape/transpose/concat) PLUS the
+# ``geometry`` category. The two geometry leaves are array-routed too:
+# ``intersect_polygon`` (RFC §8.1) yields an array-valued clipped overlap ring,
+# and ``polygon_intersection_area`` (esm-spec §8.6.1) is scalar-valued but reads
+# array-valued polygon-ring operands the SymPy path cannot clip/area — so a model
+# carrying only one of those observeds must still take the NumPy simulate path.
+ARRAY_OPS = _by_category("array") | _by_category("geometry")
 
 
 @dataclass

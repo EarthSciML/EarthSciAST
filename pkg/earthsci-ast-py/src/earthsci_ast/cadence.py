@@ -93,6 +93,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .errors import EarthSciAstError
+from .op_registry import by_category as _by_category
 from .relational import FloatKeyError, distinct, rank, skolem, skolem_edge
 
 __all__ = [
@@ -131,7 +132,9 @@ _CLASS_RANK = {name: i for i, name in enumerate(CLASS_ORDER)}
 # guard 2): one classifying ``continuous`` is a hard error. Includes the
 # arg-witness reducers (``argmin`` / ``argmax``, §5.7 rule 6) — a state-dependent
 # assignment is out of scope for v1, exactly like a state-dependent ``distinct``.
-RELATIONAL_OPS = frozenset({"distinct", "join", "skolem", "rank", "argmin", "argmax"})
+# DERIVED from the canonical op registry's ``relational`` category so it cannot
+# drift: skolem/rank/argmin/argmax/distinct/join.
+RELATIONAL_OPS = _by_category("relational")
 
 
 class CadenceError(EarthSciAstError):

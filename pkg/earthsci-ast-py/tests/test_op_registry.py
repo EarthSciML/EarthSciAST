@@ -1,22 +1,26 @@
-"""Keep :mod:`earthsci_ast.op_registry` in sync with every renderer/dispatcher.
+""":mod:`earthsci_ast.op_registry` is the SINGLE SOURCE for the AST ``op``
+vocabulary. The pure op-SET tables and the value-tables' KEY SETS now DERIVE
+their contents from it (so drift is impossible by construction); this test
+verifies those derivations are well-formed and that the tables the registry does
+NOT drive stay in sync with it:
 
-There is no single source of truth for the AST ``op`` vocabulary in the codebase;
-:mod:`earthsci_ast.op_registry` is the canonical enumeration, and this test asserts
-that each of the six independent tables / dispatch chains covers exactly the
-subset of that registry it is CONTRACTUALLY responsible for. The scope for each
-table is encoded explicitly (and justified in a comment) so the checks are
-meaningful rather than vacuous:
+* the pure op-SET tables — ``structural_checks._OPERATOR_ARITY`` (arity bounds),
+  ``flatten._SPATIAL_OPS``, ``cadence.RELATIONAL_OPS``, ``esm_types.ARRAY_OPS``,
+  ``codegen._COMPARISON_OPS`` — are derived FROM the registry; the checks here
+  confirm each derives to the intended registry subset (and catch a regression
+  that re-hardcodes one to a stale set);
+* the value-tables (the ``expression`` / ``numpy_interpreter`` dicts) keep their
+  local SymPy/ufunc values but derive their KEY SETS from the registry — a
+  missing value is a loud import-time KeyError, and the checks here pin the
+  derived key set to the intended registry-computed subset; and
+* the if-chain renderers (``display`` / ``codegen``) are NOT derived (their
+  spellings/precedence are heterogeneous target values); they are checked by
+  extracting the op string literals their dispatch branches on from the module
+  source, so a handler that is added/removed is reflected in the check.
 
-* data-driven tables (the ``expression`` / ``numpy_interpreter`` dicts,
-  ``cadence.RELATIONAL_OPS``, ``flatten._SPATIAL_OPS``) are read directly and
-  compared bidirectionally with a registry-derived subset; and
-* the if-chain renderers (``display`` / ``codegen``) are checked by extracting
-  the op string literals their dispatch branches on from the module source, so a
-  handler that is added/removed is reflected in the check.
-
-The intended failure mode: adding a new op to the registry WITHOUT wiring the
-corresponding renderer/dispatcher makes a check here fail loudly with a message
-naming the offending ops (and vice-versa).
+The intended failure mode: adding a new op to the registry WITHOUT supplying its
+value / renderer makes a check here (or the import itself) fail loudly, naming
+the offending ops (and vice-versa).
 """
 
 from __future__ import annotations
@@ -34,10 +38,12 @@ import pytest
 cadence = importlib.import_module("earthsci_ast.cadence")
 codegen = importlib.import_module("earthsci_ast.codegen")
 display = importlib.import_module("earthsci_ast.display")
+esm_types = importlib.import_module("earthsci_ast.esm_types")
 expression = importlib.import_module("earthsci_ast.expression")
 flatten = importlib.import_module("earthsci_ast.flatten")
 numpy_interpreter = importlib.import_module("earthsci_ast.numpy_interpreter")
 reg = importlib.import_module("earthsci_ast.op_registry")
+structural_checks = importlib.import_module("earthsci_ast.structural_checks")
 
 REG_NAMES = set(reg.names())
 REG_CANONICAL = set(reg.canonical_names())
@@ -72,6 +78,32 @@ def test_registry_labels_are_from_the_closed_sets():
         assert spec.arity in reg.ARITIES, f"{name!r}: bad arity {spec.arity!r}"
 
 
+def test_registry_arity_bounds_are_well_formed():
+    # Every ``arity_bounds`` is either None (no structural arity check) or a
+    # ``(min, max)`` pair with ``min >= 0`` and ``max`` either None (unbounded) or
+    # ``>= min``. A spelling alias never carries bounds (it inherits its
+    # canonical's arity check by op-string only when actually used).
+    for name, spec in reg.OPS.items():
+        b = spec.arity_bounds
+        if b is None:
+            continue
+        assert isinstance(b, tuple) and len(b) == 2, f"{name!r}: bad arity_bounds {b!r}"
+        lo, hi = b
+        assert isinstance(lo, int) and lo >= 0, f"{name!r}: bad min {lo!r}"
+        assert hi is None or (isinstance(hi, int) and hi >= lo), f"{name!r}: bad max {hi!r}"
+        assert spec.alias_of is None, f"{name!r}: alias should not carry arity_bounds"
+
+
+def test_registry_arity_bounds_pin_load_bearing_ops():
+    # Corpus-pinned bounds confirmed load-bearing in the prior wave: `-` is n-ary
+    # (a valid 3-operand subtraction exists), grad/div accept an optional boundary
+    # metavariable, laplacian is strictly unary.
+    assert reg.OPS["-"].arity_bounds == (1, None)
+    assert reg.OPS["grad"].arity_bounds == (1, 2)
+    assert reg.OPS["div"].arity_bounds == (1, 2)
+    assert reg.OPS["laplacian"].arity_bounds == (1, 1)
+
+
 def test_registry_has_no_duplicate_entries():
     # The dict would silently dedup a repeated tuple entry; guard against it.
     assert len(reg._ALL) == len(reg.OPS)
@@ -91,21 +123,57 @@ def test_rewrite_target_tier_is_exactly_spatial_sugar():
     assert set(reg.by_tier("rewrite_target")) == _cat("spatial_sugar")
 
 
+def test_unary_elementary_helper_agrees_with_raw_scan():
+    # The ``unary_elementary()`` query (single-sourced key set for the SymPy /
+    # numpy value tables) must agree with an independent raw scan of OPS.
+    assert set(reg.unary_elementary()) == _unary_elementary()
+
+
+# ---------------------------------------------------------------------------
+# structural_checks.py — arity bounds (DERIVED from op_registry)
+# ---------------------------------------------------------------------------
+
+
+def test_structural_arity_derives_from_registry():
+    # _OPERATOR_ARITY is exactly the registry's arity_bounds_map() — every op with
+    # a structural arity contract, and no others. Re-hardcoding it to a stale set
+    # fails here.
+    assert structural_checks._OPERATOR_ARITY == reg.arity_bounds_map()
+    # And every arity-bound op is a registered op (no orphan / typo).
+    assert set(structural_checks._OPERATOR_ARITY) <= REG_NAMES
+
+
+# ---------------------------------------------------------------------------
+# esm_types.py — the NumPy-path array-op set (DERIVED from op_registry)
+# ---------------------------------------------------------------------------
+
+
+def test_esm_types_array_ops_matches_registry():
+    # ARRAY_OPS routes a model to the NumPy simulate path. It is the union of the
+    # `array` category (aggregate/makearray/index/broadcast/reshape/transpose/
+    # concat) and the `geometry` category (intersect_polygon,
+    # polygon_intersection_area) — both carry array-valued operands.
+    assert set(esm_types.ARRAY_OPS) == _cat("array") | _cat("geometry")
+
+
 # ---------------------------------------------------------------------------
 # expression.py — ESM<->SymPy tables
 # ---------------------------------------------------------------------------
 
 
 def test_expression_unary_sympy_matches_registry():
-    # _UNARY_SYMPY handles the unary elementary functions EXCEPT `abs` (which uses
+    # _UNARY_SYMPY's VALUES are local SymPy callables, but its KEY SET is DERIVED
+    # from the registry: the unary elementary functions EXCEPT `abs` (which uses
     # the NaN-safe `_ess_numeric_abs` placeholder, handled explicitly), PLUS the
-    # unary logical `not`.
+    # unary logical `not`. (A registry op missing its local value is a loud
+    # import-time KeyError; this pins the derived key set.)
     expected = (_unary_elementary() - {"abs"}) | {"not"}
     assert set(expression._UNARY_SYMPY) == expected
 
 
 def test_expression_binary_sympy_matches_registry():
-    # _BINARY_SYMPY handles division, atan2, and the six evaluable comparisons.
+    # _BINARY_SYMPY: local values, KEY SET derived — division, atan2, and the six
+    # evaluable (non-alias) comparisons.
     expected = {"/", "atan2"} | _comparison_noalias()
     assert set(expression._BINARY_SYMPY) == expected
 
@@ -125,11 +193,14 @@ def test_expression_from_sympy_tables_are_registered():
 
 
 def test_numpy_scalar_funcs_matches_registry():
-    # _SCALAR_FUNCS is exactly the unary elementary functions (incl. abs).
+    # _SCALAR_FUNCS: local numpy ufuncs, KEY SET derived — exactly the unary
+    # elementary functions (incl. abs).
     assert set(numpy_interpreter._SCALAR_FUNCS) == _unary_elementary()
 
 
 def test_numpy_cmp_ufuncs_matches_registry():
+    # _CMP_UFUNCS: local numpy ufuncs, KEY SET derived — the six non-alias
+    # comparison ops.
     assert set(numpy_interpreter._CMP_UFUNCS) == _comparison_noalias()
 
 
@@ -139,8 +210,9 @@ def test_numpy_cmp_ufuncs_matches_registry():
 
 
 def test_cadence_relational_ops_matches_registry():
-    # RELATIONAL_OPS is exactly the `relational` category (value-invention +
-    # index-returning reducers): skolem/rank/argmin/argmax/distinct/join.
+    # RELATIONAL_OPS DERIVES from the `relational` category (value-invention +
+    # index-returning reducers): skolem/rank/argmin/argmax/distinct/join. This
+    # guards the derivation against a regression that re-hardcodes a stale set.
     assert set(cadence.RELATIONAL_OPS) == _cat("relational")
 
 
@@ -150,9 +222,10 @@ def test_cadence_relational_ops_matches_registry():
 
 
 def test_flatten_spatial_ops_matches_registry():
-    # _SPATIAL_OPS is the differential spatial sugar (grad/div/laplacian/curl).
-    # `integral` is spatial-sugar too but is NOT a differential operator node
-    # (no `.dim`), so this detector legitimately excludes it.
+    # _SPATIAL_OPS DERIVES from the spatial-sugar category minus `integral`:
+    # the differential spatial sugar (grad/div/laplacian/curl). `integral` is
+    # spatial-sugar too but is NOT a differential operator node (no `.dim`), so
+    # this detector legitimately excludes it. Guards the derivation formula.
     expected = _cat("spatial_sugar") - {"integral"}
     assert set(flatten._SPATIAL_OPS) == expected
 

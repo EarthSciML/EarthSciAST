@@ -42,6 +42,7 @@ from .expr_walk import any_child, iter_children, map_children, walk
 # original name for backward compatibility — ``simulation_array`` and callers in
 # this module still import ``_expand_range`` from :mod:`.flatten`.
 from .index_ranges import expand_range as _expand_range
+from .op_registry import by_category as _by_category
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
@@ -294,7 +295,11 @@ class FlattenedSystem:
 # ============================================================================
 
 
-_SPATIAL_OPS = {"grad", "div", "laplacian", "curl"}
+# The differential spatial-sugar ops (grad/div/laplacian/curl), DERIVED from the
+# canonical op registry: the ``spatial_sugar`` category minus ``integral`` (which
+# is spatial sugar but carries no ``.dim`` differential — this detector excludes
+# it). Single-sourced so it cannot drift from op_registry.
+_SPATIAL_OPS = _by_category("spatial_sugar") - {"integral"}
 # The canonical array-op set lives in esm_types (shared with
 # numpy_interpreter.expr_contains_array_op); keep the module-local alias for
 # existing references.
