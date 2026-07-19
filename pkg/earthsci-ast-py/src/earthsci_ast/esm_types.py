@@ -4,6 +4,7 @@ Type definitions for ESM Format using dataclasses.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import fields as _dataclass_fields
 from enum import Enum
 from typing import Any, Literal, Union
 
@@ -16,100 +17,178 @@ from typing import Any, Literal, Union
 class ExprNode:
     """A node in an expression tree."""
 
-    op: str
-    args: list[Expr] = field(default_factory=list)
-    wrt: str | None = None  # with respect to (for derivatives)
-    dim: str | None = None  # dimension information
-    var: str | None = None  # integration variable name (for integral operator, JSON key "var")
-    lower: Expr | None = None  # lower integration bound (for integral operator)
-    upper: Expr | None = None  # upper integration bound (for integral operator)
+    op: str = field(metadata={"kind": "scalar"})
+    args: list[Expr] = field(default_factory=list, metadata={"kind": "expr_list"})
+    wrt: str | None = field(default=None, metadata={"kind": "scalar"})  # with respect to (for derivatives)
+    dim: str | None = field(default=None, metadata={"kind": "scalar"})  # dimension information
+    var: str | None = field(default=None, metadata={"kind": "scalar"})  # integration variable name (for integral operator, JSON key "var")
+    lower: Expr | None = field(default=None, metadata={"kind": "expr"})  # lower integration bound (for integral operator)
+    upper: Expr | None = field(default=None, metadata={"kind": "expr"})  # upper integration bound (for integral operator)
 
     # Aggregate extensions (schema §ExpressionNode). None unless the op uses them.
     # The canonical Functional Aggregate Query op tag is "aggregate".
-    output_idx: list[str | int] | None = None
-    expr: Expr | None = None
-    reduce: str | None = None  # default "+"; names only the semiring ⊕ operator
+    output_idx: list[str | int] | None = field(default=None, metadata={"kind": "scalar"})
+    expr: Expr | None = field(default=None, metadata={"kind": "expr"})
+    reduce: str | None = field(default=None, metadata={"kind": "scalar"})  # default "+"; names only the semiring ⊕ operator
     # Named semiring (⊕, ⊗) parameterizing the reduction (RFC §5.1). When present
     # it supersedes ``reduce``; absent ⇒ "sum_product" (today's semantics).
-    semiring: str | None = None
+    semiring: str | None = field(default=None, metadata={"kind": "scalar"})
     # Each range value is EITHER a dense integer tuple ([start, stop] or
     # [start, step, stop]) OR an index-set reference {"from": <name>, "of": [...]}
     # resolved against the document ``index_sets`` registry (RFC §5.2).
-    ranges: dict[str, list[int] | dict[str, Any]] | None = None
+    ranges: dict[str, list[int] | dict[str, Any]] | None = field(default=None, metadata={"kind": "canonical_nested"})
     # Value-equality joins (RFC §5.3): an array of join clauses, each
     # ``{"on": [[left, right], ...]}`` naming key-column pairs. An inner
     # equi-join — a ⊗-product term is contributed only for index combinations
     # whose key columns are equal on every listed pair; an unmatched
     # combination contributes the additive identity 0̄. None ⇒ positional
     # einsum (factors combine by shared index name), exactly as today.
-    join: list[dict[str, Any]] | None = None
+    join: list[dict[str, Any]] | None = field(default=None, metadata={"kind": "scalar"})
     # Boolean predicate restricting which index combinations contribute a
     # ⊗-product term (RFC §5.3 / §7.2). Combinations for which it is false
     # contribute 0̄. None ⇒ no filter.
-    filter: Expr | None = None
+    filter: Expr | None = field(default=None, metadata={"kind": "expr"})
     # Set semantics for an index-set-producing aggregate (RFC §5.5). Parsed for
     # schema completeness; data-derived index-set materialization is not part of
     # the M2 join work.
-    distinct: bool | None = None
+    distinct: bool | None = field(default=None, metadata={"kind": "scalar"})
     # Skolem-term expression for an index-set-producing aggregate (RFC §5.5).
-    key: Expr | None = None
+    key: Expr | None = field(default=None, metadata={"kind": "expr"})
     # Documentary relation tag for a `skolem` node (e.g. "edge"/"bin"/"pair").
     # Purely descriptive: it names the relation the emitted key belongs to and is
     # NEVER part of the key itself. ``args`` are PURE key components (exact integer
     # IDs, §5.5.1 rule 4) — a leading string in ``args`` is no longer overloaded as
     # the tag (which silently masked a real component on a typo). JSON wire key
     # "label". Mirrors the Julia reference `label` field.
-    label: str | None = None
+    label: str | None = field(default=None, metadata={"kind": "scalar"})
     # makearray:
-    regions: list[list[list[int]]] | None = None
-    values: list[Expr] | None = None
+    regions: list[list[list[int]]] | None = field(default=None, metadata={"kind": "canonical_nested"})
+    values: list[Expr] | None = field(default=None, metadata={"kind": "expr_list"})
     # reshape:
-    shape: list[int | str] | None = None
+    shape: list[int | str] | None = field(default=None, metadata={"kind": "canonical_nested"})
     # transpose:
-    perm: list[int] | None = None
+    perm: list[int] | None = field(default=None, metadata={"kind": "canonical_nested"})
     # concat:
-    axis: int | None = None
+    axis: int | None = field(default=None, metadata={"kind": "scalar"})
     # broadcast:
-    fn: str | None = None
+    fn: str | None = field(default=None, metadata={"kind": "scalar"})
     # Node addressing (RFC §6.1): a node-local id by which a `kind:"derived"`
     # index set names its producer via `from_faq`. Carried on an
     # `intersect_polygon` leaf so its data-dependent clip ring is exposed as a
     # derived index set the `polygon_area` FAQ ranges over (RFC §8.1).
-    id: str | None = None
+    id: str | None = field(default=None, metadata={"kind": "scalar"})
     # Geometry interpretation for the `intersect_polygon` leaf — "planar" |
     # "spherical" | "geodesic" (RFC §8.1 / Appendix B; CONFORMANCE_SPEC.md
     # §5.8.4). REQUIRED on every intersect_polygon node, no default; matched
     # EXACTLY across bindings (two bindings compare only same-manifold).
     # Meaningful only for intersect_polygon; ignored on any other op.
-    manifold: str | None = None
+    manifold: str | None = field(default=None, metadata={"kind": "scalar"})
     # call (registered function invocation, see esm-spec §4.4 / §9.2):
-    handler_id: str | None = None
+    handler_id: str | None = field(default=None, metadata={"kind": "scalar"})
     # fn (closed function registry — esm-spec §9.2): the dotted module path of
     # a function in the spec-defined closed set (e.g. "datetime.year",
     # "interp.searchsorted").
-    name: str | None = None
+    name: str | None = field(default=None, metadata={"kind": "scalar"})
     # const (inline literal): the carried value. Any JSON number or nested
     # array thereof. Used to thread const-array tables through the AST without
     # premature numeric collapse (notably as `xs` for `interp.searchsorted`).
-    value: Any | None = None
+    value: Any | None = field(default=None, metadata={"kind": "scalar"})
     # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
     # node references. ``args`` MUST be empty for a table_lookup node — the
     # per-axis input expressions live in ``table_axes``.
-    table: str | None = None
+    table: str | None = field(default=None, metadata={"kind": "scalar"})
     # table_lookup: per-axis input-coordinate expression map. Keys MUST match
     # the axis names declared on the referenced FunctionTable; values are
     # arbitrary scalar Expressions (number, variable reference, or AST node).
     # Stored under the JSON key ``axes`` on the wire.
-    table_axes: dict[str, Expr] | None = None
+    table_axes: dict[str, Expr] | None = field(default=None, metadata={"wire": "axes", "kind": "expr_dict"})
     # table_lookup: which output of a multi-output table to return. Either a
     # non-negative integer (0-based index into the leading data dimension) or
     # a string (an entry of the table's outputs list). Single-output tables
     # MAY omit this (defaults to 0 at lowering time).
-    output: int | str | None = None
+    output: int | str | None = field(default=None, metadata={"kind": "scalar"})
 
 
 # Recursive type definition for expressions
 Expr = Union[int, float, str, ExprNode]
+
+
+# ---------------------------------------------------------------------------
+# ExprNode wire codec — the SINGLE declaration site for how each ExprNode field
+# maps to/from JSON. ``parse._parse_expression``, ``serialize._serialize_expression``
+# and ``expr_walk`` all read this, and ``canonicalize`` derives its non-emissible
+# set from the same ``dataclasses.fields(ExprNode)``. Adding a field therefore
+# means editing ONLY the dataclass above (its ``field(metadata=...)`` plus a slot
+# in the authored wire order below); the import-time check fails closed if the
+# two drift.
+#
+# Per-field metadata (attached on the dataclass fields above):
+#   "wire": JSON key on the wire (defaults to the Python field name; only
+#           ``table_axes`` differs — wire key ``axes``).
+#   "kind": codec class —
+#       "scalar"           plain JSON passthrough (str/num/bool/list/dict data)
+#       "expr"             one nested Expression, (de)serialized recursively
+#       "expr_list"        a list of nested Expressions
+#       "expr_dict"        a {name: Expression} map (table_lookup axes)
+#       "canonical_nested" integer descriptor array canonicalized on emit
+# ---------------------------------------------------------------------------
+
+# Authored WIRE ORDER of ExprNode fields — the exact key order emitted by
+# ``_serialize_expression`` and pinned BYTE-FOR-BYTE by the cross-language golden
+# fixtures. It equals the dataclass field order EXCEPT ``label``, which the wire
+# emits between ``name`` and ``value`` (verified against the goldens). This tuple
+# pins ORDER only; each field's wire key and codec kind live in its metadata.
+_EXPR_WIRE_ORDER: tuple[str, ...] = (
+    "op", "args", "wrt", "dim", "var", "lower", "upper", "output_idx", "expr",
+    "reduce", "semiring", "ranges", "join", "filter", "distinct", "key",
+    "regions", "values", "shape", "perm", "axis", "fn", "id", "manifold",
+    "handler_id", "name", "label", "value", "table", "table_axes", "output",
+)
+
+#: ExprNode fields ALWAYS emitted (never omitted when None/empty); every other
+#: field omits when its value is None.
+_EXPR_REQUIRED_FIELDS = frozenset({"op", "args"})
+
+#: Codec kinds whose value is (or contains) nested child Expressions.
+_EXPR_CHILD_KINDS = frozenset({"expr", "expr_list", "expr_dict"})
+
+
+def _build_expr_wire_spec() -> tuple[tuple[str, str, str, bool], ...]:
+    """Return ``(field_name, wire_key, kind, required)`` for every ExprNode
+    field in wire-emit order, derived from the field metadata.
+
+    Fail-closed: every dataclass field must appear exactly once in
+    ``_EXPR_WIRE_ORDER`` and carry a ``kind`` — so adding a field without giving
+    it a wire slot / codec raises here at import rather than silently dropping it
+    from the wire (the keystone this codec exists to protect).
+    """
+    by_name = {f.name: f for f in _dataclass_fields(ExprNode)}
+    if set(_EXPR_WIRE_ORDER) != set(by_name):
+        missing = sorted(set(by_name) - set(_EXPR_WIRE_ORDER))
+        extra = sorted(set(_EXPR_WIRE_ORDER) - set(by_name))
+        raise RuntimeError(
+            f"ExprNode wire spec drift: fields missing a wire slot={missing}; "
+            f"wire slots with no field={extra}"
+        )
+    spec: list[tuple[str, str, str, bool]] = []
+    for name in _EXPR_WIRE_ORDER:
+        meta = by_name[name].metadata
+        kind = meta["kind"]  # KeyError => a field lacks a codec kind (fail closed)
+        wire = meta.get("wire", name)
+        spec.append((name, wire, kind, name in _EXPR_REQUIRED_FIELDS))
+    return tuple(spec)
+
+
+#: ``(field_name, wire_key, kind, required)`` in wire-emit order — driven by
+#: parse/serialize.
+EXPR_WIRE_SPEC: tuple[tuple[str, str, str, bool], ...] = _build_expr_wire_spec()
+
+#: ``(field_name, kind)`` for the child-bearing fields only, in canonical visit
+#: order (args, then the single-expr slots, then values, then table_axes) — the
+#: ONE child-field declaration ``expr_walk`` reads.
+EXPR_CHILD_SPEC: tuple[tuple[str, str], ...] = tuple(
+    (name, kind) for name, _wire, kind, _req in EXPR_WIRE_SPEC if kind in _EXPR_CHILD_KINDS
+)
 
 
 # The canonical Functional Aggregate Query op tag.

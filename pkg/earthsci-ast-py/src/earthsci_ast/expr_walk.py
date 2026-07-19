@@ -24,29 +24,38 @@ from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any, Callable
 
-from .esm_types import Expr, ExprNode
+from .esm_types import EXPR_CHILD_SPEC, Expr, ExprNode
 
 __all__ = ["iter_children", "any_child", "map_children", "walk"]
 
-# Single-child expression slots, in canonical visit order (args come first,
-# values after these, then table_axes; see iter_children).
-_SINGLE_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
+# The child-bearing ExprNode fields and their codec kinds, in canonical visit
+# order — read from the SINGLE ExprNode field declaration (``EXPR_CHILD_SPEC`` in
+# esm_types), so a new expression-bearing field is walked automatically. Order:
+# ``args``, then the single-expr slots (``lower``/``upper``/``expr``/``filter``/
+# ``key``), then ``values``, then ``table_axes``.
+_CHILD_SPEC = EXPR_CHILD_SPEC
+
+# Single-child expression slots, in canonical visit order (kind == "expr").
+# Preserved as a named constant for the historical reference in
+# ``structural_checks`` (the one true single-child-field set).
+_SINGLE_CHILD_FIELDS = tuple(name for name, kind in _CHILD_SPEC if kind == "expr")
 
 
 def iter_children(node: ExprNode) -> Iterator[Expr]:
     """Yield every expression-bearing child of ``node`` in deterministic
     order: ``args``, then ``lower``/``upper``/``expr``/``filter``/``key``,
     then ``values``, then ``table_axes`` entries sorted by axis name."""
-    yield from node.args
-    for field_name in _SINGLE_CHILD_FIELDS:
-        child = getattr(node, field_name)
-        if child is not None:
+    for name, kind in _CHILD_SPEC:
+        child = getattr(node, name)
+        if child is None:
+            continue
+        if kind == "expr":
             yield child
-    if node.values is not None:
-        yield from node.values
-    if node.table_axes is not None:
-        for k in sorted(node.table_axes):
-            yield node.table_axes[k]
+        elif kind == "expr_list":
+            yield from child
+        elif kind == "expr_dict":
+            for k in sorted(child):
+                yield child[k]
 
 
 def any_child(node: ExprNode, predicate: Callable[[Expr], bool]) -> bool:
@@ -64,15 +73,17 @@ def map_children(node: ExprNode, fn: Callable[[Expr], Expr]) -> ExprNode:
     ``table``, ``output`` — and any field added later) is preserved
     automatically. Never rebuild an ExprNode by listing fields by hand.
     """
-    updates: dict = {"args": [fn(a) for a in node.args]}
-    for field_name in _SINGLE_CHILD_FIELDS:
-        child = getattr(node, field_name)
-        if child is not None:
-            updates[field_name] = fn(child)
-    if node.values is not None:
-        updates["values"] = [fn(v) for v in node.values]
-    if node.table_axes is not None:
-        updates["table_axes"] = {k: fn(v) for k, v in node.table_axes.items()}
+    updates: dict = {}
+    for name, kind in _CHILD_SPEC:
+        child = getattr(node, name)
+        if child is None:
+            continue
+        if kind == "expr":
+            updates[name] = fn(child)
+        elif kind == "expr_list":
+            updates[name] = [fn(v) for v in child]
+        elif kind == "expr_dict":
+            updates[name] = {k: fn(v) for k, v in child.items()}
     return replace(node, **updates)
 
 
