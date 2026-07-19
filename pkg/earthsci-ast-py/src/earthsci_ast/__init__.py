@@ -268,12 +268,6 @@ from .codegen import (
     to_python_code,
 )
 
-# Migration functionality (v0.1 → v0.2 dict-level transform behind esm-migrate)
-from .migration import (
-    migrate_file_0_1_to_0_2,
-    MigrationError,
-)
-
 # Runtime data loaders (dispatch on DataLoader.kind)
 from .data_loaders import (
     UrlTemplateError,
@@ -488,9 +482,6 @@ __all__ = [
     # Code generation
     "to_julia_code",
     "to_python_code",
-    # Migration functionality
-    "migrate_file_0_1_to_0_2",
-    "MigrationError",
     # Runtime data loaders
     "UrlTemplateError",
     "expand_url_template",
