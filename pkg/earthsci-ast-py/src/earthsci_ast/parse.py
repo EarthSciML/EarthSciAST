@@ -36,12 +36,13 @@ if TYPE_CHECKING:
 import jsonschema
 from jsonschema import validate
 
-from .diagnostics import (
+from .error_handling import (
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
 )
 from .errors import EarthSciAstError, ParseError
 from .esm_types import (
+    EXPR_WIRE_SPEC,
     AffectEquation,
     Assertion,
     CallbackCoupling,
@@ -238,68 +239,48 @@ def _parse_expression(
         def rec(sub: Any) -> Expr:  # recurse threading the identity memo
             return _parse_expression(sub, memo)
 
-        # Parse ExprNode
+        # Parse ExprNode. ``op`` is required (direct index → KeyError on a
+        # malformed hand-built node); every other field is decoded from the
+        # single wire-codec declaration (EXPR_WIRE_SPEC, esm_types) by its codec
+        # ``kind``. ``table_axes`` is op-gated + validated, so it is handled
+        # after the generic pass rather than in it.
         op = expr_data["op"]
-        args = [rec(arg) for arg in expr_data["args"]]
-        wrt = expr_data.get("wrt")
-        dim = expr_data.get("dim")
+        kwargs: dict[str, Any] = {"op": op}
+        for name, wire, kind, required in EXPR_WIRE_SPEC:
+            if name in ("op", "table_axes"):
+                continue
+            if kind in ("scalar", "canonical_nested"):
+                # Parse does NOT canonicalize integer descriptor arrays — that is
+                # an emit-time normalization; here they are plain passthrough.
+                kwargs[name] = expr_data.get(wire)
+            elif kind == "expr":
+                kwargs[name] = rec(expr_data[wire]) if wire in expr_data else None
+            elif kind == "expr_list":
+                if required:  # ``args`` — required, direct index
+                    kwargs[name] = [rec(v) for v in expr_data[wire]]
+                else:  # ``values`` — optional
+                    kwargs[name] = (
+                        [rec(v) for v in expr_data[wire]] if wire in expr_data else None
+                    )
 
-        # integral op (schema §ExpressionNode `integral`): the integration
-        # variable name (`var`, a string) plus lower/upper bounds which are
-        # themselves Expressions (numeric literal, parameter ref, or subtree).
-        var = expr_data.get("var")
-        lower = rec(expr_data["lower"]) if "lower" in expr_data else None
-        upper = rec(expr_data["upper"]) if "upper" in expr_data else None
-
-        # Validate operator-specific field requirements
-        if op == "D" and wrt is None:
+        # Validate operator-specific field requirements (unchanged semantics).
+        if op == "D" and kwargs["wrt"] is None:
             raise ParseError("Operator 'D' requires 'wrt' field to be specified")
-        if op == "grad" and dim is None:
+        if op == "grad" and kwargs["dim"] is None:
             raise ParseError("Operator 'grad' requires 'dim' field to be specified")
-
-        # Array-op fields (schema §ExpressionNode).
-        output_idx = expr_data.get("output_idx")
-        body_expr = rec(expr_data["expr"]) if "expr" in expr_data else None
-        reduce = expr_data.get("reduce")
-        semiring = expr_data.get("semiring")
-        ranges = expr_data.get("ranges")
-        # M2 value-equality join + filter predicate (RFC §5.3) and the §5.5
-        # index-set-producing fields. ``join``/``distinct`` are plain data;
-        # ``filter``/``key`` are nested Expressions.
-        join = expr_data.get("join")
-        filter_expr = rec(expr_data["filter"]) if "filter" in expr_data else None
-        distinct = expr_data.get("distinct")
-        key_expr = rec(expr_data["key"]) if "key" in expr_data else None
-        # Documentary relation tag on a `skolem` node (§5.5). Purely descriptive —
-        # NEVER part of the emitted key; `args` are pure key components.
-        label = expr_data.get("label")
-        regions = expr_data.get("regions")
-        values = None
-        if "values" in expr_data:
-            values = [rec(v) for v in expr_data["values"]]
-        shape = expr_data.get("shape")
-        perm = expr_data.get("perm")
-        axis = expr_data.get("axis")
-        fn = expr_data.get("fn")
-        handler_id = expr_data.get("handler_id")
-        name = expr_data.get("name")
-        value = expr_data.get("value")
-        # Node id (RFC §6.1) + geometry-kernel manifold (RFC §8.1, esm-spec.md
-        # §8.6.1). Both geometry leaves — the array-valued `intersect_polygon`
-        # clip and the fused scalar `polygon_intersection_area` — are strictly
-        # binary with a required manifold (the schema enforces both); fail fast
-        # here so a hand-built node mirrors that.
-        node_id = expr_data.get("id")
-        manifold = expr_data.get("manifold")
-        if op in ("intersect_polygon", "polygon_intersection_area") and manifold is None:
+        # Geometry-kernel manifold (RFC §8.1, esm-spec.md §8.6.1). Both geometry
+        # leaves — the array-valued `intersect_polygon` clip and the fused scalar
+        # `polygon_intersection_area` — are strictly binary with a REQUIRED
+        # manifold (the schema enforces both); fail fast so a hand-built node
+        # mirrors that.
+        if op in ("intersect_polygon", "polygon_intersection_area") and kwargs["manifold"] is None:
             raise ParseError(
                 f"Operator {op!r} requires a 'manifold' field "
                 "(planar / spherical / geodesic); it carries no default"
             )
-
-        if op == "call" and handler_id is None:
+        if op == "call" and kwargs["handler_id"] is None:
             raise ParseError("Operator 'call' requires 'handler_id' field to be specified")
-        if op == "fn" and name is None:
+        if op == "fn" and kwargs["name"] is None:
             raise ParseError("Operator 'fn' requires 'name' field to be specified")
         if op == "const" and "value" not in expr_data:
             raise ParseError("Operator 'const' requires 'value' field to be specified")
@@ -307,56 +288,23 @@ def _parse_expression(
         # table_lookup (esm-spec §9.5, v0.4.0): table id, per-axis input
         # expression map (carried under JSON key "axes"), optional output
         # selector. ``args`` MUST be empty for a table_lookup node.
-        table = expr_data.get("table")
-        table_axes_raw = expr_data.get("axes") if op == "table_lookup" else None
         table_axes = None
         if op == "table_lookup":
-            if table is None:
+            if kwargs["table"] is None:
                 raise ParseError("Operator 'table_lookup' requires 'table' field to be specified")
+            table_axes_raw = expr_data.get("axes")
             if not isinstance(table_axes_raw, dict):
                 raise ParseError(
                     "Operator 'table_lookup' requires 'axes' to be an object mapping axis names to input expressions"
                 )
             table_axes = {k: rec(v) for k, v in table_axes_raw.items()}
-            if args:
+            if kwargs["args"]:
                 raise ParseError(
                     "Operator 'table_lookup' must have empty 'args' (per-axis inputs live under 'axes')"
                 )
-        output = expr_data.get("output")
+        kwargs["table_axes"] = table_axes
 
-        node = ExprNode(
-            op=op,
-            args=args,
-            wrt=wrt,
-            dim=dim,
-            var=var,
-            lower=lower,
-            upper=upper,
-            output_idx=output_idx,
-            expr=body_expr,
-            reduce=reduce,
-            semiring=semiring,
-            ranges=ranges,
-            join=join,
-            filter=filter_expr,
-            distinct=distinct,
-            key=key_expr,
-            label=label,
-            regions=regions,
-            values=values,
-            shape=shape,
-            perm=perm,
-            axis=axis,
-            fn=fn,
-            handler_id=handler_id,
-            name=name,
-            value=value,
-            id=node_id,
-            manifold=manifold,
-            table=table,
-            table_axes=table_axes,
-            output=output,
-        )
+        node = ExprNode(**kwargs)
         # Keep the raw dict alive alongside the memo entry so its id is stable.
         memo[id(expr_data)] = (expr_data, node)
         return node

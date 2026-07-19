@@ -4,7 +4,7 @@ Holds the pieces every simulation pathway needs — the
 :class:`SimulationResult` container, the optional SciPy import guard, and the
 dense-output point budget — so the pathway submodules
 (:mod:`.simulation_array`, :mod:`.simulation_loaders`,
-:mod:`.simulation_legacy`) can share them without importing each other.
+:mod:`.simulation_scalar`) can share them without importing each other.
 ``earthsci_ast.simulation`` re-exports this module's API.
 """
 from __future__ import annotations

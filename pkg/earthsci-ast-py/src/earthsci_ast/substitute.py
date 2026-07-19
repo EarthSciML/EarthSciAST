@@ -11,6 +11,7 @@ from .esm_types import (
     ExprNode,
 )
 from .expr_walk import any_child, map_children
+from .json_walk import DICT_LIST_CHILD_FIELDS, DICT_SINGLE_CHILD_FIELDS
 
 
 def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
@@ -48,14 +49,18 @@ def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
         # Handle dict-form expression nodes (e.g. {"op": "+", "args": ["x", "y"]}).
         # Copy ALL keys verbatim — hand-listing keys silently dropped
         # expr/values/filter/key/name/value/... — recursing only into the
-        # expression-bearing keys (the dict-form mirror of expr_walk's
-        # canonical child set; ``axes`` is table_lookup's per-axis input map).
+        # expression-bearing keys. The single-child slots and list slots come
+        # from the shared canonical field set (``json_walk.DICT_*_CHILD_FIELDS``,
+        # the dict-form mirror of expr_walk's child set) rather than being
+        # re-listed here; ``axes`` is table_lookup's per-axis input map. Order is
+        # immaterial — each field is rebuilt independently and every non-child
+        # key is preserved verbatim by the initial ``dict(expr)`` copy.
         if "op" in expr:
             result = dict(expr)
-            for k in ("expr", "filter", "key", "lower", "upper"):
+            for k in DICT_SINGLE_CHILD_FIELDS:
                 if k in result:
                     result[k] = substitute(result[k], bindings)
-            for k in ("args", "values"):
+            for k in DICT_LIST_CHILD_FIELDS:
                 if k in result and isinstance(result[k], list):
                     result[k] = [substitute(v, bindings) for v in result[k]]
             if "axes" in result and isinstance(result["axes"], dict):

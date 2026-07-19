@@ -15,6 +15,7 @@ import warnings
 
 from . import op_registry
 from .esm_types import Equation, EsmFile, Expr, ExprNode, Model, ReactionSystem
+from .serialize import _canonical_number
 
 # ---------------------------------------------------------------------------
 # Greek letters: ONE canonical table drives every derived lookup / regex below
@@ -589,9 +590,11 @@ def _format_number(num: int | float, format_type: str) -> str:
         # ascii: no leading `+` on a positive exponent.
         return f"{mantissa}e{exp}"
 
-    # Plain-decimal band. Integers (and integral floats) print without a point.
-    if isinstance(num, int) or (isinstance(num, float) and num.is_integer()):
-        s = str(int(num))
+    # Plain-decimal band. Integers (and integral floats) print without a point,
+    # via the shared canonical-number rule (:func:`serialize._canonical_number`).
+    canon = _canonical_number(num)
+    if isinstance(canon, int):
+        s = str(canon)
     else:
         s = (_DECIMAL_FLOAT_FORMAT % num).rstrip("0").rstrip(".")
     if format_type == "unicode":
@@ -818,7 +821,8 @@ def _format_bound(value, format_type: str) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, float):
-        return str(int(value)) if value.is_integer() else str(value)
+        canon = _canonical_number(value)
+        return str(canon) if isinstance(canon, int) else str(value)
     if _is_op_node(value):
         return _render_expr(value, format_type)
     return str(value)

@@ -24,9 +24,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .esm_types import (
-    ContinuousEvent,
     EsmFile,
-    ReactionSystem,
 )
 from .flatten import (
     FlattenedSystem,
@@ -36,33 +34,10 @@ from .flatten import (
 )
 from .simulation_array import (  # noqa: F401
     BuildInspection,
-    _aggregate_needs_interpreter,
-    _apply_equation_to_dy,
-    _apply_initial_conditions,
     _build_numpy_rhs,
-    _collect_algebraic_substitutions,
-    _densify_solution,
-    _detect_value_invention_states,
-    _element_names,
     _eval_buildtime_field,
-    _expr_referenced_names,
-    _fill_build_inspection,
-    _fold_field_ics,
-    _grid_coords_from_spatial,
-    _iter_arrayop_points,
-    _linear_pos,
-    _materialize_join_key_buffers,
-    _materialize_observeds,
-    _NumpyRhsBuild,
     _order_observed_equations,
-    _parse_element_key,
-    _rebind_index_syms,
-    _resolve_field_ic,
-    _resolve_index_set_shape,
-    _resolve_state_element,
-    _scatter_arrayop_rhs,
     _simulate_with_numpy,
-    _substitute_algebraic,
     _time_varying_observeds,
     _vi_lhs_base,
     evaluate_rhs,
@@ -77,65 +52,32 @@ from .simulation_common import (  # noqa: F401
     SCIPY_AVAILABLE,
     SimulationResult,
     _failure_result,
-    _observed_rows,
-    _resolve_override,
     solve_ivp,
 )
 
 # ---------------------------------------------------------------------------
-# Pathway submodules. simulation.py is the facade: it re-exports the full API
-# (public and underscore-private) of the pathway submodules so every name
-# historically importable from ``earthsci_ast.simulation`` keeps working.
+# Pathway submodules. simulation.py is the facade: it re-exports the public
+# simulation API plus the handful of underscore-private names that are actually
+# consumed elsewhere — the CLI PDE adapter, the PDE inline-test runner, and a
+# few targeted unit tests import them through ``earthsci_ast.simulation``.
+# Private names used nowhere outside their defining submodule are NOT funnelled
+# through here; import those directly from the submodule that defines them.
 # Import direction is acyclic: the submodules never import this module.
 # ---------------------------------------------------------------------------
-from .simulation_legacy import (  # noqa: F401
-    _apply_discrete_event_effects,
-    _check_discrete_event_condition,
-    _create_event_functions,
-    _evaluate_expression_at_state,
-    _generate_mass_action_odes,
-    simulate_reaction_system,
-    simulate_with_discrete_events,
-)
 from .simulation_loaders import (  # noqa: F401
     LoaderProvider,
-    _coerce_field_values,
-    _delta_seconds,
-    _extract_loader_var,
-    _field_epoch,
-    _loader_cadence_boundaries,
-    _loader_file_variable,
     _provider_array,
-    _provider_epoch,
     _provider_is_discrete,
-    _provider_refresh_field,
     _provider_sample_field,
-    _provider_segment_boundaries,
-    _sim_clock_epoch,
     _simulate_with_discrete_providers,
     _simulate_with_loaders,
 )
 from .simulation_scalar import (  # noqa: F401
-    _resolve_parameter_values,
     _simulate_scalar,
 )
 from .sympy_bridge import (
     SimulationError,  # noqa: F401 — re-exported (earthsci_ast.__init__ imports it here)
 )
-
-
-# Backward compatibility: provide old function signature as alias
-def simulate_legacy(
-    reaction_system: ReactionSystem,
-    initial_conditions: dict[str, float],
-    time_span: tuple[float, float],
-    events: list[ContinuousEvent] | None = None,
-    **solver_options,
-) -> SimulationResult:
-    """Legacy simulate function for backward compatibility."""
-    return simulate_reaction_system(
-        reaction_system, initial_conditions, time_span, events, **solver_options
-    )
 
 
 def simulate(

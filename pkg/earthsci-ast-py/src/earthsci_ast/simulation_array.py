@@ -18,7 +18,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
-from .expr_walk import map_children
+from .expr_walk import iter_children, map_children
 from .flatten import (
     FlattenedEquation,
     FlattenedSystem,
@@ -35,6 +35,7 @@ from .numpy_interpreter import (
     eval_expr,
     ragged_factor_scope,
 )
+from .serialize import _serialize_expression
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
     SimulationResult,
@@ -44,17 +45,11 @@ from .simulation_common import (
     solve_ivp,
 )
 from .sympy_bridge import SimulationError
-
-# Reduction identity for each combine op, used when unrolling the contracted
-# (reduced) arrayop indices in :func:`_apply_aggregate_ode_to_dy`. Hoisted to
-# module scope so it is built once at import instead of rebuilt inside the
-# per-cell reduction loop.
-_REDUCE_INIT = {
-    "+": 0.0,
-    "*": 1.0,
-    "max": float("-inf"),
-    "min": float("inf"),
-}
+from .value_invention import (
+    ValueInventionError,
+    _vi_lhs_base,
+    materialize_value_invention,
+)
 
 
 def _linear_pos(shape: tuple[int, ...], one_based: list[int]) -> int:
@@ -317,25 +312,6 @@ def _iter_arrayop_points(lhs: ExprNode, ctx: EvalContext) -> tuple[list[str], li
     return syms, ranges
 
 
-def _aggregate_needs_interpreter(node: Any) -> bool:
-    """True if an aggregate / arrayop node uses a feature beyond the simulation
-    fast path's reach — a named ``semiring`` or any ``{"from": ...}`` index-set
-    range reference (RFC §5.1 / §5.2), or a value-equality ``join`` / ``filter``
-    predicate (RFC §5.3 / §7.2). Such nodes are evaluated through the full NumPy
-    interpreter, which carries the semiring, index-set, and join/filter
-    semantics, rather than the hand-rolled einsum unroll below. (The einsum fast
-    path has no way to express a join/filter gate, so missing this routing would
-    silently drop the join — see _eval_arrayop.)
-    """
-    if not isinstance(node, ExprNode):
-        return False
-    if getattr(node, "semiring", None) is not None:
-        return True
-    if getattr(node, "join", None) or getattr(node, "filter", None) is not None:
-        return True
-    return any(isinstance(v, dict) for v in (node.ranges or {}).values())
-
-
 def _scatter_arrayop_rhs(
     lhs: ExprNode,
     rhs: Expr,
@@ -346,19 +322,38 @@ def _scatter_arrayop_rhs(
     state_layout: dict[str, slice],
     dy: np.ndarray,
 ) -> None:
-    """Evaluate an aggregate RHS through the interpreter and scatter into ``dy``.
+    """Evaluate an aggregate / arrayop ODE RHS through the interpreter and scatter
+    it into ``dy`` — the single evaluation path for the
+    ``aggregate(D(index(var, i…)), ranges) = <rhs>`` array-state derivative form.
 
-    Used for the ``aggregate(D(index(var, i…)), ranges) = aggregate(…)`` ODE form
-    when the RHS carries a named semiring or index-set range references: the full
-    interpreter produces the output-box array and each element is written to the
-    matching flat-state slot. The LHS and RHS output boxes share index symbols,
-    so element ``multi`` of the result maps to ``var[idx_exprs(multi)]``.
+    Two RHS shapes are supported:
+
+    * A SELF-CONTAINED aggregate RHS (the discretized-stencil / sum-product form,
+      possibly carrying a named ``semiring``, ``{"from": ...}`` index sets, a
+      ``join`` / ``filter`` gate, or contracted reduction indices): the full NumPy
+      interpreter materializes the whole output-box array in ONE pass — reductions
+      and gates included — and each element is written to the matching flat-state
+      slot. The LHS and RHS output boxes share index symbols, so element ``multi``
+      of the result maps to ``var[idx_exprs(multi)]`` (a scalar result broadcasts
+      to every cell).
+    * A BARE-expression RHS that references the LHS output-index symbols: it is
+      evaluated PER output cell with those symbols bound to the cell's index
+      values, yielding one scalar per cell.
+
+    Evaluating the RHS through the interpreter (rather than a hand-rolled unroll)
+    keeps the reduction / semiring / index-set / join / filter semantics in ONE
+    place — the interpreter's vectorized materialization is contractually
+    byte-for-byte identical to its scalar fallback.
     """
-    result = np.asarray(eval_expr(rhs, ctx), dtype=float)
     syms, ranges = _iter_arrayop_points(lhs, ctx)
     shape = shapes[head]
     layout_start = state_layout[head].start
     it = np.ndindex(*(len(r) for r in ranges)) if ranges else [()]
+    # A self-contained aggregate binds its own output_idx internally and
+    # materializes the whole output box in one pass; a bare expression references
+    # the LHS output-index symbols and must be evaluated per cell with them bound.
+    rhs_is_box = isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op)
+    result = np.asarray(eval_expr(rhs, ctx), dtype=float) if rhs_is_box else None
     prev_locals = dict(ctx.locals)
     try:
         for multi in it:
@@ -366,7 +361,10 @@ def _scatter_arrayop_rhs(
                 ctx.locals[s] = ranges[syms.index(s)][pos]
             idx_vals = [int(round(float(eval_expr(e, ctx)))) for e in idx_exprs]
             flat_pos = layout_start + _linear_pos(shape, idx_vals)
-            dy[flat_pos] = float(result[multi]) if result.ndim else float(result)
+            if rhs_is_box:
+                dy[flat_pos] = float(result[multi]) if result.ndim else float(result)
+            else:
+                dy[flat_pos] = float(eval_expr(rhs, ctx))
     finally:
         ctx.locals = prev_locals
 
@@ -386,10 +384,11 @@ def _apply_aggregate_ode_to_dy(
     this shape (and its contribution was written into ``dy``), ``False`` otherwise
     so :func:`_apply_equation_to_dy` can fall through to its remaining cases.
 
-    Nodes using a named semiring or ``{"from": ...}`` index sets are routed
-    through the full interpreter (:func:`_scatter_arrayop_rhs`); the dense
-    sum-product / generalized-einsum fast paths below are the hand-rolled unroll
-    preserved byte-for-byte for existing fixtures.
+    Every matching node is evaluated through the full NumPy interpreter via
+    :func:`_scatter_arrayop_rhs` — the interpreter carries the reduction /
+    semiring / index-set / join / filter semantics (and its vectorized
+    materialization is contractually byte-for-byte identical to its scalar
+    fallback), so there is no hand-rolled unroll to keep in sync.
     """
     if isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op) and lhs.expr is not None:
         body = lhs.expr
@@ -398,116 +397,16 @@ def _apply_aggregate_ode_to_dy(
             if isinstance(inner, ExprNode) and inner.op == "index" and inner.args:
                 head = inner.args[0]
                 if isinstance(head, str) and head in state_layout:
-                    # Nodes using a named semiring or {"from": ...} index sets are
-                    # evaluated through the full interpreter (which carries those
-                    # semantics) and scattered into dy; the dense sum-product fast
-                    # path below is preserved byte-for-byte for existing fixtures.
-                    if _aggregate_needs_interpreter(rhs) or _aggregate_needs_interpreter(lhs):
-                        _scatter_arrayop_rhs(
-                            lhs,
-                            rhs,
-                            inner.args[1:],
-                            head,
-                            ctx,
-                            shapes,
-                            state_layout,
-                            dy,
-                        )
-                        return True
-                    syms, ranges = _iter_arrayop_points(lhs, ctx)
-                    idx_exprs = inner.args[1:]
-                    # RHS is typically an arrayop with the same ranges — the
-                    # body is what we evaluate point-by-point. Fall through to
-                    # plain eval if it's a bare expression.
-                    # Generalized einsum: detect contracted (reduction) indices
-                    # in the RHS — keys in rhs.ranges not in rhs.output_idx.
-                    rhs_body: Expr | None
-                    rhs_reduce = "+"
-                    rhs_contract_syms: list[str] = []
-                    rhs_contract_ranges: list[list[int]] = []
-                    if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op):
-                        rhs_body = rhs.expr
-                        rhs_reduce = rhs.reduce if rhs.reduce is not None else "+"
-                        rhs_out_syms = {s for s in (rhs.output_idx or []) if isinstance(s, str)}
-                        for k_sym, k_rng in sorted((rhs.ranges or {}).items()):
-                            if k_sym not in rhs_out_syms:
-                                rhs_contract_syms.append(k_sym)
-                                rhs_contract_ranges.append(_expand_range(k_rng))
-                    else:
-                        rhs_body = rhs
-                    shape = shapes[head]
-                    layout_start = state_layout[head].start
-                    it = np.ndindex(*(len(r) for r in ranges)) if ranges else [()]
-                    sym_pos = {s: i for i, s in enumerate(syms)}
-
-                    # Vectorized fast path: a pure (non-contracted) arrayop RHS —
-                    # the discretized stencil form — materializes its whole output
-                    # box in one pass (see numpy_interpreter._materialize_map),
-                    # rather than rebuilding the region-wise makearray once per
-                    # grid point. The materialized array is then scattered into dy.
-                    # Falls through to the per-point loop on any shape mismatch.
-                    if (
-                        not rhs_contract_syms
-                        and isinstance(rhs, ExprNode)
-                        and is_aggregate_op(rhs.op)
-                    ):
-                        full = np.asarray(eval_expr(rhs, ctx), dtype=float)
-                        exp_shape = tuple(len(r) for r in ranges)
-                        if full.shape == exp_shape:
-                            prev_locals = dict(ctx.locals)
-                            try:
-                                for multi in np.ndindex(*exp_shape) if exp_shape else [()]:
-                                    for s, pos in zip(syms, multi):
-                                        ctx.locals[s] = ranges[sym_pos[s]][pos]
-                                    idx_vals = [
-                                        int(round(float(eval_expr(e, ctx)))) for e in idx_exprs
-                                    ]
-                                    flat_pos = layout_start + _linear_pos(shape, idx_vals)
-                                    dy[flat_pos] = full[multi]
-                            finally:
-                                ctx.locals = prev_locals
-                            return True
-
-                    prev_locals = dict(ctx.locals)
-                    try:
-                        for multi in it:
-                            for s, pos in zip(syms, multi):
-                                ctx.locals[s] = ranges[sym_pos[s]][pos]
-                            idx_vals = [int(round(float(eval_expr(e, ctx)))) for e in idx_exprs]
-                            flat_pos = layout_start + _linear_pos(shape, idx_vals)
-                            if not rhs_contract_syms:
-                                val = float(eval_expr(rhs_body, ctx))
-                            else:
-                                # Unroll contracted indices and combine with the
-                                # reduce op. An unknown reducer is refused (parity
-                                # with numpy_interpreter._reduce_step), never
-                                # silently treated as ``min``. `_REDUCE_INIT` is the
-                                # shared identity + validity table.
-                                if rhs_reduce not in _REDUCE_INIT:
-                                    raise SimulationError(
-                                        f"Unsupported reduce op {rhs_reduce!r} in "
-                                        f"contracted arrayop ODE"
-                                    )
-                                acc = _REDUCE_INIT[rhs_reduce]
-                                k_it = np.ndindex(*(len(r) for r in rhs_contract_ranges))
-                                for k_multi in k_it:
-                                    for k_s, k_r, k_i in zip(
-                                        rhs_contract_syms, rhs_contract_ranges, k_multi
-                                    ):
-                                        ctx.locals[k_s] = k_r[k_i]
-                                    term = float(eval_expr(rhs_body, ctx))
-                                    if rhs_reduce == "+":
-                                        acc += term
-                                    elif rhs_reduce == "*":
-                                        acc *= term
-                                    elif rhs_reduce == "max":
-                                        acc = max(acc, term)
-                                    else:  # "min" — the only remaining validated op
-                                        acc = min(acc, term)
-                                val = acc
-                            dy[flat_pos] = val
-                    finally:
-                        ctx.locals = prev_locals
+                    _scatter_arrayop_rhs(
+                        lhs,
+                        rhs,
+                        inner.args[1:],
+                        head,
+                        ctx,
+                        shapes,
+                        state_layout,
+                        dy,
+                    )
                     return True
     return False
 
@@ -598,8 +497,12 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
 
     Index symbols and other non-variable strings are gathered too; callers
     intersect the result with a known name set to keep only the meaningful
-    references. Walks ``args``, the aggregate ``expr`` body, ``values``, and the
-    join ``filter`` / ``key`` predicates so a dependency edge is never missed.
+    references. Traversal goes through :func:`earthsci_ast.expr_walk.iter_children`,
+    the single canonical child enumeration, so EVERY expression-bearing slot is
+    covered — ``args``, the integral bounds ``lower`` / ``upper``, the aggregate
+    ``expr`` body, the join ``filter`` / ``key`` predicates, ``values``, and the
+    ``table_lookup`` ``table_axes`` — and a dependency edge hidden in a bound or
+    a lookup axis is never dropped.
     """
     refs: set[str] = set()
     stack: list[Any] = [expr]
@@ -608,15 +511,7 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
         if isinstance(e, str):
             refs.add(e)
         elif isinstance(e, ExprNode):
-            stack.extend(e.args)
-            if e.expr is not None:
-                stack.append(e.expr)
-            if e.values:
-                stack.extend(e.values)
-            if e.filter is not None:
-                stack.append(e.filter)
-            if e.key is not None:
-                stack.append(e.key)
+            stack.extend(iter_children(e))
     return refs
 
 
@@ -844,6 +739,14 @@ class _NumpyRhsBuild:
     # variable; see numpy_interpreter.ragged_factor_scope). Threaded into every
     # EvalContext this build spawns. Empty without ragged index sets.
     factor_scope: dict[str, str] = field(default_factory=dict)
+    # Value-invention derived-index-set extents (RFC §6.1), keyed by the producing
+    # aggregate's `id` (the `from_faq` target): the build-time skolem/distinct/rank
+    # front-door's distinct-set cardinality, materialized ONCE at setup by
+    # :func:`value_invention.materialize_value_invention` and threaded into every
+    # EvalContext as :attr:`EvalContext.derived_extents` so a `kind:"derived"` set
+    # resolves through the DESIGNED relational path. Empty when the system has no
+    # value-invention producer (byte-identical to before).
+    derived_extents: dict[str, int] = field(default_factory=dict)
 
 
 def _resolve_field_ic(
@@ -1017,14 +920,11 @@ def _resolve_index_set_shape(
     return tuple(dims)
 
 
-def _vi_lhs_base(lhs: Expr) -> str | None:
-    """Base variable name written by an equation LHS: ``name``,
-    ``index(name, …)`` or ``D(name, …)``. ``None`` if unrecognised."""
-    if isinstance(lhs, str):
-        return lhs
-    if isinstance(lhs, ExprNode) and lhs.op in ("index", "D") and lhs.args:
-        return _vi_lhs_base(lhs.args[0])
-    return None
+# ``_vi_lhs_base`` — the base variable name written by an equation LHS — is the
+# SINGLE definition in :mod:`earthsci_ast.value_invention` (it handles the typed
+# ``ExprNode`` LHS this module passes AND the raw-JSON Mapping the front-door
+# detector walks). Imported at module top; re-exported here for the
+# :mod:`earthsci_ast.simulation` facade.
 
 
 def _detect_value_invention_states(
@@ -1064,7 +964,7 @@ def _detect_value_invention_states(
     return vi_var_names, bin_specs
 
 
-def _materialize_join_key_buffers(
+def _binning_coord_arrays(
     ordered_observed: list[tuple[str, Expr]],
     bin_specs: list[tuple[str, ExprNode, str | None]],
     index_sets: dict[str, Any],
@@ -1073,22 +973,29 @@ def _materialize_join_key_buffers(
     state_layout: dict[str, slice],
     total_size: int,
     factor_scope: dict[str, str] | None = None,
-) -> tuple[dict[str, np.ndarray], dict[str, str]]:
-    """Materialize the broad-phase bin buffers ONCE at setup (RFC §5.3).
+) -> dict[str, np.ndarray]:
+    """Materialize the JOIN-FREE binning coordinates the broad-phase bins read,
+    ONCE at setup, and return them as a name → array registry (RFC §5.3).
 
-    The bins depend only on constant geometry (the source / target polygons and
-    the ``rg_dx`` / ``rg_dy`` params), so they are computed here, off the
-    per-step hot path. Every join-FREE constant observed the bins read (the
-    binning coordinates ``rg_src_lon`` … via the polygon aggregates) is
-    materialized into a setup context first; then each bin aggregate is evaluated
-    to its per-cell integer-code buffer. Returns ``(buffers, index_sets)`` keyed
-    by bin var name — the ``EvalContext.join_key_buffers`` / ``…_index_sets`` a
-    downstream ``join.on [[rg_src_bin, rg_tgt_bin]]`` gates on.
+    The value-invention bins (``rg_src_bin`` = ``skolem("bin", floor(lon/dx),
+    floor(lat/dy))``) read binning coordinates that are themselves OBSERVED-
+    EXPRESSION-derived (``rg_src_lon`` = ``min_v rg_src_poly[a][v][1]``) — the
+    front-door's ``_vi_eval`` cannot recompute an observed aggregate, so those
+    coordinates are materialized here FIRST (through the official numpy
+    interpreter) and handed to :func:`value_invention.materialize_value_invention`
+    as additional ``const_arrays`` so the bins resolve at build time.
+
+    Join-carrying observeds (``rg_A`` / ``rg_At`` / ``rg_W`` /
+    ``surface_heat_flux``) gate on the bins themselves, so they are NOT
+    materialized here; nor is every join-free observed (a join-free reduction
+    ``total = sum(rg_A)`` reads a join-carrying observed unresolvable at bin-setup
+    time). ONLY the join-free observeds the bins transitively depend on — the
+    binning coordinates and their own inputs — are materialized. The returned dict
+    is keyed by the same (flattened) names the front-door indexes (``rg_src_poly``
+    → ``OceanDynamics.rg_src_poly``); it feeds the front-door's ``const_arrays``.
     """
-    buffers: dict[str, np.ndarray] = {}
-    idx_sets: dict[str, str] = {}
     if not bin_specs:
-        return buffers, idx_sets
+        return {}
     ctx = EvalContext(
         state_layout=state_layout,
         state_shapes=shapes,
@@ -1099,12 +1006,6 @@ def _materialize_join_key_buffers(
         index_sets=index_sets,
         factor_scope=dict(factor_scope or {}),
     )
-    # Join-carrying observeds (rg_A / rg_At / rg_W / surface_heat_flux) gate on
-    # the bins themselves, so they are NOT materialized here. Nor is every
-    # join-free observed: a join-free observed may itself READ a join-carrying
-    # observed (e.g. a reduction `total = sum(rg_A)`), which is unresolvable at
-    # bin-setup time. Materialize ONLY the join-free observeds the bins
-    # transitively depend on — the binning coordinates and their own inputs.
     join_free = [
         (name, rhs)
         for name, rhs in ordered_observed
@@ -1128,11 +1029,119 @@ def _materialize_join_key_buffers(
                 frontier.append(r)
     # Preserve the dependency-sorted order of `ordered_observed`.
     _materialize_observeds([(name, rhs) for name, rhs in join_free if name in needed], ctx)
-    for name, node, idx_set in bin_specs:
-        buffers[name] = np.asarray(eval_expr(node, ctx), dtype=float).reshape(-1)
-        if idx_set is not None:
-            idx_sets[name] = idx_set
-    return buffers, idx_sets
+    # Array observeds land in `derived_rings`, scalars in `observed_values`; both
+    # are valid const-array factors for the front-door's `_vi_eval`.
+    return {**ctx.derived_rings, **ctx.observed_values}
+
+
+def _frontdoor_join_keys_and_extents(
+    flat: FlattenedSystem,
+    ordered_observed: list[tuple[str, Expr]],
+    bin_specs: list[tuple[str, ExprNode, str | None]],
+    param_values: dict[str, float],
+    shapes: dict[str, tuple[int, ...]],
+    state_layout: dict[str, slice],
+    total_size: int,
+    factor_scope: dict[str, str],
+    loader_arrays: dict[str, np.ndarray],
+) -> tuple[dict[str, np.ndarray], dict[str, str], dict[str, int]]:
+    """Run the value-invention front-door ONCE at setup and return the broad-phase
+    join-key buffers plus the derived-index-set extents (RFC §5.3 / §6.1).
+
+    This is the single source of truth that RETIRES the former per-cell mirror
+    (``_materialize_join_key_buffers`` + ``_value_invention_extents``): the
+    front-door materialises the skolem bins through the relational engine and
+    surfaces their dense per-cell code buffers (byte-identical to the mirror — each
+    code is the interpreter's own :func:`numpy_interpreter._skolem_code`), together
+    with the producer's distinct-set cardinality.
+
+    The bins must be available BEFORE the full observed hoist (the join-carrying
+    observeds ride it and gate on the bins), so the front-door is fed the
+    binning-coordinate closure (:func:`_binning_coord_arrays`) plus any loader
+    arrays as its ``const_arrays``. The FULL pass yields both bins and extents; if
+    a producer cannot be materialised from the pre-hoist factors (a ``kind:
+    "derived"`` set whose producer needs a wider const factor), it degrades to the
+    ``maps_only`` bins with empty extents — the same fail-closed contract the
+    retired ``_value_invention_extents`` had (the per-step ``derived_rings`` path
+    is then untouched). Empty ``({}, {}, {})`` when the system has neither a bin
+    nor a value-invention producer (the common case pays only the cheap gate).
+    """
+    has_derived = any(
+        isinstance(s, dict) and s.get("kind") == "derived" and s.get("from_faq") is not None
+        for s in flat.index_sets.values()
+    )
+    if not bin_specs and not has_derived:
+        return {}, {}, {}
+    model_json = _reconstruct_model_json(flat)
+    const_arrays: dict[str, np.ndarray] = {
+        str(k): np.asarray(v)
+        for k, v in _binning_coord_arrays(
+            ordered_observed,
+            bin_specs,
+            flat.index_sets,
+            param_values,
+            shapes,
+            state_layout,
+            total_size,
+            factor_scope,
+        ).items()
+    }
+    for k, v in (loader_arrays or {}).items():
+        const_arrays[str(k)] = np.asarray(v)
+
+    def _buffers(res: Any) -> tuple[dict[str, np.ndarray], dict[str, str]]:
+        return (
+            {k: np.asarray(v, dtype=float) for k, v in res.join_key_buffers.items()},
+            dict(res.join_key_index_sets),
+        )
+
+    try:
+        res = materialize_value_invention(
+            model_json, const_arrays, param_values, index_sets=flat.index_sets
+        )
+        buffers, idx_sets = _buffers(res)
+        return buffers, idx_sets, dict(res.extents)
+    except ValueInventionError:
+        # Producer materialisation needed a factor absent pre-hoist: still surface
+        # the bins (maps-only never touches producers); extents degrade to {} —
+        # fail-closed, matching the retired _value_invention_extents.
+        res = materialize_value_invention(
+            model_json, const_arrays, param_values, index_sets=flat.index_sets, maps_only=True
+        )
+        buffers, idx_sets = _buffers(res)
+        return buffers, idx_sets, {}
+
+
+def _reconstruct_model_json(flat: FlattenedSystem) -> dict[str, Any]:
+    """Rebuild the RAW JSON model document the value-invention front-door
+    (:func:`value_invention.materialize_value_invention`) consumes from a typed
+    :class:`FlattenedSystem`.
+
+    The front-door detects / evaluates over the value-invention vocabulary
+    (``distinct`` / ``key`` / ``skolem`` / ``join``) in fields the typed
+    ``ExprNode`` carries but the numeric interpreter never consumes, so it works
+    on raw JSON (mirroring :mod:`earthsci_ast.cadence`). Every flattened variable
+    becomes a ``{type, shape?, default?}`` entry and every flattened equation is
+    serialized back to raw JSON via :func:`serialize._serialize_expression` (an
+    observed's defining expression already rides the equation list as
+    ``name = <body>``). The document index-set registry is threaded verbatim."""
+    variables: dict[str, Any] = {}
+    for name, v in (
+        list(flat.state_variables.items())
+        + list(flat.parameters.items())
+        + list(flat.observed_variables.items())
+    ):
+        entry: dict[str, Any] = {"type": v.type}
+        if v.shape:
+            entry["shape"] = list(v.shape)
+        if v.default is not None:
+            entry["default"] = v.default
+        variables[name] = entry
+    equations = [
+        {"lhs": _serialize_expression(eq.lhs), "rhs": _serialize_expression(eq.rhs)}
+        for eq in flat.equations
+    ]
+    return {"variables": variables, "equations": equations, "index_sets": flat.index_sets}
 
 
 def _fill_build_inspection(
@@ -1441,29 +1450,39 @@ def _build_numpy_rhs(
         list(flat.state_variables) + list(flat.observed_variables) + list(flat.parameters),
     )
 
-    # Value-invention bin buffers (RFC §5.3): materialize the broad-phase bins
-    # (``rg_src_bin`` / ``rg_tgt_bin``) once, from constant geometry + params, so
-    # a downstream ``join.on [[rg_src_bin, rg_tgt_bin]]`` can gate the regrid.
-    # These inputs (index sets, params, shapes, layout) are fixed for the run, so
-    # a cadence-segmented rebuild reuses them from ``static_cache`` rather than
-    # re-binning every segment.
+    # Value-invention front-door (RFC §5.3 / §6.1): materialize the broad-phase
+    # bins (``rg_src_bin`` / ``rg_tgt_bin``) and the derived-index-set extents ONCE
+    # here through the relational engine, so a downstream ``join.on [[rg_src_bin,
+    # rg_tgt_bin]]`` can gate the regrid and a ``kind:"derived"`` set resolves to
+    # its dense extent ``[1, n]``. The front-door is the SINGLE source of both (it
+    # retired the former per-cell mirror + the separate late extents call); its
+    # join-key buffers are byte-identical to the mirror's, each code being the
+    # interpreter's own skolem code. Runs BEFORE the observed hoist so the join-
+    # carrying observeds (which ride it) can gate on the bins. These inputs (index
+    # sets, params, shapes, layout) are fixed for the run, so a cadence-segmented
+    # rebuild reuses them from ``static_cache`` rather than re-binning every segment.
     if static_cache is not None and "join_key_buffers" in static_cache:
         join_key_buffers = static_cache["join_key_buffers"]
         join_key_index_sets = static_cache["join_key_index_sets"]
+        derived_extents = static_cache["derived_extents"]
     else:
-        join_key_buffers, join_key_index_sets = _materialize_join_key_buffers(
-            ordered_observed,
-            bin_specs,
-            flat.index_sets,
-            param_values,
-            shapes,
-            state_layout,
-            total_size,
-            factor_scope=factor_scope,
+        join_key_buffers, join_key_index_sets, derived_extents = (
+            _frontdoor_join_keys_and_extents(
+                flat,
+                ordered_observed,
+                bin_specs,
+                param_values,
+                shapes,
+                state_layout,
+                total_size,
+                factor_scope,
+                loader_arrays,
+            )
         )
         if static_cache is not None:
             static_cache["join_key_buffers"] = join_key_buffers
             static_cache["join_key_index_sets"] = join_key_index_sets
+            static_cache["derived_extents"] = derived_extents
 
     # Initial conditions.
     y0 = np.zeros(total_size, dtype=float)
@@ -1510,6 +1529,13 @@ def _build_numpy_rhs(
         )
     )
 
+    # ``derived_extents`` was materialized by the value-invention front-door above
+    # (:func:`_frontdoor_join_keys_and_extents`), alongside the join-key bins and
+    # from the same relational pass — the DESIGNED resolution for a ``kind:
+    # "derived"`` set whose ``from_faq`` names a skolem/distinct/rank producer,
+    # generalizing the geometry clip-ring ``derived_rings`` handoff. Threaded into
+    # every EvalContext below via ``derived_extents``.
+
     # Per-call buffers hoisted out of rhs_function and reused across every
     # solver step, eliminating the two guaranteed per-step allocations.
     # solve_ivp's RK/BDF/LSODA integrators copy the returned dydt into their
@@ -1538,6 +1564,11 @@ def _build_numpy_rhs(
             t=t,
             index_sets=flat.index_sets,
             derived_rings=dict(static_derived_rings),
+            # Value-invention derived-index-set extents, materialized once at
+            # setup by the relational front-door (above): the DESIGNED resolution
+            # for a `kind:"derived"` set whose `from_faq` names a skolem/distinct/
+            # rank producer. Constant for the run, so bound by reference.
+            derived_extents=derived_extents,
             # Bind the SHARED loader-array registry by reference. Within a cadence
             # segment its contents are fixed, so the RHS is pure; the segmenting
             # driver mutates it in place between segments to advance the cadence.
@@ -1596,6 +1627,7 @@ def _build_numpy_rhs(
         join_key_buffers=join_key_buffers,
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
+        derived_extents=derived_extents,
     )
 
 
@@ -1695,6 +1727,7 @@ def _simulate_with_numpy(
                         y=y_out[:, 0],
                         t=float(t_out[0]),
                         index_sets=flat.index_sets,
+                        derived_extents=build.derived_extents,
                         join_key_buffers=build.join_key_buffers,
                         join_key_index_sets=build.join_key_index_sets,
                         factor_scope=build.factor_scope,
@@ -1729,6 +1762,7 @@ def _simulate_with_numpy(
                             t=float(t_out[j]),
                             index_sets=flat.index_sets,
                             derived_rings=dict(build.static_derived_rings),
+                            derived_extents=build.derived_extents,
                             join_key_buffers=build.join_key_buffers,
                             join_key_index_sets=build.join_key_index_sets,
                             factor_scope=build.factor_scope,

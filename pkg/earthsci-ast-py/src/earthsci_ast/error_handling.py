@@ -1,6 +1,5 @@
 """THE single registry of stable, machine-readable diagnostic codes for the
-ESM format, plus the minimal error-handling scaffolding used by
-:mod:`earthsci_ast.validation`.
+ESM format.
 
 Single source of truth
 ----------------------
@@ -10,16 +9,15 @@ below). A maintainer adding or auditing a code therefore has exactly ONE place
 to look -- this module:
 
 * :class:`ErrorCode` -- an ``Enum`` of the *validation* codes emitted by the
-  dataclass-level validator (:mod:`earthsci_ast.validation`) as structured
-  ``ErrorCollector`` records.
+  dataclass-level validator (:mod:`earthsci_ast.validation`) as coded
+  ``ValidationError`` records.
 * module-level ``str`` constants -- the *template*, *coupling*,
   *metaparameter*, *geometry*, and *closed-function* code families raised as
   ``ExpressionTemplateError`` / ``ClosedFunctionError`` during load-time
   lowering, where the code travels as a bare ``code=`` string.
 
-:mod:`earthsci_ast.diagnostics` re-exports the ``str`` constants unchanged so
-the historical ``from earthsci_ast.diagnostics import <CODE>`` import path keeps
-resolving for its consumers; those constants are *defined* here.
+These ``str`` constants are *defined* here and imported directly by their
+consumers (``from earthsci_ast.error_handling import <CODE>``).
 
 Cross-binding contract
 ----------------------
@@ -34,9 +32,9 @@ Why two representations coexist
 -------------------------------
 The two forms are a deliberate, load-bearing distinction, not an accident:
 
-* ``ErrorCode`` members flow through structured ``ESMError`` /
-  ``ErrorCollector`` records, so an ``Enum`` gives them identity, ``repr`` and
-  exhaustiveness for the validator path.
+* ``ErrorCode`` members are emitted as coded ``ValidationError`` records by the
+  validator, so an ``Enum`` gives them identity, ``repr`` and exhaustiveness for
+  the validator path.
 * The template / coupling / closed-function codes are attached as bare
   ``code=`` strings on ``ExpressionTemplateError`` (the cross-binding raise
   path), where consumers pass the constant directly -- e.g.
@@ -48,23 +46,20 @@ The two forms are a deliberate, load-bearing distinction, not an accident:
 Import-cycle safety
 -------------------
 This module imports only the standard library, so it is a true leaf: any module
-(including :mod:`earthsci_ast.parse` and the template machinery, which reach it
-through the :mod:`earthsci_ast.diagnostics` re-export shim) can import it
+(including :mod:`earthsci_ast.parse` and the template machinery) can import it
 without creating an import cycle.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 # ===========================================================================
 # Validation codes
 # ---------------------------------------------------------------------------
 # Emitted by the dataclass-level validator (:mod:`earthsci_ast.validation`) as
-# structured ``ErrorCollector`` records. Modelled as an ``Enum`` so they carry
-# identity/repr through the ``ESMError`` records.
+# coded ``ValidationError`` records. Modelled as an ``Enum`` so they carry
+# identity/repr through the validator path.
 # ===========================================================================
 
 
@@ -203,84 +198,3 @@ INTERP_NAN_IN_AXIS = "interp_nan_in_axis"
 INTERP_AXIS_TOO_SHORT = "interp_axis_too_short"
 UNKNOWN_ENUM = "unknown_enum"
 UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol"
-
-
-# ===========================================================================
-# Error-handling scaffolding
-# ---------------------------------------------------------------------------
-# Structured records + collector used by the dataclass-level validator to
-# accumulate ``ErrorCode``-coded findings.
-# ===========================================================================
-
-
-class Severity(Enum):
-    """Error severity levels."""
-
-    ERROR = "error"
-    WARNING = "warning"
-
-
-@dataclass
-class ErrorContext:
-    """Context information for errors."""
-
-    path: str | None = None
-    component: str | None = None
-    details: dict[str, Any] | None = None
-
-
-@dataclass
-class FixSuggestion:
-    """Suggestion for fixing an error."""
-
-    description: str
-
-
-@dataclass
-class ESMError:
-    """ESM validation or processing error."""
-
-    code: ErrorCode
-    message: str
-    severity: Severity
-    context: ErrorContext | None = None
-    fix_suggestion: FixSuggestion | None = None
-
-
-class ErrorCollector:
-    """Collects errors during validation."""
-
-    def __init__(self):
-        self.errors = []
-
-    def add_error(self, error: ESMError):
-        """Add an error to the collection."""
-        self.errors.append(error)
-
-
-class ESMErrorFactory:
-    """Factory for creating ESM errors."""
-
-    @staticmethod
-    def create_equation_imbalance_error(
-        model_name: str, num_equations: int, num_unknowns: int, state_vars: list
-    ) -> ESMError:
-        """Create an equation-unknown balance error."""
-        return ESMError(
-            code=ErrorCode.EQUATION_COUNT_MISMATCH,
-            message=f"Equation-unknown balance error in model '{model_name}': {num_equations} equations for {num_unknowns} unknowns (state variables: {', '.join(state_vars)})",
-            severity=Severity.ERROR,
-            context=ErrorContext(
-                component=model_name,
-                # A JSON Pointer to the offending model (root ""), not a bare
-                # None — the structural_errors wire contract requires a pointer
-                # (CONFORMANCE_SPEC §7.1.2; pinned as `/models/<name>`).
-                path=f"/models/{model_name}",
-                details={
-                    "model_name": model_name,
-                    "num_equations": num_equations,
-                    "num_unknowns": num_unknowns,
-                    "state_variables": state_vars,
-                },
-            ),
-        )

@@ -8,6 +8,7 @@ from typing import Callable
 
 import sympy as sp
 
+from . import op_registry
 from .errors import EarthSciAstError
 from .esm_types import Expr, ExprNode, Model
 from .expr_walk import iter_children, map_children
@@ -323,7 +324,11 @@ def _make_fn_callable(
 # ``exp`` reports as "Exponential"). Ops with non-uniform handling (``abs`` uses
 # the NaN-safe ``_ess_numeric_abs`` placeholder; ``^`` canonicalizes integer
 # Float exponents) are kept explicit below rather than table-driven.
-_UNARY_SYMPY: dict[str, tuple] = {
+#
+# The SymPy VALUES live here (op_registry is a sympy-free leaf); the live
+# dispatch table's KEY SET is DERIVED from the registry just below, so it cannot
+# drift from the canonical vocabulary — see ``_UNARY_SYMPY``.
+_UNARY_SYMPY_IMPL: dict[str, tuple] = {
     "exp": (sp.exp, "Exponential"),
     "log": (sp.log, "Logarithm"),
     "log10": (lambda x: sp.log(x, 10), "log10"),
@@ -346,11 +351,21 @@ _UNARY_SYMPY: dict[str, tuple] = {
     "not": (sp.Not, "not"),
 }
 
+# KEY SET single-sourced from op_registry: the unary elementary functions EXCEPT
+# ``abs`` (which uses the NaN-safe ``_ess_numeric_abs`` placeholder, handled
+# explicitly), PLUS the unary logical ``not``. Building the dict by iterating the
+# registry-derived key set makes forgetting a value a loud import-time KeyError
+# and makes a stray mapping for an unregistered op impossible.
+_UNARY_SYMPY: dict[str, tuple] = {
+    op: _UNARY_SYMPY_IMPL[op]
+    for op in (op_registry.unary_elementary() - {"abs"}) | {"not"}
+}
+
 # Pure binary math/relational ops: each takes exactly 2 ESM arguments and maps
 # to a single SymPy callable applied to them. The second tuple element is the
 # display name used in the arity error to preserve the message text (e.g. ``/``
-# reports as "Division", ``>`` as "Greater than").
-_BINARY_SYMPY: dict[str, tuple] = {
+# reports as "Division", ``>`` as "Greater than"). VALUES local; KEY SET derived.
+_BINARY_SYMPY_IMPL: dict[str, tuple] = {
     "/": (lambda a, b: a / b, "Division"),
     "atan2": (sp.atan2, "atan2"),
     ">": (sp.StrictGreaterThan, "Greater than"),
@@ -359,6 +374,13 @@ _BINARY_SYMPY: dict[str, tuple] = {
     "<=": (sp.LessThan, "Less than or equal"),
     "==": (sp.Eq, "Equality"),
     "!=": (sp.Ne, "Inequality"),
+}
+
+# KEY SET single-sourced from op_registry: division, atan2, and the six evaluable
+# (non-alias) comparison ops.
+_BINARY_SYMPY: dict[str, tuple] = {
+    op: _BINARY_SYMPY_IMPL[op]
+    for op in {"/", "atan2"} | (op_registry.by_category("comparison") & op_registry.canonical_names())
 }
 
 

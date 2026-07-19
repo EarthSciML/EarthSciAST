@@ -31,7 +31,7 @@ import os
 import re
 from typing import Any
 
-from .diagnostics import (
+from .error_handling import (
     APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
     APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
     METAPARAMETER_NAME_CONFLICT,
@@ -58,7 +58,7 @@ from .diagnostics import (
 # Shared leaf primitives (also used by lower_expression_templates). Importing
 # them from the json_walk leaf — rather than from lower_expression_templates —
 # is what lets lower_expression_templates import ``_compose_template_bodies``
-# from here at module level without a cycle. ``APPLY_OP``, ``_expand_apply``,
+# from here at module level without a cycle. ``APPLY_OP``,
 # ``_validate_templates`` and ``reject_expression_templates_pre_v04`` that this
 # module still needs from lower_expression_templates are imported lazily at
 # their (function-scoped) use sites for the same reason.
@@ -67,6 +67,7 @@ from .json_walk import (
     ExpressionTemplateError,
     _is_array,
     _is_object,
+    _rewrite_json,
     _walk_json,
     load_ref_raw,
 )
@@ -232,22 +233,16 @@ def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
     variable-reference surface syntax — with their integer values, everywhere
     except the :data:`_META_SUBST_SKIP_KEYS` structural fields (esm-spec
     §9.7.6: expression-position substitution; no folding here)."""
-    # Bespoke (not on :func:`_walk_json`): REBUILDS the tree, deep-copying the
-    # skip-key subtrees verbatim rather than merely observing nodes.
-    if isinstance(x, str):
-        return values.get(x, x)
-    if _is_array(x):
-        return [_substitute_metaparams(v, values) for v in x]
-    if _is_object(x):
-        return {
-            k: (
-                copy.deepcopy(v)
-                if k in _META_SUBST_SKIP_KEYS
-                else _substitute_metaparams(v, values)
-            )
-            for k, v in x.items()
-        }
-    return x
+    # Routed through the shared functional rebuild
+    # (:func:`json_walk._rewrite_json`, ``share=False``): these trees are
+    # UNSHARED (pre-fixpoint) so every dict / list is rebuilt fresh with no memo,
+    # and the :data:`_META_SUBST_SKIP_KEYS` structural fields are deep-copied
+    # verbatim rather than recursed. Every bare string elsewhere folds to its
+    # closed integer value.
+    def _item(_node: dict, key: str, value: Any, recurse) -> Any:
+        return copy.deepcopy(value) if key in _META_SUBST_SKIP_KEYS else recurse(value)
+
+    return _rewrite_json(x, on_str=lambda s: values.get(s, s), on_value=_item, share=False)
 
 
 def _substitute_metaparams_decl(decl: Any, values: dict[str, int]) -> Any:
@@ -502,22 +497,6 @@ def _collect_apply_names(out: list[str], x: Any) -> list[str]:
     return out
 
 
-def _inline_applies(node: Any, templates: dict[str, Any], scope: str) -> Any:
-    from .lower_expression_templates import _expand_apply
-
-    if _is_array(node):
-        return [_inline_applies(c, templates, scope) for c in node]
-    if not _is_object(node):
-        return node
-    out = {k: _inline_applies(v, templates, scope) for k, v in node.items()}
-    if out.get("op") == APPLY_OP:
-        # Referenced bodies are already closed (topological order), so a
-        # single _expand_apply produces an apply-free subtree; the bindings'
-        # own sub-ASTs were inlined by the post-order walk above.
-        return _expand_apply(out, templates, scope)
-    return out
-
-
 def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
     """Registration-time body **checking** (esm-spec §9.7.3, Option B /
     esm 0.9.0): template bodies MAY reference other in-scope MATCH-LESS
@@ -561,11 +540,13 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
                     "templates are invocable by name (esm-spec §9.7.3)",
                 )
 
-    # DFS over the reference graph: cycle detection, chain-depth bound, and a
-    # dependencies-first (post-) order for inlining.
+    # DFS over the reference graph: cycle detection and chain-depth bound. Under
+    # esm 0.9.0 (Option B) bodies are NOT inlined — the references are preserved
+    # and consumed later by ``Expand`` (§9.6.4 rule 2) or the eager pre-pass
+    # (§9.6.4 rule 3) — so no post-order accumulation is needed; this is a pure
+    # validation of the DAG (acyclic, depth-bounded, resolves to match-less).
     state: dict[str, int] = {}  # 1 = on stack, 2 = done
     depth: dict[str, int] = {}  # templates on the longest chain from this node
-    order: list[str] = []
     chain: list[str] = []
 
     def visit(name: str) -> int:
@@ -594,17 +575,10 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
                 f"of {d} templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH="
                 f"{MAX_TEMPLATE_EXPANSION_DEPTH} (esm-spec §9.7.3)",
             )
-        order.append(name)
         return d
 
     for name in sorted(refs):
         visit(name)
-
-    # esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
-    # depth-bounded, references resolve to match-less templates); the bodies are
-    # left with their ``apply_expression_template`` references intact. ``Expand``
-    # (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
-    _ = order  # topological order retained for readers; no inlining performed.
 
 
 # ---------------------------------------------------------------------------
@@ -772,33 +746,29 @@ def _rename_walk(
     body/registry would use the renamed set while ``where`` still named the
     original, and registration would fail with
     ``template_constraint_unknown_index_set``."""
-    # Bespoke (not on :func:`_walk_json`): REBUILDS the tree with per-field
-    # positional handling (``from`` / ``wrt`` / apply-``name`` / ``where``), a
-    # transform rather than a read-only observation.
-    if isinstance(x, str):
-        return varmap.get(x, x)
-    if _is_array(x):
-        return [_rename_walk(v, varmap, isetmap, tplmap) for v in x]
-    if _is_object(x):
-        op = x.get("op")
-        is_apply = op is not None and str(op) == APPLY_OP
-        out: dict[str, Any] = {}
-        for k, v in x.items():
-            ks = str(k)
-            if ks == "from" and isinstance(v, str):
-                out[ks] = isetmap.get(v, v)
-            elif ks in _RENAME_AXIS_KEYS and isinstance(v, str):
-                out[ks] = isetmap.get(v, v)
-            elif ks == "name" and is_apply and isinstance(v, str):
-                out[ks] = tplmap.get(v, v)
-            elif ks == "where" and _is_object(v):
-                out[ks] = _rename_where(v, isetmap)
-            elif ks == "of" or ks in _RENAME_PROTECTED_KEYS:
-                out[ks] = copy.deepcopy(v)
-            else:
-                out[ks] = _rename_walk(v, varmap, isetmap, tplmap)
-        return out
-    return x
+    # Routed through the shared functional rebuild
+    # (:func:`json_walk._rewrite_json`, ``share=False``): these imported-decl
+    # trees are UNSHARED, so every dict / list is rebuilt fresh with no memo, and
+    # each dict item is dispatched positionally — ``from`` / ``wrt`` / ``dim``
+    # name index sets (``isetmap``), an apply ``name`` names a template
+    # (``tplmap``), ``where`` is a match-scoping block, ``of`` + the protected
+    # scalar fields are copied verbatim, and every other bare string in a
+    # variable-reference position folds through ``varmap``.
+    def _item(node: dict, key: str, value: Any, recurse) -> Any:
+        ks = str(key)
+        if ks == "from" and isinstance(value, str):
+            return isetmap.get(value, value)
+        if ks in _RENAME_AXIS_KEYS and isinstance(value, str):
+            return isetmap.get(value, value)
+        if ks == "name" and isinstance(value, str) and str(node.get("op")) == APPLY_OP:
+            return tplmap.get(value, value)
+        if ks == "where" and _is_object(value):
+            return _rename_where(value, isetmap)
+        if ks == "of" or ks in _RENAME_PROTECTED_KEYS:
+            return copy.deepcopy(value)
+        return recurse(value)
+
+    return _rewrite_json(x, on_str=lambda s: varmap.get(s, s), on_value=_item, share=False)
 
 
 def _rename_where(whr: Any, isetmap: dict[str, str]) -> Any:

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .esm_types import (
+    EXPR_WIRE_SPEC,
     Assertion,
     CallbackCoupling,
     ContinuousEvent,
@@ -56,6 +57,7 @@ from .esm_types import (
     Tolerance,
     VariableMapCoupling,
 )
+from .json_walk import _is_array, _is_object
 
 
 def _emit_stoich(coeff: int | float) -> int | float:
@@ -109,82 +111,83 @@ def _canonical_nested(value: Any) -> Any:
     return _canonical_number(value)
 
 
+# ---------------------------------------------------------------------------
+# Spec-driven driver for the purely-mechanical per-type serializers (field-copy
+# + omit-if-None/falsy mirrors). Each such type declares ONE authored ordered
+# ``(attr, wire_key, omit, codec)`` spec — the pinned wire key ORDER and omit
+# policy — and delegates to :func:`_serialize_by_spec`. Genuinely-bespoke
+# serializers (discriminated unions, reactions, coupling entries, the event
+# affect folders, the esm_file orchestration, and the few types with per-field
+# branch logic) stay hand-written.
+# ---------------------------------------------------------------------------
+
+#: Always emit the field (even when its value is None / empty).
+_KEEP = "keep"
+#: Omit the field when its value is exactly ``None``.
+_OMIT_NONE = "none"
+#: Omit the field when its value is falsy (empty list/dict/str, 0, None).
+_OMIT_FALSY = "falsy"
+
+
+def _serialize_by_spec(obj: Any, spec: tuple) -> dict[str, Any]:
+    """Serialize ``obj`` to a dict from an authored ordered field ``spec``.
+
+    ``spec`` is an ordered sequence of ``(attr, wire_key, omit, codec)`` tuples;
+    keys are inserted in list order (the byte-pinned wire order). ``codec`` (or
+    ``None`` for identity) maps the raw attribute value to its JSON form. ``omit``
+    is one of :data:`_KEEP` / :data:`_OMIT_NONE` / :data:`_OMIT_FALSY`.
+    """
+    result: dict[str, Any] = {}
+    for attr, wire, omit, codec in spec:
+        value = getattr(obj, attr)
+        if omit == _OMIT_NONE and value is None:
+            continue
+        if omit == _OMIT_FALSY and not value:
+            continue
+        result[wire] = codec(value) if codec is not None else value
+    return result
+
+
+def _json_deepcopy(value: Any) -> Any:
+    """Deep-copy an authored passthrough blob by round-tripping through JSON —
+    the emit form the hand-written serializers used for
+    ``expression_template_imports``."""
+    return json.loads(json.dumps(value))
+
+
 def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
-    """Serialize an expression to JSON-compatible format."""
+    """Serialize an expression to JSON-compatible format.
+
+    ExprNode fields are emitted in the authored wire order pinned by
+    :data:`~earthsci_ast.esm_types.EXPR_WIRE_SPEC` — the single declaration site
+    — applying each field's codec: ``scalar`` passthrough, ``canonical_nested``
+    integer-array canonicalization (``shape`` / ``regions`` / ``ranges`` /
+    ``perm``, per CONFORMANCE_SPEC §5.5.3.1), and recursive serialization for the
+    ``expr`` / ``expr_list`` / ``expr_dict`` child slots (``lower``/``upper``/
+    ``expr``/``filter``/``key``; ``args``/``values``; ``table_axes`` under wire
+    key ``axes``). ``op``/``args`` are always emitted; every other field is
+    omitted when None so nodes round-trip byte-identically.
+    """
     if isinstance(expr, (int, float, str)):
         return _canonical_number(expr)
     if isinstance(expr, ExprNode):
-        result = {"op": expr.op, "args": [_serialize_expression(arg) for arg in expr.args]}
-        if expr.wrt is not None:
-            result["wrt"] = expr.wrt
-        if expr.dim is not None:
-            result["dim"] = expr.dim
-        # integral op fields (schema §ExpressionNode `integral`). Mirrors
-        # _parse_expression: ``var`` is a string, ``lower``/``upper`` are
-        # nested Expressions.
-        if expr.var is not None:
-            result["var"] = expr.var
-        if expr.lower is not None:
-            result["lower"] = _serialize_expression(expr.lower)
-        if expr.upper is not None:
-            result["upper"] = _serialize_expression(expr.upper)
-        # Array-op fields (schema §ExpressionNode). Mirrors _parse_expression.
-        if expr.output_idx is not None:
-            result["output_idx"] = expr.output_idx
-        if expr.expr is not None:
-            result["expr"] = _serialize_expression(expr.expr)
-        if expr.reduce is not None:
-            result["reduce"] = expr.reduce
-        if getattr(expr, "semiring", None) is not None:
-            result["semiring"] = expr.semiring
-        if expr.ranges is not None:
-            result["ranges"] = _canonical_nested(expr.ranges)
-        # M2 value-equality join + filter predicate (RFC §5.3) and the §5.5
-        # index-set-producing fields. Mirrors _parse_expression: ``join``/
-        # ``distinct`` are plain data; ``filter``/``key`` are nested Expressions.
-        if expr.join is not None:
-            result["join"] = expr.join
-        if expr.filter is not None:
-            result["filter"] = _serialize_expression(expr.filter)
-        if expr.distinct is not None:
-            result["distinct"] = expr.distinct
-        if expr.key is not None:
-            result["key"] = _serialize_expression(expr.key)
-        if expr.regions is not None:
-            result["regions"] = _canonical_nested(expr.regions)
-        if expr.values is not None:
-            result["values"] = [_serialize_expression(v) for v in expr.values]
-        if expr.shape is not None:
-            result["shape"] = _canonical_nested(expr.shape)
-        if expr.perm is not None:
-            result["perm"] = _canonical_nested(expr.perm)
-        if expr.axis is not None:
-            result["axis"] = expr.axis
-        if expr.fn is not None:
-            result["fn"] = expr.fn
-        # Node id (RFC §6.1) + intersect_polygon manifold (RFC §8.1) — emitted
-        # only when present so non-geometry nodes round-trip byte-identically.
-        if getattr(expr, "id", None) is not None:
-            result["id"] = expr.id
-        if getattr(expr, "manifold", None) is not None:
-            result["manifold"] = expr.manifold
-        if expr.handler_id is not None:
-            result["handler_id"] = expr.handler_id
-        if expr.name is not None:
-            result["name"] = expr.name
-        if getattr(expr, "label", None) is not None:
-            result["label"] = expr.label
-        if expr.value is not None:
-            result["value"] = expr.value
-        # table_lookup (esm-spec §9.5, v0.4.0). Stored under JSON key "axes"
-        # on the wire; the per-axis input expressions are serialized
-        # recursively. ``output`` is preserved verbatim (int or string).
-        if expr.table is not None:
-            result["table"] = expr.table
-        if expr.table_axes is not None:
-            result["axes"] = {k: _serialize_expression(v) for k, v in expr.table_axes.items()}
-        if expr.output is not None:
-            result["output"] = expr.output
+        result: dict[str, Any] = {}
+        for name, wire, kind, required in EXPR_WIRE_SPEC:
+            value = getattr(expr, name)
+            if value is None and not required:
+                continue
+            if kind == "scalar":
+                result[wire] = value
+            elif kind == "canonical_nested":
+                result[wire] = _canonical_nested(value)
+            elif kind == "expr":
+                result[wire] = _serialize_expression(value)
+            elif kind == "expr_list":
+                result[wire] = [_serialize_expression(v) for v in value]
+            elif kind == "expr_dict":
+                result[wire] = {k: _serialize_expression(v) for k, v in value.items()}
+            else:  # pragma: no cover - guarded by the esm_types wire-spec build
+                raise ValueError(f"unknown ExprNode codec kind {kind!r} for field {name!r}")
         return result
     raise ValueError(f"Invalid expression type: {type(expr)}")
 
@@ -216,28 +219,23 @@ def _serialize_affect_equation(affect) -> dict[str, Any]:
     return {"lhs": affect.lhs, "rhs": _serialize_expression(affect.rhs)}
 
 
+_MODEL_VARIABLE_SPEC = (
+    ("type", "type", _KEEP, None),
+    ("units", "units", _OMIT_NONE, None),
+    ("default", "default", _OMIT_NONE, None),
+    ("default_units", "default_units", _OMIT_NONE, None),
+    ("description", "description", _OMIT_NONE, None),
+    ("expression", "expression", _OMIT_NONE, _serialize_expression),
+    ("shape", "shape", _OMIT_NONE, list),
+    ("location", "location", _OMIT_NONE, None),
+    ("noise_kind", "noise_kind", _OMIT_NONE, None),
+    ("correlation_group", "correlation_group", _OMIT_NONE, None),
+)
+
+
 def _serialize_model_variable(variable: ModelVariable) -> dict[str, Any]:
     """Serialize a model variable to JSON-compatible format."""
-    result = {"type": variable.type}
-    if variable.units is not None:
-        result["units"] = variable.units
-    if variable.default is not None:
-        result["default"] = variable.default
-    if variable.default_units is not None:
-        result["default_units"] = variable.default_units
-    if variable.description is not None:
-        result["description"] = variable.description
-    if variable.expression is not None:
-        result["expression"] = _serialize_expression(variable.expression)
-    if variable.shape is not None:
-        result["shape"] = list(variable.shape)
-    if variable.location is not None:
-        result["location"] = variable.location
-    if variable.noise_kind is not None:
-        result["noise_kind"] = variable.noise_kind
-    if variable.correlation_group is not None:
-        result["correlation_group"] = variable.correlation_group
-    return result
+    return _serialize_by_spec(variable, _MODEL_VARIABLE_SPEC)
 
 
 def _serialize_discrete_event_trigger(trigger: DiscreteEventTrigger) -> dict[str, Any]:
@@ -317,17 +315,24 @@ def _serialize_discrete_event(event: DiscreteEvent) -> dict[str, Any]:
     return result
 
 
+_TOLERANCE_SPEC = (
+    ("abs", "abs", _OMIT_NONE, None),
+    ("rel", "rel", _OMIT_NONE, None),
+)
+
+
 def _serialize_tolerance(t: Tolerance) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    if t.abs is not None:
-        result["abs"] = t.abs
-    if t.rel is not None:
-        result["rel"] = t.rel
-    return result
+    return _serialize_by_spec(t, _TOLERANCE_SPEC)
+
+
+_TIME_SPAN_SPEC = (
+    ("start", "start", _KEEP, None),
+    ("end", "end", _KEEP, None),
+)
 
 
 def _serialize_time_span(ts: TimeSpan) -> dict[str, Any]:
-    return {"start": ts.start, "end": ts.end}
+    return _serialize_by_spec(ts, _TIME_SPAN_SPEC)
 
 
 def _serialize_assertion(a: Assertion) -> dict[str, Any]:
@@ -352,109 +357,124 @@ def _serialize_assertion(a: Assertion) -> dict[str, Any]:
     return result
 
 
+# Authored WIRE ORDER (differs from dataclass field order): id, description,
+# initial_conditions, parameter_overrides, time_span, tolerance,
+# expression_template_imports, assertions. ``expression_template_imports``
+# (esm-spec §9.7.10 form C) are authored per-run config that DO survive parse →
+# emit, deep-copied via JSON; ``assertions`` is always emitted.
+_TEST_SPEC = (
+    ("id", "id", _KEEP, None),
+    ("description", "description", _OMIT_NONE, None),
+    ("initial_conditions", "initial_conditions", _OMIT_FALSY, dict),
+    ("parameter_overrides", "parameter_overrides", _OMIT_FALSY, dict),
+    ("time_span", "time_span", _KEEP, _serialize_time_span),
+    ("tolerance", "tolerance", _OMIT_NONE, _serialize_tolerance),
+    ("expression_template_imports", "expression_template_imports", _OMIT_FALSY, _json_deepcopy),
+    ("assertions", "assertions", _KEEP, lambda a: [_serialize_assertion(x) for x in a]),
+)
+
+
 def _serialize_test(t: Test) -> dict[str, Any]:
-    result: dict[str, Any] = {"id": t.id}
-    if t.description is not None:
-        result["description"] = t.description
-    if t.initial_conditions:
-        result["initial_conditions"] = dict(t.initial_conditions)
-    if t.parameter_overrides:
-        result["parameter_overrides"] = dict(t.parameter_overrides)
-    result["time_span"] = _serialize_time_span(t.time_span)
-    if t.tolerance is not None:
-        result["tolerance"] = _serialize_tolerance(t.tolerance)
-    # esm-spec §9.7.10 form C: a test's injected imports are authored per-run
-    # config and DO survive parse → emit (unlike a component's own imports,
-    # which are consumed by the fixpoint at load).
-    if t.expression_template_imports:
-        result["expression_template_imports"] = json.loads(
-            json.dumps(t.expression_template_imports)
-        )
-    result["assertions"] = [_serialize_assertion(a) for a in t.assertions]
-    return result
+    return _serialize_by_spec(t, _TEST_SPEC)
+
+
+_PLOT_AXIS_SPEC = (
+    ("variable", "variable", _KEEP, None),
+    ("label", "label", _OMIT_NONE, None),
+)
 
 
 def _serialize_plot_axis(axis: PlotAxis) -> dict[str, Any]:
-    result: dict[str, Any] = {"variable": axis.variable}
-    if axis.label is not None:
-        result["label"] = axis.label
-    return result
+    return _serialize_by_spec(axis, _PLOT_AXIS_SPEC)
+
+
+_PLOT_VALUE_SPEC = (
+    ("variable", "variable", _KEEP, None),
+    ("at_time", "at_time", _OMIT_NONE, None),
+    ("reduce", "reduce", _OMIT_NONE, None),
+)
 
 
 def _serialize_plot_value(v: PlotValue) -> dict[str, Any]:
-    result: dict[str, Any] = {"variable": v.variable}
-    if v.at_time is not None:
-        result["at_time"] = v.at_time
-    if v.reduce is not None:
-        result["reduce"] = v.reduce
-    return result
+    return _serialize_by_spec(v, _PLOT_VALUE_SPEC)
+
+
+_PLOT_SERIES_SPEC = (
+    ("name", "name", _KEEP, None),
+    ("variable", "variable", _KEEP, None),
+)
 
 
 def _serialize_plot_series(s: PlotSeries) -> dict[str, Any]:
-    return {"name": s.name, "variable": s.variable}
+    return _serialize_by_spec(s, _PLOT_SERIES_SPEC)
+
+
+_PLOT_SPEC = (
+    ("id", "id", _KEEP, None),
+    ("type", "type", _KEEP, None),
+    ("description", "description", _OMIT_NONE, None),
+    ("x", "x", _KEEP, _serialize_plot_axis),
+    ("y", "y", _KEEP, _serialize_plot_axis),
+    ("value", "value", _OMIT_NONE, _serialize_plot_value),
+    ("series", "series", _OMIT_FALSY, lambda ss: [_serialize_plot_series(s) for s in ss]),
+)
 
 
 def _serialize_plot(p: Plot) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "id": p.id,
-        "type": p.type,
-    }
-    if p.description is not None:
-        result["description"] = p.description
-    result["x"] = _serialize_plot_axis(p.x)
-    result["y"] = _serialize_plot_axis(p.y)
-    if p.value is not None:
-        result["value"] = _serialize_plot_value(p.value)
-    if p.series:
-        result["series"] = [_serialize_plot_series(s) for s in p.series]
-    return result
+    return _serialize_by_spec(p, _PLOT_SPEC)
+
+
+_SWEEP_RANGE_SPEC = (
+    ("start", "start", _KEEP, None),
+    ("stop", "stop", _KEEP, None),
+    ("count", "count", _KEEP, None),
+    ("scale", "scale", _OMIT_NONE, None),
+)
 
 
 def _serialize_sweep_range(r: SweepRange) -> dict[str, Any]:
-    result: dict[str, Any] = {"start": r.start, "stop": r.stop, "count": r.count}
-    if r.scale is not None:
-        result["scale"] = r.scale
-    return result
+    return _serialize_by_spec(r, _SWEEP_RANGE_SPEC)
+
+
+_SWEEP_DIMENSION_SPEC = (
+    ("parameter", "parameter", _KEEP, None),
+    ("values", "values", _OMIT_NONE, list),
+    ("range", "range", _OMIT_NONE, _serialize_sweep_range),
+)
 
 
 def _serialize_sweep_dimension(d: SweepDimension) -> dict[str, Any]:
-    result: dict[str, Any] = {"parameter": d.parameter}
-    if d.values is not None:
-        result["values"] = list(d.values)
-    if d.range is not None:
-        result["range"] = _serialize_sweep_range(d.range)
-    return result
+    return _serialize_by_spec(d, _SWEEP_DIMENSION_SPEC)
+
+
+_PARAMETER_SWEEP_SPEC = (
+    ("type", "type", _KEEP, None),
+    ("dimensions", "dimensions", _KEEP, lambda ds: [_serialize_sweep_dimension(d) for d in ds]),
+)
 
 
 def _serialize_parameter_sweep(ps: ParameterSweep) -> dict[str, Any]:
-    return {
-        "type": ps.type,
-        "dimensions": [_serialize_sweep_dimension(d) for d in ps.dimensions],
-    }
+    return _serialize_by_spec(ps, _PARAMETER_SWEEP_SPEC)
+
+
+# Authored WIRE ORDER: id, description, initial_state, parameters, time_span,
+# parameter_sweep, plots, expression_template_imports. ``initial_state`` is a
+# scalar override map {var: number} (v0.8.0); ``expression_template_imports``
+# (esm-spec §9.7.10 form C) survive parse → emit, deep-copied via JSON.
+_EXAMPLE_SPEC = (
+    ("id", "id", _KEEP, None),
+    ("description", "description", _OMIT_NONE, None),
+    ("initial_state", "initial_state", _OMIT_NONE, dict),
+    ("parameters", "parameters", _OMIT_FALSY, dict),
+    ("time_span", "time_span", _KEEP, _serialize_time_span),
+    ("parameter_sweep", "parameter_sweep", _OMIT_NONE, _serialize_parameter_sweep),
+    ("plots", "plots", _OMIT_FALSY, lambda ps: [_serialize_plot(p) for p in ps]),
+    ("expression_template_imports", "expression_template_imports", _OMIT_FALSY, _json_deepcopy),
+)
 
 
 def _serialize_example(e: Example) -> dict[str, Any]:
-    result: dict[str, Any] = {"id": e.id}
-    if e.description is not None:
-        result["description"] = e.description
-    if e.initial_state is not None:
-        # Scalar initial-value override map {var: number} (v0.8.0).
-        result["initial_state"] = dict(e.initial_state)
-    if e.parameters:
-        result["parameters"] = dict(e.parameters)
-    result["time_span"] = _serialize_time_span(e.time_span)
-    if e.parameter_sweep is not None:
-        result["parameter_sweep"] = _serialize_parameter_sweep(e.parameter_sweep)
-    if e.plots:
-        result["plots"] = [_serialize_plot(p) for p in e.plots]
-    # esm-spec §9.7.10 form C: an example's injected imports are authored per-run
-    # config and DO survive parse → emit (unlike a component's own imports,
-    # which are consumed by the fixpoint at load). Mirrors _serialize_test.
-    if e.expression_template_imports:
-        result["expression_template_imports"] = json.loads(
-            json.dumps(e.expression_template_imports)
-        )
-    return result
+    return _serialize_by_spec(e, _EXAMPLE_SPEC)
 
 
 def _serialize_model(model: Model) -> dict[str, Any]:
@@ -538,20 +558,19 @@ def _serialize_subsystem(sub: Any) -> dict[str, Any]:
     raise ValueError(f"Invalid subsystem type: {type(sub)}")
 
 
+# ``name`` is not emitted — it is the map key in the enclosing reaction system.
+_SPECIES_SPEC = (
+    ("units", "units", _OMIT_NONE, None),
+    ("default", "default", _OMIT_NONE, None),
+    ("default_units", "default_units", _OMIT_NONE, None),
+    ("description", "description", _OMIT_NONE, None),
+    ("constant", "constant", _OMIT_NONE, None),
+)
+
+
 def _serialize_species(species: Species) -> dict[str, Any]:
     """Serialize a species to JSON-compatible format."""
-    result = {}
-    if species.units is not None:
-        result["units"] = species.units
-    if species.default is not None:
-        result["default"] = species.default
-    if species.default_units is not None:
-        result["default_units"] = species.default_units
-    if species.description is not None:
-        result["description"] = species.description
-    if species.constant is not None:
-        result["constant"] = species.constant
-    return result
+    return _serialize_by_spec(species, _SPECIES_SPEC)
 
 
 def _serialize_parameter(parameter: Parameter) -> dict[str, Any]:
@@ -655,36 +674,34 @@ def _serialize_reaction_system(rs: ReactionSystem) -> dict[str, Any]:
     return result
 
 
+# ``title`` maps to wire key ``citation`` and is emitted only when truthy.
+_REFERENCE_SPEC = (
+    ("title", "citation", _OMIT_FALSY, None),
+    ("doi", "doi", _OMIT_NONE, None),
+    ("url", "url", _OMIT_NONE, None),
+)
+
+
 def _serialize_reference(reference: Reference) -> dict[str, Any]:
     """Serialize a reference to JSON-compatible format."""
-    result = {}
-    if reference.title:
-        result["citation"] = reference.title
-    if reference.doi is not None:
-        result["doi"] = reference.doi
-    if reference.url is not None:
-        result["url"] = reference.url
-    return result
+    return _serialize_by_spec(reference, _REFERENCE_SPEC)
+
+
+# ``title`` -> wire key ``name``; ``keywords`` -> wire key ``tags``.
+_METADATA_SPEC = (
+    ("title", "name", _KEEP, None),
+    ("description", "description", _OMIT_NONE, None),
+    ("authors", "authors", _OMIT_FALSY, None),
+    ("created", "created", _OMIT_NONE, None),
+    ("modified", "modified", _OMIT_NONE, None),
+    ("keywords", "tags", _OMIT_FALSY, None),
+    ("references", "references", _OMIT_FALSY, lambda rs: [_serialize_reference(r) for r in rs]),
+)
 
 
 def _serialize_metadata(metadata: Metadata) -> dict[str, Any]:
     """Serialize metadata to JSON-compatible format."""
-    result = {"name": metadata.title}
-
-    if metadata.description is not None:
-        result["description"] = metadata.description
-    if metadata.authors:
-        result["authors"] = metadata.authors
-    if metadata.created is not None:
-        result["created"] = metadata.created
-    if metadata.modified is not None:
-        result["modified"] = metadata.modified
-    if metadata.keywords:
-        result["tags"] = metadata.keywords
-    if metadata.references:
-        result["references"] = [_serialize_reference(ref) for ref in metadata.references]
-
-    return result
+    return _serialize_by_spec(metadata, _METADATA_SPEC)
 
 
 def _serialize_domain(domain: Domain) -> dict[str, Any]:
@@ -711,28 +728,28 @@ def _serialize_domain(domain: Domain) -> dict[str, Any]:
     return result
 
 
+_DATA_LOADER_SOURCE_SPEC = (
+    ("url_template", "url_template", _KEEP, None),
+    ("mirrors", "mirrors", _OMIT_FALSY, list),
+)
+
+
 def _serialize_data_loader_source(source: DataLoaderSource) -> dict[str, Any]:
-    result: dict[str, Any] = {"url_template": source.url_template}
-    if source.mirrors:
-        result["mirrors"] = list(source.mirrors)
-    return result
+    return _serialize_by_spec(source, _DATA_LOADER_SOURCE_SPEC)
+
+
+_DATA_LOADER_TEMPORAL_SPEC = (
+    ("start", "start", _OMIT_NONE, None),
+    ("end", "end", _OMIT_NONE, None),
+    ("file_period", "file_period", _OMIT_NONE, None),
+    ("frequency", "frequency", _OMIT_NONE, None),
+    ("records_per_file", "records_per_file", _OMIT_NONE, None),
+    ("time_variable", "time_variable", _OMIT_NONE, None),
+)
 
 
 def _serialize_data_loader_temporal(temporal: DataLoaderTemporal) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    if temporal.start is not None:
-        result["start"] = temporal.start
-    if temporal.end is not None:
-        result["end"] = temporal.end
-    if temporal.file_period is not None:
-        result["file_period"] = temporal.file_period
-    if temporal.frequency is not None:
-        result["frequency"] = temporal.frequency
-    if temporal.records_per_file is not None:
-        result["records_per_file"] = temporal.records_per_file
-    if temporal.time_variable is not None:
-        result["time_variable"] = temporal.time_variable
-    return result
+    return _serialize_by_spec(temporal, _DATA_LOADER_TEMPORAL_SPEC)
 
 
 def _serialize_data_loader_variable(variable: DataLoaderVariable) -> dict[str, Any]:
@@ -752,16 +769,16 @@ def _serialize_data_loader_variable(variable: DataLoaderVariable) -> dict[str, A
     return result
 
 
+_DATA_LOADER_DETERMINISM_SPEC = (
+    ("endian", "endian", _OMIT_NONE, None),
+    ("float_format", "float_format", _OMIT_NONE, None),
+    ("integer_width", "integer_width", _OMIT_NONE, None),
+)
+
+
 def _serialize_data_loader_determinism(det: DataLoaderDeterminism) -> dict[str, Any]:
     """Serialize a determinism block (esm-spec §8.9.2)."""
-    result: dict[str, Any] = {}
-    if det.endian is not None:
-        result["endian"] = det.endian
-    if det.float_format is not None:
-        result["float_format"] = det.float_format
-    if det.integer_width is not None:
-        result["integer_width"] = det.integer_width
-    return result
+    return _serialize_by_spec(det, _DATA_LOADER_DETERMINISM_SPEC)
 
 
 def _serialize_data_loader(loader: DataLoader) -> dict[str, Any]:
@@ -789,30 +806,20 @@ def _serialize_data_loader(loader: DataLoader) -> dict[str, Any]:
     return result
 
 
+# ``operator_id`` / ``needed_vars`` are schema-required (always emitted).
+_OPERATOR_SPEC = (
+    ("operator_id", "operator_id", _KEEP, None),
+    ("needed_vars", "needed_vars", _KEEP, None),
+    ("modifies", "modifies", _OMIT_NONE, None),
+    ("config", "config", _OMIT_FALSY, None),
+    ("description", "description", _OMIT_FALSY, None),
+    ("reference", "reference", _OMIT_FALSY, _serialize_reference),
+)
+
+
 def _serialize_operator(operator: Operator) -> dict[str, Any]:
     """Serialize an operator to JSON-compatible format."""
-    result = {}
-
-    # Schema requires operator_id
-    result["operator_id"] = operator.operator_id
-
-    # Schema requires needed_vars
-    result["needed_vars"] = operator.needed_vars
-
-    # Optional fields
-    if operator.modifies is not None:
-        result["modifies"] = operator.modifies
-
-    if operator.config:
-        result["config"] = operator.config
-
-    if operator.description:
-        result["description"] = operator.description
-
-    if operator.reference:
-        result["reference"] = _serialize_reference(operator.reference)
-
-    return result
+    return _serialize_by_spec(operator, _OPERATOR_SPEC)
 
 
 def _serialize_registered_function(rf) -> dict[str, Any]:
@@ -1115,3 +1122,87 @@ def save(esm_file: EsmFile, path: str | Path | None = None) -> str:
             f.write(json_str)
 
     return json_str
+
+
+# ---------------------------------------------------------------------------
+# Canonical byte writer for the Option-B *emitted* form (esm-spec §9.6.4 rule 5).
+# Co-located with :func:`save` (the document write-back writer) so both hand-off
+# JSON writers live together. Unlike :func:`save` (``json.dumps(indent=2,
+# sort_keys=False)`` over the wire dict), this writer sorts object keys
+# lexicographically EXCEPT the entries of an ``expression_templates`` object,
+# which keep their authored-first / materialized-sorted insertion order — the
+# ``preserve`` flag threaded through :func:`_emit_write`. It shares the
+# :func:`_canonical_number` integral-float rule with the rest of the package.
+# Used by :func:`earthsci_ast.lower_expression_templates.emit_document` callers
+# (re-exported there for the historical import path).
+# ---------------------------------------------------------------------------
+
+
+def _emit_scalar(x: Any) -> str:
+    """Render one JSON scalar for the canonical emit form. Integral finite
+    floats render as integer literals (mirroring JSON3's read-normalization in
+    the Julia reference: an integral number is written without a decimal point,
+    uniformly), so the emitted bytes are cross-binding-identical; non-integral
+    floats and strings render via ``json.dumps`` (``ensure_ascii=False`` keeps
+    UTF-8 literals, matching JSON3's writer).
+
+    The integral-float → integer-literal decision is the shared canonical-number
+    rule (:func:`_canonical_number`, CONFORMANCE_SPEC §5.5.3.1) — the single
+    implementation every binding re-serializes through."""
+    if isinstance(x, bool):
+        return "true" if x else "false"
+    x = _canonical_number(x)
+    if isinstance(x, int):
+        return str(x)
+    if isinstance(x, float):
+        return json.dumps(x, ensure_ascii=False)
+    return json.dumps(x, ensure_ascii=False)
+
+
+def _emit_write(buf: list[str], x: Any, indent: int, preserve: bool = False) -> None:
+    pad = "  " * indent
+    pad1 = "  " * (indent + 1)
+    if _is_object(x):
+        if not x:
+            buf.append("{}")
+            return
+        keys = list(x.keys()) if preserve else sorted(x.keys())
+        buf.append("{\n")
+        for i, k in enumerate(keys):
+            buf.append(pad1)
+            buf.append(json.dumps(str(k), ensure_ascii=False))
+            buf.append(": ")
+            _emit_write(buf, x[k], indent + 1, preserve=(str(k) == "expression_templates"))
+            if i < len(keys) - 1:
+                buf.append(",")
+            buf.append("\n")
+        buf.append(pad)
+        buf.append("}")
+    elif _is_array(x):
+        if not x:
+            buf.append("[]")
+            return
+        buf.append("[\n")
+        for i, v in enumerate(x):
+            buf.append(pad1)
+            _emit_write(buf, v, indent + 1)
+            if i < len(x) - 1:
+                buf.append(",")
+            buf.append("\n")
+        buf.append(pad)
+        buf.append("]")
+    else:
+        buf.append(_emit_scalar(x))
+
+
+def emit_esm_string(doc: Any) -> str:
+    """Canonical byte serialization of an emitted document (esm-spec §9.6.4
+    rule 5): 2-space indent, object keys sorted lexicographically EXCEPT the
+    entries of an ``expression_templates`` object, which preserve their
+    authored-first / materialized-sorted order. The cross-binding byte-identity
+    surface for the Option-B emitted form and the target of the ``emitted.esm``
+    goldens."""
+    buf: list[str] = []
+    _emit_write(buf, doc, 0)
+    buf.append("\n")
+    return "".join(buf)

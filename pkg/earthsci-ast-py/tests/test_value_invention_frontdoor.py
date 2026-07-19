@@ -578,17 +578,22 @@ def test_centroid_grouped_reduction_reading_state_is_rejected() -> None:
 
 
 def test_join_key_prepass_skips_reductions_over_join_carrying_observeds() -> None:
-    """``_materialize_join_key_buffers`` materializes ONLY the join-free
-    observeds the broad-phase bins transitively read, not every join-free
-    observed. A join-free observed that itself reads a join-CARRYING observed
-    (the natural spelling of a reduction like ``total = sum(rg_A)``) is
-    unresolvable at bin-setup time — the join-carrying observed is not available
-    there. Before the fix the pre-pass evaluated every join-free observed and
-    raised ``NumpyInterpreterError`` on such a reduction, forcing the state-RHS
-    workaround; now the reduction is skipped here and resolves later in the RHS
-    path where the join buffers exist, while the bin buffers are unchanged."""
+    """The join-key setup pre-pass (:func:`simulation_array._binning_coord_arrays`)
+    materializes ONLY the join-free observeds the broad-phase bins transitively
+    read, not every join-free observed. A join-free observed that itself reads a
+    join-CARRYING observed (the natural spelling of a reduction like
+    ``total = sum(rg_A)``) is unresolvable at bin-setup time — the join-carrying
+    observed's own buffers do not yet exist there. So the reduction is skipped and
+    resolves later in the RHS path, while the bins' binning coordinates ARE
+    materialized (so the front-door can then quantize them into the join keys).
+
+    This pins the pre-pass that used to live inside the retired per-cell mirror
+    ``_materialize_join_key_buffers``; the binning-coordinate closure was extracted
+    into ``_binning_coord_arrays`` and the bins themselves are now minted by the
+    value-invention front-door (asserted byte-exact in the second half)."""
     from earthsci_ast.esm_types import ExprNode
-    from earthsci_ast.simulation import _materialize_join_key_buffers
+    from earthsci_ast.numpy_interpreter import _skolem_atom, _skolem_code
+    from earthsci_ast.simulation_array import _binning_coord_arrays
 
     coord = ExprNode(op="const", args=[], value=5.0)  # join-free bin input
     rg_A = ExprNode(
@@ -601,9 +606,45 @@ def test_join_key_prepass_skips_reductions_over_join_carrying_observeds() -> Non
     ordered = [("coord", coord), ("rg_A", rg_A), ("total", total)]
     bin_specs = [("src_bin", ExprNode(op="+", args=["coord", 1.0]), None)]
 
-    buffers, _idx = _materialize_join_key_buffers(ordered, bin_specs, {}, {}, {}, {}, 0)
+    coords = _binning_coord_arrays(ordered, bin_specs, {}, {}, {}, {}, 0)
 
-    # The bin (which reads `coord`) is materialized correctly; the reduction over
-    # the join-carrying observed is NOT evaluated at setup (no crash).
-    assert list(buffers["src_bin"]) == [6.0]
-    assert "total" not in buffers
+    # The bin's binning coordinate (`coord`) IS materialized (so the bin can be
+    # computed); the join-free reduction over the join-carrying observed is NOT
+    # (skipped — it is not in the bins' dependency closure), and the join-carrying
+    # observed itself is never a binning coordinate. No crash at setup.
+    assert float(coords["coord"]) == 5.0
+    assert "total" not in coords
+    assert "rg_A" not in coords
+
+    # The retained public path: the front-door quantizes a SKOLEM bin over those
+    # coordinates into the dense per-cell join-key buffer, byte-identical to the
+    # numeric interpreter's own skolem code (the retired mirror's output), plus
+    # its 1-D declared-shape index set.
+    skolem_bin = {
+        "variables": {"src_bin": {"type": "state", "shape": ["cells"]}},
+        "equations": [
+            {
+                "lhs": {"op": "index", "args": ["src_bin", "i"]},
+                "rhs": {
+                    "op": "aggregate",
+                    "output_idx": ["i"],
+                    "ranges": {"i": {"from": "cells"}},
+                    "expr": {
+                        "op": "skolem",
+                        "label": "bin",
+                        "args": [{"op": "floor", "args": [{"op": "index", "args": ["gx", "i"]}]}],
+                    },
+                },
+            }
+        ],
+        "index_sets": {"cells": {"kind": "interval", "size": 3}},
+    }
+    vi = materialize_value_invention(
+        skolem_bin,
+        {"gx": [0.0, 2.0, 2.0]},
+        {},
+        index_sets={"cells": {"kind": "interval", "size": 3}},
+    )
+    expected = [_skolem_code([_skolem_atom(float(b))]) for b in (0.0, 2.0, 2.0)]
+    assert vi.join_key_buffers["src_bin"] == expected
+    assert vi.join_key_index_sets["src_bin"] == "cells"

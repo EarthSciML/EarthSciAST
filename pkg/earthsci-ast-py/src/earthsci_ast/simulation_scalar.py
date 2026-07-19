@@ -6,15 +6,19 @@ the flattened system is lowered to a lambdified SymPy RHS (via
 :func:`scipy.integrate.solve_ivp`, and its algebraic-only states and observed
 bindings are recovered along the output trajectory. This is the pathway used
 when the flattened system contains no array ops, no data-loader fields, and no
-top-level provider injections. ``earthsci_ast.simulation`` re-exports this
-module's API and routes to :func:`_simulate_scalar`.
+top-level provider injections. It also owns :func:`_create_event_functions`,
+the scalar continuous-event helper that builds SciPy root-finding callbacks
+from a system's ``continuous_events``. ``earthsci_ast.simulation`` re-exports
+this module's API and routes to :func:`_simulate_scalar`.
 """
 from __future__ import annotations
 
 from typing import Any, Callable
 
 import numpy as np
+import sympy as sp
 
+from .esm_types import ContinuousEvent
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
@@ -27,11 +31,114 @@ from .simulation_common import (
     _resolve_override,
     solve_ivp,
 )
-from .simulation_legacy import _create_event_functions
 from .sympy_bridge import (
+    _LAMBDIFY_MODULES,
     SimulationError,
     _compile_flat_rhs,
+    _expr_to_sympy,
 )
+
+
+def _create_event_functions(
+    events: list[ContinuousEvent],
+    symbol_map: dict[str, sp.Symbol],
+    state_names: list[str],
+) -> list[Callable]:
+    """
+    Create event functions for SciPy integration.
+
+    Args:
+        events: List of continuous events
+        symbol_map: Mapping from variable names to SymPy symbols
+        state_names: State/species names in the order they appear in the solver's
+            ``y`` vector. Each condition symbol is resolved to the value of the
+            state with the SAME NAME via this ordering — never positionally,
+            since ``sympy.free_symbols`` iteration order is arbitrary.
+
+    Returns:
+        List of event functions
+    """
+    event_functions = []
+    # Name -> index in the solver state vector ``y``. A condition symbol is bound
+    # to ``y[state_index[name]]``; a symbol that names no state (a stray
+    # parameter) contributes 0.0, matching the historic default-to-zero fallback.
+    state_index = {name: i for i, name in enumerate(state_names)}
+
+    for event in events:
+        # Handle multiple conditions - create a function for each condition
+        for condition in event.conditions:
+            # Convert condition to SymPy
+            condition_expr = _expr_to_sympy(condition, symbol_map)
+
+            # Get variables in the condition
+            variables = list(condition_expr.free_symbols)
+            var_names = [str(var) for var in variables]
+
+            # Create lambda function
+            condition_func = sp.lambdify(variables, condition_expr, modules=_LAMBDIFY_MODULES)
+
+            # Check if we have direction-dependent affects
+            has_affect_neg = event.affect_neg is not None and len(event.affect_neg) > 0
+            has_affect_pos = event.affects is not None and len(event.affects) > 0
+
+            # One closure factory for every crossing flavour: the event bodies are
+            # identical (evaluate the condition at the current state), differing only
+            # in the SciPy ``direction`` and which ``affects`` list they carry.
+            def _make_event_function(
+                direction, affects, condition_func, var_names, event, state_index
+            ):
+                def event_function(
+                    t,
+                    y,
+                    condition_func=condition_func,
+                    var_names=var_names,
+                    event=event,
+                    state_index=state_index,
+                ):
+                    # Resolve each condition symbol to the value of the state with
+                    # that NAME (via ``state_index``), so the lambdified condition
+                    # sees the correct state regardless of free-symbol order.
+                    var_values = [
+                        y[state_index[name]]
+                        if name in state_index and state_index[name] < len(y)
+                        else 0.0
+                        for name in var_names
+                    ]
+                    return condition_func(*var_values) if var_values else condition_func()
+
+                event_function.terminal = True
+                event_function.direction = direction
+                event_function.affects = affects
+                event_function.event_name = event.name
+                return event_function
+
+            if has_affect_neg and has_affect_pos:
+                # Separate event functions for positive- and negative-going crossings.
+                event_functions.append(
+                    _make_event_function(
+                        1, event.affects, condition_func, var_names, event, state_index
+                    )
+                )
+                event_functions.append(
+                    _make_event_function(
+                        -1, event.affect_neg, condition_func, var_names, event, state_index
+                    )
+                )
+            else:
+                # Original behavior for events without affect_neg: detect all
+                # zero crossings (direction 0).
+                event_functions.append(
+                    _make_event_function(
+                        0,
+                        event.affects if has_affect_pos else [],
+                        condition_func,
+                        var_names,
+                        event,
+                        state_index,
+                    )
+                )
+
+    return event_functions
 
 
 def _resolve_parameter_values(

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterator
 from typing import Any, Callable
 
 from .errors import EarthSciAstError
@@ -78,7 +79,7 @@ class ExpressionTemplateError(EarthSciAstError):
     ``template_import_is_coupling_library``.
 
     The code constants themselves are defined in
-    :mod:`earthsci_ast.diagnostics`; their string values are part of the
+    :mod:`earthsci_ast.error_handling`; their string values are part of the
     cross-binding contract and must never change.
     """
 
@@ -156,6 +157,193 @@ def _walk_json(
                 rec(v, f"{path}/{k}")
 
     rec(node, path)
+
+
+def _rewrite_json(
+    node: Any,
+    *,
+    on_str: Callable[[str], Any] | None = None,
+    on_value: Callable[[dict, str, Any, Callable[[Any], Any]], Any] | None = None,
+    on_object: Callable[[dict, Callable[[Any], Any]], Any] | None = None,
+    share: bool = True,
+) -> Any:
+    """Sharing-preserving functional JSON tree rebuild — the REWRITING dual of
+    :func:`_walk_json`.
+
+    Rebuilds ``node``: each ``str`` LEAF is replaced by ``on_str`` (or kept
+    as-is), list items are rebuilt element-wise, dict values are rebuilt
+    key-by-key, and non-``str`` scalars (int / float / bool / None) pass through
+    unchanged. This is the single recursion skeleton behind every transforming
+    pass that used to hand-roll ``recurse dict/list/scalar, preserve identity,
+    memoize on id`` (``_substitute``, ``_expand``, the §9.7.7 rename walk, …).
+
+    Two MUTUALLY-EXCLUSIVE dict hooks customize a pass; both receive ``recurse``
+    — the combinator's own descent, which applies this same rebuild to a child:
+
+    * ``on_value(node, key, value, recurse)`` — called per dict ITEM, returns the
+      rewritten value for ``key``. Default: ``recurse(value)`` (recurse every
+      value). A pass overrides only the special keys (keep an
+      ``apply_expression_template`` ``name`` verbatim, deep-copy a protected
+      scalar field, map an axis / template name) and defers the rest to
+      ``recurse``.
+    * ``on_object(node, recurse)`` — called per dict NODE, returns the whole
+      rewritten node. For a pass whose dict handling is not per-item (an
+      innermost-first expansion that re-descends into a freshly produced body).
+
+    ``share`` selects the DAG contract:
+
+    * ``share=True`` (post-expansion shared DAG; mirrors :func:`_substitute`):
+      IDENTITY-PRESERVING (a subtree with nothing rewritten below it is returned
+      as the SAME object) and MEMOIZED on ``id`` so a subtree shared under many
+      parents is rewritten once — avoiding the 2**depth blow-up of a template
+      DAG. The memo stores ``(node, result)`` so the keyed object stays alive and
+      ids are not recycled mid-walk. (Identity preservation is applied to the
+      default / ``on_value`` dict rebuild; an ``on_object`` hook owns its own
+      result, so it does its own unchanged-⇒-same-object squashing.)
+    * ``share=False`` (pre-expansion UNSHARED trees; mirrors
+      :func:`~earthsci_ast.template_imports._substitute_metaparams` and the
+      §9.7.7 rename walk): every dict / list is rebuilt fresh, no memo, no
+      identity check.
+    """
+    memo: dict[int, tuple[Any, Any]] | None = {} if share else None
+
+    def rec(n: Any) -> Any:
+        if isinstance(n, str):
+            return on_str(n) if on_str is not None else n
+        if _is_array(n):
+            if memo is not None:
+                hit = memo.get(id(n))
+                if hit is not None:
+                    return hit[1]
+            out: Any = [rec(c) for c in n]
+            if memo is not None:
+                if all(o is c for o, c in zip(out, n)):
+                    out = n  # identity-preserving: nothing rewritten below here
+                memo[id(n)] = (n, out)
+            return out
+        if _is_object(n):
+            if memo is not None:
+                hit = memo.get(id(n))
+                if hit is not None:
+                    return hit[1]
+            if on_object is not None:
+                out = on_object(n, rec)
+            else:
+                out = {
+                    k: (on_value(n, k, v, rec) if on_value is not None else rec(v))
+                    for k, v in n.items()
+                }
+                if memo is not None and all(out[k] is v for k, v in n.items()):
+                    out = n  # identity-preserving
+            if memo is not None:
+                memo[id(n)] = (n, out)
+            return out
+        return n
+
+    return rec(node)
+
+
+# ---------------------------------------------------------------------------
+# Raw-dict expression child traversal (the dict-form counterpart to
+# :func:`earthsci_ast.expr_walk.iter_children`)
+# ---------------------------------------------------------------------------
+#
+# ``expr_walk`` is the ONE canonical child-field set, but it needs the typed
+# :class:`~earthsci_ast.esm_types.ExprNode` dataclasses. Many passes run on the
+# RAW ``dict`` decoded from JSON (before parsing) and cannot use it, so the
+# child-field set was historically hand-copied at each such pass. These three
+# tuples are that set for the raw-dict form; :func:`iter_child_values` is the
+# single descent every raw-dict expression walker should route through.
+#
+# Relationship to the typed set (``expr_walk._SINGLE_CHILD_FIELDS`` +
+# ``args``/``values``/``table_axes``): the SINGLE/LIST fields and the ``axes``
+# MAP mirror the typed child set exactly (``axes`` is the raw JSON key for the
+# dataclass ``table_axes``). ``bindings`` and ``regions`` are raw-only fields
+# the typed child traversal does NOT visit — an ``apply_expression_template``'s
+# free-variable targets and a ``makearray``'s ``[[lo, hi], …]`` bound
+# expressions. They carry references/loop symbols that the raw-dict
+# reference-integrity walkers must still see, so they are included here and
+# tagged so a caller that wants only the typed-canonical subset can skip them
+# by field name. NOTE: unlike ``expr_walk`` (and ``cadence.child_exprs``), this
+# visits ``axes`` in INSERTION order, not sorted — it matches the raw-dict
+# reference walkers that route through it; a sorted-axes consumer keeps its own
+# traversal.
+
+#: Raw-dict expression child fields carried as LISTS of child expressions.
+DICT_LIST_CHILD_FIELDS = ("args", "values")
+#: Raw-dict expression child fields carrying a SINGLE nested child expression,
+#: the verbatim dict-form of ``expr_walk._SINGLE_CHILD_FIELDS``.
+DICT_SINGLE_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
+#: Raw-dict expression child fields carried as ``{name: child}`` MAPS.
+DICT_MAP_CHILD_FIELDS = ("axes", "bindings")
+
+
+def _iter_region_children(regions: Any) -> Iterator[Any]:
+    """Yield each ``str``/``dict`` bound expression nested in a ``makearray``
+    ``regions`` value — a per-region list of per-axis ``[lo, hi]`` lists whose
+    bounds may be literals, names, or op-nodes. Nested lists are flattened via
+    an explicit LIFO stack; ints/floats/None are skipped. The traversal order is
+    kept byte-for-byte identical to the historical structural-checks
+    ``_iter_region_bounds`` walker so routing through it changes no diagnostic
+    order."""
+    if not isinstance(regions, list):
+        return
+    stack = list(regions)
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, (str, dict)):
+            yield item
+
+
+def iter_child_values(node: Any) -> Iterator[tuple[str, Any]]:
+    """Yield ``(field_name, child_value)`` for every child-bearing field of a
+    raw-dict expression ``node``, driven by the ONE canonical field set above.
+
+    Visit order (matching the raw-dict reference walkers this replaces):
+    ``args`` items, then ``lower``/``upper``/``expr``/``filter``/``key``, then
+    ``values`` items, then ``axes`` then ``bindings`` map values, then
+    ``regions`` bound expressions. Each child is tagged with the name of the
+    field it came from so a caller that treats certain fields specially — a
+    binder-aware walker, or one that wants only the typed-canonical subset and
+    so skips ``bindings``/``regions`` — can filter by name while still sharing
+    this single field list. A non-dict ``node`` yields nothing.
+
+    This is the raw-dict counterpart of
+    :func:`earthsci_ast.expr_walk.iter_children`; see the module notes above for
+    how the two sets relate (``bindings``/``regions`` and insertion-order
+    ``axes`` are the raw-only differences)."""
+    if not isinstance(node, dict):
+        return
+    for arg in node.get("args", []) or []:
+        yield ("args", arg)
+    for field_name in DICT_SINGLE_CHILD_FIELDS:
+        child = node.get(field_name)
+        if child is not None:
+            yield (field_name, child)
+    for val in node.get("values", []) or []:
+        yield ("values", val)
+    axes = node.get("axes")
+    if isinstance(axes, dict):
+        for child in axes.values():
+            yield ("axes", child)
+    bindings = node.get("bindings")
+    if isinstance(bindings, dict):
+        for child in bindings.values():
+            yield ("bindings", child)
+    yield from (("regions", child) for child in _iter_region_children(node.get("regions")))
+
+
+def walk_dict_exprs(node: Any) -> Iterator[Any]:
+    """Pre-order walk over a raw-dict expression tree, yielding every node — the
+    root first, including ``str`` leaves and numeric literals — descending
+    exactly the canonical child set via :func:`iter_child_values`. The raw-dict
+    counterpart to :func:`earthsci_ast.expr_walk.walk`."""
+    yield node
+    if isinstance(node, dict):
+        for _field_name, child in iter_child_values(node):
+            yield from walk_dict_exprs(child)
 
 
 # ---------------------------------------------------------------------------

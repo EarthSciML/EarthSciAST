@@ -11,10 +11,12 @@ This module tests the core simulation functionality including:
 
 import pytest
 import numpy as np
-from earthsci_ast.simulation import simulate_reaction_system as simulate, SimulationResult
+from earthsci_ast.simulation import simulate, SimulationResult
 from earthsci_ast.sympy_bridge import _expr_to_sympy
 from earthsci_ast.numpy_interpreter import UnreachableSpatialOperatorError
 from earthsci_ast.esm_types import (
+    EsmFile,
+    Metadata,
     ReactionSystem,
     Species,
     Parameter,
@@ -23,6 +25,37 @@ from earthsci_ast.esm_types import (
     ExprNode,
 )
 import sympy as sp
+
+
+def _reaction_file(
+    system_name: str,
+    species: list[Species],
+    reactions: list[Reaction],
+    parameters: list[Parameter] | None = None,
+    events: list[ContinuousEvent] | None = None,
+) -> EsmFile:
+    """Wrap a reaction system in an :class:`EsmFile` for the production
+    ``simulate()`` path.
+
+    The modern engine (:func:`earthsci_ast.simulation.simulate`) consumes an
+    :class:`EsmFile` / ``FlattenedSystem`` and lowers reactions to mass-action
+    ODEs through the same ``reactions`` machinery the analysis tier uses. State
+    variables come back dot-namespaced as ``"<system_name>.<species>"``; any
+    continuous ``events`` are attached at file scope and namespaced by
+    ``flatten()``.
+    """
+    rs = ReactionSystem(
+        name=system_name,
+        species=species,
+        parameters=parameters or [],
+        reactions=reactions,
+    )
+    return EsmFile(
+        version="0.1.0",
+        metadata=Metadata(title="test"),
+        reaction_systems={system_name: rs},
+        events=events or [],
+    )
 
 
 class TestExpressionConversion:
@@ -127,16 +160,10 @@ class TestSimpleReactionSystems:
             rate_constant=0.1,
         )
 
-        # Create reaction system
-        system = ReactionSystem(
-            name="decay_system", species=[species_A], parameters=[k], reactions=[reaction]
-        )
-
-        # Initial conditions
-        initial = {"A": 1.0}
+        file = _reaction_file("Decay", [species_A], [reaction], parameters=[k])
 
         # Simulate
-        result = simulate(system, initial, (0, 10))
+        result = simulate(file, tspan=(0, 10), initial_conditions={"A": 1.0})
 
         # Check result
         assert result.success, f"Simulation failed: {result.message}"
@@ -144,8 +171,9 @@ class TestSimpleReactionSystems:
         assert result.y.shape[0] == 1  # One species
 
         # Check exponential decay behavior
-        A_final = result.y[0, -1]
-        A_initial = result.y[0, 0]
+        a_idx = result.vars.index("Decay.A")
+        A_final = result.y[a_idx, -1]
+        A_initial = result.y[a_idx, 0]
         assert A_final < A_initial  # Should decay
         assert A_final > 0  # Should not go negative
 
@@ -165,38 +193,41 @@ class TestSimpleReactionSystems:
             name="reverse", reactants={"B": 1.0}, products={"A": 1.0}, rate_constant=0.2
         )
 
-        # Create system
-        system = ReactionSystem(
-            name="reversible",
-            species=[species_A, species_B],
-            reactions=[reaction_fwd, reaction_rev],
-        )
+        file = _reaction_file("Rev", [species_A, species_B], [reaction_fwd, reaction_rev])
 
         # Initial conditions: only A present
         initial = {"A": 1.0, "B": 0.0}
 
         # Simulate
-        result = simulate(system, initial, (0, 20))
+        result = simulate(file, tspan=(0, 20), initial_conditions=initial)
 
         # Check success
         assert result.success, f"Simulation failed: {result.message}"
 
         # Check conservation: A + B should be approximately constant
-        total = result.y[0, :] + result.y[1, :]  # A + B
+        a_idx = result.vars.index("Rev.A")
+        b_idx = result.vars.index("Rev.B")
+        total = result.y[a_idx, :] + result.y[b_idx, :]  # A + B
         initial_total = initial["A"] + initial["B"]
 
         # Allow small numerical errors
         assert np.allclose(total, initial_total, atol=1e-6), "Mass not conserved"
 
     def test_empty_system(self):
-        """Test handling of empty reaction system."""
-        system = ReactionSystem(name="empty", species=[], reactions=[])
+        """Test handling of empty reaction system.
 
-        initial = {}
-        result = simulate(system, initial, (0, 1))
+        An empty reaction system flattens to a stateless system; the
+        production engine handles it gracefully as a no-op that succeeds with
+        no state variables. (The old, now-deleted 0-D box-model engine used to
+        fail here — the modern contract is a successful empty result.)
+        """
+        file = _reaction_file("Empty", [], [])
 
-        # Should handle empty system gracefully
-        assert not result.success  # Empty systems should fail appropriately
+        result = simulate(file, tspan=(0, 1), initial_conditions={})
+
+        # Should handle empty system gracefully: a no-op success, no states.
+        assert result.success, f"Simulation failed: {result.message}"
+        assert list(result.vars) == []
 
     def test_simulation_with_events(self):
         """Test simulation with continuous events."""
@@ -204,8 +235,6 @@ class TestSimpleReactionSystems:
         species_A = Species(name="A")
 
         reaction = Reaction(name="decay", reactants={"A": 1.0}, products={}, rate_constant=0.1)
-
-        system = ReactionSystem(name="decay_with_event", species=[species_A], reactions=[reaction])
 
         # Event: stop when A drops below 0.5
         event_condition = ExprNode(op="-", args=["A", 0.5])  # A - 0.5
@@ -215,10 +244,10 @@ class TestSimpleReactionSystems:
             affects=[],
         )
 
-        initial = {"A": 1.0}
+        file = _reaction_file("Ev", [species_A], [reaction], events=[event])
 
         # Simulate with event
-        result = simulate(system, initial, (0, 20), events=[event])
+        result = simulate(file, tspan=(0, 20), initial_conditions={"A": 1.0})
 
         # Check that simulation stopped early due to event
         assert result.success or "event" in result.message.lower()
@@ -232,26 +261,29 @@ class TestSimulationErrors:
         species_A = Species(name="A")
         reaction = Reaction(name="r1", rate_constant=0.1)
 
-        system = ReactionSystem(name="test", species=[species_A], reactions=[reaction])
+        file = _reaction_file("Miss", [species_A], [reaction])
 
-        # Missing initial condition should default to 0
-        simulate(system, {}, (0, 1))
-        # This should still work, just with zero initial conditions
+        # Missing initial condition should default to the species default (0).
+        result = simulate(file, tspan=(0, 1), initial_conditions={})
+        # This should still work, just with zero initial conditions.
+        assert isinstance(result, SimulationResult)
 
     def test_invalid_time_span(self):
         """Test handling of invalid time spans."""
         species_A = Species(name="A")
-        system = ReactionSystem(name="test", species=[species_A])
+        reaction = Reaction(name="decay", reactants={"A": 1.0}, products={}, rate_constant=0.1)
+
+        file = _reaction_file("Back", [species_A], [reaction])
 
         # Backwards time span
-        result = simulate(system, {"A": 1.0}, (10, 0))
+        result = simulate(file, tspan=(10, 0), initial_conditions={"A": 1.0})
 
         # SciPy should handle this or return an error
         # We just check that we get a result (success or failure)
         assert isinstance(result, SimulationResult)
 
     def test_species_default_used_as_initial_value(self):
-        """simulate_reaction_system seeds y0 from each species' `default`.
+        """simulate() seeds y0 from each species' `default`.
 
         When an initial condition is omitted, the species' declared scalar
         `default` (here 3.0) must be used instead of 0.0; an explicit override
@@ -266,24 +298,20 @@ class TestSimulationErrors:
             products={"B": 1.0},
             rate_constant=1e-12,
         )
-        system = ReactionSystem(
-            name="defaults",
-            species=[species_A, species_B],
-            reactions=[reaction],
-        )
+        file = _reaction_file("Def", [species_A, species_B], [reaction])
 
         # No initial conditions: A starts at its declared default, B at 0.0.
-        result = simulate(system, {}, (0.0, 1.0))
+        result = simulate(file, tspan=(0.0, 1.0), initial_conditions={})
         assert result.success, f"Simulation failed: {result.message}"
         idx = {name: i for i, name in enumerate(result.vars)}
-        assert result.y[idx["A"], 0] == pytest.approx(3.0)
-        assert result.y[idx["B"], 0] == pytest.approx(0.0)
+        assert result.y[idx["Def.A"], 0] == pytest.approx(3.0)
+        assert result.y[idx["Def.B"], 0] == pytest.approx(0.0)
 
         # An explicit override still wins over the species default.
-        result2 = simulate(system, {"A": 0.5}, (0.0, 1.0))
+        result2 = simulate(file, tspan=(0.0, 1.0), initial_conditions={"A": 0.5})
         assert result2.success, f"Simulation failed: {result2.message}"
         idx2 = {name: i for i, name in enumerate(result2.vars)}
-        assert result2.y[idx2["A"], 0] == pytest.approx(0.5)
+        assert result2.y[idx2["Def.A"], 0] == pytest.approx(0.5)
 
 
 if __name__ == "__main__":

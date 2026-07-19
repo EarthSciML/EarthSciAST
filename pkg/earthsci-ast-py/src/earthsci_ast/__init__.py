@@ -244,7 +244,6 @@ _has_simulation = False
 try:
     from .simulation import (  # noqa: F401 — re-exported via __all__ below
         simulate,
-        simulate_with_discrete_events,
         evaluate_rhs,
         BuildInspection,
         SimulationResult,
@@ -267,12 +266,6 @@ from .display import (
 from .codegen import (
     to_julia_code,
     to_python_code,
-)
-
-# Migration functionality (v0.1 → v0.2 dict-level transform behind esm-migrate)
-from .migration import (
-    migrate_file_0_1_to_0_2,
-    MigrationError,
 )
 
 # Runtime data loaders (dispatch on DataLoader.kind)
@@ -489,9 +482,6 @@ __all__ = [
     # Code generation
     "to_julia_code",
     "to_python_code",
-    # Migration functionality
-    "migrate_file_0_1_to_0_2",
-    "MigrationError",
     # Runtime data loaders
     "UrlTemplateError",
     "expand_url_template",
@@ -532,7 +522,6 @@ if _has_simulation:
     __all__.extend(
         [
             "simulate",
-            "simulate_with_discrete_events",
             "evaluate_rhs",
             "BuildInspection",
             "SimulationResult",

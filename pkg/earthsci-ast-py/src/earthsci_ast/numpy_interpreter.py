@@ -37,6 +37,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from . import op_registry
 from .cadence import Partition
 from .cadence import partition as _partition_model
 from .errors import EarthSciAstError
@@ -108,8 +109,11 @@ class EvalContext:
     # 0-based ndarray of integer bin codes; ``join_key_index_sets`` records the
     # buffer's 1-D declared-shape index set so the join resolver can map the key
     # column to the range symbol whose ``{"from": <set>}`` matches. Materialized
-    # ONCE at setup (:func:`simulation._materialize_join_key_buffers`) — the
-    # skolem/floor bins run off the per-step hot path. Empty ⇒ no buffer joins.
+    # ONCE at setup by the value-invention front-door
+    # (:func:`value_invention.materialize_value_invention`, surfaced as
+    # :attr:`ValueInventionResult.join_key_buffers` and consumed by
+    # :func:`simulation_array._frontdoor_join_keys_and_extents`) — the skolem/floor
+    # bins run off the per-step hot path. Empty ⇒ no buffer joins.
     join_key_buffers: dict[str, np.ndarray] = field(default_factory=dict)
     join_key_index_sets: dict[str, str] = field(default_factory=dict)
     # Keyed-factor scope map (esm-spec §5.4 / RFC semiring-faq-unified-ir §5.2):
@@ -275,7 +279,11 @@ def _resolve_symbol(name: str, ctx: EvalContext) -> float | np.ndarray:
         raise NumpyInterpreterError(f"Unresolved symbol: {name!r}") from exc
 
 
-_SCALAR_FUNCS: dict[str, Callable] = {
+# Unary elementary op -> numpy ufunc. VALUES local (op_registry is a numpy-free
+# leaf); the KEY SET is DERIVED from the registry's unary-elementary ops just
+# below, so it cannot drift. Building the live dict by iterating that key set
+# makes a missing value a loud import-time KeyError.
+_SCALAR_FUNCS_IMPL: dict[str, Callable] = {
     "exp": np.exp,
     "log": np.log,
     "log10": np.log10,
@@ -298,17 +306,27 @@ _SCALAR_FUNCS: dict[str, Callable] = {
     "sign": np.sign,
 }
 
+_SCALAR_FUNCS: dict[str, Callable] = {
+    op: _SCALAR_FUNCS_IMPL[op] for op in op_registry.unary_elementary()
+}
+
 
 #: Comparison ops → numpy ufunc. Hoisted to module scope (was rebuilt per
 #: comparison inside eval_expr) so both the tree walker and the compiled
-#: closure share one table.
-_CMP_UFUNCS: dict[str, Callable] = {
+#: closure share one table. VALUES local; KEY SET derived from the registry's
+#: (non-alias) comparison category so it cannot drift.
+_CMP_UFUNCS_IMPL: dict[str, Callable] = {
     ">": np.greater,
     "<": np.less,
     ">=": np.greater_equal,
     "<=": np.less_equal,
     "==": np.equal,
     "!=": np.not_equal,
+}
+
+_CMP_UFUNCS: dict[str, Callable] = {
+    op: _CMP_UFUNCS_IMPL[op]
+    for op in op_registry.by_category("comparison") & op_registry.canonical_names()
 }
 
 

@@ -44,6 +44,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import op_registry
+from .json_walk import iter_child_values
+
 # StructuralValidationError is built lazily (and cached) so that its base class,
 # ``earthsci_ast.parse.SchemaValidationError``, can be imported without
 # reintroducing the parse<->structural_checks import cycle this module's
@@ -165,60 +168,18 @@ def _pint_unverifiable_errors():
     return _PINT_UNVERIFIABLE_ERRORS
 
 
-_OPERATOR_ARITY = {
-    "+": (2, None),
-    "-": (1, None),
-    "*": (2, None),
-    "/": (2, 2),
-    # `grad`/`div` accept an optional second operand: a per-field boundary
-    # (Dirichlet inflow) metavariable bound by a two-arg `grad(f, inflow, dim)`
-    # expression-template `match` (esm-spec §9.6; the schema does not constrain
-    # grad/div arity — the second arg supplies that field's own loaded BC).
-    "^": (2, 2),
-    "D": (1, 1),
-    "ic": (1, 1),
-    "grad": (1, 2),
-    "div": (1, 2),
-    "laplacian": (1, 1),
-    "exp": (1, 1),
-    "log": (1, 1),
-    "log10": (1, 1),
-    "sqrt": (1, 1),
-    "abs": (1, 1),
-    "sin": (1, 1),
-    "cos": (1, 1),
-    "tan": (1, 1),
-    "asin": (1, 1),
-    "acos": (1, 1),
-    "atan": (1, 1),
-    "atan2": (2, 2),
-    "sinh": (1, 1),
-    "cosh": (1, 1),
-    "tanh": (1, 1),
-    "asinh": (1, 1),
-    "acosh": (1, 1),
-    "atanh": (1, 1),
-    "min": (2, None),
-    "max": (2, None),
-    "floor": (1, 1),
-    "ceil": (1, 1),
-    "ifelse": (3, 3),
-    ">": (2, 2),
-    "<": (2, 2),
-    ">=": (2, 2),
-    "<=": (2, 2),
-    "==": (2, 2),
-    "!=": (2, 2),
-    "and": (2, None),
-    "or": (2, None),
-    "not": (1, 1),
-    "Pre": (1, 1),
-    "sign": (1, 1),
-    # Closed function registry (esm-spec §9.2 / §9.3). `fn` arity is checked
-    # by the dispatcher (1 for datetime.*, 2 for interp.searchsorted).
-    "enum": (2, 2),
-    "const": (0, 0),
-}
+# Operator arity bounds ``op -> (min_args, max_args)`` (``max_args`` None =
+# unbounded). DERIVED from the canonical op registry
+# (:mod:`earthsci_ast.op_registry`), the single source for the AST op vocabulary
+# and each op's arity contract, so this table cannot drift from it. The registry
+# supplies exactly the ops that carry a structural arity check — array /
+# relational / geometry ops (index-set-driven shapes), spelling aliases, boolean
+# literals, and the closed-registry ops whose args live in dedicated fields (`fn`
+# arity is checked by its dispatcher; `table_lookup`/`apply_expression_template`
+# carry no `args`) are intentionally absent, exactly as before. Notably `grad`/
+# `div` are (1, 2): they accept an optional per-field boundary metavariable bound
+# by a two-arg `grad(f, inflow, dim)` expression-template `match` (esm-spec §9.6).
+_OPERATOR_ARITY = op_registry.arity_bounds_map()
 
 # Built-in symbols always available in expressions.
 #
@@ -288,12 +249,14 @@ _UNIT_ALIASES = {
 }
 
 
-# Nested single-expression child slots of a raw-dict ExprNode, in the canonical
-# order used by ``expr_walk._SINGLE_CHILD_FIELDS`` (the one true child-field
-# set). ``args``/``values`` are expression LISTS and ``axes`` is a
-# ``{name: expr}`` MAP (the dataclass ``table_axes``; its raw JSON key is
-# ``axes``), so they are walked separately below.
-_EXPR_STRING_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
+# The raw-dict expression child-field set lives in ONE place now — the shared
+# combinator ``json_walk.iter_child_values`` (the dict-form counterpart of
+# ``expr_walk.iter_children``). The three reference-integrity walkers below
+# descend through it instead of each re-listing ``lower``/``upper``/``expr``/
+# ``filter``/``key`` + ``args``/``values``/``axes``/``bindings``/``regions`` by
+# hand. Each keeps its own LEAF logic; where a walker historically visited a
+# strict SUBSET of that set it filters the combinator's yielded field names to
+# preserve its exact traversal.
 
 
 # Fields that BIND index/integration symbols for a node's body (esm-spec §5;
@@ -301,27 +264,21 @@ _EXPR_STRING_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
 # variable of the aggregate/makearray/integral, not a reference to a declared
 # model symbol, so reference checks must not flag it as undefined.
 def _bare_string_leaves(expr) -> set[str]:
-    """Collect every bare-string leaf reachable from ``expr`` across the full
+    """Collect every bare-string leaf reachable from ``expr`` across the
     child-field set (used to pull loop symbols out of index-coordinate
-    sub-expressions like ``i + 1``)."""
+    sub-expressions like ``i + 1``).
+
+    Descends the shared combinator's child set MINUS ``regions``: this walker
+    predates ``makearray`` region bounds and never visited them, so they are
+    skipped to keep its result byte-identical."""
     out: set[str] = set()
     if isinstance(expr, str):
         out.add(expr)
     elif isinstance(expr, dict):
-        for arg in expr.get("args", []) or []:
-            out |= _bare_string_leaves(arg)
-        for field_name in _EXPR_STRING_CHILD_FIELDS:
-            out |= _bare_string_leaves(expr.get(field_name))
-        for val in expr.get("values", []) or []:
-            out |= _bare_string_leaves(val)
-        axes = expr.get("axes")
-        if isinstance(axes, dict):
-            for child in axes.values():
-                out |= _bare_string_leaves(child)
-        bindings = expr.get("bindings")
-        if isinstance(bindings, dict):
-            for child in bindings.values():
-                out |= _bare_string_leaves(child)
+        for field_name, child in iter_child_values(expr):
+            if field_name == "regions":
+                continue
+            out |= _bare_string_leaves(child)
     return out
 
 
@@ -355,25 +312,13 @@ def _expression_bound_symbols(expr) -> set[str]:
         # expressions over loop symbols, never top-level declared references.
         for coord in (expr.get("args", []) or [])[1:]:
             bound |= _bare_string_leaves(coord)
-    for field_name in _EXPR_STRING_CHILD_FIELDS:
-        bound |= _expression_bound_symbols(expr.get(field_name))
-    for arg in expr.get("args", []) or []:
-        bound |= _expression_bound_symbols(arg)
-    for val in expr.get("values", []) or []:
-        bound |= _expression_bound_symbols(val)
-    axes = expr.get("axes")
-    if isinstance(axes, dict):
-        for child in axes.values():
-            bound |= _expression_bound_symbols(child)
-    # `apply_expression_template` bindings values are free-variable TARGETS
-    # (esm-spec §10.10.2): bound symbols hidden in a binding value must stay
-    # visible so the reference walker below can filter them consistently.
-    bindings = expr.get("bindings")
-    if isinstance(bindings, dict):
-        for child in bindings.values():
-            bound |= _expression_bound_symbols(child)
-    for bound_pair in _iter_region_bounds(expr):
-        bound |= _expression_bound_symbols(bound_pair)
+    # Recurse into every child (args, single-child slots, values, axes,
+    # `apply_expression_template` bindings values — free-variable TARGETS whose
+    # bound symbols must stay visible, §10.10.2 — and makearray region bounds)
+    # via the shared child combinator: a binder introduced deeper in the tree is
+    # bound here too.
+    for _field_name, child in iter_child_values(expr):
+        bound |= _expression_bound_symbols(child)
     return bound
 
 
@@ -393,57 +338,20 @@ def _walk_expression_strings(expr) -> list[str]:
     result: list[str] = []
     if not (isinstance(expr, dict) and "op" in expr):
         return result
-
-    def descend(child) -> None:
+    # Descend the full child set — args, the single-child slots, values, axes,
+    # `apply_expression_template` bindings values (free-variable targets,
+    # §10.10.2), and makearray `[[lo, hi], …]` region bounds — via the shared
+    # combinator, preserving the historical visit ORDER so the order of the
+    # collected references (and hence of any `undefined_variable` findings) is
+    # unchanged. Nested dicts re-apply the `op` guard on recursion; a reference
+    # hidden in a region bound (e.g. metaparameter `N` in `[[2, N - 1]]`) is a
+    # reference like any other.
+    for _field_name, child in iter_child_values(expr):
         if isinstance(child, str):
             result.append(child)
         elif isinstance(child, dict):
             result.extend(_walk_expression_strings(child))
-
-    for arg in expr.get("args", []) or []:
-        descend(arg)
-    for field_name in _EXPR_STRING_CHILD_FIELDS:
-        child = expr.get(field_name)
-        if child is not None:
-            descend(child)
-    for val in expr.get("values", []) or []:
-        descend(val)
-    axes = expr.get("axes")
-    if isinstance(axes, dict):
-        for child in axes.values():
-            descend(child)
-    # `apply_expression_template` bindings values are free-variable targets
-    # (esm-spec §10.10.2); an undefined variable hidden in a binding value
-    # would otherwise escape the undefined-reference check.
-    bindings = expr.get("bindings")
-    if isinstance(bindings, dict):
-        for child in bindings.values():
-            descend(child)
-    # `makearray` REGIONS are `[[lo, hi], ...]` bound pairs per axis, and each
-    # bound is an EXPRESSION — `[[2, {op:"-", args:["N", 1]}], [1, 3]]`. A
-    # reference hidden in a region bound (the metaparameter `N` above) is a
-    # reference like any other.
-    for bound_pair in _iter_region_bounds(expr):
-        descend(bound_pair)
     return result
-
-
-def _iter_region_bounds(expr):
-    """Yield every expression nested in a ``makearray``'s ``regions``.
-
-    ``regions`` is a list (per region) of lists (per axis) of ``[lo, hi]`` pairs,
-    each of which may be a literal, a name, or an op-node.
-    """
-    regions = expr.get("regions")
-    if not isinstance(regions, list):
-        return
-    stack = list(regions)
-    while stack:
-        item = stack.pop()
-        if isinstance(item, list):
-            stack.extend(item)
-        elif isinstance(item, (str, dict)):
-            yield item
 
 
 # The value-invention / index-set-producing semirings (RFC semiring-faq-unified-ir

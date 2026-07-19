@@ -43,13 +43,11 @@ schema validation but before ``_parse_esm_data``.
 from __future__ import annotations
 
 import copy
-import json
-import math
 import re
 from typing import Any
 
 from . import op_registry
-from .diagnostics import (
+from .error_handling import (
     APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
     APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
     APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
@@ -72,8 +70,14 @@ from .json_walk import (  # noqa: F401 — re-exported for the historical import
     ExpressionTemplateError,
     _is_array,
     _is_object,
+    _rewrite_json,
     _walk_json,
 )
+# ``emit_esm_string`` (the canonical Option-B byte writer) now lives next to
+# ``serialize.save`` — the two JSON writers are co-located there. It is
+# re-exported here so ``lower_expression_templates.emit_esm_string`` (used by the
+# package ``__init__`` and tests, alongside :func:`emit_document`) keeps working.
+from .serialize import emit_esm_string  # noqa: F401 — re-exported historical path
 from .template_imports import _collect_apply_names, _compose_template_bodies
 
 # Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
@@ -239,44 +243,22 @@ def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
     each referencing its predecessor twice expands to 2^depth copies of the leaf
     and OOMs the loader well within the documented depth limits.
     """
-    # Bespoke (not on :func:`_walk_json`): this REBUILDS the tree with shared
-    # subtrees spliced in rather than merely observing it, so it stays a
-    # dedicated pass. The memo stores ``(node, result)`` so the keyed object
-    # stays alive alongside its entry (ids must not be recycled mid-walk).
-    memo: dict[int, tuple[Any, Any]] = {}
+    # Routed through the shared sharing-preserving rebuild
+    # (:func:`json_walk._rewrite_json`, ``share=True``): the identity-preserving,
+    # id-memoized DAG rebuild is the combinator's job. This pass supplies only
+    # the two substitution rules — a bound bare-string metavariable is spliced by
+    # reference, and (esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4, Option B) the
+    # ``name`` field of a nested ``apply_expression_template`` is NEVER a
+    # substitution site while every other value is.
+    def _leaf(s: str) -> Any:
+        return bindings[s] if s in bindings else s  # spliced by reference
 
-    def sub(node: Any) -> Any:
-        if isinstance(node, str):
-            if node in bindings:
-                return bindings[node]  # spliced by reference (shared DAG)
-            return node
-        if _is_array(node):
-            hit = memo.get(id(node))
-            if hit is not None:
-                return hit[1]
-            out: Any = [sub(c) for c in node]
-            if all(o is c for o, c in zip(out, node)):
-                out = node  # identity-preserving: nothing bound below here
-            memo[id(node)] = (node, out)
-            return out
-        if _is_object(node):
-            hit = memo.get(id(node))
-            if hit is not None:
-                return hit[1]
-            # esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4 (Option B):
-            # parameter substitution applies inside a nested
-            # ``apply_expression_template`` reference's ``bindings`` values
-            # exactly as any other Expression position, but the ``name`` field
-            # is NEVER a substitution site.
-            is_apply = node.get("op") == APPLY_OP
-            out = {k: (v if (is_apply and k == "name") else sub(v)) for k, v in node.items()}
-            if all(out[k] is v for k, v in node.items()):
-                out = node
-            memo[id(node)] = (node, out)
-            return out
-        return node
+    def _item(node: dict, key: str, value: Any, recurse) -> Any:
+        if key == "name" and node.get("op") == APPLY_OP:
+            return value
+        return recurse(value)
 
-    return sub(body)
+    return _rewrite_json(body, on_str=_leaf, on_value=_item, share=True)
 
 
 # --- static match-scoping constraints (`where`, esm-spec §9.6.1) --------------
@@ -500,44 +482,18 @@ def _build_match_rules(templates: dict, scope: str, iset_names: set) -> list:
 
 
 def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
-    name = node.get("name")
-    if not isinstance(name, str) or not name:
-        raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-            f"{scope}: apply_expression_template node missing or empty 'name'",
-        )
-    decl = templates.get(name)
-    if decl is None:
-        raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            f"{scope}: apply_expression_template references undeclared template '{name}'",
-        )
-    bindings = node.get("bindings")
-    if not _is_object(bindings):
-        raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-            f"{scope}: apply_expression_template '{name}' missing 'bindings' object",
-        )
-    declared = set(decl["params"])
-    provided = set(bindings.keys())
-    for p in decl["params"]:
-        if p not in provided:
-            raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                f"{scope}: apply_expression_template '{name}' missing binding for param '{p}'",
-            )
-    for p in provided:
-        if p not in declared:
-            raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                f"{scope}: apply_expression_template '{name}' supplies unknown param '{p}'",
-            )
+    # Call-site validation — name resolves to an in-scope MATCH-LESS template and
+    # bindings cover its params exactly — is shared with the surviving-reference
+    # check (:func:`_validate_apply_ref`); identical codes/messages, so the two
+    # paths cannot diverge.
+    _validate_apply_ref(node, templates, scope)
+    decl = templates[node["name"]]
     # Outermost-first (esm-spec §9.6.3): the template ``body`` is instantiated by
     # pure structural substitution with the bindings' sub-ASTs spliced in as-is.
     # It is NOT re-scanned within this pass; any apply / match ops it introduces
     # (including inside the substituted bindings) are rewritten in subsequent
     # passes, up to the bounded fixpoint.
-    resolved = dict(bindings.items())
+    resolved = dict(node["bindings"].items())
     return _substitute(decl["body"], resolved)
 
 
@@ -630,61 +586,75 @@ def _op_in_T(op: str) -> bool:
     return not op_registry.is_known(op)
 
 
-def _direct_T_op(node: Any) -> bool:
+def _contains_op(node: Any, pred) -> bool:
     """True iff ``node`` contains, ANYWHERE within it (descending through every
     field, including the ``bindings`` of nested ``apply_expression_template``
-    nodes), an object whose ``op`` is in **T** (:func:`_op_in_T`). Does NOT
-    follow references to other templates — that transitive step is
-    :func:`_template_target_bearing`."""
+    nodes), an object whose ``op`` string satisfies ``pred``. Does NOT follow
+    references to other templates — that transitive step is
+    :func:`_template_bearing`. The shared direct-scan of both the target-bearing
+    (``pred=_op_in_T``) and manifold-bearing (op ∈ geometry set) DFS passes."""
     found = [False]
 
     def _visit(obj: dict, _path: str) -> None:
         if found[0]:
             return
         op = obj.get("op")
-        if isinstance(op, str) and _op_in_T(op):
+        if isinstance(op, str) and pred(op):
             found[0] = True
 
     _walk_json(node, on_obj=_visit, dedup=True)
     return found[0]
 
 
-def _template_target_bearing(templates: dict) -> dict[str, bool]:
-    """Compute, for every template in ``templates``, its **target-bearing** flag
-    (esm-spec §9.6.4 rule 3): a template is target-bearing iff its body contains
-    an op in **T** anywhere (including inside nested references' ``bindings``),
-    OR it references — transitively through the §9.7.3-checked acyclic DAG — a
-    target-bearing template. The DAG is acyclic (checked by
-    :func:`_compose_template_bodies`), so a memoized DFS terminates."""
-    tb: dict[str, bool] = {}
+def _template_bearing(named: dict, direct_pred) -> dict[str, bool]:
+    """Compute, for every template in ``named``, whether it can produce a node
+    whose op satisfies ``direct_pred`` — directly in its body
+    (:func:`_contains_op`, including inside nested references' ``bindings``), OR
+    transitively through a referenced template in the §9.7.3-checked acyclic DAG.
+    Two policies share this memoized DFS: the **target-bearing** flag (esm-spec
+    §9.6.4 rule 3, ``direct_pred=_op_in_T``) that drives eager expansion and the
+    surviving-reference leaf semantics, and the **manifold-bearing** flag
+    (§9.6.9, ``direct_pred`` = op ∈ :data:`_GEOMETRY_MANIFOLD_OPS`) that selects
+    which references need per-instantiation manifold validation. The DAG is
+    acyclic (checked by :func:`_compose_template_bodies`), so the DFS
+    terminates."""
+    bearing: dict[str, bool] = {}
     inprogress: set[str] = set()
 
     def visit(name: str) -> bool:
-        if name in tb:
-            return tb[name]
+        if name in bearing:
+            return bearing[name]
         # Defensive against a cycle the checker somehow missed: treat an
         # in-progress node as non-contributing (acyclicity is enforced earlier).
         if name in inprogress:
             return False
-        decl = templates.get(name)
+        decl = named.get(name)
         if decl is None:
-            tb[name] = False
+            bearing[name] = False
             return False
         inprogress.add(name)
         body = decl.get("body") if _is_object(decl) else None
-        res = body is not None and _direct_T_op(body)
+        res = body is not None and _contains_op(body, direct_pred)
         if not res:
             for r in _collect_apply_names([], body):
-                if r in templates and visit(r):
+                if r in named and visit(r):
                     res = True
                     break
         inprogress.discard(name)
-        tb[name] = res
+        bearing[name] = res
         return res
 
-    for name in templates:
+    for name in named:
         visit(name)
-    return tb
+    return bearing
+
+
+def _template_target_bearing(templates: dict) -> dict[str, bool]:
+    """Per-template **target-bearing** flag (esm-spec §9.6.4 rule 3): a template
+    is target-bearing iff its body contains an op in **T** anywhere, OR it
+    references — transitively through the acyclic DAG — a target-bearing
+    template. Drives the eager pre-pass and surviving-reference leaf semantics."""
+    return _template_bearing(templates, _op_in_T)
 
 
 def _ref_is_eager(node: dict, target_bearing: dict[str, bool]) -> bool:
@@ -702,7 +672,64 @@ def _ref_is_eager(node: dict, target_bearing: dict[str, bool]) -> bool:
     b = node.get("bindings")
     if not _is_object(b):
         return False
-    return _direct_T_op(b)
+    return _contains_op(b, _op_in_T)
+
+
+def _expand(
+    node: Any,
+    templates: dict,
+    scope: str,
+    should_expand,
+    memo: dict[int, tuple] | None = None,
+) -> Any:
+    """Shared substitution engine for the two expansion policies (esm-spec
+    §9.6.4). Recursively rewrites ``apply_expression_template`` nodes by pure
+    substitution, innermost-first: the bindings are expanded before the body is
+    instantiated, and the instantiated body is re-expanded. ``should_expand`` is
+    consulted once per reference, on the node AFTER its bindings are expanded, to
+    decide whether to expand it here — :func:`_expand_all` passes
+    ``lambda n: True`` (the unconditional ``Expand`` kernel, §9.6.4 rule 2) and
+    :func:`_expand_eager` passes an eager-only predicate (§9.6.4 rule 3), which
+    returns non-eager (surviving) references intact. Deterministic and
+    sharing-preserving via an identity memo.
+
+    The list / non-apply-dict / scalar recursion and its id-memoized,
+    identity-preserving DAG rebuild are the shared combinator's job
+    (:func:`json_walk._rewrite_json`, ``share=True``); this pass supplies only
+    the innermost-first apply handling via the whole-node ``on_object`` hook. The
+    combinator manages the memo, so the legacy ``memo`` parameter is accepted for
+    signature stability but no longer threaded (top-level callers always pass
+    ``None``)."""
+
+    def _on_object(node: dict, recurse) -> Any:
+        if node.get("op") == APPLY_OP:
+            # Innermost-first: expand references inside the bindings first.
+            b = node.get("bindings")
+            newnode = node
+            if _is_object(b):
+                nb = {}
+                changed = False
+                for k, v in b.items():
+                    rv = recurse(v)
+                    if rv is not v:
+                        changed = True
+                    nb[k] = rv
+                if changed:
+                    newnode = {k: (nb if k == "bindings" else v) for k, v in node.items()}
+            if should_expand(newnode):
+                body = _expand_apply(newnode, templates, scope)
+                return recurse(body)
+            return newnode
+        changed = False
+        out = {}
+        for k, v in node.items():
+            rv = recurse(v)
+            if rv is not v:
+                changed = True
+            out[k] = rv
+        return out if changed else node
+
+    return _rewrite_json(node, on_object=_on_object, share=True)
 
 
 def _expand_eager(
@@ -717,57 +744,9 @@ def _expand_eager(
     node, and only eager nodes. Non-eager (surviving) references are returned
     intact. Consumes no ``MAX_REWRITE_PASSES`` budget (a separate pre-pass).
     Sharing is preserved via an identity memo."""
-    if memo is None:
-        memo = {}
-    if _is_object(node):
-        hit = memo.get(id(node))
-        if hit is not None:
-            return hit[1]
-        if node.get("op") == APPLY_OP:
-            # Innermost-first: expand eager references inside the bindings first.
-            b = node.get("bindings")
-            newnode = node
-            if _is_object(b):
-                nb = {}
-                changed = False
-                for k, v in b.items():
-                    rv = _expand_eager(v, templates, target_bearing, scope, memo)
-                    if rv is not v:
-                        changed = True
-                    nb[k] = rv
-                if changed:
-                    newnode = {k: (nb if k == "bindings" else v) for k, v in node.items()}
-            if _ref_is_eager(newnode, target_bearing):
-                body = _expand_apply(newnode, templates, scope)
-                res = _expand_eager(body, templates, target_bearing, scope, memo)
-            else:
-                res = newnode
-        else:
-            changed = False
-            out = {}
-            for k, v in node.items():
-                rv = _expand_eager(v, templates, target_bearing, scope, memo)
-                if rv is not v:
-                    changed = True
-                out[k] = rv
-            res = out if changed else node
-        memo[id(node)] = (node, res)
-        return res
-    if _is_array(node):
-        hit = memo.get(id(node))
-        if hit is not None:
-            return hit[1]
-        changed = False
-        out = []
-        for v in node:
-            rv = _expand_eager(v, templates, target_bearing, scope, memo)
-            if rv is not v:
-                changed = True
-            out.append(rv)
-        res = out if changed else node
-        memo[id(node)] = (node, res)
-        return res
-    return node
+    return _expand(
+        node, templates, scope, lambda n: _ref_is_eager(n, target_bearing), memo
+    )
 
 
 def _expand_all(node: Any, templates: dict, scope: str, memo: dict[int, tuple] | None = None) -> Any:
@@ -777,53 +756,7 @@ def _expand_all(node: Any, templates: dict, scope: str, memo: dict[int, tuple] |
     the per-registry kernel of the public :func:`expand_document` /
     :func:`Expand` function (esm-spec §9.6.4 rule 2). Deterministic and
     sharing-preserving."""
-    if memo is None:
-        memo = {}
-    if _is_object(node):
-        hit = memo.get(id(node))
-        if hit is not None:
-            return hit[1]
-        if node.get("op") == APPLY_OP:
-            b = node.get("bindings")
-            newnode = node
-            if _is_object(b):
-                nb = {}
-                changed = False
-                for k, v in b.items():
-                    rv = _expand_all(v, templates, scope, memo)
-                    if rv is not v:
-                        changed = True
-                    nb[k] = rv
-                if changed:
-                    newnode = {k: (nb if k == "bindings" else v) for k, v in node.items()}
-            body = _expand_apply(newnode, templates, scope)
-            res = _expand_all(body, templates, scope, memo)
-        else:
-            changed = False
-            out = {}
-            for k, v in node.items():
-                rv = _expand_all(v, templates, scope, memo)
-                if rv is not v:
-                    changed = True
-                out[k] = rv
-            res = out if changed else node
-        memo[id(node)] = (node, res)
-        return res
-    if _is_array(node):
-        hit = memo.get(id(node))
-        if hit is not None:
-            return hit[1]
-        changed = False
-        out = []
-        for v in node:
-            rv = _expand_all(v, templates, scope, memo)
-            if rv is not v:
-                changed = True
-            out.append(rv)
-        res = out if changed else node
-        memo[id(node)] = (node, res)
-        return res
-    return node
+    return _expand(node, templates, scope, lambda n: True, memo)
 
 
 # Maximum number of productive rewrite passes before a file is rejected as
@@ -1252,46 +1185,7 @@ def _template_manifold_bearing(named: dict) -> dict[str, bool]:
     through a referenced template. Only references to these templates need
     per-instantiation manifold validation (§9.6.9); everything else is skipped,
     so a geometry-free document pays nothing."""
-
-    def direct(node: Any) -> bool:
-        found = [False]
-
-        def _visit(obj: dict, _path: str) -> None:
-            if found[0]:
-                return
-            if obj.get("op") in _GEOMETRY_MANIFOLD_OPS:
-                found[0] = True
-
-        _walk_json(node, on_obj=_visit, dedup=True)
-        return found[0]
-
-    mb: dict[str, bool] = {}
-    inprog: set[str] = set()
-
-    def visit(name: str) -> bool:
-        if name in mb:
-            return mb[name]
-        if name in inprog:
-            return False
-        decl = named.get(name)
-        if decl is None:
-            mb[name] = False
-            return False
-        inprog.add(name)
-        body = decl.get("body") if _is_object(decl) else None
-        res = body is not None and direct(body)
-        if not res:
-            for r in _collect_apply_names([], body):
-                if r in named and visit(r):
-                    res = True
-                    break
-        inprog.discard(name)
-        mb[name] = res
-        return res
-
-    for n in named:
-        visit(n)
-    return mb
+    return _template_bearing(named, lambda op: op in _GEOMETRY_MANIFOLD_OPS)
 
 
 def _validate_manifolds_in_refs(
@@ -1674,74 +1568,10 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
 
 
 # --- Canonical byte writer (2-space indent, keys sorted except the ordered
-#     `expression_templates` block) — the cross-binding byte-identity surface. ---
-
-
-def _emit_scalar(x: Any) -> str:
-    """Render one JSON scalar for the canonical emit form. Integral finite
-    floats render as integer literals (mirroring JSON3's read-normalization in
-    the Julia reference: an integral number is written without a decimal point,
-    uniformly), so the emitted bytes are cross-binding-identical; non-integral
-    floats and strings render via ``json.dumps`` (``ensure_ascii=False`` keeps
-    UTF-8 literals, matching JSON3's writer)."""
-    if isinstance(x, bool):
-        return "true" if x else "false"
-    if isinstance(x, int):
-        return str(x)
-    if isinstance(x, float):
-        if math.isfinite(x) and x.is_integer():
-            return str(int(x))
-        return json.dumps(x, ensure_ascii=False)
-    return json.dumps(x, ensure_ascii=False)
-
-
-def _emit_write(buf: list[str], x: Any, indent: int, preserve: bool = False) -> None:
-    pad = "  " * indent
-    pad1 = "  " * (indent + 1)
-    if _is_object(x):
-        if not x:
-            buf.append("{}")
-            return
-        keys = list(x.keys()) if preserve else sorted(x.keys())
-        buf.append("{\n")
-        for i, k in enumerate(keys):
-            buf.append(pad1)
-            buf.append(json.dumps(str(k), ensure_ascii=False))
-            buf.append(": ")
-            _emit_write(buf, x[k], indent + 1, preserve=(str(k) == "expression_templates"))
-            if i < len(keys) - 1:
-                buf.append(",")
-            buf.append("\n")
-        buf.append(pad)
-        buf.append("}")
-    elif _is_array(x):
-        if not x:
-            buf.append("[]")
-            return
-        buf.append("[\n")
-        for i, v in enumerate(x):
-            buf.append(pad1)
-            _emit_write(buf, v, indent + 1)
-            if i < len(x) - 1:
-                buf.append(",")
-            buf.append("\n")
-        buf.append(pad)
-        buf.append("]")
-    else:
-        buf.append(_emit_scalar(x))
-
-
-def emit_esm_string(doc: Any) -> str:
-    """Canonical byte serialization of an emitted document (esm-spec §9.6.4
-    rule 5): 2-space indent, object keys sorted lexicographically EXCEPT the
-    entries of an ``expression_templates`` object, which preserve their
-    authored-first / materialized-sorted order. The cross-binding byte-identity
-    surface for the Option-B emitted form and the target of the ``emitted.esm``
-    goldens."""
-    buf: list[str] = []
-    _emit_write(buf, doc, 0)
-    buf.append("\n")
-    return "".join(buf)
+#     `expression_templates` block) — the cross-binding byte-identity surface.
+#     The writer now lives next to :func:`serialize.save` (co-located JSON
+#     writers); it is re-exported here (see the module head) so the historical
+#     ``lower_expression_templates.emit_esm_string`` import path keeps resolving.
 
 
 # ===========================================================================
@@ -1774,31 +1604,16 @@ def _json_equal(a: Any, b: Any) -> bool:
 def _rename_apply_refs(node: Any, rename: dict[str, str]) -> Any:
     """Rewrite the ``name`` of every ``apply_expression_template`` reference in
     ``node`` according to ``rename`` (old name → new name), in lockstep with a
-    registry rename. Sharing-preserving."""
-    if _is_array(node):
-        changed = False
-        out = []
-        for v in node:
-            rv = _rename_apply_refs(v, rename)
-            if rv is not v:
-                changed = True
-            out.append(rv)
-        return out if changed else node
-    if _is_object(node):
-        is_apply = node.get("op") == APPLY_OP
-        changed = False
-        out = {}
-        for k, v in node.items():
-            if is_apply and k == "name" and isinstance(v, str) and v in rename:
-                out[k] = rename[v]
-                changed = True
-            else:
-                rv = _rename_apply_refs(v, rename)
-                if rv is not v:
-                    changed = True
-                out[k] = rv
-        return out if changed else node
-    return node
+    registry rename. Sharing-preserving via the shared combinator
+    (:func:`json_walk._rewrite_json`, ``share=True``): only the apply ``name``
+    slot is mapped, every other value recursed unchanged."""
+
+    def _item(n: dict, key: str, value: Any, recurse) -> Any:
+        if key == "name" and n.get("op") == APPLY_OP and isinstance(value, str) and value in rename:
+            return rename[value]
+        return recurse(value)
+
+    return _rewrite_json(node, on_value=_item, share=True)
 
 
 def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:

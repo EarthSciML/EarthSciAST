@@ -35,6 +35,7 @@ import numpy as np
 
 from . import cadence, relational
 from .errors import EarthSciAstError
+from .esm_types import ExprNode
 
 
 class ValueInventionError(EarthSciAstError):
@@ -96,17 +97,52 @@ def _vi_node_kind(node: Any) -> str:
 
 
 def _vi_lhs_base(lhs: Any) -> str | None:
-    """Base variable name written by a raw LHS node: ``name``,
-    ``{op:index,args:[name,…]}`` or ``{op:D,args:[name,…]}``. ``None`` if
-    unrecognised."""
+    """Base variable name written by a LHS node — the SINGLE shared definition.
+
+    Handles all three LHS spellings so both front-doors reuse one function: a
+    bare ``name`` string, a raw-JSON ``{op:index|D, args:[name,…]}`` Mapping (the
+    :func:`_vi_detect` path), and the typed :class:`ExprNode` equivalent (the
+    :mod:`earthsci_ast.simulation_array` simulate-build detector imports this).
+    ``None`` if unrecognised."""
     if isinstance(lhs, str):
         return lhs
+    if isinstance(lhs, ExprNode):
+        if lhs.op in ("index", "D") and lhs.args:
+            return _vi_lhs_base(lhs.args[0])
+        return None
     if isinstance(lhs, Mapping):
         op = lhs.get("op")
         if op in ("index", "D"):
             args = lhs.get("args") or []
             if args:
                 return _vi_lhs_base(args[0])
+    return None
+
+
+def _vi_scope_get(mapping: Mapping[str, Any], name: Any) -> tuple[str, Any] | None:
+    """Resolve ``name`` against a possibly flattening-namespaced ``mapping``.
+
+    An exact key wins; otherwise the UNIQUE dot-suffix (``*.name``) match at the
+    shallowest namespace depth — the identical scope rule
+    :func:`_vi_keyed_factor` / :func:`numpy_interpreter.ragged_factor_scope`
+    already use. Returns ``(resolved_key, value)`` or ``None``.
+
+    This lets the front-door resolve a bin / producer join column named by its
+    BARE authored name (``rg_src_bin``) against the namespaced variable and map
+    registries a FLATTENED simulate build carries (``OceanDynamics.rg_src_bin``),
+    while a raw per-model document (bare names throughout) always takes the
+    exact-match branch — byte-identical, and only the LOOKUP is affected, never a
+    computed key / member / extent."""
+    if name in mapping:
+        return name, mapping[name]
+    suffix = "." + str(name)
+    cands = [k for k in mapping if isinstance(k, str) and k.endswith(suffix)]
+    if not cands:
+        return None
+    mindepth = min(k.count(".") for k in cands)
+    best = [k for k in cands if k.count(".") == mindepth]
+    if len(best) == 1:
+        return best[0], mapping[best[0]]
     return None
 
 
@@ -462,7 +498,14 @@ def _vi_skolem(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) -
     component (e.g. a bound range symbol) — never silently discarded as a tag."""
     _label = node.get("label")  # documentary relation tag; NOT part of the key
     comps = [_vi_eval(a, ctx, bindings) for a in (node.get("args") or [])]
-    key = tuple(_vi_key_int(c) for c in comps)
+    # Each component is first coerced to an exact integer key ID (`_vi_key_int`
+    # rejects a non-integral float / unresolved name — the VI-specific §5.5.1
+    # rule-1 gate), then the canonical DIRECTED tuple is built by the SINGLE
+    # relational definition `relational.skolem` (order-preserving; the emitted
+    # tuple is unchanged). A single component degrades to a scalar key — the one
+    # difference from `relational.skolem` (which always returns a 1-tuple), which
+    # tests/test_value_invention_skolem_label.py pins.
+    key = relational.skolem([_vi_key_int(c) for c in comps])
     if len(key) == 1:
         return key[0]
     return key
@@ -576,9 +619,10 @@ def _vi_join_index_sym(vname: str, producer_ranges: Mapping[str, Any], ctx: _ViC
     """The index range symbol of a join-key variable within the producer's
     ranges: the producer range whose ``from`` equals the variable's (1-D) shape
     index set."""
-    v = ctx.variables.get(vname)
-    if v is None:
+    got = _vi_scope_get(ctx.variables, vname)
+    if got is None:
         raise ValueInventionError(f"join references unknown variable {vname!r}")
+    v = got[1]
     shape = v.get("shape") or []
     if len(shape) != 1:
         raise ValueInventionError(
@@ -604,9 +648,13 @@ def _vi_join_ok(
             lname, rname = pair[0], pair[1]
             ls = _vi_join_index_sym(lname, producer_ranges, ctx)
             rs = _vi_join_index_sym(rname, producer_ranges, ctx)
-            lval = ctx.maps[lname][bindings[ls]]
-            rval = ctx.maps[rname][bindings[rs]]
-            if lval != rval:
+            lbuf = _vi_scope_get(ctx.maps, lname)
+            rbuf = _vi_scope_get(ctx.maps, rname)
+            if lbuf is None:
+                raise ValueInventionError(f"join key buffer {lname!r} is not materialised")
+            if rbuf is None:
+                raise ValueInventionError(f"join key buffer {rname!r} is not materialised")
+            if lbuf[1][bindings[ls]] != rbuf[1][bindings[rs]]:
                 return False
     return True
 
@@ -853,9 +901,9 @@ def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
         for pair in clause.get("on", []):
             if isinstance(pair, (list, tuple)) and len(pair) == 2:
                 a, b = pair[0], pair[1]
-                if b == gsym and a in ctx.maps:
+                if b == gsym and _vi_scope_get(ctx.maps, a) is not None:
                     keyvar = a
-                if a == gsym and b in ctx.maps:
+                if a == gsym and _vi_scope_get(ctx.maps, b) is not None:
                     keyvar = b
     if keyvar is None:
         raise ValueInventionError(
@@ -863,12 +911,13 @@ def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
             f"buffer with the output index {gsym!r}"
         )
     keysym = _vi_join_index_sym(keyvar, ranges, ctx)
+    keybuf = _vi_scope_get(ctx.maps, keyvar)[1]  # exists — the keyvar check above passed
     op, zerobar = _vi_oplus(node)
     contract = {s: spec for s, spec in ranges.items() if s != gsym}
     rows: list[tuple[int, float]] = []
 
     def visit(bindings: dict[str, Any]) -> None:
-        k = _vi_key_int(ctx.maps[keyvar][bindings[keysym]])
+        k = _vi_key_int(keybuf[bindings[keysym]])
         rows.append((k, float(_vi_eval(body, ctx, bindings))))
 
     _vi_enumerate(contract, ctx, visit)
@@ -937,6 +986,46 @@ def _vi_classification_model(
 
 
 # --------------------------------------------------------------------------- #
+# Join-key bin buffers (the broad-phase equi-join column)
+# --------------------------------------------------------------------------- #
+
+
+def _vi_map_skolem(node: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The skolem key / body expr of a value-invention BIN map (its join-key
+    generator), or ``None`` for an arg-witness map (which produces an integer
+    nearest-generator INDEX, not a join key). Only a bin map — a skolem-bodied or
+    skolem-keyed per-element map — mints a :attr:`ValueInventionResult.join_key_buffers`
+    column."""
+    body = node.get("expr")
+    if isinstance(body, Mapping) and body.get("op") == "skolem":
+        return body
+    key = node.get("key")
+    if isinstance(key, Mapping) and key.get("op") == "skolem":
+        return key
+    return None
+
+
+def _vi_join_key_code(key: Any) -> float:
+    """Encode a materialised skolem bin key — a canonical tuple, or a scalar for a
+    single-component key (:func:`_vi_skolem`) — to the SAME 48-bit float bin code
+    the numeric interpreter emits for the equivalent ``skolem`` node
+    (:func:`numpy_interpreter._skolem_code`).
+
+    This is the byte-identity bridge that lets the front-door surface the join-key
+    buffers the retired per-cell mirror produced: the join column is only ever
+    COMPARED (the §5.3 equi-join re-buckets it), so any injective encoding suffices
+    for correctness — but reusing the interpreter's own encoding makes the buffer
+    byte-for-byte identical to the mirror's. Every component is an exact integer
+    key ID (guaranteed by :func:`_vi_key_int`), so ``_skolem_atom(float(c))``
+    canonicalises to ``("i", c)`` — matching the interpreter, whose skolem args
+    (``floor(...)``) evaluate to integral floats."""
+    from .numpy_interpreter import _skolem_atom, _skolem_code
+
+    comps = key if isinstance(key, tuple) else (key,)
+    return _skolem_code([_skolem_atom(float(c)) for c in comps])
+
+
+# --------------------------------------------------------------------------- #
 # Public entrypoint
 # --------------------------------------------------------------------------- #
 
@@ -957,6 +1046,18 @@ class ValueInventionResult:
       (``num[g] = Σ_{p:assign=g} rho_p·x_p``, run through
       :func:`relational.group_aggregate`, §5.5 rule 5) and an elementwise derived
       buffer (``centroid[g] = num[g]/den[g]``) — the SCVT centroid-update step.
+    - ``join_key_buffers`` — skolem BIN map var → the dense per-cell 48-bit bin
+      code buffer (a list of floats, dense in output-index order), the broad-phase
+      equi-join column ``rg_src_bin`` / ``rg_tgt_bin`` an aggregate ``join.on``
+      gates on. Each code is the interpreter's own
+      :func:`numpy_interpreter._skolem_code` of the materialised skolem key, so a
+      buffer is **byte-identical** to what the retired ``simulation_array``
+      per-cell mirror produced (:attr:`EvalContext.join_key_buffers`). The
+      distinct value-invention primitives (distinct / rank) return SETS and
+      arg-witness returns an ARG; this is the setup-materialised join column.
+    - ``join_key_index_sets`` — skolem BIN map var → its 1-D declared-shape index
+      set name, so the join resolver maps the key column to the range symbol whose
+      ``{"from": <set>}`` matches (:attr:`EvalContext.join_key_index_sets`).
     - ``vi_var_names`` — value-invention LHS vars to drop from the ODE.
     """
 
@@ -964,6 +1065,8 @@ class ValueInventionResult:
     members: dict[str, list[Any]] = field(default_factory=dict)
     assignments: dict[str, list[int]] = field(default_factory=dict)
     groups: dict[str, list[float]] = field(default_factory=dict)
+    join_key_buffers: dict[str, list[float]] = field(default_factory=dict)
+    join_key_index_sets: dict[str, str] = field(default_factory=dict)
     vi_var_names: set[str] = field(default_factory=set)
 
 
@@ -973,12 +1076,23 @@ def materialize_value_invention(
     params: Mapping[str, Any] | None = None,
     const_array_boundaries: Mapping[str, Sequence[str]] | None = None,
     index_sets: Mapping[str, Any] | None = None,
+    maps_only: bool = False,
 ) -> ValueInventionResult:
     """Run the build-time value-invention engine over a raw model document.
 
     ``const_arrays`` supplies the build-time factor arrays (the connectivity /
     coordinates the keys are computed from); ``params`` supplies scalar parameter
     overrides. A producer that classifies CONTINUOUS is rejected (§5.7 guard 2).
+
+    ``maps_only`` restricts the pass to the skolem BIN maps and their surfaced
+    :attr:`ValueInventionResult.join_key_buffers` — the arg-witness maps, the
+    grouped / derived chain, and the index-set producers are all skipped. This is
+    the build's join-key PRE-PASS (:func:`simulation_array._build_numpy_rhs`),
+    which needs the broad-phase equi-join columns available BEFORE the full
+    observed hoist that the join-carrying observeds ride: it is fed only the
+    binning-coordinate closure, so a full producer materialisation (which may read
+    a wider const factor) could raise — ``maps_only`` guarantees the bins are
+    produced regardless.
 
     ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
     as of v0.8.0 lives at the top level of the document rather than on each
@@ -1031,20 +1145,45 @@ def materialize_value_invention(
     # §5.7 guard 2 for arg-witness assignments: a state-dependent nearest-generator
     # buffer (continuous cadence) may not be materialised at build time — its
     # topology would change every step (out of scope for v1, like a continuous
-    # `distinct`).
-    for vname, node in det.maps:
-        body = node.get("expr")
-        if not (isinstance(body, Mapping) and body.get("op") in _VI_ARGWITNESS_OPS):
-            continue
-        if cadence.classify(node, cls_model) == "continuous":
-            raise ValueInventionError(
-                f"arg-witness map {vname!r} classifies CONTINUOUS — a build-time assignment "
-                f"buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"
-            )
+    # `distinct`). Skipped in ``maps_only`` — the join-key pre-pass materialises
+    # only the skolem bins, never arg-witness maps.
+    if not maps_only:
+        for vname, node in det.maps:
+            body = node.get("expr")
+            if not (isinstance(body, Mapping) and body.get("op") in _VI_ARGWITNESS_OPS):
+                continue
+            if cadence.classify(node, cls_model) == "continuous":
+                raise ValueInventionError(
+                    f"arg-witness map {vname!r} classifies CONTINUOUS — a build-time assignment "
+                    f"buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"
+                )
 
-    # Maps first (a producer's join / key — or an arg-witness `join` — may reference them).
+    # Maps first (a producer's join / key — or an arg-witness `join` — may
+    # reference them). Each skolem BIN map ALSO surfaces its dense per-cell join-key
+    # code buffer (dense in output-index order, byte-identical to the retired
+    # per-cell mirror ``simulation_array._materialize_join_key_buffers``) plus its
+    # 1-D declared-shape index set. In ``maps_only`` the arg-witness maps are
+    # skipped — the join-key pre-pass needs only the bins (and cannot then fail on
+    # an arg-witness reduction that would need the full hoist).
     for vname, node in det.maps:
+        skexpr = _vi_map_skolem(node)
+        if maps_only and skexpr is None:
+            continue  # arg-witness map — not a join key
         _vi_materialize_map(ctx, vname, node)
+        if skexpr is not None:
+            m = ctx.maps[vname]
+            result.join_key_buffers[vname] = [_vi_join_key_code(m[k]) for k in sorted(m.keys())]
+            v = ctx.variables.get(vname)
+            shape = (v.get("shape") if isinstance(v, Mapping) else None) or []
+            if len(shape) == 1:
+                result.join_key_index_sets[vname] = str(shape[0])
+
+    # ``maps_only``: the build's join-key pre-pass — the bins (and their surfaced
+    # ``join_key_buffers``) are ready; skip the arg-witness assignments, the
+    # grouped / derived chain, and the index-set producers (any of which may need
+    # the full observed hoist the pre-pass runs before).
+    if maps_only:
+        return result
 
     # Surface the arg-witness buffers (the integer nearest-generator INDEX
     # assignment), dense in output-index order, for byte-identity assertions and

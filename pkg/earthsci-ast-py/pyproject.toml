@@ -47,7 +47,6 @@ Documentation = "https://github.com/EarthSciML/EarthSciAST#readme"
 Issues = "https://github.com/EarthSciML/EarthSciAST/issues"
 
 [project.scripts]
-esm-migrate = "earthsci_ast.cli.migrate:main"
 earthsci-determinism-adapter-python = "earthsci_ast.cli.determinism_adapter:main"
 earthsci-cadence-adapter-python = "earthsci_ast.cli.cadence_adapter:main"
 # The pde-simulation conformance harness probes PATH for
