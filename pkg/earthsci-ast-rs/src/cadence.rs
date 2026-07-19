@@ -30,12 +30,15 @@ use serde_json::{Map, Value};
 /// A cadence-partition contract violation in a fixture or producer output (a
 /// wrong `expect_cadence`, a `CONTINUOUS` relational node, a `from_faq` cycle, a
 /// float topology key, or a malformed node).
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("{0}")]
-pub struct CadenceError(pub String);
+///
+/// Alias of the shared [`crate::error::MessageError`] newtype; the public name and
+/// its bare-`{0}` `Display` output are unchanged.
+pub type CadenceError = crate::error::MessageError;
 
 fn err(msg: impl Into<String>) -> CadenceError {
-    CadenceError(msg.into())
+    // Construct via the underlying newtype: a `pub type` alias to a tuple struct
+    // cannot itself be used as a constructor.
+    crate::error::MessageError(msg.into())
 }
 
 /// The cadence lattice (`CONFORMANCE_SPEC.md` §5.7.1): `const ⊏ discrete ⊏
