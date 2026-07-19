@@ -2084,19 +2084,6 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/SpatialModel/equations/0",
-        "code": "unit_inconsistency",
-        "message": "Gradient operator applied to variable with incompatible spatial units",
-        "details": {
-          "operator": "grad",
-          "variable": "c",
-          "variable_units": "mol/m^3",
-          "dim": "x",
-          "coordinate_units": null,
-          "equation_index": 0
-        }
-      },
-      {
         "path": "/models/SpatialModel/variables/bad_sum",
         "code": "unit_inconsistency",
         "message": "Cannot add quantities with different units: 'm' + 'kg'",
@@ -2109,7 +2096,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "Primary demonstration: grad applied over coordinate 'x' that the model declares WITHOUT units — validators that model grad/div/laplacian must not assume a hardcoded metre denominator. Since the v0.8.0 Domain.spatial removal, physical coordinates are ordinary declared variables/parameters, so the fixture declares 'x' as a units-less parameter; a grad dim naming NO declared variable (an index-set axis lowered by a discretization rewrite rule, spec §9.6.8) is instead left to the legacy metre fallback and never flagged. The companion bad_sum observed variable is a secondary demonstration included so bindings that do not yet validate grad/div/laplacian still surface this fixture as invalid. The Julia binding surfaces the grad-specific inconsistency by resolving the dim against declared model variables (validate.jl::validate_model_gradient_units); follow-up beads track the same declared-variable resolution in the TypeScript/Rust bindings (whose coordinate tables are currently never populated) and gradient support in Python/Go."
+    "notes": "The ONLY pinned finding is the bad_sum addition mismatch ('m' + 'kg'), an ordinary §4.8.3 provable-mismatch. The grad over coordinate 'x' (declared WITHOUT units) is DELIBERATELY NOT flagged: `grad`/`div`/`laplacian` are open-tier rewrite-target sugar with no dimensional rule (§4.8.3 'any other op'), so their result dimension is UNDETERMINABLE until lowered and a checker MUST report `unknown` and skip (§4.8.4), never invent a coordinate-divided dimension. This fixture now GUARDS that despecialization: a binding that re-adds a bespoke gradient-units rule (emitting a `unit_inconsistency` at /models/SpatialModel/equations/0) is regressing and the harness must go red. (Historically the bindings hand-rolled a grad-over-coordinate divide rule; it was removed when grad/div/laplacian were demoted to ordinary rewrite-target match keys — see esm-spec §4.2.)"
   },
   "units_mixed_dimensional_operations.esm": {
     "schema_errors": [],

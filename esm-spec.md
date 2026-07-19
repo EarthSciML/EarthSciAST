@@ -166,6 +166,17 @@ Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
 rules for them — the discretization std-lib lives in
 [EarthSciDiscretizations](../earthscidiscretizations). See §9.6.8.
 
+As open-tier rewrite targets these sugar ops (and every user rewrite-target op) carry **no**
+privilege of any kind over the enclosing evaluator, checker, or flattener. Specifically: their
+result dimension is UNDETERMINABLE until they are lowered — they have **no** dimensional rule
+(§4.8.3 "any other op"), so a checker MUST report their dimension as `unknown` and skip the
+enclosing check (§4.8.4), never inventing a coordinate-divided dimension; their `dim`/`var`
+fields are ordinary axis-naming scalar fields resolved **structurally by field, not by op name**
+(§4.9.1); and system dimensionality / independent variables are derived from variable shapes over
+`index_sets` (§11.2), never from the presence of these op names. A binding MUST NOT single these
+names out — `grad`/`div`/`laplacian`/`curl`/`integral` are matched, lowered, and checked by the
+same machinery as any other rewrite-target op.
+
 The `integral` op encodes a spatial partial integral for use in partial integro-differential equations (PIDEs).
 `args[0]` is the integrand expression; `var` names the spatial dimension variable being integrated over;
 `lower` and `upper` are `Expression` values giving the integration bounds.
@@ -723,7 +734,7 @@ Three classes of symbol are in scope in a model's expressions **without appearin
 | Symbol | Where it comes from | Pinned by |
 |---|---|---|
 | **The independent variable** — `domain.independent_variable`, default `"t"` | §11.3. Every time-dependent model may write `t` in an equation, a condition, or an event affect; an analytic forcing `A*sin(omega*t)` is the ordinary spelling. Its dimension is the time dimension (`s`). | `tests/valid/cadence/pure_pointwise.esm` |
-| **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the `dim` of a spatial differential operator (`grad`, `div`, `curl`, `laplacian`) anywhere in the document, or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
+| **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the value of a `dim` field on **any** Expression node, or a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on a `D` node, anywhere in the document — these are axis-naming scalar fields, resolved **structurally by field, without regard to the enclosing `op`** (a `dim` on a user rewrite-target op names a coordinate exactly as a `dim` on `grad` does), or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
 | **`_var`** | §6.4. The operator-model placeholder, substituted with each matching state variable of the target system at `operator_compose` time. It is legal **wherever a state variable is legal** — including an equation LHS/RHS, a continuous-event `affects` / `affect_neg` LHS, and a `functional_affect`'s `read_vars`. A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target. | `tests/valid/full_coupled.esm` |
 
 #### 4.9.2 Scoped references are ARBITRARY DEPTH

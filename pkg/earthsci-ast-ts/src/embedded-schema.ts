@@ -328,7 +328,7 @@ export const schema: AnySchemaObject = {
         },
         "dim": {
           "type": "string",
-          "description": "Legacy alias field naming a spatial axis (e.g. \"x\", \"y\", \"z\"), used only by the optional `grad` sugar op. PREFER `D` with `wrt` set to the axis. Custom rewrite-target ops SHOULD carry scheme parameters in `attrs` instead."
+          "description": "Scalar field naming a spatial axis (e.g. \"x\", \"y\", \"z\"). Carried by rewrite-target differential-operator sugar (`grad`/`div`/`laplacian`) and admissible on any open-tier rewrite-target op; it is an ordinary axis-naming scalar field with NO privileged status. A `dim` value names a spatial coordinate STRUCTURALLY, independent of the enclosing `op` (esm-spec §4.9.1), and confers no dimensional rule on its op (the op's dimension is UNDETERMINABLE until lowered, §4.8.3/§4.8.4). PREFER `D` with `wrt` set to the axis. Custom rewrite-target ops MAY instead carry scheme parameters in `attrs`."
         },
         "attrs": {
           "type": "object",

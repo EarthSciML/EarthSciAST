@@ -1883,10 +1883,15 @@ a claim about *why* the file is invalid, not merely *that* it is:
   - **A pin is NEVER relaxed to accommodate a binding that lacks the check.** If a fixture pins
     two findings and a binding emits one, the binding has a coverage GAP; the harness going red
     is the pin doing its job. Deleting the pin to make it green is how a corpus stops meaning
-    anything. (`units_gradient_operator_mismatch.esm` pins BOTH a `grad`-over-unitless-coordinate
-    error at `/models/SpatialModel/equations/0` AND an addition mismatch at
-    `/models/SpatialModel/variables/bad_sum`; TS emits both, Go emits only the second because it
-    does not yet unit-check `grad`. The fix is Go's, not the pin's.)
+    anything. (Relaxing a pin is legitimate ONLY when a spec change makes the pinned finding no
+    longer conformant — then the pin is removed *because the spec moved*, in the same change, not
+    to paper over a binding gap. That is what happened to `units_gradient_operator_mismatch.esm`:
+    it once pinned BOTH a `grad`-over-unitless-coordinate error AND the `bad_sum` addition
+    mismatch, but grad/div/laplacian were demoted to ordinary open-tier rewrite-target ops with
+    no dimensional rule (esm-spec §4.2/§4.8.3), so the grad finding was never spec-sanctioned and
+    the fixture now pins ONLY the `bad_sum` addition at `/models/SpatialModel/variables/bad_sum`.
+    A binding that still emits a `unit_inconsistency` for the `grad` at
+    `/models/SpatialModel/equations/0` is now the one regressing.)
 - `resolver_only: true` — the file is schema-valid and is rejected only by an
   evaluator/resolver that a schema-only binding does not run. Such a binding must assert
   `schema_errors == []` and nothing more.
