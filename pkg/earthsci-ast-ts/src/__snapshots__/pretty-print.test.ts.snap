@@ -48,7 +48,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "and",
     },
     "latex": "x > 0 \\land x < 10",
-    "mathml": "<mrow><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>&and;</mo><mrow><mi>x</mi><mo>&lt;</mo><mn>10</mn></mrow></mrow>",
+    "mathml": "<mrow><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>&#x2227;</mo><mrow><mi>x</mi><mo>&lt;</mo><mn>10</mn></mrow></mrow>",
     "unicode": "x > 0 ∧ x < 10",
   },
   {
@@ -73,7 +73,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "or",
     },
     "latex": "x < 0 \\lor x > 10",
-    "mathml": "<mrow><mrow><mi>x</mi><mo>&lt;</mo><mn>0</mn></mrow><mo>&or;</mo><mrow><mi>x</mi><mo>&gt;</mo><mn>10</mn></mrow></mrow>",
+    "mathml": "<mrow><mrow><mi>x</mi><mo>&lt;</mo><mn>0</mn></mrow><mo>&#x2228;</mo><mrow><mi>x</mi><mo>&gt;</mo><mn>10</mn></mrow></mrow>",
     "unicode": "x < 0 ∨ x > 10",
   },
   {
@@ -91,7 +91,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "not",
     },
     "latex": "\\neg (x = 0)",
-    "mathml": "<mrow><mo>&not;</mo><mrow><mi>=</mi><mo>(</mo><mi>x</mi><mo>,</mo><mn>0</mn><mo>)</mo></mrow></mrow>",
+    "mathml": "<mrow><mo>&#xAC;</mo><mrow><mi>=</mi><mo>(</mo><mi>x</mi><mo>,</mo><mn>0</mn><mo>)</mo></mrow></mrow>",
     "unicode": "¬(x = 0)",
   },
   {
@@ -142,7 +142,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "floor",
     },
     "latex": "\\lfloor x \\rfloor",
-    "mathml": "<mrow><mo>&lfloor;</mo><mi>x</mi><mo>&rfloor;</mo></mrow>",
+    "mathml": "<mrow><mo>&#x230A;</mo><mi>x</mi><mo>&#x230B;</mo></mrow>",
     "unicode": "⌊x⌋",
   },
   {
@@ -154,7 +154,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "ceil",
     },
     "latex": "\\lceil x \\rceil",
-    "mathml": "<mrow><mo>&lceil;</mo><mi>x</mi><mo>&rceil;</mo></mrow>",
+    "mathml": "<mrow><mo>&#x2308;</mo><mi>x</mi><mo>&#x2309;</mo></mrow>",
     "unicode": "⌈x⌉",
   },
   {
@@ -202,7 +202,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "sin",
     },
     "latex": "\\sin(\\theta)",
-    "mathml": "<mrow><mi>sin</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>sin</mi><mo>(</mo><mi>&#x3B8;</mi><mo>)</mo></mrow>",
     "unicode": "sin(θ)",
   },
   {
@@ -214,7 +214,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "cos",
     },
     "latex": "\\cos(\\theta)",
-    "mathml": "<mrow><mi>cos</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>cos</mi><mo>(</mo><mi>&#x3B8;</mi><mo>)</mo></mrow>",
     "unicode": "cos(θ)",
   },
   {
@@ -226,7 +226,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "tan",
     },
     "latex": "\\tan(\\theta)",
-    "mathml": "<mrow><mi>tan</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>tan</mi><mo>(</mo><mi>&#x3B8;</mi><mo>)</mo></mrow>",
     "unicode": "tan(θ)",
   },
   {
@@ -312,7 +312,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "!=",
     },
     "latex": "x \\neq y",
-    "mathml": "<mrow><mi>x</mi><mo>&neq;</mo><mi>y</mi></mrow>",
+    "mathml": "<mrow><mi>x</mi><mo>&#x2260;</mo><mi>y</mi></mrow>",
     "unicode": "x ≠ y",
   },
   {
@@ -338,7 +338,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "<=",
     },
     "latex": "x \\leq y",
-    "mathml": "<mrow><mi>x</mi><mo>&leq;</mo><mi>y</mi></mrow>",
+    "mathml": "<mrow><mi>x</mi><mo>&#x2264;</mo><mi>y</mi></mrow>",
     "unicode": "x ≤ y",
   },
   {
@@ -364,7 +364,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": ">=",
     },
     "latex": "x \\geq y",
-    "mathml": "<mrow><mi>x</mi><mo>&geq;</mo><mi>y</mi></mrow>",
+    "mathml": "<mrow><mi>x</mi><mo>&#x2265;</mo><mi>y</mi></mrow>",
     "unicode": "x ≥ y",
   },
   {
@@ -1869,7 +1869,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "*",
     },
     "latex": "a \\cdot b \\cdot c",
-    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow>",
     "unicode": "a·b·c",
   },
   {
@@ -1908,7 +1908,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "wrt": "t",
     },
     "latex": "\\frac{\\partial x}{\\partial t}",
-    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>x</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>x</mi></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
     "unicode": "∂x/∂t",
   },
   {
@@ -2041,7 +2041,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "cos",
     },
     "latex": "\\cos(\\theta)",
-    "mathml": "<mrow><mi>cos</mi><mo>(</mo><mi>&theta;</mi><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>cos</mi><mo>(</mo><mi>&#x3B8;</mi><mo>)</mo></mrow>",
     "unicode": "cos(θ)",
   },
   {
@@ -2141,7 +2141,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "floor",
     },
     "latex": "\\lfloor x \\rfloor",
-    "mathml": "<mrow><mo>&lfloor;</mo><mi>x</mi><mo>&rfloor;</mo></mrow>",
+    "mathml": "<mrow><mo>&#x230A;</mo><mi>x</mi><mo>&#x230B;</mo></mrow>",
     "unicode": "⌊x⌋",
   },
   {
@@ -2153,7 +2153,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "ceil",
     },
     "latex": "\\lceil x \\rceil",
-    "mathml": "<mrow><mo>&lceil;</mo><mi>x</mi><mo>&rceil;</mo></mrow>",
+    "mathml": "<mrow><mo>&#x2308;</mo><mi>x</mi><mo>&#x2309;</mo></mrow>",
     "unicode": "⌈x⌉",
   },
   {
@@ -2192,7 +2192,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": ">=",
     },
     "latex": "a \\geq b",
-    "mathml": "<mrow><mi>a</mi><mo>&geq;</mo><mi>b</mi></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x2265;</mo><mi>b</mi></mrow>",
     "unicode": "a ≥ b",
   },
   {
@@ -2205,7 +2205,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "<=",
     },
     "latex": "a \\leq b",
-    "mathml": "<mrow><mi>a</mi><mo>&leq;</mo><mi>b</mi></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x2264;</mo><mi>b</mi></mrow>",
     "unicode": "a ≤ b",
   },
   {
@@ -2231,7 +2231,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "!=",
     },
     "latex": "a \\neq b",
-    "mathml": "<mrow><mi>a</mi><mo>&neq;</mo><mi>b</mi></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x2260;</mo><mi>b</mi></mrow>",
     "unicode": "a ≠ b",
   },
   {
@@ -2244,7 +2244,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "and",
     },
     "latex": "p \\land q",
-    "mathml": "<mrow><mi>p</mi><mo>&and;</mo><mi>q</mi></mrow>",
+    "mathml": "<mrow><mi>p</mi><mo>&#x2227;</mo><mi>q</mi></mrow>",
     "unicode": "p ∧ q",
   },
   {
@@ -2258,7 +2258,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "or",
     },
     "latex": "p \\lor q \\lor r",
-    "mathml": "<mrow><mi>p</mi><mo>&or;</mo><mi>q</mi><mo>&or;</mo><mi>r</mi></mrow>",
+    "mathml": "<mrow><mi>p</mi><mo>&#x2228;</mo><mi>q</mi><mo>&#x2228;</mo><mi>r</mi></mrow>",
     "unicode": "p ∨ q ∨ r",
   },
   {
@@ -2270,7 +2270,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "not",
     },
     "latex": "\\neg p",
-    "mathml": "<mrow><mo>&not;</mo><mi>p</mi></mrow>",
+    "mathml": "<mrow><mo>&#xAC;</mo><mi>p</mi></mrow>",
     "unicode": "¬p",
   },
   {
@@ -2336,7 +2336,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "exp",
     },
     "latex": "\\exp\\left(\\frac{-1370 \\cdot \\ln(T)}{R}\\right)",
-    "mathml": "<mrow><mi>exp</mi><mo>(</mo><mfrac><mrow><mn>-1370</mn><mo>&cdot;</mo><mrow><mi>ln</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow></mrow><mi>R</mi></mfrac><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>exp</mi><mo>(</mo><mfrac><mrow><mn>-1370</mn><mo>&#x22C5;</mo><mrow><mi>ln</mi><mo>(</mo><mi>T</mi><mo>)</mo></mrow></mrow><mi>R</mi></mfrac><mo>)</mo></mrow>",
     "unicode": "exp(−1370·ln(T)/R)",
   },
   {
@@ -2383,7 +2383,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "+",
     },
     "latex": "A \\cdot \\sin(\\omega \\cdot t) + B \\cdot \\cos(\\omega \\cdot t)",
-    "mathml": "<mrow><mrow><mi>A</mi><mo>&cdot;</mo><mrow><mi>sin</mi><mo>(</mo><mrow><mi>&omega;</mi><mo>&cdot;</mo><mi>t</mi></mrow><mo>)</mo></mrow></mrow><mo>+</mo><mrow><mi>B</mi><mo>&cdot;</mo><mrow><mi>cos</mi><mo>(</mo><mrow><mi>&omega;</mi><mo>&cdot;</mo><mi>t</mi></mrow><mo>)</mo></mrow></mrow></mrow>",
+    "mathml": "<mrow><mrow><mi>A</mi><mo>&#x22C5;</mo><mrow><mi>sin</mi><mo>(</mo><mrow><mi>&#x3C9;</mi><mo>&#x22C5;</mo><mi>t</mi></mrow><mo>)</mo></mrow></mrow><mo>+</mo><mrow><mi>B</mi><mo>&#x22C5;</mo><mrow><mi>cos</mi><mo>(</mo><mrow><mi>&#x3C9;</mi><mo>&#x22C5;</mo><mi>t</mi></mrow><mo>)</mo></mrow></mrow></mrow>",
     "unicode": "A·sin(ω·t) + B·cos(ω·t)",
   },
   {
@@ -2427,7 +2427,7 @@ exports[`Rendering output lock (all display fixtures) > renders comprehensive_op
       "op": "sqrt",
     },
     "latex": "\\sqrt{a^{2} + b^{2} + 2 \\cdot a \\cdot b \\cdot \\cos(\\gamma)}",
-    "mathml": "<msqrt><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup><mo>+</mo><mrow><mn>2</mn><mo>&cdot;</mo><mi>a</mi><mo>&cdot;</mo><mi>b</mi><mo>&cdot;</mo><mrow><mi>cos</mi><mo>(</mo><mi>&gamma;</mi><mo>)</mo></mrow></mrow></mrow></msqrt>",
+    "mathml": "<msqrt><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup><mo>+</mo><mrow><mn>2</mn><mo>&#x22C5;</mo><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi><mo>&#x22C5;</mo><mrow><mi>cos</mi><mo>(</mo><mi>&#x3B3;</mi><mo>)</mo></mrow></mrow></mrow></msqrt>",
     "unicode": "√(a² + b² + 2·a·b·cos(γ))",
   },
 ]
@@ -2512,7 +2512,7 @@ exports[`Rendering output lock (all display fixtures) > renders expr_precedence.
       "op": "*",
     },
     "latex": "a \\cdot b",
-    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow>",
     "unicode": "a·b",
   },
   {
@@ -2531,7 +2531,7 @@ exports[`Rendering output lock (all display fixtures) > renders expr_precedence.
       "op": "+",
     },
     "latex": "a \\cdot b + c",
-    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
     "unicode": "a·b + c",
   },
   {
@@ -2550,7 +2550,7 @@ exports[`Rendering output lock (all display fixtures) > renders expr_precedence.
       "op": "*",
     },
     "latex": "(a + b) \\cdot c",
-    "mathml": "<mrow><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo>&#x22C5;</mo><mi>c</mi></mrow>",
     "unicode": "(a + b)·c",
   },
   {
@@ -2588,7 +2588,7 @@ exports[`Rendering output lock (all display fixtures) > renders expr_precedence.
       "op": "+",
     },
     "latex": "x^{2} + 2 \\cdot x",
-    "mathml": "<mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mrow><mn>2</mn><mo>&cdot;</mo><mi>x</mi></mrow></mrow>",
+    "mathml": "<mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mrow><mn>2</mn><mo>&#x22C5;</mo><mi>x</mi></mrow></mrow>",
     "unicode": "x² + 2·x",
   },
   {
@@ -2663,7 +2663,7 @@ exports[`Rendering output lock (all display fixtures) > renders expr_precedence.
       "wrt": "t",
     },
     "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
-    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
     "unicode": "∂O₃/∂t",
   },
   {
@@ -2755,7 +2755,7 @@ exports[`Rendering output lock (all display fixtures) > renders expr_precedence.
       "op": "*",
     },
     "latex": "1.8 \\times 10^{-12} \\cdot \\mathrm{O_3} \\cdot \\mathrm{NO} \\cdot M",
-    "mathml": "<mrow><mn>1.8e-12</mn><mo>&cdot;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi><mo>&cdot;</mo><mi>M</mi></mrow>",
+    "mathml": "<mrow><mn>1.8e-12</mn><mo>&#x22C5;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&#x22C5;</mo><mi>N</mi><mi>O</mi><mo>&#x22C5;</mo><mi>M</mi></mrow>",
     "unicode": "1.8×10⁻¹²·O₃·NO·M",
   },
 ]
@@ -2773,7 +2773,7 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       "wrt": "t",
     },
     "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
-    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
     "unicode": "∂O₃/∂t",
   },
   {
@@ -2786,7 +2786,7 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       "wrt": "t",
     },
     "latex": "\\frac{\\partial \\mathrm{concentration}}{\\partial t}",
-    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>concentration</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>concentration</mi></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
     "unicode": "∂concentration/∂t",
   },
   {
@@ -2863,7 +2863,7 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       "op": "/",
     },
     "latex": "\\frac{a}{b \\cdot c}",
-    "mathml": "<mfrac><mi>a</mi><mrow><mi>b</mi><mo>&cdot;</mo><mi>c</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mi>a</mi><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow></mfrac>",
     "unicode": "a/(b·c)",
   },
   {
@@ -2904,7 +2904,7 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       "op": "*",
     },
     "latex": "a \\cdot b",
-    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow>",
     "unicode": "a·b",
   },
   {
@@ -2918,7 +2918,7 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       "op": "*",
     },
     "latex": "k \\mathrm{O_3} \\mathrm{NO}",
-    "mathml": "<mrow><mi>k</mi><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub></mrow>",
+    "mathml": "<mrow><mi>k</mi><mo>&#x22C5;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&#x22C5;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub></mrow>",
     "unicode": "k·\\mathrm{O_3}·\\mathrm{NO}",
   },
   {
@@ -3074,7 +3074,7 @@ exports[`Rendering output lock (all display fixtures) > renders latex_format.jso
       "op": "=",
     },
     "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t} = (-k_{NO_O3}) \\mathrm{O_3} \\mathrm{NO} M + j_{NO2} \\mathrm{NO_2}",
-    "mathml": "<mrow><mi>=</mi><mo>(</mo><mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>,</mo><mrow><mrow><mrow><mo>-</mo><mi>k</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub>}</mrow></msub></mrow><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub><mo>&cdot;</mo><mi>M</mi></mrow><mo>+</mo><mrow><mi>j</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>}</mrow></msub><mo>&cdot;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_2}</mrow></msub></mrow></mrow><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>=</mi><mo>(</mo><mfrac><mrow><mo>&#x2202;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac><mo>,</mo><mrow><mrow><mrow><mo>-</mo><mi>k</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub>}</mrow></msub></mrow><mo>&#x22C5;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>O</mi>_3}</mrow></msub><mo>&#x22C5;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>}</mrow></msub><mo>&#x22C5;</mo><mi>M</mi></mrow><mo>+</mo><mrow><mi>j</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub>}</mrow></msub><mo>&#x22C5;</mo><mi>\\mathrm</mi><msub><mi></mi><mrow>{<mi>N</mi><mi>O</mi>_2}</mrow></msub></mrow></mrow><mo>)</mo></mrow>",
     "unicode": "∂O₃/∂t = (−k_{NO_O₃})·\\mathrm{O_3}·\\mathrm{NO}·M + j_{NO₂}·\\mathrm{NO_2}",
   },
 ]
@@ -3257,7 +3257,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "+",
     },
     "latex": "a \\cdot b + c",
-    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
     "unicode": "a·b + c",
   },
   {
@@ -3276,7 +3276,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "*",
     },
     "latex": "(a + b) \\cdot c",
-    "mathml": "<mrow><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo>&#x22C5;</mo><mi>c</mi></mrow>",
     "unicode": "(a + b)·c",
   },
   {
@@ -3332,7 +3332,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "-",
     },
     "latex": "-a \\cdot b",
-    "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow></mrow>",
+    "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow></mrow>",
     "unicode": "−a·b",
   },
   {
@@ -3350,7 +3350,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "*",
     },
     "latex": "(-a) \\cdot b",
-    "mathml": "<mrow><mrow><mo>-</mo><mi>a</mi></mrow><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "mathml": "<mrow><mrow><mo>-</mo><mi>a</mi></mrow><mo>&#x22C5;</mo><mi>b</mi></mrow>",
     "unicode": "(−a)·b",
   },
   {
@@ -3440,7 +3440,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "*",
     },
     "latex": "\\exp(x) \\cdot y",
-    "mathml": "<mrow><mrow><mi>exp</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>&cdot;</mo><mi>y</mi></mrow>",
+    "mathml": "<mrow><mrow><mi>exp</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>&#x22C5;</mo><mi>y</mi></mrow>",
     "unicode": "exp(x)·y",
   },
   {
@@ -3459,7 +3459,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "+",
     },
     "latex": "\\frac{\\partial x}{\\partial t} + y",
-    "mathml": "<mrow><mfrac><mrow><mo>&part;</mo><mi>x</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mi>y</mi></mrow>",
+    "mathml": "<mrow><mfrac><mrow><mo>&#x2202;</mo><mi>x</mi></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mi>y</mi></mrow>",
     "unicode": "∂x/∂t + y",
   },
   {
@@ -3478,7 +3478,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "wrt": "t",
     },
     "latex": "\\frac{\\partial (x + y)}{\\partial t}",
-    "mathml": "<mfrac><mrow><mo>&part;</mo><mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
     "unicode": "∂(x + y)/∂t",
   },
   {
@@ -3497,7 +3497,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "grad",
     },
     "latex": "\\mathrm{grad}(f \\cdot g)",
-    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mrow><mi>f</mi><mo>&cdot;</mo><mi>g</mi></mrow><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mrow><mi>f</mi><mo>&#x22C5;</mo><mi>g</mi></mrow><mo>)</mo></mrow>",
     "unicode": "grad(f·g)",
   },
   {
@@ -3554,7 +3554,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "*",
     },
     "latex": "a \\cdot b \\cdot c",
-    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>&cdot;</mo><mi>c</mi></mrow>",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow><mo>&#x22C5;</mo><mi>c</mi></mrow>",
     "unicode": "a·b·c",
   },
   {
@@ -3627,7 +3627,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "+",
     },
     "latex": "\\sin(x) \\cdot \\cos(y) + z^{2}",
-    "mathml": "<mrow><mrow><mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>&cdot;</mo><mrow><mi>cos</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow></mrow><mo>+</mo><msup><mi>z</mi><mn>2</mn></msup></mrow>",
+    "mathml": "<mrow><mrow><mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>&#x22C5;</mo><mrow><mi>cos</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow></mrow><mo>+</mo><msup><mi>z</mi><mn>2</mn></msup></mrow>",
     "unicode": "sin(x)·cos(y) + z²",
   },
   {
@@ -3652,7 +3652,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "/",
     },
     "latex": "\\frac{a + b}{c \\cdot d}",
-    "mathml": "<mfrac><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mrow><mi>c</mi><mo>&cdot;</mo><mi>d</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mrow><mi>c</mi><mo>&#x22C5;</mo><mi>d</mi></mrow></mfrac>",
     "unicode": "(a + b)/(c·d)",
   },
   {
@@ -3665,7 +3665,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "*",
     },
     "latex": "\\mathrm{O_3} \\cdot \\mathrm{NO}",
-    "mathml": "<mrow><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi></mrow>",
+    "mathml": "<mrow><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&#x22C5;</mo><mi>N</mi><mi>O</mi></mrow>",
     "unicode": "O₃·NO",
   },
   {
@@ -3691,7 +3691,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "+",
     },
     "latex": "\\frac{\\partial \\mathrm{CH_2O}}{\\partial t} + k_{\\mathrm{OH}} \\cdot \\mathrm{CH_2O} \\cdot \\mathrm{OH}",
-    "mathml": "<mrow><mfrac><mrow><mo>&part;</mo><mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mrow><mi>k</mi><msub><mi></mi><mrow><mi>O</mi><mi>H</mi></mrow></msub><mo>&cdot;</mo><mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><mo>&cdot;</mo><mi>O</mi><mi>H</mi></mrow></mrow>",
+    "mathml": "<mrow><mfrac><mrow><mo>&#x2202;</mo><mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mrow><mi>k</mi><msub><mi></mi><mrow><mi>O</mi><mi>H</mi></mrow></msub><mo>&#x22C5;</mo><mi>C</mi><mi>H</mi><msub><mi></mi><mn>2</mn></msub><mi>O</mi><mo>&#x22C5;</mo><mi>O</mi><mi>H</mi></mrow></mrow>",
     "unicode": "∂CH₂O/∂t + k_OH·CH₂O·OH",
   },
   {
@@ -3733,7 +3733,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "div",
     },
     "latex": "\\mathrm{div}(u \\cdot \\mathrm{tracer})",
-    "mathml": "<mrow><mi>div</mi><mo>(</mo><mrow><mi>u</mi><mo>&cdot;</mo><mi>tracer</mi></mrow><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>div</mi><mo>(</mo><mrow><mi>u</mi><mo>&#x22C5;</mo><mi>tracer</mi></mrow><mo>)</mo></mrow>",
     "unicode": "div(u·tracer)",
   },
   {
@@ -3758,7 +3758,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "and",
     },
     "latex": "x > 0 \\land x < 10",
-    "mathml": "<mrow><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>&and;</mo><mrow><mi>x</mi><mo>&lt;</mo><mn>10</mn></mrow></mrow>",
+    "mathml": "<mrow><mrow><mi>x</mi><mo>&gt;</mo><mn>0</mn></mrow><mo>&#x2227;</mo><mrow><mi>x</mi><mo>&lt;</mo><mn>10</mn></mrow></mrow>",
     "unicode": "x > 0 ∧ x < 10",
   },
   {
@@ -3783,7 +3783,7 @@ exports[`Rendering output lock (all display fixtures) > renders operator_precede
       "op": "or",
     },
     "latex": "t \\leq 0 \\lor t \\geq 8.64 \\times 10^{4}",
-    "mathml": "<mrow><mrow><mi>t</mi><mo>&leq;</mo><mn>0</mn></mrow><mo>&or;</mo><mrow><mi>t</mi><mo>&geq;</mo><mn>8.64e4</mn></mrow></mrow>",
+    "mathml": "<mrow><mrow><mi>t</mi><mo>&#x2264;</mo><mn>0</mn></mrow><mo>&#x2228;</mo><mrow><mi>t</mi><mo>&#x2265;</mo><mn>8.64e4</mn></mrow></mrow>",
     "unicode": "t ≤ 0 ∨ t ≥ 8.64×10⁴",
   },
   {
@@ -4330,7 +4330,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "op": "grad",
     },
     "latex": "\\mathrm{grad}(f \\cdot g)",
-    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mrow><mi>f</mi><mo>&cdot;</mo><mi>g</mi></mrow><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>grad</mi><mo>(</mo><mrow><mi>f</mi><mo>&#x22C5;</mo><mi>g</mi></mrow><mo>)</mo></mrow>",
     "unicode": "grad(f·g)",
   },
   {
@@ -4387,7 +4387,7 @@ exports[`Rendering output lock (all display fixtures) > renders unicode_format.j
       "wrt": "t",
     },
     "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
-    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
     "unicode": "∂O₃/∂t",
   },
   {
@@ -4400,7 +4400,7 @@ exports[`Rendering output lock (all display fixtures) > renders unicode_format.j
       "wrt": "t",
     },
     "latex": "\\frac{\\partial \\mathrm{concentration}}{\\partial t}",
-    "mathml": "<mfrac><mrow><mo>&part;</mo><mi>concentration</mi></mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac>",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>concentration</mi></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
     "unicode": "∂concentration/∂t",
   },
   {
@@ -4439,7 +4439,7 @@ exports[`Rendering output lock (all display fixtures) > renders unicode_format.j
       "op": "*",
     },
     "latex": "a \\cdot b",
-    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow>",
     "unicode": "a·b",
   },
   {
@@ -4453,7 +4453,7 @@ exports[`Rendering output lock (all display fixtures) > renders unicode_format.j
       "op": "*",
     },
     "latex": "k \\cdot \\mathrm{O_3} \\cdot \\mathrm{NO}",
-    "mathml": "<mrow><mi>k</mi><mo>&cdot;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi></mrow>",
+    "mathml": "<mrow><mi>k</mi><mo>&#x22C5;</mo><mi>O</mi><msub><mi></mi><mn>3</mn></msub><mo>&#x22C5;</mo><mi>N</mi><mi>O</mi></mrow>",
     "unicode": "k·O₃·NO",
   },
   {
@@ -4605,7 +4605,7 @@ exports[`Rendering output lock (all display fixtures) > renders unicode_format.j
       "op": "+",
     },
     "latex": "a \\cdot b + c",
-    "mathml": "<mrow><mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
     "unicode": "a·b + c",
   },
   {
@@ -4624,7 +4624,7 @@ exports[`Rendering output lock (all display fixtures) > renders unicode_format.j
       "op": "*",
     },
     "latex": "a \\cdot (b + c)",
-    "mathml": "<mrow><mi>a</mi><mo>&cdot;</mo><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mrow>",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mrow>",
     "unicode": "a·(b + c)",
   },
   {
@@ -4668,7 +4668,7 @@ exports[`Rendering output lock (all display fixtures) > renders unicode_format.j
       "op": "=",
     },
     "latex": "\\frac{\\partial \\mathrm{O₃}}{\\partial t} = (-k_{\\mathrm{NO_O_3}}) \\cdot \\mathrm{O₃} \\cdot \\mathrm{NO} \\cdot M + j_{\\mathrm{NO_2}} \\cdot \\mathrm{NO₂}",
-    "mathml": "<mrow><mi>=</mi><mo>(</mo><mfrac><mrow><mo>&part;</mo><mi>O</mi>₃</mrow><mrow><mo>&part;</mo><mi>t</mi></mrow></mfrac><mo>,</mo><mrow><mrow><mrow><mo>-</mo><mi>k</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow></msub></mrow><mo>&cdot;</mo><mi>O</mi>₃<mo>&cdot;</mo><mi>N</mi><mi>O</mi><mo>&cdot;</mo><mi>M</mi></mrow><mo>+</mo><mrow><mi>j</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub></mrow></msub><mo>&cdot;</mo><mi>N</mi><mi>O</mi>₂</mrow></mrow><mo>)</mo></mrow>",
+    "mathml": "<mrow><mi>=</mi><mo>(</mo><mfrac><mrow><mo>&#x2202;</mo><mi>O</mi>₃</mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac><mo>,</mo><mrow><mrow><mrow><mo>-</mo><mi>k</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi>_<mi>O</mi><msub><mi></mi><mn>3</mn></msub></mrow></msub></mrow><mo>&#x22C5;</mo><mi>O</mi>₃<mo>&#x22C5;</mo><mi>N</mi><mi>O</mi><mo>&#x22C5;</mo><mi>M</mi></mrow><mo>+</mo><mrow><mi>j</mi><msub><mi></mi><mrow><mi>N</mi><mi>O</mi><msub><mi></mi><mn>2</mn></msub></mrow></msub><mo>&#x22C5;</mo><mi>N</mi><mi>O</mi>₂</mrow></mrow><mo>)</mo></mrow>",
     "unicode": "∂O₃/∂t = (−k_NO_O₃)·O₃·NO·M + jNO₂·NO₂",
   },
 ]

@@ -229,8 +229,11 @@ for (const [name, lower, upper, hasUpperLatex] of GREEK_TABLE) {
   if (hasUpperLatex) GREEK_LETTERS[capitalize(name)] = `\\${capitalize(name)}`
   GREEK_NAME_TO_CHAR[name] = lower
   GREEK_CHAR_TO_NAME[lower] = name
-  GREEK_CHAR_TO_ENTITY[lower] = `&${name};`
-  GREEK_CHAR_TO_ENTITY[upper] = `&${capitalize(name)};`
+  // Numeric character references (not HTML named entities like `&pi;`), which
+  // are the only Unicode form valid in XML/MathML — HTML named entities are
+  // undefined in XML and mis-render (e.g. as the wrong glyph) when parsed.
+  GREEK_CHAR_TO_ENTITY[lower] = `&#x${lower.charCodeAt(0).toString(16).toUpperCase()};`
+  GREEK_CHAR_TO_ENTITY[upper] = `&#x${upper.charCodeAt(0).toString(16).toUpperCase()};`
 }
 
 // Alternation of the 24 lowercase names, in canonical order, shared by every
@@ -887,10 +890,10 @@ function formatMathMLVariable(variable: string): string {
 }
 
 /**
- * Convert Greek letters to MathML entities. Only bare Unicode Greek chars are
- * mapped (via {@link GREEK_CHAR_TO_ENTITY}); the second, name-matching pass is
- * historically a no-op (named letters have no entity entry) and is retained
- * for byte-identical output.
+ * Convert Greek letters to MathML numeric character references. Only bare
+ * Unicode Greek chars are mapped (via {@link GREEK_CHAR_TO_ENTITY}); the second,
+ * name-matching pass is historically a no-op (named letters have no entry) and
+ * is retained for byte-identical output.
  */
 function convertGreekLettersToMathML(text: string): string {
   return text
@@ -1132,8 +1135,8 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
     },
     mathml: (c) => {
       const { args } = c
-      if (args.length === 2) return `<mrow>${c.m(args[0])}<mo>&cdot;</mo>${c.m(args[1])}</mrow>`
-      if (args.length >= 3) return `<mrow>${args.map((a) => c.m(a)).join('<mo>&cdot;</mo>')}</mrow>`
+      if (args.length === 2) return `<mrow>${c.m(args[0])}<mo>&#x22C5;</mo>${c.m(args[1])}</mrow>`
+      if (args.length >= 3) return `<mrow>${args.map((a) => c.m(a)).join('<mo>&#x22C5;</mo>')}</mrow>`
       return undefined
     },
   },
@@ -1167,12 +1170,12 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
 
   '>': { text: textInfix('>', '>', '>'), mathml: mathmlInfix('<mo>&gt;</mo>') },
   '<': { text: textInfix('<', '<', '<'), mathml: mathmlInfix('<mo>&lt;</mo>') },
-  '>=': { text: textInfix('≥', '\\geq', '>='), mathml: mathmlInfix('<mo>&geq;</mo>') },
-  '<=': { text: textInfix('≤', '\\leq', '<='), mathml: mathmlInfix('<mo>&leq;</mo>') },
+  '>=': { text: textInfix('≥', '\\geq', '>='), mathml: mathmlInfix('<mo>&#x2265;</mo>') },
+  '<=': { text: textInfix('≤', '\\leq', '<='), mathml: mathmlInfix('<mo>&#x2264;</mo>') },
   '=': { text: textInfix('=', '=', '==') },
   '==': { text: textInfix('=', '=', '=='), mathml: mathmlInfix('<mo>=</mo>') },
-  '!=': { text: textInfix('≠', '\\neq', '!='), mathml: mathmlInfix('<mo>&neq;</mo>') },
-  and: { text: textInfix('∧', '\\land', 'and'), mathml: mathmlInfix('<mo>&and;</mo>') },
+  '!=': { text: textInfix('≠', '\\neq', '!='), mathml: mathmlInfix('<mo>&#x2260;</mo>') },
+  and: { text: textInfix('∧', '\\land', 'and'), mathml: mathmlInfix('<mo>&#x2227;</mo>') },
 
   or: {
     text: (c) => {
@@ -1189,8 +1192,8 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
     },
     mathml: (c) => {
       const { args } = c
-      if (args.length === 2) return `<mrow>${c.m(args[0])}<mo>&or;</mo>${c.m(args[1])}</mrow>`
-      if (args.length >= 3) return `<mrow>${args.map((a) => c.m(a)).join('<mo>&or;</mo>')}</mrow>`
+      if (args.length === 2) return `<mrow>${c.m(args[0])}<mo>&#x2228;</mo>${c.m(args[1])}</mrow>`
+      if (args.length >= 3) return `<mrow>${args.map((a) => c.m(a)).join('<mo>&#x2228;</mo>')}</mrow>`
       return undefined
     },
   },
@@ -1256,7 +1259,7 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
       return `not ${c.arg(a)}`
     },
     mathml: (c) =>
-      c.args.length === 1 ? `<mrow><mo>&not;</mo>${c.m(c.args[0])}</mrow>` : undefined,
+      c.args.length === 1 ? `<mrow><mo>&#xAC;</mo>${c.m(c.args[0])}</mrow>` : undefined,
   },
 
   exp: { text: textElementaryFunc, mathml: mathmlUnaryCall },
@@ -1340,7 +1343,7 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
     },
     mathml: (c) =>
       c.args.length === 1
-        ? `<mrow><mo>&lfloor;</mo>${c.m(c.args[0])}<mo>&rfloor;</mo></mrow>`
+        ? `<mrow><mo>&#x230A;</mo>${c.m(c.args[0])}<mo>&#x230B;</mo></mrow>`
         : undefined,
   },
 
@@ -1354,7 +1357,7 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
     },
     mathml: (c) =>
       c.args.length === 1
-        ? `<mrow><mo>&lceil;</mo>${c.m(c.args[0])}<mo>&rceil;</mo></mrow>`
+        ? `<mrow><mo>&#x2308;</mo>${c.m(c.args[0])}<mo>&#x2309;</mo></mrow>`
         : undefined,
   },
 
@@ -1399,7 +1402,7 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
     mathml: (c) => {
       if (c.args.length !== 1) return undefined
       const w = c.wrt || 't'
-      return `<mfrac><mrow><mo>&part;</mo>${c.m(c.args[0])}</mrow><mrow><mo>&part;</mo><mi>${w}</mi></mrow></mfrac>`
+      return `<mfrac><mrow><mo>&#x2202;</mo>${c.m(c.args[0])}</mrow><mrow><mo>&#x2202;</mo><mi>${w}</mi></mrow></mfrac>`
     },
   },
 

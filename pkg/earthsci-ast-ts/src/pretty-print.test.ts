@@ -194,7 +194,7 @@ describe('MathML formatting', () => {
 
   it('should format multiplication correctly', () => {
     const expr = { op: '*', args: ['a', 'b'] }
-    expect(toMathML(expr)).toBe('<mrow><mi>a</mi><mo>&cdot;</mo><mi>b</mi></mrow>')
+    expect(toMathML(expr)).toBe('<mrow><mi>a</mi><mo>&#x22C5;</mo><mi>b</mi></mrow>')
   })
 
   it('should format division correctly', () => {
@@ -234,7 +234,7 @@ describe('MathML formatting', () => {
     const expr = { op: 'D', args: ['x'], wrt: 't' }
     const result = toMathML(expr)
     expect(result).toContain('<mfrac>')
-    expect(result).toContain('&part;')
+    expect(result).toContain('&#x2202;')
     expect(result).toContain('<mi>x</mi>')
     expect(result).toContain('<mi>t</mi>')
   })
@@ -245,5 +245,38 @@ describe('MathML formatting', () => {
     expect(result).toContain('<math>')
     expect(result).toContain('<mo>=</mo>')
     expect(result).toContain('<mi>y</mi>')
+  })
+
+  it('uses numeric character references, not HTML named entities (regression)', () => {
+    // Multiplication must be the DOT OPERATOR numeric char ref (U+22C5), never
+    // the HTML named entity `&cdot;`. `&cdot;` is undefined in XML/MathML and
+    // browsers mis-render it as "ċ" (U+010B) instead of a multiplication dot.
+    const mul = toMathML({ op: '*', args: ['a', 'b'] })
+    expect(mul).toContain('<mo>&#x22C5;</mo>')
+    expect(mul).not.toContain('&cdot;')
+    expect(mul).not.toContain('ċ') // "ċ", the wrong glyph the bug produced
+
+    // Greek letters map to numeric character references (e.g. π → &#x3C0;), not
+    // the HTML named entity `&pi;`.
+    const pi = toMathML('π')
+    expect(pi).toContain('&#x3C0;')
+    expect(pi).not.toContain('&pi;')
+
+    // A representative expression exercising many MathML operators (comparison,
+    // logical, floor, derivative, Greek identifiers) must contain no HTML named
+    // entity — only numeric char refs (&#x…;) plus the XML-safe named ones.
+    const expr = {
+      op: 'and',
+      args: [
+        { op: '>=', args: [{ op: '*', args: ['α', 'β'] }, 'γ'] },
+        { op: 'floor', args: [{ op: 'D', args: ['θ'], wrt: 't' }] },
+      ],
+    }
+    const out = toMathML(expr)
+    const XML_SAFE = ['&amp;', '&lt;', '&gt;', '&quot;', '&apos;']
+    const namedEntities = (out.match(/&[a-zA-Z][a-zA-Z0-9]*;/g) ?? []).filter(
+      (e) => !XML_SAFE.includes(e),
+    )
+    expect(namedEntities).toEqual([])
   })
 })
