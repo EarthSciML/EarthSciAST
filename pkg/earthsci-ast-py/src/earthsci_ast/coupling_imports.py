@@ -33,7 +33,13 @@ from .error_handling import (
     COUPLING_LIBRARY_NESTED_IMPORT,
     COUPLING_ROLE_UNUSED,
 )
-from .json_walk import ExpressionTemplateError, load_ref_raw
+from .json_walk import (
+    DICT_LIST_CHILD_FIELDS,
+    DICT_MAP_CHILD_FIELDS,
+    DICT_SINGLE_CHILD_FIELDS,
+    ExpressionTemplateError,
+    load_ref_raw,
+)
 
 # Payload keys a coupling-library file MUST NOT declare (esm-spec §10.9).
 _LIBRARY_FORBIDDEN_KEYS = (
@@ -97,15 +103,16 @@ def _rewrite_expr(expr: Any, fn: RefFn) -> Any:
     """Rewrite/visit every scoped reference inside an Expression tree.
 
     Numbers pass through; strings are rewritten via ``fn``. Operator nodes recurse
-    into the FULL canonical raw-dict child set — the ``args`` operand list, the
-    aggregate body / ``filter`` / ``key`` and integral ``lower`` / ``upper``
-    single-child slots, the ``makearray`` ``values`` list, and the
-    ``table_lookup`` per-axis input map (``axes``) — the dict-form mirror of
-    :func:`substitute.substitute`. (An args-only walk let a role-scoped reference
-    inside an aggregate body / filter / key / bounds escape both rewriting and the
-    ``coupling_edge_unknown_role`` check.) An ``apply_expression_template`` node's
-    ``bindings`` VALUES are additionally free-variable targets (esm-spec
-    §10.10.2) — Expressions in their own right.
+    into the FULL canonical raw-dict child set — sourced from the ONE shared slot
+    set (:data:`json_walk.DICT_SINGLE_CHILD_FIELDS` /
+    :data:`~json_walk.DICT_LIST_CHILD_FIELDS` /
+    :data:`~json_walk.DICT_MAP_CHILD_FIELDS`) rather than a hand-copied list, so
+    this rewriter can never drift from the canonical expression child slots the
+    reference walkers descend. (An earlier args-only walk let a role-scoped
+    reference inside an aggregate body / filter / key / bounds escape both
+    rewriting and the ``coupling_edge_unknown_role`` check.) An
+    ``apply_expression_template`` node's ``bindings`` VALUES are additionally
+    free-variable targets (esm-spec §10.10.2) — Expressions in their own right.
     """
     if isinstance(expr, bool):
         return expr
@@ -116,18 +123,24 @@ def _rewrite_expr(expr: Any, fn: RefFn) -> Any:
     if not _is_object(expr):
         return expr
     node = expr
-    for k in ("expr", "filter", "key", "lower", "upper"):
+    for k in DICT_SINGLE_CHILD_FIELDS:
         if k in node:
             node[k] = _rewrite_expr(node[k], fn)
-    for k in ("args", "values"):
+    for k in DICT_LIST_CHILD_FIELDS:
         if isinstance(node.get(k), list):
             node[k] = [_rewrite_expr(a, fn) for a in node[k]]
-    if _is_object(node.get("axes")):
-        node["axes"] = {ak: _rewrite_expr(av, fn) for ak, av in node["axes"].items()}
-    if node.get("op") == "apply_expression_template" and _is_object(node.get("bindings")):
-        b = node["bindings"]
-        for k in list(b.keys()):
-            b[k] = _rewrite_expr(b[k], fn)
+    # ``axes`` and ``bindings`` are the two raw-dict MAP child fields
+    # (:data:`json_walk.DICT_MAP_CHILD_FIELDS`) — handled by name because their
+    # scopes differ: ``axes`` values are per-axis input Expressions on any node,
+    # while ``bindings`` values are free-variable-target Expressions only on an
+    # ``apply_expression_template`` node (esm-spec §10.10.2).
+    for k in DICT_MAP_CHILD_FIELDS:
+        m = node.get(k)
+        if not _is_object(m):
+            continue
+        if k == "bindings" and node.get("op") != "apply_expression_template":
+            continue
+        node[k] = {mk: _rewrite_expr(mv, fn) for mk, mv in m.items()}
     return node
 
 

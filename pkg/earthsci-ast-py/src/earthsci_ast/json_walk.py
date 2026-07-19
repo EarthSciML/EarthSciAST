@@ -159,6 +159,90 @@ def _walk_json(
     rec(node, path)
 
 
+def _rewrite_json(
+    node: Any,
+    *,
+    on_str: Callable[[str], Any] | None = None,
+    on_value: Callable[[dict, str, Any, Callable[[Any], Any]], Any] | None = None,
+    on_object: Callable[[dict, Callable[[Any], Any]], Any] | None = None,
+    share: bool = True,
+) -> Any:
+    """Sharing-preserving functional JSON tree rebuild — the REWRITING dual of
+    :func:`_walk_json`.
+
+    Rebuilds ``node``: each ``str`` LEAF is replaced by ``on_str`` (or kept
+    as-is), list items are rebuilt element-wise, dict values are rebuilt
+    key-by-key, and non-``str`` scalars (int / float / bool / None) pass through
+    unchanged. This is the single recursion skeleton behind every transforming
+    pass that used to hand-roll ``recurse dict/list/scalar, preserve identity,
+    memoize on id`` (``_substitute``, ``_expand``, the §9.7.7 rename walk, …).
+
+    Two MUTUALLY-EXCLUSIVE dict hooks customize a pass; both receive ``recurse``
+    — the combinator's own descent, which applies this same rebuild to a child:
+
+    * ``on_value(node, key, value, recurse)`` — called per dict ITEM, returns the
+      rewritten value for ``key``. Default: ``recurse(value)`` (recurse every
+      value). A pass overrides only the special keys (keep an
+      ``apply_expression_template`` ``name`` verbatim, deep-copy a protected
+      scalar field, map an axis / template name) and defers the rest to
+      ``recurse``.
+    * ``on_object(node, recurse)`` — called per dict NODE, returns the whole
+      rewritten node. For a pass whose dict handling is not per-item (an
+      innermost-first expansion that re-descends into a freshly produced body).
+
+    ``share`` selects the DAG contract:
+
+    * ``share=True`` (post-expansion shared DAG; mirrors :func:`_substitute`):
+      IDENTITY-PRESERVING (a subtree with nothing rewritten below it is returned
+      as the SAME object) and MEMOIZED on ``id`` so a subtree shared under many
+      parents is rewritten once — avoiding the 2**depth blow-up of a template
+      DAG. The memo stores ``(node, result)`` so the keyed object stays alive and
+      ids are not recycled mid-walk. (Identity preservation is applied to the
+      default / ``on_value`` dict rebuild; an ``on_object`` hook owns its own
+      result, so it does its own unchanged-⇒-same-object squashing.)
+    * ``share=False`` (pre-expansion UNSHARED trees; mirrors
+      :func:`~earthsci_ast.template_imports._substitute_metaparams` and the
+      §9.7.7 rename walk): every dict / list is rebuilt fresh, no memo, no
+      identity check.
+    """
+    memo: dict[int, tuple[Any, Any]] | None = {} if share else None
+
+    def rec(n: Any) -> Any:
+        if isinstance(n, str):
+            return on_str(n) if on_str is not None else n
+        if _is_array(n):
+            if memo is not None:
+                hit = memo.get(id(n))
+                if hit is not None:
+                    return hit[1]
+            out: Any = [rec(c) for c in n]
+            if memo is not None:
+                if all(o is c for o, c in zip(out, n)):
+                    out = n  # identity-preserving: nothing rewritten below here
+                memo[id(n)] = (n, out)
+            return out
+        if _is_object(n):
+            if memo is not None:
+                hit = memo.get(id(n))
+                if hit is not None:
+                    return hit[1]
+            if on_object is not None:
+                out = on_object(n, rec)
+            else:
+                out = {
+                    k: (on_value(n, k, v, rec) if on_value is not None else rec(v))
+                    for k, v in n.items()
+                }
+                if memo is not None and all(out[k] is v for k, v in n.items()):
+                    out = n  # identity-preserving
+            if memo is not None:
+                memo[id(n)] = (n, out)
+            return out
+        return n
+
+    return rec(node)
+
+
 # ---------------------------------------------------------------------------
 # Raw-dict expression child traversal (the dict-form counterpart to
 # :func:`earthsci_ast.expr_walk.iter_children`)

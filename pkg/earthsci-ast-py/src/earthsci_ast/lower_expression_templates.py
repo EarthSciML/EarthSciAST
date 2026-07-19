@@ -72,6 +72,7 @@ from .json_walk import (  # noqa: F401 — re-exported for the historical import
     ExpressionTemplateError,
     _is_array,
     _is_object,
+    _rewrite_json,
     _walk_json,
 )
 from .template_imports import _collect_apply_names, _compose_template_bodies
@@ -239,44 +240,22 @@ def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
     each referencing its predecessor twice expands to 2^depth copies of the leaf
     and OOMs the loader well within the documented depth limits.
     """
-    # Bespoke (not on :func:`_walk_json`): this REBUILDS the tree with shared
-    # subtrees spliced in rather than merely observing it, so it stays a
-    # dedicated pass. The memo stores ``(node, result)`` so the keyed object
-    # stays alive alongside its entry (ids must not be recycled mid-walk).
-    memo: dict[int, tuple[Any, Any]] = {}
+    # Routed through the shared sharing-preserving rebuild
+    # (:func:`json_walk._rewrite_json`, ``share=True``): the identity-preserving,
+    # id-memoized DAG rebuild is the combinator's job. This pass supplies only
+    # the two substitution rules — a bound bare-string metavariable is spliced by
+    # reference, and (esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4, Option B) the
+    # ``name`` field of a nested ``apply_expression_template`` is NEVER a
+    # substitution site while every other value is.
+    def _leaf(s: str) -> Any:
+        return bindings[s] if s in bindings else s  # spliced by reference
 
-    def sub(node: Any) -> Any:
-        if isinstance(node, str):
-            if node in bindings:
-                return bindings[node]  # spliced by reference (shared DAG)
-            return node
-        if _is_array(node):
-            hit = memo.get(id(node))
-            if hit is not None:
-                return hit[1]
-            out: Any = [sub(c) for c in node]
-            if all(o is c for o, c in zip(out, node)):
-                out = node  # identity-preserving: nothing bound below here
-            memo[id(node)] = (node, out)
-            return out
-        if _is_object(node):
-            hit = memo.get(id(node))
-            if hit is not None:
-                return hit[1]
-            # esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4 (Option B):
-            # parameter substitution applies inside a nested
-            # ``apply_expression_template`` reference's ``bindings`` values
-            # exactly as any other Expression position, but the ``name`` field
-            # is NEVER a substitution site.
-            is_apply = node.get("op") == APPLY_OP
-            out = {k: (v if (is_apply and k == "name") else sub(v)) for k, v in node.items()}
-            if all(out[k] is v for k, v in node.items()):
-                out = node
-            memo[id(node)] = (node, out)
-            return out
-        return node
+    def _item(node: dict, key: str, value: Any, recurse) -> Any:
+        if key == "name" and node.get("op") == APPLY_OP:
+            return value
+        return recurse(value)
 
-    return sub(body)
+    return _rewrite_json(body, on_str=_leaf, on_value=_item, share=True)
 
 
 # --- static match-scoping constraints (`where`, esm-spec §9.6.1) --------------
@@ -709,13 +688,17 @@ def _expand(
     ``lambda n: True`` (the unconditional ``Expand`` kernel, §9.6.4 rule 2) and
     :func:`_expand_eager` passes an eager-only predicate (§9.6.4 rule 3), which
     returns non-eager (surviving) references intact. Deterministic and
-    sharing-preserving via an identity memo."""
-    if memo is None:
-        memo = {}
-    if _is_object(node):
-        hit = memo.get(id(node))
-        if hit is not None:
-            return hit[1]
+    sharing-preserving via an identity memo.
+
+    The list / non-apply-dict / scalar recursion and its id-memoized,
+    identity-preserving DAG rebuild are the shared combinator's job
+    (:func:`json_walk._rewrite_json`, ``share=True``); this pass supplies only
+    the innermost-first apply handling via the whole-node ``on_object`` hook. The
+    combinator manages the memo, so the legacy ``memo`` parameter is accepted for
+    signature stability but no longer threaded (top-level callers always pass
+    ``None``)."""
+
+    def _on_object(node: dict, recurse) -> Any:
         if node.get("op") == APPLY_OP:
             # Innermost-first: expand references inside the bindings first.
             b = node.get("bindings")
@@ -724,7 +707,7 @@ def _expand(
                 nb = {}
                 changed = False
                 for k, v in b.items():
-                    rv = _expand(v, templates, scope, should_expand, memo)
+                    rv = recurse(v)
                     if rv is not v:
                         changed = True
                     nb[k] = rv
@@ -732,35 +715,18 @@ def _expand(
                     newnode = {k: (nb if k == "bindings" else v) for k, v in node.items()}
             if should_expand(newnode):
                 body = _expand_apply(newnode, templates, scope)
-                res = _expand(body, templates, scope, should_expand, memo)
-            else:
-                res = newnode
-        else:
-            changed = False
-            out = {}
-            for k, v in node.items():
-                rv = _expand(v, templates, scope, should_expand, memo)
-                if rv is not v:
-                    changed = True
-                out[k] = rv
-            res = out if changed else node
-        memo[id(node)] = (node, res)
-        return res
-    if _is_array(node):
-        hit = memo.get(id(node))
-        if hit is not None:
-            return hit[1]
+                return recurse(body)
+            return newnode
         changed = False
-        out = []
-        for v in node:
-            rv = _expand(v, templates, scope, should_expand, memo)
+        out = {}
+        for k, v in node.items():
+            rv = recurse(v)
             if rv is not v:
                 changed = True
-            out.append(rv)
-        res = out if changed else node
-        memo[id(node)] = (node, res)
-        return res
-    return node
+            out[k] = rv
+        return out if changed else node
+
+    return _rewrite_json(node, on_object=_on_object, share=True)
 
 
 def _expand_eager(
@@ -1699,31 +1665,16 @@ def _json_equal(a: Any, b: Any) -> bool:
 def _rename_apply_refs(node: Any, rename: dict[str, str]) -> Any:
     """Rewrite the ``name`` of every ``apply_expression_template`` reference in
     ``node`` according to ``rename`` (old name → new name), in lockstep with a
-    registry rename. Sharing-preserving."""
-    if _is_array(node):
-        changed = False
-        out = []
-        for v in node:
-            rv = _rename_apply_refs(v, rename)
-            if rv is not v:
-                changed = True
-            out.append(rv)
-        return out if changed else node
-    if _is_object(node):
-        is_apply = node.get("op") == APPLY_OP
-        changed = False
-        out = {}
-        for k, v in node.items():
-            if is_apply and k == "name" and isinstance(v, str) and v in rename:
-                out[k] = rename[v]
-                changed = True
-            else:
-                rv = _rename_apply_refs(v, rename)
-                if rv is not v:
-                    changed = True
-                out[k] = rv
-        return out if changed else node
-    return node
+    registry rename. Sharing-preserving via the shared combinator
+    (:func:`json_walk._rewrite_json`, ``share=True``): only the apply ``name``
+    slot is mapped, every other value recursed unchanged."""
+
+    def _item(n: dict, key: str, value: Any, recurse) -> Any:
+        if key == "name" and n.get("op") == APPLY_OP and isinstance(value, str) and value in rename:
+            return rename[value]
+        return recurse(value)
+
+    return _rewrite_json(node, on_value=_item, share=True)
 
 
 def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
