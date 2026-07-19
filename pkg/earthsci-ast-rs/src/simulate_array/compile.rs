@@ -10,6 +10,8 @@ use crate::flatten::FlattenedSystem;
 use crate::op_registry::OpError;
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
+use crate::value_invention::{materialize_value_invention, rewrite_derived_index_sets};
+use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 
 // ============================================================================
@@ -498,6 +500,20 @@ impl ArrayCompiled {
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
+        // Materialize genuine relational OUTPUTS — the arg-witness reducer
+        // (`argmin`/`argmax`, RFC §5.7 rule 6) and the grouped/derived SCVT chain
+        // (`group_aggregate`) — to CONSTANT DATA at build setup, then rewrite each
+        // output's defining equation to a `const` literal the per-cell oracle
+        // already evaluates. This runs the byte-conformant [`crate::value_invention`]
+        // engine (the previously-unwired front door) and mirrors the Julia
+        // reference's "materialize to data" and the live Python interpreter, so
+        // `argmin` / `group_aggregate` now SIMULATE end-to-end instead of raising
+        // [`CompileError::UnevaluableOperatorError`]. Runs BEFORE
+        // [`strip_value_invention`] so a bin-skolem `join` feeding an argmin is still
+        // intact when the buffer is computed. A NO-OP (byte-identical) for every
+        // model without an arg-witness op — the conservative-regrid skolem/distinct
+        // path is left entirely to `strip_value_invention` below.
+        materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned)?;
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
@@ -1717,6 +1733,179 @@ pub(super) fn strip_value_invention(
         if let Some(expr) = &mut var.expression {
             strip_vi_joins(expr, &vi_cols);
         }
+    }
+    Ok(())
+}
+
+// ===========================================================================
+// Value-invention OUTPUT front-door — materialize the arg-witness / grouped
+// relational outputs to constant data (the previously-unwired engine).
+// ===========================================================================
+
+/// True iff any equation or observed expression in `model` contains an
+/// arg-witness reducer (`argmin` / `argmax`). Mirrors [`expr_contains_skolem`]:
+/// its presence is the marker of a genuine relational OUTPUT — a per-element
+/// nearest-witness INDEX buffer (RFC §5.7 rule 6) — that the dense evaluator
+/// cannot run and [`strip_value_invention`] does not remove (it is neither a
+/// derived-set-shaped var nor a skolem producer). This gates the build-time
+/// materialize pass so every model WITHOUT one stays byte-identical.
+fn expr_contains_arg_witness(expr: &Expr) -> bool {
+    match expr {
+        Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
+        Expr::Operator(node) => {
+            node.op == "argmin" || node.op == "argmax" || node.any_child(&mut expr_contains_arg_witness)
+        }
+    }
+}
+
+fn model_contains_arg_witness(model: &Model) -> bool {
+    model
+        .equations
+        .iter()
+        .any(|eq| expr_contains_arg_witness(&eq.lhs) || expr_contains_arg_witness(&eq.rhs))
+        || model
+            .variables
+            .values()
+            .any(|v| v.expression.as_ref().is_some_and(expr_contains_arg_witness))
+}
+
+/// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
+/// (`index(gx, g)` etc.): every variable whose `expression` is a `const` op (the
+/// established self-contained build-time array channel — see the geometry
+/// `src_poly`/`tgt_poly` fixtures). Each is evaluated once, with no state /
+/// params / `t` (a `const` literal needs none), into its dense `ArrayD`. This is
+/// the Rust analogue of the Julia reference's `const_arrays` registry and the
+/// Python interpreter's join-free const-observed pre-materialization.
+fn collect_const_factor_arrays(model: &Model) -> HashMap<String, ArrayD<f64>> {
+    let mut out: HashMap<String, ArrayD<f64>> = HashMap::new();
+    for (name, var) in &model.variables {
+        let Some(expr) = var.expression.as_ref() else {
+            continue;
+        };
+        let Expr::Operator(node) = expr else { continue };
+        if node.op != "const" {
+            continue;
+        }
+        match eval_expression(expr, &HashMap::new(), &[], &[], 0.0) {
+            Ok(Value::Array(a)) => {
+                out.insert(name.clone(), *a);
+            }
+            Ok(Value::Scalar(s)) => {
+                out.insert(name.clone(), ArrayD::from_elem(IxDyn(&[]), s));
+            }
+            Err(_) => {}
+        }
+    }
+    out
+}
+
+/// Scalar parameter defaults, the value-invention engine's scalar `params` map
+/// (e.g. the bin width of a broad-phase skolem quantization). Only 0-D
+/// parameters with a `default` contribute — an array parameter carries no inline
+/// data and is supplied (if at all) through [`collect_const_factor_arrays`].
+fn collect_scalar_param_defaults(model: &Model) -> HashMap<String, f64> {
+    let mut out: HashMap<String, f64> = HashMap::new();
+    for (name, var) in &model.variables {
+        if var.var_type == VariableType::Parameter
+            && var.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+            && let Some(d) = var.default
+        {
+            out.insert(name.clone(), d);
+        }
+    }
+    out
+}
+
+/// Rewrite the equation (or observed `expression`) that DEFINES `name` into a
+/// whole-array `const` literal carrying the materialized dense `buf` — the
+/// "materialize to data" step. The relational op (`argmin` / `group_aggregate`)
+/// that produced `name` is thereby replaced by data the existing oracle
+/// evaluates, so it never reaches the run path as an
+/// [`CompileError::UnevaluableOperatorError`]. The LHS collapses to the bare
+/// variable (a whole-array assignment); the eliminated-state machinery then
+/// materializes it as an ordinary constant observed.
+fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
+    let value = JsonValue::Array(
+        buf.iter()
+            .map(|&v| {
+                serde_json::Number::from_f64(v)
+                    .map(JsonValue::Number)
+                    .unwrap_or(JsonValue::Null)
+            })
+            .collect(),
+    );
+    let const_node = Expr::Operator(ExpressionNode {
+        op: "const".to_string(),
+        value: Some(value),
+        ..Default::default()
+    });
+    let mut replaced = false;
+    for eq in &mut model.equations {
+        if equation_defined_var(&eq.lhs).as_deref() == Some(name) {
+            eq.lhs = Expr::Variable(name.to_string());
+            eq.rhs = const_node.clone();
+            replaced = true;
+        }
+    }
+    if !replaced && let Some(var) = model.variables.get_mut(name) {
+        var.expression = Some(const_node);
+    }
+}
+
+/// Wire the value-invention front door into the array run path: run the
+/// byte-conformant [`materialize_value_invention`] engine over the raw-JSON model
+/// and rewrite each materialized relational OUTPUT to constant data
+/// ([`rewrite_equation_to_const`]), so `argmin` / `argmax` / `group_aggregate`
+/// simulate end-to-end. Derived index sets named by a materialized producer are
+/// densified to intervals via [`rewrite_derived_index_sets`] (the same handoff
+/// [`apply_value_invention`] performs). A NO-OP — and byte-identical — for any
+/// model without an arg-witness op (gated by [`model_contains_arg_witness`]), so
+/// the conservative-regrid skolem/distinct path handled by
+/// [`strip_value_invention`] is untouched.
+fn materialize_vi_outputs_to_data(
+    model: &mut Model,
+    index_sets: &mut HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
+    if !model_contains_arg_witness(model) {
+        return Ok(());
+    }
+    let const_arrays = collect_const_factor_arrays(model);
+    let params = collect_scalar_param_defaults(model);
+
+    // The engine walks the RAW `serde_json::Value` document (it preserves the
+    // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
+    // `index_sets` registry merged down as a sibling — mirroring the engine's own
+    // `model_json` fixture helper and `crate::cadence`.
+    let mut model_json = serde_json::to_value(&*model).map_err(|e| {
+        CompileError::InterpreterBuildError {
+            details: format!("value-invention: could not serialize model: {e}"),
+        }
+    })?;
+    if let JsonValue::Object(m) = &mut model_json {
+        let is_json =
+            serde_json::to_value(&*index_sets).map_err(|e| CompileError::InterpreterBuildError {
+                details: format!("value-invention: could not serialize index_sets: {e}"),
+            })?;
+        m.insert("index_sets".to_string(), is_json);
+    }
+
+    let result = materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new())
+        .map_err(|e| CompileError::InterpreterBuildError {
+            details: format!("value-invention materialize failed: {}", e.0),
+        })?;
+
+    // Densify any derived index set named by a materialized producer (§8.1 handoff).
+    rewrite_derived_index_sets(index_sets, &result.extents);
+
+    // Materialize-to-data: the arg-witness assignment (integer nearest-witness
+    // index) and the grouped/derived SCVT chain (num / den / centroid) become
+    // constant observeds.
+    for (name, buf) in &result.assignments {
+        let as_f64: Vec<f64> = buf.iter().map(|&i| i as f64).collect();
+        rewrite_equation_to_const(model, name, &as_f64);
+    }
+    for (name, buf) in &result.groups {
+        rewrite_equation_to_const(model, name, buf);
     }
     Ok(())
 }
