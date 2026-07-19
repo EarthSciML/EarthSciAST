@@ -222,7 +222,10 @@ def test_display_covers_every_registered_op():
 # SUBSET of the registry, pinned here explicitly.
 CODEGEN_HANDLED = {
     "+", "*", "-", "/", "^", "**", "pow",
-    "D", "grad",
+    "D",  # `grad`/`div`/`laplacian`/`curl` are no longer special-cased in codegen —
+          # they render via the generic `op(args)` fallback (rewrite-target keywords a
+          # discretization template lowers before codegen; `D` remains the special core
+          # derivative reshaped per target).
     "exp", "ifelse", "Pre", "not",
     "<", ">", "<=", ">=", "==", "!=",
     "and", "or",

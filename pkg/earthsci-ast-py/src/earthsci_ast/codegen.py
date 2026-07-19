@@ -408,20 +408,11 @@ def _format_expr_node(node: dict[str, Any], target: str) -> str:
             return f"D({r(args[0])})" if args else "D()"
         # D(x,t) → sp.Derivative(x(t), t)
         return f"sp.Derivative({r(args[0])}(t), t)" if args else "sp.Derivative()"
-    if op == "grad":
-        if target == "julia":
-            # grad(x,y) → Differential(y)(x)
-            if len(args) >= 2:
-                return f"Differential({r(args[1])})({r(args[0])})"
-            if len(args) == 1:
-                return f"Differential(x)({r(args[0])})"
-            return "Differential(x)()"
-        # grad(x,y) → sp.Derivative(x, y)
-        if len(args) >= 2:
-            return f"sp.Derivative({r(args[0])}, {r(args[1])})"
-        if len(args) == 1:
-            return f"sp.Derivative({r(args[0])}, x)"
-        return "sp.Derivative()"
+    # `grad`/`div`/`laplacian`/`curl` are no longer special operators here: they
+    # are open-tier rewrite-target keywords a discretization template lowers to a
+    # stencil before any code-generation. One reaching codegen was never rewritten;
+    # render it via the generic `grad(args)` fallback (it is a registered op, so no
+    # unregistered-op warning) rather than inventing a Differential/Derivative form.
     if op == "ifelse":
         if target == "julia":
             return f"ifelse({', '.join(r(arg) for arg in args)})"
