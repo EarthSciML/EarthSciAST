@@ -355,9 +355,25 @@ pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) ->
                     keyword: "format".to_string(),
                 }],
             };
+            // A load rejection must STILL surface its structured `(code, path)`
+            // structural findings (CONFORMANCE_SPEC §7.1.2) rather than collapsing
+            // to an EMPTY `structural_errors` — otherwise a document rejected at
+            // load records `is_valid:false` with no structural records and every
+            // pin on it silently misses. Some structural defects (an undeclared
+            // event target, an invalid discrete parameter, a coupling cycle, an
+            // unresolvable coupling scoped ref) reject the load BEFORE the typed
+            // `validate()` pass runs, yet the document is otherwise deserializable
+            // — so run the typed structural pass on a best-effort raw parse and
+            // populate `structural_errors` from it. This never flips the verdict:
+            // `is_valid` stays false; it only recovers the `(code, path)` records.
+            // (Mirrors the conformance runner's recovery in `bin/esm.rs`.)
+            let structural_errors = match serde_json::from_str::<EsmFile>(json_str) {
+                Ok(esm_file) => validate(&esm_file).structural_errors,
+                Err(_) => vec![],
+            };
             ValidationResult {
                 schema_errors,
-                structural_errors: vec![],
+                structural_errors,
                 unit_warnings: vec![],
                 is_valid: false,
             }
@@ -429,7 +445,6 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             systems.insert(
                 name.clone(),
                 SystemInfo {
-                    _system_type: SystemType::Model,
                     variables,
                     species: HashSet::new(),
                     parameters,
@@ -458,7 +473,6 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             systems.insert(
                 name.clone(),
                 SystemInfo {
-                    _system_type: SystemType::ReactionSystem,
                     variables: HashSet::new(),
                     species,
                     parameters,
@@ -478,7 +492,6 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             systems.insert(
                 name.clone(),
                 SystemInfo {
-                    _system_type: SystemType::DataLoader,
                     variables,
                     species: HashSet::new(),
                     parameters: HashSet::new(),
@@ -493,7 +506,6 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             systems.insert(
                 name.clone(),
                 SystemInfo {
-                    _system_type: SystemType::Operator,
                     variables: HashSet::new(),
                     species: HashSet::new(),
                     parameters: HashSet::new(),
@@ -554,7 +566,6 @@ fn register_subsystems(
         systems.insert(
             path.clone(),
             SystemInfo {
-                _system_type: SystemType::Model,
                 variables,
                 species,
                 parameters,
@@ -572,18 +583,9 @@ fn register_subsystems(
 
 #[derive(Debug, Clone)]
 pub(crate) struct SystemInfo {
-    pub(crate) _system_type: SystemType,
     pub(crate) variables: HashSet<String>,
     pub(crate) species: HashSet<String>,
     pub(crate) parameters: HashSet<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum SystemType {
-    Model,
-    ReactionSystem,
-    DataLoader,
-    Operator,
 }
 
 #[cfg(test)]
@@ -1822,6 +1824,37 @@ mod tests {
         assert!(
             result.structural_errors.is_empty(),
             "Should have no structural errors"
+        );
+    }
+
+    #[test]
+    fn test_validate_complete_recovers_structural_on_load_reject() {
+        // A document that is schema-valid but rejected at LOAD by a structural
+        // rule (here: an event `affects` targeting an undeclared variable) must
+        // still surface its structured `(code, path)` structural findings from
+        // `validate_complete`, NOT collapse to an empty `structural_errors`
+        // (CONFORMANCE_SPEC §7.1.2). Fixture + pinned shape:
+        // tests/invalid/event_var_undeclared.esm + expected_errors.json.
+        let fixture = include_str!("../../../tests/invalid/event_var_undeclared.esm");
+        let result = validate_complete(fixture, None);
+
+        assert!(!result.is_valid, "load-rejected fixture must be invalid");
+        assert!(
+            !result.structural_errors.is_empty(),
+            "validate_complete must recover typed structural errors on load-reject, got none"
+        );
+        // The pinned `(code, path)` record must be present. Per §7.1.2 the pin is
+        // a REQUIRED SUBSET of what the binding emits, so a load-Err document may
+        // additionally carry a `keyword:"parse"` load diagnostic in
+        // `schema_errors` — that is existing behavior and is not asserted here;
+        // what matters is that the structural pin is recovered rather than lost.
+        assert!(
+            result.structural_errors.iter().any(|e| matches!(
+                e.code,
+                StructuralErrorCode::EventVarUndeclared
+            ) && e.path == "/models/TestModel/continuous_events/0/affects/0/lhs"),
+            "expected pinned event_var_undeclared @ /models/TestModel/continuous_events/0/affects/0/lhs, got: {:?}",
+            result.structural_errors
         );
     }
 }

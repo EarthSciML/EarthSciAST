@@ -919,11 +919,15 @@ fn check_circular_model_dependencies(
         return;
     }
 
-    // Build system -> set of system names it references.
-    let mut deps: std::collections::HashMap<&str, std::collections::HashSet<&str>> =
+    // Build system -> set of system names it references. The edge set is exactly
+    // as before (equation lhs+rhs scoped refs into OTHER models); only the cycle
+    // search itself is delegated to the typed stack's shared DFS
+    // (`structural::has_cycle_dfs` / `find_cycle`) so the algorithm lives in ONE
+    // place. Keys are owned to match that shared signature.
+    let mut deps: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
     for mname in &model_names {
-        deps.insert(mname, std::collections::HashSet::new());
+        deps.insert((*mname).to_string(), std::collections::HashSet::new());
     }
 
     for (mname, mv) in models {
@@ -945,71 +949,28 @@ fn check_circular_model_dependencies(
                     && let Some(target) = model_names.get(system)
                     && let Some(set) = deps.get_mut(mname.as_str())
                 {
-                    set.insert(*target);
+                    set.insert((*target).to_string());
                 }
             }
         }
     }
 
-    // DFS with gray-coloring for cycle detection.
-    #[derive(Clone, Copy, PartialEq)]
-    enum Color {
-        White,
-        Gray,
-        Black,
-    }
-    let mut color: std::collections::HashMap<&str, Color> =
-        deps.keys().map(|k| (*k, Color::White)).collect();
-    let mut cycle: Option<Vec<String>> = None;
-
-    fn dfs<'a>(
-        node: &'a str,
-        deps: &std::collections::HashMap<&'a str, std::collections::HashSet<&'a str>>,
-        color: &mut std::collections::HashMap<&'a str, Color>,
-        path: &mut Vec<&'a str>,
-        cycle: &mut Option<Vec<String>>,
-    ) -> bool {
-        color.insert(node, Color::Gray);
-        path.push(node);
-        if let Some(children) = deps.get(node) {
-            for &child in children {
-                match color.get(child).copied().unwrap_or(Color::White) {
-                    Color::Gray => {
-                        let start_idx = path.iter().position(|&n| n == child).unwrap_or(0);
-                        let mut c: Vec<String> =
-                            path[start_idx..].iter().map(|s| s.to_string()).collect();
-                        c.push(child.to_string());
-                        *cycle = Some(c);
-                        return true;
-                    }
-                    Color::White => {
-                        if dfs(child, deps, color, path, cycle) {
-                            return true;
-                        }
-                    }
-                    Color::Black => {}
-                }
-            }
+    // Delegate cycle detection to the shared DFS in `crate::structural` (the same
+    // primitives the typed `validate()` pass uses), preserving the pinned
+    // load-time rejection wording.
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut rec_stack: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for node in deps.keys() {
+        if !visited.contains(node)
+            && crate::structural::has_cycle_dfs(node, &deps, &mut visited, &mut rec_stack)
+        {
+            let cycle = crate::structural::find_cycle(&deps, node);
+            errors.push(format!(
+                "circular reference (cycle) detected: {}",
+                cycle.join(" -> ")
+            ));
+            break;
         }
-        color.insert(node, Color::Black);
-        path.pop();
-        false
-    }
-
-    for node in deps.keys().copied().collect::<Vec<_>>() {
-        if color.get(node).copied().unwrap_or(Color::White) == Color::White {
-            let mut path: Vec<&str> = Vec::new();
-            if dfs(node, &deps, &mut color, &mut path, &mut cycle) {
-                break;
-            }
-        }
-    }
-
-    if let Some(c) = cycle {
-        errors.push(format!(
-            "circular reference (cycle) detected: {}",
-            c.join(" -> ")
-        ));
     }
 }
 
