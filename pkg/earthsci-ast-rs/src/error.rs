@@ -38,3 +38,58 @@ pub enum EsmError {
     #[error("{0}")]
     Other(String),
 }
+
+/// A single-field, string-wrapped error whose [`Display`](std::fmt::Display) is
+/// exactly its inner message (`write!(f, "{}", self.0)`).
+///
+/// This is the shared newtype behind the crate's bare-string error aliases —
+/// [`crate::provider::ProviderError`] and [`crate::cadence::CadenceError`] — which
+/// previously each declared their own structurally-identical `pub struct X(pub
+/// String)` with a `#[error("{0}")]` (bare) `Display`. They are now `pub type`
+/// aliases of this type, so their public names and their rendered messages are
+/// unchanged.
+///
+/// Errors whose `Display` prepends a *prefix* (e.g.
+/// [`crate::relational::FloatKeyError`] → `"FloatKeyError: {0}"`,
+/// [`crate::value_invention::ValueInventionError`] →
+/// `"ValueInventionError: {0}"`) deliberately do **not** alias this type: a shared
+/// `Display` would change their cross-binding message bytes.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct MessageError(pub String);
+
+#[cfg(test)]
+mod tests {
+    use super::MessageError;
+
+    // Cross-binding message stability: the rendered `Display` of every
+    // string-wrapped error must stay byte-identical (bare vs. prefixed).
+    #[test]
+    fn message_error_renders_bare_inner_string() {
+        assert_eq!(MessageError("boom".into()).to_string(), "boom");
+    }
+
+    #[test]
+    fn bare_aliases_render_inner_string_unchanged() {
+        // Aliases of MessageError — bare `{0}` Display. Constructed via the
+        // underlying newtype (a `pub type` alias is not a constructor) but bound
+        // to the alias type, so this exercises the alias identity.
+        let p: crate::provider::ProviderError = MessageError("p".into());
+        let c: crate::cadence::CadenceError = MessageError("c".into());
+        assert_eq!(p.to_string(), "p");
+        assert_eq!(c.to_string(), "c");
+    }
+
+    #[test]
+    fn prefixed_errors_keep_their_prefix() {
+        // Left separate on purpose — their Display prepends a type-name prefix.
+        assert_eq!(
+            crate::relational::FloatKeyError("f".into()).to_string(),
+            "FloatKeyError: f"
+        );
+        assert_eq!(
+            crate::value_invention::ValueInventionError("v".into()).to_string(),
+            "ValueInventionError: v"
+        );
+    }
+}
