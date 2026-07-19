@@ -1455,24 +1455,29 @@ fn resolve_expr(
             }
         }
         Expr::Operator(node) => {
-            // Reject unlowered rewrite-target operators at compile time
-            // (esm-spec §4.2 / §9.6.8): the optional sugar ops
-            // `grad` / `div` / `laplacian` (and `curl` / `∇`) have no evaluator,
-            // and a SPATIAL `D` (`wrt` != "t") is a rewrite-target that a
-            // discretization rule must lower to a stencil before evaluation. The
-            // structural time derivative `D(_, t)` stays evaluable-core. The gate
-            // fires here — before evaluation — with the uniform
-            // `unlowered_operator` code.
-            let unlowered = match node.op.as_str() {
-                "grad" | "div" | "laplacian" | "curl" | "∇" => true,
-                "D" => node.wrt.as_deref().is_some_and(|w| w != "t"),
-                _ => false,
-            };
-            if unlowered {
-                return Err(CompileError::UnloweredOperatorError {
-                    op: node.op.clone(),
-                });
-            }
+            // Reject any operator that may not reach the evaluator, delegating
+            // the tier decision wholesale to `op_registry` — the single source
+            // of truth for the operator vocabulary (esm-spec §4.2 / §9.6.8) —
+            // rather than a hand-maintained op-name list. A node it classifies
+            // `Unlowered` is a rewrite target: the optional sugar ops
+            // (`grad`/`div`/`laplacian`/`curl`/`∇`/`integral`), a SPATIAL `D`
+            // (`wrt` != "t"), or ANY op not in the evaluable core — an
+            // unregistered user discretization op is treated exactly like the
+            // named sugar ops, with no privileged status. The structural time
+            // derivative `D(_, t)` stays evaluable-core. A wrong arity or an
+            // inverted `makearray` region is surfaced with its own diagnostic.
+            // This mirrors the array path's `check_no_spatial_ops` gate.
+            crate::op_registry::check_node(node).map_err(|e| match e {
+                crate::op_registry::OpError::Unlowered { op } => {
+                    CompileError::UnloweredOperatorError { op }
+                }
+                crate::op_registry::OpError::Arity { op, got, expected } => {
+                    CompileError::InvalidOperatorArity { op, got, expected }
+                }
+                crate::op_registry::OpError::MakearrayRegion { reason } => {
+                    CompileError::MakearrayRegionInvalid { reason }
+                }
+            })?;
             // Closed-registry function call (esm-spec §9.2): resolve to the
             // dedicated `Fn` variant so the callee `name` and any inline array
             // arguments survive to evaluation (a plain `Op` drops both — the
@@ -1896,12 +1901,15 @@ fn eval_op(
         // if it shows up on the RHS we treat it as 0 (legacy parity).
         "D" => 0.0,
 
-        // Spatial differential operators on the RHS are treated as 0 (same
-        // convention as "D"). They are rewritten by ESD discretization before
-        // reaching the solver in the normal pipeline; returning 0 here keeps
-        // interpret() well-defined when called directly on expressions that
-        // contain spatial operators (e.g. in tests or expression walkers).
-        "grad" | "div" | "laplacian" => 0.0,
+        // The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
+        // `integral`) and every other unregistered op carry NO privileged
+        // semantics: they are open-tier rewrite targets that a discretization
+        // rule must lower to a stencil before evaluation, and their value is
+        // UNDETERMINABLE until then (esm-spec §4.2). The normal pipeline rejects
+        // them at compile time (`resolve_expr`); reaching this direct-evaluation
+        // fallback with one still present yields `NaN` (undeterminable) via the
+        // catch-all below — never a silent `0.0`, which would quietly poison a
+        // trajectory.
 
         // Pre is the previous-value operator (used by event handling). With
         // events disallowed in v1 it should never appear, but if it does we

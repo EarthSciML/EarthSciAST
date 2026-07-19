@@ -850,14 +850,15 @@ fn collect_index_head_names(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect the `dim` axis of every spatial differential operator in the subtree
-/// (defensive: the array path rejects unlowered spatial ops earlier, but a
-/// coordinate an `ic` RHS shares with a `grad` `dim` stays creditable).
+/// Collect the `dim` axis of every node that carries one, regardless of `op`
+/// (esm-spec §4.9.1 (ii), as revised): a coordinate axis is resolved
+/// STRUCTURALLY by the presence of a `dim` field, not by a hardcoded
+/// spatial-operator name list (the sugar ops carry no privileged status).
+/// Defensive: the array path rejects unlowered spatial ops earlier, but a
+/// coordinate an `ic` RHS shares with a node's `dim` stays creditable.
 fn collect_dim_symbols(expr: &Expr, out: &mut HashSet<String>) {
     if let Expr::Operator(node) = expr {
-        if matches!(node.op.as_str(), "grad" | "div" | "curl" | "laplacian")
-            && let Some(dim) = &node.dim
-        {
+        if let Some(dim) = &node.dim {
             out.insert(dim.clone());
         }
         node.for_each_child(&mut |child| collect_dim_symbols(child, out));

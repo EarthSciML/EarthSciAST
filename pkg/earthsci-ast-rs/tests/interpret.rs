@@ -299,24 +299,28 @@ fn state_param_observed_time_refs() {
 }
 
 // ============================================================================
-// Differential operators are no-ops on the RHS
+// Differential operators on the RHS: `D` stays a legacy 0.0 marker; the spatial
+// sugar ops carry no privileged semantics and are undeterminable (NaN)
 // ============================================================================
 
 #[test]
-fn differential_ops_zero_on_rhs() {
+fn differential_ops_on_rhs() {
+    // `D` on the RHS is unchanged — the legacy 0.0 marker (its time-derivative
+    // semantics are not touched by the spatial-op de-specialization).
     assert_eq!(interpret(&op("D", vec![n(123.0)]), &[], &[], &[], 0.0), 0.0);
-    assert_eq!(
-        interpret(&op("grad", vec![n(123.0)]), &[], &[], &[], 0.0),
-        0.0
-    );
-    assert_eq!(
-        interpret(&op("div", vec![n(123.0)]), &[], &[], &[], 0.0),
-        0.0
-    );
-    assert_eq!(
-        interpret(&op("laplacian", vec![n(123.0)]), &[], &[], &[], 0.0),
-        0.0
-    );
+
+    // The spatial-calculus sugar ops are ORDINARY open-tier rewrite targets with
+    // NO privileged semantics: their value is UNDETERMINABLE until a
+    // discretization rule lowers them (esm-spec §4.2). The normal pipeline
+    // rejects them at compile time; reached directly here they evaluate to
+    // `NaN` (undeterminable), never a silent `0.0` that would quietly poison a
+    // trajectory.
+    for name in ["grad", "div", "laplacian", "curl", "∇", "integral"] {
+        assert!(
+            interpret(&op(name, vec![n(123.0)]), &[], &[], &[], 0.0).is_nan(),
+            "{name} must be undeterminable (NaN), not silently 0.0"
+        );
+    }
 }
 
 // ============================================================================

@@ -617,20 +617,19 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
 // rule 3 / RFC out-of-line-expression-templates §7.2)
 // ---------------------------------------------------------------------------
 
-/// The rewrite-target ops explicitly named by §4.2 as the open rewrite-target
-/// tier plus the two load-eliminated forms — the members of **T** that carry a
-/// recognized op name. Any op NOT in the evaluable-core registry
-/// (`op_registry`) is ALSO in T (an open-namespace custom op no evaluator
-/// implements); `apply_expression_template` itself is excluded.
-const REWRITE_TARGET_OPS: [&str; 7] = [
-    "D",
-    "grad",
-    "div",
-    "laplacian",
-    "integral",
-    "table_lookup",
-    "enum",
-];
+/// The tier-**T** ops that ARE evaluable-core registry entries and so cannot be
+/// derived from "not in the core": the structural derivative `D` (a SPATIAL `D`
+/// is a rewrite target) and the two load-eliminated forms `table_lookup` /
+/// `enum` (esm-spec §4.5 / §9.5).
+///
+/// The open rewrite-target sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
+/// `integral`) and any unregistered custom op are DELIBERATELY not hand-listed
+/// here — [`op_in_t`] derives them from "not in the evaluable core"
+/// (`!is_core_op`), so the sugar vocabulary lives in exactly one place
+/// (`op_registry`) and this list never drifts from it (that is precisely why a
+/// hand-list previously carried `grad`/`div`/`laplacian`/`integral` but silently
+/// omitted `curl`/`∇`). `apply_expression_template` itself is excluded.
+const REWRITE_TARGET_OPS: [&str; 3] = ["D", "table_lookup", "enum"];
 
 /// True iff op string `op` is a member of the rewrite-target tier **T**
 /// (esm-spec §9.6.4 rule 3): one of the named rewrite-target ops, or an op with

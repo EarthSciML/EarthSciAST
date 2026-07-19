@@ -1218,35 +1218,32 @@ fn namespace_plain(name: &str, system_name: &str) -> String {
 
 /// Scan an expression-tree RHS and reject any unlowered rewrite-target operator
 /// (esm-spec §4.2 / §9.6.8) with the uniform [`FlattenError::UnloweredOperator`]
-/// (`unlowered_operator`) code. These are the optional sugar ops
-/// `grad` / `div` / `laplacian` / `curl` / `∇`, and a spatial `D` — a `D` whose
-/// `wrt` is a spatial axis (e.g. `"x"`, `"lon"`) rather than the time variable
-/// `"t"`. `wrt` is now open (any declared differentiation variable); the
-/// structural equation-LHS `D(u, t)` stays evaluable-core and is untouched. A
-/// rewrite rule must lower these to a stencil before evaluation; this format
-/// ships no such rules (they live in EarthSciDiscretizations).
+/// (`unlowered_operator`) code.
+///
+/// The tier decision is delegated wholesale to [`crate::op_registry`], the
+/// single source of truth for the operator vocabulary — this gate keeps NO
+/// hand-maintained op-name list of its own. A node the registry classifies
+/// [`crate::op_registry::OpError::Unlowered`] is a rewrite target: the optional
+/// sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/`integral`), a SPATIAL `D` (a
+/// `D` whose `wrt` is a spatial axis rather than the time variable `"t"`), or
+/// ANY op not in the evaluable core — an unregistered user discretization op
+/// (`godunov_hamiltonian`) is treated exactly like the named sugar ops, with no
+/// privileged status. The structural equation-LHS `D(u, t)` stays
+/// evaluable-core and is untouched. A rewrite rule must lower these to a stencil
+/// before evaluation; this format ships no such rules (they live in
+/// EarthSciDiscretizations).
+///
+/// Malformed-CORE problems (a wrong arity, an inverted `makearray` region) are
+/// not this gate's concern — the compile / eval stages report those with their
+/// own diagnostics — so only the `Unlowered` classification is surfaced here.
 fn reject_spatial_operators(expr: &Expr) -> Result<(), FlattenError> {
     match expr {
         Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => Ok(()),
         Expr::Operator(node) => {
-            match node.op.as_str() {
-                "grad" | "div" | "laplacian" | "curl" | "∇" => {
-                    return Err(FlattenError::UnloweredOperator {
-                        op: node.op.clone(),
-                    });
-                }
-                "D" => {
-                    // A spatial `D` (`wrt` != "t") is a rewrite-target; only the
-                    // structural time derivative `D(_, t)` is evaluable-core.
-                    if let Some(wrt) = &node.wrt
-                        && wrt != "t"
-                    {
-                        return Err(FlattenError::UnloweredOperator {
-                            op: node.op.clone(),
-                        });
-                    }
-                }
-                _ => {}
+            if let Err(crate::op_registry::OpError::Unlowered { op }) =
+                crate::op_registry::check_node(node)
+            {
+                return Err(FlattenError::UnloweredOperator { op });
             }
             // Recurse through the crate's ONE canonical child-walker so the gate
             // sees operators hidden in EVERY expression-bearing sidecar field

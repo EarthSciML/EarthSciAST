@@ -184,11 +184,6 @@ pub fn check_makearray_regions(node: &ExpressionNode) -> Result<(), OpError> {
     Ok(())
 }
 
-/// The rewrite-target sugar ops (esm-spec §4.2 / §9.6.8): differential-operator
-/// shorthand with no evaluator. One list feeds the compile-time reject walk and
-/// the runtime backstop in `eval_op`.
-pub const REWRITE_TARGET_SUGAR: [&str; 6] = ["grad", "div", "laplacian", "curl", "∇", "integral"];
-
 /// The arity of an evaluable-core operator, or `None` if `op` is not in the
 /// closed core set (esm-spec §4.2) — i.e. it is an open-tier rewrite target.
 ///

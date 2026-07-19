@@ -84,6 +84,17 @@ fn units_fixtures_dimensional_propagation() {
     // Thermodynamics S and G observeds — are provable and are now reported as
     // hard `unit_inconsistency` STRUCTURAL ERRORS rather than warnings, so they
     // do not appear in this count either.
+    //
+    // It DOES raise exactly one dimensional warning now: its FluidMechanics
+    // equation applies `grad`, and the spatial-calculus sugar ops were demoted
+    // to ordinary open-tier rewrite targets with NO privileged dimensional rule
+    // (esm-spec §4.2 / §4.8.3), so `grad`'s dimension is UNDETERMINABLE until a
+    // discretization rule lowers it. The propagator reports that as a
+    // non-blocking Analysis finding ("no dimensional rule; dimension unknown") —
+    // the "report unknown / skip" outcome for an unlowered operator, resolved by
+    // the same no-rule path as any unregistered user op. It is not a file defect
+    // (the fixture stays valid); the checker just declines to fabricate a
+    // dimension it cannot know.
     let expected_warning_counts = [
         // These counts are DIMENSIONAL-analysis warnings only. Many of these
         // fixtures declare real scientific units (Hz, T, C, BTU, kWh, degC, bar,
@@ -94,7 +105,9 @@ fn units_fixtures_dimensional_propagation() {
         // gap, orthogonal to dimensional propagation, so the assertion below
         // filters those out.
         ("units_conversions.esm", 0usize),
-        ("units_dimensional_analysis.esm", 0),
+        // One non-blocking Analysis warning: `grad` has no dimensional rule (see
+        // the note above). The fixture remains valid.
+        ("units_dimensional_analysis.esm", 1),
         ("units_propagation.esm", 0),
     ];
     for (name, content) in UNITS_FIXTURES {

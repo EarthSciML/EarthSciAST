@@ -13,7 +13,7 @@
 
 use crate::EsmFile;
 use crate::units::{
-    Unit, build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
+    build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
 };
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use std::collections::{HashMap, HashSet};
@@ -160,14 +160,6 @@ pub(crate) fn validate_model(
         });
     }
 
-    // Build the coordinate-units map for the model's referenced domain, if
-    // any. Used by `grad`/`div`/`laplacian` propagation to divide by the
-    // declared coordinate units rather than a hardcoded metre denominator
-    // (gt-ui96). Coordinates declared without units are stored as
-    // dimensionless so the downstream propagator falls back to metres.
-    let coord_env = build_coordinate_unit_env(esm_file, model);
-    let coord_env_ref = coord_env.as_ref();
-
     // Reference integrity applies to EVERY expression-bearing block, not just
     // `equations`. `initialization_equations` (§6.2) are a separate block with a
     // separate balance — but they are still expressions over the model's
@@ -236,7 +228,7 @@ pub(crate) fn validate_model(
         // mismatch is a hard `unit_inconsistency` error, an undeterminable
         // dimension stays a non-blocking warning. See `record_unit_findings`.
         record_unit_findings(
-            check_equation_dimensions(equation, &unit_env, coord_env_ref),
+            check_equation_dimensions(equation, &unit_env),
             &eq_path,
             &format!("Equation {eq_idx}"),
             errors,
@@ -316,7 +308,7 @@ pub(crate) fn validate_model(
                 // `tests/invalid/expected_errors.json`.
                 let declared = variable.units.as_deref().and_then(|u| parse_unit(u).ok());
                 record_unit_findings(
-                    check_expression_dimensions(expr, declared.as_ref(), &unit_env, coord_env_ref),
+                    check_expression_dimensions(expr, declared.as_ref(), &unit_env),
                     &format!("{model_path}/variables/{var_name}"),
                     &format!("Observed variable \"{var_name}\""),
                     errors,
@@ -554,10 +546,12 @@ pub(crate) fn validate_data_loader_unit_conversions(
 ///    accepted even in models that never declared a domain.)
 ///
 /// 2. **Spatial coordinate names** — §11.4. A checker resolves as a coordinate
-///    any free symbol that is (i) a key of `index_sets`, (ii) the `dim` of a
-///    spatial differential operator (`grad`/`div`/`curl`/`laplacian`) anywhere
-///    in the document, or (iii) a free symbol in the RHS of an `ic` equation,
-///    which §11.4 *defines* to be a coordinate expression.
+///    any free symbol that is (i) a key of `index_sets`, (ii) the `dim` field of
+///    ANY node that carries one (resolved STRUCTURALLY, by field — the
+///    spatial-calculus sugar ops carry no privileged status, so this is not
+///    keyed on a `grad`/`div`/`curl`/`laplacian` op-name list), or (iii) a free
+///    symbol in the RHS of an `ic` equation, which §11.4 *defines* to be a
+///    coordinate expression.
 ///
 /// 3. **`_var`** — §6.4, the operator-model placeholder, legal wherever a state
 ///    variable is legal (equation LHS/RHS, a continuous event's
@@ -619,10 +613,10 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     }
 
     // (2ii) + (2iii): walk every expression in the document once, collecting the
-    // `dim` of each spatial differential operator and the free symbols of each
-    // `ic` RHS. Both are document-scoped: a coordinate named by `grad(..., dim:
-    // "x")` in one model is the same axis `x` that another model's initial
-    // condition may reference.
+    // `dim` field of every node that carries one (structurally, by field) and
+    // the free symbols of each `ic` RHS. Both are document-scoped: a coordinate
+    // named by `{op: grad, dim: "x"}` in one model is the same axis `x` that
+    // another model's initial condition may reference.
     if let Some(models) = &esm_file.models {
         for model in models.values() {
             for eq in &model.equations {
@@ -660,13 +654,19 @@ fn is_ic_equation(lhs: &crate::Expr) -> bool {
     matches!(lhs, crate::Expr::Operator(op) if op.op == "ic")
 }
 
-/// Collect the `dim` of every spatial differential operator in `expr`
-/// (esm-spec §4.9.1 (2ii)) — `grad`, `div`, `curl`, `laplacian`.
+/// Collect the `dim` axis of every node that carries one, regardless of its
+/// `op` (esm-spec §4.9.1 (ii), as revised).
+///
+/// The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`) are
+/// ordinary open-tier rewrite targets with NO privileged status, so a
+/// coordinate axis is resolved STRUCTURALLY — by the presence of a `dim` field
+/// — not by matching a hardcoded operator-name list. Resolving by field also
+/// credits an axis named by an unregistered user discretization op (e.g.
+/// `godunov_hamiltonian`) or by `∇`, which a hand-maintained name list
+/// silently missed.
 fn collect_coordinate_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
     if let crate::Expr::Operator(op) = expr {
-        if matches!(op.op.as_str(), "grad" | "div" | "curl" | "laplacian")
-            && let Some(dim) = &op.dim
-        {
+        if let Some(dim) = &op.dim {
             out.insert(dim.clone());
         }
         op.for_each_child(&mut |child| collect_coordinate_symbols(child, out));
@@ -982,44 +982,6 @@ fn check_physical_constant_units(
             }),
         });
     }
-}
-
-/// Build a map of spatial-coordinate name → parsed [`Unit`] for use by
-/// `Unit::propagate_with_coords` in grad/div/laplacian propagation. A
-/// coordinate declared without `units` (or whose `units` string fails to
-/// parse) is stored as dimensionless — the propagator then falls back to
-/// the legacy metre denominator so downstream comparisons remain
-/// conservative. Returns `None` when there is no resolvable spatial table.
-fn build_coordinate_unit_env(
-    esm_file: &EsmFile,
-    model: &crate::Model,
-) -> Option<HashMap<String, Unit>> {
-    let coords = collect_coordinate_units(esm_file, model)?;
-    let mut env = HashMap::new();
-    for (dim_name, units) in coords {
-        let unit = units
-            .as_deref()
-            .and_then(|s| parse_unit(s).ok())
-            .unwrap_or_else(Unit::dimensionless);
-        env.insert(dim_name, unit);
-    }
-    Some(env)
-}
-
-/// Build a map of spatial-coordinate names → declared units string for the
-/// model's referenced domain.
-///
-/// As of ESM v0.8.0 the bespoke `Domain.spatial` coordinate table was removed
-/// (grid geometry is now ordinary data / `aggregate` FAQs), so there is no
-/// per-coordinate units table to collect. This always returns `None`, leaving
-/// grad/div/laplacian unit propagation on the legacy metre-denominator fallback
-/// in `units.rs` — matching the other bindings' behaviour when no spatial
-/// coordinate units are declared.
-fn collect_coordinate_units(
-    _esm_file: &EsmFile,
-    _model: &crate::Model,
-) -> Option<HashMap<String, Option<String>>> {
-    None
 }
 
 /// Returns true if the expression references a variable by exact name

@@ -214,7 +214,6 @@ pub use units::{
     Dimension, Rational, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,
     build_unit_env, check_dimensional_consistency, check_equation_dimensions,
     check_expression_dimensions, convert_units, parse_unit, validate_equation_dimensions,
-    validate_equation_dimensions_with_coords,
 };
 
 #[cfg(feature = "parallel")]
