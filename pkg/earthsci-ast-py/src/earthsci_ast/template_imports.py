@@ -31,7 +31,7 @@ import os
 import re
 from typing import Any
 
-from .diagnostics import (
+from .error_handling import (
     APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
     APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
     METAPARAMETER_NAME_CONFLICT,
@@ -58,7 +58,7 @@ from .diagnostics import (
 # Shared leaf primitives (also used by lower_expression_templates). Importing
 # them from the json_walk leaf — rather than from lower_expression_templates —
 # is what lets lower_expression_templates import ``_compose_template_bodies``
-# from here at module level without a cycle. ``APPLY_OP``, ``_expand_apply``,
+# from here at module level without a cycle. ``APPLY_OP``,
 # ``_validate_templates`` and ``reject_expression_templates_pre_v04`` that this
 # module still needs from lower_expression_templates are imported lazily at
 # their (function-scoped) use sites for the same reason.
@@ -502,22 +502,6 @@ def _collect_apply_names(out: list[str], x: Any) -> list[str]:
     return out
 
 
-def _inline_applies(node: Any, templates: dict[str, Any], scope: str) -> Any:
-    from .lower_expression_templates import _expand_apply
-
-    if _is_array(node):
-        return [_inline_applies(c, templates, scope) for c in node]
-    if not _is_object(node):
-        return node
-    out = {k: _inline_applies(v, templates, scope) for k, v in node.items()}
-    if out.get("op") == APPLY_OP:
-        # Referenced bodies are already closed (topological order), so a
-        # single _expand_apply produces an apply-free subtree; the bindings'
-        # own sub-ASTs were inlined by the post-order walk above.
-        return _expand_apply(out, templates, scope)
-    return out
-
-
 def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
     """Registration-time body **checking** (esm-spec §9.7.3, Option B /
     esm 0.9.0): template bodies MAY reference other in-scope MATCH-LESS
@@ -561,11 +545,13 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
                     "templates are invocable by name (esm-spec §9.7.3)",
                 )
 
-    # DFS over the reference graph: cycle detection, chain-depth bound, and a
-    # dependencies-first (post-) order for inlining.
+    # DFS over the reference graph: cycle detection and chain-depth bound. Under
+    # esm 0.9.0 (Option B) bodies are NOT inlined — the references are preserved
+    # and consumed later by ``Expand`` (§9.6.4 rule 2) or the eager pre-pass
+    # (§9.6.4 rule 3) — so no post-order accumulation is needed; this is a pure
+    # validation of the DAG (acyclic, depth-bounded, resolves to match-less).
     state: dict[str, int] = {}  # 1 = on stack, 2 = done
     depth: dict[str, int] = {}  # templates on the longest chain from this node
-    order: list[str] = []
     chain: list[str] = []
 
     def visit(name: str) -> int:
@@ -594,17 +580,10 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
                 f"of {d} templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH="
                 f"{MAX_TEMPLATE_EXPANSION_DEPTH} (esm-spec §9.7.3)",
             )
-        order.append(name)
         return d
 
     for name in sorted(refs):
         visit(name)
-
-    # esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
-    # depth-bounded, references resolve to match-less templates); the bodies are
-    # left with their ``apply_expression_template`` references intact. ``Expand``
-    # (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
-    _ = order  # topological order retained for readers; no inlining performed.
 
 
 # ---------------------------------------------------------------------------
