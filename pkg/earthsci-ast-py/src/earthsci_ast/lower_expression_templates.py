@@ -43,8 +43,6 @@ schema validation but before ``_parse_esm_data``.
 from __future__ import annotations
 
 import copy
-import json
-import math
 import re
 from typing import Any
 
@@ -75,6 +73,11 @@ from .json_walk import (  # noqa: F401 — re-exported for the historical import
     _rewrite_json,
     _walk_json,
 )
+# ``emit_esm_string`` (the canonical Option-B byte writer) now lives next to
+# ``serialize.save`` — the two JSON writers are co-located there. It is
+# re-exported here so ``lower_expression_templates.emit_esm_string`` (used by the
+# package ``__init__`` and tests, alongside :func:`emit_document`) keeps working.
+from .serialize import emit_esm_string  # noqa: F401 — re-exported historical path
 from .template_imports import _collect_apply_names, _compose_template_bodies
 
 # Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
@@ -1565,74 +1568,10 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
 
 
 # --- Canonical byte writer (2-space indent, keys sorted except the ordered
-#     `expression_templates` block) — the cross-binding byte-identity surface. ---
-
-
-def _emit_scalar(x: Any) -> str:
-    """Render one JSON scalar for the canonical emit form. Integral finite
-    floats render as integer literals (mirroring JSON3's read-normalization in
-    the Julia reference: an integral number is written without a decimal point,
-    uniformly), so the emitted bytes are cross-binding-identical; non-integral
-    floats and strings render via ``json.dumps`` (``ensure_ascii=False`` keeps
-    UTF-8 literals, matching JSON3's writer)."""
-    if isinstance(x, bool):
-        return "true" if x else "false"
-    if isinstance(x, int):
-        return str(x)
-    if isinstance(x, float):
-        if math.isfinite(x) and x.is_integer():
-            return str(int(x))
-        return json.dumps(x, ensure_ascii=False)
-    return json.dumps(x, ensure_ascii=False)
-
-
-def _emit_write(buf: list[str], x: Any, indent: int, preserve: bool = False) -> None:
-    pad = "  " * indent
-    pad1 = "  " * (indent + 1)
-    if _is_object(x):
-        if not x:
-            buf.append("{}")
-            return
-        keys = list(x.keys()) if preserve else sorted(x.keys())
-        buf.append("{\n")
-        for i, k in enumerate(keys):
-            buf.append(pad1)
-            buf.append(json.dumps(str(k), ensure_ascii=False))
-            buf.append(": ")
-            _emit_write(buf, x[k], indent + 1, preserve=(str(k) == "expression_templates"))
-            if i < len(keys) - 1:
-                buf.append(",")
-            buf.append("\n")
-        buf.append(pad)
-        buf.append("}")
-    elif _is_array(x):
-        if not x:
-            buf.append("[]")
-            return
-        buf.append("[\n")
-        for i, v in enumerate(x):
-            buf.append(pad1)
-            _emit_write(buf, v, indent + 1)
-            if i < len(x) - 1:
-                buf.append(",")
-            buf.append("\n")
-        buf.append(pad)
-        buf.append("]")
-    else:
-        buf.append(_emit_scalar(x))
-
-
-def emit_esm_string(doc: Any) -> str:
-    """Canonical byte serialization of an emitted document (esm-spec §9.6.4
-    rule 5): 2-space indent, object keys sorted lexicographically EXCEPT the
-    entries of an ``expression_templates`` object, which preserve their
-    authored-first / materialized-sorted order. The cross-binding byte-identity
-    surface for the Option-B emitted form and the target of the ``emitted.esm``
-    goldens."""
-    buf: list[str] = []
-    _emit_write(buf, doc, 0)
-    buf.append("\n")
-    return "".join(buf)
+#     `expression_templates` block) — the cross-binding byte-identity surface.
+#     The writer now lives next to :func:`serialize.save` (co-located JSON
+#     writers); it is re-exported here (see the module head) so the historical
+#     ``lower_expression_templates.emit_esm_string`` import path keeps resolving.
 
 
 # ===========================================================================

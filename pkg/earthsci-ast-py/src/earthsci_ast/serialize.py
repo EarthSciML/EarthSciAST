@@ -57,6 +57,7 @@ from .esm_types import (
     Tolerance,
     VariableMapCoupling,
 )
+from .json_walk import _is_array, _is_object
 
 
 def _emit_stoich(coeff: int | float) -> int | float:
@@ -1121,3 +1122,87 @@ def save(esm_file: EsmFile, path: str | Path | None = None) -> str:
             f.write(json_str)
 
     return json_str
+
+
+# ---------------------------------------------------------------------------
+# Canonical byte writer for the Option-B *emitted* form (esm-spec §9.6.4 rule 5).
+# Co-located with :func:`save` (the document write-back writer) so both hand-off
+# JSON writers live together. Unlike :func:`save` (``json.dumps(indent=2,
+# sort_keys=False)`` over the wire dict), this writer sorts object keys
+# lexicographically EXCEPT the entries of an ``expression_templates`` object,
+# which keep their authored-first / materialized-sorted insertion order — the
+# ``preserve`` flag threaded through :func:`_emit_write`. It shares the
+# :func:`_canonical_number` integral-float rule with the rest of the package.
+# Used by :func:`earthsci_ast.lower_expression_templates.emit_document` callers
+# (re-exported there for the historical import path).
+# ---------------------------------------------------------------------------
+
+
+def _emit_scalar(x: Any) -> str:
+    """Render one JSON scalar for the canonical emit form. Integral finite
+    floats render as integer literals (mirroring JSON3's read-normalization in
+    the Julia reference: an integral number is written without a decimal point,
+    uniformly), so the emitted bytes are cross-binding-identical; non-integral
+    floats and strings render via ``json.dumps`` (``ensure_ascii=False`` keeps
+    UTF-8 literals, matching JSON3's writer).
+
+    The integral-float → integer-literal decision is the shared canonical-number
+    rule (:func:`_canonical_number`, CONFORMANCE_SPEC §5.5.3.1) — the single
+    implementation every binding re-serializes through."""
+    if isinstance(x, bool):
+        return "true" if x else "false"
+    x = _canonical_number(x)
+    if isinstance(x, int):
+        return str(x)
+    if isinstance(x, float):
+        return json.dumps(x, ensure_ascii=False)
+    return json.dumps(x, ensure_ascii=False)
+
+
+def _emit_write(buf: list[str], x: Any, indent: int, preserve: bool = False) -> None:
+    pad = "  " * indent
+    pad1 = "  " * (indent + 1)
+    if _is_object(x):
+        if not x:
+            buf.append("{}")
+            return
+        keys = list(x.keys()) if preserve else sorted(x.keys())
+        buf.append("{\n")
+        for i, k in enumerate(keys):
+            buf.append(pad1)
+            buf.append(json.dumps(str(k), ensure_ascii=False))
+            buf.append(": ")
+            _emit_write(buf, x[k], indent + 1, preserve=(str(k) == "expression_templates"))
+            if i < len(keys) - 1:
+                buf.append(",")
+            buf.append("\n")
+        buf.append(pad)
+        buf.append("}")
+    elif _is_array(x):
+        if not x:
+            buf.append("[]")
+            return
+        buf.append("[\n")
+        for i, v in enumerate(x):
+            buf.append(pad1)
+            _emit_write(buf, v, indent + 1)
+            if i < len(x) - 1:
+                buf.append(",")
+            buf.append("\n")
+        buf.append(pad)
+        buf.append("]")
+    else:
+        buf.append(_emit_scalar(x))
+
+
+def emit_esm_string(doc: Any) -> str:
+    """Canonical byte serialization of an emitted document (esm-spec §9.6.4
+    rule 5): 2-space indent, object keys sorted lexicographically EXCEPT the
+    entries of an ``expression_templates`` object, which preserve their
+    authored-first / materialized-sorted order. The cross-binding byte-identity
+    surface for the Option-B emitted form and the target of the ``emitted.esm``
+    goldens."""
+    buf: list[str] = []
+    _emit_write(buf, doc, 0)
+    buf.append("\n")
+    return "".join(buf)
