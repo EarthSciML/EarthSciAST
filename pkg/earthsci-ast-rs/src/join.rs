@@ -25,13 +25,14 @@
 //!
 //! **Determinism (§5.7 rule 5).** Hashing may bucket only; the emitted result
 //! MUST be **sorted by the canonical key**, never hash-iteration / first-seen
-//! order. [`inner_equi_join`] buckets the right relation in an [`IndexMap`] and
-//! then emits sorted by [`JoinKey`] total order, so the output is independent of
-//! input order, duplicates, and orientation. The ⊕ used to combine duplicates is
-//! associative + commutative for every registry semiring, so input and parallel
-//! order cannot change a reduced value; [`group_by_reduce`] performs each
-//! bucket's reduction sequentially in canonical input order so a float ⊕ has no
-//! last-ULP drift.
+//! order. Codes here are assigned by rank in the sorted union of a key pair's
+//! distinct values ([`JoinKey`] total order), so the equality classes are
+//! independent of input order, duplicates, and declared member order. The ⊕ used
+//! to combine matched terms is associative + commutative for every registry
+//! semiring, so input and parallel order cannot change a reduced value. (The
+//! runtime value-equality equi-join / group-by kernel proper lives in
+//! [`crate::relational`]; this module lowers a build-time `join.on` to a coded
+//! `filter` gate.)
 //!
 //! **Build-time, same artifact.** Like [`crate::aggregate::resolve_aggregate_ranges`],
 //! [`resolve_aggregate_joins`] runs once on an owned model — **before** range
@@ -49,20 +50,19 @@
 //!   into the node's `filter`: the contraction admits `(i, j)` iff the key
 //!   columns carry equal members, so a key occurring `m`×`n` times contributes
 //!   all `m·n` ⊗-terms (the defined many-to-many cardinality). Codes are assigned
-//!   by rank in the sorted union of the pair's distinct values (the dense-coding
-//!   form of [`inner_equi_join`]'s bucket-and-probe — same equality classes,
-//!   independent of declared member order), so the evaluator reuses its existing
-//!   `filter` gate with no new value-equality path on the hot loop.
+//!   by rank in the sorted union of the pair's distinct values (dense value
+//!   coding — same equality classes, independent of declared member order), so
+//!   the evaluator reuses its existing `filter` gate with no new value-equality
+//!   path on the hot loop.
 //! - **Unsupported.** The `left` key resolves to no loop symbol (a join keyed on
 //!   a genuine data column, not an iterated index); rejected with a clear error
 //!   rather than silently mis-combined.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use indexmap::IndexMap;
 use serde_json::Value;
 
-use crate::aggregate::{ReduceKind, is_aggregate_op};
+use crate::aggregate::is_aggregate_op;
 use crate::compile_error::CompileError;
 use crate::types::{Expr, ExpressionNode, IndexSet, Model, RangeSpec};
 
@@ -129,173 +129,6 @@ impl JoinKey {
             Value::Array(_) | Value::Object(_) => Err(KeyError::NonScalar),
         }
     }
-
-    /// The JSON scalar form of this key component, for canonical serialization.
-    fn to_json(&self) -> Value {
-        match self {
-            JoinKey::Int(i) => Value::from(*i),
-            JoinKey::Cat(s) => Value::from(s.clone()),
-        }
-    }
-}
-
-/// Project a whole key tuple from JSON components, failing on the first
-/// component that violates the key-type discipline (§5.7 rule 1).
-pub fn key_tuple_from_json(components: &[Value]) -> Result<Vec<JoinKey>, KeyError> {
-    components.iter().map(JoinKey::from_json).collect()
-}
-
-/// One emitted combined tuple of an [`inner_equi_join`]: the shared key plus
-/// the source-row indices on each side. `left`/`right` index back into the
-/// relations passed to the join, so the caller can gather the corresponding
-/// factor values for the ⊗-product term.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JoinMatch {
-    /// The equal key value both rows carry.
-    pub key: Vec<JoinKey>,
-    /// Index of the contributing row in the left relation.
-    pub left: usize,
-    /// Index of the contributing row in the right relation.
-    pub right: usize,
-}
-
-/// Inner equi-join of two relations by the value equality of their key
-/// projections (§5.3). Each entry of `left` / `right` is a row's key tuple, or
-/// `None` if a key column is null/missing on that row (which makes the row
-/// **unmatchable** — it joins to nothing and contributes `0̄`, §5.3).
-///
-/// The right relation is bucketed by key in an [`IndexMap`] (hashing used only
-/// to bucket); the left relation probes it. Many-to-many is defined: a key with
-/// `m` left rows and `n` right rows emits all `m·n` matches (§5.3). The result
-/// is then **sorted by the canonical key**, with `(left, right)` as a stable
-/// tiebreak, so the emitted sequence is a pure function of the total order over
-/// keys and is independent of the input bucket-iteration order (§5.7 rule 5).
-pub fn inner_equi_join(
-    left: &[Option<Vec<JoinKey>>],
-    right: &[Option<Vec<JoinKey>>],
-) -> Vec<JoinMatch> {
-    // Bucket the right side by key. IndexMap keeps insertion order for a
-    // deterministic *probe traversal*, but the emitted result is sorted below,
-    // so bucket order never leaks into the output.
-    let mut buckets: IndexMap<Vec<JoinKey>, Vec<usize>> = IndexMap::new();
-    for (j, rk) in right.iter().enumerate() {
-        if let Some(k) = rk {
-            buckets.entry(k.clone()).or_default().push(j);
-        }
-        // A null/missing right key is unmatchable: contributes no bucket entry.
-    }
-
-    let mut matches: Vec<JoinMatch> = Vec::new();
-    for (i, lk) in left.iter().enumerate() {
-        let Some(k) = lk else {
-            // A null/missing left key is unmatchable: joins to nothing (0̄).
-            continue;
-        };
-        if let Some(js) = buckets.get(k) {
-            for &j in js {
-                matches.push(JoinMatch {
-                    key: k.clone(),
-                    left: i,
-                    right: j,
-                });
-            }
-        }
-    }
-
-    // §5.7 rule 5: emit SORTED by canonical key (never bucket / first-seen
-    // order). `(left, right)` breaks ties between the m·n tuples of one key so
-    // the full sequence is deterministic for a fixed input labeling.
-    matches.sort_by(|a, b| {
-        a.key
-            .cmp(&b.key)
-            .then(a.left.cmp(&b.left))
-            .then(a.right.cmp(&b.right))
-    });
-    matches
-}
-
-/// Group-by reduction under a semiring ⊕ (§5.3 / §5.7 rule 5): bucket rows by
-/// their key, then **emit sorted by the canonical key**, reducing each bucket's
-/// values with `reduce` in canonical (stable) input order. This is the
-/// group-by-aggregate join (`group_by_sum` and its semiring generalizations) —
-/// the value-equality counterpart of [`inner_equi_join`] for the case where the
-/// matched rows are immediately folded.
-///
-/// Because every registry ⊕ is associative + commutative, permuting the input
-/// rows cannot change any bucket's reduced value; reducing sequentially in the
-/// (stable) input order additionally pins the *order of summation*, so swapping
-/// to a float ⊕ introduces no last-ULP drift (§5.7 rule 5).
-pub fn group_by_reduce(
-    rows: &[(Vec<JoinKey>, f64)],
-    reduce: ReduceKind,
-) -> Vec<(Vec<JoinKey>, f64)> {
-    let mut buckets: IndexMap<Vec<JoinKey>, Vec<f64>> = IndexMap::new();
-    for (k, v) in rows {
-        buckets.entry(k.clone()).or_default().push(*v);
-    }
-
-    // Emit sorted by canonical key, not by bucket insertion order.
-    let mut keys: Vec<Vec<JoinKey>> = buckets.keys().cloned().collect();
-    keys.sort();
-
-    keys.into_iter()
-        .map(|k| {
-            let mut acc = reduce.identity();
-            for &v in &buckets[&k] {
-                acc = reduce.combine(acc, v);
-            }
-            (k, acc)
-        })
-        .collect()
-}
-
-/// Canonical byte serialization of a reduced relation: compact JSON
-/// `[[k…,v],…]` — no spaces, UTF-8 (no `\uXXXX` escaping), each member tuple's
-/// key components followed by its reduced value. This is the same canonical-JSON
-/// discipline the round-trip idempotence contract relies on, and is what
-/// "byte-identical serialized index set" means in the determinism harness
-/// (`tests/conformance/determinism/`). An integral value serializes as an
-/// integer (`5`, not `5.0`; `-0.0`→`0`) so the form matches integer-semiring
-/// goldens exactly.
-pub fn canonical_serialize_kv(rows: &[(Vec<JoinKey>, f64)]) -> String {
-    // Tokens are assembled by hand (rather than through one serde_json pass)
-    // so the reduced-value component can use the canonical float form below;
-    // key components still go through serde_json's compact formatter, which
-    // emits no spaces and raw UTF-8 (it escapes only control chars / `"` /
-    // `\`), matching the harness's json.dumps(separators=(",",":"),
-    // ensure_ascii=False).
-    let mut out = String::from("[");
-    for (i, (key, val)) in rows.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push('[');
-        for k in key {
-            out.push_str(&serde_json::to_string(&k.to_json()).unwrap_or_default());
-            out.push(',');
-        }
-        out.push_str(&num_token(*val));
-        out.push(']');
-    }
-    out.push(']');
-    out
-}
-
-/// Render a reduced value as the canonical JSON number token: an exact
-/// integer when the value is integral and i64-representable (normalizing
-/// `-0.0`→`0`, keeping integer-semiring outputs free of a spurious `.0`),
-/// otherwise the RFC §5.4.6 canonical float form
-/// ([`crate::canonicalize::format_canonical_float`]). The canonical form —
-/// not serde's Ryu shortest-round-trip, which switches to exponent notation
-/// at different magnitudes — is what Python's `_emit_token` and
-/// [`crate::relational`]'s `Num` token writer emit, so all three canonical
-/// serializers agree byte-for-byte on float-valued reductions.
-fn num_token(v: f64) -> String {
-    if v.is_finite() && v.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&v) {
-        (v as i64).to_string()
-    } else {
-        crate::canonicalize::format_canonical_float(v)
-    }
 }
 
 /// Resolve every `join.on` clause in `model` (RFC §5.3), in place. Call once on
@@ -344,32 +177,25 @@ fn lower_expr_joins(
         lower_node_joins(node, index_sets)?;
     }
 
-    for a in &mut node.args {
-        lower_expr_joins(a, index_sets)?;
-    }
-    if let Some(b) = &mut node.expr {
-        lower_expr_joins(b, index_sets)?;
-    }
-    if let Some(f) = &mut node.filter {
-        lower_expr_joins(f, index_sets)?;
-    }
-    if let Some(l) = &mut node.lower {
-        lower_expr_joins(l, index_sets)?;
-    }
-    if let Some(u) = &mut node.upper {
-        lower_expr_joins(u, index_sets)?;
-    }
-    if let Some(vals) = &mut node.values {
-        for v in vals {
-            lower_expr_joins(v, index_sets)?;
+    // Recurse into every expression-bearing child via the canonical walker
+    // (args, lower, upper, expr, filter, values, axes, key, bindings) so a
+    // `join`-bearing aggregate nested in a grouping `key` or a template
+    // `bindings` value is lowered too — not just the hand-picked subset this
+    // used to enumerate (bug D: `key`/`bindings` were skipped, leaving a `join`
+    // clause in the typed IR). `for_each_child_mut`'s closure cannot return, so
+    // the first lowering error is captured and propagated afterwards.
+    let mut err: Option<CompileError> = None;
+    node.for_each_child_mut(&mut |child| {
+        if err.is_none()
+            && let Err(e) = lower_expr_joins(child, index_sets)
+        {
+            err = Some(e);
         }
+    });
+    match err {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
-    if let Some(axes) = &mut node.axes {
-        for v in axes.values_mut() {
-            lower_expr_joins(v, index_sets)?;
-        }
-    }
-    Ok(())
 }
 
 /// Classify and lower one aggregate node's join clauses (see the module docs):
@@ -628,8 +454,8 @@ fn join_key_member(m: &Value, set_name: &str) -> Result<JoinKey, CompileError> {
 /// Assign each key value an integer code by its rank in the sorted union of the
 /// two columns' distinct values ([`JoinKey`] total order, §5.7 rule 1): equal
 /// values get equal codes across both columns, so code equality is exactly
-/// member-value equality. This is the dense-coding form of [`inner_equi_join`]'s
-/// bucket-and-probe and yields the same equality classes, independent of the
+/// member-value equality. This is the dense-coding form of a bucket-and-probe
+/// equi-join and yields the same equality classes, independent of the
 /// declared member order (the permuted-fixture determinism property). Codes
 /// start at 1 so 0 stays free for the unused fill of a code table (see
 /// [`code_lookup`]).
@@ -769,148 +595,6 @@ mod tests {
             JoinKey::from_json(&Value::from(false)).unwrap(),
             JoinKey::Int(0)
         );
-    }
-
-    // --- Inner equi-join: cardinality, sorting, null-handling (§5.3) -------
-
-    fn k(i: i64) -> Option<Vec<JoinKey>> {
-        Some(vec![JoinKey::Int(i)])
-    }
-
-    #[test]
-    fn many_to_many_cardinality_is_m_times_n() {
-        // Key 7 appears twice on the left, three times on the right ⇒ 6 tuples.
-        // Key 9 appears once each ⇒ 1. Key 3 (left only) and 4 (right only) ⇒ 0.
-        let left = vec![k(7), k(3), k(7), k(9)];
-        let right = vec![k(9), k(7), k(7), k(4), k(7)];
-        let matches = inner_equi_join(&left, &right);
-        let n7 = matches
-            .iter()
-            .filter(|m| m.key == vec![JoinKey::Int(7)])
-            .count();
-        let n9 = matches
-            .iter()
-            .filter(|m| m.key == vec![JoinKey::Int(9)])
-            .count();
-        assert_eq!(n7, 6, "m·n = 2·3");
-        assert_eq!(n9, 1, "1·1");
-        assert_eq!(
-            matches.len(),
-            7,
-            "no spurious matches for left-only/right-only keys"
-        );
-    }
-
-    #[test]
-    fn join_emits_sorted_by_canonical_key() {
-        let left = vec![k(30), k(10), k(20)];
-        let right = vec![k(20), k(10), k(30)];
-        let matches = inner_equi_join(&left, &right);
-        let keys: Vec<&Vec<JoinKey>> = matches.iter().map(|m| &m.key).collect();
-        let mut sorted = keys.clone();
-        sorted.sort();
-        assert_eq!(
-            keys, sorted,
-            "output must be sorted by canonical key, not input order"
-        );
-    }
-
-    #[test]
-    fn null_key_rows_are_unmatchable() {
-        // A null key on either side contributes nothing (joins to 0̄, §5.3).
-        let left = vec![k(1), None, k(2)];
-        let right = vec![None, k(1), k(2), None];
-        let matches = inner_equi_join(&left, &right);
-        assert_eq!(matches.len(), 2);
-        assert!(
-            matches
-                .iter()
-                .all(|m| m.key == vec![JoinKey::Int(1)] || m.key == vec![JoinKey::Int(2)])
-        );
-    }
-
-    #[test]
-    fn join_is_independent_of_input_permutation_in_key_multiset() {
-        // The emitted (sorted) key sequence — with multiplicity — is invariant
-        // under permuting either relation (adversarial order-independence).
-        let canon_keys = |l: &[Option<Vec<JoinKey>>], r: &[Option<Vec<JoinKey>>]| {
-            inner_equi_join(l, r)
-                .into_iter()
-                .map(|m| m.key)
-                .collect::<Vec<_>>()
-        };
-        let l1 = vec![k(7), k(7), k(9)];
-        let r1 = vec![k(7), k(9), k(7)];
-        let l2 = vec![k(9), k(7), k(7)]; // permuted
-        let r2 = vec![k(7), k(7), k(9)]; // permuted
-        assert_eq!(canon_keys(&l1, &r1), canon_keys(&l2, &r2));
-    }
-
-    // --- Group-by determinism golden (CONFORMANCE_SPEC §5.5 / manifest) ----
-
-    fn gb_rows() -> Vec<(Vec<JoinKey>, f64)> {
-        // The manifest `group_by_sum` canonical input rows.
-        vec![
-            (vec![JoinKey::Cat("B".into())], 2.0),
-            (vec![JoinKey::Cat("a".into())], 5.0),
-            (vec![JoinKey::Cat("B".into())], 3.0),
-            (vec![JoinKey::Cat("Z".into())], 1.0),
-            (vec![JoinKey::Cat("a".into())], 4.0),
-        ]
-    }
-
-    #[test]
-    fn group_by_sum_matches_manifest_golden_byte_for_byte() {
-        let out = group_by_reduce(&gb_rows(), ReduceKind::Sum);
-        // Sorted by code-point key: B(5), Z(1), a(9).
-        assert_eq!(
-            out,
-            vec![
-                (vec![JoinKey::Cat("B".into())], 5.0),
-                (vec![JoinKey::Cat("Z".into())], 1.0),
-                (vec![JoinKey::Cat("a".into())], 9.0),
-            ]
-        );
-        // Byte-identical to tests/conformance/determinism/manifest.json
-        // fixture `group_by_sum`.expected.serialized.
-        assert_eq!(canonical_serialize_kv(&out), r#"[["B",5],["Z",1],["a",9]]"#);
-    }
-
-    #[test]
-    fn group_by_sum_is_permutation_invariant() {
-        // The manifest `permuted_rows` adversarial variant collapses to golden.
-        let permuted = vec![
-            (vec![JoinKey::Cat("a".into())], 4.0),
-            (vec![JoinKey::Cat("Z".into())], 1.0),
-            (vec![JoinKey::Cat("B".into())], 2.0),
-            (vec![JoinKey::Cat("a".into())], 5.0),
-            (vec![JoinKey::Cat("B".into())], 3.0),
-        ];
-        assert_eq!(
-            canonical_serialize_kv(&group_by_reduce(&permuted, ReduceKind::Sum)),
-            canonical_serialize_kv(&group_by_reduce(&gb_rows(), ReduceKind::Sum)),
-        );
-    }
-
-    #[test]
-    fn group_by_respects_semiring_oplus() {
-        // Under min_sum's ⊕ = min, bucket B reduces to min(2,3)=2; a to min(5,4)=4.
-        let out = group_by_reduce(&gb_rows(), ReduceKind::Min);
-        assert_eq!(
-            out,
-            vec![
-                (vec![JoinKey::Cat("B".into())], 2.0),
-                (vec![JoinKey::Cat("Z".into())], 1.0),
-                (vec![JoinKey::Cat("a".into())], 4.0),
-            ]
-        );
-    }
-
-    #[test]
-    fn integral_values_serialize_without_trailing_point() {
-        let rows = vec![(vec![JoinKey::Int(3)], -0.0), (vec![JoinKey::Int(4)], 2.0)];
-        // -0.0 normalizes to 0; 2.0 → 2.
-        assert_eq!(canonical_serialize_kv(&rows), r#"[[3,0],[4,2]]"#);
     }
 
     // --- Key-column coding (the data-derived value-equality core) -----------
