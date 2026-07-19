@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { compileExpression, evaluateExpression } from './codegen.js'
+import { compileExpression, evaluateExpression, UnloweredOperatorError } from './codegen.js'
 import type { Expr } from './types.js'
 
 describe('compileExpression / evaluateExpression — TS scalar runner', () => {
@@ -146,9 +146,28 @@ describe('compileExpression / evaluateExpression — TS scalar runner', () => {
       )
     })
 
-    it('throws for unsupported operator', () => {
-      const expr: any = { op: 'unsupported', args: [1] }
-      expect(() => evaluateExpression(expr, bindings)).toThrow('Unsupported operator: unsupported')
+    it('throws `unlowered_operator` for an unregistered (open-tier) op', () => {
+      // esm-spec §4.2: the op namespace is open, so an op the evaluable-core
+      // op-registry does not know is an unlowered rewrite-target (user op or the
+      // spatial sugar grad/div/laplacian), not a bespoke "unsupported" case.
+      const expr: any = { op: 'godunov_hamiltonian', args: [1] }
+      let err: unknown
+      try {
+        evaluateExpression(expr, bindings)
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(UnloweredOperatorError)
+      expect((err as UnloweredOperatorError).code).toBe('unlowered_operator')
+      expect(String(err)).toContain('godunov_hamiltonian')
+    })
+
+    it('throws `Unsupported operator` for a registered but non-scalar op (Pre)', () => {
+      // `Pre` IS in the op-registry (evaluable-core, structural) but carries no
+      // scalar evaluator, so it passes the rewrite-target gate and is reported
+      // as unsupported here — distinct from the unlowered_operator open-tier gate.
+      const expr: any = { op: 'Pre', args: ['x'] }
+      expect(() => evaluateExpression(expr, bindings)).toThrow('Unsupported operator: Pre')
     })
 
     it('rejects unlowered enum nodes', () => {

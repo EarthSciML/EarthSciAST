@@ -7,9 +7,11 @@
  * result; `evaluateExpression` walks and applies in one step.
  *
  * Structural / array ops and the closed-function registry are dispatched to
- * their consumers; the rewrite-target sugar ops (`grad`/`div`/`laplacian`, a
- * spatial `D`) are rejected here — they must be lowered to a stencil by a
- * rewrite rule before evaluation.
+ * their consumers; ANY op the evaluable-core op-registry does not know — the
+ * open-tier rewrite-target sugar `grad`/`div`/`laplacian`/`integral`, a user op,
+ * or a spatial / right-hand-side `D` — is rejected here as an unlowered
+ * rewrite-target: it must be lowered to a stencil by a rewrite rule before
+ * evaluation.
  */
 
 import type { Expr, Expression, ExpressionNode } from './types.js'
@@ -23,16 +25,6 @@ import { getOpInfo, checkArity } from './op-registry.js'
  * returns the scalar result.
  */
 export type CompiledExpression = (bindings: Map<string, number>) => number
-
-/**
- * Rewrite-target ops (esm-spec §4.2, docs/rfcs/open-op-namespace-fixpoint-rewrite.md):
- * a spatial / right-hand-side `D`, and the `grad`/`div`/`laplacian` sugar ops.
- * They carry NO evaluator implementation — each MUST be lowered to an
- * `aggregate`/`makearray` stencil by a rewrite rule (§9.6) before evaluation.
- * This format ships no discretization rules (the std-lib lives in
- * EarthSciDiscretizations). One reaching the evaluator means no rule lowered it.
- */
-const REWRITE_TARGET_OPS = new Set<string>(['D', 'grad', 'div', 'laplacian'])
 
 /**
  * Error carrying the stable, cross-binding `unlowered_operator` diagnostic
@@ -176,12 +168,23 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
       return dispatchClosedFunction(fnName, fnArgs)
     }
 
-    // Rewrite-target op gate (esm-spec §4.2 / §9.6.8): a spatial/RHS `D` or a
-    // grad/div/laplacian sugar op that reaches evaluation was never lowered to
-    // a stencil. Fire the uniform `unlowered_operator` diagnostic BEFORE
-    // evaluating args (mirrors the Julia `_compile` gate). Loading stays
-    // permissive — the open namespace tolerates these ops until evaluation.
-    if (REWRITE_TARGET_OPS.has(node.op)) {
+    // Rewrite-target op gate (esm-spec §4.2 / §9.6.8). The evaluable-core op
+    // vocabulary is the op-registry (op-registry.ts) — the SINGLE SOURCE OF
+    // TRUTH, no bespoke {grad,div,laplacian} name list. ANY op reaching
+    // evaluation that the registry does not know is an OPEN-TIER rewrite-target:
+    // the optional spatial sugar `grad`/`div`/`laplacian`/`integral`, or a user
+    // op such as `godunov_hamiltonian`. It carries no evaluator and must have
+    // been lowered to a stencil by a rewrite rule (§9.6) first. `D` is the one
+    // registered op that is evaluable-core ONLY in its structural equation-LHS
+    // role (§4.2) — reaching THIS scalar evaluator (a spatial `D`, or any `D` in
+    // an RHS / observed / rate position) it is likewise an unlowered
+    // rewrite-target, so it is named explicitly. Both fire the uniform
+    // `unlowered_operator` diagnostic BEFORE evaluating args (mirrors the Julia
+    // `_compile` gate). The const/enum/fn structural ops are handled above; a
+    // registered-but-non-scalar op (`Pre`, `=`) passes this gate and falls
+    // through to the `unsupported_operator` arm below. Loading stays permissive
+    // — the open namespace tolerates these ops until evaluation.
+    if (node.op === 'D' || getOpInfo(node.op) === undefined) {
       const wrt = node.op === 'D' && typeof node.wrt === 'string' ? ` (wrt=${node.wrt})` : ''
       throw new UnloweredOperatorError(
         `unlowered rewrite-target operator '${node.op}'${wrt} reached evaluation: ` +
@@ -230,7 +233,11 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
 
     // Scalar operators dispatch through the central op registry: arity
     // bounds and the evaluator body live in ONE table (op-registry.ts), so
-    // adding an operator is a single registry entry.
+    // adding an operator is a single registry entry. The gate above already
+    // rejected every UNREGISTERED op as `unlowered_operator`, so `info` is
+    // defined here; a registered op that carries no scalar evaluator (`Pre`,
+    // `=` — structural, not scalar-evaluable) is the only thing this arm
+    // reports as `unsupported_operator`.
     const info = getOpInfo(node.op)
     if (!info || !info.evaluate) {
       throw new EvaluatorError('unsupported_operator', `Unsupported operator: ${node.op}`)

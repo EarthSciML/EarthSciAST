@@ -254,9 +254,8 @@ function powerUnit(base: ParsedUnit, exp: number): ParsedUnit {
 export function checkDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
-  coordinateBindings?: Map<string, ParsedUnit>,
 ): UnitResult {
-  return checkDimensionsMemo(expr, unitBindings, coordinateBindings, new Map())
+  return checkDimensionsMemo(expr, unitBindings, new Map())
 }
 
 /**
@@ -274,7 +273,6 @@ export function checkDimensions(
 function checkDimensionsMemo(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
-  coordinateBindings: Map<string, ParsedUnit> | undefined,
   memo: Map<object, UnitResult>,
 ): UnitResult {
   const isNode = typeof expr === 'object' && expr !== null
@@ -284,7 +282,7 @@ function checkDimensionsMemo(
       return { dimensions: hit.dimensions, warnings: [], diagnostics: [] }
     }
   }
-  const res = computeDimensions(expr, unitBindings, coordinateBindings, memo)
+  const res = computeDimensions(expr, unitBindings, memo)
   if (isNode) memo.set(expr, res)
   return res
 }
@@ -292,7 +290,6 @@ function checkDimensionsMemo(
 function computeDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
-  coordinateBindings: Map<string, ParsedUnit> | undefined,
   memo: Map<object, UnitResult>,
 ): UnitResult {
   const diagnostics: UnitDiagnostic[] = []
@@ -352,9 +349,7 @@ function computeDimensions(
   const op = node.op
   const args = node.args ?? []
 
-  const argResults = args.map((arg) =>
-    checkDimensionsMemo(arg, unitBindings, coordinateBindings, memo),
-  )
+  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo))
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
   // `get(i)` is the i-th operand's dimension, or `null` when indeterminate.
@@ -487,50 +482,6 @@ function computeDimensions(
       // no real coverage.
       if (timeDims === undefined) return unknown()
       return finish(divideUnits(operand, timeDims))
-    }
-
-    case 'grad':
-    case 'div':
-    case 'laplacian': {
-      // Spatial derivative: operand dimensions divided by the spatial
-      // coordinate's declared units. The coordinate is identified by `node.dim`
-      // and resolved against the enclosing model's coordinate table.
-      //
-      // NO METRE FALLBACK. When there is no coordinate table (a reaction
-      // system's constraint equations), or `dim` names nothing in it (an
-      // index-set axis rather than a declared coordinate variable), or `dim` is
-      // absent entirely, the coordinate's dimension is simply NOT KNOWN — and
-      // the honest answer is INDETERMINATE. The old code invented a metre
-      // denominator instead. That is a FABRICATION: it asserts a dimension the
-      // file never declared, and under the hard-error severity policy a
-      // fabricated dimension becomes a FALSE REJECTION the moment the model's
-      // coordinates are not metres (a lat/lon grid, a nondimensionalized
-      // channel, a pressure coordinate). Go returns indeterminate here; so do
-      // we.
-      const operand = get(0)
-      if (operand === null) return unknown()
-      const dimName = node.dim
-      if (!dimName || !coordinateBindings) return unknown()
-      const coordDims = coordinateBindings.get(dimName)
-      if (!coordDims) return unknown()
-      if (isDimensionless(coordDims)) {
-        // The coordinate IS declared, and declared with no units. Dividing by a
-        // dimensionless coordinate would silently return the operand's own
-        // dimension, quietly claiming ∂u/∂x has the same units as u. That is a
-        // provable defect in the file, not a limit of the analysis.
-        warn(
-          `Gradient operator applied to variable with incompatible spatial units: coordinate '${dimName}' has no declared units (unit_inconsistency)`,
-          'dimensional_mismatch',
-        )
-        return unknown()
-      }
-      // `laplacian` is the SECOND derivative (∂²u/∂x²), so it divides by the
-      // coordinate SQUARED; `grad` and `div` are first-order and divide once.
-      // Dividing only once for laplacian reported `nu*laplacian(u)` as m²/s²
-      // against an advection term of m/s² — a false mismatch in every
-      // Navier-Stokes fixture in the corpus.
-      const order = op === 'laplacian' ? 2 : 1
-      return finish(divideUnits(operand, powerUnit(coordDims, order)))
     }
 
     // ----------------------------------------------------------------------
@@ -741,12 +692,21 @@ function computeDimensions(
 
     default:
       // Structural / not-dimensionally-modelled ops (`index`, `fn`,
-      // `aggregate`, `const`, `makearray`, `table_lookup`, `arrayop`, ...).
-      // Their dimension is UNKNOWN, and saying so is the whole point: the
-      // previous `dimensionless()` fallback asserted a dimension these nodes do
-      // not have, which manufactured false mismatches all over the valid
-      // corpus. Go returns `nil, nil` here and skips the check; so do we. No
-      // diagnostic is emitted — an unmodelled op is not a defect.
+      // `aggregate`, `const`, `makearray`, `table_lookup`, `arrayop`, ...) AND
+      // every OPEN-TIER rewrite-target op — the spatial-calculus sugar
+      // `grad`/`div`/`laplacian`/`integral` and any user op such as
+      // `godunov_hamiltonian`. These sugar ops carry NO dimensional rule
+      // (esm-spec §4.2 / §4.8.3 "any other op"): their result dimension is
+      // UNDETERMINABLE until a discretization rule lowers them to a `D` stencil,
+      // so the honest answer is UNKNOWN and the enclosing check is SKIPPED
+      // (§4.8.4). They are resolved by the SAME machinery as any other
+      // rewrite-target op — no bespoke coordinate-divided gradient rule, no
+      // op-name special case. Inventing a dimension here (the old
+      // `dimensionless()` — or the removed grad-over-coordinate divide) asserts
+      // a dimension these nodes do not have, which manufactured false mismatches
+      // across the valid corpus and, under the hard-error severity policy, false
+      // rejections. Go returns `nil, nil` here and skips the check; so do we. No
+      // diagnostic is emitted — an unmodelled or unlowered op is not a defect.
       return unknown()
   }
 }
@@ -831,52 +791,43 @@ function checkAndReport(
 }
 
 /**
- * Build the coordinate → units table a model's `grad`/`div`/`laplacian` ops
- * resolve their `dim` against. Mirrors Julia's `_collect_coordinate_units`
- * (validate.jl): every declared model variable maps to its parsed units, and a
- * variable declared WITHOUT units maps to a dimensionless entry. `checkDimensions`
- * then flags a grad whose `dim` names a dimensionless (no-units) coordinate,
- * resolves one naming a coordinate WITH units, and — for a `dim` that is NOT a
- * declared variable (an index-set axis) — finds no entry and leaves the gradient
- * INDETERMINATE. Parameters live in `variables` (type `parameter`) so they are
- * covered by the same loop, matching Julia's `model.variables`.
+ * Emit an `unparseable_unit` finding for every model variable whose declared
+ * `units` string names no real unit.
+ *
+ * This is what remains of the old `buildCoordinateBindings` after the bespoke
+ * gradient-units rule was removed. `grad`/`div`/`laplacian` are ordinary
+ * open-tier rewrite-target ops with NO dimensional rule (esm-spec §4.2 / §4.8.3
+ * "any other op"), so there is no coordinate → units table for the checker to
+ * build any more — a spatial derivative's dimension is UNDETERMINABLE until it is
+ * lowered, and the checker simply reports UNKNOWN and skips (§4.8.4).
+ *
+ * Its one still-needed STRUCTURAL purpose survives: because the top-level binding
+ * pass ({@link addBinding}) walks only top-level `file.models` /
+ * `file.reaction_systems`, this per-COMPONENT pass — reached for every visited
+ * component INCLUDING inline subsystems (`forEachComponent(recurse:true)`) — is
+ * the only place an inline subsystem variable's unparseable declaration is
+ * caught. For a top-level model both passes raise the finding at the same JSON
+ * Pointer and {@link dedupeUnparseable} collapses the pair to one defect / one
+ * error. An unparseable unit is a defect in the FILE (a HARD ERROR — see
+ * {@link UnitWarning.code}). Parameters live in `variables` (type `parameter`)
+ * so they are covered by the same loop.
  */
-function buildCoordinateBindings(
+function reportUnparseableVariableUnits(
   model: Model,
   warnings: UnitWarning[],
   location: string,
-): Map<string, ParsedUnit> {
-  const coords = new Map<string, ParsedUnit>()
+): void {
   for (const [name, variable] of Object.entries(model.variables ?? {})) {
-    if (!variable.units) {
-      coords.set(name, dimensionless())
-      continue
-    }
-    const parsed = tryParseUnit(variable.units)
-    if (parsed === null) {
-      // Unparseable coordinate unit: leave it OUT of the table so its dimension
-      // stays UNKNOWN. A grad/div/laplacian naming it is then INDETERMINATE (the
-      // not-a-declared-coordinate path) instead of hitting the dimensionless
-      // entry that would raise a false unit_inconsistency.
-      //
-      // The declaration itself is still a defect in the file (`unparseable_unit`
-      // — a HARD ERROR). This pass also sees INLINE SUBSYSTEM variables, which
-      // `addBinding` never visits, so it is the only place their unparseable
-      // declarations are caught. For a top-level model both passes raise the
-      // finding at the same pointer, and `validateUnits` collapses the pair —
-      // one defect, one error.
-      warnings.push({
-        message: `Unit string '${variable.units}' is not a recognised unit`,
-        code: 'unparseable_unit',
-        location: `${location}/variables/${name}`,
-        variable: name,
-        units: variable.units,
-      })
-      continue
-    }
-    coords.set(name, parsed)
+    if (!variable.units) continue
+    if (tryParseUnit(variable.units) !== null) continue
+    warnings.push({
+      message: `Unit string '${variable.units}' is not a recognised unit`,
+      code: 'unparseable_unit',
+      location: `${location}/variables/${name}`,
+      variable: name,
+      units: variable.units,
+    })
   }
-  return coords
 }
 
 /**
@@ -902,13 +853,15 @@ function buildCoordinateBindings(
  * top-level reaction system's `constraint_equations` still resolve fully,
  * because that system's species/parameters ARE in the shared environment.
  *
- * SPATIAL COORDINATES: each model supplies `checkDimensions` a
- * `coordinateBindings` map built from its declared variables (see
- * {@link buildCoordinateBindings}), so `grad`/`div`/`laplacian` resolve their
- * `dim` against the model's own declarations (mirroring Julia's
- * `validate_model_gradient_units`). Reaction-system constraint equations get no
- * coordinate table (gradient-unit resolution is model-only in Julia), so a grad
- * there is INDETERMINATE — never silently divided by a fabricated metre.
+ * SPATIAL-CALCULUS SUGAR: `grad`/`div`/`laplacian` (and `integral`, and any user
+ * op) are ordinary open-tier rewrite-target ops with NO dimensional rule
+ * (esm-spec §4.2 / §4.8.3 "any other op"): their dimension is UNDETERMINABLE
+ * until a discretization rule lowers them to a `D` stencil, so `checkDimensions`
+ * reports UNKNOWN and skips the enclosing check (§4.8.4). There is no coordinate
+ * table and no op-name special case — the checker never divides an operand by a
+ * coordinate's units. Unparseable variable-unit DECLARATIONS are still a defect;
+ * {@link reportUnparseableVariableUnits} flags them per component (the only pass
+ * that sees inline-subsystem variables).
  */
 export function validateUnits(file: EsmFile): UnitWarning[] {
   const warnings: UnitWarning[] = []
@@ -986,13 +939,13 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       // mismatch-suppression.
       const bindings = bindingsForComponent(unitBindings, scopedName, component)
 
-      // Coordinate table for grad/div/laplacian — models only (a reaction
-      // system has no `variables`, so `undefined` here keeps the metre fallback
-      // for any grad in a constraint equation).
-      const coordinateBindings =
-        'variables' in component
-          ? buildCoordinateBindings(component, warnings, location)
-          : undefined
+      // Flag any unparseable variable-unit declarations in this component. For
+      // an INLINE SUBSYSTEM this is the only pass that sees them — the top-level
+      // binding loop above walks only top-level components — and
+      // `dedupeUnparseable` collapses the top-level overlap with `addBinding`.
+      if ('variables' in component) {
+        reportUnparseableVariableUnits(component, warnings, location)
+      }
 
       forEachEquation(component, (equation, index) => {
         // Report AT THE EQUATION, not at the enclosing component: the shared
@@ -1000,8 +953,8 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         // `/models/<M>/equations/<i>` (tests/invalid/expected_errors.json).
         const eqLocation = `${location}/${equationsKey}/${index}`
         checkAndReport(warnings, eqLocation, 'Error checking equation dimensions', () => {
-          const lhsResult = checkDimensions(equation.lhs, bindings, coordinateBindings)
-          const rhsResult = checkDimensions(equation.rhs, bindings, coordinateBindings)
+          const lhsResult = checkDimensions(equation.lhs, bindings)
+          const rhsResult = checkDimensions(equation.rhs, bindings)
           const diagnostics = [...lhsResult.diagnostics, ...rhsResult.diagnostics]
           const lhs = lhsResult.dimensions
           const rhs = rhsResult.dimensions
@@ -1016,11 +969,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
           // weaker — but still provable — time-ratio rule instead.
           const derivMessage = derivativeOfUndeclaredTime(equation.lhs, bindings)
             ? derivativeTimeMismatch(
-                checkDimensions(
-                  (equation.lhs as ExpressionNode).args[0],
-                  bindings,
-                  coordinateBindings,
-                ).dimensions,
+                checkDimensions((equation.lhs as ExpressionNode).args[0], bindings).dimensions,
                 rhs,
               )
             : null
@@ -1062,7 +1011,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               varLocation,
               'Error checking observed variable dimensions',
               () => {
-                const exprResult = checkDimensions(expression, bindings, coordinateBindings)
+                const exprResult = checkDimensions(expression, bindings)
                 const diagnostics = [...exprResult.diagnostics]
                 // Declared units are parsed fallibly. An unparseable declaration
                 // leaves the target dimension UNKNOWN, so the mismatch
@@ -1075,7 +1024,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                 // a `variables` entry, so its declaration has already been read —
                 // and its `unparseable_unit` finding already raised, at the
                 // precise `/variables/<v>/units` pointer — by `addBinding` and
-                // `buildCoordinateBindings`. Raising it a third time here (at the
+                // `reportUnparseableVariableUnits`. Raising it a third time here (at the
                 // coarser `/variables/<v>` pointer, which the dedupe cannot match
                 // against the other two) would turn one bad declaration into
                 // multiple structural errors.
@@ -1108,13 +1057,13 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
  * Collapse duplicate `unparseable_unit` findings.
  *
  * ONE unparseable declaration is ONE defect, but two passes can see it: the
- * top-level binding pass ({@link addBinding}) and the per-model coordinate pass
- * ({@link buildCoordinateBindings}) both read `model.variables`. Both are needed
- * — the binding pass alone misses inline subsystems, the coordinate pass alone
- * misses reaction-system species — so they overlap on top-level model variables
- * and raise the finding at the same JSON Pointer. Since `validate()` now
- * promotes this code to a structural error, an un-collapsed pair would surface
- * as two identical errors for one defect.
+ * top-level binding pass ({@link addBinding}) and the per-component pass
+ * ({@link reportUnparseableVariableUnits}) both read `model.variables`. Both are
+ * needed — the binding pass alone misses inline subsystems, the per-component
+ * pass alone misses reaction-system species — so they overlap on top-level model
+ * variables and raise the finding at the same JSON Pointer. Since `validate()`
+ * now promotes this code to a structural error, an un-collapsed pair would
+ * surface as two identical errors for one defect.
  *
  * Only `unparseable_unit` is deduped, and the key is the LOCATION alone - the
  * `/.../variables/<v>` pointer, which names the one declaration at fault. Other
