@@ -273,9 +273,12 @@ end
 # key their per-dim fold class (in-range / clamp-low / clamp-high / wrap count),
 # so a clamp/wrap transition of a const gather also produces a cut — within each
 # resulting segment the resolved const index is affine again.
-function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
-                     var_map, param_sym_set, reg_funcs,
-                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
+# Region signature (`bkey`) + its cached branch template — the part
+# `_process_affine_box!` needs. Split out of `_cell_ckey!` (perf) so the per-box
+# call skips the scan-only gather-delta key it would otherwise BUILD AND DISCARD
+# (the state-recipe evals of lines below + a second `String`).
+function _cell_bkey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
+                     var_map, param_sym_set, reg_funcs)
     env = ctx_proto.idx_env
     empty!(env)
     _set_env!(env, idx_names, loop)
@@ -286,6 +289,14 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         branch = _build_branch_template(body, ctx_proto, var_map, param_sym_set, reg_funcs)
         sig.branch_cache[bkey] = branch
     end
+    return bkey, branch
+end
+function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
+                     var_map, param_sym_set, reg_funcs,
+                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
+    bkey, branch = _cell_bkey!(sig, loop, idx_names, body, ctx_proto,
+                               var_map, param_sym_set, reg_funcs)
+    env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
     _tmpl, recipes, state_ks, _subcalls = branch
     # Only the STATE lanes feed the gather key; evaluate just those into a reused
     # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
@@ -546,20 +557,32 @@ end
 # kinds the box processor actually emits into a lane_repl (STATE_AFFINE, LOOP_IDX,
 # CONST_BOX); any other kind falls back to identity keying — safe (it can only
 # OVER-split, never merge two genuinely different descriptors).
+# ISBITS key (perf): a uniform `Tuple{UInt8,UInt64,Int,Int,Int,Int}` — `(tag, id,
+# a, b, c, d)` — instead of an allocated `String`. The leading `tag` disambiguates
+# the kinds (so e.g. a STATE_AFFINE and a LOOP_IDX with equal payload never
+# collide, exactly as the old "SA"/"LI" prefixes did), and the fixed shape means
+# `_acc_vn_key`'s per-ACCESS-node CSE key and `_lane_repl_key`'s per-lane key hash
+# with no per-node string materialization. Equality classes are identical to the
+# old strings: two descriptors map to the same tuple iff they mapped to the same
+# string.
 function _desc_key(d::_AccDesc)
     k = d.kind
-    k === _AK_STATE_AFFINE && return "SA$(d.delta)"
-    k === _AK_LOOP_IDX     && return "LI$(d.dim)"
-    k === _AK_CONST_BOX    && return "CB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
-    k === _AK_FORCING_BOX  && return "FB$(objectid(d.arr)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
-    k === _AK_STATE_TBL_BOX && return "ST$(objectid(d.conn)),$(d.s1),$(d.s2),$(d.s3),$(d.off)"
-    return "?$(objectid(d))"
+    k === _AK_STATE_AFFINE && return (0x1, UInt64(0), d.delta, 0, 0, 0)
+    k === _AK_LOOP_IDX     && return (0x2, UInt64(0), d.dim, 0, 0, 0)
+    k === _AK_CONST_BOX    && return (0x3, objectid(d.arr), d.s1, d.s2, d.s3, d.off)
+    k === _AK_FORCING_BOX  && return (0x4, objectid(d.arr), d.s1, d.s2, d.s3, d.off)
+    k === _AK_STATE_TBL_BOX && return (0x5, objectid(d.conn), d.s1, d.s2, d.s3, d.off)
+    return (0xff, objectid(d), 0, 0, 0, 0)
 end
 function _lane_repl_key(lane_repl)
     io = IOBuffer()
     for r in lane_repl
-        r isa _LitRepl ? print(io, 'L', r.v, ';') :
-                         print(io, 'A', _desc_key((r::_AccRepl).desc), ';')
+        if r isa _LitRepl
+            print(io, 'L', r.v, ';')
+        else
+            t = _desc_key((r::_AccRepl).desc)
+            print(io, 'A', t[1], ',', t[2], ',', t[3], ',', t[4], ',', t[5], ',', t[6], ';')
+        end
     end
     return String(take!(io))
 end
@@ -726,8 +749,8 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     rep = Int[first(box[d]) for d in 1:D]
     thin = Bool[length(box[d]) == 1 for d in 1:D]
     corners = _box_corners(box)
-    bkey, _ckey, branch = _cell_ckey!(sig, rep, idx_names, body, ctx_proto,
-                                      var_map, param_sym_set, reg_funcs)
+    bkey, branch = _cell_bkey!(sig, rep, idx_names, body, ctx_proto,
+                               var_map, param_sym_set, reg_funcs)
     tmpl, recipes, _state_ks, subcalls = branch
 
     # verify the output slot map on this box against var_map (catches a bad omap)

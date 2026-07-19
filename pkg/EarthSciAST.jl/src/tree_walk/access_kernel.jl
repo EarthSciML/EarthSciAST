@@ -750,7 +750,6 @@ end
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
     key_to_vn = Dict{Any,Int}()
-    vn_of = IdDict{_Node,Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
     # exactly what earns a CSE slot — collapsing to distinct-node visits would
@@ -762,19 +761,30 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # multiplicities parent→child in reverse postorder and tally each unique
     # node's multiplicity into its value number — identical totals to the full
     # path enumeration, O(nodes + edges).
+    #
+    # DENSE-POSITION KEYING (perf): number every UNIQUE node with a dense
+    # postorder position `pos_of[n] ∈ 1:P` (ONE identity dict, built once), so the
+    # value-number, path-multiplicity, and rewrite passes below index plain
+    # `Vector`s by position instead of hashing each freshly-lowered `_Node`
+    # through a SEPARATE `IdDict` per pass — `IdDict` get/set over these spines was
+    # the build's top self-time. Entry-marking + `order` are byte-identical to the
+    # prior `seen`-set walk, so vn/mult/slot decisions are unchanged.
     order = _Node[]
-    seen = IdDict{_Node,Nothing}()
+    pos_of = IdDict{_Node,Int}()
     function collect_postorder(n::_Node)
-        haskey(seen, n) && return
-        seen[n] = nothing
+        haskey(pos_of, n) && return
+        pos_of[n] = 0                  # mark in-progress (entry-marked, as prior `seen`)
         for c in n.children
             collect_postorder(c)
         end
         push!(order, n)
+        pos_of[n] = length(order)      # final dense position (spine ends up == P)
     end
     collect_postorder(spine)
-    for n in order          # postorder ⇒ children already numbered
-        childvns = Int[vn_of[c] for c in n.children]
+    P = length(order)
+    vn_by_pos = Vector{Int}(undef, P)
+    for (p, n) in enumerate(order)    # postorder ⇒ children already numbered
+        childvns = Int[vn_by_pos[pos_of[c]] for c in n.children]
         key = _acc_vn_key(n, childvns, acc)
         vn = get(key_to_vn, key, 0)
         if vn == 0
@@ -787,20 +797,19 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
                   false                       # _NK_REDUCE excluded upstream; be safe
             push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
         end
-        vn_of[n] = vn
+        vn_by_pos[p] = vn
     end
-    mult = IdDict{_Node,Int}()
-    mult[spine] = 1
-    for i in length(order):-1:1    # reverse postorder = parents before children
-        n = order[i]
-        m = get(mult, n, 0)
-        for c in n.children
-            mult[c] = _sat_add(get(mult, c, 0), m)
+    mult_by_pos = zeros(Int, P)
+    mult_by_pos[pos_of[spine]] = 1     # spine is the last postorder node
+    for i in P:-1:1                    # reverse postorder = parents before children
+        m = mult_by_pos[i]
+        for c in order[i].children
+            pc = pos_of[c]
+            mult_by_pos[pc] = _sat_add(mult_by_pos[pc], m)
         end
     end
-    for n in order
-        vn = vn_of[n]
-        counts[vn] = _sat_add(counts[vn], get(mult, n, 0))
+    for p in 1:P
+        counts[vn_by_pos[p]] = _sat_add(counts[vn_by_pos[p]], mult_by_pos[p])
     end
     # Two-tier slot assignment, in value-number order (a child's vn is always below
     # its parent's, so each tier's recipes end up dependency-ordered): every
@@ -823,11 +832,12 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # node — without the memo the per-path rebuild re-inflated a shared spine
     # into an exponentially large tree (ESS-0hh). Values are unchanged: the
     # runner evaluates the same ops on the same inputs either way.
-    rw_memo = IdDict{_Node,_Node}()
+    rw_cache = Vector{Union{Nothing,_Node}}(nothing, P)
     function rw(n::_Node)
-        cached = get(rw_memo, n, nothing)
+        p = pos_of[n]
+        cached = rw_cache[p]
         cached === nothing || return cached
-        vn = vn_of[n]
+        vn = vn_by_pos[p]
         s = get(inv_slot, vn, 0)
         result = if s != 0
             _mknode(kind=_NK_CACHED, idx=s, payload=inv_scratch)
@@ -843,7 +853,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
                         children=_Node[rw(c) for c in n.children])
             end
         end
-        rw_memo[n] = result
+        rw_cache[p] = result
         return result
     end
     _recipe(vn) = (r = rep[vn];
