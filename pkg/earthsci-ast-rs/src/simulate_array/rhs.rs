@@ -370,7 +370,7 @@ pub(super) fn materialize_observeds_append(
                     forcing,
                 };
                 let arr = match eval(body, &mut ctx) {
-                    Value::Array(a) => a,
+                    Value::Array(a) => *a,
                     Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
                 };
                 dst.insert(var.clone(), arr);

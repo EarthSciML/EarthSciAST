@@ -61,8 +61,7 @@
     clippy::too_many_arguments,
     clippy::type_complexity,
     clippy::collapsible_if,
-    clippy::needless_range_loop,
-    clippy::large_enum_variant
+    clippy::needless_range_loop
 )]
 
 mod compile;
@@ -144,7 +143,14 @@ type ValVec = SmallVec<[Value; 4]>;
 #[derive(Debug, Clone)]
 pub enum Value {
     Scalar(f64),
-    Array(ArrayD<f64>),
+    /// Boxed so the whole-array payload lives on the heap and `Value` stays
+    /// ~16 bytes: the per-cell oracle moves a `Value` at every AST node of
+    /// every grid cell, and the vast majority are `Scalar`s — an unboxed
+    /// `ArrayD` (~64 B) would make every one of those scalar moves a large
+    /// memcpy (knot #6). Constructing an `Array` now heap-allocates, but the
+    /// hot zero-allocation RHS paths (scalar ODE, vectorized whole-array) do
+    /// not construct per-cell `Array` values, so they are unaffected.
+    Array(Box<ArrayD<f64>>),
 }
 
 impl Value {
