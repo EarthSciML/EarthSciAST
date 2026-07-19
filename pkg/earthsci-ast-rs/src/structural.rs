@@ -904,6 +904,12 @@ fn known_physical_constants() -> &'static [(&'static str, &'static str, &'static
     ]
 }
 
+/// Message pinned for a physical-constant dimensional error
+/// (`tests/invalid/expected_errors.json`). Named so the same string drives
+/// both the emitted record and the supersession filter below.
+const PHYSICAL_CONSTANT_UNIT_MESSAGE: &str =
+    "Physical constant used with incorrect dimensional analysis";
+
 /// Flag parameters whose name matches a well-known physical constant but whose
 /// declared units are dimensionally incompatible with the canonical form
 /// (e.g., `R` declared as `kcal/mol` — missing temperature — instead of
@@ -951,10 +957,23 @@ fn check_physical_constant_units(
             }
         }
         let target = usage_site.unwrap_or(constant_name);
+        let target_path = format!("/models/{model_name}/variables/{target}");
+        // A wrong-dimensioned physical constant ALSO makes the observed
+        // expression that uses it fail the generic expression-dimension check
+        // (`record_unit_findings`), which already pushed a second
+        // `unit_inconsistency` record at this very path. This physical-constant
+        // diagnostic is the root-cause report and the single record the shared
+        // corpus pins (tests/invalid/expected_errors.json), so it supersedes
+        // the redundant generic one — each (code, path) is emitted exactly once.
+        errors.retain(|e| {
+            !(matches!(e.code, StructuralErrorCode::UnitInconsistency)
+                && e.path == target_path
+                && e.message != PHYSICAL_CONSTANT_UNIT_MESSAGE)
+        });
         errors.push(StructuralError {
-            path: format!("/models/{model_name}/variables/{target}"),
+            path: target_path,
             code: StructuralErrorCode::UnitInconsistency,
-            message: "Physical constant used with incorrect dimensional analysis".to_string(),
+            message: PHYSICAL_CONSTANT_UNIT_MESSAGE.to_string(),
             details: serde_json::json!({
                 "constant_name": constant_name,
                 "constant_description": description,
