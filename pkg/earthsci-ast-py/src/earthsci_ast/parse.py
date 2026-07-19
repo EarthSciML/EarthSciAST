@@ -151,13 +151,16 @@ def _count_top_level_systems(parsed) -> int:
     )
 
 
-# Current library version for compatibility checking. Bumped to 0.8.0 with the
-# clean break that removed the bespoke spatial-grid / discretization / regrid
-# machinery in favour of `aggregate` Functional Aggregate Query nodes; legacy
-# loader files are now rejected by the schema's `additionalProperties: false`.
-# Prior steps: 0.4.0 added the sampled-function-tables block + `table_lookup`;
-# 0.5.0 widened `plots.y`; 0.6.0 added the `integral` AST op.
-_CURRENT_VERSION = (0, 8, 0)
+# Current library version for compatibility checking. Kept in lockstep with the
+# package version (pyproject `version`) and the schema banner. Bumped to 0.9.0
+# with the reference-preserving (Option B) template round-trip: template
+# references survive load and parse->emit (esm-spec §9.6.4). 0.8.0 was the clean
+# break that removed the bespoke spatial-grid / discretization / regrid machinery
+# in favour of `aggregate` Functional Aggregate Query nodes; legacy loader files
+# are rejected by the schema's `additionalProperties: false`. Prior steps: 0.4.0
+# added the sampled-function-tables block + `table_lookup`; 0.5.0 widened
+# `plots.y`; 0.6.0 added the `integral` AST op.
+_CURRENT_VERSION = (0, 9, 0)
 
 
 def _check_version_compatibility(version_string: str) -> None:
