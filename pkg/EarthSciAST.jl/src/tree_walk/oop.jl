@@ -117,6 +117,15 @@ const _oop_value_type = _rhs_value_type
 # own, and an equivalent detector was equally worthless there. Same answer, both worlds.)
 @inline _oop_gather(u, slots::Vector{Int}) = @inbounds u[slots]
 
+# One SCALAR element of a live forcing buffer (an `_NK_PARAM_GATHER` node or an
+# invariant `_AK_ARR_FIXED` descriptor). A seam for the same reason
+# `_oop_read_state` is: on host it is the indexed load it reads as; a tracing
+# backend must replace it, because scalar indexing of a traced array is rejected
+# outright. Bounded exactly like `_oop_read_state` — O(#scalar forcing reads),
+# never O(#cells); a forcing LANE goes through `_oop_gather`, which is a
+# whole-array op and needs no method.
+@inline _oop_read_forcing(buf, i::Int) = @inbounds buf[i]
+
 # ---- Output-container seams (GPU / Reactant) --------------------------------
 #
 # The three places the RHS BUILDS its output, named for the same reason
@@ -443,6 +452,49 @@ function _oop_interp_bilinear_lanes(h::_InterpBilinearSpec, x, y, ::Type{T}) whe
     return row_j .+ wy .* (row_jp1 .- row_j)
 end
 
+# ---- Live forcing buffers as ARGUMENTS (B2) ----------------------------------
+#
+# The compiled IR reaches a live forcing buffer (`param_arrays` entries and
+# DiscreteMaterializer caches, both registered in the build's `pgather` dict) by
+# ALIAS: an `_NK_PARAM_GATHER` payload and the `arr` field of a forcing acc
+# descriptor (`_AK_ARR_FIXED` / `_AK_FORCING_BOX` / `_AK_ARR_TBL_BOX`) are the
+# same host `Vector{Float64}` the caller bound. On host that aliasing IS the
+# live-refresh channel. Under an XLA trace it is the silent-staleness bug: a
+# captured host array is a trace-time CONSTANT.
+#
+# So the out-of-place RHS carries the buffers through its ARGUMENT LIST instead:
+# the explicit form is `rhs(u, p, t, buffers)`, where `buffers` is a NamedTuple
+# of arrays in a STABLE order (buffer names sorted; see `_make_rhs_oop`). At each
+# read site the walker swaps the node's aliased host array for the aligned entry
+# of the `buffers` argument via `_oop_forcing_slab` — an identity (`===`) scan
+# over `hostkeys`, the host buffers in the container's own order (built once per
+# RHS). A LINEAR scan, not an `IdDict`, and that is load-bearing: the scan runs
+# per forcing read per call, O(#buffers) with #buffers the handful of forcing
+# VARIABLES (never cells) — and an `IdDict` capture is untraceable (its
+# `Memory{Any}` hash table throws inside Reactant's closure walk), which would
+# break tracing for every model, forcing or not. A backend passes device arrays
+# (`ConcreteRArray`s) in `buffers`, and an in-place `copyto!` into those SAME
+# arrays between calls is a real input update the compiled program sees
+# (measured; see ext/EarthSciASTReactantExt.jl).
+#
+# The host wrapper (`_OopRHS`) forwards the build's own host buffers, so
+# `f(u, p, t)` still reads the exact aliased storage it always did — the
+# fallback arm in `_oop_forcing_slab` (an arr absent from `hostkeys`, e.g. a
+# hand-built test kernel) reads the host array directly, the pre-B2 behavior.
+struct _OopForcing{B}
+    bufs::B                             # this CALL's buffer container (host or traced)
+    hostkeys::Vector{Vector{Float64}}   # host buffer identities, aligned with `bufs`
+end
+const _OOP_NO_FORCING = _OopForcing((;), Vector{Float64}[])
+
+@inline function _oop_forcing_slab(fb::_OopForcing, arr::Vector{Float64})
+    ks = fb.hostkeys
+    @inbounds for j in eachindex(ks)
+        ks[j] === arr && return fb.bufs[j]
+    end
+    return arr
+end
+
 # ---- Scalar walker (`_Node`) ------------------------------------------------
 #
 # The generic twin of `_eval_node`. Type-stable in `T`: every leaf converts into the
@@ -454,7 +506,7 @@ end
 # subexpressions. `f!` reads the same slots out of a `Vector{Float64}` captured on
 # the node; here they come from a `Vector{T}` allocated per call, which is what makes
 # CSE survive differentiation at all.
-function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
+function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     k = n.kind
     if k === _NK_LITERAL
         return convert(T, n.literal)
@@ -465,22 +517,26 @@ function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
     elseif k === _NK_TIME
         return convert(T, t)
     elseif k === _NK_PARAM_GATHER
-        # Captured live forcing buffer (ess-14f.3) — data, so it enters as a
-        # constant of the value type (zero derivative), exactly as it should.
-        return convert(T, @inbounds (n.payload::Vector{Float64})[n.idx])
+        # Live forcing buffer (ess-14f.3) — data, so it enters as a constant of
+        # the value type (zero derivative), exactly as it should. Read through
+        # the `buffers` ARGUMENT (`_oop_forcing_slab` swaps the node's aliased
+        # host array for the aligned argument entry), so a tracing backend sees
+        # a real input, not a baked-in trace-time constant.
+        return convert(T, _oop_read_forcing(
+            _oop_forcing_slab(fb, n.payload::Vector{Float64}), n.idx))
     elseif k === _NK_CACHED
         return @inbounds cache[n.idx]
     elseif k === _NK_CONTRACTION
-        return _oop_contraction(n, u, p, t, cache)
+        return _oop_contraction(n, u, p, t, cache, fb)
     else
-        return _oop_eval_op(n, u, p, t, cache)
+        return _oop_eval_op(n, u, p, t, cache, fb)
     end
 end
 
-function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
-    n.op === :fn && return _oop_fn(n, u, p, t, cache)
+function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+    n.op === :fn && return _oop_fn(n, u, p, t, cache, fb)
     if n.op === :^ || n.op === :pow
-        return _oop_pow(n.op, n.children, u, p, t, cache)
+        return _oop_pow(n.op, n.children, u, p, t, cache, fb)
     end
     # A GUARD MUST GUARD. `ifelse`/`and`/`or` are lazy on the in-place scalar walker
     # (`_eval_node_op`), and this emitter promises a Float64 `:oop` run is bit-
@@ -494,23 +550,23 @@ function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
     ch = n.children
     if n.op === :ifelse
         _expect_arity_n(n.op, ch, 3)
-        return _oop_eval(ch[1], u, p, t, cache) != 0 ?
-               _oop_eval(ch[2], u, p, t, cache) :
-               _oop_eval(ch[3], u, p, t, cache)
+        return _oop_eval(ch[1], u, p, t, cache, fb) != 0 ?
+               _oop_eval(ch[2], u, p, t, cache, fb) :
+               _oop_eval(ch[3], u, p, t, cache, fb)
     elseif n.op === :and
         @inbounds for i in eachindex(ch)
-            _oop_eval(ch[i], u, p, t, cache) == 0 && return zero(T)
+            _oop_eval(ch[i], u, p, t, cache, fb) == 0 && return zero(T)
         end
         return one(T)
     elseif n.op === :or
         @inbounds for i in eachindex(ch)
-            _oop_eval(ch[i], u, p, t, cache) != 0 && return one(T)
+            _oop_eval(ch[i], u, p, t, cache, fb) != 0 && return one(T)
         end
         return zero(T)
     end
     c = Vector{T}(undef, length(ch))
     @inbounds for i in eachindex(ch)
-        c[i] = _oop_eval(ch[i], u, p, t, cache)
+        c[i] = _oop_eval(ch[i], u, p, t, cache, fb)
     end
     return _oop_op(n.op, c, T)
 end
@@ -528,35 +584,35 @@ end
 # Both branches return the value type (`T^Float64` and `T^T` alike), so this stays
 # type-stable, and at Float64 it is the same `^` call the in-place ladder makes.
 @inline function _oop_pow(op::Symbol, ch::Vector{_Node}, u, p, t,
-                          cache::AbstractVector{T})::T where {T}
+                          cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     _expect_arity_n(op, ch, 2)
-    base = _oop_eval(ch[1], u, p, t, cache)
+    base = _oop_eval(ch[1], u, p, t, cache, fb)
     e = ch[2]
     return e.kind === _NK_LITERAL ? base^e.literal :
-           base^_oop_eval(e, u, p, t, cache)
+           base^_oop_eval(e, u, p, t, cache, fb)
 end
 
 # Semiring fold, seeded from the 0̄ identity baked on the node — same order as
 # `_eval_contraction`, so the sum is bit-identical at Float64.
-function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
+function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     op = n.op
     ch = n.children
     s = convert(T, n.literal)
     if op === :+
         @inbounds for k in eachindex(ch)
-            s += _oop_eval(ch[k], u, p, t, cache)
+            s += _oop_eval(ch[k], u, p, t, cache, fb)
         end
     elseif op === :*
         @inbounds for k in eachindex(ch)
-            s *= _oop_eval(ch[k], u, p, t, cache)
+            s *= _oop_eval(ch[k], u, p, t, cache, fb)
         end
     elseif op === :max
         @inbounds for k in eachindex(ch)
-            s = max(s, _oop_eval(ch[k], u, p, t, cache))
+            s = max(s, _oop_eval(ch[k], u, p, t, cache, fb))
         end
     else  # :min
         @inbounds for k in eachindex(ch)
-            s = min(s, _oop_eval(ch[k], u, p, t, cache))
+            s = min(s, _oop_eval(ch[k], u, p, t, cache, fb))
         end
     end
     return s
@@ -568,18 +624,18 @@ end
 # registry or its eltype-generic twin on the compile-time `T` — so a `Dual` walk
 # differentiates `datetime.julian_day` (a real function of `t`, which IS a
 # differentiation variable for a Rosenbrock ∂f/∂t term) instead of throwing on it.
-function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T})::T where {T}
+function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     pl = n.payload
     c = n.children
     if pl isa Tuple{String,_InterpLinearSpec}
-        return _oop_interp_linear(pl[2], _oop_eval(c[1], u, p, t, cache), T)
+        return _oop_interp_linear(pl[2], _oop_eval(c[1], u, p, t, cache, fb), T)
     elseif pl isa Tuple{String,_InterpBilinearSpec}
-        return _oop_interp_bilinear(pl[2], _oop_eval(c[1], u, p, t, cache),
-                                    _oop_eval(c[2], u, p, t, cache), T)
+        return _oop_interp_bilinear(pl[2], _oop_eval(c[1], u, p, t, cache, fb),
+                                    _oop_eval(c[2], u, p, t, cache, fb), T)
     elseif pl isa Tuple{String,_InterpSearchsortedSpec}
-        return _oop_interp_searchsorted(pl[2], _oop_eval(c[1], u, p, t, cache), T)
+        return _oop_interp_searchsorted(pl[2], _oop_eval(c[1], u, p, t, cache, fb), T)
     elseif pl isa Tuple{String,Nothing}
-        args = Any[_oop_eval(ci, u, p, t, cache) for ci in c]
+        args = Any[_oop_eval(ci, u, p, t, cache, fb) for ci in c]
         return convert(T, _eval_closed_fn(pl[1], args, T))
     end
     throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
@@ -610,22 +666,31 @@ end
 # The build still REPORTS `n_const_slots` / `n_dynamic_slots` for an `:oop` build; the
 # classification is a property of the prelude, not of the emitter.
 # ---------------------------------------------------------------------------
-# J5 — REFUSE TO BE XLA-COMPILED WHILE A LIVE FORCING BUFFER IS BOUND.
+# J5 — REFUSE TO BE XLA-COMPILED WHILE A LIVE FORCING BUFFER IS A CAPTURE.
 #
-# A `_VK_PGATHER`/`_NK_PARAM_GATHER` payload is an ALIASED HOST `Vector{Float64}`
-# — the same object the caller passed through `param_arrays`, so that a
-# discrete-cadence refresh callback's in-place `buffer .= …` is seen by the RHS
-# with zero reallocation. That aliasing is the whole point of the channel, and it
-# is exactly what an XLA tracer cannot honour: to the tracer the host vector is a
-# CONSTANT, so `@compile` bakes the buffer's compile-time contents into the
+# A `_NK_PARAM_GATHER` payload is an ALIASED HOST `Vector{Float64}` — the same
+# object the caller passed through `param_arrays`, so that a discrete-cadence
+# refresh callback's in-place `buffer .= …` is seen by the RHS with zero
+# reallocation. That aliasing is the whole point of the channel, and it is
+# exactly what an XLA tracer cannot honour: to the tracer a captured host vector
+# is a CONSTANT, so `@compile` bakes the buffer's compile-time contents into the
 # program and the refresh is never seen again.
 #
 # The failure mode is the dangerous one — not an exception, not a NaN, but THE
 # SAME NUMBERS FOREVER, off by the full magnitude of every forcing update. A
 # silently wrong answer is worse than no answer, so this refuses.
 #
+# The SUPPORTED tracing route (B2) is the explicit-buffers form: `rhs_with_buffers`
+# hands out `rhs(u, p, t, buffers)`, and a trace that passes TRACED buffers (the
+# `buffers` argument arrives Reactant-rooted) is legal — every forcing read then
+# lands on a real XLA input, and `copyto!` into those same device arrays at each
+# cadence boundary IS seen by the compiled program. The refusal therefore fires
+# only when a trace reaches the walk while the buffers are still HOST arrays —
+# i.e. the 3-arg wrapper (which forwards its captured host buffers) or an
+# explicit call that passed host buffers under tracing.
+#
 # The refusal fires during the TRACE (i.e. inside `@compile`), not at build time,
-# because build time cannot distinguish the two consumers: the interpreted
+# because build time cannot distinguish the consumers: the interpreted
 # out-of-place closure over a `param_arrays` model is perfectly correct and DOES
 # track the refresh — `reactant_oop_test.jl` asserts exactly that — so refusing at
 # `build_evaluator` would reject a working configuration.
@@ -636,6 +701,12 @@ end
 # ---------------------------------------------------------------------------
 _reactant_rooted(x) = nameof(Base.moduleroot(parentmodule(typeof(x)))) === :Reactant
 _is_traced(u, p, t) = _reactant_rooted(u) || _reactant_rooted(t)
+
+# Are the buffers this call carries real trace INPUTS? True iff every entry of
+# the `buffers` argument is Reactant-rooted (a `TracedRArray` during a trace).
+# `all` over an empty container is `true`, but the guard only consults this when
+# `live_forcing` holds, and live forcing implies a non-empty buffers container.
+_forcing_traced(bufs) = all(_reactant_rooted, values(bufs))
 
 # Does this compiled IR read a live forcing buffer anywhere? A `_VK_INVARIANT`
 # carries a scalar `_Node` in its payload, so the scalar side is walked too — a
@@ -1167,7 +1238,7 @@ const _OOP_NO_SUB = _OopSubRT(_AccKernel[], _OopAccPlan[], Vector{Any}[], Vector
 # walk — a `_NK_SUBCALL` looks its sub up there, never in the descending `K`/`plan`).
 function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                         invvals::Vector{Any}, cellvals::Vector{Any},
-                        sub::_OopSubRT, ::Type{T}) where {T}
+                        sub::_OopSubRT, fb::_OopForcing, ::Type{T}) where {T}
     k = nd.kind
     if k === _NK_ACCESS
         a = K.acc[nd.idx]
@@ -1190,11 +1261,15 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         elseif ak === _AK_SCALAR
             return convert(T, a.v)
         elseif ak === _AK_ARR_FIXED
-            # LIVE forcing (invariant slot): re-read per call — data, zero derivative.
-            return convert(T, @inbounds a.arr[a.idx])
+            # LIVE forcing (invariant slot): re-read per call — data, zero
+            # derivative. Through the `buffers` argument (see `_OopForcing`), so
+            # a trace reads a real input; the seam makes the scalar read legal.
+            return convert(T, _oop_read_forcing(_oop_forcing_slab(fb, a.arr), a.idx))
         elseif ak === _AK_FORCING_BOX || ak === _AK_ARR_TBL_BOX
-            # LIVE forcing lanes: re-gathered from the aliased buffer per call.
-            return @inbounds a.arr[plan.forc[nd.idx]]
+            # LIVE forcing lanes: re-gathered per call from the `buffers`
+            # argument — one whole-array gather at host-frozen indices, which
+            # traces as-is (the indices are constants; the buffer is an input).
+            return _oop_gather(_oop_forcing_slab(fb, a.arr), plan.forc[nd.idx])
         else
             # CONST_AFFINE / CONST_BOX / LOOP_IDX / CONST_CELL: frozen lane data.
             return plan.consts[nd.idx]
@@ -1221,9 +1296,9 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         cv = @inbounds sub.cellvals[j]
         rs = S.cse.recipes
         @inbounds for i in eachindex(rs)
-            cv[i] = _oop_eval_acck(rs[i], u, p, t, S, Sp, iv, cv, sub, T)
+            cv[i] = _oop_eval_acck(rs[i], u, p, t, S, Sp, iv, cv, sub, fb, T)
         end
-        return _oop_eval_acck(S.spine, u, p, t, S, Sp, iv, cv, sub, T)
+        return _oop_eval_acck(S.spine, u, p, t, S, Sp, iv, cv, sub, fb, T)
     elseif k === _NK_REDUCE
         # Variable-valence sum reduction, CSR-segmented (gordian reduce-vectorize):
         # evaluate the body ONCE over the flat E-lane buffer (its only state access
@@ -1231,7 +1306,7 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         # SEQUENTIALLY in child (CSR) order, seeded from `zerobar` — bit-identical
         # to `_eval_acc`'s `s = zerobar; for m in 1:cnt; s += body(c,m)`.
         Ep = @inbounds plan.red_plan[1]
-        bodyE = _oop_eval_acck(nd.children[1], u, p, t, K, Ep, invvals, cellvals, sub, T)
+        bodyE = _oop_eval_acck(nd.children[1], u, p, t, K, Ep, invvals, cellvals, sub, fb, T)
         return _oop_reduce_fold(bodyE, plan.red_seg, K.zerobar, T)
     elseif k === _NK_CONTRACTION
         # Fixed-width ⊕-fold over lane vectors, seeded from the 0̄ identity —
@@ -1242,19 +1317,21 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         res::Any = nd.literal     # scalar seed; the first broadcast promotes it
         if op === :+
             for i in eachindex(ch)
-                res = res .+ _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T)
+                res = res .+ _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
             end
         elseif op === :*
             for i in eachindex(ch)
-                res = res .* _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T)
+                res = res .* _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
             end
         elseif op === :max
             for i in eachindex(ch)
-                res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T))
+                res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan,
+                                               invvals, cellvals, sub, fb, T))
             end
         else  # :min
             for i in eachindex(ch)
-                res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T))
+                res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan,
+                                               invvals, cellvals, sub, fb, T))
             end
         end
         return res
@@ -1262,17 +1339,17 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         op = nd.op
         ch = nd.children
         if op === :fn
-            return _oop_acck_fn(nd, u, p, t, K, plan, invvals, cellvals, sub, T)
+            return _oop_acck_fn(nd, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
         elseif (op === :^ || op === :pow) && length(ch) == 2
             # A literal exponent stays a literal — see `_oop_pow`.
-            base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, sub, T)
+            base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
             e = ch[2]
             return e.kind === _NK_LITERAL ? base .^ e.literal :
-                   base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, sub, T)
+                   base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
         end
         c = Vector{Any}(undef, length(ch))
         for i in eachindex(ch)
-            c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, T)
+            c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
         end
         return _oop_op(op, c, T)
     end
@@ -1280,10 +1357,10 @@ end
 
 function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                       invvals::Vector{Any}, cellvals::Vector{Any},
-                      sub::_OopSubRT, ::Type{T}) where {T}
+                      sub::_OopSubRT, fb::_OopForcing, ::Type{T}) where {T}
     pl = nd.payload
     ch = nd.children
-    ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, sub, T)
+    ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
     if pl isa Tuple{String,_InterpLinearSpec}
         return _oop_interp_linear_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,_InterpBilinearSpec}
@@ -1307,7 +1384,7 @@ end
 # then K's own CSE tiers in slot order (invariant scalars first), the spine over
 # whole lanes, and ONE scatter.
 function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
-                          ::Type{T}) where {T}
+                          ::Type{T}, fb::_OopForcing=_OOP_NO_FORCING) where {T}
     sub = _oop_build_subrt(plan)
     for j in eachindex(sub.subs)
         S = @inbounds sub.subs[j]
@@ -1315,7 +1392,7 @@ function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         iv = @inbounds sub.invvals[j]; cv = @inbounds sub.cellvals[j]
         ir = S.cse.inv_recipes
         @inbounds for i in eachindex(ir)
-            iv[i] = _oop_eval_acck(ir[i], u, p, t, S, Sp, iv, cv, sub, T)
+            iv[i] = _oop_eval_acck(ir[i], u, p, t, S, Sp, iv, cv, sub, fb, T)
         end
     end
     cse = K.cse
@@ -1323,13 +1400,13 @@ function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     cellvals = Vector{Any}(undef, length(cse.recipes))
     for i in eachindex(cse.inv_recipes)
         invvals[i] = _oop_eval_acck(cse.inv_recipes[i], u, p, t, K, plan,
-                                    invvals, cellvals, sub, T)
+                                    invvals, cellvals, sub, fb, T)
     end
     for i in eachindex(cse.recipes)
         cellvals[i] = _oop_eval_acck(cse.recipes[i], u, p, t, K, plan,
-                                     invvals, cellvals, sub, T)
+                                     invvals, cellvals, sub, fb, T)
     end
-    res = _oop_eval_acck(K.spine, u, p, t, K, plan, invvals, cellvals, sub, T)
+    res = _oop_eval_acck(K.spine, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
     return _oop_scatter(du, plan.out_slots, res)
 end
 
@@ -1347,42 +1424,119 @@ function _oop_build_subrt(plan::_OopAccPlan)
     return _OopSubRT(subs, plan.sub_plans, invvals, cellvals)
 end
 
+# ---- The RHS wrapper: buffers as arguments, arity preserved (B2) -------------
+#
+# `build_evaluator(model; form = :oop)` returns one of these in the `f!` slot.
+# It IS the backward-compatible 3-arg RHS — `f(u, p, t) -> du`, exactly the arity
+# SciML dispatches `ODEProblem` on, forwarding the build's own HOST buffers — and
+# it also CARRIES the explicit-buffers form a tracing backend compiles.
+#
+# Deliberately NO 4-arg call method on the wrapper itself: SciMLBase infers
+# in-place-ness from a 4-argument method (`f!(du, u, p, t)`), so adding one would
+# make `ODEProblem(f, …)` misread this out-of-place RHS as in-place. The explicit
+# form is handed out by `rhs_with_buffers` instead.
+struct _OopRHS{F,B} <: Function
+    rhs::F                          # rhs(u, p, t, buffers) -> du  (explicit form)
+    buffers::B                      # NamedTuple: name => aliased HOST buffer, stable order
+    buffer_index::Dict{String,Int}  # buffer name -> position in `buffers`
+end
+(f::_OopRHS)(u, p, t) = f.rhs(u, p, t, f.buffers)
+
+"""
+    rhs_with_buffers(f) -> rhs
+
+The explicit-buffers form of an out-of-place RHS built by
+`build_evaluator(model; form = :oop)`: a function `rhs(u, p, t, buffers) -> du`
+whose LIVE FORCING BUFFERS (`param_arrays` entries and [`DiscreteMaterializer`](@ref)
+caches) arrive through the ARGUMENT LIST instead of being read off the compiled
+IR's captured host arrays. `buffers` must be a container aligned with
+[`forcing_buffers`](@ref)`(f)` — same length, same (stable, name-sorted) order;
+pass `forcing_buffers(f)` itself for host evaluation (that is exactly what
+calling `f(u, p, t)` does), or an aligned NamedTuple of device arrays
+(`Reactant.ConcreteRArray`s) when compiling with `@compile`. In the compiled
+program each buffer is a real XLA input, so an in-place `copyto!` into those
+same device arrays between calls — see [`sync_forcing!`](@ref) — IS observed on
+the next call: the discrete-cadence refresh model survives compilation with no
+retrace.
+"""
+rhs_with_buffers(f::_OopRHS) = f.rhs
+
+"""
+    forcing_buffers(f) -> NamedTuple
+
+The live forcing buffers of an out-of-place RHS from
+`build_evaluator(model; form = :oop)`, as a NamedTuple in a STABLE order (buffer
+names sorted): every `param_arrays` entry and every [`DiscreteMaterializer`](@ref)
+cache, each value the aliased flat host view of the exact array the build bound
+— NOT a copy, so a discrete-cadence refresh writing the original array is
+visible through this container. Position of a name is
+[`forcing_buffer_index`](@ref)`(f)[name]`. Empty for a model with no live
+forcing.
+"""
+forcing_buffers(f::_OopRHS) = f.buffers
+
+"""
+    forcing_buffer_index(f) -> Dict{String,Int}
+
+Name → position map for [`forcing_buffers`](@ref)`(f)`: `forcing_buffer_index(f)[name]`
+is the index of buffer `name` in the buffers container (and in any aligned
+container passed to [`rhs_with_buffers`](@ref)`(f)`). Treat as read-only.
+"""
+forcing_buffer_index(f::_OopRHS) = f.buffer_index
+
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        acc_kernels::AbstractVector{_AccKernel},
-                       n_states::Int)
+                       n_states::Int,
+                       pgather::AbstractDict=_EMPTY_PGATHER)
     n_cse = length(cse_prelude)
     # J5 covers BOTH IR families: the `_NK_PARAM_GATHER` scalar scan and the
     # acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`/`_AK_ARR_TBL_BOX`)
-    # — an affine build over live forcing must refuse a trace all the same.
+    # — an affine build over live forcing must refuse a host-buffer trace all
+    # the same.
     live_forcing = _has_live_forcing(cse_prelude, rhs_list) ||
                    any(_acc_has_live_forcing, acc_kernels)
     # Vectorized lane plans for the acc kernels (host index data, built once).
     acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
-    function f(u, p, t)
+    # The buffers container (B2): every live forcing buffer this build registered
+    # — raw `param_arrays` entries AND DiscreteMaterializer caches, both of which
+    # live in `pgather` by the time this runs — in a STABLE order (names sorted),
+    # as a NamedTuple of the aliased flat host views. `host_keys` carries the same
+    # arrays positionally: the walkers identity-match a node payload / acc
+    # descriptor against it to swap the captured array for the argument entry.
+    buf_names = sort!(String[String(k) for k in keys(pgather)])
+    host_bufs = NamedTuple{Tuple(Symbol(n) for n in buf_names)}(
+        Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
+    buffer_index = Dict{String,Int}(n => i for (i, n) in enumerate(buf_names))
+    host_keys = Vector{Float64}[(pgather[n]::_PGatherArray).flat for n in buf_names]
+    function rhs(u, p, t, buffers)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
-        if live_forcing && _is_traced(u, p, t)
+        if live_forcing && _is_traced(u, p, t) && !_forcing_traced(buffers)
             throw(TreeWalkError("E_TREEWALK_XLA_LIVE_FORCING",
                 "This model binds a live forcing buffer through `param_arrays`, and " *
-                "an XLA/Reactant tracer cannot honour it: the buffer is an aliased " *
-                "host array, which the tracer captures as a CONSTANT. `@compile` would " *
-                "bake in its compile-time contents and then silently ignore every " *
-                "in-place refresh a data-refresh callback performs — the same numbers " *
-                "forever, with no exception and no NaN. Either drop `param_arrays` and " *
+                "an XLA/Reactant tracer cannot honour a HOST buffer: the tracer " *
+                "captures it as a CONSTANT. `@compile` would bake in its compile-time " *
+                "contents and then silently ignore every in-place refresh a " *
+                "data-refresh callback performs — the same numbers forever, with no " *
+                "exception and no NaN. Either compile the explicit-buffers form " *
+                "(`rhs_with_buffers(f)`) passing the forcing buffers as traced " *
+                "arguments (`ConcreteRArray`s; refresh them with `copyto!` / " *
+                "`sync_forcing!` at each cadence boundary), or drop `param_arrays` and " *
                 "pass the forcing data as `const_arrays` (frozen, inlined — correct if " *
                 "the data never changes), or run the interpreted evaluator, which does " *
                 "track the refresh."))
         end
+        fb = _OopForcing(buffers, host_keys)
         T = _oop_value_type(u, p, t)
         cache = Vector{T}(undef, n_cse)
         @inbounds for s in 1:n_cse
-            cache[s] = _oop_eval(cse_prelude[s], u, p, t, cache)
+            cache[s] = _oop_eval(cse_prelude[s], u, p, t, cache, fb)
         end
 
         du = _oop_du_zeros(u, T, n_states)
         @inbounds for k in eachindex(rhs_list)
             slot, node = rhs_list[k]
-            du = _oop_store(du, slot, _oop_eval(node, u, p, t, cache))
+            du = _oop_store(du, slot, _oop_eval(node, u, p, t, cache, fb))
         end
 
         # Access kernels (the unified array IR), out of place. The vectorized form
@@ -1393,10 +1547,10 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         for j in eachindex(acc_kernels)
             plan = acc_plans[j]
             du = plan.vectorizable ?
-                 _oop_run_acc_vec(du, u, p, t, acc_kernels[j], plan, T) :
+                 _oop_run_acc_vec(du, u, p, t, acc_kernels[j], plan, T, fb) :
                  _oop_run_acc_kernel(du, u, p, t, acc_kernels[j], T)
         end
         return du
     end
-    return f
+    return _OopRHS(rhs, host_bufs, buffer_index)
 end

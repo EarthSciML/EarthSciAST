@@ -1737,7 +1737,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                   const_slots, dyn_slots)
     elseif form === :oop
-        _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states)
+        # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
+        # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
+        # (`_OopRHS` / `rhs_with_buffers`, B2) — the traceable binding.
+        _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
@@ -2368,7 +2371,12 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   IR in the same evaluation order, so a Float64 `:oop` call is
   bit-identical to `f!` — which is why the in-place tests use it as their
   oracle. SciML dispatches `ODEProblem` on RHS arity, so either drops into
-  `ODEProblem(f, u0, tspan, p)` unchanged.
+  `ODEProblem(f, u0, tspan, p)` unchanged. The `:oop` RHS additionally
+  carries an explicit-buffers form for tracing backends — its live forcing
+  buffers (`param_arrays` + discrete caches) exposed as ARGUMENTS via
+  [`rhs_with_buffers`](@ref) / [`forcing_buffers`](@ref) /
+  [`forcing_buffer_index`](@ref), so `@compile` receives them as real XLA
+  inputs and an in-place refresh stays visible to the compiled program.
 """
 function build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)

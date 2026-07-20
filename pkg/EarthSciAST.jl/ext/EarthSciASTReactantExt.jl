@@ -35,39 +35,46 @@ is exactly the container boundary:
     value, so the trace has no output and the compile fails (or, worse, silently returns
     a constant). `_oop_du_zeros` takes the container from `Reactant.Ops.fill` instead.
 
-THE THING THIS EXTENSION DOES NOT FIX — READ BEFORE USING IT ON A REAL MODEL.
-A live forcing buffer (`param_arrays`, ess-14f.3) is bound BY REFERENCE and read
-through `_NK_PARAM_GATHER` / `_VK_PGATHER` nodes that hold the aliased host
-`Vector{Float64}` in the node's `payload`. Under tracing a captured host array is a
-TRACE-TIME CONSTANT: XLA bakes in whatever the buffer held at `@compile`. The
-discrete-cadence refresh callback (src/data_refresh.jl) then writes the buffer in
-place, the compiled program does not see it, and the run continues at full speed on
-STALE forcing — no error, no warning, plausible-looking numbers. The same applies to a
-`DiscreteMaterializer` cache buffer, which is a `pgather` entry by construction.
+LIVE FORCING BUFFERS ARE TRACED ARGUMENTS, NOT CAPTURES (B2). A live forcing
+buffer (`param_arrays`, ess-14f.3; a `DiscreteMaterializer` cache is a `pgather`
+entry by construction) is bound BY REFERENCE into `_NK_PARAM_GATHER` node payloads
+and forcing acc descriptors. Under tracing a CAPTURED host array is a TRACE-TIME
+CONSTANT: XLA bakes in whatever the buffer held at `@compile`, the discrete-cadence
+refresh callback (src/data_refresh.jl) then writes the buffer in place, and the
+compiled program does not see it — silently STALE forcing, no error, plausible
+numbers. That defect was demonstrated, then fixed by moving the BINDING, not the
+refresh model: the out-of-place RHS now carries an explicit-buffers form,
+`rhs_with_buffers(f)(u, p, t, buffers)`, whose `buffers` container (see
+`forcing_buffers` / `forcing_buffer_index`) arrives through the ARGUMENT LIST. An
+array passed as an argument is a real XLA input, and `copyto!`-ing new values into
+that same `ConcreteRArray` between calls IS seen by the already-compiled program
+(measured, and pinned by test/reactant_oop_test.jl) — so the discrete-cadence model
+survives compilation verbatim: one aliased buffer per forcing, refreshed in place at
+each cadence boundary (`sync_forcing!` mirrors host → device inside the refresh
+callback's `post_refresh` hook), no reallocation, no recompile. (Recompiling at each
+boundary "works" and is the trap: silent, O(#boundaries) compiles, and a different
+program at each one.)
 
-This is DEMONSTRATED, not conjectured; see the `@test_broken` in
-test/reactant_oop_test.jl. Until it is fixed: **`@compile` the RHS only for a model
-with no `param_arrays`**, or accept that the forcing is frozen at its compile-time
-value.
+The usage contract, then:
 
-The fix is to promote a forcing buffer from a closure CAPTURE to an explicit INPUT of
-the traced function, which changes the RHS contract and is therefore a decision, not a
-patch. What is worth writing down here is the measurement that says the rest of the
-design survives it: an array passed as an ARGUMENT is a real XLA input, and
-`copyto!`-ing new values into that same `ConcreteRArray` between calls IS seen by the
-already-compiled program. So the discrete-cadence model — one aliased buffer, refreshed
-in place at each cadence boundary, no reallocation, no recompile — needs no rethinking.
-Only the binding does: the buffer has to arrive through the argument list rather than be
-read off a node's `payload`. (Recompiling at each cadence boundary "works" and is the
-trap: it is silent, it is O(#boundaries) compiles, and it makes the compiled program a
-different program at each one.)
+    fo   = build_evaluator(model; form = :oop, param_arrays = forcing)[1]
+    dev  = map(ConcreteRArray, forcing_buffers(fo))
+    xla  = @compile rhs_with_buffers(fo)(u_r, p_r, t_r, dev)
+    # at each cadence boundary, after the host refresh:
+    sync_forcing!(dev, forcing_buffers(fo))
+
+`@compile`-ing the 3-ARG wrapper `fo(u, p, t)` over a live-forcing model still
+REFUSES (audit J5): the wrapper forwards its captured HOST buffers, which is
+exactly the silent-staleness configuration, so the walk throws
+`E_TREEWALK_XLA_LIVE_FORCING` during the trace rather than bake them in. A model
+with no `param_arrays` compiles through the 3-arg wrapper as before.
 """
 module EarthSciASTReactantExt
 
 using Reactant: Reactant, TracedRArray, TracedRNumber, @allowscalar
 
 import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
-    _oop_scatter
+    _oop_scatter, _oop_read_forcing
 
 # ---- State reads -------------------------------------------------------------
 #
@@ -81,7 +88,16 @@ import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
 # `_oop_gather` needs no method: `u[slots]` on a `TracedRArray` with a host
 # `Vector{Int}` already traces to a whole-array gather (XLA then canonicalizes a
 # contiguous run to a slice on its own). It is here as an explicit note so that the
-# absence of a method reads as a decision rather than an oversight.
+# absence of a method reads as a decision rather than an oversight. The same
+# applies to a forcing LANE read (`_AK_FORCING_BOX` / `_AK_ARR_TBL_BOX`): the
+# walker routes it through `_oop_gather` over the traced buffers ARGUMENT.
+
+# The scalar read of a live forcing buffer passed as a traced argument
+# (`_NK_PARAM_GATHER` / `_AK_ARR_FIXED`). Same bounded-scalar-indexing argument
+# as `_oop_read_state`: O(#scalar forcing reads), never O(#cells) — a forcing
+# lane axis goes through `_oop_gather`, a whole-array op.
+@inline _oop_read_forcing(buf::TracedRArray{T,1}, i::Int) where {T} =
+    @allowscalar buf[i]
 
 # ---- Output container --------------------------------------------------------
 #

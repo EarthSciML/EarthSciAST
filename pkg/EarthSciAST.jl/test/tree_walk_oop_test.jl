@@ -346,7 +346,9 @@ end
         fo, _, _, _, _ = ESM.build_evaluator(_rd(64); form = :oop)
         @test !isempty(getfield(fi, :acc_kernels))
         @test all(P -> P !== nothing, getfield(fi, :acc_plans))
-        oplans = getfield(fo, :acc_plans)
+        # `fo` is the `_OopRHS` wrapper (B2); the walk closure — and its captured
+        # lane plans — is the explicit-buffers form behind `rhs_with_buffers`.
+        oplans = getfield(ESM.rhs_with_buffers(fo), :acc_plans)
         @test !isempty(oplans) && all(P -> P.vectorizable, oplans)
     end
 

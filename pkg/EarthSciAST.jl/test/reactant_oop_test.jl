@@ -1,8 +1,13 @@
 # XLA tracing of the out-of-place RHS, via ext/EarthSciASTReactantExt.jl.
 #
-# OPT-IN. Reactant is a heavy dependency (a bundled XLA runtime) and is deliberately
-# NOT a test dep, so `Pkg.test()` never loads it. runtests.jl includes this file only
-# when `ESM_TEST_REACTANT=1`, and the environment must then supply Reactant itself:
+# OPT-IN. Reactant is a heavy dependency (a bundled XLA runtime): it sits in the test
+# target so `Pkg.test()` can resolve it, but runtests.jl never LOADS it by default —
+# this file is included only when `ESM_TEST_REACTANT=1`:
+#
+#     ESM_TEST_REACTANT=1 julia --project=pkg/EarthSciAST.jl \
+#         -e 'using Pkg; Pkg.test()'
+#
+# or standalone, in any environment that has Reactant + OrdinaryDiffEqTsit5:
 #
 #     julia --project=@reactant -e 'using Pkg
 #         Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.add(["Reactant","OrdinaryDiffEqTsit5"])'
@@ -20,22 +25,26 @@
 # tolerance is not a weaker claim here, it is the only true one; asserting `==` would
 # be asserting that XLA did not optimize.
 #
-# THE TWO SILENT-STALENESS TRAPS. Both are `@test_broken`, and both are the same bug
-# in different clothes: a value the tracer sees as a HOST CONSTANT gets baked into the
-# compiled program, and a later host-side update is invisible to it. No error is
-# raised, the program runs at full speed, and the numbers look plausible.
+# THE TWO SILENT-STALENESS TRAPS. Both were the same bug in different clothes: a
+# value the tracer sees as a HOST CONSTANT gets baked into the compiled program, and
+# a later host-side update is invisible to it. No error is raised, the program runs
+# at full speed, and the numbers look plausible.
 #
 #   1. `t` passed as a plain `Float64` is frozen at its compile-time value. Fixed by
 #      passing a `ConcreteRNumber` — so this one is a USAGE contract, and the test
 #      pins both halves (frozen when concrete, live when traced).
-#   2. A live forcing buffer (`param_arrays`, ess-14f.3) is frozen at its
-#      compile-time CONTENTS, because `_NK_PARAM_GATHER` / `_VK_PGATHER` hold the
-#      aliased host `Vector{Float64}` in the node payload. This one CANNOT be fixed by
-#      calling differently: the buffer is a closure capture, not an argument, so there
-#      is no way to hand XLA a fresh value. `build_refresh_callback`'s in-place refresh
-#      is therefore INVISIBLE to a compiled RHS. The `@test_broken` below is the
-#      failing test for that, and it is what must go green before a model with data
-#      loaders may be compiled. See ext/EarthSciASTReactantExt.jl for the fix's shape.
+#   2. A live forcing buffer (`param_arrays`, ess-14f.3) used to be frozen at its
+#      compile-time CONTENTS, because `_NK_PARAM_GATHER` and the forcing acc
+#      descriptors hold the aliased host `Vector{Float64}` by reference — a closure
+#      capture, with no way to hand XLA a fresh value. FIXED (B2) by moving the
+#      BINDING: the `:oop` RHS now carries an explicit-buffers form,
+#      `rhs_with_buffers(f)(u, p, t, buffers)`, whose buffers arrive through the
+#      ARGUMENT LIST as real XLA inputs; `copyto!` into those same
+#      `ConcreteRArray`s (`sync_forcing!`) at each cadence boundary IS seen by the
+#      already-compiled program. The formerly-broken staleness test is now the green
+#      "refresh IS seen" testset below. The 3-arg wrapper still REFUSES a trace over
+#      host buffers (audit J5) — that configuration is still the silent-staleness
+#      bug, and refusing beats baking it in.
 
 using Test
 using EarthSciAST
@@ -230,18 +239,19 @@ const TOL = 1e-14   # see the header: XLA reassociates and fuses FMAs.
         @test_throws Exception (@compile sync = true fo(ur, pr, RX.ConcreteRNumber(0.0)))
     end
 
-    @testset "a live forcing buffer REFUSES to be XLA-compiled (audit J5)" begin
+    @testset "a live forcing buffer REFUSES a HOST-buffer trace (audit J5)" begin
         # THE ONE THAT USED NOT TO FAIL LOUDLY. `wind` is bound by reference through
-        # `param_arrays`; the RHS reads it through `_VK_PGATHER`, whose payload is the
-        # aliased host `Vector{Float64}`. To the tracer that is a constant, so XLA baked
-        # in the buffer's COMPILE-TIME contents. The discrete-cadence refresh callback
-        # then wrote the buffer in place — exactly as `build_refresh_callback` does at
-        # every cadence boundary — and the compiled program did not see one bit of it:
-        # not an exception, not a NaN, but the SAME NUMBERS FOREVER, off by the full
-        # magnitude of the forcing update.
+        # `param_arrays`; the 3-arg wrapper forwards its captured HOST buffers, and to
+        # the tracer a captured host array is a constant, so XLA would bake in the
+        # buffer's COMPILE-TIME contents. The discrete-cadence refresh callback would
+        # then write the buffer in place — exactly as `build_refresh_callback` does at
+        # every cadence boundary — and the compiled program would not see one bit of
+        # it: not an exception, not a NaN, but the SAME NUMBERS FOREVER, off by the
+        # full magnitude of the forcing update.
         #
-        # A silently wrong answer is worse than no answer, so the out-of-place closure
-        # now REFUSES the trace when a live forcing buffer is bound.
+        # A silently wrong answer is worse than no answer, so the out-of-place walk
+        # REFUSES a trace that reaches it while the buffers are host arrays. The
+        # SUPPORTED route — buffers as traced ARGUMENTS — is the next testset.
         N = 8
         wind = fill(1.0, N)
         fi, _, p, _, _ = ESM.build_evaluator(_forced(N); param_arrays = Dict("wind" => wind))
@@ -272,6 +282,49 @@ const TOL = 1e-14   # see the header: XLA reassociates and fuses FMAs.
         fresh = _ip(fi, u, p, 0.0)          # `f!` sees it; that is the whole design
         @test isapprox(fo(u, p, 0.0), fresh; rtol = TOL)   # ...and so does the oop one
         @test maximum(abs, fresh .- before) ≈ 99.0 rtol = 1e-12   # it really did change
+    end
+
+    @testset "buffers as traced ARGUMENTS: a compiled RHS observes the refresh (B2)" begin
+        # The formerly-broken staleness test, green. The explicit-buffers form
+        # (`rhs_with_buffers`) carries the live forcing buffers through the traced
+        # function's ARGUMENT LIST, so `@compile` receives them as `ConcreteRArray`
+        # INPUTS — and an in-place `copyto!` into those same device arrays between
+        # calls (what `sync_forcing!` does at a cadence boundary, mirroring the host
+        # refresh) IS seen by the already-compiled program. Same model, same host
+        # refresh gesture as the refusal testset above; the only thing that moved is
+        # the BINDING.
+        N = 8
+        wind = fill(1.0, N)
+        fi, _, p, _, _ = ESM.build_evaluator(_forced(N); param_arrays = Dict("wind" => wind))
+        fo, _, _, _, _ = ESM.build_evaluator(_forced(N); form = :oop,
+                                             param_arrays = Dict("wind" => wind))
+        u = _seed(N)
+
+        # The buffers contract: stable name-sorted order, aliased host arrays,
+        # name → position map.
+        host = ESM.forcing_buffers(fo)
+        @test keys(host) == (:wind,)
+        @test host.wind === wind                       # aliased, not copied
+        @test ESM.forcing_buffer_index(fo) == Dict("wind" => 1)
+
+        g = ESM.rhs_with_buffers(fo)
+        dev = map(RX.ConcreteRArray, host)             # the compiled program's inputs
+        ur, pr, tr = RX.ConcreteRArray(u), _dev(p), RX.ConcreteRNumber(0.0)
+        xla = @compile sync = true g(ur, pr, tr, dev)
+
+        before = _ip(fi, u, p, 0.0)
+        @test isapprox(Array(xla(ur, pr, tr, dev)), before; rtol = TOL, atol = 1e-15)
+
+        wind .= 100.0                                  # the in-place host refresh, verbatim
+        ESM.sync_forcing!(dev, host)                   # the post_refresh hook: copyto! into
+                                                       # the argument arrays — NO recompile
+        fresh = _ip(fi, u, p, 0.0)
+        @test maximum(abs, fresh .- before) ≈ 99.0 rtol = 1e-12   # it really did change
+        # THE FLIP: the compiled program sees the refresh (this was the @test_broken).
+        @test isapprox(Array(xla(ur, pr, tr, dev)), fresh; rtol = TOL, atol = 1e-15)
+
+        # And the host wrapper is unchanged by all of it: same arity, same aliasing.
+        @test isapprox(fo(u, p, 0.0), fresh; rtol = TOL)
     end
 
     @testset "a model with NO live forcing still compiles (J5 refusal is scoped)" begin

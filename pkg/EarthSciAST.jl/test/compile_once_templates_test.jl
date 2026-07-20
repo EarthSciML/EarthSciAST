@@ -113,7 +113,9 @@ end
         FIX = bench("transport_3axis_7cubed_fullrank.esm")
         flat = flatten(load(FIX))
         fo, u0, p, _, _ = build_evaluator(flat; form=:oop)
-        oplans = getfield(fo, :acc_plans)
+        # `fo` is the `_OopRHS` wrapper (B2); the walk closure — and its captured
+        # lane plans — is the explicit-buffers form behind `rhs_with_buffers`.
+        oplans = getfield(rhs_with_buffers(fo), :acc_plans)
         @test !isempty(oplans)
         @test any(P -> !isempty(P.subs), oplans)     # the tier actually fired here
         @test all(P -> P.vectorizable, oplans)       # …and none forced the fallback
