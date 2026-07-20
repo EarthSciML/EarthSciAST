@@ -81,8 +81,10 @@ _stencil_disabled() = get(ENV, "ESS_STENCIL_DISABLE", "") == "1"
 # entry (`_expand_model_refs!` with site recording), so every phase and every
 # fallback path sees exactly the fused expanded tree it always saw. The ONLY
 # consumer of the recorded sites is this tier: when `_stencilize` reaches a node
-# that IS an expansion root, it compiles that subtree ONCE per (use site, region
-# class) into a `_SubVariant` and splices a SUB-KERNEL CALL sentinel into the
+# that IS an expansion root, it compiles that subtree ONCE per (root structure,
+# loop-index set, region class) — per BUILD via the `_XEqStore` hoist (A3), so
+# equations sharing a root reuse one `_SubVariant` — and splices a SUB-KERNEL
+# CALL sentinel into the
 # parent spine instead of re-walking the body per branch. The variant's lane
 # recipes are appended to the parent's recipe vector at a per-branch base
 # ("lane re-basing"), so ghost keys, per-cell recipe evaluation, and the affine
@@ -110,16 +112,87 @@ struct _SubVariant
 end
 const _SubCallSite = Tuple{_SubVariant,Int}   # (variant, lane base in enclosing recipes)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CROSS-EQUATION VARIANT MEMOIZATION (perf plan A3). A `_SubVariant` is a pure
+# function of (root STRUCTURE, loop-index-name set, region-class branch key)
+# plus BUILD-level context: `var_map` / `param_sym_set` / `reg_funcs` /
+# `array_var_info` / `const_arrays` / `pgather` are the same objects for every
+# equation of one `build_evaluator` call (threaded unchanged from
+# `_build_compile_evaluator` through `_compile_derivative_equations`), and
+# `_branch_key!` carries ALL `idx_env` dependence (that is what already lets
+# one root share a variant across branches within an equation). After A1
+# interning, `objectid(root)` IS a structural key — so the variant cache (and
+# the bound-body cache, the same purity argument via `_sub_preserving`) can be
+# hoisted to ONE per-build store, and the same PPM body stops recompiling for
+# every equation that instantiates it (D(m,t)/D(mq,t)/D(dev,t); one rule × N
+# species in the chem assembly). The only remaining per-EQUATION input a
+# variant bakes in is the loop-index-name set (it decides LANE_LOOPLIT leaves
+# and every `_refs_idxset` invariance cut), so it enters the key (`idxkey`).
+#
+# `obs_memo` is the shared `_sub_preserving` memo for the per-equation observed
+# inlining (`_try_affine_stencil`): the bindings (`resolved_obs`) are one fixed
+# Dict per build, so sharing the memo is sound by `_sub_preserving`'s own
+# contract — and it is what KEEPS cross-equation root identity: without it,
+# each equation's obs-inline manufactures a fresh copy of every root that
+# contains an observed reference, and the structural key never hits.
+# `obs_bindings` guards that contract: a different bindings object (defensive —
+# no current caller does this) gets a fresh memo instead of a wrong reuse.
+#
+# Sharing a variant across equations reuses the SAME mechanism as sharing
+# across branches: `variant.recipes` are appended at each use's own per-branch
+# base (lane re-basing, `_stencilize_shared`), and the per-(lane-repl) access
+# forms in `variant.acc_cache` are keyed by descriptor CONTENT
+# (`_lane_repl_key`), so a cache hit from another equation is byte-identical
+# to the variant that equation would have compiled itself.
+#
+# KILL SWITCH: `ESS_XEQ_VARIANT_DISABLE=1` restores the per-equation caches
+# (no store is created; every `_TemplateCtx` gets fresh dicts and every
+# obs-inline a fresh memo — the pre-A3 build exactly).
+_xeq_disabled() = get(ENV, "ESS_XEQ_VARIANT_DISABLE", "") == "1"
+
+struct _XEqStore
+    variants::Dict{Tuple{UInt64,String,String},_SubVariant}
+    bound_bodies::IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}
+    obs_memo::IdDict{OpExpr,ASTExpr}          # a shared `_SubMemo`
+    obs_bindings::Base.RefValue{Any}          # the bindings object it was built against
+end
+_XEqStore() = _XEqStore(Dict{Tuple{UInt64,String,String},_SubVariant}(),
+                        IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}(),
+                        IdDict{OpExpr,ASTExpr}(), Base.RefValue{Any}(nothing))
+
+# The shared obs-inline memo, valid only for ONE bindings object per build
+# (pinned on first use). A different bindings object returns a fresh memo —
+# correctness over sharing.
+function _xeq_obs_memo(store::_XEqStore, bindings)
+    ob = store.obs_bindings[]
+    if ob === nothing
+        store.obs_bindings[] = bindings
+        return store.obs_memo
+    end
+    ob === bindings && return store.obs_memo
+    return IdDict{OpExpr,ASTExpr}()
+end
+
+# Canonical key for an equation's loop-index-name set (order-insensitive: the
+# stencilize walk consults MEMBERSHIP only; recipes/idx_args reference names).
+_idxset_key(idx_names::Vector{String}) = join(sort(idx_names), '\0')
+
 # Per-equation compile-once context. `sites` maps each expansion root (an
 # `OpExpr` in the obs-inlined RHS, by identity) to its originating apply node
 # (documentary — the template name for diagnostics). `variants` memoizes
-# compiled bodies by `(root identity, body branch key)`; `gmemo` is the shared
-# `_refs_idxset` guard memo; `bio` a scratch buffer for body branch keys. The
-# compile inputs (`var_map`, `param_sym_set`, `reg_funcs`) ride along because
-# variant compilation happens mid-`_stencilize`, where they are out of scope.
+# compiled bodies by `(root identity, loop-index-set key, body branch key)` —
+# PER BUILD when an `_XEqStore` is threaded in (the A3 hoist; `variants` /
+# `bound_bodies` then alias the store's dicts), per equation otherwise
+# (`ESS_XEQ_VARIANT_DISABLE=1`, or a caller without a store). `gmemo` is the
+# shared `_refs_idxset` guard memo (per-equation: its answers depend on this
+# equation's idxset); `bio` a scratch buffer for body branch keys. The compile
+# inputs (`var_map`, `param_sym_set`, `reg_funcs`) ride along because variant
+# compilation happens mid-`_stencilize`, where they are out of scope; they are
+# build-level constants (see the A3 note above), which is what makes the
+# hoisted cache sound.
 struct _TemplateCtx
     sites::IdDict{OpExpr,OpExpr}
-    variants::Dict{Tuple{UInt64,String},_SubVariant}
+    variants::Dict{Tuple{UInt64,String,String},_SubVariant}
     gmemo::IdDict{OpExpr,Bool}
     bio::IOBuffer
     var_map::Dict{String,Int}
@@ -129,17 +202,27 @@ struct _TemplateCtx
     # aggregate reached through `index(makearray → root, k…)` — the ESD stencil
     # shape): the producer's `expr_body` with its output indices substituted by
     # the k-args, built ONCE per (root, k-arg identity tuple) and shared across
-    # branches. The bound body is then the compile-once boundary exactly as a
-    # scalar-position root is. Keyed by root identity; each entry holds the
-    # k-arg objects it was bound against (branch-invariant in practice, so the
-    # inner vector stays length 1) plus the shared bound body.
+    # branches — and, via the store, across equations (the bound body is a pure
+    # function of producer + k-arg structure, and sharing it is what lets the
+    # bound-site variant key hit across equations: the shared bound body IS the
+    # vkey root). Each entry holds the k-arg objects it was bound against
+    # (branch-invariant in practice, so the inner vector stays length 1) plus
+    # the shared bound body.
     bound_bodies::IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}
+    # This equation's loop-index-set key — the per-equation component of vkey.
+    idxkey::String
 end
-_TemplateCtx(sites::IdDict{OpExpr,OpExpr}, var_map::Dict{String,Int},
-             param_sym_set, reg_funcs) =
-    _TemplateCtx(sites, Dict{Tuple{UInt64,String},_SubVariant}(),
-                 IdDict{OpExpr,Bool}(), IOBuffer(), var_map, param_sym_set, reg_funcs,
-                 IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}())
+function _TemplateCtx(sites::IdDict{OpExpr,OpExpr}, var_map::Dict{String,Int},
+                      param_sym_set, reg_funcs;
+                      idxkey::String="", store::Union{Nothing,_XEqStore}=nothing)
+    variants = store === nothing ? Dict{Tuple{UInt64,String,String},_SubVariant}() :
+               store.variants
+    bound = store === nothing ?
+            IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}() :
+            store.bound_bodies
+    return _TemplateCtx(sites, variants, IdDict{OpExpr,Bool}(), IOBuffer(),
+                        var_map, param_sym_set, reg_funcs, bound, idxkey)
+end
 
 # Does `expr` reference any of the output loop indices in `idxset`? EXHAUSTIVE
 # over every `ASTExpr`-typed field of `OpExpr` via the shared `child_exprs`
@@ -308,7 +391,10 @@ function _stencilize_shared(node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
                             bypass::Bool)
     _branch_key!(tctx.bio, node, ctx.idxset, ctx.idx_env, ctx.const_arrays, tctx.gmemo)
     bodykey = String(take!(tctx.bio))
-    vkey = (objectid(node), bodykey)
+    # (root identity ≡ structure after A1 interning, loop-index-set key, region
+    # class): the full variant key — shared per BUILD when the A3 store is
+    # threaded in, per equation otherwise. See the _XEqStore purity note above.
+    vkey = (objectid(node), tctx.idxkey, bodykey)
     variant = get(tctx.variants, vkey, nothing)
     if variant === nothing
         _BENCH_ON[] && (_BENCH_BODY_VARIANTS[] += 1)
@@ -537,8 +623,10 @@ end
 # The emitted STRING changes with this (a shared `index(makearray)` site
 # prints its `M<r>;` segment once instead of once per path), but the string
 # is ONLY ever compared to other strings produced by this same function over
-# the SAME body object (`branch_cache` / template-variant keys within one
-# equation build), and key-EQUALITY classes are preserved exactly: the
+# the SAME body object under the SAME loop-index set (`branch_cache` within
+# one equation; template-variant keys per build, where the vkey pins the root
+# object and idxkey pins the index set), and key-EQUALITY classes are
+# preserved exactly: the
 # traversal — which sites are visited, in which order, and what each prints —
 # is a deterministic function of the fixed body DAG plus the per-cell region
 # selections, so two cells produce equal deduped keys iff they select equal
