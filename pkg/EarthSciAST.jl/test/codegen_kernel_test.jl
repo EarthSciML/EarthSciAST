@@ -38,7 +38,7 @@ _cgk_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
 _cgk_probe(n, k) =
     Float64[1.4 + 0.9 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.05i for i in 1:n]
 
-_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
+_cgk_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 
 # The full differential: several (u, t) probes bit-compared at Float64, plus
 # the ForwardDiff Jacobian over the state bit-compared (the Dual axis).
@@ -52,12 +52,12 @@ function _cgk_differential(model, ics; const_arrays=Dict(), jacobian::Bool=true)
     @test u0 == v0
     for k in 1:5, t in (0.0, 0.7, 3.25)
         u = k == 1 ? copy(u0) : _cgk_probe(length(u0), k)
-        @test _bitsame(_cgk_du(fc, u, p, t), _cgk_du(fr, u, q, t))
+        @test _cgk_bitsame(_cgk_du(fc, u, p, t), _cgk_du(fr, u, q, t))
     end
     if jacobian
         Jc = ForwardDiff.jacobian(uu -> _cgk_du(fc, uu, p, 0.4), u0)
         Jr = ForwardDiff.jacobian(uu -> _cgk_du(fr, uu, q, 0.4), v0)
-        @test _bitsame(Jc, Jr)
+        @test _cgk_bitsame(Jc, Jr)
     end
     return nothing
 end
@@ -258,7 +258,7 @@ end
                 u = k == 1 ? copy(u0) : _cgk_probe(length(u0), k)
                 duc = _cgk_du(fc, u, p, t)
                 dur = _cgk_du(fr, u, q, t)
-                @test _bitsame(duc, dur)
+                @test _cgk_bitsame(duc, dur)
                 # u0 is a uniform field, whose advection derivative is exactly
                 # zero — only the non-trivial probes must be non-zero.
                 k > 1 && @test sum(abs, duc) > 0
@@ -270,6 +270,45 @@ end
             gr = ForwardDiff.derivative(s -> sum(_cgk_du(fr, v0 .+ s .* seed, q, 0.4)), 0.0)
             @test gc === gr
         end
+    end
+
+    @testset "per-kernel decline: mixed emit/fallback section" begin
+        # Hand-built kernels driven straight through `_make_kernel_section`:
+        # kernel 1 (1-D affine box) is emittable; kernel 2 (a rank-4 box) is
+        # NOT (`:box_rank` decline) and must silently keep the scalar runner.
+        N = 24
+        mk1d(lo, hi, dW, dE) = begin
+            acc = ESM._AccDesc[ESM._AccStateAffine(dW), ESM._AccStateAffine(0),
+                               ESM._AccStateAffine(dE)]
+            sp = ESM._aop(:+, ESM._aop(:-, ESM._acc(1),
+                                       ESM._aop(:*, ESM._alit(2.0), ESM._acc(2))),
+                          ESM._acc(3))
+            ESM._AccKernel(ESM._CellSet([1], UnitRange{Int}[lo:hi], 0), sp, acc,
+                           ESM._FixedBound(0), 0.0)
+        end
+        K1 = mk1d(2, N - 1, -1, 1)
+        # Rank-4 box over a 2×2×2×3 slab (strides for a 2×2×2×3 row-major-ish
+        # layout; 24 slots): the emitter caps box rank at 3 and must decline.
+        acc4 = ESM._AccDesc[ESM._AccStateAffine(0)]
+        sp4 = ESM._aop(:*, ESM._alit(0.5), ESM._acc(1))
+        K2 = ESM._AccKernel(
+            ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -1),
+            sp4, acc4, ESM._FixedBound(0), 0.0)
+        kernels = ESM._AccKernel[K1, K2]
+        plans = Union{Nothing,ESM._AccPlan}[ESM._build_acc_plan(K) for K in kernels]
+        ESM._reset_cascade_tally!()
+        section = ESM._make_kernel_section(kernels, plans)
+        tally = copy(ESM._CASCADE_TALLY)
+        @test get(tally, :codegen_kernel, 0) == 1
+        @test get(tally, :codegen_decline_box_rank, 0) == 1
+        @test length(section.kernels) == 1          # K2 kept its scalar runner
+        u = _cgk_probe(N, 3)
+        du = zeros(N)
+        section(du, u, nothing, 0.0, Float64)
+        ref = zeros(N)
+        ESM._run_acc_kernel!(ref, u, nothing, 0.0, K1)
+        ESM._run_acc_kernel!(ref, u, nothing, 0.0, K2)
+        @test _cgk_bitsame(du, ref)
     end
 
     @testset "zero allocations at Float64 (codegen path)" begin

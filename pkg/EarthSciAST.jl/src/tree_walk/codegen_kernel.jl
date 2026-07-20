@@ -269,6 +269,22 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     throw(_CodegenDecline(:unknown_kind))
 end
 
+# Emit a kernel's per-cell CSE recipes as `local q = convert(T, …)` statements
+# appended to `stmts`, registering each local on `kc.cellsyms` so later recipes
+# and the spine resolve their `_NK_CACHED` reads (recipes only ever read LOWER
+# slots, so each name exists before its first read). The `convert` is exactly
+# where the interpreter's scratch store (`buf[i] = _eval_acc(…)`, a `Vector{T}`
+# setindex!) converts. Shared by the kernel cell body and the subcall inliner.
+function _cg_emit_recipes!(stmts::Vector{Any}, ctx::_CGCtx, kc::_CGKernCtx)
+    for r in kc.K.cse.recipes
+        e = _cg_emit(ctx, kc, r)
+        s = _cg_name(ctx, "q")
+        push!(stmts, :(local $s = convert(_cgT, $e)))
+        push!(kc.cellsyms, s)
+    end
+    return stmts
+end
+
 # Template sub-kernel call (`_NK_SUBCALL`): inline the body at the call site —
 # per-cell CSE recipes become occurrence-local `convert(T, …)` locals (the
 # interpreter refills the body's scratch at every evaluation; occurrence-local
@@ -278,16 +294,9 @@ end
 function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     invsyms = get(ctx.invdone, S, nothing)
     invsyms === nothing && throw(_CodegenDecline(:subcall_order))
-    cellsyms = Symbol[]
     inner = _CGKernCtx(S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-                       cellsyms, invsyms)
-    stmts = Any[]
-    for r in S.cse.recipes
-        e = _cg_emit(ctx, inner, r)
-        s = _cg_name(ctx, "q")
-        push!(stmts, :(local $s = convert(_cgT, $e)))
-        push!(cellsyms, s)
-    end
+                       Symbol[], invsyms)
+    stmts = _cg_emit_recipes!(Any[], ctx, inner)
     spine = _cg_emit(ctx, inner, S.spine)
     isempty(stmts) && return spine
     return Expr(:block, stmts..., spine)
@@ -426,13 +435,7 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # Per-cell body: CSE recipes as locals (converted to T exactly where the
     # interpreter's scratch store converts), then the spine into du[oln].
     function cellbody(kc::_CGKernCtx)
-        stmts = Any[]
-        for r in K.cse.recipes
-            e = _cg_emit(ctx, kc, r)
-            s = _cg_name(ctx, "q")
-            push!(stmts, :(local $s = convert(_cgT, $e)))
-            push!(kc.cellsyms, s)
-        end
+        stmts = _cg_emit_recipes!(Any[], ctx, kc)
         push!(stmts, :(du[$(kc.oln)] = $(_cg_emit(ctx, kc, K.spine))))
         return stmts
     end
