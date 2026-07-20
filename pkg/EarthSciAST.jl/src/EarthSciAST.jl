@@ -26,7 +26,12 @@ module EarthSciAST
 using Dates
 using JSON3
 using JSONSchema
+using RuntimeGeneratedFunctions
 using Tullio
+
+# The tree-walk codegen tier (tree_walk/codegen_kernel.jl) compiles emitted
+# kernel source through this module's RGF cache.
+RuntimeGeneratedFunctions.init(@__MODULE__)
 
 # Core data model + validation
 include("types.jl")
