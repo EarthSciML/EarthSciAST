@@ -79,9 +79,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_oop_test.jl")
     include("tree_walk_iip_generic_test.jl")
     # XLA tracing of the out-of-place RHS (ext/EarthSciASTReactantExt.jl). OPT-IN:
-    # Reactant bundles an XLA runtime, so it is not a test dep and this suite must
-    # keep running without it. Set ESM_TEST_REACTANT=1 in an environment that HAS
-    # Reactant — see the header of test/reactant_oop_test.jl.
+    # Reactant bundles an XLA runtime; it is in the test target so `Pkg.test()`
+    # resolves it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default
+    # suite must keep running (and passing) without it. See the header of
+    # test/reactant_oop_test.jl.
     if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
         include("reactant_oop_test.jl")
     else
