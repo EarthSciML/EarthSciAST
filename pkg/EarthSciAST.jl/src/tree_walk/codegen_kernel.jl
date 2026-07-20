@@ -571,7 +571,8 @@ end
 struct _KernelSection{F,TB}
     cgf::F
     cgtabs::TB
-    kernels::Vector{_AccKernel}
+    n_emitted::Int                # kernels compiled into the generated function
+    kernels::Vector{_AccKernel}   # residual kernels (pre-codegen runners)
     plans::Vector{Union{Nothing,_AccPlan}}
 end
 
@@ -597,12 +598,12 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
                               acc_plans::AbstractVector{Union{Nothing,_AccPlan}})
     cg = _codegen_disabled() ? nothing : _build_codegen_rhs(acc_kernels)
     if cg === nothing
-        return _KernelSection(nothing, nothing,
+        return _KernelSection(nothing, nothing, 0,
                               collect(_AccKernel, acc_kernels),
                               collect(Union{Nothing,_AccPlan}, acc_plans))
     end
     resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
-    return _KernelSection(cg.f, cg.tabs,
+    return _KernelSection(cg.f, cg.tabs, count(cg.covered),
                           _AccKernel[acc_kernels[j] for j in resid],
                           Union{Nothing,_AccPlan}[acc_plans[j] for j in resid])
 end

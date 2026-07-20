@@ -177,8 +177,10 @@ end
         # of them makes the identity assertions fail loudly instead of vacuously.
         f_rd, = ESM.build_evaluator(_rd(64))
         # array kernels present — the unified access-kernel IR owns every array
-        # equation, so a non-empty acc list proves the array phase ran.
-        @test !isempty(getfield(f_rd, :acc_kernels))
+        # equation, so a non-empty kernel section (codegen-emitted + residual
+        # kernels, tree_walk/codegen_kernel.jl) proves the array phase ran.
+        ks_rd = getfield(f_rd, :kernel_section)
+        @test ks_rd.n_emitted + length(ks_rd.kernels) > 0
         f_z, = ESM.build_evaluator(_zerod())
         @test !isempty(getfield(f_z, :cse_prelude))          # CSE prelude non-empty
         @test !isempty(getfield(f_z, :rhs_list))             # scalar equations present
@@ -344,8 +346,12 @@ end
         # cells one at a time on the default path.
         fi, _, _, _, _ = ESM.build_evaluator(_rd(64))
         fo, _, _, _, _ = ESM.build_evaluator(_rd(64); form = :oop)
-        @test !isempty(getfield(fi, :acc_kernels))
-        @test all(P -> P !== nothing, getfield(fi, :acc_plans))
+        # In-place kernels are either compiled by the codegen tier (a straight
+        # loop nest, never per-cell) or residual with a lane tape each — the
+        # assertion holds with the tier on AND under ESS_CODEGEN_DISABLE=1.
+        ks = getfield(fi, :kernel_section)
+        @test ks.n_emitted + length(ks.kernels) > 0
+        @test all(P -> P !== nothing, ks.plans)
         oplans = getfield(fo, :acc_plans)
         @test !isempty(oplans) && all(P -> P.vectorizable, oplans)
     end
