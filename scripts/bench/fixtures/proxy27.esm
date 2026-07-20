@@ -1,0 +1,1141 @@
+{
+ "esm": "0.8.0",
+ "metadata": {
+  "name": "Bench_Proxy27",
+  "description": "Controlled 27-box proxy for the affine access-kernel lowering path: a 3x3x3 grid, one tracer, branch-free donor-cell upwind flux divergence along lon and lev with no-flux walls (structural omission, ESD convention), plus linear decay. Self-contained (no external imports). Reconstruction of the ephemeral fixture used to validate EarthSciAST commit 08c4985b; 9 region classes (3 lon x 3 lev), 7 gathered aggregates, one scalar parameter.",
+  "license": "MIT"
+ },
+ "index_sets": {
+  "lon": {
+   "kind": "interval",
+   "size": 3
+  },
+  "lat": {
+   "kind": "interval",
+   "size": 3
+  },
+  "lev": {
+   "kind": "interval",
+   "size": 3
+  },
+  "lon_nodes": {
+   "kind": "interval",
+   "size": 4
+  },
+  "lev_nodes": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "Proxy27": {
+   "variables": {
+    "c": {
+     "type": "state",
+     "units": "1",
+     "shape": [
+      "lon",
+      "lat",
+      "lev"
+     ],
+     "description": "Tracer mass per box."
+    },
+    "kappa": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 0.001,
+     "description": "Linear decay rate."
+    },
+    "w": {
+     "type": "observed",
+     "units": "1/s",
+     "shape": [
+      "lon",
+      "lat",
+      "lev_nodes"
+     ],
+     "description": "Vertical face velocity; vanishes at both walls.",
+     "expression": {
+      "op": "aggregate",
+      "output_idx": [
+       "ci",
+       "cj",
+       "ck"
+      ],
+      "ranges": {
+       "ci": {
+        "from": "lon"
+       },
+       "cj": {
+        "from": "lat"
+       },
+       "ck": {
+        "from": "lev_nodes"
+       }
+      },
+      "args": [],
+      "expr": {
+       "op": "*",
+       "args": [
+        0.2,
+        {
+         "op": "*",
+         "args": [
+          4.0,
+          {
+           "op": "/",
+           "args": [
+            {
+             "op": "-",
+             "args": [
+              "ck",
+              1
+             ]
+            },
+            3.0
+           ]
+          },
+          {
+           "op": "-",
+           "args": [
+            1.0,
+            {
+             "op": "/",
+             "args": [
+              {
+               "op": "-",
+               "args": [
+                "ck",
+                1
+               ]
+              },
+              3.0
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "sin",
+         "args": [
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              1.3,
+              "ci"
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              0.7,
+              "cj"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "u": {
+     "type": "observed",
+     "units": "1/s",
+     "shape": [
+      "lon_nodes",
+      "lat",
+      "lev"
+     ],
+     "description": "Zonal face velocity; vanishes at both walls.",
+     "expression": {
+      "op": "aggregate",
+      "output_idx": [
+       "ci",
+       "cj",
+       "ck"
+      ],
+      "ranges": {
+       "ci": {
+        "from": "lon_nodes"
+       },
+       "cj": {
+        "from": "lat"
+       },
+       "ck": {
+        "from": "lev"
+       }
+      },
+      "args": [],
+      "expr": {
+       "op": "*",
+       "args": [
+        0.15,
+        {
+         "op": "*",
+         "args": [
+          4.0,
+          {
+           "op": "/",
+           "args": [
+            {
+             "op": "-",
+             "args": [
+              "ci",
+              1
+             ]
+            },
+            3.0
+           ]
+          },
+          {
+           "op": "-",
+           "args": [
+            1.0,
+            {
+             "op": "/",
+             "args": [
+              {
+               "op": "-",
+               "args": [
+                "ci",
+                1
+               ]
+              },
+              3.0
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "cos",
+         "args": [
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              0.9,
+              "cj"
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              0.5,
+              "ck"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "c"
+      ]
+     },
+     "rhs": {
+      "op": "aggregate",
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "lon"
+       },
+       "j": {
+        "from": "lat"
+       },
+       "k": {
+        "from": "lev"
+       }
+      },
+      "args": [],
+      "expr": {
+       "op": "+",
+       "args": [
+        1.0,
+        {
+         "op": "*",
+         "args": [
+          0.25,
+          {
+           "op": "sin",
+           "args": [
+            {
+             "op": "+",
+             "args": [
+              {
+               "op": "*",
+               "args": [
+                1.7,
+                "i"
+               ]
+              },
+              {
+               "op": "*",
+               "args": [
+                0.9,
+                "j"
+               ]
+              },
+              {
+               "op": "*",
+               "args": [
+                0.4,
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "c"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "+",
+      "args": [
+       {
+        "op": "aggregate",
+        "output_idx": [
+         "i",
+         "j",
+         "k"
+        ],
+        "ranges": {
+         "i": {
+          "from": "lon"
+         },
+         "j": {
+          "from": "lat"
+         },
+         "k": [
+          1,
+          1
+         ]
+        },
+        "args": [
+         "c",
+         "w"
+        ],
+        "expr": {
+         "op": "neg",
+         "args": [
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "max",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "w",
+                  "i",
+                  "j",
+                  {
+                   "op": "+",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "min",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "w",
+                  "i",
+                  "j",
+                  {
+                   "op": "+",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                {
+                 "op": "+",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "op": "aggregate",
+        "output_idx": [
+         "i",
+         "j",
+         "k"
+        ],
+        "ranges": {
+         "i": {
+          "from": "lon"
+         },
+         "j": {
+          "from": "lat"
+         },
+         "k": [
+          2,
+          2
+         ]
+        },
+        "args": [
+         "c",
+         "w"
+        ],
+        "expr": {
+         "op": "-",
+         "args": [
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "max",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "w",
+                  "i",
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                {
+                 "op": "-",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "min",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "w",
+                  "i",
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "max",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "w",
+                  "i",
+                  "j",
+                  {
+                   "op": "+",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "min",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "w",
+                  "i",
+                  "j",
+                  {
+                   "op": "+",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                {
+                 "op": "+",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "op": "aggregate",
+        "output_idx": [
+         "i",
+         "j",
+         "k"
+        ],
+        "ranges": {
+         "i": {
+          "from": "lon"
+         },
+         "j": {
+          "from": "lat"
+         },
+         "k": [
+          3,
+          3
+         ]
+        },
+        "args": [
+         "c",
+         "w"
+        ],
+        "expr": {
+         "op": "+",
+         "args": [
+          {
+           "op": "*",
+           "args": [
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "w",
+                "i",
+                "j",
+                "k"
+               ]
+              },
+              0.0
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "c",
+              "i",
+              "j",
+              {
+               "op": "-",
+               "args": [
+                "k",
+                1
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "w",
+                "i",
+                "j",
+                "k"
+               ]
+              },
+              0.0
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "c",
+              "i",
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "op": "aggregate",
+        "output_idx": [
+         "i",
+         "j",
+         "k"
+        ],
+        "ranges": {
+         "i": [
+          1,
+          1
+         ],
+         "j": {
+          "from": "lat"
+         },
+         "k": {
+          "from": "lev"
+         }
+        },
+        "args": [
+         "c",
+         "u"
+        ],
+        "expr": {
+         "op": "neg",
+         "args": [
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "max",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "u",
+                  {
+                   "op": "+",
+                   "args": [
+                    "i",
+                    1
+                   ]
+                  },
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "min",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "u",
+                  {
+                   "op": "+",
+                   "args": [
+                    "i",
+                    1
+                   ]
+                  },
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                {
+                 "op": "+",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "op": "aggregate",
+        "output_idx": [
+         "i",
+         "j",
+         "k"
+        ],
+        "ranges": {
+         "i": [
+          2,
+          2
+         ],
+         "j": {
+          "from": "lat"
+         },
+         "k": {
+          "from": "lev"
+         }
+        },
+        "args": [
+         "c",
+         "u"
+        ],
+        "expr": {
+         "op": "-",
+         "args": [
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "max",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "u",
+                  "i",
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "min",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "u",
+                  "i",
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "max",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "u",
+                  {
+                   "op": "+",
+                   "args": [
+                    "i",
+                    1
+                   ]
+                  },
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                "i",
+                "j",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "min",
+               "args": [
+                {
+                 "op": "index",
+                 "args": [
+                  "u",
+                  {
+                   "op": "+",
+                   "args": [
+                    "i",
+                    1
+                   ]
+                  },
+                  "j",
+                  "k"
+                 ]
+                },
+                0.0
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "c",
+                {
+                 "op": "+",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                "j",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "op": "aggregate",
+        "output_idx": [
+         "i",
+         "j",
+         "k"
+        ],
+        "ranges": {
+         "i": [
+          3,
+          3
+         ],
+         "j": {
+          "from": "lat"
+         },
+         "k": {
+          "from": "lev"
+         }
+        },
+        "args": [
+         "c",
+         "u"
+        ],
+        "expr": {
+         "op": "+",
+         "args": [
+          {
+           "op": "*",
+           "args": [
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "u",
+                "i",
+                "j",
+                "k"
+               ]
+              },
+              0.0
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "c",
+              {
+               "op": "-",
+               "args": [
+                "i",
+                1
+               ]
+              },
+              "j",
+              "k"
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            {
+             "op": "min",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "u",
+                "i",
+                "j",
+                "k"
+               ]
+              },
+              0.0
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "c",
+              "i",
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "op": "aggregate",
+        "output_idx": [
+         "i",
+         "j",
+         "k"
+        ],
+        "ranges": {
+         "i": {
+          "from": "lon"
+         },
+         "j": {
+          "from": "lat"
+         },
+         "k": {
+          "from": "lev"
+         }
+        },
+        "args": [
+         "c"
+        ],
+        "expr": {
+         "op": "neg",
+         "args": [
+          {
+           "op": "*",
+           "args": [
+            "kappa",
+            {
+             "op": "index",
+             "args": [
+              "c",
+              "i",
+              "j",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ }
+}
