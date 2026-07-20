@@ -495,7 +495,15 @@ end
     end
 
     _alloc_of(K, M, t) = begin
-        f!, u0, p, _ts, _vm = build_evaluator(_fanout_model(K, M))
+        # Built with the B3 TIME tier disabled, deliberately: the whole sza→bands
+        # chain depends only on `t`, so the tiered `f!` evaluates it once per
+        # `(p, t, epoch)` and every warm same-`t` call allocates ZERO — which would
+        # zero the per-CALL evaluation counter this testset reads. What is pinned
+        # here is the fn-barrier removal (evaluate once per call, independent of
+        # fan-out); the same-`t` skip has its own suite (tree_walk_tcadence_test.jl).
+        f!, u0, p, _ts, _vm = withenv("ESS_TCADENCE_DISABLE" => "1") do
+            build_evaluator(_fanout_model(K, M))
+        end
         du = similar(u0)
         rhs_alloc_bytes(f!, du, u0, p, t)
     end
@@ -691,9 +699,12 @@ end
     end
 
     @testset "a CSE'd live gather still reads the buffer LIVE (ess-qic)" begin
-        # Hoisting caches the value for ONE `f!` call: the prelude is refilled at the
-        # top of every call, and the buffer cannot change mid-call. So an in-place
-        # refresh BETWEEN calls must show through the cached slot.
+        # Hoisting caches the value for one `(p, t, forcing-epoch)` stamp (B3): the
+        # buffer cannot change mid-call, and an in-place refresh BETWEEN calls must
+        # show through the cached slot — through the epoch bump when the refresh
+        # lands at an already-seen `t` (a refresh callback fires AT its tstop; the
+        # in-tree write paths `_write_forcing!`/`materialize!` bump it themselves),
+        # and through the `t` key at any new `t`.
         buf = [5.0, 6.0]
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_pg_shared_model();
             param_arrays=Dict("F" => buf))
@@ -703,10 +714,15 @@ end
         f!(du, u0, p, 0.0)
         @test du[vm["y"]] === 5.0 * k
 
-        buf[1] = 42.0                        # ...and still tracks the live buffer.
+        buf[1] = 42.0                        # ...and still tracks the live buffer:
+        ESM.notify_forcing_refresh!()        # refresh at the SAME t, epoch-keyed
         f!(du, u0, p, 0.0)
         @test du[vm["x"]] === sin(42.0 * k) + cos(42.0 * k)
         @test du[vm["y"]] === 42.0 * k
+
+        buf[1] = 9.0                         # refresh seen at a NEW t, t-keyed
+        f!(du, u0, p, 0.5)
+        @test du[vm["y"]] === 9.0 * k
     end
 
     # ---- discrete-cadence caches ride the same `pgather` channel ----
@@ -842,9 +858,10 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
 
         @test diag.n_cse_slots == 5              # neg · * · / · exp · *
         @test diag.n_const_slots == 5
+        @test diag.n_time_slots == 0
         @test diag.n_dynamic_slots == 0
-        # The two counters partition the FINAL prelude (CSE slots + invariant slots).
-        @test diag.n_const_slots + diag.n_dynamic_slots ==
+        # The three counters partition the FINAL prelude (CSE slots + invariant slots).
+        @test diag.n_const_slots + diag.n_time_slots + diag.n_dynamic_slots ==
               diag.n_cse_slots + diag.n_invariant_slots
 
         # Bit-exact — `===`, not `≈`. Skipping the const refill must not perturb a
@@ -1003,12 +1020,15 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # ----------------------------------------------------------------
     # (6) TRAP, HALF ONE — `_NK_PARAM_GATHER`. A live forcing buffer is refreshed IN
     # PLACE between calls while `p` never moves, so a `p`-keyed stamp cannot see it
-    # change: a slot reading one is DISCRETE cadence, not const. The model carries BOTH
-    # a param-only chain (const) and a gather chain (dynamic), so "all dynamic" cannot
-    # pass this vacuously.
+    # change: a slot reading one must NEVER be const. Since B3 it is TIME-cadence —
+    # memoized on `(p, t, forcing epoch)`, so an in-place refresh is seen through the
+    # epoch bump (`notify_forcing_refresh!`, which `_write_forcing!`/`materialize!`
+    # call automatically) or at any new `t`, while `p` alone can never validate it.
+    # The model carries BOTH a param-only chain (const) and a gather chain (time),
+    # so "all dynamic" cannot pass this vacuously.
     #   D(x) = sin(F[1]*k) + cos(F[1]*k) ;  D(y) = F[1]*k ;  D(z) = exp(k*m) + 2*exp(k*m)
     # ----------------------------------------------------------------
-    @testset "a slot reading a live forcing buffer is DYNAMIC, not const" begin
+    @testset "a slot reading a live forcing buffer is TIME-cadence, not const" begin
         vars = Dict{String,ModelVariable}(
             "x" => ModelVariable(StateVariable; default=1.0),
             "y" => ModelVariable(StateVariable; default=1.0),
@@ -1017,7 +1037,7 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
             "m" => ModelVariable(ParameterVariable; default=3.0),
         )
         km() = _cse_op("exp", _cse_op("*", _cse_v("k"), _cse_v("m")))   # → CONST
-        fk() = _cse_op("*", _idx("F", _i(1)), _cse_v("k"))              # → DYNAMIC
+        fk() = _cse_op("*", _idx("F", _i(1)), _cse_v("k"))              # → TIME
         eqs = ESM.Equation[
             ESM.Equation(_cse_D("x"),
                 _cse_op("+", _cse_op("sin", fk()), _cse_op("cos", fk()))),
@@ -1032,20 +1052,32 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         # 3 slots: `k*m` and `exp(k*m)` are const; `F[1]*k` reads the live buffer.
         @test diag.n_cse_slots == 3
         @test diag.n_const_slots == 2
-        @test diag.n_dynamic_slots == 1
+        @test diag.n_time_slots == 1
+        @test diag.n_dynamic_slots == 0
 
         k, m = 2.0, 3.0
         du = _ct_call(f!, u0, p, 0.0)
         @test du[vm["y"]] === 5.0 * k
         @test du[vm["z"]] === exp(k * m) + 2.0 * exp(k * m)
 
-        # THE ASSERTION. Refresh the buffer in place — `p` is unchanged, so a const
-        # classification of the gather slot would freeze `F[1]*k` at 10.0 forever.
+        # THE ASSERTION, half A. Refresh the buffer in place and notify (the two
+        # in-tree refresh surfaces — `_write_forcing!` and `materialize!` — bump the
+        # epoch themselves; a direct `buf[i] = …` is the raw form of the same event).
+        # `p` is unchanged and `t` is the SAME `t` as the last call — exactly when a
+        # refresh callback fires — so a const classification of the gather slot (or a
+        # stamp that ignored the epoch) would freeze `F[1]*k` at 10.0 forever.
         buf[1] = 42.0
+        ESM.notify_forcing_refresh!()
         du = _ct_call(f!, u0, p, 0.0)
         @test du[vm["x"]] === sin(42.0 * k) + cos(42.0 * k)
         @test du[vm["y"]] === 42.0 * k
         @test du[vm["z"]] === exp(k * m) + 2.0 * exp(k * m)   # the const chain holds
+
+        # Half B: a refresh is also seen WITHOUT a notify at any `t` the memo has
+        # not stamped — the stamp is keyed on `t`, so moving `t` refills.
+        buf[1] = 7.0
+        du = _ct_call(f!, u0, p, 0.25)
+        @test du[vm["y"]] === 7.0 * k
     end
 
     # ----------------------------------------------------------------

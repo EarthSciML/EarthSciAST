@@ -153,11 +153,20 @@ const ESM = EarthSciAST
         f!(du, u0, p, 0.0)
         @test du[vm["y"]] === sin(7.0 * a) + cos(7.0 * a)
         @test du[vm["z"]] === 7.0 * a
-        # In-place refresh of the SAME buffer object → the CACHED expression tracks it.
+        # In-place refresh of the SAME buffer object → the CACHED expression tracks
+        # it. Since B3 the state-free slot is TIME-cadence — memoized on (p, t,
+        # forcing epoch) — so a refresh landing at an ALREADY-SEEN t is announced
+        # via the epoch (the in-tree refresh surfaces `_write_forcing!` /
+        # `materialize!` bump it themselves; this direct write is its raw form)…
         buf[2] = 42.0
+        ESM.notify_forcing_refresh!()
         f!(du, u0, p, 0.0)
         @test du[vm["y"]] === sin(42.0 * a) + cos(42.0 * a)
         @test du[vm["z"]] === 42.0 * a
+        # …and needs no notify at any t the memo has not stamped.
+        buf[2] = 5.0
+        f!(du, u0, p, 1.0)
+        @test du[vm["z"]] === 5.0 * a
     end
 
     @testset "build-time guards" begin

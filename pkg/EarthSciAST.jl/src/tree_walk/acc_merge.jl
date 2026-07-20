@@ -310,6 +310,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    cse_cache::_CSECache,
                    acc_kernels::AbstractVector{_AccKernel},
                    const_slots::AbstractVector{Int},
+                   time_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int})
     # Lane tapes for the affine access kernels (access_kernel.jl): compiled once
     # here, run in place of the per-cell scalar walk wherever a strided
@@ -330,7 +331,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
-        # CSE prelude (ess-r7h), in its TWO CADENCE TIERS (4qf, const_tier.jl):
+        # CSE prelude (ess-r7h), in its THREE CADENCE TIERS (4qf + B3, const_tier.jl):
         # evaluate each distinct shared subexpression once into the scratch cache,
         # in slot order. `defs[s]` references only slots < s (topological), so each
         # read is already filled. The cache makes `f!` non-reentrant (one instance
@@ -365,10 +366,31 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
             _cse_mark_const!(cse_cache, T, p)
         end
 
-        # ---- Tier 2: DYNAMIC slots — refilled every call ----
-        # A dynamic def may read const slots (all filled, above) and lower dynamic
-        # slots (filled by this loop, which is ascending) — so every read is already
-        # filled, exactly as in the single-loop prelude this replaces.
+        # ---- Tier 2: TIME-cadence slots — refilled when (p, t, epoch) moved ----
+        # These slots' defs read no state; they are pure functions of `p`, `t`, and
+        # the CONTENTS of any live forcing buffer they gather (const_tier.jl). They
+        # stay good in THIS buffer while `p` and `t` are egal to the stamp and no
+        # in-place forcing refresh has bumped `_FORCING_EPOCH` — exactly what
+        # `_cse_t_stale` tests. The payoff is the FD-Jacobian shape: N+1 calls at
+        # the bit-same `t` with perturbed `u` evaluate the FastJX-style photolysis /
+        # met-gather / w_time chains ONCE instead of N+1 times. A time def may read
+        # const slots (valid or refilled above — every trigger that refills them
+        # also invalidates this stamp: `p` egal is part of it, and buffer
+        # replacement clears `tpalt`) and lower time slots (this loop, ascending).
+        # Memoizing on `t` is safe under step rejection: the defs carry no history,
+        # so revisiting a `t` reuses/recomputes the same pure function of it.
+        if !isempty(time_slots) && _cse_t_stale(cse_cache, T, p, t)
+            @inbounds for i in eachindex(time_slots)
+                s = time_slots[i]
+                cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
+            end
+            _cse_mark_t!(cse_cache, T, p, t)
+        end
+
+        # ---- Tier 3: DYNAMIC slots — refilled every call ----
+        # A dynamic def may read const/time slots (valid or filled, above) and lower
+        # dynamic slots (filled by this loop, which is ascending) — so every read is
+        # already filled, exactly as in the single-loop prelude this replaces.
         @inbounds for i in eachindex(dyn_slots)
             s = dyn_slots[i]
             cache[s] = _eval_node(cse_prelude[s], u, p, t, T)

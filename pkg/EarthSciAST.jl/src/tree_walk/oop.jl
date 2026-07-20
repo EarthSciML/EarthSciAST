@@ -663,8 +663,11 @@ end
 # is nothing valid to skip TO. So every slot is refilled, in ascending slot order —
 # which is the const tier's two loops with the skip permanently disabled, hence
 # numerically identical to `f!` (the tests pin `:inplace` ≡ `:oop`) and never stale.
-# The build still REPORTS `n_const_slots` / `n_dynamic_slots` for an `:oop` build; the
-# classification is a property of the prelude, not of the emitter.
+# The same reasoning covers the B3 TIME tier: with a per-call cache there is nothing
+# valid to skip to, so `:oop` refills time slots every call too — and is therefore
+# also the natural untiered oracle for the t-tier differential tests. The build still
+# REPORTS `n_const_slots` / `n_time_slots` / `n_dynamic_slots` for an `:oop` build;
+# the classification is a property of the prelude, not of the emitter.
 # ---------------------------------------------------------------------------
 # J5 — REFUSE TO BE XLA-COMPILED WHILE A LIVE FORCING BUFFER IS A CAPTURE.
 #
