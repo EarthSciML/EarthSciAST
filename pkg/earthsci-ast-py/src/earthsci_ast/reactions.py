@@ -55,6 +55,13 @@ def lower_reactions_to_equations(
             reactant or product that isn't in the species list.
     """
     species_names = [s.name for s in species]
+    # Reservoir species (`constant: true`, §7.4): held fixed, so they get NO
+    # dX/dt equation. Their concentration is STILL a mass-action factor in the
+    # rate laws of the other species (built below from ``reaction.reactants``),
+    # so the only change here is to skip emitting their own ODE — mirroring the
+    # Julia reference (flatten.jl `lower_reactions_to_equations`,
+    # `species[i].constant === true && continue`).
+    constant_names = {s.name for s in species if s.constant is True}
     species_rates: dict[str, Expr] = dict.fromkeys(species_names, 0)
 
     for reaction in reactions:
@@ -96,6 +103,8 @@ def lower_reactions_to_equations(
 
     equations: list[Equation] = []
     for species_name in species_names:
+        if species_name in constant_names:
+            continue
         if species_rates[species_name] != 0:
             lhs = ExprNode(op="D", args=[species_name], wrt="t")
             equations.append(Equation(lhs=lhs, rhs=species_rates[species_name]))
@@ -130,11 +139,24 @@ def derive_odes(system: ReactionSystem) -> Model:
     variables: dict[str, ModelVariable] = {}
 
     for species in system.species:
-        variables[species.name] = ModelVariable(
-            type="state",
-            units=species.units,
-            description=f"Concentration of {species.name}",
-        )
+        # Reservoir species (`constant: true`, §7.4) are held fixed and get no
+        # ODE, so they lower to PARAMETERS carrying their declared ``default``
+        # as the fixed value — the same treatment as the flatten path
+        # (`_collect_reaction_system`) and the Julia reference (reactions.jl
+        # `derive_odes`, namespacing.jl `_collect_reaction_system!`).
+        if species.constant is True:
+            variables[species.name] = ModelVariable(
+                type="parameter",
+                units=species.units,
+                default=species.default,
+                description=f"Concentration of {species.name} (reservoir, held fixed)",
+            )
+        else:
+            variables[species.name] = ModelVariable(
+                type="state",
+                units=species.units,
+                description=f"Concentration of {species.name}",
+            )
 
     for param in system.parameters:
         variables[param.name] = ModelVariable(

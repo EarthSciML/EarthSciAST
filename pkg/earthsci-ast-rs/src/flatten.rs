@@ -996,21 +996,33 @@ fn build_reaction_block(
     for species_name in species_names {
         let species = &rs.species[species_name];
         let namespaced = format!("{system_name}.{species_name}");
-        state_vars.insert(
-            namespaced,
-            ModelVariable {
-                var_type: VariableType::State,
-                units: species.units.clone(),
-                default: species.default,
-                default_units: None,
-                description: species.description.clone(),
-                expression: None,
-                shape: None,
-                location: None,
-                noise_kind: None,
-                correlation_group: None,
+        // Reservoir species (`constant: true`, §7.4): held fixed, no ODE
+        // (`lower_reactions_to_equations` skips its equation), so it is a
+        // PARAMETER whose value is the species' `default`, not a state. It still
+        // resolves as a concentration factor wherever a rate law references it.
+        // Mirrors the Julia reference (namespacing.jl `_collect_reaction_system!`,
+        // `target = sp.constant === true ? params : states`).
+        let var = ModelVariable {
+            var_type: if species.constant == Some(true) {
+                VariableType::Parameter
+            } else {
+                VariableType::State
             },
-        );
+            units: species.units.clone(),
+            default: species.default,
+            default_units: None,
+            description: species.description.clone(),
+            expression: None,
+            shape: None,
+            location: None,
+            noise_kind: None,
+            correlation_group: None,
+        };
+        if species.constant == Some(true) {
+            parameters.insert(namespaced, var);
+        } else {
+            state_vars.insert(namespaced, var);
+        }
     }
 
     let mut param_names: Vec<&String> = rs.parameters.keys().collect();

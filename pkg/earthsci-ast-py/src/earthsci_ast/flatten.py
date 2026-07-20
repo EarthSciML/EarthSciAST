@@ -777,6 +777,15 @@ def _collect_reaction_system(
     Species become state variables; reaction parameters become parameters;
     rate laws are converted to dN_i/dt equations via mass-action kinetics.
     Constraint equations are passed through.
+
+    EXCEPT a reservoir species (``constant: true``, §7.4), which becomes a
+    PARAMETER: the spec holds its concentration fixed and emits no ODE for it
+    (``derive_odes``/``lower_reactions_to_equations`` already skip its
+    equation), so it is not a state. Its ``default`` carries over as the
+    parameter's fixed value, so it still reads as a concentration in every rate
+    law. Mirrors the Julia reference (namespacing.jl
+    ``_collect_reaction_system!``, ``target = sp.constant === true ? params :
+    states``).
     """
     full_prefix = prefix or name
     component = _ComponentSystem(name=full_prefix)
@@ -790,14 +799,27 @@ def _collect_reaction_system(
 
     for species in rs.species:
         namespaced = f"{full_prefix}.{species.name}"
-        component.state_vars[namespaced] = FlattenedVariable(
-            name=namespaced,
-            type="species",
-            units=species.units,
-            default=species.default,
-            description=species.description,
-            source_system=full_prefix,
-        )
+        if species.constant is True:
+            # Reservoir species: held fixed, no ODE — lower to a parameter whose
+            # value is the species' default (see docstring). It still resolves
+            # as a concentration factor wherever a rate law references it.
+            component.parameters[namespaced] = FlattenedVariable(
+                name=namespaced,
+                type="parameter",
+                units=species.units,
+                default=species.default,
+                description=species.description,
+                source_system=full_prefix,
+            )
+        else:
+            component.state_vars[namespaced] = FlattenedVariable(
+                name=namespaced,
+                type="species",
+                units=species.units,
+                default=species.default,
+                description=species.description,
+                source_system=full_prefix,
+            )
 
     for param in rs.parameters:
         namespaced = f"{full_prefix}.{param.name}"

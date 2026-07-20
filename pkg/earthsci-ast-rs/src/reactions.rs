@@ -82,6 +82,16 @@ pub fn lower_reactions_to_equations(
     let mut species_names: Vec<&String> = species.keys().collect();
     species_names.sort();
     for sp_name in species_names {
+        // Reservoir species (`constant: true`, §7.4): held fixed, so it gets
+        // NO dX/dt equation. Its concentration is still a mass-action factor in
+        // the OTHER species' rate laws — `enhance_rate_with_mass_action` reads
+        // it from each reaction's substrate list regardless of this skip.
+        // Mirrors the Julia reference (flatten.jl `lower_reactions_to_equations`,
+        // `species[i].constant === true && continue`).
+        if species.get(sp_name).and_then(|s| s.constant) == Some(true) {
+            continue;
+        }
+
         let mut rate_terms = Vec::new();
 
         for reaction in reactions {
@@ -174,10 +184,20 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
     let mut variables = HashMap::new();
 
     for (species_name, species) in &system.species {
+        // Reservoir species (`constant: true`, §7.4) are held fixed and get no
+        // ODE (skipped in `lower_reactions_to_equations`), so they lower to
+        // PARAMETERS carrying their declared `default` as the fixed value — the
+        // same treatment as the flatten path (`build_reaction_block`) and the
+        // Julia reference (reactions.jl `derive_odes`).
+        let var_type = if species.constant == Some(true) {
+            VariableType::Parameter
+        } else {
+            VariableType::State
+        };
         variables.insert(
             species_name.clone(),
             ModelVariable {
-                var_type: VariableType::State,
+                var_type,
                 units: species.units.clone(),
                 default: species.default,
                 default_units: None,
@@ -378,7 +398,7 @@ pub fn stoichiometric_matrix_parallel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Reaction, Species, StoichiometricEntry};
+    use crate::{Reaction, Species, StoichiometricEntry, VariableType};
 
     fn create_test_species(name: &str) -> (String, Species) {
         (
@@ -477,6 +497,90 @@ mod tests {
 
         assert!(var_names.contains(&"A".to_string()));
         assert!(var_names.contains(&"B".to_string()));
+    }
+
+    #[test]
+    fn test_derive_odes_reservoir_constant_species() {
+        // esm-spec §7.4: a `constant: true` reservoir species that is a
+        // stoichiometric SUBSTRATE (R + A -> B) is held fixed — it lowers to a
+        // PARAMETER (not a state), gets NO dR/dt equation, yet still appears as
+        // a mass-action concentration factor in the other species' rate laws.
+        let mut species: std::collections::HashMap<String, Species> =
+            [create_test_species("A"), create_test_species("B")]
+                .into_iter()
+                .collect();
+        species.insert(
+            "R".to_string(),
+            Species {
+                units: Some("1".to_string()),
+                default: Some(2.0),
+                description: None,
+                constant: Some(true),
+            },
+        );
+        let system = ReactionSystem {
+            reference: None,
+            species,
+            parameters: HashMap::new(),
+            reactions: vec![create_test_reaction(
+                vec![("R", 1.0), ("A", 1.0)],
+                vec![("B", 1.0)],
+                Expr::Variable("k".to_string()),
+            )],
+            constraint_equations: None,
+            discrete_events: None,
+            continuous_events: None,
+            subsystems: None,
+        };
+
+        let model = derive_odes(&system).expect("Should derive ODEs successfully");
+
+        // Reservoir R becomes a Parameter carrying its default; A and B stay State.
+        assert!(
+            matches!(model.variables["R"].var_type, VariableType::Parameter),
+            "reservoir R must lower to a parameter"
+        );
+        assert_eq!(model.variables["R"].default, Some(2.0));
+        assert!(matches!(model.variables["A"].var_type, VariableType::State));
+        assert!(matches!(model.variables["B"].var_type, VariableType::State));
+
+        // No dR/dt equation; A and B keep theirs (2 equations total, not 3).
+        let eq_species: Vec<String> = model
+            .equations
+            .iter()
+            .filter_map(|eq| match &eq.lhs {
+                Expr::Operator(node) if node.op == "D" => match &node.args[0] {
+                    Expr::Variable(name) => Some(name.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !eq_species.contains(&"R".to_string()),
+            "reservoir R must get no ODE, got equations for {eq_species:?}"
+        );
+        assert!(eq_species.contains(&"A".to_string()));
+        assert!(eq_species.contains(&"B".to_string()));
+        assert_eq!(model.equations.len(), 2);
+
+        // R is still a mass-action factor in dA/dt (held-fixed reservoir still
+        // contributes its concentration to every rate law it appears in).
+        let a_eq = model
+            .equations
+            .iter()
+            .find(|eq| match &eq.lhs {
+                Expr::Operator(node) if node.op == "D" => {
+                    matches!(&node.args[0], Expr::Variable(name) if name == "A")
+                }
+                _ => false,
+            })
+            .expect("Should find A equation");
+        let rhs_dbg = format!("{:?}", a_eq.rhs);
+        assert!(
+            rhs_dbg.contains("\"R\""),
+            "reservoir R must remain a mass-action factor in dA/dt: {rhs_dbg}"
+        );
     }
 
     #[test]

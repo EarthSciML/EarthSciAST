@@ -1,0 +1,144 @@
+{
+  "esm": "0.2.0",
+  "metadata": {
+    "name": "ReservoirReactantHeldFixed",
+    "description": "Cross-binding conformance fixture for esm-spec.md §7.4 reservoir species. A `constant: true` species R appears as a STOICHIOMETRIC SUBSTRATE of the only reaction (R + A -> B), so a binding that ignores the flag would put R in the ODE state vector and CONSUME it. Per §7.4 a reservoir gets NO dX/dt equation (its concentration is held fixed at its `default`) yet STILL contributes as a mass-action concentration factor to every rate law it appears in. Held at R=2 with k=0.5 the effective rate law is v = k*R*A = 1.0*A, so A(t) = exp(-t) and B(t) = 1 - exp(-t) exactly, and R never moves. A buggy binding that treats R as a consumed state instead lets R drift down from 2, giving A a strictly SLOWER decay (A(1) ~= 0.4353 vs 0.3679, A(3) ~= 0.1256 vs 0.0498) that misses every t>0 assertion; a binding that instead DROPPED R from the rate law would decay at k=0.5 (A(1) = exp(-0.5) ~= 0.6065), also caught. The A/B trajectory therefore proves, transitively, that R stayed pinned at its default while the non-reservoir species evolved.",
+    "authors": [
+      "EarthSciML conformance"
+    ],
+    "created": "2026-07-20T00:00:00Z",
+    "tags": [
+      "conformance",
+      "reactions",
+      "reservoir",
+      "constant-species",
+      "mass-action",
+      "esm-spec-7.4"
+    ]
+  },
+  "reaction_systems": {
+    "ReservoirHeldFixed": {
+      "reference": {
+        "notes": "Reaction R + A -> B with rate coefficient k. R is a reservoir (constant: true): held at its default (2.0), no ODE, but still a mass-action factor. Effective rate v = k*R*A = 0.5*2.0*A = A, so dA/dt = -A, dB/dt = +A, dR/dt = 0. Closed form from A(0)=1, B(0)=0, R=2, k=0.5: A(t)=exp(-t), B(t)=1-exp(-t). Values cross-checked against the Julia (Catalyst/MTK) reference binding."
+      },
+      "species": {
+        "R": {
+          "units": "1",
+          "default": 2.0,
+          "description": "Reservoir substrate, held fixed at its default (constant: true). Consumed formally by R + A -> B but its concentration must not change.",
+          "constant": true
+        },
+        "A": {
+          "units": "1",
+          "default": 1.0,
+          "description": "Non-reservoir substrate; decays as exp(-k*R*t) = exp(-t) while R is held fixed."
+        },
+        "B": {
+          "units": "1",
+          "default": 0.0,
+          "description": "Product; grows as 1 - exp(-t)."
+        }
+      },
+      "parameters": {
+        "k": {
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Rate coefficient. The runner forms the full rate law k * R * A from this coefficient and the substrate concentrations (spec §7.4)."
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "name": "reservoir_consumes_A",
+          "substrates": [
+            {
+              "species": "R",
+              "stoichiometry": 1
+            },
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "k"
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-09
+      },
+      "tests": [
+        {
+          "id": "reservoir_held_fixed_massaction",
+          "description": "R is a reservoir (constant: true) held at 2.0, so A(t) = exp(-t) and B(t) = 1 - exp(-t) exactly. Asserting the A/B trajectory proves R stayed pinned: any binding that consumes R as a state produces a strictly slower A decay and misses these values.",
+          "initial_conditions": {
+            "A": 1.0,
+            "B": 0.0
+          },
+          "parameter_overrides": {
+            "k": 0.5
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "A",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "B",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "A",
+              "time": 1.0,
+              "expected": 0.36787944117144233
+            },
+            {
+              "variable": "B",
+              "time": 1.0,
+              "expected": 0.6321205588285577
+            },
+            {
+              "variable": "A",
+              "time": 2.0,
+              "expected": 0.1353352832366127
+            },
+            {
+              "variable": "B",
+              "time": 2.0,
+              "expected": 0.8646647167633873
+            },
+            {
+              "variable": "A",
+              "time": 3.0,
+              "expected": 0.049787068367863944
+            },
+            {
+              "variable": "B",
+              "time": 3.0,
+              "expected": 0.950212931632136
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "domain": {
+    "temporal": {
+      "start": "2026-01-01T00:00:00Z",
+      "end": "2026-01-01T00:00:03Z"
+    },
+    "element_type": "Float64"
+  }
+}
