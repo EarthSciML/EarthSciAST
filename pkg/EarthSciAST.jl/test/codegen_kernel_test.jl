@@ -287,12 +287,13 @@ end
                            ESM._FixedBound(0), 0.0)
         end
         K1 = mk1d(2, N - 1, -1, 1)
-        # Rank-4 box over a 2×2×2×3 slab (strides for a 2×2×2×3 row-major-ish
-        # layout; 24 slots): the emitter caps box rank at 3 and must decline.
+        # Rank-4 box over a 2×2×2×3 slab (strides 1/2/4/8 with base -14, so
+        # oln = -14 + i + 2j + 4k + 8l covers 1:24 exactly once): the emitter
+        # caps box rank at 3 and must decline.
         acc4 = ESM._AccDesc[ESM._AccStateAffine(0)]
         sp4 = ESM._aop(:*, ESM._alit(0.5), ESM._acc(1))
         K2 = ESM._AccKernel(
-            ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -1),
+            ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
             sp4, acc4, ESM._FixedBound(0), 0.0)
         kernels = ESM._AccKernel[K1, K2]
         plans = Union{Nothing,ESM._AccPlan}[ESM._build_acc_plan(K) for K in kernels]
