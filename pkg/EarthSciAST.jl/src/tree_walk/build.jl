@@ -1218,6 +1218,11 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         @inbounds for (cv, l, node) in fills
             cv[l] = _eval_node(node, uz, pp, 0.0)
         end
+        # The caches just changed IN PLACE under readers gathering them via
+        # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
+        # (B3, const_tier.jl): a refresh fires AT its tstop, so the next RHS call
+        # is at a `t` the t-tier stamp may already hold.
+        _bump_forcing_epoch!()
         return nothing
     end
     materialize!()          # initial fill — valid caches for u0 seeding + first step
@@ -1699,15 +1704,19 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # reference trees are exactly the `_compile` output, untouched by sharing.
     isempty(percell_scalar) || append!(rhs_list, percell_scalar)
 
-    # ---- Cadence tiers of the (now final) prelude (4qf, const_tier.jl) ----
+    # ---- Cadence tiers of the (now final) prelude (4qf + B3, const_tier.jl) ----
     # Runs AFTER the sharing pass, because that pass APPENDS prelude defs — a
-    # lane-invariant kernel subtree hoisted into the scalar prelude is a const-cadence
+    # lane-invariant kernel subtree hoisted into the scalar prelude is a cadence-tier
     # candidate exactly like any other def. A slot is CONST iff its def touches no
-    # state / time / live forcing buffer AND every cache ref in it lands on a slot that
-    # is itself CONST (that second clause is the trap: an `_NK_CACHED` node carries no
-    # leaf of its own, so a leaf scan alone would call a def const while it reads a
-    # dynamic slot). `f!` then refills the const slots only when `p` has moved.
-    const_slots, dyn_slots = _classify_const_slots(scalar_prelude, scalar_cache)
+    # state / time / live forcing buffer, TIME iff it touches `t` and/or a live
+    # forcing buffer but no state, and DYNAMIC otherwise — with every cache ref in a
+    # def contributing the tier of the slot it reads (that clause is the trap: an
+    # `_NK_CACHED` node carries no leaf of its own, so a leaf scan alone would call a
+    # def const while it reads a dynamic slot). `f!` then refills the const slots
+    # only when `p` has moved, and the time slots only when `(p, t, forcing epoch)`
+    # has — so an FD Jacobian's N+1 same-`t` calls fill the time tier once.
+    const_slots, time_slots, dyn_slots =
+        _classify_const_slots(scalar_prelude, scalar_cache)
 
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
@@ -1718,7 +1727,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
         _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
-                  const_slots, dyn_slots)
+                  const_slots, time_slots, dyn_slots)
     elseif form === :oop
         _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states)
     else
@@ -1730,9 +1739,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # (and their CSE tiers) must be invariant across grid sizes; only the
     # embedded slot/value vectors grow with N. `n_cse_slots` /
     # `n_cse_occurrences` witness the scalar CSE evaluate-once property
-    # (ess-r7h #2); `n_const_slots` / `n_dynamic_slots` partition the prelude by
-    # cadence (4qf) — `n_const_slots` is the number of slots `f!` skips on a
-    # call whose `p` has not moved.
+    # (ess-r7h #2); `n_const_slots` / `n_time_slots` / `n_dynamic_slots` partition
+    # the prelude by cadence (4qf + B3) — `n_const_slots` is the number of slots
+    # `f!` skips on a call whose `p` has not moved, and `n_time_slots` the number
+    # it additionally skips while `(p, t, forcing epoch)` stand still (the FD
+    # Jacobian's same-`t` columns).
     #
     # The `_VecNode`-overlay fields (`n_vec_kernels`, `template_node_count`, the
     # `n_invariant_*` and `n_vec_*` triples) are RETAINED AS HARD ZEROS: the
@@ -1763,6 +1774,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               n_vec_shared = 0,
               n_vec_prelude_nodes = 0,
               n_const_slots = length(const_slots),
+              n_time_slots = length(time_slots),
               n_dynamic_slots = length(dyn_slots))
 
     return f!, u0, p, tspan_default, var_map, diag

@@ -139,6 +139,11 @@ function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
         "has $(length(buffer)); the provider must deliver the native forcing on the " *
         "buffer's grid (regridding is an in-model coupling, not a refresh-time transform)"))
     copyto!(buffer, field)
+    # The buffer just changed in place under the RHS's live gathers — invalidate the
+    # memoized time-cadence prelude slots (B3, tree_walk/const_tier.jl). A refresh
+    # callback fires AT its tstop, so the next RHS call may be at a `t` the t-tier
+    # stamp already holds; the epoch bump is what makes the refresh visible then.
+    _bump_forcing_epoch!()
     return buffer
 end
 

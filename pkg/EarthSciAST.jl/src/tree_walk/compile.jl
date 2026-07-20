@@ -891,11 +891,30 @@ _sat_add(a::Int, b::Int) = a > typemax(Int) - b ? typemax(Int) : a + b
 # `alt` is `undef`, so "`p` has not changed, skip the const slots" would read GARBAGE
 # on the first `Dual` call if the two buffers shared one stamp. `_cse_buf` therefore
 # invalidates the stamp of any buffer it allocates. See const_tier.jl for the tier.
+#
+# Each buffer ALSO carries a T-TIER stamp triple (B3, const_tier.jl): the `(p, t,
+# forcing-epoch)` its TIME-cadence slots currently hold. A t-only slot depends on `p`,
+# `t`, and the CONTENTS of any live forcing buffer it gathers — never on the state —
+# so its value stays good exactly while all three stand still. The `t` half of the
+# f64 stamp is a TYPED `Float64` field (`tt64`), not an `Any`: `t` moves on virtually
+# every accepted step, and re-boxing it into an `Any` field per step would cost the
+# hot path its zero-allocation property. The `p` halves (`tp64`/`tpalt`) are `Any`
+# like the const stamps and are only re-stored when `p` actually moves; `ttalt` is
+# `Any` because a non-Float64 value type may (rarely) carry a non-Float64 `t` — a
+# `Dual` t under AD-over-time — and a `Dual` t must never satisfy a Float64-keyed
+# stamp, which `===` (egal, type-discriminating) guarantees structurally.
 mutable struct _CSECache
     f64::Vector{Float64}
     alt::Any
     stamp64::Any
     stampalt::Any
+    # ---- t-tier stamps (B3): the (p, t, forcing epoch) the t-slots hold ----
+    tp64::Any
+    tt64::Float64
+    te64::UInt64
+    tpalt::Any
+    ttalt::Any
+    tealt::UInt64
 end
 
 # "This buffer's const slots hold nothing valid." A private singleton, so it is `!==`
@@ -903,7 +922,49 @@ end
 struct _CSEInvalid end
 const _CSE_INVALID = _CSEInvalid()
 
-_CSECache() = _CSECache(Float64[], nothing, _CSE_INVALID, _CSE_INVALID)
+_CSECache() = _CSECache(Float64[], nothing, _CSE_INVALID, _CSE_INVALID,
+                        _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID,
+                        UInt64(0))
+
+# ---- The forcing epoch (B3): the t-tier's view of "the forcing data moved" ----
+#
+# A t-only prelude slot may gather a LIVE forcing buffer (`_NK_PARAM_GATHER`) — a
+# `param_arrays` buffer or a discrete-cadence cache — whose CONTENTS are refreshed in
+# place while `p` and `t` stand still (a refresh callback fires AT its tstop, so the
+# first RHS call after it is at the SAME `t` as the calls before it). A `(p, t)`-keyed
+# stamp cannot see that change, so every in-place refresh must bump this counter: the
+# t-tier compares it and refills when it moved. Bumped by `_write_forcing!`
+# (data_refresh.jl — the refresh callback's write path) and by
+# `DiscreteMaterializer.materialize!` (build.jl — the discrete-cadence cache refill);
+# code that mutates a `param_arrays` buffer OUTSIDE those two paths must call
+# `notify_forcing_refresh!` itself (see its docstring).
+#
+# A single process-global counter, deliberately: a bump invalidates every evaluator's
+# t-tier, which is over-invalidation (one wasted refill), never staleness. Plain
+# `Ref`, same single-threaded-per-instance bargain the `_CSECache` buffers already
+# make (non-reentrancy note in acc_merge.jl).
+const _FORCING_EPOCH = Ref{UInt64}(0)
+
+@inline _bump_forcing_epoch!() = (_FORCING_EPOCH[] += UInt64(1); nothing)
+
+"""
+    notify_forcing_refresh!()
+
+Tell the tree-walk evaluator that the contents of a live forcing buffer (a
+`param_arrays` buffer bound into `build_evaluator`) were mutated in place, so any
+memoized time-cadence prelude values that gather it are invalidated before the next
+RHS call.
+
+The supported refresh surfaces call this automatically: the data-refresh callback
+(`build_refresh_callback` → `_write_forcing!`) and the discrete-cadence
+[`DiscreteMaterializer`](@ref)'s `materialize!`. Only code that writes a forcing
+buffer *directly* — e.g. a hand-rolled callback doing `buf .= …` — needs to call it,
+and only when the RHS may next be evaluated at a `t` it has already been evaluated
+at (the memo is keyed on `(p, t, forcing epoch)`, so any later `t` re-evaluates
+regardless). Calling it spuriously is always safe: it costs one refill of the
+time-cadence slots, never a wrong number.
+"""
+notify_forcing_refresh!() = _bump_forcing_epoch!()
 
 # Fetch the prelude scratch for value type `T`. `T` is a compile-time constant at
 # every call site (it is derived from the argument TYPES — see `_rhs_value_type`),
@@ -922,6 +983,7 @@ _CSECache() = _CSECache(Float64[], nothing, _CSE_INVALID, _CSE_INVALID)
     nb = Vector{T}(undef, length(c.f64))
     c.alt = nb
     c.stampalt = _CSE_INVALID
+    c.tpalt = _CSE_INVALID     # fresh `undef` buffer: its t-slots were never filled
     return nb
 end
 
@@ -962,6 +1024,64 @@ end
 end
 @inline function _cse_mark_const!(c::_CSECache, ::Type{T}, p) where {T}
     c.stampalt = isbits(p) ? p : _CSE_INVALID
+    return nothing
+end
+
+# ---- The t-tier's validity check (B3) -----------------------------------------
+#
+# A TIME-cadence prelude slot (const_tier.jl) is a deterministic function of
+# `(p, t, forcing-buffer contents)`, so the value in the buffer stays good until any
+# of the three moves — or until the buffer itself is replaced (`_cse_buf` invalidates
+# `tpalt` on allocation; `f64` is never replaced). `f!` refills the t-slots iff
+# `_cse_t_stale` says so, and stamps the buffer afterwards.
+#
+# The `t` compare is `===` (EGAL) — a BIT compare, deliberately NOT `==` and NOT
+# `isapprox`. Bit-equality is exactly the FD-Jacobian shape (N+1 calls at the
+# LITERALLY same `t`, perturbed `u`), and it is the only predicate under which the
+# skip is bit-exact: two `t`s that are egal produce bit-identical slot values, while
+# `==` would merge `0.0`/`-0.0` (different slots for e.g. `sign(t)`) and any
+# tolerance would return one `t`'s forcing for a nearby other. Egal is also
+# TYPE-discriminating, which closes the AD trap for free: a `Dual` `t` (AD-over-time
+# rides the `alt` buffer, since `T` promotes over `typeof(t)`) is never egal to a
+# stamped `Float64` `t`, and two `Dual`s with equal values but different partials are
+# not egal either — the memo can never hand AD a value whose partials belong to a
+# different seed. On the `f64` buffer `t isa Float64` is guaranteed dynamically
+# (any other `t` fails `t === c.tt64` by type and `_cse_mark_t!` refuses to stamp
+# it), so the typed `tt64` field is sound.
+#
+# The epoch compare is what makes a live-forcing gather admissible in this tier at
+# all (the const tier must exclude it): an in-place refresh bumps `_FORCING_EPOCH`,
+# the stamp stops matching, and the slots refill — at the same `t`, which is exactly
+# when a refresh callback fires. `isbits(p)` gates exactly as in the const tier.
+@inline _cse_t_stale(c::_CSECache, ::Type{Float64}, p, t) =
+    !(isbits(p) && c.tp64 === p && t === c.tt64 && c.te64 === _FORCING_EPOCH[])
+@inline _cse_t_stale(c::_CSECache, ::Type{T}, p, t) where {T} =
+    !(isbits(p) && c.tpalt === p && c.ttalt === t && c.tealt === _FORCING_EPOCH[])
+
+# Record the `(p, t, epoch)` this buffer's t-slots now hold. Zero-allocation on the
+# paths that repeat: `t` lands in a TYPED field (`tt64`) on the Float64 buffer, and
+# the `Any` fields (`tp64`/`tpalt`/`ttalt`) are only re-stored (boxed) when their
+# value actually moved — `p` on a `p` change, `ttalt` on a `t` change of the alt
+# path. A non-Float64 `t` on the Float64 buffer, or a non-isbits `p`/`t`, is never
+# stamped (fail closed: the tier refills every call, which is the pre-B3 behavior).
+@inline function _cse_mark_t!(c::_CSECache, ::Type{Float64}, p, t)
+    if t isa Float64 && isbits(p)
+        c.tp64 === p || (c.tp64 = p)
+        c.tt64 = t
+        c.te64 = _FORCING_EPOCH[]
+    else
+        c.tp64 === _CSE_INVALID || (c.tp64 = _CSE_INVALID)
+    end
+    return nothing
+end
+@inline function _cse_mark_t!(c::_CSECache, ::Type{T}, p, t) where {T}
+    if isbits(p) && isbits(t)
+        c.tpalt === p || (c.tpalt = p)
+        c.ttalt === t || (c.ttalt = t)
+        c.tealt = _FORCING_EPOCH[]
+    else
+        c.tpalt === _CSE_INVALID || (c.tpalt = _CSE_INVALID)
+    end
     return nothing
 end
 
