@@ -231,7 +231,27 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
             lhs = lhs::OpExpr
             vname = (lhs.args[1]::VarExpr).name
             shape = var_shapes[vname]
-            loops = String["_lp$(i-1)_$(vname)" for i in 1:length(shape)]
+            # A3 (cross-equation variant memo): UNIFORM loop names (`_lp0`,
+            # `_lp1`, …) rather than the historical state-suffixed
+            # `_lp0_$(vname)`, so two lifted equations over the same shape index
+            # the same (interned) rhs producers with IDENTICAL index
+            # expressions — which is what lets the per-build `_XEqStore` share
+            # one compiled template body across D(m,t)/D(mq,t)/D(dev,t).
+            # Pure alpha-renaming: the generated names are engine-internal loop
+            # indices, never part of a cell key, branch key, or emitted value.
+            # Collision guard: if the rhs actually uses an `_lpN` name as a
+            # variable (or the state itself is so named), fall back to the
+            # historical suffixed names for THIS equation — the pre-A3 scheme,
+            # whose own collision exposure was the same one suffix over.
+            loops = String["_lp$(i-1)" for i in 1:length(shape)]
+            clash = vname in loops
+            clash || foreach_subexpr_once(eq.rhs) do x
+                clash || (x isa VarExpr && x.name in loops && (clash = true))
+                nothing
+            end
+            if clash
+                loops = String["_lp$(i-1)_$(vname)" for i in 1:length(shape)]
+            end
             ranges = Dict{String,Any}()
             for i in eachindex(shape)
                 ranges[loops[i]] = IndexSetRef(shape[i])

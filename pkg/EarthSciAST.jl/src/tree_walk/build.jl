@@ -1968,6 +1968,13 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     percell_scalar = Tuple{Int,_Node}[]
     acc_kernels = _AccKernel[]
     covered = falses(n_states)
+    # A3: ONE cross-equation store for this build's whole equation loop — the
+    # compile-once variant / bound-body caches and the shared obs-inline memo
+    # move from per-equation to per-build (sound because every compile input
+    # threaded below is the same object for every equation; see the _XEqStore
+    # note in stencil.jl). `ESS_XEQ_VARIANT_DISABLE=1` restores the
+    # per-equation caches exactly.
+    xeq = _xeq_disabled() ? nothing : _XEqStore()
 
     for eq in derivative_eqs
         if _is_scalar_D_lhs(eq.lhs)
@@ -2008,7 +2015,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             _compile_arrayop_equation!(percell_scalar, acc_kernels, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs;
-                                       template_sites=template_sites)
+                                       template_sites=template_sites, xeq=xeq)
         end
     end
     return scalar_entries, percell_scalar, acc_kernels
@@ -2075,7 +2082,10 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels,
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
         param_sym_set, reg_funcs;
-        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing)
+        template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
+        # `nothing` or an `_XEqStore` (untyped: stencil.jl defines the type and
+        # is included after this file; `_try_affine_stencil` checks it).
+        xeq=nothing)
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -2148,7 +2158,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels,
             _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
                                 resolved_obs, array_var_info, var_map,
                                 const_registry, pgather, param_sym_set, reg_funcs,
-                                covered; template_sites=template_sites)
+                                covered; template_sites=template_sites, xeq=xeq)
         affine_first_try = affine_kernels !== nothing
         # Compile-once tier declined (a body construct the sub-kernel split cannot
         # model): retry the SAME expanded body fused — exactly the pre-tier build.
@@ -2158,7 +2168,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels,
                 _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
                                     resolved_obs, array_var_info, var_map,
                                     const_registry, pgather, param_sym_set,
-                                    reg_funcs, covered)
+                                    reg_funcs, covered; xeq=xeq)
         end
     end
     if affine_kernels !== nothing
