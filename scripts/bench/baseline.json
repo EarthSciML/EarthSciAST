@@ -1,0 +1,63 @@
+{
+    "meta": {
+        "julia": "1.12.6",
+        "commit": "b17d1d59",
+        "hostname": "ccc0233.campuscluster.illinois.edu",
+        "esd_root": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations",
+        "timestamp": "2026-07-19T21:42:06.449",
+        "reseact_root": "/projects/illinois/eng/cee/ctessum/ctessum/code/reseact.esm"
+    },
+    "fixtures": {
+        "ref_kernel": {
+            "rhs_equiv_s": 0.00039085199999999996,
+            "sweep_allocs": 0,
+            "ncells": 3528,
+            "grid": "7x7x72",
+            "rhs_equiv_convention": "9 x lon sweep (3 axes x 3 fields)",
+            "sweep_s": 4.3428e-5
+        },
+        "proxy27": {
+            "nstates": 27,
+            "load_s": 8.093667030334473,
+            "rhs_f64_allocs": 0,
+            "rhs_dual_s": 0.000123973,
+            "body_variants": 0,
+            "peak_rss_mb": 1133.85546875,
+            "rhs_dual_allocs": 109056,
+            "build_s": 18.481550931930542,
+            "rhs_f64_s": 1.8469e-5,
+            "compile_calls": 246,
+            "source": "committed",
+            "build_warm_s": 0.015266895294189453,
+            "esm": "/tmp/claude-1111265/-projects-illinois-eng-cee-ctessum-ctessum-code-reseact-esm/526f244a-2d11-4247-bece-e2026c5288ae/scratchpad/wt-p0/scripts/bench/fixtures/proxy27.esm"
+        },
+        "t3d_7x7x72": {
+            "nstates": 10584,
+            "load_s": 1.4418809413909912,
+            "rhs_f64_allocs": 0,
+            "rhs_dual_s": 0.632492789,
+            "body_variants": 52,
+            "peak_rss_mb": 2791.9765625,
+            "rhs_dual_allocs": 423497168,
+            "build_s": 313.13942289352417,
+            "rhs_f64_s": 0.266394818,
+            "compile_calls": 745602,
+            "source": "regenerated",
+            "esm": "/tmp/esm_bench_HfWhQF/fixtures/gen/t3d/transport_3d_bench_72.esm"
+        },
+        "t3d_7x7x7": {
+            "nstates": 1029,
+            "load_s": 7.4579010009765625,
+            "rhs_f64_allocs": 0,
+            "rhs_dual_s": 0.129083253,
+            "body_variants": 52,
+            "peak_rss_mb": 2760.01171875,
+            "rhs_dual_allocs": 54879248,
+            "build_s": 339.75341796875,
+            "rhs_f64_s": 0.080980896,
+            "compile_calls": 745602,
+            "source": "regenerated",
+            "esm": "/tmp/esm_bench_l1aRVR/fixtures/gen/t3d/transport_3d_bench_7.esm"
+        }
+    }
+}

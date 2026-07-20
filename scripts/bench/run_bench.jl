@@ -221,6 +221,7 @@ function run_esm_fixture(name, esm_path; const_arrays = Dict{String,Any}(),
                          warm_rebuild::Bool = false, source = "committed")
     println("== fixture $name ==")
     println("   esm: $esm_path")
+    flush(stdout)
     t0 = time()
     doc = EA.load(esm_path)
     load_s = time() - t0
@@ -228,6 +229,7 @@ function run_esm_fixture(name, esm_path; const_arrays = Dict{String,Any}(),
     f!, u0, p, tspan, _ = built
     @printf("   build: %.2f s   body_variants=%d compile_calls=%d   nstates=%d\n",
             b1.build_s, b1.body_variants, b1.compile_calls, length(u0))
+    flush(stdout)
     r = Dict{String,Any}(
         "esm" => esm_path, "source" => source, "nstates" => length(u0),
         "load_s" => load_s, "build_s" => b1.build_s,
@@ -246,6 +248,7 @@ function run_esm_fixture(name, esm_path; const_arrays = Dict{String,Any}(),
     for (k, v) in pairs(rhs); r[String(k)] = v; end
     r["peak_rss_mb"] = peak_rss_mb()
     @printf("   peak RSS: %.0f MiB (process high-water mark)\n", r["peak_rss_mb"])
+    flush(stdout)
     return r
 end
 
