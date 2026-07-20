@@ -1864,6 +1864,28 @@ function _build_evaluator_impl(model::Model;
             "expression_templates registry reached the build; construct via " *
             "an EsmFile/document front-door (esm-spec §9.6.4 Option B)"))
     end
+    # ---- Structural interning (hash-consing) of the expression AST (perf
+    # plan A1; src/intern.jl). Every build pass below is identity-memoized;
+    # interning makes textually identical subtrees (which template inlining
+    # manufactures as fresh copies) the SAME object, so those memos hit.
+    # Returns a NEW Model sharing untouched sub-objects — the caller's model
+    # is never mutated. `_template_sites` is keyed by node identity, so its
+    # entries are re-keyed through the intern map (a merged key is harmless:
+    # the only site consumers are `haskey` boundary checks, see the pre-audit
+    # audits/intern_preaudit_2026-07-19.md). `ESS_INTERN_DISABLE=1` skips the
+    # pass, restoring the pre-interning build exactly.
+    if !_intern_disabled()
+        ictx = _InternCtx()
+        model = _intern_model(model, ictx)
+        if _template_sites !== nothing
+            translated = IdDict{OpExpr,OpExpr}()
+            for (root, ap) in _template_sites
+                nr = get(ictx.memo, root, root)
+                translated[nr] = ap
+            end
+            _template_sites = translated
+        end
+    end
     _has_value_invention = !isempty(_vi_vars)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;

@@ -66,6 +66,8 @@ include("resolve.jl")
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
 include("expression.jl")
+# Structural interning (hash-consing) of the expression AST — perf plan A1.
+include("intern.jl")
 include("display.jl")
 include("graph.jl")
 include("units.jl")
