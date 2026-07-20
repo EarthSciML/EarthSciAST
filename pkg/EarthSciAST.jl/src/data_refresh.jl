@@ -260,3 +260,49 @@ build_refresh_callback(args...; kwargs...) = throw(RefreshError(
     "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
     "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
     "EarthSciASTDataRefreshExt is active"))
+
+# --------------------------------------------------------------------------- #
+# sync_forcing! — mirror refreshed host buffers into a compiled RHS's argument
+# arrays (the B2 hook for the XLA/Reactant tier)
+# --------------------------------------------------------------------------- #
+
+"""
+    sync_forcing!(dest::NamedTuple, src::NamedTuple) -> dest
+
+Copy every live forcing buffer in `src` into the same-named array of `dest`, in
+place (`copyto!` element copy — `dest`'s arrays are never rebound). The refresh
+hook for a compiled out-of-place RHS: when the RHS was `@compile`d through
+[`rhs_with_buffers`](@ref) with device arrays (`Reactant.ConcreteRArray`s) as
+its buffers argument, those arrays are real XLA inputs, and a `copyto!` into
+them between calls IS seen by the already-compiled program — so mirroring the
+freshly refreshed host buffers into them at each cadence boundary keeps the
+compiled forcing live, with no retrace and no reallocation.
+
+Wire it through [`build_refresh_callback`](@ref)'s `post_refresh` hook, which
+runs at each cadence boundary AFTER the host buffers are refreshed (and after
+the [`DiscreteMaterializer`](@ref) caches are refilled, when `post_refresh`
+chains `materialize!` first):
+
+```julia
+fo = build_evaluator(model; form = :oop, param_arrays = forcing)[1]
+host = forcing_buffers(fo)                        # aliased host buffers, stable order
+dev  = map(Reactant.ConcreteRArray, host)         # the compiled program's inputs
+rhs  = @compile rhs_with_buffers(fo)(u_r, p_r, t_r, dev)
+cb, tstops = build_refresh_callback(;
+    providers, buffers = RefreshBuffers(forcing),
+    post_refresh = () -> sync_forcing!(dev, host))
+```
+
+`src` is normally [`forcing_buffers`](@ref)`(fo)`; any NamedTuple pair works as
+long as every key of `src` is present in `dest` and shapes/lengths agree
+(`copyto!` enforces length). Missing keys throw [`RefreshError`](@ref).
+"""
+function sync_forcing!(dest::NamedTuple, src::NamedTuple)
+    for k in keys(src)
+        haskey(dest, k) || throw(RefreshError(
+            "sync_forcing!: destination has no buffer '$k' (present: " *
+            "$(collect(keys(dest)))); dest must be aligned with forcing_buffers(f)"))
+        copyto!(getfield(dest, k), getfield(src, k))
+    end
+    return dest
+end
