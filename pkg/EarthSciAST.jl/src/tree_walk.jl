@@ -86,6 +86,7 @@ include("tree_walk/access_kernel.jl")
 include("tree_walk/oop.jl")
 include("tree_walk/acc_merge.jl")     # per-cell → indirect-outs _AccKernels + _make_rhs
 include("tree_walk/xcse.jl")          # §4e: cross-kernel/kernel↔prelude fn-CSE (plan B4)
+include("tree_walk/codegen_kernel.jl") # §4f: B1 Julia-codegen tier for access kernels (RGF)
 include("tree_walk/const_tier.jl")
 include("tree_walk/stencil.jl")
 include("tree_walk/stencil_affine.jl")

@@ -328,6 +328,11 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
             _tally_cascade!(P.vectorizable ? :oop_vec : Symbol("oopdecl_", _oop_decline_reason(K)))
         end
     end
+    # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
+    # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
+    # (bit-identical, eltype-generic); the rest keep the tape/scalar runners
+    # above. `ESS_CODEGEN_DISABLE=1` yields exactly the pre-codegen kernel loop.
+    kernel_section = _make_kernel_section(acc_kernels, acc_plans)
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
@@ -404,17 +409,12 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # Each resolves its gathers at runtime from an access-descriptor table over
         # a strided output box — no per-lane slot vectors were built. The reduction
         # bound / connectivity are data, so one kernel covers every valence.
-        # At Float64 a kernel with a lane tape runs de-scalarized (`_run_acc_plan!`,
-        # bit-identical + zero-alloc); everything else — a declined kernel, or any
-        # non-Float64 value type — walks the eltype-generic scalar runner.
-        @inbounds for j in 1:length(acc_kernels)
-            P = acc_plans[j]
-            if T === Float64 && P !== nothing
-                _run_acc_plan!(du, u, p, t, acc_kernels[j], P)
-            else
-                _run_acc_kernel!(du, u, p, t, acc_kernels[j], T)
-            end
-        end
+        # The kernel section (codegen_kernel.jl) runs the codegen-emitted kernels
+        # through their compiled loop nests (any value type), then each residual
+        # kernel exactly as before: at Float64 a kernel with a lane tape runs
+        # de-scalarized (`_run_acc_plan!`, bit-identical + zero-alloc); everything
+        # else walks the eltype-generic scalar runner.
+        kernel_section(du, u, p, t, T)
         return nothing
     end
     return f!
