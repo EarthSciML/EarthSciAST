@@ -1325,11 +1325,13 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             end
         elseif op === :max
             for i in eachindex(ch)
-                res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T))
+                res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan,
+                                               invvals, cellvals, sub, fb, T))
             end
         else  # :min
             for i in eachindex(ch)
-                res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T))
+                res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan,
+                                               invvals, cellvals, sub, fb, T))
             end
         end
         return res
