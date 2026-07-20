@@ -1787,16 +1787,58 @@ _expand_expr_refs(e::OpExpr, reg) = _expand_expr_refs(e, reg, nothing)
 # sees the plain Option-A expanded tree. `sites === nothing` is the plain
 # expansion (byte-identical to the pre-tier behavior).
 const _TemplateSites = Union{Nothing,IdDict{OpExpr,OpExpr}}
-_expand_expr_refs(e::VarExpr, reg, ::_TemplateSites) = e
-_expand_expr_refs(e::NumExpr, reg, ::_TemplateSites) = e
-_expand_expr_refs(e::IntExpr, reg, ::_TemplateSites) = e
-function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites)
+
+# Expansion memo (perf plan A4): the recursive expansion of an
+# `apply_expression_template` node is a PURE function of (template name,
+# unexpanded bindings, registry) — `reg` is fixed for one `_expand_model_refs!`
+# call — so two structurally-identical apply sites expand to structurally-equal
+# subtrees. Keying `(name, canonical bindings)` → expanded root lets the second
+# site REUSE the first's expansion instead of re-running serialize → substitute
+# → re-parse → recurse, which the profiler flagged as ~34% build wall / ~46%
+# build allocs on the 7×7×7 transport fixture (the PPM flux templates recur at
+# every tracer equation, and each nested sub-template re-expands per parent).
+#
+# SHARING SAFETY: returning the SAME object for two sites makes the expanded
+# equation set a DAG — exactly the DAG A1 interning would collapse it to one
+# pass later (build.jl `_intern_model`). The two identity consumers are
+# DAG-safe by construction: `sites` is read as a `haskey` boundary Set
+# (stencil.jl:347/538) — a shared root is still a boundary; and
+# `_translate_sites_lockstep!` (build_helpers.jl) already carries a `seen`
+# guard "O(distinct nodes) on a shared DAG". The A1 pre-audit
+# (audits/intern_preaudit_2026-07-19.md) established that merging site keys is
+# harmless because the only site consumers are those `haskey` checks. Output is
+# byte-identical (verified by the differential oracle + the affine/intern
+# oracles); `ESS_EXPAND_MEMO_DISABLE=1` restores the per-site re-expansion.
+const _ExpandMemo = Union{Nothing,Dict{Tuple{String,String},OpExpr}}
+_expand_memo_disabled() = get(ENV, "ESS_EXPAND_MEMO_DISABLE", "") == "1"
+
+_expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
+_expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
+_expand_expr_refs(e::IntExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
+function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites,
+                           memo::_ExpandMemo=nothing)
     if e.op == APPLY_EXPRESSION_TEMPLATE_OP
         name = e.name
         (name !== nothing && reg !== nothing && haskey(reg, name)) || throw(
             ExpressionTemplateError("apply_expression_template_unknown_template",
                 "apply_expression_template references template " *
                 "'$(name === nothing ? "?" : name)' with no in-scope registry entry"))
+        # Canonical bindings key: name-sorted `k=serialized(v)` pairs. The same
+        # serialization feeds `_substitute` below, so the key captures exactly
+        # what determines the expansion (two sites collide iff they substitute
+        # identically). Only built when the memo is live.
+        mkey = nothing
+        if memo !== nothing
+            bkey = e.bindings === nothing ? "" :
+                join(sort!(String[string(k) * "\0" * _stable_json(serialize_expression(v))
+                                  for (k, v) in e.bindings]), "\x01")
+            mkey = (name::String, bkey)
+            cached = get(memo, mkey, nothing)
+            if cached !== nothing
+                sites === nothing || (sites[cached] = e)
+                return cached
+            end
+        end
         body_raw = _raw_get(reg[name], "body")
         bindings_raw = Dict{String,Any}()
         if e.bindings !== nothing
@@ -1805,13 +1847,14 @@ function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites)
             end
         end
         substituted = _substitute(body_raw, bindings_raw)
-        ex = _expand_expr_refs(parse_expression(substituted), reg, sites)
+        ex = _expand_expr_refs(parse_expression(substituted), reg, sites, memo)
         if sites !== nothing && ex isa OpExpr
             sites[ex] = e
         end
+        memo !== nothing && ex isa OpExpr && (memo[mkey] = ex)
         return ex
     end
-    return map_children(c -> _expand_expr_refs(c, reg, sites), e)
+    return map_children(c -> _expand_expr_refs(c, reg, sites, memo), e)
 end
 
 """
@@ -1844,25 +1887,28 @@ function _expand_refs!(file::EsmFile)::EsmFile
     return file
 end
 
-function _expand_model_refs!(model::Model, reg; sites::_TemplateSites=nothing)
+function _expand_model_refs!(model::Model, reg; sites::_TemplateSites=nothing,
+                             memo::_ExpandMemo=_expand_memo_disabled() ? nothing :
+                                   Dict{Tuple{String,String},OpExpr}())
     for (name, var) in model.variables
         if var.expression !== nothing
-            lowered = _expand_expr_refs(var.expression, reg, sites)
+            lowered = _expand_expr_refs(var.expression, reg, sites, memo)
             lowered === var.expression || _replace_var_expression!(model.variables, name, var, lowered)
         end
     end
-    _expand_equations_refs!(model.equations, reg; sites=sites)
-    _expand_equations_refs!(model.initialization_equations, reg; sites=sites)
+    _expand_equations_refs!(model.equations, reg; sites=sites, memo=memo)
+    _expand_equations_refs!(model.initialization_equations, reg; sites=sites, memo=memo)
     for (_, sub) in model.subsystems
-        sub isa Model && _expand_model_refs!(sub, reg; sites=sites)
+        sub isa Model && _expand_model_refs!(sub, reg; sites=sites, memo=memo)
     end
     return
 end
 
-function _expand_equations_refs!(eqs::Vector{Equation}, reg; sites::_TemplateSites=nothing)
+function _expand_equations_refs!(eqs::Vector{Equation}, reg; sites::_TemplateSites=nothing,
+                                 memo::_ExpandMemo=nothing)
     isempty(eqs) && return
-    new_eqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg, sites),
-                                _expand_expr_refs(eq.rhs, reg, sites); _comment=eq._comment)
+    new_eqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg, sites, memo),
+                                _expand_expr_refs(eq.rhs, reg, sites, memo); _comment=eq._comment)
                        for eq in eqs]
     empty!(eqs); append!(eqs, new_eqs)
     return

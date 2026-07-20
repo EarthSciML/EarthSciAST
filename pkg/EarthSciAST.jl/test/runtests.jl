@@ -67,6 +67,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("dag_walk_memo_test.jl")               # ESS-1p5 exponential-path DAG walk regression
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ ESS_INTERN_DISABLE=1 (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ ESS_XEQ_VARIANT_DISABLE=1 (differential)
+    include("expand_memo_oracle_test.jl")          # A4 template-expansion memo ≡ ESS_EXPAND_MEMO_DISABLE=1 (differential)
     include("tree_walk_arrayop_test.jl")
     include("tree_walk_vectorized_test.jl")
     include("access_kernel_foundation_test.jl")     # ess-affine IR foundation
