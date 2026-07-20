@@ -347,8 +347,14 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     elseif k === _NK_CACHED
         # A CSE reference: the value was computed once for THIS cell by the box
         # loop's prelude (`_fill_cse!`) into the per-cell scratch captured in
-        # `payload`; every occurrence reads it here instead of re-walking.
-        return _acc_scratch_read(nd.payload::_AccScratch, nd.idx, T)
+        # `payload` — or, for an inv-tier def the cross-kernel sharing pass
+        # (xcse.jl, plan B4) rewrote, once per CALL into the SCALAR prelude's
+        # `_CSECache` (filled by `_make_rhs` before any kernel runs). The `isa`
+        # split keeps both reads monomorphic; kernels a build never rewrites
+        # only ever see the `_AccScratch` branch.
+        pl = nd.payload
+        pl isa _AccScratch && return _acc_scratch_read(pl, nd.idx, T)
+        return _cse_read(pl::_CSECache, nd.idx, T)
     elseif k === _NK_SUBCALL
         # Template-body sub-kernel (RFC out-of-line-expression-templates): fill the
         # body's per-cell CSE scratch for THIS cell, then evaluate its spine

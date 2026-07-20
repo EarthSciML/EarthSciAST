@@ -801,7 +801,12 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              array_var_info, var_map::Dict{String,Int},
                              const_arrays::AbstractDict, pgather::AbstractDict,
                              param_sym_set, reg_funcs, covered::BitVector;
-                             template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing)
+                             template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
+                             # A3: the per-BUILD cross-equation store (variant +
+                             # bound-body caches, shared obs-inline memo).
+                             # `nothing` restores the per-equation caches
+                             # (ESS_XEQ_VARIANT_DISABLE=1 / storeless callers).
+                             xeq::Union{Nothing,_XEqStore}=nothing)
     (lhs_body.op == "D" && !isempty(lhs_body.args) &&
      lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
      !isempty((lhs_body.args[1]::OpExpr).args) &&
@@ -826,7 +831,12 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     body = rhs_body
     sites = template_sites
     if !isempty(resolved_obs)
-        memo = _SubMemo()
+        # A3: with a store, the substitution memo is shared across every
+        # equation of the build (bindings — `resolved_obs` — are one fixed Dict
+        # per build, `_xeq_obs_memo` pins that), so a root shared by two
+        # equations rewrites to the SAME object and the cross-equation variant
+        # key can hit. Without a store: a fresh per-call memo, as before.
+        memo = xeq === nothing ? _SubMemo() : _xeq_obs_memo(xeq, resolved_obs)
         body = _sub_preserving(rhs_body, resolved_obs, memo)
         if sites !== nothing
             translated = IdDict{OpExpr,OpExpr}()
@@ -861,7 +871,8 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         flush(stderr)
     end
     tctx = sites === nothing ? nothing :
-           _TemplateCtx(sites, var_map, param_sym_set, reg_funcs)
+           _TemplateCtx(sites, var_map, param_sym_set, reg_funcs;
+                        idxkey=_idxset_key(idx_names), store=xeq)
     ctx_proto = _StencilCtx(Set{String}(idx_names), _LaneRecipe[], Dict{String,Int}(),
                             array_var_info, const_arrays, pgather, tctx)
     sig = _AffineSig()
