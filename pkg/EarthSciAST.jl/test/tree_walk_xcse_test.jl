@@ -134,15 +134,24 @@ end
     @testset "evaluate-once: per-call fn count, ON == 1, OFF == K" begin
         K, N = 5, 6
         _, ics = _xc_fastjx(K, N; nshared=K)
-        for (on, expected_fn) in ((true, 1), (false, K))
-            f!, _, _, _, _, diag = _xc_build(_xc_fastjx(K, N; nshared=K)[1];
-                                             ics, on=on)
-            fields = fieldnames(typeof(f!))
-            @test :cse_prelude in fields && :acc_kernels in fields
-            prelude = getfield(f!, :cse_prelude)
-            kernels = getfield(f!, :acc_kernels)
-            @test _xc_percall_fn(prelude, kernels) == expected_fn
-            @test diag.n_xcse_slots == (on ? 3 : 0)
+        # White-box count over the INTERPRETER kernel IR: disable the B1 codegen
+        # tier so every kernel stays a residual `_AccKernel` (its inv recipes
+        # walkable). With codegen on, the OFF case's K per-kernel interp calls
+        # are compiled into the generated function and would vanish from the
+        # introspectable set; the xcse hoisting under test is identical either
+        # way. `_make_rhs` still captures `kernel_section` (B1), whose `.kernels`
+        # holds all kernels when nothing is emitted.
+        withenv("ESS_CODEGEN_DISABLE" => "1") do
+            for (on, expected_fn) in ((true, 1), (false, K))
+                f!, _, _, _, _, diag = _xc_build(_xc_fastjx(K, N; nshared=K)[1];
+                                                 ics, on=on)
+                fields = fieldnames(typeof(f!))
+                @test :cse_prelude in fields && :kernel_section in fields
+                prelude = getfield(f!, :cse_prelude)
+                kernels = getfield(getfield(f!, :kernel_section), :kernels)
+                @test _xc_percall_fn(prelude, kernels) == expected_fn
+                @test diag.n_xcse_slots == (on ? 3 : 0)
+            end
         end
     end
 
