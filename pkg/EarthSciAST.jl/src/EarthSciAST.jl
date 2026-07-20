@@ -188,6 +188,10 @@ export
     # expression the RHS evaluates (the obsolete RegridApplier seam was removed).
     build_refresh_callback, RefreshBuffers, RefreshError,
     provider_refresh_times, provider_is_const, provider_sample,
+    # Out-of-place RHS explicit-buffers surface (perf-plan B2): the traced-
+    # argument binding of the live forcing buffers, plus the refresh-side hook
+    # that mirrors a host refresh into the compiled program's argument arrays.
+    rhs_with_buffers, forcing_buffers, forcing_buffer_index, sync_forcing!,
     # One-call run entry (load → discretize → build_evaluator → seed → refresh →
     # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).
     # `prepare` runs the deterministic-per-document pipeline ONCE into a cached
