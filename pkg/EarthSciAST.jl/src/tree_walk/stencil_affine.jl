@@ -626,6 +626,44 @@ function _materialize_state_tbl(rec::_LaneRecipe, idx_names, box, D,
     return _AccRepl(_AccStateTblBox(tbl, s[1], s[2], s[3], off))
 end
 
+# Kill switch for the non-affine LIVE-forcing lane table lowering below
+# (perf-plan A2, prototypes/perf-gap-closure-plan.md): `ESS_OBSREF_DISABLE=1`
+# restores the pre-A2 whole-equation per-cell fallback byte-for-byte — the
+# differential-oracle escape hatch (test/stencil_affine_pgather_tbl_test.jl).
+_obsref_disabled() = get(ENV, "ESS_OBSREF_DISABLE", "") == "1"
+
+# Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
+# into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
+# inlining splices into stencil lanes gather their raw buffers with clamped
+# subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls — the GEOS-FP
+# Mz/OMEGA pattern); the clamp makes the flat index non-affine across a box,
+# and — pgather transitions being invisible to the per-cell cut signature —
+# the corner verification then threw the WHOLE equation onto the per-cell
+# fallback (measured on the 72-level GEOS-FP transport: the mass equation
+# alone was ~910k `_compile` calls, ~40% of the warm build). Lowering the lane
+# to `_AccArrTblBox` instead mirrors `_materialize_state_tbl`: one
+# `_eval_recipe` per box cell — the SAME index resolution the per-cell
+# fallback would run — stored densely in box-local layout. The table holds
+# linear INDICES (static); the VALUES are read through the aliased `pg.flat`
+# at eval time, so an in-place refresh is always seen — exactly the
+# `_AccForcingBox` liveness contract, and the same descriptor kind the
+# per-cell merge (`_acc_merge_nodes`) already emits for divergent forcing
+# reads. Bit-identical by construction; O(box) build cost.
+function _materialize_pgather_tbl(rec::_LaneRecipe, idx_names, box, D,
+                                  var_map, const_arrays)
+    pg = rec.arr::_PGatherArray
+    s, off, len = _box_local_addr(box, D)
+    tbl = Vector{Int}(undef, len)
+    env = Dict{String,Int}()
+    j = 0
+    for loop in Iterators.product((box[d] for d in 1:D)...)
+        j += 1
+        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
+                              var_map, const_arrays)::Int
+    end
+    return _AccRepl(_AccArrTblBox(pg.flat, tbl, s[1], s[2], s[3], off))
+end
+
 # Materialize a NON-AFFINE const lane as a dense per-box VALUE table, addressed
 # box-locally through the existing `_AccConstBox` descriptor. The values are
 # `_eval_recipe`'s per-cell outputs (boundary folds included), so a fetch is
@@ -647,13 +685,14 @@ end
 # Derive one lane's lowering for a box and VERIFY it is uniform across the box
 # corners (state Δ constant, ghost uniform, const/forcing index affine). A
 # non-uniform STATE lane (an unstructured/indirect gather, or a fold pattern
-# past the Δ-cut cap) and a non-affine CONST index MATERIALIZE per-box tables
-# instead of declining — see `_materialize_state_tbl` / `_materialize_const_box`.
-# A non-affine live-forcing (pgather) index still throws `_StencilFallback`
-# (per-cell fallback): a forcing gather must stay an index into the aliased live
-# buffer, and no table kind models that today. A live forcing lane otherwise
-# lowers to `_AccForcingBox` over the aliased buffer (never folded to a literal,
-# so it stays refresh-live).
+# past the Δ-cut cap), a non-affine CONST index, and a non-affine LIVE-forcing
+# (pgather) index all MATERIALIZE per-box tables instead of declining — see
+# `_materialize_state_tbl` / `_materialize_const_box` /
+# `_materialize_pgather_tbl` (the pgather table holds indices into the aliased
+# live buffer, so it stays refresh-live; `ESS_OBSREF_DISABLE=1` restores the
+# pre-A2 whole-equation per-cell fallback for the differential oracle). A live
+# forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
+# (never folded to a literal, so it stays refresh-live).
 function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                            oln_rep, base, strides, D, var_map, const_arrays,
                            flat_cache, box)
@@ -725,8 +764,15 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         end
         off = lin_rep - sum((rep[d]-1)*s[d] for d in 1:D)
         for cn in corners
-            (off + sum((cn[d]-1)*s[d] for d in 1:D)) == ev(cn) ||
-                throw(_StencilFallback("pgather index non-affine in box"))
+            if (off + sum((cn[d]-1)*s[d] for d in 1:D)) != ev(cn)
+                # Clamped/folded forcing subscript (non-affine across the box):
+                # materialize the per-box index table (perf-plan A2). The kill
+                # switch restores the pre-A2 whole-equation per-cell fallback.
+                _obsref_disabled() &&
+                    throw(_StencilFallback("pgather index non-affine in box"))
+                return _materialize_pgather_tbl(rec, idx_names, box, D,
+                                                var_map, const_arrays)
+            end
         end
         return _AccRepl(_AccForcingBox(pg.flat, s[1], s[2], s[3], off))
     end

@@ -699,7 +699,9 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
             (1 <= v <= pg.dims[d]) ||
                 throw(TreeWalkError("E_TREEWALK_PGATHER_OOB",
                     "forcing array '$(rec.var_name)' index $(v) out of range " *
-                    "[1, $(pg.dims[d])] on dim $(d)"))
+                    "[1, $(pg.dims[d])] on dim $(d)" *
+                    (get(ENV, "ESS_PGATHER_OOB_DEBUG", "") == "1" ?
+                     " idx_args=$(repr(rec.idx_args)) idx_env=$(idx_env)" : "")))
             inds[d] = v
         end
         return LinearIndices(Tuple(pg.dims))[inds...]
