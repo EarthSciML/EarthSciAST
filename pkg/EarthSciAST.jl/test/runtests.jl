@@ -76,6 +76,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("stencil_affine_contract_test.jl")       # ess-affine const-bound contraction ≡ per-cell
     include("stencil_affine_cse_test.jl")            # ess-affine per-cell CSE ≡ per-cell
     include("stencil_affine_invariant_test.jl")      # ess-affine invariant hoist ≡ per-cell
+    include("codegen_kernel_test.jl")                # B1 codegen tier ≡ pre-codegen (differential)
     include("tree_walk_oop_test.jl")
     include("tree_walk_iip_generic_test.jl")
     # XLA tracing of the out-of-place RHS (ext/EarthSciASTReactantExt.jl). OPT-IN:
