@@ -1690,6 +1690,23 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
                             has_pgather = !isempty(pgather), obs_defs=obs_defs)
 
+    # ---- Cross-kernel / kernel↔prelude fn-CSE (perf plan B4; xcse.jl) ----
+    # A lane-invariant fn/interp subtree appearing in several array kernels'
+    # invariant tiers (and possibly in scalar equations too) collapses to ONE
+    # shared scalar prelude slot; each kernel's inv def becomes a bare cache
+    # read. `:inplace` only — the `:oop` emitter fills its own per-call prelude
+    # vector, never the `_CSECache` the kernel-side reads consult. Runs BEFORE
+    # the percell append (the ESS_STENCIL_DISABLE reference trees stay exactly
+    # the `_compile` output) and BEFORE the cadence split (a hoisted
+    # parameter-only def still joins the const tier). ESS_XCSE_DISABLE=1
+    # restores the pre-B4 build byte for byte.
+    xcse_diag = if form === :inplace && !_xcse_disabled()
+        _share_kernel_invariants!(rhs_list, scalar_prelude, scalar_cache,
+                                  acc_kernels)
+    else
+        _XCSE_NONE_DIAG
+    end
+
     # ---- Forced per-cell reference (ESS_STENCIL_DISABLE=1) ----
     # The disabled fallback's compiled per-cell nodes join the scalar list —
     # each cell evaluated by the plain scalar walker `_eval_node`, with no merge
@@ -1759,6 +1776,12 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               n_invariant_slots = 0,
               n_invariant_shared = 0,
               n_invariant_scalar_shared = 0,
+              # Cross-kernel fn-CSE (plan B4; xcse.jl): shared prelude slots
+              # minted by the pass / kernel inv defs rewritten to shared-slot
+              # reads / scalar RHS sites rewritten onto new shared slots.
+              n_xcse_slots = xcse_diag.n_xcse_slots,
+              n_xcse_kernel_shared = xcse_diag.n_xcse_kernel_shared,
+              n_xcse_scalar_shared = xcse_diag.n_xcse_scalar_shared,
               n_vec_slots = 0,
               n_vec_shared = 0,
               n_vec_prelude_nodes = 0,
