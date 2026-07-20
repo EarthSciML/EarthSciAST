@@ -911,7 +911,7 @@ _CSECache() = _CSECache(Float64[], nothing, _CSE_INVALID, _CSE_INVALID)
 # specialization, and the `Float64` one is a field load.
 #
 # `f64` is allocated ONCE, at build time (`_cse_compile_scalar` sizes it, and
-# `_share_lane_invariants!` may grow it), and never replaced — so its stamp can only
+# `_share_kernel_invariants!` (xcse.jl) may grow it), and never replaced — so its stamp can only
 # be invalidated by a `p` change. `alt` is (re)allocated lazily here, and every fresh
 # `alt` is `undef` memory whose const slots have never been filled: allocating one
 # MUST invalidate its stamp.
@@ -1166,7 +1166,7 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
     # ---- Named observed prelude defs, in dependency order (ess-obs-slots) ----
     # Compiled BEFORE the equations so every reader's slot exists, and in
     # dependency order so a def's slot reads land strictly below it (the
-    # topological-prelude invariant const_tier.jl and invariant_share.jl rely
+    # topological-prelude invariant const_tier.jl and xcse.jl rely
     # on). A def whose whole body lowered to an existing CSE slot (its key was
     # counted >= 2) is ALIASED onto that slot rather than duplicated.
     n_obs_own = 0
