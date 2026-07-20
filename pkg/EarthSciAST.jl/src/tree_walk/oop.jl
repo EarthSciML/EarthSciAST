@@ -466,25 +466,33 @@ end
 # the explicit form is `rhs(u, p, t, buffers)`, where `buffers` is a NamedTuple
 # of arrays in a STABLE order (buffer names sorted; see `_make_rhs_oop`). At each
 # read site the walker swaps the node's aliased host array for the aligned entry
-# of the `buffers` argument via `_oop_forcing_slab` — an identity lookup on the
-# host array, resolved through `pos` (built once per RHS). A backend then passes
-# device arrays (`ConcreteRArray`s) in `buffers`, and an in-place `copyto!` into
-# those SAME arrays between calls is a real input update the compiled program
-# sees (measured; see ext/EarthSciASTReactantExt.jl).
+# of the `buffers` argument via `_oop_forcing_slab` — an identity (`===`) scan
+# over `hostkeys`, the host buffers in the container's own order (built once per
+# RHS). A LINEAR scan, not an `IdDict`, and that is load-bearing: the scan runs
+# per forcing read per call, O(#buffers) with #buffers the handful of forcing
+# VARIABLES (never cells) — and an `IdDict` capture is untraceable (its
+# `Memory{Any}` hash table throws inside Reactant's closure walk), which would
+# break tracing for every model, forcing or not. A backend passes device arrays
+# (`ConcreteRArray`s) in `buffers`, and an in-place `copyto!` into those SAME
+# arrays between calls is a real input update the compiled program sees
+# (measured; see ext/EarthSciASTReactantExt.jl).
 #
 # The host wrapper (`_OopRHS`) forwards the build's own host buffers, so
 # `f(u, p, t)` still reads the exact aliased storage it always did — the
-# fallback arm in `_oop_forcing_slab` (an arr absent from `pos`, e.g. a
+# fallback arm in `_oop_forcing_slab` (an arr absent from `hostkeys`, e.g. a
 # hand-built test kernel) reads the host array directly, the pre-B2 behavior.
 struct _OopForcing{B}
     bufs::B                             # this CALL's buffer container (host or traced)
-    pos::IdDict{Vector{Float64},Int}    # host buffer identity → position in `bufs`
+    hostkeys::Vector{Vector{Float64}}   # host buffer identities, aligned with `bufs`
 end
-const _OOP_NO_FORCING = _OopForcing((;), IdDict{Vector{Float64},Int}())
+const _OOP_NO_FORCING = _OopForcing((;), Vector{Float64}[])
 
 @inline function _oop_forcing_slab(fb::_OopForcing, arr::Vector{Float64})
-    j = get(fb.pos, arr, 0)
-    return j === 0 ? arr : fb.bufs[j]
+    ks = fb.hostkeys
+    @inbounds for j in eachindex(ks)
+        ks[j] === arr && return fb.bufs[j]
+    end
+    return arr
 end
 
 # ---- Scalar walker (`_Node`) ------------------------------------------------
@@ -1491,17 +1499,14 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # The buffers container (B2): every live forcing buffer this build registered
     # — raw `param_arrays` entries AND DiscreteMaterializer caches, both of which
     # live in `pgather` by the time this runs — in a STABLE order (names sorted),
-    # as a NamedTuple of the aliased flat host views. `pos` maps a buffer's host
-    # identity (the exact object a node payload / acc descriptor aliases) to its
-    # position, so the walkers can swap a captured array for the argument entry.
+    # as a NamedTuple of the aliased flat host views. `host_keys` carries the same
+    # arrays positionally: the walkers identity-match a node payload / acc
+    # descriptor against it to swap the captured array for the argument entry.
     buf_names = sort!(String[String(k) for k in keys(pgather)])
     host_bufs = NamedTuple{Tuple(Symbol(n) for n in buf_names)}(
         Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
     buffer_index = Dict{String,Int}(n => i for (i, n) in enumerate(buf_names))
-    pos = IdDict{Vector{Float64},Int}()
-    for (i, n) in enumerate(buf_names)
-        pos[(pgather[n]::_PGatherArray).flat] = i
-    end
+    host_keys = Vector{Float64}[(pgather[n]::_PGatherArray).flat for n in buf_names]
     function rhs(u, p, t, buffers)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         if live_forcing && _is_traced(u, p, t) && !_forcing_traced(buffers)
@@ -1519,7 +1524,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                 "the data never changes), or run the interpreted evaluator, which does " *
                 "track the refresh."))
         end
-        fb = _OopForcing(buffers, pos)
+        fb = _OopForcing(buffers, host_keys)
         T = _oop_value_type(u, p, t)
         cache = Vector{T}(undef, n_cse)
         @inbounds for s in 1:n_cse
