@@ -44,8 +44,7 @@ import './web-components.css'
  * Usage:
  * <esm-expression-editor
  *   expression='{"op": "+", "args": [1, 2]}'
- *   allow-editing="true"
- *   show-palette="true">
+ *   allow-editing="true">
  * </esm-expression-editor>
  */
 export interface EsmExpressionEditorProps {
@@ -53,8 +52,6 @@ export interface EsmExpressionEditorProps {
   expression: string
   /** Whether editing is allowed */
   'allow-editing'?: boolean
-  /** Whether to show the expression palette */
-  'show-palette'?: boolean
 }
 
 /**
@@ -74,8 +71,6 @@ export interface EsmModelEditorProps {
   name?: string
   /** Whether editing is allowed */
   'allow-editing'?: boolean
-  /** Whether to show the expression palette */
-  'show-palette'?: boolean
 }
 
 /**
@@ -233,9 +228,6 @@ export const EsmExpressionEditorComponent = (
         get readonly() {
           return !attrBool(props['allow-editing'])
         },
-        get showPalette() {
-          return attrBool(props['show-palette'])
-        },
       })
     },
   })
@@ -270,9 +262,6 @@ export const EsmModelEditorComponent = (
           dispatch(props.element, 'change', { model: updatedModel }),
         get readonly() {
           return !attrBool(props['allow-editing'])
-        },
-        get showPalette() {
-          return attrBool(props['show-palette'])
         },
       })
     },
@@ -406,7 +395,6 @@ export function registerWebComponents() {
       {
         expression: '',
         'allow-editing': true,
-        'show-palette': true,
       },
       (props, { element }) =>
         EsmExpressionEditorComponent(
@@ -420,7 +408,6 @@ export function registerWebComponents() {
         model: '',
         name: '',
         'allow-editing': true,
-        'show-palette': true,
       },
       (props, { element }) =>
         EsmModelEditorComponent(mergeProps(props, { element: element as unknown as HTMLElement })),

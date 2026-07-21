@@ -35,7 +35,6 @@ describe('ModelEditor', () => {
     description: 'A test model for demonstration',
     onModelChange: vi.fn(),
     readonly: false,
-    showPalette: true,
   }
 
   beforeEach(() => {
@@ -81,7 +80,7 @@ describe('ModelEditor', () => {
   })
 
   it('hides add buttons in readonly mode', () => {
-    render(() => <ModelEditor {...mockProps} readonly={true} showPalette={false} />)
+    render(() => <ModelEditor {...mockProps} readonly={true} />)
 
     // In readonly mode, main panel add buttons should not be present
     expect(screen.queryByLabelText('Add new variable')).not.toBeInTheDocument()
@@ -267,21 +266,5 @@ describe('ModelEditor', () => {
     // Leaving the variable clears the highlight
     fireEvent.mouseLeave(variableItem)
     expect(container.querySelector('.esm-expression-node.highlighted')).toBeNull()
-  })
-
-  it('shows expression palette when enabled', () => {
-    render(() => <ModelEditor {...mockProps} showPalette={true} />)
-
-    // The palette should be rendered (it has specific classes)
-    const palette = document.querySelector('.palette-sidebar')
-    expect(palette).toBeInTheDocument()
-  })
-
-  it('hides expression palette when disabled', () => {
-    render(() => <ModelEditor {...mockProps} showPalette={false} />)
-
-    // The palette should not be rendered
-    const palette = document.querySelector('.palette-sidebar')
-    expect(palette).not.toBeInTheDocument()
   })
 })

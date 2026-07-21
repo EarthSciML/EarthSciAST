@@ -7,7 +7,6 @@
 
 // Core components
 export { ExpressionNode, type ExpressionNodeProps } from './components/ExpressionNode'
-export { ExpressionPalette, type ExpressionPaletteProps } from './components/ExpressionPalette'
 
 // Editor components
 export { EquationEditor, type EquationEditorProps } from './components/EquationEditor'

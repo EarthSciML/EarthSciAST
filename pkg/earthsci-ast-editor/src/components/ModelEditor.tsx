@@ -26,7 +26,6 @@ import type {
   ContinuousEvent,
   DiscreteEvent,
 } from '@earthsciml/ast'
-import { ExpressionPalette } from './ExpressionPalette'
 import { VariablesPanel } from './VariablesPanel'
 import { EquationsPanel } from './EquationsPanel'
 import { EventsPanel } from './EventsPanel'
@@ -56,9 +55,6 @@ export interface ModelEditorProps {
 
   /** CSS class for styling */
   class?: string
-
-  /** Whether to show the expression palette */
-  showPalette?: boolean
 }
 
 /**
@@ -219,13 +215,6 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
             />
           </div>
         </div>
-
-        {/* Expression palette sidebar */}
-        <Show when={props.showPalette && !props.readonly}>
-          <div class="palette-sidebar">
-            <ExpressionPalette currentModel={props.model} visible={true} />
-          </div>
-        </Show>
       </div>
     </div>
   )

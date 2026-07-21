@@ -46,13 +46,6 @@ export interface ExpressionEditorProps {
    */
   readonly?: boolean
 
-  /**
-   * Retained for API/web-component compatibility. The old draggable expression
-   * palette was a structural-editing affordance and has been removed now that
-   * editing is text-only, so this prop is currently a no-op.
-   */
-  showPalette?: boolean
-
   /** CSS class for styling */
   class?: string
 

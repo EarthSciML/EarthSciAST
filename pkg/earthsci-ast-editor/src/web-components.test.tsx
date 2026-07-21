@@ -93,7 +93,6 @@ describe('Web Components', () => {
       const validProps = {
         expression: JSON.stringify(validExpression),
         'allow-editing': 'true',
-        'show-palette': 'true',
       }
 
       expect(() => JSON.parse(validProps.expression)).not.toThrow()
@@ -210,7 +209,6 @@ describe('Web Components', () => {
       const expressionEditorProps = {
         expression: '{"op": "+", "args": [1, 2]}',
         'allow-editing': true,
-        'show-palette': true,
       }
 
       const modelEditorProps = {
