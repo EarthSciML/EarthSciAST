@@ -580,6 +580,84 @@ function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
     return true
 end
 
+# Instrumentation: number of leaf bindings the enumerator VISITED (a tuple the
+# callback was invoked on). Reset by callers/tests; proves the overlap-gated
+# producer visits O(|candidates|·∏ungated) tuples, NOT the full O(∏ranges)
+# product (projection-pushdown Wall #1).
+const _VI_ENUM_VISITS = Ref{Int}(0)
+
+# The first OVERLAP join gate (the one carrying a prebuilt `(query_pos, cell_pos)`
+# candidate set) among the resolved gates, or `nothing` if none. This is the gate
+# whose candidate pairs DRIVE enumeration: an overlap gate resolves its entire
+# admissible pair set ONCE (`_vi_resolve_join`), so we can iterate those pairs
+# directly instead of testing every product tuple for membership.
+function _vi_overlap_driver(gates::Union{Vector{_ViJoinGate},Nothing})
+    gates === nothing && return nothing
+    for g in gates
+        g.candidates === nothing || return g
+    end
+    return nothing
+end
+
+# Enumerate an aggregate's `ranges`, DRIVING from an OVERLAP gate's prebuilt
+# candidate pairs when one is present (Wall #1 fix). Instead of building the full
+# `Iterators.product` over every range and membership-testing each tuple —
+# O(∏ranges), e.g. O(N_query·N_cell) — iterate ONLY the gate's `(query_pos,
+# cell_pos)` candidate pairs, bind the two gated range symbols from each pair, and
+# take the cartesian product with any OTHER (ungated) ranges. Cost drops to
+# O(|candidates|·∏ungated); with both gated symbols the only ranges (the ISRM
+# emis×cells producer) that is O(|candidates|).
+#
+# With NO overlap gate this is EXACTLY `_vi_enumerate` — byte-for-byte identical
+# enumeration order and leaf set (bin-equality / ungated producers are untouched).
+# The callback is identical in both paths and STILL applies the narrow `filter`
+# and the full `_vi_join_ok` re-check downstream, so the overlap-gated leaf set
+# differs from the full product only by provably-non-candidate tuples the
+# membership test would have rejected anyway — the materialised member SET (after
+# `distinct` canonicalises order) is identical to the old full-product path.
+function _vi_enumerate_join(ranges, gates::Union{Vector{_ViJoinGate},Nothing},
+                            ctx::_ViCtx, cb)
+    counted = bindings -> (_VI_ENUM_VISITS[] += 1; cb(bindings))
+    ov = _vi_overlap_driver(gates)
+    if ov === nothing
+        _vi_enumerate(ranges, ctx, counted)   # full product — unchanged behaviour
+        return
+    end
+    sym_l, sym_r = ov.sym_l, ov.sym_r
+    # DETERMINISTIC (query_pos, cell_pos)-ascending drive order. The member set is
+    # canonicalised downstream (`distinct`/`rank`), but a sorted drive keeps any
+    # order-sensitive `⊕` reduction stable.
+    pairs = sort!(collect(ov.candidates))
+    # The remaining ungated symbols, in the SAME topological order the full product
+    # visits them (ragged `of` parents before children), minus the two driven
+    # symbols. Overlap-gated symbols index a 1-D buffer (interval/categorical), so
+    # they are never ragged `of` parents — pre-binding them is order-safe.
+    rest = filter(s -> s != sym_l && s != sym_r, _vi_order_syms(ranges))
+    bindings = Dict{String,Any}()
+    function rec(k)
+        if k > length(rest)
+            counted(bindings)
+            return
+        end
+        s = rest[k]
+        for v in _vi_range_values(ranges[s], ctx, bindings)
+            bindings[s] = v
+            rec(k + 1)
+        end
+        delete!(bindings, s)
+    end
+    # A candidate pair holds 1-based range POSITIONS; for an interval/categorical
+    # range `_vi_range_values` binds position p to the value p, so binding the two
+    # gated symbols directly reproduces exactly the tuple the old product bound at
+    # those positions (and which `_vi_join_ok` admitted).
+    for (pl, pr) in pairs
+        bindings[sym_l] = pl
+        bindings[sym_r] = pr
+        rec(1)
+    end
+    return
+end
+
 # Arg-witness reducer (RFC §5.7 rule 6). Over the inner contracted `ranges`
 # (which EXTEND the outer map binding so `value` may read both the point and the
 # candidate), evaluate the scalar `value` body at each candidate and return the
@@ -687,10 +765,13 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     filt = node.filter
     join = node.join
     # Resolve join gates ONCE (a `join.overlap` broad-phase candidate set is built
-    # a single time here, then membership-tested per contracted tuple).
+    # a single time here). An OVERLAP gate then DRIVES enumeration from its
+    # candidate pairs (`_vi_enumerate_join`, Wall #1) — O(|candidates|) rather than
+    # O(∏ranges) with a per-tuple membership test; other gate kinds enumerate the
+    # full product exactly as before.
     join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
     members = Any[]
-    _vi_enumerate(ranges, ctx, bindings -> begin
+    _vi_enumerate_join(ranges, join_gates, ctx, bindings -> begin
         if filt !== nothing
             fv = _vi_eval(filt, ctx, bindings)
             (fv === true || (isa(fv, Real) && fv > 0)) || return
