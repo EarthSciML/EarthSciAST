@@ -2679,8 +2679,13 @@ function build_evaluator(esm::AbstractDict;
         # TEMPLATE-CONSTRUCTED (aggregate-valued) coordinate is admissible as a
         # skolem-bin index target (not only a const-supplied / reduce-over-const one).
         _vi_targets = _vi_skolem_index_targets(model)
+        # Thread the model's registered functions so a coordinate whose body needs
+        # the GENERAL build-time evaluator (an LCC projection's trig/`^`/`fn`
+        # expansion — ops outside the setup-time geometry vocabulary) is projected
+        # HERE, before value-invention, and its `X`/`Y` fed into `const_arrays`.
+        _regfns = get(kwd, :registered_functions, Dict{String,Function}())
         _derived = _derive_binning_coords(model, file.index_sets, _ca, _params,
-                                          _vi_targets)
+                                          _vi_targets, _regfns)
         if !isempty(_derived)
             merge!(_ca, _derived)
             kwd[:const_arrays] = _ca

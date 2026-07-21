@@ -1198,7 +1198,8 @@ end
 # (or any name absent from the build-time env) is NOT build-time-constant, so it is
 # never materialised and never becomes an index target. Returns name → values.
 function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overrides,
-                                vi_index_targets=Set{String}())
+                                vi_index_targets=Set{String}(),
+                                registered_functions::AbstractDict=Dict{String,Function}())
     out = Dict{String,Vector{Float64}}()
     # The shared setup env (see `_build_setup_env` for the precedence proof that
     # this equals the assembly formerly inlined here): in-file `const`-op ring
@@ -1251,7 +1252,26 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
                 ok = false; break                            # unresolved dep — retry / drop
             end
             ok || continue
-            env[n] = _materialize_geom_array(e, env, index_sets, derived_extents, var_shapes)
+            # A coordinate whose body reaches an op OUTSIDE the setup-time geometry
+            # vocabulary (`_GEO_EVAL_OPS`) — a Lambert-conformal PROJECTION (`X[e] =
+            # lambert_conformal_forward_x(lon[e],lat[e])`, trig/`^`/`fn`, an
+            # `apply_expression_template` expansion) — cannot be compiled by
+            # `_materialize_geom_array` (whose `_geo_compile` speaks only that
+            # vocabulary). Route it to the GENERAL build-time cell pipeline
+            # (`_eval_cellwise`, the full scalar + `fn` op set the ODE RHS resolver
+            # uses), exactly as a promoted-physics MAP is materialised in
+            # `_materialize_geometry_setup`. Because this runs BEFORE
+            # `materialize_value_invention` (the seeds feed `const_arrays`), a
+            # projected coordinate becomes visible to value-invention's `_vi_eval`
+            # (which has no trig): the CALLER supplies only raw `lon`/`lat`, never
+            # pre-projected `X`/`Y`. The geometry-vocabulary reduce-projection path
+            # is unchanged (`_body_needs_general_eval` is false there).
+            env[n] = if _body_needs_general_eval(e)
+                _materialize_setup_general_map(e, env, index_sets, derived_extents,
+                                               registered_functions)
+            else
+                _materialize_geom_array(e, env, index_sets, derived_extents, var_shapes)
+            end
             push!(accepted, n); changed = true
         end
         changed
