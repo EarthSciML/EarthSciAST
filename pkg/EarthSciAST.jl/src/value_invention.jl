@@ -153,13 +153,18 @@ function _vi_grouped_key(node::OpExpr, vi_var_names)
     gsym = String(oi[1])
     join = node.join
     join === nothing && return nothing
-    # Typed join clauses (parse.jl `_coerce_join`): each clause is a vector of
-    # `(left, right)` key-column pairs (no `on` wrapper).
-    for clause in join, pair in clause
-        length(pair) == 2 || continue
-        a, b = String(pair[1]), String(pair[2])
-        a == gsym && b in vi_var_names && return b
-        b == gsym && a in vi_var_names && return a
+    # Typed join clauses (parse.jl `_coerce_join`): a bin-equality clause is a
+    # vector of `(left, right)` key-column pairs (no `on` wrapper); a Phase-2a
+    # `overlap` clause is a `_OverlapJoinSpec` (not a pair vector) and never names
+    # a grouped output key, so it is skipped.
+    for clause in join
+        clause isa AbstractVector || continue
+        for pair in clause
+            length(pair) == 2 || continue
+            a, b = String(pair[1]), String(pair[2])
+            a == gsym && b in vi_var_names && return b
+            b == gsym && a in vi_var_names && return a
+        end
     end
     return nothing
 end
@@ -513,18 +518,63 @@ function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
         "no producer range binds the index set '$(target)' of join key '$(vname)'"))
 end
 
-# True iff every join key-column pair compares equal at this binding (the
-# value-equality equi-join gate, §5.3); each key is a materialised map buffer.
-# Typed join clauses are vectors of `(left, right)` pairs (`_coerce_join`).
-function _vi_join_ok(join, producer_ranges, ctx::_ViCtx, bindings::AbstractDict)
+# One resolved value-invention join gate (built ONCE per producer/arg-witness,
+# not per tuple). A bin-EQUALITY gate carries the two materialised map buffers
+# (`map_l`/`map_r`) and admits iff the buffer values are equal; an OVERLAP gate
+# (Phase 2a) carries `candidates`, the prebuilt broad-phase `(pos_l,pos_r)` set,
+# and admits iff the binding's range positions are a member.
+struct _ViJoinGate
+    sym_l::String
+    sym_r::String
+    map_l::Union{Dict{Any,Any},Nothing}
+    map_r::Union{Dict{Any,Any},Nothing}
+    candidates::Union{Set{Tuple{Int,Int}},Nothing}
+end
+
+# Envelope vectors for a value-invention OVERLAP gate: look each env-factor name
+# up in `ctx.const_arrays` and coerce to `(xmin,ymin,xmax,ymax)` 4-tuples (shared
+# `_envelope_vectors_from_cols`: 4 names→rect, 2→point, 1→ring-AABB).
+function _vi_env_vectors(env_names::AbstractVector, ctx::_ViCtx)
+    cols = Any[ctx.const_arrays[String(n)] for n in env_names]
+    return _envelope_vectors_from_cols(env_names, cols)
+end
+
+# Resolve an aggregate's `join` clauses into `_ViJoinGate`s ONCE (the candidate
+# set / buffer bindings are shared across every contracted tuple). A
+# `_OverlapJoinSpec` clause maps `src_env`→sym_l and `tgt_env`→sym_r via each
+# factor's 1-D shape index set (`_vi_join_index_sym`, exactly like an `on` key
+# column) and builds its candidate set from the const-array envelope factors.
+function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
+    gates = _ViJoinGate[]
     for clause in join
-        for pair in clause
-            lname, rname = String(pair[1]), String(pair[2])
-            ls = _vi_join_index_sym(lname, producer_ranges, ctx)
-            rs = _vi_join_index_sym(rname, producer_ranges, ctx)
-            lval = ctx.maps[lname][bindings[ls]]
-            rval = ctx.maps[rname][bindings[rs]]
-            lval == rval || return false
+        if clause isa _OverlapJoinSpec
+            sym_l = _vi_join_index_sym(clause.src_env[1], producer_ranges, ctx)
+            sym_r = _vi_join_index_sym(clause.tgt_env[1], producer_ranges, ctx)
+            cands = _overlap_candidate_set(_vi_env_vectors(clause.src_env, ctx),
+                                           _vi_env_vectors(clause.tgt_env, ctx);
+                                           eps=clause.eps)
+            push!(gates, _ViJoinGate(sym_l, sym_r, nothing, nothing, cands))
+        else
+            for pair in clause
+                lname, rname = String(pair[1]), String(pair[2])
+                ls = _vi_join_index_sym(lname, producer_ranges, ctx)
+                rs = _vi_join_index_sym(rname, producer_ranges, ctx)
+                push!(gates, _ViJoinGate(ls, rs, ctx.maps[lname], ctx.maps[rname], nothing))
+            end
+        end
+    end
+    return gates
+end
+
+# True iff every resolved join gate admits this binding (§5.3 / Phase 2a): a
+# bin-equality gate compares materialised buffer values; an overlap gate tests
+# membership of the `(pos_l,pos_r)` range positions in the broad-phase set.
+function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
+    for g in gates
+        if g.candidates === nothing
+            g.map_l[bindings[g.sym_l]] == g.map_r[bindings[g.sym_r]] || return false
+        else
+            (bindings[g.sym_l], bindings[g.sym_r]) in g.candidates || return false
         end
     end
     return true
@@ -562,6 +612,9 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
     # point's bin) resolves alongside the inner candidate's bin (§5.3 equi-join).
     # `Base.merge` — the module shadows `merge` with an `EsmFile` method.
     combined = Base.merge(Dict{String,Any}(outer_ranges), Dict{String,Any}(inner_ranges))
+    # Resolve the join gates ONCE (broad-phase candidate set / buffer bindings are
+    # shared across every candidate tuple), not per `rec` leaf.
+    join_gates = join === nothing ? nothing : _vi_resolve_join(join, combined, ctx)
     syms = _vi_order_syms(inner_ranges)
     bindings = Dict{String,Any}(outer_bindings)
     best_val = nothing
@@ -572,7 +625,7 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
                 fv = _vi_eval(filt, ctx, bindings)
                 (fv === true || (isa(fv, Real) && fv > 0)) || return
             end
-            if join !== nothing && !_vi_join_ok(join, combined, ctx, bindings)
+            if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
                 return
             end
             v = Float64(_vi_eval(value_expr, ctx, bindings))
@@ -633,13 +686,16 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     ranges = _vi_ranges(node)
     filt = node.filter
     join = node.join
+    # Resolve join gates ONCE (a `join.overlap` broad-phase candidate set is built
+    # a single time here, then membership-tested per contracted tuple).
+    join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
     members = Any[]
     _vi_enumerate(ranges, ctx, bindings -> begin
         if filt !== nothing
             fv = _vi_eval(filt, ctx, bindings)
             (fv === true || (isa(fv, Real) && fv > 0)) || return
         end
-        if join !== nothing && !_vi_join_ok(join, ranges, ctx, bindings)
+        if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
             return
         end
         push!(members, _vi_skolem(key, ctx, bindings))
@@ -769,10 +825,13 @@ function _vi_materialize_grouped!(ctx::_ViCtx, vname::AbstractString, node::OpEx
     # that names a materialised VI buffer (`assign`). It is read at the contraction
     # symbol that ranges over its 1-D index set.
     keyvar = nothing
-    for clause in join, pair in clause
-        a, b = String(pair[1]), String(pair[2])
-        b == gsym && haskey(ctx.maps, a) && (keyvar = a)
-        a == gsym && haskey(ctx.maps, b) && (keyvar = b)
+    for clause in join
+        clause isa AbstractVector || continue   # a Phase-2a overlap clause pairs no group key
+        for pair in clause
+            a, b = String(pair[1]), String(pair[2])
+            b == gsym && haskey(ctx.maps, a) && (keyvar = a)
+            a == gsym && haskey(ctx.maps, b) && (keyvar = b)
+        end
     end
     keyvar === nothing && throw(TreeWalkError("E_TREEWALK_VI_GROUP",
         "grouped aggregate '$vname' `join` must pair a materialised value-invention " *

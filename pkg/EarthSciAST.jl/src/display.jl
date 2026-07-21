@@ -768,6 +768,15 @@ function format_ranges_clause(ranges, format::Symbol)
         " where {$(join(parts, ", "))}"
 end
 
+# One join clause → its display fragment. A bin-equality clause renders its
+# key-column pairs `l=r, …`; an overlap clause (Phase 2a) renders its envelope
+# factors `overlap([src]~[tgt])` with the `eps` slack when non-zero.
+function _display_join_clause(clause::_OverlapJoinSpec)
+    slack = clause.eps == 0.0 ? "" : "; eps=$(clause.eps)"
+    return "overlap([$(join(clause.src_env, ","))]~[$(join(clause.tgt_env, ","))]$slack)"
+end
+_display_join_clause(clause) = join(["$(p[1])=$(p[2])" for p in clause], ", ")
+
 """Render an `aggregate` node per the rendering contract."""
 function format_aggregate(node::OpExpr, format::Symbol)
     r(e) = format_expression(e, format)
@@ -783,9 +792,7 @@ function format_aggregate(node::OpExpr, format::Symbol)
         out *= format_ranges_clause(node.ranges, format)
     end
     if node.join !== nothing && !isempty(node.join)
-        clauses = join(
-            [join(["$(p[1])=$(p[2])" for p in clause], ", ") for clause in node.join],
-            "; ")
+        clauses = join([_display_join_clause(clause) for clause in node.join], "; ")
         out *= " join($clauses)"
     end
     if node.filter !== nothing

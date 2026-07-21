@@ -97,3 +97,99 @@ function broad_phase_candidates(query_envs::AbstractVector, cell_envs::AbstractV
     # contract independent of loop structure / index internals.
     return sort!(out)
 end
+
+# =========================================================================== #
+# OVERLAP JOIN-GATE broad phase (projection-pushdown Phase 2a).
+#
+# The shared helper that turns two envelope FACTOR-ARRAYS into the candidate
+# `Set{(src_pos, tgt_pos)}` an OVERLAP join gate admits on. Built ONCE per gate
+# (cached on the resolved `_JoinGate` / `_ViJoinGate`), then consulted by
+# membership per contracted tuple in BOTH join paths — `_join_admits`
+# (tree_walk/semiring.jl) and `_vi_join_ok` (value_invention.jl). The narrow
+# phase (exact rectangle / polygon test) stays as the aggregate's `filter`; this
+# is ONLY the conservative broad phase.
+# =========================================================================== #
+
+# Build per-position `(xmin, ymin, xmax, ymax)` envelope 4-tuples from named
+# const-array envelope factors. `env_names` is 1, 2, or 4 factor names; `cols`
+# is the matching list of factor arrays (each a 1-D column indexed by position,
+# except the 1-name ring case which is a `[pos, verts, coord]` 3-D array):
+#   4 names → rectangles [xmin, ymin, xmax, ymax],
+#   2 names → points [x, y] → degenerate envelope (x, y, x, y),
+#   1 name  → polygon-ring factor → AABB via `_ring_xybbox` (remapped).
+function _envelope_vectors_from_cols(env_names::AbstractVector, cols::AbstractVector)
+    k = length(env_names)
+    if k == 4
+        a, b, c, d = cols
+        n = length(a)
+        return NTuple{4,Float64}[
+            (Float64(a[p]), Float64(b[p]), Float64(c[p]), Float64(d[p])) for p in 1:n]
+    elseif k == 2
+        x, y = cols
+        n = length(x)
+        return NTuple{4,Float64}[
+            (Float64(x[p]), Float64(y[p]), Float64(x[p]), Float64(y[p])) for p in 1:n]
+    elseif k == 1
+        return _ring_envelopes(cols[1])
+    else
+        throw(ArgumentError(
+            "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 " *
+            "(rect [xmin,ymin,xmax,ymax]) const-array factors; got $k"))
+    end
+end
+
+# A `[pos, verts, coord]` ring factor → one AABB envelope per position, remapping
+# `_ring_xybbox`'s `(xmin, xmax, ymin, ymax)` to `(xmin, ymin, xmax, ymax)`.
+function _ring_envelopes(rings::AbstractArray)
+    ndims(rings) == 3 || throw(ArgumentError(
+        "overlap-join single-factor env expects a [pos, verts, coord] 3-D ring " *
+        "array; got a $(ndims(rings))-D factor"))
+    npos = size(rings, 1)
+    out = Vector{NTuple{4,Float64}}(undef, npos)
+    for p in 1:npos
+        xmin, xmax, ymin, ymax = _ring_xybbox(@view rings[p, :, :])
+        out[p] = (Float64(xmin), Float64(ymin), Float64(xmax), Float64(ymax))
+    end
+    return out
+end
+
+# Look each env-factor name up in `arrays` (a const-array registry) → envelope
+# vectors. Names are stringified so `Symbol` / `String` keys both resolve.
+function _envelope_vectors(env_names::AbstractVector, arrays::AbstractDict)
+    cols = Any[arrays[String(n)] for n in env_names]
+    return _envelope_vectors_from_cols(env_names, cols)
+end
+
+"""
+    _overlap_candidate_set(src_envs, tgt_envs; eps=0.0) -> Set{Tuple{Int,Int}}
+    _overlap_candidate_set(src_names, tgt_names, arrays; eps=0.0) -> Set{Tuple{Int,Int}}
+
+Build the OVERLAP join-gate candidate set: every `(src_pos, tgt_pos)` whose
+envelopes intersect (inflated outward by `eps`), keyed so `src_env` is the query
+side and `tgt_env` the indexed cell side. The vector method takes the two
+envelope vectors directly; the name+registry method resolves envelope factor
+arrays out of `arrays` first (see [`_envelope_vectors`](@ref)).
+
+Uses the exported Phase-3a primitive: the fast STRtree path
+([`build_spatial_index`](@ref) on the cell/`tgt` side) when the GeometryOps
+extension is loaded, else the dependency-free brute-force
+[`broad_phase_candidates`](@ref). Both return an identical pair set, so the gate
+is deterministic and backend-independent.
+"""
+function _overlap_candidate_set(src_envs::AbstractVector, tgt_envs::AbstractVector;
+                                eps::Real=0.0)
+    e = Float64(eps)
+    pairs = if hasmethod(build_spatial_index, Tuple{AbstractVector})
+        idx = build_spatial_index(tgt_envs; eps=e)
+        broad_phase_candidates(src_envs, idx; eps=e)
+    else
+        broad_phase_candidates(src_envs, tgt_envs; eps=e)
+    end
+    return Set{Tuple{Int,Int}}(pairs)
+end
+
+function _overlap_candidate_set(src_names::AbstractVector, tgt_names::AbstractVector,
+                                arrays::AbstractDict; eps::Real=0.0)
+    return _overlap_candidate_set(_envelope_vectors(src_names, arrays),
+                                  _envelope_vectors(tgt_names, arrays); eps=eps)
+end
