@@ -15,22 +15,15 @@ import { parseExpression, parseEquation, ExpressionParseError } from './parse-ex
 
 const reprint = (ast: unknown) => toAscii(ast as never)
 
-// Structural ops carry data outside `args`; an expression containing one is a
-// structural-tier expression and must be refused.
+// Structural ops with no text surface yet — an expression containing one is
+// still refused. (const/true/fn/index/integral/reshape/transpose/concat DO have
+// a surface now and are handled below.)
 const STRUCTURAL = new Set([
-  'const',
-  'true',
-  'fn',
   'enum',
-  'index',
   'broadcast',
-  'integral',
   'table_lookup',
   'apply_expression_template',
   'makearray',
-  'reshape',
-  'transpose',
-  'concat',
   'intersect_polygon',
   'polygon_intersection_area',
   'aggregate',
@@ -111,8 +104,37 @@ describe('parseEquation', () => {
   })
 })
 
-describe('structural tier is refused', () => {
-  for (const s of ['aggregate(x)', 'table_lookup(a)', 'integral(f, x, 0, 1)', 'const(3)', 'a[0]', 'datetime.year(t)']) {
+describe('array & call-shaped tier: reconstructs exact node shapes', () => {
+  it('array literals → const', () => {
+    expect(parseExpression('[1, 2, 3]')).toEqual({ op: 'const', value: [1, 2, 3], args: [] })
+    expect(parseExpression('[[1, 2], [3, 4]]')).toEqual({
+      op: 'const',
+      value: [[1, 2], [3, 4]],
+      args: [],
+    })
+  })
+  it('subscripts → index', () => {
+    expect(parseExpression('u[i, j]')).toEqual({ op: 'index', args: ['u', 'i', 'j'] })
+  })
+  it('dotted calls → fn (closed function)', () => {
+    expect(parseExpression('datetime.year(t)')).toEqual({ op: 'fn', name: 'datetime.year', args: ['t'] })
+  })
+  it('true literal', () => {
+    expect(parseExpression('true')).toEqual({ op: 'true', args: [] })
+  })
+  it('integral / reshape / transpose / concat', () => {
+    expect(parseExpression('integral(f, x, 0, 1)')).toEqual({
+      op: 'integral', args: ['f'], var: 'x', lower: 0, upper: 1,
+    })
+    expect(parseExpression('reshape(a, [3, 4])')).toEqual({ op: 'reshape', args: ['a'], shape: [3, 4] })
+    expect(parseExpression('transpose(a)')).toEqual({ op: 'transpose', args: ['a'] })
+    expect(parseExpression('transpose(a, [1, 0])')).toEqual({ op: 'transpose', args: ['a'], perm: [1, 0] })
+    expect(parseExpression('concat(a, b, axis=0)')).toEqual({ op: 'concat', args: ['a', 'b'], axis: 0 })
+  })
+})
+
+describe('still-deferred structural ops are refused', () => {
+  for (const s of ['aggregate(x)', 'table_lookup(a)', 'makearray(x)', 'argmin(x)']) {
     it(`refuses ${s}`, () => {
       expect(() => parseExpression(s)).toThrow(ExpressionParseError)
     })
