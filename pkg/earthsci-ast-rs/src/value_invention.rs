@@ -960,44 +960,235 @@ fn vi_join_index_sym(
     ))
 }
 
-/// True iff every `join.on` key-column pair compares equal at this binding (the
-/// value-equality equi-join gate, §5.3); each key is a materialised map buffer.
-fn vi_join_ok(
+/// A join clause resolved ONCE against a node's ranges (the candidate set /
+/// buffer bindings are shared across every contracted tuple), mirroring Julia's
+/// `_ViJoinGate` (`value_invention.jl`). Consulted per binding by [`vi_join_ok`];
+/// an [`ViJoinGate::Overlap`] gate additionally DRIVES enumeration from its
+/// prebuilt candidate pairs ([`vi_enumerate_join`]).
+enum ViJoinGate {
+    /// A `join.on` value-equality gate (§5.3): admit `(sym_l, sym_r)` iff the two
+    /// materialised map buffers agree — `maps[lname][bindings[sym_l]] ==
+    /// maps[rname][bindings[sym_r]]`.
+    Equality {
+        sym_l: String,
+        sym_r: String,
+        lname: String,
+        rname: String,
+    },
+    /// A `join.overlap` spatial broad-phase gate (Phase 2a): admit `(sym_l,
+    /// sym_r)` iff the `(pos_l, pos_r)` range positions (1-based, matching the
+    /// enumeration bindings) are in the prebuilt broad-phase candidate set — the
+    /// envelope candidacy computed ONCE from the const-array envelope factors via
+    /// [`crate::broad_phase`].
+    Overlap {
+        sym_l: String,
+        sym_r: String,
+        candidates: HashSet<(i64, i64)>,
+    },
+}
+
+/// The OVERLAP join-gate candidate set: every `(pos_l, pos_r)` — 1-based range
+/// positions keyed so `src_env` is the query side and `tgt_env` the indexed cell
+/// side — whose eps-inflated envelopes intersect. Built ONCE from the const-array
+/// envelope factors through the Phase-3a broad-phase primitive (rstar fast path,
+/// byte-identical to the brute-force oracle). Mirrors Julia's
+/// `_overlap_candidate_set`.
+fn overlap_candidate_set(
+    src_env: &[String],
+    tgt_env: &[String],
+    ctx: &ViCtx,
+    eps: f64,
+) -> Result<HashSet<(i64, i64)>, ValueInventionError> {
+    let src_envs =
+        crate::broad_phase::envelope_vectors(src_env, ctx.const_arrays).map_err(ValueInventionError)?;
+    let tgt_envs =
+        crate::broad_phase::envelope_vectors(tgt_env, ctx.const_arrays).map_err(ValueInventionError)?;
+    let pairs = crate::broad_phase::broad_phase_candidates(&src_envs, &tgt_envs, eps);
+    // Broad-phase pairs are 0-based positions; the enumeration bindings are
+    // 1-based (`vi_range_values` binds interval/categorical position p to p), so
+    // shift to 1-based to match.
+    Ok(pairs
+        .into_iter()
+        .map(|(q, c)| ((q as i64) + 1, (c as i64) + 1))
+        .collect())
+}
+
+/// Structural arity check on an overlap-clause env-factor list (1 rings /
+/// 2 points / 4 rectangle bounds), mirroring Julia's `_valid_env_arity`.
+fn overlap_env_names(ov: &Value, field: &str) -> Result<Vec<String>, ValueInventionError> {
+    let raw = ov.get(field).and_then(|v| v.as_array()).ok_or_else(|| {
+        ValueInventionError(format!(
+            "join `overlap` clause requires both `src_env` and `tgt_env` arrays of envelope \
+             factor names (Phase 2a spatial overlap gate); missing/invalid `{field}`"
+        ))
+    })?;
+    let names: Vec<String> = raw
+        .iter()
+        .map(|x| x.as_str().map(String::from).unwrap_or_default())
+        .collect();
+    if !matches!(names.len(), 1 | 2 | 4) {
+        return err(format!(
+            "join `overlap` `{field}` must name 1 (rings), 2 (point [x,y]), or 4 \
+             (rect [xmin,ymin,xmax,ymax]) factors; got {}",
+            names.len()
+        ));
+    }
+    Ok(names)
+}
+
+/// Resolve an aggregate's `join` clauses into [`ViJoinGate`]s ONCE against
+/// `producer_ranges`. A `{on: [...]}` clause resolves to one [`ViJoinGate::Equality`]
+/// per key pair; a `{overlap: {src_env, tgt_env, eps}}` clause resolves to a
+/// single [`ViJoinGate::Overlap`] whose broad-phase candidate set is built here.
+/// Mirrors Julia's `_vi_resolve_join`.
+fn vi_resolve_join(
     join: &[Value],
     producer_ranges: &Map<String, Value>,
     ctx: &ViCtx,
-    bindings: &Bindings,
-) -> Result<bool, ValueInventionError> {
+) -> Result<Vec<ViJoinGate>, ValueInventionError> {
+    let mut gates: Vec<ViJoinGate> = Vec::new();
     for clause in join {
-        if let Some(on) = clause.get("on").and_then(|v| v.as_array()) {
+        if let Some(ov) = clause.get("overlap") {
+            let src_env = overlap_env_names(ov, "src_env")?;
+            let tgt_env = overlap_env_names(ov, "tgt_env")?;
+            let eps = ov.get("eps").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            // `src_env`/`tgt_env` name const-array envelope FACTORS; each factor's
+            // 1-D shape index set names one join range (like an `on` key column).
+            // All factors of one side share that index set, so the first names it.
+            let sym_l = vi_join_index_sym(&src_env[0], producer_ranges, ctx)?;
+            let sym_r = vi_join_index_sym(&tgt_env[0], producer_ranges, ctx)?;
+            let candidates = overlap_candidate_set(&src_env, &tgt_env, ctx, eps)?;
+            gates.push(ViJoinGate::Overlap {
+                sym_l,
+                sym_r,
+                candidates,
+            });
+        } else if let Some(on) = clause.get("on").and_then(|v| v.as_array()) {
             for pair in on {
                 let cols = pair.as_array().filter(|c| c.len() == 2).ok_or_else(|| {
                     ValueInventionError("join.on entry must be a [left, right] pair".into())
                 })?;
-                let lname = cols[0].as_str().unwrap_or_default();
-                let rname = cols[1].as_str().unwrap_or_default();
-                let ls = vi_join_index_sym(lname, producer_ranges, ctx)?;
-                let rs = vi_join_index_sym(rname, producer_ranges, ctx)?;
-                // `join.on` names and index symbols come from user JSON, so a
-                // missing map buffer or unbound symbol is a diagnostic, not a
-                // panicking `Index` lookup.
+                let lname = cols[0].as_str().unwrap_or_default().to_string();
+                let rname = cols[1].as_str().unwrap_or_default().to_string();
+                let sym_l = vi_join_index_sym(&lname, producer_ranges, ctx)?;
+                let sym_r = vi_join_index_sym(&rname, producer_ranges, ctx)?;
+                gates.push(ViJoinGate::Equality {
+                    sym_l,
+                    sym_r,
+                    lname,
+                    rname,
+                });
+            }
+        }
+    }
+    Ok(gates)
+}
+
+/// True iff every resolved join gate admits this binding (§5.3 / Phase 2a): a
+/// value-equality gate compares materialised buffer values; an overlap gate tests
+/// membership of the `(pos_l, pos_r)` range positions in the broad-phase set.
+/// Mirrors Julia's `_vi_join_ok`.
+fn vi_join_ok(
+    gates: &[ViJoinGate],
+    ctx: &ViCtx,
+    bindings: &Bindings,
+) -> Result<bool, ValueInventionError> {
+    // `join.on` names and index symbols come from user JSON, so a missing map
+    // buffer or unbound symbol is a diagnostic, not a panicking `Index` lookup.
+    let unbound = |sym: &str| ValueInventionError(format!("join index symbol {sym:?} is not bound"));
+    for g in gates {
+        match g {
+            ViJoinGate::Equality {
+                sym_l,
+                sym_r,
+                lname,
+                rname,
+            } => {
                 let missing_map = |name: &str| {
                     ValueInventionError(format!("join key {name:?} has no materialised map buffer"))
                 };
-                let unbound = |sym: &str| {
-                    ValueInventionError(format!("join index symbol {sym:?} is not bound"))
-                };
                 let lmap = ctx.maps.get(lname).ok_or_else(|| missing_map(lname))?;
                 let rmap = ctx.maps.get(rname).ok_or_else(|| missing_map(rname))?;
-                let lbind = bindings.get(&ls).ok_or_else(|| unbound(&ls))?;
-                let rbind = bindings.get(&rs).ok_or_else(|| unbound(&rs))?;
+                let lbind = bindings.get(sym_l).ok_or_else(|| unbound(sym_l))?;
+                let rbind = bindings.get(sym_r).ok_or_else(|| unbound(sym_r))?;
                 if lmap.get(lbind) != rmap.get(rbind) {
+                    return Ok(false);
+                }
+            }
+            ViJoinGate::Overlap {
+                sym_l,
+                sym_r,
+                candidates,
+            } => {
+                let l = *bindings.get(sym_l).ok_or_else(|| unbound(sym_l))?;
+                let r = *bindings.get(sym_r).ok_or_else(|| unbound(sym_r))?;
+                if !candidates.contains(&(l, r)) {
                     return Ok(false);
                 }
             }
         }
     }
     Ok(true)
+}
+
+/// Enumerate an aggregate's `ranges`, DRIVING from an OVERLAP gate's prebuilt
+/// candidate pairs when one is present (projection-pushdown Wall #1). Instead of
+/// building the full product over every range and membership-testing each tuple —
+/// O(∏ranges), e.g. O(N_query·N_cell) — iterate ONLY the gate's `(pos_l, pos_r)`
+/// candidate pairs (sorted for determinism), bind the two gated range symbols
+/// from each pair, and take the cartesian product with any OTHER (ungated) ranges.
+/// Cost drops to O(|candidates|·∏ungated).
+///
+/// With NO overlap gate this is EXACTLY [`vi_enumerate`] — byte-for-byte identical
+/// enumeration order and leaf set. The callback STILL applies the narrow `filter`
+/// and the full [`vi_join_ok`] re-check downstream, so the overlap-gated leaf set
+/// differs from the full product only by provably-non-candidate tuples the
+/// membership test would have rejected anyway — the materialised member SET (after
+/// `distinct` canonicalises order) is identical to the old full-product path.
+/// Mirrors Julia's `_vi_enumerate_join`.
+fn vi_enumerate_join<F>(
+    ranges: &Map<String, Value>,
+    gates: &[ViJoinGate],
+    ctx: &ViCtx,
+    mut visit: F,
+) -> Result<(), ValueInventionError>
+where
+    F: FnMut(&Bindings) -> Result<(), ValueInventionError>,
+{
+    // The first overlap gate drives; other gate kinds enumerate the full product.
+    let driver = gates.iter().find_map(|g| match g {
+        ViJoinGate::Overlap {
+            sym_l,
+            sym_r,
+            candidates,
+        } => Some((sym_l, sym_r, candidates)),
+        _ => None,
+    });
+    let Some((sym_l, sym_r, candidates)) = driver else {
+        return vi_enumerate(ranges, ctx, visit); // full product — unchanged behaviour
+    };
+    // DETERMINISTIC (pos_l, pos_r)-ascending drive order (member set is
+    // canonicalised downstream, but a sorted drive keeps any order-sensitive
+    // reduction stable).
+    let mut pairs: Vec<(i64, i64)> = candidates.iter().copied().collect();
+    pairs.sort_unstable();
+    // The remaining ungated symbols, in the topological order the full product
+    // visits them, minus the two driven symbols.
+    let rest: Vec<String> = vi_order_syms(ranges)?
+        .into_iter()
+        .filter(|s| s != sym_l && s != sym_r)
+        .collect();
+    let mut bindings: Bindings = HashMap::new();
+    for (pl, pr) in pairs {
+        // A candidate pair holds 1-based range POSITIONS; for an interval /
+        // categorical range `vi_range_values` binds position p to the value p, so
+        // binding the gated symbols directly reproduces exactly the tuple the full
+        // product would have bound (and which `vi_join_ok` admits).
+        bindings.insert(sym_l.clone(), pl);
+        bindings.insert(sym_r.clone(), pr);
+        vi_enumerate_rec(&rest, 0, ranges, ctx, &mut bindings, &mut visit)?;
+    }
+    Ok(())
 }
 
 /// Arg-witness reducer (RFC §5.7 rule 6). Over the inner contracted `ranges`
@@ -1053,6 +1244,13 @@ fn vi_argreduce(
     for (k, v) in inner_ranges {
         combined.insert(k.clone(), v.clone());
     }
+    // Resolve the join gates ONCE (broad-phase candidate set / buffer bindings are
+    // shared across every candidate tuple), not per `rec` leaf.
+    let gates = if join.is_empty() {
+        Vec::new()
+    } else {
+        vi_resolve_join(&join, &combined, ctx)?
+    };
     let syms = vi_order_syms(inner_ranges)?;
     let mut bindings = outer_bindings.clone();
     let mut best: Option<(f64, i64)> = None;
@@ -1068,7 +1266,7 @@ fn vi_argreduce(
                 return Ok(());
             }
         }
-        if !join.is_empty() && !vi_join_ok(&join, &combined, ctx, b)? {
+        if !gates.is_empty() && !vi_join_ok(&gates, ctx, b)? {
             return Ok(());
         }
         let v = vi_eval(value_expr, ctx, b)?.as_f64()?;
@@ -1165,8 +1363,18 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    // Resolve join gates ONCE (a `join.overlap` broad-phase candidate set is built
+    // a single time here). An OVERLAP gate then DRIVES enumeration from its
+    // candidate pairs (`vi_enumerate_join`, Wall #1) — O(|candidates|) rather than
+    // O(∏ranges) with a per-tuple membership test; other gate kinds enumerate the
+    // full product exactly as before.
+    let gates = if join.is_empty() {
+        Vec::new()
+    } else {
+        vi_resolve_join(&join, ranges, ctx)?
+    };
     let mut members: Vec<Key> = Vec::new();
-    vi_enumerate(ranges, ctx, |bindings| {
+    vi_enumerate_join(ranges, &gates, ctx, |bindings| {
         if let Some(f) = filt {
             let fv = vi_eval(f, ctx, bindings)?;
             let pass = match fv {
@@ -1179,7 +1387,7 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
                 return Ok(());
             }
         }
-        if !join.is_empty() && !vi_join_ok(&join, ranges, ctx, bindings)? {
+        if !gates.is_empty() && !vi_join_ok(&gates, ctx, bindings)? {
             return Ok(());
         }
         members.push(vi_skolem(key, ctx, bindings)?);
