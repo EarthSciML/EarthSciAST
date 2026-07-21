@@ -247,6 +247,8 @@ describe('ReactionEditor', () => {
 
     // Expand the rate editor.
     fireEvent.click(screen.getByText('[k]'))
+    // Structural rate editing is now opt-in behind the toggle.
+    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
 
     // Select the nested D node (path ['rate','args',0]) so its field-editor
     // button appears, then edit its `wrt`.
@@ -267,9 +269,10 @@ describe('ReactionEditor', () => {
   it('does not show the rate text toggle in readonly mode', () => {
     render(() => <ReactionEditor {...mockProps} readonly={true} />)
 
-    // The rate editor cannot be expanded in readonly, so no text toggle exists.
+    // The rate editor cannot be expanded in readonly, so neither toggle exists.
     fireEvent.click(screen.getByText('[k]'))
     expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Structural' })).not.toBeInTheDocument()
   })
 
   it('assigns the first unused R-id when adding after a deletion (regression)', () => {
@@ -302,7 +305,7 @@ describe('ReactionEditor', () => {
   })
 })
 
-describe('ReactionEditor — rate text mode (DSL)', () => {
+describe('ReactionEditor — rate text mode (DSL, the default surface)', () => {
   const system: ReactionSystem = {
     species: { NO: {}, O3: {}, NO2: {} },
     parameters: {},
@@ -316,16 +319,15 @@ describe('ReactionEditor — rate text mode (DSL)', () => {
     ],
   }
 
+  // Expanding the rate editor lands on the text surface by default.
   const expand = () => fireEvent.click(screen.getByText('[k]'))
-  const toText = () => fireEvent.click(screen.getByRole('button', { name: 'Edit as text' }))
   const textarea = () => screen.getByLabelText('Rate expression text') as HTMLTextAreaElement
 
   beforeEach(() => vi.clearAllMocks())
 
-  it('toggles the rate to a textarea seeded with its ascii form', () => {
+  it('shows the rate as a textarea seeded with its ascii form when expanded', () => {
     render(() => <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} />)
     expand()
-    toText()
     expect(textarea()).toBeInTheDocument()
     expect(textarea().value).toBe('k_NO_O3')
   })
@@ -336,7 +338,6 @@ describe('ReactionEditor — rate text mode (DSL)', () => {
       <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
     ))
     expand()
-    toText()
     fireEvent.input(textarea(), { target: { value: 'k_NO_O3 * 2' } })
     fireEvent.blur(textarea())
 
@@ -351,7 +352,6 @@ describe('ReactionEditor — rate text mode (DSL)', () => {
       <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
     ))
     expand()
-    toText()
     fireEvent.input(textarea(), { target: { value: 'k_NO_O3 *' } }) // trailing operator
     fireEvent.blur(textarea())
 
@@ -365,7 +365,6 @@ describe('ReactionEditor — rate text mode (DSL)', () => {
       <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
     ))
     expand()
-    toText()
     fireEvent.blur(textarea())
     expect(onReactionSystemChange).not.toHaveBeenCalled()
   })
@@ -373,7 +372,6 @@ describe('ReactionEditor — rate text mode (DSL)', () => {
   it('blocks leaving text mode while the rate buffer is unparseable', () => {
     render(() => <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} />)
     expand()
-    toText()
     fireEvent.input(textarea(), { target: { value: 'k_NO_O3 *' } })
     fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
     expect(textarea()).toBeInTheDocument() // still in text mode

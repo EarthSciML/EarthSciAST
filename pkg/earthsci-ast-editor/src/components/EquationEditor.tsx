@@ -3,11 +3,12 @@
  *
  * Two edit surfaces over the SAME `equation: Equation` / `onEquationChange`
  * contract:
- *  - **structural** (default): clickable `ExpressionNode`s for LHS and RHS,
- *    edited via the shared document-path replace;
- *  - **text**: an in-place textarea holding the equation's ascii DSL form
- *    (`toAscii` ⇄ `parseEquation` from `@earthsciml/ast`). This is the same
- *    code-like syntax used everywhere else; it's the inverse of `toAscii`.
+ *  - **text** (default when editable): an in-place textarea holding the
+ *    equation's ascii DSL form (`toAscii` ⇄ `parseEquation` from
+ *    `@earthsciml/ast`). This is the same code-like syntax used everywhere else;
+ *    it's the inverse of `toAscii`.
+ *  - **structural**: clickable `ExpressionNode`s for LHS and RHS, edited via the
+ *    shared document-path replace — now the opt-in surface behind the toggle.
  *
  * The text surface **blocks emit until it parses**: on commit (blur, ⌘/Ctrl+Enter,
  * or toggling back) the buffer is parsed; a parse error is surfaced and NOTHING is
@@ -59,8 +60,8 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
   // Text edit surface over the equation's ascii DSL form. The shared hook owns
   // the buffer/commit/error state and the block-on-error + emit-only-when-changed
   // invariants; we supply the equation-specific seed/parse/reprint plus the merge
-  // that preserves non-lhs/rhs fields such as `_comment`. Default is structural;
-  // text is opt-in behind the toggle.
+  // that preserves non-lhs/rhs fields such as `_comment`. Text is the default
+  // surface (when editable); structural is opt-in behind the toggle.
   const textMode = createTextEditMode({
     readonly: () => props.readonly,
     seed: () => toAscii(props.equation),
@@ -68,6 +69,7 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
     reprint: (parsed) => toAscii(parsed),
     emit: (parsed) =>
       props.onEquationChange?.({ ...props.equation, lhs: parsed.lhs, rhs: parsed.rhs }),
+    initialMode: 'text',
   })
 
   // Base highlight set merged with the locally hovered variable.

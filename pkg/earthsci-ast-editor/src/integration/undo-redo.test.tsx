@@ -175,6 +175,14 @@ describe('Undo/Redo Integration', () => {
         </div>
       ))
 
+      // The ExpressionEditor defaults to the text surface; reveal its structural
+      // nodes (which the assertion below queries). Only the expression editor is
+      // toggled — the model equation is left on text so no spurious change is
+      // committed to the history.
+      document
+        .querySelectorAll('.expression-editor .esm-eq-mode-btn')
+        .forEach((b) => fireEvent.click(b as HTMLButtonElement))
+
       // Initial state should be rendered
       expect(screen.getByText('O3')).toBeInTheDocument()
       expect(container.querySelector('.esm-infix-op[data-operator="+"]')).toBeInTheDocument()

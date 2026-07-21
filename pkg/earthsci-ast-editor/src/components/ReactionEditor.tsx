@@ -133,8 +133,8 @@ const ReactionItem: Component<{
   // SAME document-path replace (`handleReplace(['rate'], …)` →
   // `replaceAtDocumentPath` → `onEditReaction`) the structural editor uses, so
   // the rest of the reaction is untouched. Only reachable when a rate exists;
-  // the seed is defensively empty otherwise. Default is structural; text is
-  // opt-in behind the toggle.
+  // the seed is defensively empty otherwise. Text is the default surface (when
+  // editable); structural is opt-in behind the toggle.
   const rateText = createTextEditMode<Expression>({
     readonly: () => props.readonly,
     seed: () => (props.reaction.rate != null ? toAscii(props.reaction.rate) : ''),
@@ -144,6 +144,7 @@ const ReactionItem: Component<{
     parse: (src) => parseExpression(src) as Expression,
     reprint: (parsed) => toAscii(parsed),
     emit: (parsed) => handleReplace(['rate'], parsed),
+    initialMode: 'text',
   })
 
   const handleRemove = () => {

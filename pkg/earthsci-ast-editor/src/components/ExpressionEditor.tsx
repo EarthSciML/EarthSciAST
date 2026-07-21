@@ -3,11 +3,12 @@
  *
  * Two edit surfaces over the SAME controlled `initialExpression` / `onChange`
  * contract:
- *  - **structural** (default): clickable `ExpressionNode`s (plus optional
- *    palette), edited via the shared expression-path replace;
- *  - **text**: an in-place textarea holding the expression's ascii DSL form
- *    (`toAscii` ⇄ `parseExpression` from `@earthsciml/ast`) — the same code-like
- *    syntax used everywhere else, the inverse of `toAscii`.
+ *  - **text** (default when editable): an in-place textarea holding the
+ *    expression's ascii DSL form (`toAscii` ⇄ `parseExpression` from
+ *    `@earthsciml/ast`) — the same code-like syntax used everywhere else, the
+ *    inverse of `toAscii`.
+ *  - **structural**: clickable `ExpressionNode`s (plus optional palette), edited
+ *    via the shared expression-path replace — now opt-in behind the toggle.
  *
  * The text surface **blocks emit until it parses** and **emits only when the
  * reprint actually changed** (so an untouched expression's AST stays
@@ -69,7 +70,8 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
   // Text edit surface over the expression's ascii DSL form. The shared hook owns
   // the buffer/commit/error state and the block-on-error + emit-only-when-changed
   // invariants; a bare expression has nothing to merge, so it's emitted whole.
-  // Default is structural; text is opt-in behind the toggle.
+  // Text is the default surface (when editable); structural is opt-in behind the
+  // toggle.
   const textMode = createTextEditMode<Expression>({
     readonly: () => props.readonly,
     seed: () => toAscii(props.initialExpression),
@@ -79,6 +81,7 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
     parse: (src) => parseExpression(src) as Expression,
     reprint: (parsed) => toAscii(parsed),
     emit: (parsed) => props.onChange?.(parsed),
+    initialMode: 'text',
   })
 
   // Base highlight set merged with the locally hovered variable.

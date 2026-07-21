@@ -21,6 +21,8 @@ describe('EquationEditor', () => {
 
   it('renders equation with equals sign', () => {
     render(() => <EquationEditor {...mockProps} />)
+    // Text is the default surface now; switch to structural to assert the render.
+    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
 
     expect(screen.getByText('x')).toBeInTheDocument()
     expect(screen.getByText('=')).toBeInTheDocument()
@@ -39,6 +41,8 @@ describe('EquationEditor', () => {
     const { container } = render(() => (
       <EquationEditor {...mockProps} equation={equation} onEquationChange={onEquationChange} />
     ))
+    // Structural editing is now opt-in behind the toggle.
+    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
 
     const nestedD = container.querySelector('[data-path="rhs.args.0"]')!
     fireEvent.click(nestedD)
@@ -85,14 +89,12 @@ describe('EquationEditor', () => {
   })
 })
 
-describe('EquationEditor — text mode (DSL)', () => {
+describe('EquationEditor — text mode (DSL, the default surface)', () => {
   const eq = { lhs: 'x', rhs: { op: '+', args: ['y', 2] } }
-  const toText = () => fireEvent.click(screen.getByRole('button', { name: 'Edit as text' }))
   const textarea = () => screen.getByLabelText('Equation text') as HTMLTextAreaElement
 
-  it('toggles to a textarea seeded with the ascii form', () => {
+  it('defaults to a textarea seeded with the ascii form', () => {
     render(() => <EquationEditor equation={eq} onEquationChange={vi.fn()} />)
-    toText()
     expect(textarea()).toBeInTheDocument()
     expect(textarea().value).toBe('x = y + 2')
   })
@@ -100,7 +102,6 @@ describe('EquationEditor — text mode (DSL)', () => {
   it('commits a valid edit on blur, emitting the parsed equation', () => {
     const onEquationChange = vi.fn()
     render(() => <EquationEditor equation={eq} onEquationChange={onEquationChange} />)
-    toText()
     fireEvent.input(textarea(), { target: { value: 'x = y + 3' } })
     fireEvent.blur(textarea())
     expect(onEquationChange).toHaveBeenCalledWith({ lhs: 'x', rhs: { op: '+', args: ['y', 3] } })
@@ -109,7 +110,6 @@ describe('EquationEditor — text mode (DSL)', () => {
   it('blocks emit on a parse error and surfaces the error', () => {
     const onEquationChange = vi.fn()
     render(() => <EquationEditor equation={eq} onEquationChange={onEquationChange} />)
-    toText()
     fireEvent.input(textarea(), { target: { value: 'x = y +' } }) // trailing operator
     fireEvent.blur(textarea())
     expect(onEquationChange).not.toHaveBeenCalled()
@@ -119,7 +119,6 @@ describe('EquationEditor — text mode (DSL)', () => {
   it('does not emit when the reprint is unchanged (AST left untouched)', () => {
     const onEquationChange = vi.fn()
     render(() => <EquationEditor equation={eq} onEquationChange={onEquationChange} />)
-    toText()
     fireEvent.blur(textarea())
     expect(onEquationChange).not.toHaveBeenCalled()
   })
@@ -128,7 +127,6 @@ describe('EquationEditor — text mode (DSL)', () => {
     const withComment = { lhs: 'x', rhs: { op: '+', args: ['y', 2] }, _comment: 'note' }
     const onEquationChange = vi.fn()
     render(() => <EquationEditor equation={withComment} onEquationChange={onEquationChange} />)
-    toText()
     fireEvent.input(textarea(), { target: { value: 'x = y + 3' } })
     fireEvent.blur(textarea())
     expect(onEquationChange).toHaveBeenCalledWith({
@@ -140,16 +138,16 @@ describe('EquationEditor — text mode (DSL)', () => {
 
   it('blocks leaving text mode while the buffer is unparseable', () => {
     render(() => <EquationEditor equation={eq} onEquationChange={vi.fn()} />)
-    toText()
     fireEvent.input(textarea(), { target: { value: 'x = y +' } })
-    // The toggle now reads "Structural"; clicking it must NOT switch back.
+    // The toggle reads "Structural"; clicking it must NOT switch away from text.
     fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
     expect(textarea()).toBeInTheDocument() // still in text mode
     expect(screen.getByRole('alert')).toBeInTheDocument()
   })
 
-  it('does not show the text toggle in readonly mode', () => {
+  it('does not show the toggle at all in readonly mode', () => {
     render(() => <EquationEditor equation={eq} readonly onEquationChange={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Structural' })).not.toBeInTheDocument()
   })
 })

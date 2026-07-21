@@ -41,6 +41,17 @@ describe('Cross-Component Integration', () => {
     vi.clearAllMocks()
   })
 
+  // Editors default to the text surface. These tests query the ExpressionEditor's
+  // structural DOM, so reveal it via its toggle. The ModelEditor's equation is
+  // left on the text surface deliberately: `validModel`'s `D(O3, t)` lhs does not
+  // round-trip (`toAscii` normalizes it to `D(O3)/Dt`), so committing it would
+  // emit a spurious model change and corrupt the history/state assertions.
+  const revealExpressionStructural = () => {
+    document
+      .querySelectorAll('.expression-editor .esm-eq-mode-btn')
+      .forEach((b) => fireEvent.click(b as HTMLButtonElement))
+  }
+
   describe('Expression and Model Editor Integration', () => {
     it('should synchronize data between expression editor and model editor', async () => {
       const expression: Expression = { op: '+', args: ['x', 2] }
@@ -77,6 +88,8 @@ describe('Cross-Component Integration', () => {
         </div>
       ))
 
+      revealExpressionStructural()
+
       // Verify initial state - use more specific selectors
       expect(screen.getByLabelText(/Operator: \+/)).toBeInTheDocument() // Expression operator
       expect(screen.getByLabelText(/Variable: x/)).toBeInTheDocument()
@@ -104,10 +117,13 @@ describe('Cross-Component Integration', () => {
         </div>
       ))
 
-      // Both variables are present in both components: the expression editor
-      // (and the model equations) render them in chemical notation (O₃) while
-      // the variables panel shows the raw variable name (O3).
-      expect(screen.getAllByText('O₃').length).toBeGreaterThan(0) // Expression editor / equations
+      revealExpressionStructural()
+
+      // The expression editor renders variables in chemical notation (O₃) while
+      // the variables panel shows the raw variable name (O3). (The model's
+      // equation stays on the default text surface, so O₃ comes from the
+      // expression editor.)
+      expect(screen.getAllByText('O₃').length).toBeGreaterThan(0) // Expression editor
       expect(screen.getByText('O3')).toBeInTheDocument() // Variables panel
       expect(screen.getAllByText('NO')).toHaveLength(2) // Expression + Variables panel
 
@@ -149,6 +165,8 @@ describe('Cross-Component Integration', () => {
           />
         </div>
       ))
+
+      revealExpressionStructural()
 
       // Verify initial render
       expect(screen.getByText('O3')).toBeInTheDocument()
@@ -202,6 +220,8 @@ describe('Cross-Component Integration', () => {
           </button>
         </div>
       ))
+
+      revealExpressionStructural()
 
       // Verify initial state
       expect(screen.getByText('O3')).toBeInTheDocument()
@@ -288,9 +308,11 @@ describe('Cross-Component Integration', () => {
         </div>
       ))
 
+      revealExpressionStructural()
+
       // Verify all components are rendered and connected
       expect(screen.getByText('O3')).toBeInTheDocument()
-      // The equation RHS multiplication renders with the '*' operator layout
+      // The expression editor (seeded from the equation RHS) renders the '*' op.
       expect(container.querySelector('[data-operator="*"]')).toBeInTheDocument()
 
       // Test that state updates propagate
@@ -319,6 +341,8 @@ describe('Cross-Component Integration', () => {
           />
         </div>
       ))
+
+      revealExpressionStructural()
 
       // Components should be rendered without errors
       expect(screen.getByText('O3')).toBeInTheDocument()
