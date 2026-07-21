@@ -84,6 +84,10 @@ include("relational.jl")
 include("mtk_export.jl")
 include("geometry.jl")
 include("area_faq.jl")
+# Planar spatial-index broad phase (projection-pushdown Phase 3a): a
+# dependency-free brute-force reference + the generic seam whose fast STRtree
+# method lives in EarthSciASTGeometryOpsExt.
+include("broad_phase.jl")
 # MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
 include("tree_walk.jl")
 include("data_refresh.jl")
@@ -186,6 +190,12 @@ export
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
+    # Planar spatial-index broad phase (projection-pushdown Phase 3a). The fast
+    # STRtree `broad_phase_candidates(query_envs, index)` method + the
+    # `build_spatial_index` producer live in EarthSciASTGeometryOpsExt; the core
+    # `broad_phase_candidates(query_envs, cell_envs)` brute-force method is the
+    # dependency-free fallback + conformance oracle.
+    broad_phase_candidates, build_spatial_index,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
     build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
     DiscreteMaterializer,

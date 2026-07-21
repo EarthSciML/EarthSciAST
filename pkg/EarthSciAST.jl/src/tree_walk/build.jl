@@ -1413,13 +1413,20 @@ function _build_partition_and_materialize(model::Model, cls;
 
     # ---- Resolve value-equality joins (RFC §5.3) ----
     # Rewrite each aggregate's `join` clauses into build-time `join_gates` (a
-    # canonical bucket code per key-column position) BEFORE index-set ranges are
-    # resolved away — categorical members are read from the still-present
-    # `{from}` references here. No-op (byte-identical) for files without a join.
-    equations = _resolve_join_gates(ode_equations, index_sets, vi_maps)
+    # canonical bucket code per key-column position, or — Phase 2a — a prebuilt
+    # spatial-overlap candidate set for a `join.overlap` gate) BEFORE index-set
+    # ranges are resolved away — categorical members are read from the still-
+    # present `{from}` references here, and a `join.overlap` gate reads its
+    # envelope factor arrays from `const_arrays` (with each factor's 1-D shape
+    # from `join_var_shapes`). No-op (byte-identical) for files without a join.
+    join_var_shapes = Dict{String,Vector{String}}(
+        String(n) => (v.shape === nothing ? String[] : Vector{String}(v.shape))
+        for (n, v) in model.variables)
+    equations = _resolve_join_gates(ode_equations, index_sets, vi_maps,
+                                    const_arrays, join_var_shapes)
     _translate_equation_sites!(template_sites, ode_equations, equations)
     init_equations = _resolve_join_gates(model.initialization_equations,
-                                         index_sets, vi_maps)
+                                         index_sets, vi_maps, const_arrays, join_var_shapes)
 
     # ---- Resolve index-set references in ranges (RFC §5.2) ----
     # Rewrite any `ranges[*]` `{from: <name>}` reference against the document's

@@ -281,12 +281,34 @@ function _join_key_sym_pos_vals(key::String, ranges::AbstractDict,
     return (sym, positions, vals)
 end
 
-# Resolve every join clause of an aggregate node into `_JoinGate`s (RFC §5.3).
-# Operates on the node's ORIGINAL ranges (index-set `{from}` refs intact) so it
-# can read categorical members from the document registry; a key that names a
-# value-invention map buffer gates on the materialised buffer values instead.
+# Map an OVERLAP-gate env-factor list to the aggregate range symbol its axis
+# runs over (Phase 2a): the env factors are 1-D const-array buffers, so — exactly
+# like an `on` key column — the first factor's 1-D shape index set names the
+# range. `var_shapes` maps a factor name to its declared shape (index-set names).
+function _overlap_env_sym(env_names::AbstractVector, ranges::AbstractDict,
+                          sym_to_set::AbstractDict, var_shapes::AbstractDict)
+    isempty(env_names) && throw(TreeWalkError("E_TREEWALK_JOIN_OVERLAP",
+        "overlap join gate has an empty env-factor list"))
+    fname = String(env_names[1])
+    shape = get(var_shapes, fname, nothing)
+    (shape === nothing || length(shape) != 1) && throw(TreeWalkError(
+        "E_TREEWALK_JOIN_OVERLAP",
+        "overlap join env factor '$fname' must be a 1-D buffer whose shape index " *
+        "set names the join range; shape=$(shape === nothing ? "<unknown>" : shape)"))
+    return _join_sym_for_key(String(shape[1]), ranges, sym_to_set)
+end
+
+# Resolve every join clause of an aggregate node into `_JoinGate`s (RFC §5.3 /
+# Phase 2a). Operates on the node's ORIGINAL ranges (index-set `{from}` refs
+# intact) so it can read categorical members from the document registry; a key
+# that names a value-invention map buffer gates on the materialised buffer values
+# instead. A `_OverlapJoinSpec` clause resolves to an OVERLAP gate: the broad-
+# phase candidate set built ONCE from its envelope factor arrays (in
+# `const_arrays`) via the Phase-3a primitive, cached on the gate's `candidates`.
 function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
-                                 vi_maps=_EMPTY_VI_MAPS)
+                                 vi_maps=_EMPTY_VI_MAPS,
+                                 const_arrays::AbstractDict=Dict{String,Any}(),
+                                 var_shapes::AbstractDict=Dict{String,Vector{String}}())
     node.join === nothing && return nothing
     ranges = node.ranges === nothing ? Dict{String,Any}() : node.ranges
     sym_to_set = Dict{String,String}(
@@ -294,14 +316,25 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
     # `OpExpr.join_gates` is typed `Union{Vector{_JoinGate},Nothing}` (types.jl
     # defines `_JoinGate` ahead of `OpExpr`), so build the concrete vector here.
     gates = _JoinGate[]
-    for clause in node.join            # clause :: Vector{Tuple{String,String}}
-        for (lkey, rkey) in clause
-            sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets, sym_to_set, vi_maps)
-            sym_r, pos_r, vals_r = _join_key_sym_pos_vals(rkey, ranges, index_sets, sym_to_set, vi_maps)
-            codes_l, codes_r = _encode_join_keys(vals_l, vals_r)
-            push!(gates, _JoinGate(sym_l, sym_r,
-                Dict{Int,Int}(zip(pos_l, codes_l)),
-                Dict{Int,Int}(zip(pos_r, codes_r))))
+    for clause in node.join
+        if clause isa _OverlapJoinSpec
+            # OVERLAP gate: envelope candidacy, NOT key equality. `src_env` axis →
+            # sym_l, `tgt_env` axis → sym_r; the candidate `(pos_l,pos_r)` set is
+            # keyed to match, built once here from the const-array envelope factors.
+            sym_l = _overlap_env_sym(clause.src_env, ranges, sym_to_set, var_shapes)
+            sym_r = _overlap_env_sym(clause.tgt_env, ranges, sym_to_set, var_shapes)
+            cands = _overlap_candidate_set(clause.src_env, clause.tgt_env, const_arrays;
+                                           eps=clause.eps)
+            push!(gates, _JoinGate(sym_l, sym_r, Dict{Int,Int}(), Dict{Int,Int}(), cands))
+        else                           # clause :: Vector{Tuple{String,String}}
+            for (lkey, rkey) in clause
+                sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets, sym_to_set, vi_maps)
+                sym_r, pos_r, vals_r = _join_key_sym_pos_vals(rkey, ranges, index_sets, sym_to_set, vi_maps)
+                codes_l, codes_r = _encode_join_keys(vals_l, vals_r)
+                push!(gates, _JoinGate(sym_l, sym_r,
+                    Dict{Int,Int}(zip(pos_l, codes_l)),
+                    Dict{Int,Int}(zip(pos_r, codes_r))))
+            end
         end
     end
     return gates
@@ -315,7 +348,14 @@ end
 function _join_admits(gates, binding::AbstractDict)
     gates === nothing && return true
     for g in gates
-        g.codes_l[binding[g.sym_l]] == g.codes_r[binding[g.sym_r]] || return false
+        if g.candidates === nothing
+            # Bin-equality gate: equal bucket codes at the two range positions.
+            g.codes_l[binding[g.sym_l]] == g.codes_r[binding[g.sym_r]] || return false
+        else
+            # OVERLAP gate (Phase 2a): the (pos_l, pos_r) pair must be in the
+            # prebuilt broad-phase candidate set (envelope candidacy).
+            (binding[g.sym_l], binding[g.sym_r]) in g.candidates || return false
+        end
     end
     return true
 end
@@ -356,32 +396,42 @@ _eq_has_join(eq::Equation) = _expr_has_join(eq.lhs) || _expr_has_join(eq.rhs)
 # present for member lookup. The wire `join`/`filter` fields are carried through
 # unchanged (serialization round-trips them); only the internal `join_gates` is
 # populated.
-function _resolve_join_in_expr(expr::OpExpr, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS)
-    new_args = ASTExpr[_resolve_join_in_expr(a, index_sets, vi_maps) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : _resolve_join_in_expr(expr.expr_body, index_sets, vi_maps)
+function _resolve_join_in_expr(expr::OpExpr, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
+                               const_arrays::AbstractDict=Dict{String,Any}(),
+                               var_shapes::AbstractDict=Dict{String,Vector{String}}())
+    new_args = ASTExpr[_resolve_join_in_expr(a, index_sets, vi_maps, const_arrays, var_shapes) for a in expr.args]
+    new_body = expr.expr_body === nothing ? nothing : _resolve_join_in_expr(expr.expr_body, index_sets, vi_maps, const_arrays, var_shapes)
     new_values = expr.values === nothing ? nothing :
-                 ASTExpr[_resolve_join_in_expr(v, index_sets, vi_maps) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps)
-    new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps)
-    new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps)
+                 ASTExpr[_resolve_join_in_expr(v, index_sets, vi_maps, const_arrays, var_shapes) for v in expr.values]
+    new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps, const_arrays, var_shapes)
+    new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps, const_arrays, var_shapes)
+    new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps, const_arrays, var_shapes)
     gates = (_is_aggregate_op(expr.op) && expr.join !== nothing) ?
-            _resolve_join_gates_for(expr, index_sets, vi_maps) : expr.join_gates
+            _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes) : expr.join_gates
     return reconstruct(expr; args=new_args, expr_body=new_body,
                        values=new_values, lower=new_lower, upper=new_upper,
                        filter=new_filter, join_gates=gates)
 end
-_resolve_join_in_expr(expr::ASTExpr, ::AbstractDict, vi_maps=_EMPTY_VI_MAPS) = expr
+_resolve_join_in_expr(expr::ASTExpr, ::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
+                      const_arrays::AbstractDict=Dict{String,Any}(),
+                      var_shapes::AbstractDict=Dict{String,Vector{String}}()) = expr
 
-_resolve_join_in_eq(eq::Equation, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS) =
-    Equation(_resolve_join_in_expr(eq.lhs, index_sets, vi_maps),
-             _resolve_join_in_expr(eq.rhs, index_sets, vi_maps);
+_resolve_join_in_eq(eq::Equation, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
+                    const_arrays::AbstractDict=Dict{String,Any}(),
+                    var_shapes::AbstractDict=Dict{String,Vector{String}}()) =
+    Equation(_resolve_join_in_expr(eq.lhs, index_sets, vi_maps, const_arrays, var_shapes),
+             _resolve_join_in_expr(eq.rhs, index_sets, vi_maps, const_arrays, var_shapes);
              _comment=eq._comment)
 
 # Resolve join gates across a vector of equations. Returns the input unchanged
 # when no equation uses a `join` clause (byte-identical for join-free files).
-# `vi_maps` carries any value-invention map buffers a `join.on` gates on (RFC §5.3).
+# `vi_maps` carries any value-invention map buffers a `join.on` gates on (RFC
+# §5.3); `const_arrays` + `var_shapes` supply the envelope factor arrays and
+# their 1-D shapes a Phase-2a `join.overlap` gate resolves against.
 function _resolve_join_gates(eqs::Vector{Equation}, index_sets::AbstractDict,
-                             vi_maps=_EMPTY_VI_MAPS)
+                             vi_maps=_EMPTY_VI_MAPS,
+                             const_arrays::AbstractDict=Dict{String,Any}(),
+                             var_shapes::AbstractDict=Dict{String,Vector{String}}())
     any(_eq_has_join, eqs) || return eqs
-    return Equation[_resolve_join_in_eq(eq, index_sets, vi_maps) for eq in eqs]
+    return Equation[_resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes) for eq in eqs]
 end

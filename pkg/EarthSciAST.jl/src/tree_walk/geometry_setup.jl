@@ -354,13 +354,20 @@ end
 function _resolve_geo_join_gates(expr, ctx::_GeoCtx, setof)
     expr.join === nothing && return nothing
     gates = _GeoJoinGate[]
-    for clause in expr.join, pair in clause
-        colA, colB = String(pair[1]), String(pair[2])
-        lvA = _geo_loopvar_for(colA, setof, ctx.var_shapes)
-        lvB = _geo_loopvar_for(colB, setof, ctx.var_shapes)
-        (lvA === nothing || lvB === nothing) && continue
-        (haskey(ctx.env, colA) && haskey(ctx.env, colB)) || continue
-        push!(gates, _GeoJoinGate(ctx.env[colA], lvA, ctx.env[colB], lvB))
+    for clause in expr.join
+        # Only bin-equality (key-column-pair) clauses gate the setup-time geometry
+        # interpreter; a Phase-2a `overlap` clause is a `_OverlapJoinSpec` (not a
+        # pair vector) and its broad phase is handled by the semiring / VI join
+        # resolvers, so it is skipped here exactly as an unresolvable pair was.
+        clause isa AbstractVector || continue
+        for pair in clause
+            colA, colB = String(pair[1]), String(pair[2])
+            lvA = _geo_loopvar_for(colA, setof, ctx.var_shapes)
+            lvB = _geo_loopvar_for(colB, setof, ctx.var_shapes)
+            (lvA === nothing || lvB === nothing) && continue
+            (haskey(ctx.env, colA) && haskey(ctx.env, colB)) || continue
+            push!(gates, _GeoJoinGate(ctx.env[colA], lvA, ctx.env[colB], lvB))
+        end
     end
     return gates
 end

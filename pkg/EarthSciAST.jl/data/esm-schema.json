@@ -413,8 +413,17 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "on"
+            "oneOf": [
+              {
+                "required": [
+                  "on"
+                ]
+              },
+              {
+                "required": [
+                  "overlap"
+                ]
+              }
             ],
             "properties": {
               "on": {
@@ -428,6 +437,37 @@
                   },
                   "minItems": 2,
                   "maxItems": 2
+                }
+              },
+              "overlap": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Phase-2a spatial OVERLAP broad-phase gate: replaces uniform-grid bin equality with envelope candidacy. `src_env` / `tgt_env` name const-array ENVELOPE factors — 4 names [xmin,ymin,xmax,ymax] (rectangles, e.g. cell [W,S,E,N]), 2 names [x,y] (points → degenerate envelope), or 1 name (a [pos,verts,coord] ring factor → AABB). A ⊗-product term is contributed only for (src_pos, tgt_pos) index combinations whose envelopes intersect (inflated outward by `eps`); the narrow phase (exact rectangle/polygon test) stays as the aggregate `filter`. The candidate set is built once at build time via the planar broad-phase primitive (STRtree/brute-force).",
+                "required": [
+                  "src_env",
+                  "tgt_env"
+                ],
+                "properties": {
+                  "src_env": {
+                    "type": "array",
+                    "description": "Envelope factor names for the source (query) side: 1 (rings), 2 (point [x,y]), or 4 (rect [xmin,ymin,xmax,ymax]) const-array factor names.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "tgt_env": {
+                    "type": "array",
+                    "description": "Envelope factor names for the target (indexed cell) side: 1, 2, or 4 const-array factor names, same convention as src_env.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "eps": {
+                    "type": "number",
+                    "description": "Outward envelope inflation (FP-conservative slack). Default 0.0; eps >= 0 grows the candidate set monotonically."
+                  }
                 }
               }
             }
