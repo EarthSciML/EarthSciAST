@@ -195,6 +195,7 @@ export
     # expression the RHS evaluates (the obsolete RegridApplier seam was removed).
     build_refresh_callback, RefreshBuffers, RefreshError,
     provider_refresh_times, provider_is_const, provider_sample,
+    provider_supports_selection,
     # Out-of-place RHS explicit-buffers surface (perf-plan B2): the traced-
     # argument binding of the live forcing buffers, plus the refresh-side hook
     # that mirrors a host refresh into the compiled program's argument arrays.

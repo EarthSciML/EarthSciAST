@@ -86,16 +86,47 @@ function provider_is_const end
 provider_is_const(p) = isempty(provider_refresh_times(p))
 
 """
-    provider_sample(provider, t::Real) -> sample
+    provider_supports_selection(provider) -> Bool
+
+True if `provider` can honour a per-call `selection` (projection pushdown) in
+[`provider_sample`](@ref) — i.e. it reads only the requested slice of the
+native array rather than the whole thing. Defaults to `false`; the data binding
+overrides it (the EarthSciIO extension bridges to `EarthSciIO.supports_selection`,
+true for a store-backed zarr provider, false for a whole-file reader). A caller
+that wants to push a `selection` down MUST gate on this: handing a `selection`
+to a provider that returns `false` is a clear error (the fall-back-to-full-then-
+slice path, if any, belongs to the build side, not to `provider_sample`).
+"""
+function provider_supports_selection end
+provider_supports_selection(::Any) = false
+
+"""
+    provider_sample(provider, t::Real; selection=nothing) -> sample
 
 The native-grid data for `provider` at cadence tick `t` (solver seconds). The
 return value is opaque to EarthSciAST — it is handed straight to the forcing-write seam
 (`_write_forcing!`), which extracts a named variable from it.
 For the EarthSciIO provider this is `refresh(p, t)` returning a `NativeDataset`;
 for a mock it can be any per-variable container (e.g. a `Dict{String,Vector}`).
+
+`selection` is an optional, provider-NEUTRAL per-axis projection pushdown: one
+positional entry per NATIVE axis of the gated array(s). `selection===nothing`
+(the default) samples the whole array — identical to the pre-pushdown behaviour,
+so every existing 2-arg caller is unchanged. When supplied each entry is:
+
+  * `Colon()`                         → the whole axis;
+  * an `Integer i` (1-BASED)          → the single fixed index `i`;
+  * an `AbstractVector{<:Integer}` (1-BASED) → that ordered list of indices.
+
+The binding translates this to its native selection (the EarthSciIO extension
+maps 1-based → 0-based and calls the zarr reader's `select`), fetching ONLY the
+intersecting data. The gated axis of the returned array is ordered EXACTLY as the
+index vector (a permuted list yields permuted rows — order is load-bearing, not
+sorted). A `selection` may only be given to a provider whose
+[`provider_supports_selection`](@ref) is `true`; otherwise the binding errors.
 """
 function provider_sample end
-provider_sample(p, ::Real) = throw(RefreshError(
+provider_sample(p, ::Real; selection=nothing) = throw(RefreshError(
     "provider_sample not implemented for $(typeof(p)); the data binding " *
     "(EarthSciIO) or a mock must add a method"))
 

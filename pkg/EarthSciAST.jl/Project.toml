@@ -58,9 +58,25 @@ Symbolics = "7"
 Tullio = "0.3.9"
 Unitful = "1.28.0"
 julia = "1.10"
+# Test-only deps for the EarthSciIO-extension pushdown tests (test/provider_selection_test.jl).
+Blosc = "0.7"
+EarthSciIO = "0.1"
+JSON = "1"
+SHA = "0.7, 1"
+
+# Dev-track the Phase-1a EarthSciIO (branch `pushdown`) for the extension tests
+# WITHOUT adding it to the package's own [deps] (it stays a weakdep). `[sources]`
+# is honoured only when this Project is the active/develop env (i.e. under
+# `Pkg.test()` / the test target), so a downstream `add EarthSciAST` ignores it.
+[sources]
+EarthSciIO = {path = "/Users/ctessum/code/earthsciml/EarthSciIO-wt-pushdown/julia"}
 
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Blosc = "a74b3585-a348-5f62-a45c-50e91977d574"
+EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
@@ -78,4 +94,4 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "BenchmarkTools", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Reactant", "SciMLBase", "Symbolics"]
+test = ["Test", "BenchmarkTools", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Reactant", "SciMLBase", "Symbolics", "EarthSciIO", "Blosc", "JSON", "SHA"]

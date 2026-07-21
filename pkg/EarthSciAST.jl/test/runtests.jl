@@ -99,6 +99,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("data_refresh_test.jl")
     include("data_refresh_e2e_test.jl")
     include("refresh_conformance_test.jl")
+    # Phase 1b projection pushdown across the EarthSciIO provider seam. Loads
+    # EarthSciIO (+ Blosc/JSON/SHA) from the test target (Project.toml
+    # [targets].test), which activates the EarthSciASTEarthSciIOExt extension.
+    include("provider_selection_test.jl")
     include("discrete_materialize_test.jl")
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")
