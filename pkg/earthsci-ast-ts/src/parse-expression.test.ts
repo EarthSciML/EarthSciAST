@@ -18,9 +18,9 @@ const reprint = (ast: unknown) => toAscii(ast as never)
 // Structural ops with no text surface yet — an expression containing one is
 // still refused. (const/true/fn/index/integral/reshape/transpose/concat and the
 // whole reduction & array-query tier — aggregate/argmin/argmax/
-// apply_expression_template/polygon_intersection_area — DO have a surface now
-// and are handled below.)
-const STRUCTURAL = new Set(['enum', 'broadcast', 'table_lookup', 'makearray', 'intersect_polygon'])
+// apply_expression_template/polygon_intersection_area/makearray — DO have a
+// surface now and are handled below.)
+const STRUCTURAL = new Set(['enum', 'broadcast', 'table_lookup', 'intersect_polygon'])
 function hasStructuralOp(n: unknown): boolean {
   if (!n || typeof n !== 'object') return false
   if (Array.isArray(n)) return n.some(hasStructuralOp)
@@ -265,10 +265,34 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
     const nested = 'sqrt(sum[] (v[e] * v[e]) where {e in space})'
     expect(reprint(parseExpression(nested))).toBe(nested)
   })
+  it('makearray piecewise regions (expr bounds, empty args)', () => {
+    expect(
+      parseExpression('makearray([2:NLON - 1, 1:NLAT] = a[i, j] / dlon, [1:1, 1:NLAT] = b)'),
+    ).toEqual({
+      op: 'makearray',
+      args: [],
+      regions: [
+        [
+          [2, { op: '-', args: ['NLON', 1] }],
+          [1, 'NLAT'],
+        ],
+        [
+          [1, 1],
+          [1, 'NLAT'],
+        ],
+      ],
+      values: [{ op: '/', args: [{ op: 'index', args: ['a', 'i', 'j'] }, 'dlon'] }, 'b'],
+    })
+  })
+  it('makearray whose region values are themselves aggregate / template bodies', () => {
+    const src =
+      'makearray([2:NLON, 1:NLAT] = central_D<f=f>, [1:1, 1:NLAT] = sum[j] (u[1, j]) where {j in lat})'
+    expect(reprint(parseExpression(src))).toBe(src)
+  })
 })
 
 describe('still-deferred structural ops are refused', () => {
-  for (const s of ['table_lookup(a)', 'makearray(x)', 'broadcast(y)', 'enum(a, b)']) {
+  for (const s of ['table_lookup(a)', 'broadcast(y)', 'enum(a, b)']) {
     it(`refuses ${s}`, () => {
       expect(() => parseExpression(s)).toThrow(ExpressionParseError)
     })
@@ -276,7 +300,8 @@ describe('still-deferred structural ops are refused', () => {
 })
 
 describe('malformed input reports a position', () => {
-  for (const s of ['k * ', 'a b', '(a + b']) {
+  // includes a makearray missing its `[region]` bracket (a body, not a region)
+  for (const s of ['k * ', 'a b', '(a + b', 'makearray(x)']) {
     it(`rejects ${JSON.stringify(s)}`, () => {
       expect(() => parseExpression(s)).toThrow(ExpressionParseError)
     })

@@ -18,8 +18,9 @@
  *    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
  *    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses
  *    `argmin[g] (expr) where {…}`, template application
- *    `name<binding = value, …>` (`apply_expression_template`), and
- *    `polygon_intersection_area(a, b, manifold=…)`.
+ *    `name<binding = value, …>` (`apply_expression_template`),
+ *    `polygon_intersection_area(a, b, manifold=…)`, and the piecewise-region
+ *    array `makearray([lo:hi, …] = value, …)`.
  *
  * Aggregate `args` is a derived operand cache the printer doesn't emit; it's
  * reconstructed best-effort (see {@link deriveAggregateArgs}) and is
@@ -27,10 +28,9 @@
  * reconstructs as a plain `+` reduction — the join-less `sum_product` annotation
  * (semantically identical there) is not recovered; both reprint identically.
  *
- * Still deferred (need dedicated surface syntax — a later pass): `makearray`,
- * `table_lookup`, `broadcast`, `enum`, and `intersect_polygon` (its `id` field
- * is not printed, so it can't round-trip). Those are refused with an
- * {@link ExpressionParseError}.
+ * Still deferred (need dedicated surface syntax — a later pass): `table_lookup`,
+ * `broadcast`, `enum`, and `intersect_polygon` (its `id` field is not printed, so
+ * it can't round-trip). Those are refused with an {@link ExpressionParseError}.
  *
  * Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
  * juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -101,17 +101,12 @@ const TEMPLATE_ARG_MIN = opPrecedence('+')
  * Structural ops whose defining data lives OUTSIDE `args` AND which have no
  * text surface yet — refused, pending a dedicated syntax pass. (`integral`,
  * `reshape`, `transpose`, `concat`, `fn`, `const`, `index`, `true`, `aggregate`,
- * `apply_expression_template`, `polygon_intersection_area` DO have a surface and
- * are reconstructed below; they are intentionally absent here. `intersect_polygon`
- * stays refused: its `id` field is not printed, so it can't round-trip.)
+ * `apply_expression_template`, `polygon_intersection_area`, `makearray` DO have a
+ * surface and are reconstructed below; they are intentionally absent here.
+ * `intersect_polygon` stays refused: its `id` field is not printed, so it can't
+ * round-trip.)
  */
-const STRUCTURAL_OPS = new Set<string>([
-  'makearray',
-  'table_lookup',
-  'broadcast',
-  'enum',
-  'intersect_polygon',
-])
+const STRUCTURAL_OPS = new Set<string>(['table_lookup', 'broadcast', 'enum', 'intersect_polygon'])
 
 /**
  * The aggregate reduction symbols `toAscii` emits (`formatAggregate`). Each maps
@@ -348,6 +343,10 @@ class Parser {
     if (t.k === '[') return { op: 'const', value: this.parseArrayRest(), args: [] }
     if (t.k === 'name') {
       if (t.v === 'true') return { op: 'true', args: [] }
+      // `makearray(region = value, …)` — a piecewise-region array. Its arguments
+      // are `[lo:hi, …] = value` pairs, not plain call args, so it needs its own
+      // parse rather than the generic parseCall path.
+      if (t.v === 'makearray' && this.peek().k === '(') return this.parseMakearray()
       if (this.peek().k === '(') return this.parseCall(t.v)
       // Template application `name<binding = value, …>` (or empty `name<>`) →
       // apply_expression_template. The `< NAME =` / `< >` lookahead distinguishes
@@ -663,6 +662,55 @@ class Parser {
     }
     this.expectOp('>', "'>' to close a template application")
     return { op: 'apply_expression_template', args: [], name, bindings }
+  }
+
+  /**
+   * Parse a `makearray` piecewise-region array (esm-spec §4.2) — the inverse of
+   * `formatStructuralOp`'s makearray case:
+   *
+   *   'makearray' '(' region '=' value ( ',' region '=' value )* ')'
+   *   region := '[' bound ':' bound ( ',' bound ':' bound )* ']'
+   *
+   * Each region is a list of per-dimension `lo:hi` bounds, and `value` is the
+   * expression that region evaluates to. A bound is any expression (a number, a
+   * name like `NLON`, or e.g. `NLON - 1`). `args` is always `[]` (the printer
+   * emits none); `regions` and `values` are positionally paired. Values are
+   * flattened to the canonical n-ary `+`/`*` form, like the top-level parse.
+   */
+  private parseMakearray(): Expr {
+    this.next() // '('
+    const regions: [Expr, Expr][][] = []
+    const values: Expr[] = []
+    if (this.peek().k !== ')') {
+      for (;;) {
+        this.expect('[', "'[' to open a makearray region")
+        const region: [Expr, Expr][] = []
+        if (this.peek().k !== ']') {
+          for (;;) {
+            const lo = this.parseExpr(0)
+            this.expect(':', "':' between a region's lo:hi bounds")
+            const hi = this.parseExpr(0)
+            region.push([flatten(lo), flatten(hi)])
+            if (this.peek().k === ',') {
+              this.next()
+              continue
+            }
+            break
+          }
+        }
+        this.expect(']', "']' to close a makearray region")
+        this.expect('eq', "'=' after a makearray region")
+        regions.push(region)
+        values.push(flatten(this.parseExpr(0)))
+        if (this.peek().k === ',') {
+          this.next()
+          continue
+        }
+        break
+      }
+    }
+    this.expect(')', "')' to close makearray(...)")
+    return { op: 'makearray', args: [], regions, values } as unknown as Expr
   }
 }
 
