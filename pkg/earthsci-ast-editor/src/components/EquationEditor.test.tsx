@@ -123,6 +123,18 @@ describe('EquationEditor — text mode (DSL, the default surface)', () => {
     expect(onEquationChange).not.toHaveBeenCalled()
   })
 
+  it('does not emit on a no-edit blur even for a non-reprint-idempotent node', () => {
+    // A wrt-less `D(O3, t)` seeds as `D(O3, t)` but reprints as `D(O3)/Dt`, so a
+    // reprint-only guard would spuriously rewrite it on a focus+blur with no
+    // edit. Gating emit on the buffer having actually changed prevents that.
+    const nonIdempotent = { lhs: 'x', rhs: { op: 'D', args: ['O3', 't'] } }
+    const onEquationChange = vi.fn()
+    render(() => <EquationEditor equation={nonIdempotent} onEquationChange={onEquationChange} />)
+    expect(textarea().value).toBe('x = D(O3, t)')
+    fireEvent.blur(textarea()) // focus/blur with no edit
+    expect(onEquationChange).not.toHaveBeenCalled()
+  })
+
   it('preserves _comment (and other non-lhs/rhs fields) across a text edit', () => {
     const withComment = { lhs: 'x', rhs: { op: '+', args: ['y', 2] }, _comment: 'note' }
     const onEquationChange = vi.fn()

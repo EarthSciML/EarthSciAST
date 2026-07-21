@@ -11,10 +11,12 @@
  *    {@link ExpressionParseError} is surfaced (its message stored in `error`)
  *    and NOTHING is emitted — and `commit()` returns `false` so the caller can
  *    refuse to leave text mode. Escape reverts the buffer to the seed.
- *  - **Emit only when the reprint actually changed.** `reprint(parsed)` is
- *    compared against the seed (`toAscii` of the source); an untouched node
- *    re-parses to a byte-identical reprint and is left alone, so the
- *    non-injective printer never rewrites an AST the user didn't edit.
+ *  - **Emit only when the user actually edited the buffer** (`text() !== seed()`)
+ *    **and** the parse reprints differently from the seed. Gating on the buffer
+ *    itself — not just the reprint — keeps an untouched node byte-identical even
+ *    when it is NOT reprint-idempotent (a wrt-less `D(O3, t)` reprints to
+ *    `D(O3)/Dt`; a float's last digit can shift through `formatNumber`), so a
+ *    focus+blur with no edit never rewrites an AST the user didn't touch.
  *
  * The surface-specific merge/emit lives in {@link TextEditModeOptions.emit},
  * which is called only on a clean parse, only when editable, and only when the
@@ -89,7 +91,15 @@ export function createTextEditMode<T>(opts: TextEditModeOptions<T>): TextEditMod
       throw e
     }
     setError(null)
-    if (!opts.readonly() && opts.reprint(parsed) !== opts.seed()) opts.emit(parsed)
+    // Emit only when the user actually changed the buffer AND that change is
+    // real (reprints differently from the seed). Gating on `text() !== seed()`
+    // — not just the reprint — is what keeps an UNTOUCHED node byte-identical
+    // even when it is not reprint-idempotent: a wrt-less `D(O3, t)` reprints to
+    // `D(O3)/Dt`, and a float's last digit can shift through `formatNumber`, so
+    // a focus+blur with no edit would otherwise silently rewrite the AST.
+    if (!opts.readonly() && text() !== opts.seed() && opts.reprint(parsed) !== opts.seed()) {
+      opts.emit(parsed)
+    }
     return true
   }
 
