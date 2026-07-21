@@ -362,11 +362,21 @@ function prepare(input;
     merged_const = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
     merged_param = Dict{String,Any}(String(k) => v for (k, v) in param_arrays)
     discrete_providers = Dict{String,Any}()
+    # Phase 2b Hook 2: GATED providers are DEFERRED — not pulled whole here, but
+    # stashed and fetched pre-sliced after value-invention (the const-tier
+    # dependency edge). A provider is gated when it reports a `provider_gate_spec`
+    # (the runner sets it from the loader's `gated_select`; a mock carries it).
+    gated_providers = Dict{String,Any}()
     if providers !== nothing
         t0 = Float64(sample_time)
         for (rawk, prov) in providers
             k = String(rawk)
-            if provider_is_const(prov)
+            if provider_is_gated(prov)
+                # Defer: value-invention must derive the gating set's members
+                # before we know which rows to fetch. Bundle the gate spec so the
+                # build resolves the selection without re-consulting the provider.
+                gated_providers[k] = (prov=prov, gate=provider_gate_spec(prov))
+            elseif provider_is_const(prov)
                 merged_const[k] = _provider_const_field(provider_sample(prov, t0), k)
             else
                 # DISCRETE: allocate a LIVE forcing buffer seeded at the initial tick
@@ -395,7 +405,11 @@ function prepare(input;
         const_arrays = merged_const,
         param_arrays = merged_param,
         inspect = inspect,
-        materialize_out = dm)
+        materialize_out = dm,
+        # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
+        # The front door fetches these pre-sliced right after value-invention.
+        _gated_providers = gated_providers,
+        _sample_time = Float64(sample_time))
 
     return PreparedModel(f!, u0, p, var_map, merged_param, discrete_providers, dm,
                          Float64(sample_time), _doc_equation_count(doc),

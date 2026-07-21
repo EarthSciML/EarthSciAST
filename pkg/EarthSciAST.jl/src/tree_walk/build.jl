@@ -2437,6 +2437,191 @@ end
 # needs); default the internal extents/vars to empty here so a direct
 # EsmFile/Model call is unchanged.
 
+# The const-array keys an authored bare factor name resolves to in THIS build.
+# The front-door build keeps bare names, but `prepare` flattens first — every
+# variable is namespaced to `<OrigModel>.<name>` (the model itself renamed
+# `Flattened`), while document-scoped index-set fields (`member_factor`) and gate
+# `applies_to` stay bare. So a bare authored name must be injected under BOTH the
+# bare key AND every model-variable key whose final dotted segment matches it, so
+# the gather (which reads the namespaced ref) resolves in either build path.
+function _const_factor_aliases(model, bare::AbstractString)
+    keys_out = Set{String}([String(bare)])
+    if model !== nothing
+        for k in keys(model.variables)
+            ks = String(k)
+            (ks == bare || (occursin('.', ks) &&
+                            String(split(ks, '.')[end]) == bare)) && push!(keys_out, ks)
+        end
+    end
+    return keys_out
+end
+
+# ---- Phase 2b Hook 1 helper: members-fed-back-as-const-factor ----------------
+# Scan the document index-set registry for `kind:"derived"` sets that name a
+# `member_factor`; for each, surface its value-invention MEMBERS (the invented,
+# sorted-distinct, 1-based full-grid ids in `vi_members[from_faq]`) as a dense
+# 1-D Float64 const array keyed by the factor name (and its namespaced aliases,
+# see `_const_factor_aliases`). Returns a `name => vector` dict to merge into
+# `const_arrays`. A derived set with no `member_factor`, or whose producer did
+# not materialise, contributes nothing.
+function _feed_back_vi_members(index_sets, vi_members::AbstractDict, model)
+    out = Dict{String,Any}()
+    index_sets === nothing && return out
+    for (_, is) in index_sets
+        is isa IndexSet || continue
+        is.kind == "derived" || continue
+        mf = is.member_factor
+        (mf === nothing || is.from_faq === nothing) && continue
+        faq = String(is.from_faq)
+        haskey(vi_members, faq) || continue
+        mem = vi_members[faq]
+        # single-component skolem keys degrade to scalar ids (value_invention.jl);
+        # a multi-component (tuple) member has no scalar factor form.
+        vec = Vector{Float64}(undef, length(mem))
+        ok = true
+        for (i, m) in enumerate(mem)
+            if m isa Real
+                vec[i] = Float64(m)
+            else
+                ok = false
+                break
+            end
+        end
+        ok || throw(TreeWalkError("E_TREEWALK_VI_MEMBER_FACTOR",
+            "derived index set member_factor '$mf' requires SCALAR members " *
+            "(a single-component skolem key); got a composite member for faq '$faq'"))
+        for k in _const_factor_aliases(model, String(mf))
+            out[k] = vec
+        end
+    end
+    return out
+end
+
+# ---- Phase 2b Hook 2 helper: gated-provider deferral → selective fetch -------
+# Resolve each stashed GATED provider's `selection` from the now-materialised
+# value-invention members, fetch ONLY the compact slab, and return a
+# `model-var-name => compact Float64 array` dict to merge into `const_arrays`.
+#
+# `gated` maps a provider KEY to either the bare provider or a `(prov=…, gate=…)`
+# bundle; `provider_gate_spec(prov)` supplies the gate when the bundle omits it.
+# A gate is `Dict("axes"=>[…], "applies_to"=>[names…])` where each native axis is
+# one of `Dict("fixed"=>[i])` (0-based native index → DROPPED length-1 axis),
+# `Dict("gated_by"=>"<derived set>")` (the set's members, 1-based, as the new
+# axis), or `"all"` (whole axis). The compact gated axis length is asserted to
+# equal the gating set's materialised extent.
+function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64, model)
+    out = Dict{String,Any}()
+    (vi === nothing) && isempty(gated) && return out
+    # derived set name → its producer faq id (for `gated_by` resolution).
+    set_to_faq = Dict{String,String}()
+    if index_sets !== nothing
+        for (sname, is) in index_sets
+            is isa IndexSet || continue
+            is.kind == "derived" && is.from_faq !== nothing &&
+                (set_to_faq[String(sname)] = String(is.from_faq))
+        end
+    end
+    vi_members = vi === nothing ? Dict{String,Vector{Any}}() : vi.members
+    vi_extents = vi === nothing ? Dict{String,Int}() : vi.extents
+
+    for (key, entry) in gated
+        prov, gate = _unbundle_gated(entry)
+        gate === nothing && continue
+        axes = get(gate, "axes", nothing)
+        applies = get(gate, "applies_to", nothing)
+        (axes === nothing || applies === nothing) && throw(RefreshError(
+            "gated provider '$key' gate spec needs both `axes` and `applies_to`"))
+
+        selection = Vector{Any}(undef, length(axes))
+        drop_axes = Int[]                 # positions of `fixed` axes (dropped)
+        gated_pos = 0                     # position of the single gated axis
+        gated_extent = 0
+        for (ax_i, ax) in enumerate(axes)
+            if ax == "all"
+                selection[ax_i] = Colon()
+            elseif ax isa AbstractDict && haskey(ax, "fixed")
+                fx = ax["fixed"]
+                fi = fx isa AbstractVector ? Int(first(fx)) : Int(fx)
+                selection[ax_i] = fi + 1          # 0-based native → 1-based neutral
+                push!(drop_axes, ax_i)
+            elseif ax isa AbstractDict && haskey(ax, "gated_by")
+                sname = String(ax["gated_by"])
+                haskey(set_to_faq, sname) || throw(RefreshError(
+                    "gated provider '$key' gates on '$sname' which is not a " *
+                    "derived index set with a from_faq"))
+                faq = set_to_faq[sname]
+                haskey(vi_members, faq) || throw(RefreshError(
+                    "gated provider '$key' gates on '$sname' (faq '$faq') but its " *
+                    "value-invention members were not materialised"))
+                mem = Int[Int(m) for m in vi_members[faq]]   # 1-based ids, set order
+                selection[ax_i] = mem
+                gated_pos = ax_i
+                gated_extent = get(vi_extents, faq, length(mem))
+            else
+                throw(RefreshError("gated provider '$key' axis $ax_i is malformed " *
+                    "(expected \"all\", {\"fixed\":[i]}, or {\"gated_by\":set})"))
+            end
+        end
+        gated_pos == 0 && throw(RefreshError(
+            "gated provider '$key' declares no {\"gated_by\":…} axis"))
+
+        # position of the compact gated axis AFTER dropping the fixed axes.
+        gated_pos_out = gated_pos - count(<(gated_pos), drop_axes)
+        drop_tuple = Tuple(drop_axes)
+
+        supports = provider_supports_selection(prov)
+        if supports
+            sample = provider_sample(prov, t0; selection=selection)
+            for name in applies
+                nm = String(name)
+                field = _sample_field(sample, nm)
+                isempty(drop_tuple) || (field = dropdims(field; dims=drop_tuple))
+                arr = Array{Float64}(field)
+                size(arr, gated_pos_out) == gated_extent || throw(RefreshError(
+                    "gated provider '$key' variable '$nm': fetched compact axis is " *
+                    "$(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"))
+                for k in _const_factor_aliases(model, nm)
+                    out[k] = arr
+                end
+            end
+        else
+            # FALLBACK: reader cannot push down — fetch whole, then slice. Build a
+            # per-axis index tuple (fixed→scalar DROPS the axis, gated→member vec,
+            # all→Colon) so the sliced result matches the pushdown result exactly.
+            sample = provider_sample(prov, t0)
+            idx = Any[a == "all" ? Colon() :
+                      (a isa Integer ? Int(a) : Vector{Int}(a)) for a in selection]
+            for name in applies
+                nm = String(name)
+                full = _sample_field(sample, nm)
+                field = full[idx...]
+                arr = Array{Float64}(field)
+                size(arr, gated_pos_out) == gated_extent || throw(RefreshError(
+                    "gated provider '$key' variable '$nm' (fallback slice): compact axis " *
+                    "is $(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"))
+                for k in _const_factor_aliases(model, nm)
+                    out[k] = arr
+                end
+            end
+        end
+    end
+    return out
+end
+
+# A stashed gated entry is either the bare provider (gate via `provider_gate_spec`)
+# or a `(prov=…, gate=…)` / `Dict("prov"=>…, "gate"=>…)` bundle.
+function _unbundle_gated(entry)
+    if entry isa NamedTuple && haskey(entry, :prov)
+        return entry.prov, (haskey(entry, :gate) && entry.gate !== nothing ?
+                            entry.gate : provider_gate_spec(entry.prov))
+    elseif entry isa AbstractDict && haskey(entry, "prov")
+        g = get(entry, "gate", nothing)
+        return entry["prov"], (g === nothing ? provider_gate_spec(entry["prov"]) : g)
+    else
+        return entry, provider_gate_spec(entry)
+    end
+end
+
 """
     build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
 
@@ -2490,6 +2675,45 @@ function build_evaluator(esm::AbstractDict;
 
     _vi = model === nothing ? nothing :
           materialize_value_invention(model, file.index_sets, _ca, _params)
+
+    # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----
+    # A `kind:"derived"` index set may name a `member_factor` — a model parameter
+    # const factor the build fills HERE with the set's materialised member ids
+    # (`vi.members[from_faq]`, 1-based full-grid ids). This is the ONLY path a
+    # derived set's member VALUES (not just its dense extent `[1,n]`) reach the
+    # ODE body: `cell_W[c] = index(W, index(<member_factor>, c))` gathers the
+    # full-grid rows the compact derived axis selects. (There is NO `member(set,c)`
+    # IR op — this feedback IS the mechanism.) Mirrors the `_derive_binning_coords`
+    # merge above: the injected factor rides `const_arrays` into the impl build.
+    if _vi !== nothing && !isempty(_vi.members)
+        _fed = _feed_back_vi_members(file.index_sets, _vi.members, model)
+        if !isempty(_fed)
+            merge!(_ca, _fed)
+            kwd[:const_arrays] = _ca
+        end
+    end
+
+    # ---- Phase 2b Hook 2: gated-provider deferral → post-VI selective fetch ----
+    # A GATED provider (its `.esm` data_loader declares a `gated_select`; the
+    # runner reports it via `provider_gate_spec`) was SKIPPED by the eager const
+    # loop in `prepare` and stashed in `_gated_providers`. Now that value-invention
+    # has materialised the gating derived set's members + extent, push that set
+    # down to the provider as a per-axis `selection` and fetch ONLY the compact
+    # slab, merging it into `const_arrays` under the model variable name(s) the
+    # gate's `applies_to` lists. This is the const-tier dependency edge:
+    # value-invention (above) → gated provider_sample(selection) → const merge.
+    _gated = get(kwd, :_gated_providers, nothing)
+    if _gated !== nothing && !isempty(_gated)
+        _t0 = Float64(get(kwd, :_sample_time, 0.0))
+        _fetched = _fetch_gated_providers(_gated, file.index_sets, _vi, _t0, model)
+        if !isempty(_fetched)
+            merge!(_ca, _fetched)
+            kwd[:const_arrays] = _ca
+        end
+    end
+    # These are consumed here; do not forward to the typed impl entry point.
+    delete!(kwd, :_gated_providers)
+    delete!(kwd, :_sample_time)
 
     return build_evaluator(file; model_name=model_name,
                            _vi_extents=(_vi === nothing ? Dict{String,Int}() : _vi.extents),

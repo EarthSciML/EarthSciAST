@@ -945,10 +945,21 @@ struct IndexSet
     # to `String`) can no longer distinguish. `nothing` for ordinary string-only
     # sets, so they stay byte-identical to before.
     members_raw::Union{Vector{Any},Nothing}
+    # PROJECTION-PUSHDOWN Phase 2b (members-fed-back-as-const-factor). For a
+    # `kind:"derived"` set, names a model `parameter` const factor that the build
+    # fills with this set's materialised value-invention MEMBERS (the invented
+    # 1-based full-grid ids, `vi.members[from_faq]`) — so an in-model gather
+    # `index(W, index(<member_factor>, c))` can pull the full-grid rows the
+    # compact derived axis selects. There is no `member(set,c)` IR op; this
+    # feedback IS the mechanism. `nothing` for every non-feedback set (byte-
+    # identical round-trip).
+    member_factor::Union{String,Nothing}
 
     IndexSet(kind::AbstractString; size=nothing, members=nothing, of=nothing,
-             offsets=nothing, values=nothing, from_faq=nothing, members_raw=nothing) =
-        new(String(kind), size, members, of, offsets, values, from_faq, members_raw)
+             offsets=nothing, values=nothing, from_faq=nothing, members_raw=nothing,
+             member_factor=nothing) =
+        new(String(kind), size, members, of, offsets, values, from_faq, members_raw,
+            member_factor)
 end
 
 """
@@ -2215,6 +2226,7 @@ const RECORD_FIELD_TABLES = (
         (f = :offsets,  wire = "offsets",  kind = :string, mode = :opt, emit = :nonnothing),
         (f = :values,   wire = "values",   kind = :string, mode = :opt, emit = :nonnothing),
         (f = :from_faq, wire = "from_faq", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :member_factor, wire = "member_factor", kind = :string, mode = :opt, emit = :nonnothing),
     )),
     (T = :ModelVariable, fn = :model_variable, rows = (
         (f = :type, wire = "type", kind = :model_variable_type, mode = :req, emit = :always, pos = true),

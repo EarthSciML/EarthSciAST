@@ -101,6 +101,42 @@ function provider_supports_selection end
 provider_supports_selection(::Any) = false
 
 """
+    provider_gate_spec(provider) -> Union{Nothing,AbstractDict}
+
+The projection-pushdown GATE for a deferred provider, or `nothing` (the default)
+for an ordinary provider. A non-`nothing` gate marks `provider` as GATED: the
+eager const-materialization loop in [`prepare`](@ref) SKIPS it (it is not pulled
+whole), and the build defers its fetch until value-invention has materialised the
+gating derived set's members — then pushes that set down as a per-axis
+`selection` ([`provider_sample`](@ref)) and fetches only the compact slab.
+
+The gate is `Dict("axes"=>[…], "applies_to"=>[names…])`, mirroring the `.esm`
+`data_loaders.<name>.metadata.x_esd.gated_select` field (which the runner reads
+to construct the gated provider — `format`/gating live at provider creation, not
+in the 0.8.0 source schema). Each entry of `axes` is one per NATIVE array axis:
+
+  * `"all"`                       → the whole axis;
+  * `Dict("fixed"=>[i])`          → native 0-based index `i`, DROPPED (length-1);
+  * `Dict("gated_by"=>"<set>")`   → the derived index set's materialised members
+                                    (1-based), in the set's canonical order.
+
+`applies_to` names the fetched variables to merge into `const_arrays`. Defaults
+to `nothing`; a mock or the EarthSciIO binding overrides it.
+"""
+function provider_gate_spec end
+provider_gate_spec(::Any) = nothing
+
+"""
+    provider_is_gated(provider) -> Bool
+
+True iff `provider` carries a projection-pushdown [`provider_gate_spec`](@ref) —
+i.e. its materialization must be DEFERRED past value-invention and delivered
+pre-sliced to the compact derived axis, rather than pulled whole in the eager
+const loop.
+"""
+provider_is_gated(p) = provider_gate_spec(p) !== nothing
+
+"""
     provider_sample(provider, t::Real; selection=nothing) -> sample
 
 The native-grid data for `provider` at cadence tick `t` (solver seconds). The

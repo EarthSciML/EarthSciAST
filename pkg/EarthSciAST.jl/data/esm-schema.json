@@ -3195,6 +3195,10 @@
           "type": "string",
           "description": "derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is \"derived\"."
         },
+        "member_factor": {
+          "type": "string",
+          "description": "derived (projection-pushdown, RFC semiring-faq-unified-ir Phase 2b): optional name of a model `parameter` const factor that the build fills with this derived set's materialized value-invention MEMBERS — the invented, sorted-distinct, 1-based full-grid ids. Lets an in-model gather (e.g. cell_W[c] = index(W, index(<member_factor>, c))) pull the full-grid rows the compact derived axis selects; there is no member(set,c) IR op, so this feedback IS the mechanism. Admissible only when kind is \"derived\"; purely additive (a set omitting it validates and resolves exactly as before)."
+        },
         "of": {
           "type": "array",
           "description": "ragged: the parent index-set name(s) this inner set depends on (e.g. [\"cells\"] for the edges of each cell). Required when kind is \"ragged\".",
