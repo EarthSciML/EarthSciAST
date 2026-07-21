@@ -246,14 +246,10 @@ describe('ModelEditor', () => {
   })
 
   it('highlights hovered variables in the equation list', () => {
-    const { container } = render(() => <ModelEditor {...mockProps} />)
-
-    // Equations default to the text surface; reveal the structural nodes so the
-    // hover highlight is observable. (The `x = y + 2` equation round-trips, so
-    // toggling commits no change.)
-    container
-      .querySelectorAll('.equation-editor .esm-eq-mode-btn')
-      .forEach((b) => fireEvent.click(b as HTMLButtonElement))
+    // Editing is text-only; equations render as structural nodes (where the
+    // hover highlight is observable) only in readonly mode. Variable hovering in
+    // the variables panel stays active regardless of readonly.
+    const { container } = render(() => <ModelEditor {...mockProps} readonly={true} />)
 
     expect(container.querySelector('.esm-expression-node.highlighted')).toBeNull()
 

@@ -3,13 +3,11 @@ import { render, screen, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import { ExpressionNode } from './ExpressionNode'
 
-describe('ExpressionNode', () => {
+describe('ExpressionNode (read-only renderer)', () => {
   const mockProps = {
     path: ['test'],
     highlightedVars: new Set<string>(),
     onHoverVar: vi.fn(),
-    onSelect: vi.fn(),
-    onReplace: vi.fn(),
   }
 
   beforeEach(() => {
@@ -45,23 +43,15 @@ describe('ExpressionNode', () => {
     expect(onHoverVar).toHaveBeenCalledWith(null)
   })
 
-  it('handles click events', () => {
-    const onSelect = vi.fn()
-    render(() => <ExpressionNode expr="x" {...mockProps} onSelect={onSelect} />)
-
-    const element = screen.getByRole('button')
-    fireEvent.click(element)
-
-    expect(onSelect).toHaveBeenCalledWith(['test'])
-  })
-
   it('highlights variables when they are in highlightedVars set', () => {
     const [highlightedVars] = createSignal(new Set(['x']))
 
-    render(() => <ExpressionNode expr="x" {...mockProps} highlightedVars={highlightedVars()} />)
+    const { container } = render(() => (
+      <ExpressionNode expr="x" {...mockProps} highlightedVars={highlightedVars()} />
+    ))
 
-    const element = screen.getByRole('button')
-    expect(element).toHaveClass('highlighted')
+    const node = container.querySelector('.esm-expression-node')
+    expect(node).toHaveClass('highlighted')
   })
 
   it('renders operator nodes with OperatorLayout', () => {
@@ -166,54 +156,5 @@ describe('ExpressionNode', () => {
     // Should NOT have generic function layout (prefix notation)
     const genericFunction = container.querySelector('.esm-generic-function')
     expect(genericFunction).not.toBeInTheDocument()
-  })
-
-  describe('Field editor integration', () => {
-    it('shows the edit-fields button for a selected op that has editable fields', () => {
-      render(() => (
-        <ExpressionNode
-          expr={{ op: 'D', args: ['u'], wrt: 't' }}
-          {...mockProps}
-          path={['test']}
-          selectedPath={['test']}
-        />
-      ))
-
-      expect(screen.getByTitle('Edit D fields')).toBeInTheDocument()
-    })
-
-    it('does not show the edit-fields button for a plain arithmetic op', () => {
-      render(() => (
-        <ExpressionNode
-          expr={{ op: '+', args: [1, 2] }}
-          {...mockProps}
-          path={['test']}
-          selectedPath={['test']}
-        />
-      ))
-
-      expect(screen.queryByTitle('Edit + fields')).not.toBeInTheDocument()
-    })
-
-    it('opens the field editor and round-trips an edit to onReplace', () => {
-      const onReplace = vi.fn()
-      render(() => (
-        <ExpressionNode
-          expr={{ op: 'D', args: ['u'], wrt: 't' }}
-          {...mockProps}
-          path={['test']}
-          selectedPath={['test']}
-          onReplace={onReplace}
-        />
-      ))
-
-      fireEvent.click(screen.getByTitle('Edit D fields'))
-
-      const input = screen.getByDisplayValue('t')
-      fireEvent.input(input, { target: { value: 'x' } })
-      fireEvent.click(screen.getByText('Apply'))
-
-      expect(onReplace).toHaveBeenCalledWith(['test'], { op: 'D', args: ['u'], wrt: 'x' })
-    })
   })
 })

@@ -41,16 +41,11 @@ describe('Cross-Component Integration', () => {
     vi.clearAllMocks()
   })
 
-  // Editors default to the text surface. These tests query the ExpressionEditor's
-  // structural DOM, so reveal it via its toggle. The ModelEditor's equation is
-  // left on the text surface deliberately: `validModel`'s `D(O3, t)` lhs does not
-  // round-trip (`toAscii` normalizes it to `D(O3)/Dt`), so committing it would
-  // emit a spurious model change and corrupt the history/state assertions.
-  const revealExpressionStructural = () => {
-    document
-      .querySelectorAll('.expression-editor .esm-eq-mode-btn')
-      .forEach((b) => fireEvent.click(b as HTMLButtonElement))
-  }
+  // Editing is text-only now; the pretty-math structural render is the read-only
+  // surface. These tests query the ExpressionEditor's structural DOM, so they
+  // render it `readonly`. The ModelEditor stays editable: its equations sit on
+  // the text surface, so `validModel`'s non-round-tripping `D(O3, t)` lhs never
+  // emits a spurious model change into the history/state assertions.
 
   describe('Expression and Model Editor Integration', () => {
     it('should synchronize data between expression editor and model editor', async () => {
@@ -74,7 +69,7 @@ describe('Cross-Component Integration', () => {
               setSelectedExpression(newExpr)
               logChange('expression', newExpr)
             }}
-            readonly={false}
+            readonly={true}
           />
           <ModelEditor
             model={currentModel()}
@@ -87,8 +82,6 @@ describe('Cross-Component Integration', () => {
           <div data-testid="change-log">{changeLog.join(', ')}</div>
         </div>
       ))
-
-      revealExpressionStructural()
 
       // Verify initial state - use more specific selectors
       expect(screen.getByLabelText(/Operator: \+/)).toBeInTheDocument() // Expression operator
@@ -107,7 +100,7 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={{ op: '+', args: ['O3', 'NO'] }}
             onChange={() => {}}
-            readonly={false}
+            readonly={true}
             highlightedVars={highlightedVars()}
           />
           <ModelEditor model={model()} onModelChange={setModel} />
@@ -116,8 +109,6 @@ describe('Cross-Component Integration', () => {
           </button>
         </div>
       ))
-
-      revealExpressionStructural()
 
       // The expression editor renders variables in chemical notation (O₃) while
       // the variables panel shows the raw variable name (O3). (The model's
@@ -161,12 +152,10 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={currentExpression()}
             onChange={onExpressionChange}
-            readonly={false}
+            readonly={true}
           />
         </div>
       ))
-
-      revealExpressionStructural()
 
       // Verify initial render
       expect(screen.getByText('O3')).toBeInTheDocument()
@@ -213,15 +202,13 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={appState().expression}
             onChange={(newExpr) => updateState({ expression: newExpr })}
-            readonly={false}
+            readonly={true}
           />
           <button onClick={undo} data-testid="undo-button">
             Undo
           </button>
         </div>
       ))
-
-      revealExpressionStructural()
 
       // Verify initial state
       expect(screen.getByText('O3')).toBeInTheDocument()
@@ -301,14 +288,12 @@ describe('Cross-Component Integration', () => {
               }
               updateGlobalState({ model: updatedModel })
             }}
-            readonly={false}
+            readonly={true}
             highlightedVars={new Set([globalState().selectedVariable])}
           />
           {/* Validation would be handled by a validation panel component */}
         </div>
       ))
-
-      revealExpressionStructural()
 
       // Verify all components are rendered and connected
       expect(screen.getByText('O3')).toBeInTheDocument()
@@ -337,12 +322,10 @@ describe('Cross-Component Integration', () => {
           <ExpressionEditor
             initialExpression={{ op: '+', args: [1, 2] }}
             onChange={(newExpr) => logEvent('expression-change', { expression: newExpr })}
-            readonly={false}
+            readonly={true}
           />
         </div>
       ))
-
-      revealExpressionStructural()
 
       // Components should be rendered without errors
       expect(screen.getByText('O3')).toBeInTheDocument()

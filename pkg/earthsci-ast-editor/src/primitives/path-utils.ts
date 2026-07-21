@@ -3,8 +3,8 @@
  *
  * This module is the one place where path navigation, comparison, and
  * expression-tree replacement logic live. It is consumed by:
- * - selection.tsx (selection + inline editing)
- * - structural-editing.tsx (wrap/unwrap/reorder operations)
+ * - ExpressionNode.tsx (rendering `data-path` for read-only nodes)
+ * - document-path.ts (document-dialect replace used by the editors)
  * - ast-store.ts (document-level path get/set and the `PathUtils` export)
  *
  * Two path dialects are supported:

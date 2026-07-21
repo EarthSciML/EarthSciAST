@@ -219,58 +219,13 @@ describe('ReactionEditor', () => {
     expect(speciesItems.length).toBeGreaterThan(0)
   })
 
-  it('applies a nested edit inside the rate subtree (regression)', () => {
-    // The rate is an operator whose first argument is an editable-field op (D).
-    // Previously onReplace dropped every path other than exactly ['rate'], so
-    // editing the nested D was a silent no-op.
-    const nestedSystem = {
-      species: { u: {} },
-      parameters: {},
-      reactions: [
-        {
-          id: 'R1',
-          substrates: [{ species: 'u', stoichiometry: 1 }],
-          products: [{ species: 'u', stoichiometry: 1 }],
-          rate: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 't' }, 'k'] },
-        },
-      ],
-    } as unknown as ReactionSystem
-
-    const onReactionSystemChange = vi.fn()
-    const { container } = render(() => (
-      <ReactionEditor
-        {...mockProps}
-        reactionSystem={nestedSystem}
-        onReactionSystemChange={onReactionSystemChange}
-      />
-    ))
-
-    // Expand the rate editor.
-    fireEvent.click(screen.getByText('[k]'))
-    // Structural rate editing is now opt-in behind the toggle.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
-
-    // Select the nested D node (path ['rate','args',0]) so its field-editor
-    // button appears, then edit its `wrt`.
-    const nestedD = container.querySelector('[data-path="rate.args.0"]')!
-    fireEvent.click(nestedD)
-    fireEvent.click(screen.getByTitle('Edit D fields'))
-    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } })
-    fireEvent.click(screen.getByText('Apply'))
-
-    expect(onReactionSystemChange).toHaveBeenCalledTimes(1)
-    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem
-    expect(updated.reactions[0].rate).toEqual({
-      op: '+',
-      args: [{ op: 'D', args: ['u'], wrt: 'x' }, 'k'],
-    })
-  })
-
-  it('does not show the rate text toggle in readonly mode', () => {
+  it('does not expand the rate editor (or show any toggle) in readonly mode', () => {
     render(() => <ReactionEditor {...mockProps} readonly={true} />)
 
-    // The rate editor cannot be expanded in readonly, so neither toggle exists.
+    // The rate editor cannot be expanded in readonly, so no rate textarea or
+    // toggle appears.
     fireEvent.click(screen.getByText('[k]'))
+    expect(screen.queryByLabelText('Rate expression text')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Structural' })).not.toBeInTheDocument()
   })
@@ -367,14 +322,5 @@ describe('ReactionEditor — rate text mode (DSL, the default surface)', () => {
     expand()
     fireEvent.blur(textarea())
     expect(onReactionSystemChange).not.toHaveBeenCalled()
-  })
-
-  it('blocks leaving text mode while the rate buffer is unparseable', () => {
-    render(() => <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} />)
-    expand()
-    fireEvent.input(textarea(), { target: { value: 'k_NO_O3 *' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
-    expect(textarea()).toBeInTheDocument() // still in text mode
-    expect(screen.getByRole('alert')).toBeInTheDocument()
   })
 })

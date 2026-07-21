@@ -97,7 +97,6 @@ const ReactionItem: Component<{
   readonly?: boolean
 }> = (props) => {
   const [isExpanded, setIsExpanded] = createSignal(false)
-  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null)
   const [hoveredVar, setHoveredVar] = createSignal<string | null>(null)
 
   // Base highlight set merged with the locally hovered variable.
@@ -117,9 +116,9 @@ const ReactionItem: Component<{
     props.onEditReaction(props.index, newReaction)
   }
 
-  // Apply an edit from anywhere in the rate subtree. Paths are rooted at the
-  // reaction (`['rate']`, `['rate', 'args', 0]`, …); nested edits previously
-  // fell through a `path === ['rate']` guard and were silently dropped.
+  // Apply the parsed rate back onto the reaction. The path is rooted at the
+  // reaction (`['rate']`); the shared document-path replace leaves the rest of
+  // the reaction untouched.
   const handleReplace = (path: (string | number)[], newExpr: Expression) => {
     if (props.readonly || !props.onEditReaction) return
 
@@ -129,12 +128,11 @@ const ReactionItem: Component<{
 
   // Text edit surface over the rate expression's ascii DSL form. The shared hook
   // owns the buffer/commit/error state and the block-on-error +
-  // emit-only-when-changed invariants; a clean parse is routed back through the
-  // SAME document-path replace (`handleReplace(['rate'], …)` →
-  // `replaceAtDocumentPath` → `onEditReaction`) the structural editor uses, so
-  // the rest of the reaction is untouched. Only reachable when a rate exists;
-  // the seed is defensively empty otherwise. Text is the default surface (when
-  // editable); structural is opt-in behind the toggle.
+  // emit-only-when-changed invariants; a clean parse is routed through the
+  // shared document-path replace (`handleReplace(['rate'], …)` →
+  // `replaceAtDocumentPath` → `onEditReaction`), so the rest of the reaction is
+  // untouched. Only reachable when a rate exists; the seed is defensively empty
+  // otherwise. Text is the editable surface; readonly renders pretty math.
   const rateText = createTextEditMode<Expression>({
     readonly: () => props.readonly,
     seed: () => (props.reaction.rate != null ? toAscii(props.reaction.rate) : ''),
@@ -222,20 +220,6 @@ const ReactionItem: Component<{
                 </div>
               }
             >
-              <Show when={!props.readonly}>
-                <div class="esm-eq-toolbar">
-                  <button
-                    type="button"
-                    class="esm-eq-mode-btn"
-                    aria-pressed={rateText.inTextMode()}
-                    title={rateText.inTextMode() ? 'Switch to structural editing' : 'Edit as text'}
-                    onClick={rateText.toggleMode}
-                  >
-                    {rateText.inTextMode() ? 'Structural' : 'Edit as text'}
-                  </button>
-                </div>
-              </Show>
-
               <Show
                 when={rateText.inTextMode()}
                 fallback={
@@ -244,9 +228,6 @@ const ReactionItem: Component<{
                     path={['rate']}
                     highlightedVars={highlightedVars()}
                     onHoverVar={setHoveredVar}
-                    onSelect={setSelectedPath}
-                    onReplace={handleReplace}
-                    selectedPath={selectedPath()}
                   />
                 }
               >

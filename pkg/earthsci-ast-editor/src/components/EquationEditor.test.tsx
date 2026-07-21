@@ -19,48 +19,20 @@ describe('EquationEditor', () => {
     vi.clearAllMocks()
   })
 
-  it('renders equation with equals sign', () => {
-    render(() => <EquationEditor {...mockProps} />)
-    // Text is the default surface now; switch to structural to assert the render.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
+  it('renders equation as pretty math with equals sign in readonly mode', () => {
+    // The structural render is the read-only surface; editable is text-only.
+    render(() => <EquationEditor {...mockProps} readonly={true} />)
 
     expect(screen.getByText('x')).toBeInTheDocument()
     expect(screen.getByText('=')).toBeInTheDocument()
     expect(screen.getByText('+')).toBeInTheDocument()
   })
 
-  it('handles equation changes, including nested edits deep in the RHS tree', () => {
-    // Edit a `D` node nested inside the RHS (path ['rhs','args',0]) and confirm
-    // the change is applied via the shared document-path replace — nested edits
-    // used to be dropped by a hand-rolled walker.
-    const equation = {
-      lhs: 'x',
-      rhs: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 't' }, 'k'] },
-    }
-    const onEquationChange = vi.fn()
-    const { container } = render(() => (
-      <EquationEditor {...mockProps} equation={equation} onEquationChange={onEquationChange} />
-    ))
-    // Structural editing is now opt-in behind the toggle.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
-
-    const nestedD = container.querySelector('[data-path="rhs.args.0"]')!
-    fireEvent.click(nestedD)
-    fireEvent.click(screen.getByTitle('Edit D fields'))
-    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } })
-    fireEvent.click(screen.getByText('Apply'))
-
-    expect(onEquationChange).toHaveBeenCalledWith({
-      lhs: 'x',
-      rhs: { op: '+', args: [{ op: 'D', args: ['u'], wrt: 'x' }, 'k'] },
-    })
-  })
-
-  it('respects readonly mode', () => {
+  it('respects readonly mode (renders the lhs variable, no textarea)', () => {
     render(() => <EquationEditor {...mockProps} readonly={true} />)
 
-    const editor = screen.getByRole('button', { name: /x/ })
-    expect(editor).toBeInTheDocument()
+    expect(screen.getByText('x')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Equation text')).not.toBeInTheDocument()
   })
 
   it('displays equation comment when provided', () => {
@@ -89,11 +61,11 @@ describe('EquationEditor', () => {
   })
 })
 
-describe('EquationEditor — text mode (DSL, the default surface)', () => {
+describe('EquationEditor — text mode (DSL, the only editable surface)', () => {
   const eq = { lhs: 'x', rhs: { op: '+', args: ['y', 2] } }
   const textarea = () => screen.getByLabelText('Equation text') as HTMLTextAreaElement
 
-  it('defaults to a textarea seeded with the ascii form', () => {
+  it('editable mode shows a textarea seeded with the ascii form', () => {
     render(() => <EquationEditor equation={eq} onEquationChange={vi.fn()} />)
     expect(textarea()).toBeInTheDocument()
     expect(textarea().value).toBe('x = y + 2')
@@ -148,17 +120,8 @@ describe('EquationEditor — text mode (DSL, the default surface)', () => {
     })
   })
 
-  it('blocks leaving text mode while the buffer is unparseable', () => {
+  it('renders no structural/text toggle (editing is text-only now)', () => {
     render(() => <EquationEditor equation={eq} onEquationChange={vi.fn()} />)
-    fireEvent.input(textarea(), { target: { value: 'x = y +' } })
-    // The toggle reads "Structural"; clicking it must NOT switch away from text.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
-    expect(textarea()).toBeInTheDocument() // still in text mode
-    expect(screen.getByRole('alert')).toBeInTheDocument()
-  })
-
-  it('does not show the toggle at all in readonly mode', () => {
-    render(() => <EquationEditor equation={eq} readonly onEquationChange={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Structural' })).not.toBeInTheDocument()
   })

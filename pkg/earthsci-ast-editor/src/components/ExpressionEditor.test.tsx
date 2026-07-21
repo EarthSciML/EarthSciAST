@@ -12,17 +12,15 @@ describe('ExpressionEditor', () => {
     onChange: vi.fn(),
     highlightedVars: new Set<string>(),
     readonly: false,
-    showPalette: false,
   }
 
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('renders expression without equals sign', () => {
-    render(() => <ExpressionEditor {...mockProps} />)
-    // Text is the default surface now; switch to structural to assert the render.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
+  it('renders expression as pretty math (readonly), without an equals sign', () => {
+    // The structural render is the read-only surface; editable is text-only.
+    render(() => <ExpressionEditor {...mockProps} readonly={true} />)
 
     expect(screen.getByText('+')).toBeInTheDocument()
     expect(screen.getByText('x')).toBeInTheDocument()
@@ -31,61 +29,22 @@ describe('ExpressionEditor', () => {
     expect(screen.queryByText('=')).not.toBeInTheDocument()
   })
 
-  it('handles expression changes', () => {
-    // Drive a real edit through the node's field editor and confirm the new
-    // expression flows out via onChange (controlled: parent owns the value).
-    const onChange = vi.fn()
-    const { container } = render(() => (
-      <ExpressionEditor
-        {...mockProps}
-        initialExpression={{ op: 'D', args: ['u'], wrt: 't' }}
-        onChange={onChange}
-      />
-    ))
-    // Structural editing is now opt-in behind the toggle.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
-
-    const rootNode = container.querySelector('.esm-expression-node')!
-    fireEvent.click(rootNode)
-    fireEvent.click(screen.getByTitle('Edit D fields'))
-    fireEvent.input(screen.getByDisplayValue('t'), { target: { value: 'x' } })
-    fireEvent.click(screen.getByText('Apply'))
-
-    expect(onChange).toHaveBeenCalledWith({ op: 'D', args: ['u'], wrt: 'x' })
-  })
-
   it('respects readonly=true mode', () => {
     render(() => <ExpressionEditor {...mockProps} readonly={true} />)
 
-    const editor = screen.getByRole('button', { name: /\+/ })
-    expect(editor).toBeInTheDocument()
     expect(screen.getByText('+')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Expression text')).not.toBeInTheDocument()
   })
 
-  it('shows palette toggle when showPalette=true', () => {
-    render(() => <ExpressionEditor {...mockProps} showPalette={true} />)
-    // The palette is a structural-editing affordance; reveal the structural surface.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
-
-    const paletteToggle = screen.getByTitle('Toggle expression palette')
-    expect(paletteToggle).toBeInTheDocument()
-  })
-
-  it('hides palette toggle when showPalette=false', () => {
-    render(() => <ExpressionEditor {...mockProps} showPalette={false} />)
-
-    const paletteToggle = screen.queryByTitle('Toggle expression palette')
-    expect(paletteToggle).not.toBeInTheDocument()
-  })
-
-  it('updates expression when initialExpression prop changes', () => {
-    // Controlled: the rendered expression tracks the prop. Asserted on the
-    // structural surface — once seeded, the text buffer is an independent edit
-    // buffer, so prop reactivity is observed structurally.
+  it('updates the readonly render when initialExpression prop changes', () => {
+    // Controlled: the rendered (readonly) expression tracks the prop. In editable
+    // mode the text buffer is an independent edit buffer, so prop reactivity is
+    // observed on the structural render.
     const [expression, setExpression] = createSignal<Expression>(7)
 
-    render(() => <ExpressionEditor {...mockProps} initialExpression={expression()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
+    render(() => (
+      <ExpressionEditor {...mockProps} readonly={true} initialExpression={expression()} />
+    ))
 
     expect(screen.getByText('7')).toBeInTheDocument()
 
@@ -110,29 +69,31 @@ describe('ExpressionEditor', () => {
     expect(editor).toHaveClass('readonly')
   })
 
-  it('handles simple expression (non-operator)', () => {
+  it('handles simple expression (non-operator) in readonly render', () => {
     const simpleExpression = 'x'
-    render(() => <ExpressionEditor {...mockProps} initialExpression={simpleExpression} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
+    render(() => (
+      <ExpressionEditor {...mockProps} readonly={true} initialExpression={simpleExpression} />
+    ))
 
     expect(screen.getByText('x')).toBeInTheDocument()
     expect(screen.queryByText('+')).not.toBeInTheDocument()
   })
 
-  it('handles number expression', () => {
+  it('handles number expression in readonly render', () => {
     const numberExpression = 42
-    render(() => <ExpressionEditor {...mockProps} initialExpression={numberExpression} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
+    render(() => (
+      <ExpressionEditor {...mockProps} readonly={true} initialExpression={numberExpression} />
+    ))
 
     expect(screen.getByText('42')).toBeInTheDocument()
   })
 })
 
-describe('ExpressionEditor — text mode (DSL, the default surface)', () => {
+describe('ExpressionEditor — text mode (DSL, the only editable surface)', () => {
   const expr = { op: '+', args: ['x', 2] }
   const textarea = () => screen.getByLabelText('Expression text') as HTMLTextAreaElement
 
-  it('defaults to a textarea seeded with the ascii form', () => {
+  it('editable mode shows a textarea seeded with the ascii form', () => {
     render(() => <ExpressionEditor initialExpression={expr} onChange={vi.fn()} />)
     expect(textarea()).toBeInTheDocument()
     expect(textarea().value).toBe('x + 2')
@@ -162,17 +123,8 @@ describe('ExpressionEditor — text mode (DSL, the default surface)', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('blocks leaving text mode while the buffer is unparseable', () => {
+  it('renders no structural/text toggle (editing is text-only now)', () => {
     render(() => <ExpressionEditor initialExpression={expr} onChange={vi.fn()} />)
-    fireEvent.input(textarea(), { target: { value: 'x +' } })
-    // The toggle reads "Structural"; clicking it must NOT switch away from text.
-    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
-    expect(textarea()).toBeInTheDocument() // still in text mode
-    expect(screen.getByRole('alert')).toBeInTheDocument()
-  })
-
-  it('does not show the toggle at all in readonly mode', () => {
-    render(() => <ExpressionEditor initialExpression={expr} readonly onChange={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Structural' })).not.toBeInTheDocument()
   })

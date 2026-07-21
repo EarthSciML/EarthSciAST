@@ -1,26 +1,28 @@
 /**
- * ExpressionNode - Core SolidJS component for rendering interactive AST nodes
+ * ExpressionNode - Read-only recursive AST renderer
  *
- * This is a simplified, focused recursive AST renderer for the earthsci-ast-editor package.
- * It provides the foundation for interactive expression editing with:
- * - Number literals with click-to-select and hover highlighting
+ * Renders an expression AST as pretty math. This is a PURE renderer: it never
+ * mutates the AST and has no editing affordances (no click-to-select, no gear /
+ * field editor, no drag-and-drop / context menu). Editing happens exclusively
+ * through the text DSL surfaces (see {@link createTextEditMode}); this component
+ * is what the editors show in `readonly` mode.
+ *
+ * It renders:
+ * - Number literals (with scientific-notation formatting)
  * - Variable references with chemical subscript rendering (shared module)
  * - Operator nodes that dispatch to the layout components in src/layout
  *   (Fraction, Superscript, Radical) for mathematical typography
+ *
+ * The only interactive affordance retained is variable hover-highlighting
+ * (`onHoverVar` + `highlightedVars`), a read-only navigation aid that highlights
+ * every occurrence of the hovered variable across the document.
  */
 
 import type { Component, JSX } from 'solid-js'
 import { createSignal, createMemo, Show, Switch, Match, Index } from 'solid-js'
 import type { Expression, ExpressionNode as ExprNode } from '@earthsciml/ast'
-import {
-  useMaybeStructuralEditingContext,
-  DraggableExpression,
-  StructuralEditingMenu,
-  COMMUTATIVE_OPERATORS,
-} from '../primitives/structural-editing'
 import { renderChemicalName } from '../primitives/chemical-formula'
-import { pathsEqual, pathToString } from '../primitives/path-utils'
-import { NodeFieldEditor, opHasFieldEditor } from './NodeFieldEditor'
+import { pathToString } from '../primitives/path-utils'
 import { isNumericString, formatNumber } from './number-format'
 import { Fraction } from '../layout/Fraction'
 import { Superscript } from '../layout/Superscript'
@@ -33,78 +35,39 @@ export interface ExpressionNodeProps {
   /** The expression to render (reactive from Solid store) */
   expr: Expression
 
-  /** AST path for unique identification and updates */
+  /** AST path for unique identification (rendered as `data-path`) */
   path: (string | number)[]
 
   /** Currently highlighted variable equivalence class */
   highlightedVars: Set<string>
 
-  /** Callback when hovering over a variable */
-  onHoverVar: (name: string | null) => void
-
-  /** Callback when selecting a node */
-  onSelect: (path: (string | number)[]) => void
-
-  /** Callback when replacing a node with new expression */
-  onReplace: (path: (string | number)[], newExpr: Expression) => void
-
-  /** Currently selected path (for showing structural editing menu) */
-  selectedPath?: (string | number)[] | null
-
-  /** Parent path for drag operations */
-  parentPath?: (string | number)[]
-
-  /** Index within parent for drag operations */
-  indexInParent?: number
+  /** Callback when hovering over a variable (read-only navigation aid) */
+  onHoverVar?: (name: string | null) => void
 }
 
 /**
- * Operator layout dispatcher with proper mathematical layout and
- * drag-and-drop support. Fractions, exponents, and radicals render via the
- * shared layout components (Section 5.2.3) instead of hand-rolled markup.
+ * Operator layout dispatcher with proper mathematical layout. Fractions,
+ * exponents, and radicals render via the shared layout components
+ * (Section 5.2.3) instead of hand-rolled markup.
  */
 function OperatorLayout(props: {
   node: ExprNode
   path: (string | number)[]
   highlightedVars: Set<string>
-  onHoverVar: (name: string | null) => void
-  onSelect: (path: (string | number)[]) => void
-  onReplace: (path: (string | number)[], newExpr: Expression) => void
-  selectedPath?: (string | number)[] | null
+  onHoverVar?: (name: string | null) => void
 }) {
-  // Structural editing context is optional (non-throwing accessor)
-  const structuralEditing = useMaybeStructuralEditingContext()
-
   const op = () => props.node.op
   const args = () => (props.node.args as Expression[] | undefined) ?? []
-  const isCommutative = () => COMMUTATIVE_OPERATORS.has(props.node.op)
 
-  // Helper to create child nodes with drag support
-  const child = (arg: () => Expression, index: number): JSX.Element => {
-    const argPath = () => [...props.path, 'args', index]
-    const childNode = (
-      <ExpressionNode
-        expr={arg()}
-        path={argPath()}
-        highlightedVars={props.highlightedVars}
-        onHoverVar={props.onHoverVar}
-        onSelect={props.onSelect}
-        onReplace={props.onReplace}
-        selectedPath={props.selectedPath}
-        parentPath={props.path}
-        indexInParent={index}
-      />
-    )
-
-    // Wrap in draggable component for commutative operations
-    return (
-      <Show when={structuralEditing && isCommutative() && args().length > 1} fallback={childNode}>
-        <DraggableExpression path={argPath()} index={index} parentPath={props.path} canDrag={true}>
-          {childNode}
-        </DraggableExpression>
-      </Show>
-    )
-  }
+  // Helper to render child nodes.
+  const child = (arg: () => Expression, index: number): JSX.Element => (
+    <ExpressionNode
+      expr={arg()}
+      path={[...props.path, 'args', index]}
+      highlightedVars={props.highlightedVars}
+      onHoverVar={props.onHoverVar}
+    />
+  )
 
   /** Render args as a separated infix sequence */
   const infixArgs = (separator: () => JSX.Element) => (
@@ -200,16 +163,10 @@ function OperatorLayout(props: {
 }
 
 /**
- * Core ExpressionNode component - recursive AST renderer
+ * Core ExpressionNode component - recursive read-only AST renderer
  */
 export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
   const [isHovered, setIsHovered] = createSignal(false)
-  const [showStructuralMenu, setShowStructuralMenu] = createSignal(false)
-  const [menuPosition, setMenuPosition] = createSignal({ x: 0, y: 0 })
-  const [showFieldEditor, setShowFieldEditor] = createSignal(false)
-
-  // Structural editing context is optional (non-throwing accessor)
-  const structuralEditing = useMaybeStructuralEditingContext()
 
   // Determine if this expression is a variable reference
   const isVariable = createMemo(
@@ -221,27 +178,12 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
     () => isVariable() && props.highlightedVars.has(props.expr as string),
   )
 
-  // Check if this node is currently selected
-  const isSelected = createMemo(
-    () => props.selectedPath != null && pathsEqual(props.selectedPath, props.path),
-  )
-
-  // Check if this can be dragged (is in a commutative operation with siblings)
-  const canDrag = createMemo(
-    () =>
-      structuralEditing !== undefined &&
-      props.parentPath !== undefined &&
-      typeof props.indexInParent === 'number' &&
-      props.parentPath.length > 0,
-  )
-
   // CSS classes for styling
   const nodeClasses = createMemo(() => {
     const classes = ['esm-expression-node']
 
     if (isHovered()) classes.push('hovered')
     if (shouldHighlight()) classes.push('highlighted')
-    if (isSelected()) classes.push('selected')
     if (isVariable()) classes.push('variable')
     if (typeof props.expr === 'number') classes.push('number')
     if (typeof props.expr === 'object') classes.push('operator')
@@ -249,39 +191,19 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
     return classes.join(' ')
   })
 
-  // Handle mouse events
+  // Handle mouse events (variable hover-highlighting only)
   const handleMouseEnter = () => {
     setIsHovered(true)
     if (isVariable()) {
-      props.onHoverVar(props.expr as string)
+      props.onHoverVar?.(props.expr as string)
     }
   }
 
   const handleMouseLeave = () => {
     setIsHovered(false)
     if (isVariable()) {
-      props.onHoverVar(null)
+      props.onHoverVar?.(null)
     }
-  }
-
-  const handleClick = (e: MouseEvent) => {
-    e.stopPropagation()
-    props.onSelect(props.path)
-  }
-
-  const handleContextMenu = (e: MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-
-    if (structuralEditing) {
-      props.onSelect(props.path) // Select the node first
-      setMenuPosition({ x: e.clientX, y: e.clientY })
-      setShowStructuralMenu(true)
-    }
-  }
-
-  const handleCloseMenu = () => {
-    setShowStructuralMenu(false)
   }
 
   // Get ARIA label for accessibility
@@ -301,104 +223,37 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
   const isOperatorNode = () =>
     typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr
 
-  // Op name when this node is an operator (empty otherwise).
-  const opName = () => (isOperatorNode() ? (props.expr as ExprNode).op : '')
-
-  // Whether this operator exposes editable non-`args` fields (e.g. D's `wrt`,
-  // const's `value`, aggregate's reduce/semiring/…).
-  const canEditFields = createMemo(() => isOperatorNode() && opHasFieldEditor(opName()))
-
-  const openFieldEditor = (e: MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    props.onSelect(props.path) // Select the node first
-    setShowFieldEditor(true)
-  }
-
-  const content = (
-    <>
-      <span
-        class={nodeClasses()}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        onClick={handleClick}
-        onContextMenu={handleContextMenu}
-        tabIndex={0}
-        role="button"
-        aria-label={ariaLabel()}
-        data-path={pathToString(props.path)}
-      >
-        <Switch fallback={<span class="esm-unknown">?</span>}>
-          <Match when={typeof props.expr === 'number'}>
-            <span class="esm-num" title={`Number: ${props.expr}`}>
-              {formatNumber(props.expr as number)}
-            </span>
-          </Match>
-
-          <Match when={typeof props.expr === 'string'}>
-            <span class="esm-var" title={`Variable: ${props.expr}`}>
-              {renderChemicalName(props.expr as string)}
-            </span>
-          </Match>
-
-          <Match when={isOperatorNode()}>
-            <OperatorLayout
-              node={props.expr as ExprNode}
-              path={props.path}
-              highlightedVars={props.highlightedVars}
-              onHoverVar={props.onHoverVar}
-              onSelect={props.onSelect}
-              onReplace={props.onReplace}
-              selectedPath={props.selectedPath}
-            />
-          </Match>
-        </Switch>
-      </span>
-
-      <Show when={canEditFields() && (isSelected() || isHovered() || showFieldEditor())}>
-        <button
-          class="esm-edit-fields-btn"
-          onClick={openFieldEditor}
-          title={`Edit ${opName()} fields`}
-          aria-label={`Edit fields of ${opName()}`}
-        >
-          ⚙
-        </button>
-      </Show>
-
-      <Show when={showFieldEditor() && isOperatorNode()}>
-        <NodeFieldEditor
-          node={props.expr as ExprNode}
-          path={props.path}
-          onReplace={props.onReplace}
-          onClose={() => setShowFieldEditor(false)}
-        />
-      </Show>
-
-      <Show when={showStructuralMenu() && structuralEditing}>
-        <StructuralEditingMenu
-          selectedPath={props.path}
-          selectedExpr={props.expr}
-          isVisible={showStructuralMenu()}
-          position={menuPosition()}
-          onClose={handleCloseMenu}
-        />
-      </Show>
-    </>
-  )
-
-  // Wrap in draggable component if this can be dragged
   return (
-    <Show when={canDrag()} fallback={content}>
-      <DraggableExpression
-        path={props.path}
-        index={props.indexInParent!}
-        parentPath={props.parentPath!}
-        canDrag={true}
-      >
-        {content}
-      </DraggableExpression>
-    </Show>
+    <span
+      class={nodeClasses()}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      aria-label={ariaLabel()}
+      data-path={pathToString(props.path)}
+    >
+      <Switch fallback={<span class="esm-unknown">?</span>}>
+        <Match when={typeof props.expr === 'number'}>
+          <span class="esm-num" title={`Number: ${props.expr}`}>
+            {formatNumber(props.expr as number)}
+          </span>
+        </Match>
+
+        <Match when={typeof props.expr === 'string'}>
+          <span class="esm-var" title={`Variable: ${props.expr}`}>
+            {renderChemicalName(props.expr as string)}
+          </span>
+        </Match>
+
+        <Match when={isOperatorNode()}>
+          <OperatorLayout
+            node={props.expr as ExprNode}
+            path={props.path}
+            highlightedVars={props.highlightedVars}
+            onHoverVar={props.onHoverVar}
+          />
+        </Match>
+      </Switch>
+    </span>
   )
 }
 

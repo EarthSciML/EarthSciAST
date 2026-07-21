@@ -1,32 +1,30 @@
 /**
  * EquationEditor - Single equation editor with LHS = RHS format
  *
- * Two edit surfaces over the SAME `equation: Equation` / `onEquationChange`
- * contract:
- *  - **text** (default when editable): an in-place textarea holding the
- *    equation's ascii DSL form (`toAscii` ⇄ `parseEquation` from
- *    `@earthsciml/ast`). This is the same code-like syntax used everywhere else;
- *    it's the inverse of `toAscii`.
- *  - **structural**: clickable `ExpressionNode`s for LHS and RHS, edited via the
- *    shared document-path replace — now the opt-in surface behind the toggle.
+ * One editing surface over the `equation: Equation` / `onEquationChange`
+ * contract, plus a read-only render:
+ *  - **editable**: an in-place textarea holding the equation's ascii DSL form
+ *    (`toAscii` ⇄ `parseEquation` from `@earthsciml/ast`). This is the same
+ *    code-like syntax used everywhere else; it's the inverse of `toAscii`.
+ *  - **readonly**: the equation rendered as pretty math via the read-only
+ *    `ExpressionNode` renderer (LHS = RHS). No click-to-edit.
  *
- * The text surface **blocks emit until it parses**: on commit (blur, ⌘/Ctrl+Enter,
- * or toggling back) the buffer is parsed; a parse error is surfaced and NOTHING is
- * emitted, and you can't leave text mode until it parses (Escape reverts). A
- * successful parse emits only when the equation actually changed (reprint differs),
- * preserving non-lhs/rhs fields such as `_comment` — so an untouched equation's AST
- * stays byte-identical (the parser is a faithful, but structure-normalizing,
- * inverse of the non-injective printer). The buffer/commit/error state and these
- * invariants live in the shared {@link createTextEditMode} hook.
+ * The text surface **blocks emit until it parses**: on commit (blur or
+ * ⌘/Ctrl+Enter) the buffer is parsed; a parse error is surfaced and NOTHING is
+ * emitted (Escape reverts). A successful parse emits only when the equation
+ * actually changed (reprint differs), preserving non-lhs/rhs fields such as
+ * `_comment` — so an untouched equation's AST stays byte-identical (the parser
+ * is a faithful, but structure-normalizing, inverse of the non-injective
+ * printer). The buffer/commit/error state and these invariants live in the
+ * shared {@link createTextEditMode} hook.
  */
 
 import type { Component } from 'solid-js'
 import { createSignal, Show } from 'solid-js'
-import type { Equation, Expression } from '@earthsciml/ast'
+import type { Equation } from '@earthsciml/ast'
 import { toAscii, parseEquation } from '@earthsciml/ast'
 import { ExpressionNode } from './ExpressionNode'
 import { createMergedHighlight } from './merged-highlight'
-import { replaceAtDocumentPath } from './document-path'
 import { createTextEditMode } from './text-edit-mode'
 import './equation-editor.css'
 
@@ -54,14 +52,13 @@ export interface EquationEditorProps {
  * Main EquationEditor component
  */
 export const EquationEditor: Component<EquationEditorProps> = (props) => {
-  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null)
   const [hoveredVar, setHoveredVar] = createSignal<string | null>(null)
 
   // Text edit surface over the equation's ascii DSL form. The shared hook owns
   // the buffer/commit/error state and the block-on-error + emit-only-when-changed
   // invariants; we supply the equation-specific seed/parse/reprint plus the merge
-  // that preserves non-lhs/rhs fields such as `_comment`. Text is the default
-  // surface (when editable); structural is opt-in behind the toggle.
+  // that preserves non-lhs/rhs fields such as `_comment`. Text is the editable
+  // surface; readonly renders the pretty math instead.
   const textMode = createTextEditMode({
     readonly: () => props.readonly,
     seed: () => toAscii(props.equation),
@@ -75,25 +72,9 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
   // Base highlight set merged with the locally hovered variable.
   const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar)
 
-  // Handle selection of expression nodes
-  const handleSelect = (path: (string | number)[]) => {
-    setSelectedPath(path)
-  }
-
   // Handle hovering over variables
   const handleHoverVar = (varName: string | null) => {
     setHoveredVar(varName)
-  }
-
-  // Handle replacement of expression parts. The paths handed up by
-  // ExpressionNode are rooted at the equation (`['lhs']`, `['rhs', 'args', 0]`,
-  // …), so this uses the document-dialect replace rather than the pure
-  // expression-path variant.
-  const handleReplace = (path: (string | number)[], newExpr: Expression) => {
-    if (props.readonly || !props.onEquationChange) return
-
-    const newEquation = replaceAtDocumentPath(props.equation, path, newExpr)
-    props.onEquationChange(newEquation)
   }
 
   const editorClasses = () => {
@@ -105,20 +86,6 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
 
   return (
     <div class={editorClasses()} id={props.id}>
-      <Show when={!props.readonly}>
-        <div class="esm-eq-toolbar">
-          <button
-            type="button"
-            class="esm-eq-mode-btn"
-            aria-pressed={textMode.inTextMode()}
-            title={textMode.inTextMode() ? 'Switch to structural editing' : 'Edit as text'}
-            onClick={textMode.toggleMode}
-          >
-            {textMode.inTextMode() ? 'Structural' : 'Edit as text'}
-          </button>
-        </div>
-      </Show>
-
       <Show
         when={textMode.inTextMode()}
         fallback={
@@ -130,9 +97,6 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
                 path={['lhs']}
                 highlightedVars={highlightedVars()}
                 onHoverVar={handleHoverVar}
-                onSelect={handleSelect}
-                onReplace={handleReplace}
-                selectedPath={selectedPath()}
               />
             </div>
 
@@ -148,9 +112,6 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
                 path={['rhs']}
                 highlightedVars={highlightedVars()}
                 onHoverVar={handleHoverVar}
-                onSelect={handleSelect}
-                onReplace={handleReplace}
-                selectedPath={selectedPath()}
               />
             </div>
           </div>

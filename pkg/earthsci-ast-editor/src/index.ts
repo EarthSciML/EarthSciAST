@@ -44,18 +44,6 @@ export {
   type HighlightProviderProps,
 } from './primitives/highlighted-var'
 
-// Selection and inline editing primitives
-export {
-  SelectionProvider,
-  useSelectionContext,
-  useMaybeSelectionContext,
-  createSelectionContext,
-  getVariableSuggestions,
-  type SelectionContextValue,
-  type SelectionProviderProps,
-  type NodeDetails,
-} from './primitives/selection'
-
 // Shared path utilities (single implementation used by all primitives)
 export {
   getValueAtPath,
@@ -65,22 +53,6 @@ export {
   pathToString,
   stringToPath,
 } from './primitives/path-utils'
-
-// Structural editing primitives
-export {
-  StructuralEditingProvider,
-  useStructuralEditingContext,
-  useMaybeStructuralEditingContext,
-  StructuralEditingMenu,
-  DraggableExpression,
-  WRAP_OPERATORS,
-  COMMUTATIVE_OPERATORS,
-  type StructuralEditingContextValue,
-  type StructuralEditingProviderProps,
-  type StructuralEditingMenuProps,
-  type DraggableExpressionProps,
-  type DragState,
-} from './primitives/structural-editing'
 
 // Undo/redo history management
 export {
