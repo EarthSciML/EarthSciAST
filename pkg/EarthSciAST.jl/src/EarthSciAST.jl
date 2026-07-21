@@ -95,6 +95,10 @@ include("simulate.jl")
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
+# Phase 4: the automatic projection-pushdown desugar (recognises the
+# +-aggregate / sparse-binned-factor pattern and generates the Phase-2b
+# derived-set + producer + member_factor + gated_select constructs).
+include("pushdown_rewrite.jl")
 # Inline-test runners (spec §6.6; called as API by downstream model repos)
 include("run_tests.jl")
 include("pde_inline_tests.jl")

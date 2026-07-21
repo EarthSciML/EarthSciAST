@@ -2637,6 +2637,21 @@ literal values. Used to inject `__stgfw_` Fornberg weight arrays for
 function build_evaluator(esm::AbstractDict;
                          model_name::Union{Nothing,AbstractString}=nothing,
                          kwargs...)
+    kwd = Dict{Symbol,Any}(kwargs)
+
+    # ---- Phase 4: AUTOMATIC projection-pushdown desugar (opt-in) ----
+    # When `pushdown_rewrite=true`, recognise the ISRM-shaped `+`-aggregate /
+    # sparse-binned-factor pattern in a CLEAN model and generate the four
+    # hand-authored Phase-2b constructs (derived set + `distinct` producer +
+    # member_factor + gated_select) BEFORE parsing, so the value-invention
+    # front door and the impl re-parse both see them. A no-op (returns `esm`
+    # unchanged) when the pattern does not match or the semiring guard fails.
+    # OFF by default: every existing build path is byte-identical.
+    if get(kwd, :pushdown_rewrite, false) === true
+        esm = desugar_pushdown(esm; model_name = model_name)
+    end
+    delete!(kwd, :pushdown_rewrite)
+
     # `coerce_esm_file` normalizes every dict-like carrier (JSON3 object,
     # native Dict, JSONLikeDict) itself — no JSON-string round-trip.
     file = coerce_esm_file(esm)
@@ -2647,7 +2662,6 @@ function build_evaluator(esm::AbstractDict;
     # index set is materialised from the typed model and the extents threaded
     # into the typed path. A no-op (and byte-identical) for models without a
     # skolem/distinct/rank node.
-    kwd = Dict{Symbol,Any}(kwargs)
     model = _select_model_or_nothing(file, model_name)
 
     # ---- Build-time binning-coordinate derivation (RFC §8.6.1 purity) ----

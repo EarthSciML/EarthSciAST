@@ -135,6 +135,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
     include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
+    include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
