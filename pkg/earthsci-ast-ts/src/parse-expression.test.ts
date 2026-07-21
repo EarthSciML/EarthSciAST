@@ -291,6 +291,28 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
   })
 })
 
+describe('unicode names: ∂/∇ are name characters, big-operators are refused', () => {
+  it('parses ∂-in-name variables (a discretized ∂u/∂z field) as plain names', () => {
+    // `toAscii` prints such names verbatim (ascii derivatives are `D(x)/Dt`, not
+    // `∂`), so `∂`/`∇` in ascii output are always name characters, never operators.
+    expect(parseExpression('∂u_∂z^2 + ∂v_∂z^2')).toEqual({
+      op: '+',
+      args: [
+        { op: '^', args: ['∂u_∂z', 2] },
+        { op: '^', args: ['∂v_∂z', 2] },
+      ],
+    })
+    const src = 'g / thetaᵥ * ∂thetaᵥ_∂z / S^2'
+    expect(reprint(parseExpression(src))).toBe(src)
+    expect(parseExpression('∇phi')).toBe('∇phi')
+  })
+  it('still refuses the unicode big-operator display forms', () => {
+    for (const s of ['∑x', '∫f', 'a ∈ b']) {
+      expect(() => parseExpression(s)).toThrow(ExpressionParseError)
+    }
+  })
+})
+
 describe('still-deferred structural ops are refused', () => {
   for (const s of ['table_lookup(a)', 'broadcast(y)', 'enum(a, b)']) {
     it(`refuses ${s}`, () => {

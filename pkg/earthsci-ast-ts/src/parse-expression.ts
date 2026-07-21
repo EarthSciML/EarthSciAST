@@ -151,7 +151,15 @@ const NUM_RE = /^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/
 // dots (qualified refs like `Emissions.NO`, and dotted closed-function names
 // like `datetime.year`, which makeCall turns into `fn` nodes). A leading digit
 // still can't start an identifier (numbers lex first).
-const NAME_RE = /^[_\p{L}][\w.\p{L}\p{N}]*/u
+//
+// `∂` (U+2202) and `∇` (U+2207) are also name-constituents: source variables are
+// sometimes named with them (`∂u_∂z`, a discretized ∂u/∂z shear field), and
+// `toAscii` prints such names verbatim. Those glyphs are NOT ascii operators —
+// the ascii derivative surface is `D(x)/Dt`, so `∂`/`∇` appear in `toAscii`
+// output ONLY inside a name, and accepting them keeps the parser its exact
+// inverse. (The unicode big-operator display forms `∑ ∫ ∈ ⟨⟩` remain refused;
+// they're `toUnicode`/`toLatex` forms, not the ascii surface — see tokenize().)
+const NAME_RE = /^[_∂∇\p{L}][\w.∂∇\p{L}\p{N}]*/u
 const WORD_OPS = new Set(['and', 'or', 'not'])
 
 function tokenize(src: string): Tok[] {
@@ -228,10 +236,11 @@ function tokenize(src: string): Tok[] {
       i += v.length
       continue
     }
-    // The big-operator / unicode display forms (∑ ∫ ∂ ∈ ⟨⟩ …) are rendered by
+    // The big-operator / unicode display forms (∑ ∫ ∈ ⟨⟩ …) are rendered by
     // toUnicode/toLatex, not the ascii form this parser inverts; refuse them so a
     // caller routes such input elsewhere. (The ascii aggregate surface uses the
-    // words `sum`/`where`/`in`/`join`/`if` and `{ }` `:` `;`, all handled above.)
+    // words `sum`/`where`/`in`/`join`/`if` and `{ }` `:` `;`, all handled above;
+    // the name-constituents `∂`/`∇` matched via NAME_RE just above.)
     if (c.charCodeAt(0) > 127) {
       throw new ExpressionParseError(
         `unicode operator syntax (${JSON.stringify(c)}) — use the ascii text form`,
