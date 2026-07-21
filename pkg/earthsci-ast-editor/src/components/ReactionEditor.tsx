@@ -18,13 +18,16 @@
 import type { Component } from 'solid-js'
 import { createSignal, For, Show } from 'solid-js'
 import type { ReactionSystem, Reaction, Species, Parameter, Expression } from '@earthsciml/ast'
+import { toAscii, parseExpression } from '@earthsciml/ast'
 import { ExpressionNode } from './ExpressionNode'
 import { InlineForm } from './InlineForm'
 import { CollapsiblePanel } from './CollapsiblePanel'
 import { EmptyState } from './EmptyState'
 import { createMergedHighlight } from './merged-highlight'
 import { replaceAtDocumentPath } from './document-path'
+import { createTextEditMode } from './text-edit-mode'
 import { renderChemicalName } from '../primitives/chemical-formula'
+import './equation-editor.css'
 
 /**
  * Coerce a plain `Reaction[]` into the schema's non-empty-tuple `reactions`
@@ -124,6 +127,25 @@ const ReactionItem: Component<{
     props.onEditReaction(props.index, newReaction)
   }
 
+  // Text edit surface over the rate expression's ascii DSL form. The shared hook
+  // owns the buffer/commit/error state and the block-on-error +
+  // emit-only-when-changed invariants; a clean parse is routed back through the
+  // SAME document-path replace (`handleReplace(['rate'], …)` →
+  // `replaceAtDocumentPath` → `onEditReaction`) the structural editor uses, so
+  // the rest of the reaction is untouched. Only reachable when a rate exists;
+  // the seed is defensively empty otherwise. Default is structural; text is
+  // opt-in behind the toggle.
+  const rateText = createTextEditMode<Expression>({
+    readonly: () => props.readonly,
+    seed: () => (props.reaction.rate != null ? toAscii(props.reaction.rate) : ''),
+    // parseExpression returns the wider `Expr` (`Expression | NumericLiteral`);
+    // narrow to the editor's public `Expression`, matching the codebase's
+    // parse→Expression bridging convention.
+    parse: (src) => parseExpression(src) as Expression,
+    reprint: (parsed) => toAscii(parsed),
+    emit: (parsed) => handleReplace(['rate'], parsed),
+  })
+
   const handleRemove = () => {
     if (!props.readonly) {
       props.onRemoveReaction?.(props.index)
@@ -199,15 +221,54 @@ const ReactionItem: Component<{
                 </div>
               }
             >
-              <ExpressionNode
-                expr={props.reaction.rate!}
-                path={['rate']}
-                highlightedVars={highlightedVars()}
-                onHoverVar={setHoveredVar}
-                onSelect={setSelectedPath}
-                onReplace={handleReplace}
-                selectedPath={selectedPath()}
-              />
+              <Show when={!props.readonly}>
+                <div class="esm-eq-toolbar">
+                  <button
+                    type="button"
+                    class="esm-eq-mode-btn"
+                    aria-pressed={rateText.inTextMode()}
+                    title={rateText.inTextMode() ? 'Switch to structural editing' : 'Edit as text'}
+                    onClick={rateText.toggleMode}
+                  >
+                    {rateText.inTextMode() ? 'Structural' : 'Edit as text'}
+                  </button>
+                </div>
+              </Show>
+
+              <Show
+                when={rateText.inTextMode()}
+                fallback={
+                  <ExpressionNode
+                    expr={props.reaction.rate!}
+                    path={['rate']}
+                    highlightedVars={highlightedVars()}
+                    onHoverVar={setHoveredVar}
+                    onSelect={setSelectedPath}
+                    onReplace={handleReplace}
+                    selectedPath={selectedPath()}
+                  />
+                }
+              >
+                <div class="esm-eq-text">
+                  <textarea
+                    class="esm-eq-textarea"
+                    classList={{ 'has-error': rateText.error() != null }}
+                    value={rateText.text()}
+                    spellcheck={false}
+                    rows={2}
+                    aria-label="Rate expression text"
+                    aria-invalid={rateText.error() != null}
+                    onInput={(e) => rateText.onInput(e.currentTarget.value)}
+                    onBlur={() => rateText.commit()}
+                    onKeyDown={rateText.handleKeyDown}
+                  />
+                  <Show when={rateText.error()}>
+                    <div class="esm-eq-error" role="alert">
+                      {rateText.error()}
+                    </div>
+                  </Show>
+                </div>
+              </Show>
             </Show>
           </div>
         </div>

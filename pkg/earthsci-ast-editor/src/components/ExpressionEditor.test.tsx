@@ -117,3 +117,58 @@ describe('ExpressionEditor', () => {
     expect(screen.getByText('42')).toBeInTheDocument()
   })
 })
+
+describe('ExpressionEditor — text mode (DSL)', () => {
+  const expr = { op: '+', args: ['x', 2] }
+  const toText = () => fireEvent.click(screen.getByRole('button', { name: 'Edit as text' }))
+  const textarea = () => screen.getByLabelText('Expression text') as HTMLTextAreaElement
+
+  it('toggles to a textarea seeded with the ascii form', () => {
+    render(() => <ExpressionEditor initialExpression={expr} onChange={vi.fn()} />)
+    toText()
+    expect(textarea()).toBeInTheDocument()
+    expect(textarea().value).toBe('x + 2')
+  })
+
+  it('commits a valid edit on blur, emitting the parsed expression', () => {
+    const onChange = vi.fn()
+    render(() => <ExpressionEditor initialExpression={expr} onChange={onChange} />)
+    toText()
+    fireEvent.input(textarea(), { target: { value: 'x + 3' } })
+    fireEvent.blur(textarea())
+    expect(onChange).toHaveBeenCalledWith({ op: '+', args: ['x', 3] })
+  })
+
+  it('blocks emit on a parse error and surfaces the error', () => {
+    const onChange = vi.fn()
+    render(() => <ExpressionEditor initialExpression={expr} onChange={onChange} />)
+    toText()
+    fireEvent.input(textarea(), { target: { value: 'x +' } }) // trailing operator
+    fireEvent.blur(textarea())
+    expect(onChange).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('does not emit when the reprint is unchanged (AST left untouched)', () => {
+    const onChange = vi.fn()
+    render(() => <ExpressionEditor initialExpression={expr} onChange={onChange} />)
+    toText()
+    fireEvent.blur(textarea())
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('blocks leaving text mode while the buffer is unparseable', () => {
+    render(() => <ExpressionEditor initialExpression={expr} onChange={vi.fn()} />)
+    toText()
+    fireEvent.input(textarea(), { target: { value: 'x +' } })
+    // The toggle now reads "Structural"; clicking it must NOT switch back.
+    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
+    expect(textarea()).toBeInTheDocument() // still in text mode
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('does not show the text toggle in readonly mode', () => {
+    render(() => <ExpressionEditor initialExpression={expr} readonly onChange={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
+  })
+})

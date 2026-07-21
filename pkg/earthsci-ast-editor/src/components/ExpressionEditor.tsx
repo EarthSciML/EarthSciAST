@@ -1,19 +1,31 @@
 /**
  * ExpressionEditor - Single expression editor without LHS = RHS format
  *
- * This component provides an interactive editor for individual expressions,
- * displaying them as a single mathematical expression with clickable
- * nodes that can be edited using the ExpressionNode component.
- * This is distinct from EquationEditor which shows "left = right" format.
+ * Two edit surfaces over the SAME controlled `initialExpression` / `onChange`
+ * contract:
+ *  - **structural** (default): clickable `ExpressionNode`s (plus optional
+ *    palette), edited via the shared expression-path replace;
+ *  - **text**: an in-place textarea holding the expression's ascii DSL form
+ *    (`toAscii` ⇄ `parseExpression` from `@earthsciml/ast`) — the same code-like
+ *    syntax used everywhere else, the inverse of `toAscii`.
+ *
+ * The text surface **blocks emit until it parses** and **emits only when the
+ * reprint actually changed** (so an untouched expression's AST stays
+ * byte-identical). Unlike EquationEditor there is no comment/metadata to merge:
+ * a bare expression is emitted wholesale. The buffer/commit/error state lives in
+ * the shared {@link createTextEditMode} hook.
  */
 
 import type { Component } from 'solid-js'
 import { createSignal, Show } from 'solid-js'
 import type { Expression } from '@earthsciml/ast'
+import { toAscii, parseExpression } from '@earthsciml/ast'
 import { ExpressionNode } from './ExpressionNode'
 import { ExpressionPalette } from './ExpressionPalette'
 import { createMergedHighlight } from './merged-highlight'
 import { replaceExpressionAtPath } from '../primitives/path-utils'
+import { createTextEditMode } from './text-edit-mode'
+import './equation-editor.css'
 
 export interface ExpressionEditorProps {
   /**
@@ -53,6 +65,21 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
   const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null)
   const [hoveredVar, setHoveredVar] = createSignal<string | null>(null)
   const [showPalettePanel, setShowPalettePanel] = createSignal(props.showPalette ?? false)
+
+  // Text edit surface over the expression's ascii DSL form. The shared hook owns
+  // the buffer/commit/error state and the block-on-error + emit-only-when-changed
+  // invariants; a bare expression has nothing to merge, so it's emitted whole.
+  // Default is structural; text is opt-in behind the toggle.
+  const textMode = createTextEditMode<Expression>({
+    readonly: () => props.readonly,
+    seed: () => toAscii(props.initialExpression),
+    // parseExpression returns the wider `Expr` (`Expression | NumericLiteral`);
+    // narrow to the editor's public `Expression`, matching the codebase's
+    // parse→Expression bridging convention.
+    parse: (src) => parseExpression(src) as Expression,
+    reprint: (parsed) => toAscii(parsed),
+    emit: (parsed) => props.onChange?.(parsed),
+  })
 
   // Base highlight set merged with the locally hovered variable.
   const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar)
@@ -99,32 +126,71 @@ export const ExpressionEditor: Component<ExpressionEditorProps> = (props) => {
 
   return (
     <div class={editorClasses()} id={props.id}>
-      <div class="expression-editor-content">
-        {/* Main expression display */}
-        <div class="expression-main">
-          <ExpressionNode
-            expr={props.initialExpression}
-            path={[]}
-            highlightedVars={highlightedVars()}
-            onHoverVar={handleHoverVar}
-            onSelect={handleSelect}
-            onReplace={handleReplace}
-            selectedPath={selectedPath()}
-          />
-        </div>
-
-        {/* Optional palette toggle button */}
-        <Show when={props.showPalette && !props.readonly}>
+      <Show when={!props.readonly}>
+        <div class="esm-eq-toolbar">
           <button
-            class="palette-toggle-btn"
-            onClick={() => setShowPalettePanel((prev) => !prev)}
-            title="Toggle expression palette"
-            aria-label="Toggle expression palette"
+            type="button"
+            class="esm-eq-mode-btn"
+            aria-pressed={textMode.inTextMode()}
+            title={textMode.inTextMode() ? 'Switch to structural editing' : 'Edit as text'}
+            onClick={textMode.toggleMode}
           >
-            {showPalettePanel() ? '←' : '→'}
+            {textMode.inTextMode() ? 'Structural' : 'Edit as text'}
           </button>
-        </Show>
-      </div>
+        </div>
+      </Show>
+
+      <Show
+        when={textMode.inTextMode()}
+        fallback={
+          <div class="expression-editor-content">
+            {/* Main expression display */}
+            <div class="expression-main">
+              <ExpressionNode
+                expr={props.initialExpression}
+                path={[]}
+                highlightedVars={highlightedVars()}
+                onHoverVar={handleHoverVar}
+                onSelect={handleSelect}
+                onReplace={handleReplace}
+                selectedPath={selectedPath()}
+              />
+            </div>
+
+            {/* Optional palette toggle button */}
+            <Show when={props.showPalette && !props.readonly}>
+              <button
+                class="palette-toggle-btn"
+                onClick={() => setShowPalettePanel((prev) => !prev)}
+                title="Toggle expression palette"
+                aria-label="Toggle expression palette"
+              >
+                {showPalettePanel() ? '←' : '→'}
+              </button>
+            </Show>
+          </div>
+        }
+      >
+        <div class="esm-eq-text">
+          <textarea
+            class="esm-eq-textarea"
+            classList={{ 'has-error': textMode.error() != null }}
+            value={textMode.text()}
+            spellcheck={false}
+            rows={2}
+            aria-label="Expression text"
+            aria-invalid={textMode.error() != null}
+            onInput={(e) => textMode.onInput(e.currentTarget.value)}
+            onBlur={() => textMode.commit()}
+            onKeyDown={textMode.handleKeyDown}
+          />
+          <Show when={textMode.error()}>
+            <div class="esm-eq-error" role="alert">
+              {textMode.error()}
+            </div>
+          </Show>
+        </div>
+      </Show>
 
       {/* Optional expression palette */}
       <Show when={showPalettePanel() && props.showPalette && !props.readonly}>

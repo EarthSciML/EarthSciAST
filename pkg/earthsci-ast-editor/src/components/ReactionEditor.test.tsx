@@ -264,6 +264,14 @@ describe('ReactionEditor', () => {
     })
   })
 
+  it('does not show the rate text toggle in readonly mode', () => {
+    render(() => <ReactionEditor {...mockProps} readonly={true} />)
+
+    // The rate editor cannot be expanded in readonly, so no text toggle exists.
+    fireEvent.click(screen.getByText('[k]'))
+    expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
+  })
+
   it('assigns the first unused R-id when adding after a deletion (regression)', () => {
     // R1 and R3 exist (R2 was deleted). The old `R${length+1}` scheme would
     // reuse R3; the fix assigns the first free id, R2.
@@ -291,5 +299,84 @@ describe('ReactionEditor', () => {
     const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem
     expect(updated.reactions).toHaveLength(3)
     expect(updated.reactions[2].id).toBe('R2')
+  })
+})
+
+describe('ReactionEditor — rate text mode (DSL)', () => {
+  const system: ReactionSystem = {
+    species: { NO: {}, O3: {}, NO2: {} },
+    parameters: {},
+    reactions: [
+      {
+        id: 'R1',
+        substrates: [{ species: 'NO', stoichiometry: 1 }],
+        products: [{ species: 'NO2', stoichiometry: 1 }],
+        rate: 'k_NO_O3',
+      },
+    ],
+  }
+
+  const expand = () => fireEvent.click(screen.getByText('[k]'))
+  const toText = () => fireEvent.click(screen.getByRole('button', { name: 'Edit as text' }))
+  const textarea = () => screen.getByLabelText('Rate expression text') as HTMLTextAreaElement
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('toggles the rate to a textarea seeded with its ascii form', () => {
+    render(() => <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} />)
+    expand()
+    toText()
+    expect(textarea()).toBeInTheDocument()
+    expect(textarea().value).toBe('k_NO_O3')
+  })
+
+  it('commits a valid rate edit on blur, routing the parsed rate through onReactionSystemChange', () => {
+    const onReactionSystemChange = vi.fn()
+    render(() => (
+      <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
+    ))
+    expand()
+    toText()
+    fireEvent.input(textarea(), { target: { value: 'k_NO_O3 * 2' } })
+    fireEvent.blur(textarea())
+
+    expect(onReactionSystemChange).toHaveBeenCalledTimes(1)
+    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem
+    expect(updated.reactions[0].rate).toEqual({ op: '*', args: ['k_NO_O3', 2] })
+  })
+
+  it('blocks emit on a parse error and surfaces the error', () => {
+    const onReactionSystemChange = vi.fn()
+    render(() => (
+      <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
+    ))
+    expand()
+    toText()
+    fireEvent.input(textarea(), { target: { value: 'k_NO_O3 *' } }) // trailing operator
+    fireEvent.blur(textarea())
+
+    expect(onReactionSystemChange).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('does not emit when the reprint is unchanged (rate AST left untouched)', () => {
+    const onReactionSystemChange = vi.fn()
+    render(() => (
+      <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
+    ))
+    expand()
+    toText()
+    fireEvent.blur(textarea())
+    expect(onReactionSystemChange).not.toHaveBeenCalled()
+  })
+
+  it('blocks leaving text mode while the rate buffer is unparseable', () => {
+    render(() => <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} />)
+    expand()
+    toText()
+    fireEvent.input(textarea(), { target: { value: 'k_NO_O3 *' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Structural' }))
+    expect(textarea()).toBeInTheDocument() // still in text mode
+    expect(screen.getByRole('alert')).toBeInTheDocument()
   })
 })
