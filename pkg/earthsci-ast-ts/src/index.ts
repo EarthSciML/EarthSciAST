@@ -106,6 +106,9 @@ export type {
 // Export pretty-printing utilities
 export { toUnicode, toLatex, toAscii, toMathML, formatChemicalName } from './pretty-print.js'
 
+// Export the expression text-form parser (inverse of toAscii for the scalar tier)
+export { parseExpression, parseEquation, ExpressionParseError } from './parse-expression.js'
+
 // Export substitution utilities
 export { substitute, substituteInModel, substituteInReactionSystem } from './substitute.js'
 
