@@ -1,0 +1,84 @@
+/**
+ * Styling for the EquationEditor text-mode affordance: the mode toggle, the
+ * editable textarea, and the parse-error banner. The structural view keeps its
+ * existing (app-provided) `.equation-*` layout classes; only the text-mode UI is
+ * styled here, with `.esm-`-prefixed classes to match the other components.
+ */
+
+.esm-eq-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.esm-eq-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  color: #495057;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.esm-eq-mode-btn:hover {
+  background: #e9ecef;
+  border-color: #adb5bd;
+}
+
+.esm-eq-mode-btn:focus-visible {
+  outline: 2px solid #0d6efd;
+  outline-offset: 1px;
+}
+
+.esm-eq-mode-btn[aria-pressed='true'] {
+  background: #e7f1ff;
+  border-color: #0d6efd;
+  color: #0d6efd;
+}
+
+.esm-eq-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.esm-eq-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 2.4em;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #212529;
+  background: #fff;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.esm-eq-textarea:focus {
+  outline: none;
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
+}
+
+.esm-eq-textarea.has-error {
+  border-color: #dc3545;
+}
+
+.esm-eq-textarea.has-error:focus {
+  box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.15);
+}
+
+.esm-eq-error {
+  font-size: 12px;
+  color: #dc3545;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
