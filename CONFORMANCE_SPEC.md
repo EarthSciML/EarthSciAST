@@ -835,6 +835,80 @@ are `clamp(M, 5) = 40`, `periodic(M, 5) = 10`, `periodic(M, 0) = 40`. (Bead
 `ess-gj4`; enables the covariant-FV connection-term metric gathers of the
 discretization RFC to run unmodified through the evaluator.)
 
+#### 5.5.6 Spatial overlap join-gate and gated-select pushdown (normative)
+
+> Projection-pushdown Phase 2a/3a. Reference implementations: Julia
+> `EarthSciAST.jl/src/broad_phase.jl` + `value_invention.jl`; Rust
+> `earthsci-ast-rs/src/broad_phase.rs` + `value_invention.rs`. Cross-language
+> conformance: the shared point-in-rectangle fixture
+> (`pkg/earthsci-ast-rs/tests/fixtures/pushdown/overlap_gate_point_in_rect.esm`)
+> materialises to the byte-identical support set `[1,2,4,9]` in both engines.
+
+A `join` clause on an `aggregate` may be a **spatial OVERLAP gate** instead of an
+`on` value-equality gate. It replaces uniform-grid bin-equality with **envelope
+candidacy**: a contracted `(src_pos, tgt_pos)` tuple is admitted iff the two range
+positions are in a **broad-phase candidate set** computed once from two envelope
+factor arrays. The narrow phase (exact rectangle / polygon test) stays as the
+aggregate's `filter`; the gate is ONLY the conservative broad phase.
+
+**Wire form.** A join clause is either `{ "on": [[l, r], …] }` (§5.3) **or**:
+
+```json
+{ "overlap": { "src_env": ["X","Y"], "tgt_env": ["W","S","E","N"], "eps": 0.0 } }
+```
+
+* `src_env` names the **QUERY**-side envelope factors; `tgt_env` the **INDEXED**
+  (cell) side. Each is a list of **const-array factor names** interpreted as
+  per-position envelopes, of arity **1, 2, or 4** (both sides independent):
+  * **4 names** → rectangles `[xmin, ymin, xmax, ymax]` (e.g. cells `[W,S,E,N]`);
+  * **2 names** → points `[x, y]` → the degenerate envelope `(x, y, x, y)`;
+  * **1 name** → a `[pos, verts, coord]` 3-D ring factor → its axis-aligned bbox,
+    remapped to `(xmin, ymin, xmax, ymax)`.
+* Each side's factors share a 1-D shape index set, which names the join range
+  (like an `on` key column): `src_env` → the source loop symbol, `tgt_env` → the
+  target loop symbol.
+* `eps ≥ 0` (default `0.0`) inflates BOTH envelopes of a pair OUTWARD by `eps`
+  (`xmin−=eps, ymin−=eps, xmax+=eps, ymax+=eps`) before the intersection test.
+
+**Broad-phase contract (normative).** `broad_phase_candidates(query_envs,
+cell_envs, eps)` returns **every** `(qi, cj)` whose eps-inflated 2-D envelopes
+intersect, under a **CLOSED** per-axis AABB predicate (edge-touching admitted):
+`q.xmin ≤ c.xmax ∧ c.xmin ≤ q.xmax ∧ q.ymin ≤ c.ymax ∧ c.ymin ≤ q.ymax`. The
+result is:
+
+1. **Conservative.** A SUPERSET of true geometric overlaps — any pair whose
+   geometries actually overlap has intersecting envelopes and so appears (with
+   `eps ≥ 0`). Missing a true overlap is impossible by construction.
+2. **Monotone in `eps`.** `candidates(eps=δ) ⊇ candidates(eps=0)` for `δ ≥ 0`.
+3. **Deterministic.** SORTED ascending by `(qi, cj)`; a spatial-index fast path
+   (rstar R*-tree / STRtree) MUST return a set byte-identical to the brute-force
+   `O(nq·nc)` oracle for the same `eps` (both use the closed predicate).
+
+**Join admission.** The gate admits a binding iff `(pos_src, pos_tgt)` is in the
+candidate set (positions 1-based, matching the enumeration bindings). The gate's
+candidate set is built ONCE per node (not per tuple). An overlap-gated producer
+DRIVES enumeration from the sorted candidate pairs (binding the two gated symbols
+from each pair, then the cartesian product of any ungated ranges) — cost
+`O(|candidates|·∏ungated)` rather than `O(∏ranges)`. The materialised member set
+is IDENTICAL to the full-product path: the gate is conservative, so it only skips
+tuples the narrow `filter` would have rejected. Because the broad phase compares
+only floating-point envelopes but the emitted **keys are integer** (§5.5.1), the
+`distinct` member set is byte-identical across bindings regardless of the
+candidate-generation backend.
+
+**Derived-set `member_factor` and `gated_select` pushdown.** A `kind:"derived"`
+index set produced by an overlap-gated `distinct` aggregate carries
+`from_faq:"<producer id>"` and MAY carry `member_factor:"<var>"` — the buffer that
+receives the surviving member key per invented position (Hook 1: fed back as a
+`const` factor so downstream aggregates gather on the compact derived axis). A
+provider whose axis is `gated_by:"<derived set>"` is DEFERRED past value-invention
+and then fetched with a `Selection` built from the materialised members **in
+sorted order** — the compact slab only, never a wholesale fetch (the `gated_select`
+pushdown; the Rust EarthSciIO `DataLoader.select` / `Selection` seam). This edge
+is specified here for Python/Go/TS; the current Rust slice implements the
+overlap-gate broad phase + candidate-driven producer (the support-set derivation)
+and leaves the const-tier gated-provider fetch to the loader integration.
+
 ### 5.6 Closed Semiring Registry (normative)
 
 > This is the normative form of RFC `semiring-faq-unified-ir` §5.1 / §5.2 / §5.6.

@@ -43,6 +43,9 @@ pub mod adapter_support;
 pub mod aggregate;
 /// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
 pub mod analysis;
+/// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
+/// projection-pushdown overlap join-gate.
+pub mod broad_phase;
 pub mod cadence;
 pub mod canonicalize;
 pub mod coupling;
