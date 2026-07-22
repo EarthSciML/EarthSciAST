@@ -1,13 +1,17 @@
 /**
  * ReactionEditor - Chemical reaction system editor with chemical notation
  *
- * This component provides an interactive editor for reaction systems,
- * displaying reactions in chemical notation (e.g., NO + O₃ →[k] NO₂)
- * with clickable rate expressions that expand to full ExpressionEditor.
+ * This component provides an interactive editor for reaction systems. Each
+ * reaction reads as rendered chemistry (native MathML, `substrates ⟶ products`
+ * with the rate set over the arrow); clicking it (when editable) swaps the whole
+ * line to a textarea holding the reaction's ascii DSL form — `toAscii` ⇄
+ * `parseReaction`, the inverse-of-print syntax used everywhere else. Substrates,
+ * products, stoichiometric coefficients, AND the rate are all edited as one text
+ * line, e.g. `2 NO + O3 -> [k1] NO2 + O2`.
  * Features:
- * - Chemical notation display with proper subscripts (shared element-aware
- *   renderer, identical to ExpressionNode's variable rendering)
- * - Species panel with chemical formulas
+ * - MathML rendering when not editing (mirrors the EquationEditor surface)
+ * - Whole-reaction text editing with parse-blocking + no-churn-when-untouched
+ * - Species panel with chemical formulas, default value, and units
  * - Parameter panel listing all parameters
  * - UI for adding/removing reactions
  *
@@ -16,15 +20,12 @@
  */
 
 import type { Component } from 'solid-js'
-import { createSignal, For, Show } from 'solid-js'
-import type { ReactionSystem, Reaction, Species, Parameter, Expression } from '@earthsciml/ast'
-import { toAscii, parseExpression } from '@earthsciml/ast'
-import { ExpressionNode } from './ExpressionNode'
+import { createEffect, createSignal, For, Show } from 'solid-js'
+import type { ReactionSystem, Reaction, Species, Parameter } from '@earthsciml/ast'
+import { toAscii, toMathML, parseReaction } from '@earthsciml/ast'
 import { InlineForm } from './InlineForm'
 import { CollapsiblePanel } from './CollapsiblePanel'
 import { EmptyState } from './EmptyState'
-import { createMergedHighlight } from './merged-highlight'
-import { replaceAtDocumentPath } from './document-path'
 import { createTextEditMode } from './text-edit-mode'
 import { renderChemicalName } from '../primitives/chemical-formula'
 import './equation-editor.css'
@@ -40,20 +41,15 @@ function asReactions(reactions: Reaction[]): ReactionSystem['reactions'] {
   return reactions as ReactionSystem['reactions']
 }
 
-/**
- * Render a substrate/product list in chemical notation (e.g. `2NO + O₃`).
- * Shared by the reactants and products sides, which are byte-identical.
- */
-function renderSpeciesList(entries: Reaction['substrates'] | Reaction['products']): string {
-  if (!entries) return ''
-
-  return entries
-    .map((entry) => {
-      const formula = renderChemicalName(entry.species)
-      const stoichiometry = entry.stoichiometry ?? 1
-      return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`
-    })
-    .join(' + ')
+/** MathML for a reaction, wrapped in a `<math>` root when needed; '' on failure. */
+function toMathMLSafe(node: unknown): string {
+  try {
+    const ml = toMathML(node as Parameters<typeof toMathML>[0])
+    if (!ml) return ''
+    return ml.trimStart().startsWith('<math') ? ml : `<math>${ml}</math>`
+  } catch {
+    return ''
+  }
 }
 
 export interface ReactionEditorProps {
@@ -86,63 +82,49 @@ interface NamedParameter {
 }
 
 /**
- * Component for rendering a single chemical reaction
+ * Component for rendering a single chemical reaction.
+ *
+ * The default surface is rendered MathML (`substrates ⟶ products` with the rate
+ * over the arrow); clicking it (when editable) swaps the whole line to a
+ * textarea holding the reaction's ascii DSL form. Substrates, products,
+ * coefficients, and the rate are all edited on that one line — mirroring the
+ * EquationEditor surface. The shared {@link createTextEditMode} hook owns the
+ * buffer/commit/error state plus the block-on-error and emit-only-when-changed
+ * invariants, so an untouched reaction stays byte-identical (the reaction
+ * printer is non-injective, e.g. `1` coefficients drop out).
  */
 const ReactionItem: Component<{
   reaction: Reaction
   index: number
   onEditReaction?: (index: number, reaction: Reaction) => void
   onRemoveReaction?: (index: number) => void
-  highlightedVars?: Set<string>
   readonly?: boolean
 }> = (props) => {
-  const [isExpanded, setIsExpanded] = createSignal(false)
-  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null)
-
-  // Base highlight set merged with the locally hovered variable.
-  const highlightedVars = createMergedHighlight(() => props.highlightedVars, hoveredVar)
-
-  // Handle rate expression editing
-  const handleRateClick = () => {
-    if (!props.readonly) {
-      setIsExpanded(!isExpanded())
-    }
-  }
-
-  const handleRateChange = (newRate: Expression) => {
-    if (props.readonly || !props.onEditReaction) return
-
-    const newReaction = { ...props.reaction, rate: newRate }
-    props.onEditReaction(props.index, newReaction)
-  }
-
-  // Apply the parsed rate back onto the reaction. The path is rooted at the
-  // reaction (`['rate']`); the shared document-path replace leaves the rest of
-  // the reaction untouched.
-  const handleReplace = (path: (string | number)[], newExpr: Expression) => {
-    if (props.readonly || !props.onEditReaction) return
-
-    const newReaction = replaceAtDocumentPath(props.reaction, path, newExpr)
-    props.onEditReaction(props.index, newReaction)
-  }
-
-  // Text edit surface over the rate expression's ascii DSL form. The shared hook
-  // owns the buffer/commit/error state and the block-on-error +
-  // emit-only-when-changed invariants; a clean parse is routed through the
-  // shared document-path replace (`handleReplace(['rate'], …)` →
-  // `replaceAtDocumentPath` → `onEditReaction`), so the rest of the reaction is
-  // untouched. Only reachable when a rate exists; the seed is defensively empty
-  // otherwise. Text is the editable surface; readonly renders pretty math.
-  const rateText = createTextEditMode<Expression>({
+  const reactionText = createTextEditMode<Reaction>({
     readonly: () => props.readonly,
-    seed: () => (props.reaction.rate != null ? toAscii(props.reaction.rate) : ''),
-    // parseExpression returns the wider `Expr` (`Expression | NumericLiteral`);
-    // narrow to the editor's public `Expression`, matching the codebase's
-    // parse→Expression bridging convention.
-    parse: (src) => parseExpression(src) as Expression,
+    seed: () => toAscii(props.reaction),
+    parse: (src) => parseReaction(src),
     reprint: (parsed) => toAscii(parsed),
-    emit: (parsed) => handleReplace(['rate'], parsed),
-    initialMode: 'text',
+    // parseReaction returns an id-less reaction; merge over the original so its
+    // id / name / reference survive and only the edited chemistry is adopted.
+    emit: (parsed) =>
+      props.onEditReaction?.(props.index, {
+        ...props.reaction,
+        substrates: parsed.substrates,
+        products: parsed.products,
+        rate: parsed.rate,
+      }),
+    initialMode: 'structural',
+  })
+
+  const mathml = () => toMathMLSafe(props.reaction)
+
+  // Focus the textarea when the edit surface opens, so a click lands ready to
+  // type (parity with EquationEditor). queueMicrotask defers past the render
+  // that mounts the textarea.
+  let textareaRef: HTMLTextAreaElement | undefined
+  createEffect(() => {
+    if (reactionText.inTextMode()) queueMicrotask(() => textareaRef?.focus())
   })
 
   const handleRemove = () => {
@@ -151,28 +133,64 @@ const ReactionItem: Component<{
     }
   }
 
+  const enterEdit = () => {
+    if (!props.readonly) reactionText.toggleMode()
+  }
+
   return (
     <div class="reaction-item">
       <div class="reaction-header">
-        <div class="reaction-equation">
-          {/* Substrates (reactants) */}
-          <span class="reactants">{renderSpeciesList(props.reaction.substrates)}</span>
-
-          {/* Arrow with rate */}
-          <span class="reaction-arrow">
-            →
-            <span
-              class={`rate-expression ${isExpanded() ? 'expanded' : ''} ${!props.readonly ? 'clickable' : ''}`}
-              onClick={handleRateClick}
-              title={props.readonly ? undefined : 'Click to edit rate expression'}
+        <Show
+          when={reactionText.inTextMode()}
+          fallback={
+            <div
+              class={`reaction-equation ${props.readonly ? '' : 'clickable'}`}
+              role={props.readonly ? undefined : 'button'}
+              tabindex={props.readonly ? undefined : '0'}
+              title={props.readonly ? undefined : 'Click to edit reaction'}
+              onClick={enterEdit}
+              onKeyDown={(e) => {
+                if (!props.readonly && (e.key === 'Enter' || e.key === ' ')) {
+                  e.preventDefault()
+                  enterEdit()
+                }
+              }}
             >
-              [{props.reaction.rate ? 'k' : '?'}]
-            </span>
-          </span>
-
-          {/* Products */}
-          <span class="products">{renderSpeciesList(props.reaction.products)}</span>
-        </div>
+              <Show
+                when={mathml()}
+                fallback={<span class="reaction-ascii">{toAscii(props.reaction)}</span>}
+              >
+                <span class="esm-math" innerHTML={mathml()} />
+              </Show>
+            </div>
+          }
+        >
+          <div class="reaction-equation-edit esm-eq-text">
+            <textarea
+              ref={textareaRef}
+              class="esm-eq-textarea"
+              classList={{ 'has-error': reactionText.error() != null }}
+              value={reactionText.text()}
+              spellcheck={false}
+              rows={2}
+              aria-label="Reaction text"
+              aria-invalid={reactionText.error() != null}
+              onInput={(e) => reactionText.onInput(e.currentTarget.value)}
+              // Commit + leave text mode on blur; the shared toggleMode blocks
+              // the exit while the buffer fails to parse.
+              onBlur={() => reactionText.toggleMode()}
+              onKeyDown={reactionText.handleKeyDown}
+            />
+            <Show when={reactionText.error()}>
+              <div class="esm-eq-error" role="alert">
+                {reactionText.error()}
+              </div>
+            </Show>
+            <div class="esm-eq-hint">
+              e.g. <code>2 NO + O3 -&gt; [k1] NO2 + O2</code> · ⌘⏎ to save · Esc to cancel
+            </div>
+          </div>
+        </Show>
 
         <div class="reaction-controls">
           <Show when={props.reaction.name}>
@@ -193,68 +211,6 @@ const ReactionItem: Component<{
           </Show>
         </div>
       </div>
-
-      {/* Expanded rate expression editor */}
-      <Show when={isExpanded()}>
-        <div class="reaction-rate-editor">
-          <div class="rate-editor-header">
-            <span>Rate Expression:</span>
-            <button
-              class="collapse-btn"
-              onClick={() => setIsExpanded(false)}
-              title="Collapse rate editor"
-            >
-              ▲
-            </button>
-          </div>
-
-          <div class="rate-editor-content">
-            <Show
-              when={props.reaction.rate}
-              fallback={
-                <div class="no-rate-placeholder">
-                  <span>No rate expression defined</span>
-                  <button class="add-rate-btn" onClick={() => handleRateChange('k_rate')}>
-                    Add rate constant
-                  </button>
-                </div>
-              }
-            >
-              <Show
-                when={rateText.inTextMode()}
-                fallback={
-                  <ExpressionNode
-                    expr={props.reaction.rate!}
-                    path={['rate']}
-                    highlightedVars={highlightedVars()}
-                    onHoverVar={setHoveredVar}
-                  />
-                }
-              >
-                <div class="esm-eq-text">
-                  <textarea
-                    class="esm-eq-textarea"
-                    classList={{ 'has-error': rateText.error() != null }}
-                    value={rateText.text()}
-                    spellcheck={false}
-                    rows={2}
-                    aria-label="Rate expression text"
-                    aria-invalid={rateText.error() != null}
-                    onInput={(e) => rateText.onInput(e.currentTarget.value)}
-                    onBlur={() => rateText.commit()}
-                    onKeyDown={rateText.handleKeyDown}
-                  />
-                  <Show when={rateText.error()}>
-                    <div class="esm-eq-error" role="alert">
-                      {rateText.error()}
-                    </div>
-                  </Show>
-                </div>
-              </Show>
-            </Show>
-          </div>
-        </div>
-      </Show>
     </div>
   )
 }
@@ -279,11 +235,37 @@ const SpeciesPanel: Component<{
     setIsAdding(true)
   }
 
+  // Build a Species from the inline-form values. `default` is optional (unlike a
+  // Parameter's): an empty value field leaves it unset. `base` carries forward
+  // any fields the form doesn't expose (e.g. `constant`, `default_units`) on an
+  // edit. Returns an error string when the value field isn't a number.
+  const parseSpeciesFields = (
+    values: Record<string, string>,
+    base: Species = {},
+  ): Species | string => {
+    const raw = (values.value ?? '').trim()
+    let def: number | undefined
+    if (raw !== '') {
+      const n = Number(raw)
+      if (!Number.isFinite(n)) return 'Default value must be a number'
+      def = n
+    }
+    return {
+      ...base,
+      default: def,
+      units: (values.units ?? '').trim() || undefined,
+      description: (values.description ?? '').trim() || undefined,
+    }
+  }
+
   const handleAddConfirm = (values: Record<string, string>) => {
     const name = values.name.trim()
     if (!name) return 'Species name is required'
 
-    props.onAddSpecies?.(name, values.description ? { description: values.description } : {})
+    const species = parseSpeciesFields(values)
+    if (typeof species === 'string') return species
+
+    props.onAddSpecies?.(name, species)
     setIsAdding(false)
   }
 
@@ -291,10 +273,10 @@ const SpeciesPanel: Component<{
     const newName = values.name.trim()
     if (!newName) return 'Species name is required'
 
-    props.onEditSpecies?.(oldName, newName, {
-      ...species,
-      description: values.description || undefined,
-    })
+    const updated = parseSpeciesFields(values, species)
+    if (typeof updated === 'string') return updated
+
+    props.onEditSpecies?.(oldName, newName, updated)
     setEditingName(null)
   }
 
@@ -326,6 +308,8 @@ const SpeciesPanel: Component<{
           title="Add species"
           fields={[
             { name: 'name', label: 'Name (chemical formula)', placeholder: 'e.g. NO2' },
+            { name: 'value', label: 'Default value' },
+            { name: 'units', label: 'Units', placeholder: 'e.g. ppb' },
             { name: 'description', label: 'Description' },
           ]}
           confirmLabel="Add"
@@ -353,6 +337,12 @@ const SpeciesPanel: Component<{
                   <Show when={renderChemicalName(entry.name) !== entry.name}>
                     <span class="species-name">({entry.name})</span>
                   </Show>
+                  <Show when={entry.species.units}>
+                    <span class="species-unit">[{entry.species.units}]</span>
+                  </Show>
+                  <Show when={entry.species.default !== undefined}>
+                    <span class="species-value">= {entry.species.default}</span>
+                  </Show>
                 </div>
 
                 <Show when={entry.species.description}>
@@ -379,6 +369,12 @@ const SpeciesPanel: Component<{
               title={`Edit species ${entry.name}`}
               fields={[
                 { name: 'name', label: 'Name', initial: entry.name },
+                {
+                  name: 'value',
+                  label: 'Default value',
+                  initial: entry.species.default !== undefined ? String(entry.species.default) : '',
+                },
+                { name: 'units', label: 'Units', initial: entry.species.units || '' },
                 {
                   name: 'description',
                   label: 'Description',
@@ -718,7 +714,6 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
                   index={index()}
                   onEditReaction={handleEditReaction}
                   onRemoveReaction={handleRemoveReaction}
-                  highlightedVars={props.highlightedVars}
                   readonly={props.readonly}
                 />
               )}
