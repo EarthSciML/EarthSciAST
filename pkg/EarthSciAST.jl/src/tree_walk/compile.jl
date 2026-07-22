@@ -37,6 +37,7 @@ const _NK_OP           = UInt8(5)   # apply op to children
 const _NK_CONTRACTION  = UInt8(6)   # runtime ⊕-reduction over children (seq. fold)
 const _NK_CACHED       = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
 const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: payload[idx] (ess-14f.3)
+const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an EVAL-TIME-computed offset (wall2 Phase B)
 
 # One compiled scalar-IR node. `kind` selects which fields are live. The
 # catch-all `payload::Any` slot carries a KIND-DEPENDENT runtime payload,
@@ -54,6 +55,11 @@ const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: paylo
 #   * `_NK_PARAM_GATHER` — the aliased flat `Vector{Float64}` of a live
 #     forcing buffer (`_PGatherArray.flat`, ess-14f.3); `idx` holds the
 #     pre-linearized column-major offset.
+#   * `_NK_CONST_GATHER` — a `_ConstGatherArray` (wall2 Phase B): the flattened
+#     const/provider array plus its column-major strides. The subscripts are the
+#     node's `children` (subscript `_Node`s) and the column-major offset is
+#     computed AT EVAL TIME from them, so a runtime-varying subscript (e.g. a
+#     bound output index) selects a different element without a rebuild.
 #   * `_NK_CACHED` — the shared CSE scratch (`_CSECache`, ess-r7h); `idx` holds
 #     the value-number slot.
 #   * every other kind — `nothing`.
@@ -124,6 +130,43 @@ function _mknode(; kind::UInt8, op::Symbol=Symbol(""),
                  sym::Symbol=Symbol(""), payload=nothing,
                  children::Vector{_Node}=_Node[])
     return _Node(kind, op, literal, idx, sym, payload, children)
+end
+
+# Payload of a `_NK_CONST_GATHER` node (wall2 Phase B). Unlike `_NK_PARAM_GATHER`
+# — which reads a live buffer at a FIXED offset baked at build time — this carries
+# the whole flattened source array plus its column-major strides, and the offset is
+# recomputed on every eval from the node's subscript `children`. That is what lets a
+# runtime-varying subscript (Phase C will bind output-index parameters here) select a
+# different element WITHOUT re-resolving/re-compiling the AST. All fields are concrete
+# so the eval arm stays monomorphic + allocation-free (mirroring how the
+# `_NK_PARAM_GATHER` arm asserts `payload::Vector{Float64}`).
+struct _ConstGatherArray
+    flat::Vector{Float64}   # column-major flattening of the source array (== vec(A))
+    strides::Vector{Int}    # column-major strides: strides[d] = prod(size(A)[1:d-1])
+    len::Int                # length(flat) — bounds guard for the computed offset
+end
+
+# Build-time constructor for a `_NK_CONST_GATHER` node (wall2 Phase B). Flattens `A`
+# column-major into a fresh `Vector{Float64}`, derives its column-major strides from
+# `size(A)`, and captures them in a `_ConstGatherArray`; `subscript_nodes` become the
+# node's subscript `children` (one per dimension, in dimension order). Phase C calls
+# this to lower a `index(const_array, subs...)` gather whose subscripts are not all
+# build-time constants. `subscript_nodes` must have one entry per dimension of `A`.
+function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node})
+    sz = size(A)
+    length(subscript_nodes) == length(sz) || throw(ArgumentError(
+        "_const_gather_node: expected $(length(sz)) subscript node(s) for a " *
+        "$(length(sz))-D array, got $(length(subscript_nodes))"))
+    flat = Vector{Float64}(vec(A))
+    strides = Vector{Int}(undef, length(sz))
+    acc = 1
+    @inbounds for d in eachindex(sz)
+        strides[d] = acc
+        acc *= sz[d]
+    end
+    return _mknode(kind=_NK_CONST_GATHER,
+                   payload=_ConstGatherArray(flat, strides, length(flat)),
+                   children=subscript_nodes)
 end
 
 # ---- interp.* const-arg protocol (one table, both ends) ------------------------
@@ -1353,6 +1396,25 @@ end
         # `::Vector{Float64}` assert keeps this monomorphic + zero-alloc (no
         # runtime-symbol `getfield`, so the scalar `p` NamedTuple stays homogeneous).
         @inbounds return (n.payload::Vector{Float64})[n.idx]
+    elseif k === _NK_CONST_GATHER
+        # Runtime-indexed read of a captured const/provider array (wall2 Phase B).
+        # `payload` is a `_ConstGatherArray` (flat column-major values + strides);
+        # the subscript `children` are evaluated HERE and linearized HERE, so a
+        # child that resolves to a runtime-varying value (Phase C: a bound output
+        # index) reaches a different element with no rebuild. Subscripts are
+        # exact-integer-valued, so `round(Int, …)` recovers them without drift. The
+        # concrete `::_ConstGatherArray` assert keeps this arm monomorphic; the
+        # happy-path read allocates nothing (the guard only throws on failure).
+        cg = n.payload::_ConstGatherArray
+        children = n.children
+        strides = cg.strides
+        off = 1
+        @inbounds for d in eachindex(children)
+            sub = round(Int, _eval_node(children[d], u, p, t, T))
+            off += (sub - 1) * strides[d]
+        end
+        (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
+        @inbounds return cg.flat[off]
     elseif k === _NK_TIME
         return t
     elseif k === _NK_CACHED
