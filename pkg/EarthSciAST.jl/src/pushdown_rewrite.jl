@@ -80,6 +80,37 @@ function _pd_index_syms(e)
     return (f, syms)
 end
 
+# SHARED linear-mat-vec body predicate — also reused by the wall2 Phase D BLAS
+# accelerator (`_evaluate_cellwise_blas`, pde_inline_tests.jl). Classify an
+# aggregate BODY `A[c, out…] · E[c]` — a two-factor `⊗=·` product of a
+# rank-(1+|out|) array factor `A` subscripted `[c, out…]` (contracted index first,
+# then the output indices in order) and a rank-1 factor `E` subscripted `[c]` —
+# into `(Aname, Ename)`, or `nothing` when `body` is not that exact shape.
+# `c_sym` is the contracted index and `out_syms` the ordered output indices. This
+# is a PURE STRUCTURAL check on index symbols; it neither inspects factor values
+# nor the semiring (callers apply the additive `(+,0)` semiring guard themselves).
+function _pd_matvec_factors(body, c_sym::AbstractString,
+                            out_syms::AbstractVector{<:AbstractString})
+    (body isa OpExpr && body.op == "*" && length(body.args) == 2) || return nothing
+    isempty(out_syms) && return nothing
+    parts = Any[_pd_index_syms(a) for a in body.args]
+    any(p -> p === nothing, parts) && return nothing
+    A_syms = String[String(c_sym)]
+    append!(A_syms, (String(s) for s in out_syms))
+    E_syms = String[String(c_sym)]
+    Aname = nothing; Ename = nothing
+    for p in parts
+        f, syms = p
+        if syms == A_syms
+            Aname = f
+        elseif syms == E_syms
+            Ename = f
+        end
+    end
+    (Aname === nothing || Ename === nothing) && return nothing
+    return (Aname, Ename)
+end
+
 # (⊕ spelling, 0̄) for an aggregate node, or `nothing` on an unknown semiring.
 _pd_oplus(agg::OpExpr) =
     try _aggregate_oplus_identity(agg.semiring, agg.reduce) catch; nothing end
@@ -197,20 +228,9 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
         s_sym === nothing && continue
         (ranges[s_sym] isa IndexSetRef && ranges[rcv_sym] isa IndexSetRef) || continue
         c_set = ranges[s_sym].from; r_set = ranges[rcv_sym].from
-        body = agg.expr_body
-        (body isa OpExpr && body.op == "*" && length(body.args) == 2) || continue
-        parts = Any[_pd_index_syms(a) for a in body.args]
-        any(p -> p === nothing, parts) && continue
-        Aname = nothing; Ename = nothing
-        for p in parts
-            f, syms = p
-            if syms == [s_sym, rcv_sym]
-                Aname = f
-            elseif syms == [s_sym]
-                Ename = f
-            end
-        end
-        (Aname !== nothing && Ename !== nothing) || continue
+        facs = _pd_matvec_factors(agg.expr_body, s_sym, String[rcv_sym])
+        facs === nothing && continue
+        Aname, Ename = facs
         av = get(vars, Aname, nothing)
         (av !== nothing && av.type == ParameterVariable && av.shape !== nothing &&
          length(av.shape) == 2 && av.shape[1] == c_set && av.shape[2] == r_set) || continue

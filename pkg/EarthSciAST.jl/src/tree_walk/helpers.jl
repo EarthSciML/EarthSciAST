@@ -723,11 +723,16 @@ end
 function _cellwise_compile_once(expr::EarthSciAST.ASTExpr, nidx::Int,
                                 const_arrays::AbstractDict,
                                 registered_functions::AbstractDict,
-                                params::AbstractDict)
+                                params::AbstractDict;
+                                bind_syms::Union{Nothing,Vector{String}}=nothing)
     nidx >= 1 || return nothing
     # Reserved output-index parameter names (never authored by a user), one per
     # output dimension. Guard against the (impossible-in-practice) name collision.
-    syms_str = String["__esm_oidx_$d" for d in 1:nidx]
+    # `bind_syms` overrides them with caller-chosen names (wall2 Phase D reuses
+    # this to compile a BLAS-precomputed wrapper, binding the aggregate's own
+    # output symbols); the default is byte-identical to the Phase C behaviour.
+    syms_str = bind_syms === nothing ? String["__esm_oidx_$d" for d in 1:nidx] : bind_syms
+    length(syms_str) == nidx || return nothing
     for s in syms_str
         (s == "t" || haskey(params, s)) && return nothing
     end

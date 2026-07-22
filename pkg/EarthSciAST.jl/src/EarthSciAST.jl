@@ -26,6 +26,7 @@ module EarthSciAST
 using Dates
 using JSON3
 using JSONSchema
+using LinearAlgebra   # wall2 Phase D: BLAS `mul!` accelerator for linear mat-vec observeds
 using RuntimeGeneratedFunctions
 using Tullio
 

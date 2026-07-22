@@ -89,6 +89,213 @@ resolved §6.6.4 tolerances.
 """
 const PdeAssertionResult = AssertionResult
 
+# ============================================================
+# wall2 Phase D — OPTIONAL BLAS accelerator for the linear mat-vec observed
+# ============================================================
+#
+# The Phase C compile-once evaluator folds the contraction `conc[out…] =
+# Σ_c A[c,out…]·E[c]` SEQUENTIALLY per output cell (a type-stable
+# `_NK_CONTRACTION`, ~47 µs/cell, zero per-cell alloc). For this SPECIAL linear
+# sum-product shape the entire field is one matrix product `conc = A' · E`, which
+# a single BLAS `mul!` evaluates far faster. This layer recognises that shape and
+# takes the BLAS path; it FALLS BACK (returns `nothing`) to Phase C — the
+# bit-identical-to-oracle baseline — for everything else, and is engaged only via
+# the opt-in `evaluate_cellwise(…; blas_accel=true)` flag.
+#
+# HONEST correctness: BLAS sums each dot product in a blocked/SIMD order that
+# differs from Phase C's sequential fold, so the result is NOT bit-identical — it
+# agrees to a few ULPs (machine precision), which the Phase D tests pin at
+# rtol 1e-10. Phase C remains the bit-exact baseline.
+#
+# Reuse: the SEMIRING guard (`_pd_oplus == ("+",0)`) and the body-shape predicate
+# (`_pd_matvec_factors`) are the SAME ones the pushdown auto-rewrite (`_pd_detect`,
+# pushdown_rewrite.jl) fires on — factored there and shared here, not duplicated.
+
+# Collect every aggregate/arrayop node reachable in `e` (walking `args` and
+# `expr_body`), so the accelerator can require EXACTLY ONE reduction.
+function _blas_collect_aggregates!(acc::Vector{OpExpr}, e)
+    if e isa OpExpr
+        _is_aggregate_op(e.op) && push!(acc, e)
+        for a in e.args
+            _blas_collect_aggregates!(acc, a)
+        end
+        e.expr_body === nothing || _blas_collect_aggregates!(acc, e.expr_body)
+    end
+    return acc
+end
+
+# The aggregate's `output_idx` as ordered `String`s, or `nothing` when it carries
+# a literal singleton dimension (`Int 1`) rather than a symbol.
+function _blas_out_syms(agg::OpExpr)
+    oi = agg.output_idx
+    oi === nothing && return nothing
+    all(s -> s isa AbstractString, oi) || return nothing
+    return String[String(s) for s in oi]
+end
+
+# Column-major strides for an output extent tuple (matches the `_ConstGatherArray`
+# flattening convention: `strides[d] = prod(sz[1:d-1])`).
+function _blas_colmajor_strides(sz::Tuple)
+    st = Vector{Int}(undef, length(sz))
+    acc = 1
+    @inbounds for d in eachindex(sz)
+        st[d] = acc
+        acc *= sz[d]
+    end
+    return st
+end
+
+# Substitute `target` (matched by object identity) with `repl` in the elementwise
+# arg-tree of `e`; returns `(new_expr, n_replaced)`. Descends `args` only — the
+# wrapper around a nested aggregate is elementwise, so its operands live in `args`
+# — and rebuilds only nodes on the path (field-preserving `reconstruct`).
+function _blas_subst(e, target::OpExpr, repl::ASTExpr)
+    e === target && return (repl, 1)
+    e isa OpExpr || return (e, 0)
+    n = 0
+    newargs = Vector{ASTExpr}(undef, length(e.args))
+    for (i, a) in enumerate(e.args)
+        na, k = _blas_subst(a, target, repl)
+        newargs[i] = na; n += k
+    end
+    n == 0 && return (e, 0)
+    return (reconstruct(e; args=newargs), n)
+end
+
+# conc[out…] = Σ_{c∈crange} A[c,out…]·E[c] via ONE BLAS `mul!`. `A` is reshaped to
+# a (N_c × ∏out) matrix that SHARES its buffer (no copy for a dense `Float64`
+# array), and `conc = Asel' · Esel` is written into a preallocated vector; a strict
+# sub-`crange` selects rows through a strided view (still one gemv). The result is
+# reshaped to the output extents column-major — matching A's storage and the
+# const-gather read order — so `conc[out…]` equals the contracted value.
+function _blas_matvec(A::AbstractArray, E::AbstractArray,
+                      crange::AbstractUnitRange, out_sizes::Tuple)
+    Af = A isa Array{Float64} ? A : Array{Float64}(A)   # dense Float64 ⇒ no copy
+    Ef = E isa Vector{Float64} ? E : Vector{Float64}(E)
+    N_c = size(Af, 1)
+    K = prod(out_sizes; init=1)
+    Amat = reshape(Af, N_c, K)                          # shares Af's buffer
+    full = (first(crange) == 1 && last(crange) == N_c)
+    Asel = full ? Amat : view(Amat, crange, :)
+    Esel = full ? Ef   : view(Ef, crange)
+    conc_flat = Vector{Float64}(undef, K)
+    mul!(conc_flat, Asel', Esel)                        # BLAS gemv on A' (no transpose copy)
+    return reshape(conc_flat, out_sizes)
+end
+
+# Gather the precomputed field `conc` (shape `out_sizes`, column-major) at each
+# requested output cell, in `cells` order → `Vector{Float64}`.
+function _blas_gather(conc::AbstractArray, cells::AbstractVector, out_sizes::Tuple)
+    nidx = length(out_sizes)
+    st = _blas_colmajor_strides(out_sizes)
+    out = Vector{Float64}(undef, length(cells))
+    @inbounds for i in eachindex(cells)
+        cell = cells[i]
+        off = 1
+        for d in 1:nidx
+            off += (Int(cell[d]) - 1) * st[d]
+        end
+        out[i] = conc[off]
+    end
+    return out
+end
+
+"""
+    _evaluate_cellwise_blas(expr, cells, const_arrays, registered_functions, params)
+
+The wall2 Phase D BLAS fast path. Returns the evaluated field `Vector{Float64}`
+when `expr` is (or elementwise-wraps) the linear sum-product mat-vec
+`conc[out…] = Σ_c A[c,out…]·E[c]` over const arrays `A`/`E`, else `nothing` (⇒ the
+caller falls back to the Phase C compile-once path). Rank-1 and rank-≥2 output are
+both handled (via a reshape to `(N_c × ∏out)`). NOT bit-identical to Phase C — see
+the module note — but agrees to machine precision.
+"""
+function _evaluate_cellwise_blas(expr::ASTExpr,
+                                 cells::AbstractVector{<:AbstractVector{<:Integer}},
+                                 const_arrays::AbstractDict,
+                                 registered_functions::AbstractDict,
+                                 params::AbstractDict)
+    nidx = length(first(cells))
+    (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
+
+    # Exactly one reduction anywhere in the (otherwise elementwise) tree.
+    aggs = _blas_collect_aggregates!(OpExpr[], expr)
+    length(aggs) == 1 || return nothing
+    agg = aggs[1]
+
+    # SEMIRING GUARD — the additive (+,0) monoid ONLY (mirrors `_pd_detect`; a
+    # max/min-semiring contraction of the same shape is left to Phase C).
+    oz = _pd_oplus(agg); oz === nothing && return nothing
+    (oz[1] == "+" && oz[2] == 0.0) || return nothing
+    # A PLAIN contraction only — no relational join / filter / value-invention.
+    (agg.join === nothing && agg.join_gates === nothing && agg.filter === nothing &&
+     agg.distinct === nothing && agg.key === nothing) || return nothing
+
+    out_syms = _blas_out_syms(agg)
+    (out_syms !== nothing && length(out_syms) == nidx) || return nothing
+
+    # Exactly one contracted index (the cell axis summed over), disjoint from outputs.
+    ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
+    length(ranges) == 1 || return nothing
+    c_sym = String(first(keys(ranges)))
+    c_sym in out_syms && return nothing
+
+    body = agg.expr_body
+    body === nothing && return nothing
+    facs = _pd_matvec_factors(body, c_sym, out_syms)   # SHARED predicate (pushdown_rewrite.jl)
+    facs === nothing && return nothing
+    Aname, Ename = facs
+
+    A = get(const_arrays, String(Aname), nothing)
+    E = get(const_arrays, String(Ename), nothing)
+    (A isa AbstractArray && E isa AbstractArray) || return nothing
+    (eltype(A) <: Real && eltype(E) <: Real) || return nothing
+    (ndims(A) == nidx + 1 && ndims(E) == 1) || return nothing
+    N_c = size(A, 1)
+    length(E) == N_c || return nothing
+    out_sizes = size(A)[2:end]
+
+    # Contracted range → concrete UNIT range within 1:N_c. A stepped range would
+    # not map to one contiguous gemv slice ⇒ bail to Phase C.
+    rspec = ranges[c_sym]
+    (rspec isa AbstractVector && _is_const_int_range(rspec)) || return nothing
+    crange = _expand_int_range(rspec)
+    (crange isa AbstractUnitRange) || return nothing
+    (first(crange) >= 1 && last(crange) <= N_c) || return nothing
+
+    # Every requested cell must be in-bounds for the output extents.
+    for cell in cells
+        @inbounds for d in 1:nidx
+            (1 <= Int(cell[d]) <= out_sizes[d]) || return nothing
+        end
+    end
+
+    conc = _blas_matvec(A, E, crange, out_sizes)   # Array{Float64} of shape out_sizes
+
+    # BARE mat-vec: `expr` IS the aggregate ⇒ gather conc at each requested cell.
+    expr === agg && return _blas_gather(conc, cells, out_sizes)
+
+    # WRAPPED elementwise form `f(conc[out…])`: replace the aggregate with a gather
+    # of the precomputed `conc`, then evaluate the (now array-producer-free) wrapper
+    # per cell via the Phase C compile-once path, binding the aggregate's OWN output
+    # symbols. A collision with a param / the time symbol ⇒ bail to Phase C.
+    for s in out_syms
+        (s == "t" || haskey(params, s)) && return nothing
+    end
+    concname = "__esm_blas_conc"
+    haskey(const_arrays, concname) && return nothing
+    gather = OpExpr("index", ASTExpr[VarExpr(concname),
+                                     (VarExpr(s) for s in out_syms)...])
+    expr2, nrep = _blas_subst(expr, agg, gather)
+    nrep == 1 || return nothing
+    aug = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    aug[concname] = conc
+    ce = _cellwise_compile_once(expr2, nidx, aug, registered_functions, params;
+                                bind_syms=out_syms)
+    ce === nothing && return nothing
+    return _eval_cells(ce, cells)
+end
+
 """
     evaluate_cellwise(expr, cells; const_arrays=Dict(), registered_functions=Dict(),
                       params=Dict()) -> Vector{Float64}
@@ -110,8 +317,23 @@ asserted directly (esm-spec §6.6.5) instead of erroring with
 function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector{<:Integer}};
                            const_arrays::AbstractDict=Dict{String,Any}(),
                            registered_functions::AbstractDict=Dict{String,Function}(),
-                           params::AbstractDict=Dict{String,Float64}())::Vector{Float64}
+                           params::AbstractDict=Dict{String,Float64}(),
+                           blas_accel::Bool=false)::Vector{Float64}
     isempty(cells) && return Float64[]
+    # OPT-IN BLAS accelerator (wall2 Phase D): when `blas_accel=true` and the
+    # observed is (or elementwise-wraps) the linear sum-product mat-vec
+    # `conc[out…] = Σ_c A[c,out…]·E[c]` over const arrays, evaluate the WHOLE field
+    # with one BLAS `mul!` (`conc = A' * E`) instead of the Phase C per-cell
+    # contraction. It is a PURE OPTIMISATION layered on Phase C: it returns
+    # `nothing` (⇒ falls through to the compile-once path below, byte-identical)
+    # on ANY shape it does not recognise, and its result agrees with Phase C to
+    # machine precision (BLAS sums in a different order — NOT bit-identical).
+    # `blas_accel=false` (default) skips it entirely ⇒ behaviour is unchanged.
+    if blas_accel
+        blas = _evaluate_cellwise_blas(expr, cells, const_arrays,
+                                       registered_functions, params)
+        blas === nothing || return blas
+    end
     # Compile-once fast path (wall2 Phase C — THE Wall #2 fix): resolve+compile the
     # observed body ONCE with the output indices bound as parameters, then evaluate
     # each cell by rebinding only those params. Applies only when every cell shares
