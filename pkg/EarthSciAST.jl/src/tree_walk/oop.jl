@@ -1489,7 +1489,7 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
-                       acc_kernels::AbstractVector{_AccKernel},
+                       acc_kernels_in::AbstractVector{_AccKernel},
                        n_states::Int,
                        pgather::AbstractDict=_EMPTY_PGATHER)
     n_cse = length(cse_prelude)
@@ -1498,9 +1498,22 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # — an affine build over live forcing must refuse a host-buffer trace all
     # the same.
     live_forcing = _has_live_forcing(cse_prelude, rhs_list) ||
-                   any(_acc_has_live_forcing, acc_kernels)
+                   any(_acc_has_live_forcing, acc_kernels_in)
     # Vectorized lane plans for the acc kernels (host index data, built once).
-    acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
+    acc_plans_in = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels_in]
+    # ---- :oop kernel-class merge (oop_merge.jl) ----
+    # Collapse per-cell-fragmented kernels into lane-batched class kernels —
+    # value-exact (bit-identical host output), and the difference between an
+    # XLA trace that finishes in minutes and one that runs for hours (ReSEACT
+    # transport: 4,119 → 346 kernels, 7.93M → 1.06M IR nodes). Runs after the
+    # plans because the merge transposes each member's plan tables into the
+    # per-lane tables of the merged kernel. ESS_OOP_MERGE_DISABLE=1 restores
+    # the unmerged build byte for byte. The merged vectors get fresh names
+    # assigned exactly once so the `rhs` closure below captures them UNBOXED
+    # (and with the stable field names :acc_kernels / :acc_plans).
+    acc_kernels, acc_plans, _oop_merge_diag = _oop_merge_disabled() ?
+        (acc_kernels_in, acc_plans_in, nothing) :
+        _merge_oop_acc_kernels(acc_kernels_in, acc_plans_in)
     # The buffers container (B2): every live forcing buffer this build registered
     # — raw `param_arrays` entries AND DiscreteMaterializer caches, both of which
     # live in `pgather` by the time this runs — in a STABLE order (names sorted),
