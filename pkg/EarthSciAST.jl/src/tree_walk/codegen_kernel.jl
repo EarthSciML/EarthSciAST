@@ -505,16 +505,50 @@ struct _CGBuilt{F,TB}
     covered::Vector{Bool}
 end
 
-# Emit + compile every codegen-able kernel into ONE RuntimeGeneratedFunction
-# `(du, u, p, t, tabs) -> nothing`. Kernels that decline stay on their
-# existing runners (`covered[j] == false`). Returns `nothing` when no kernel
-# could be emitted.
+# Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
+# AST size; this bounds the size of any ONE compiled function, because LLVM's
+# first-call compile memory is super-linear in single-function size (one ~400k-
+# node function OOMs a 40 GB host). Loop nests are packed into `@noinline`
+# sub-functions up to this cap so LLVM compiles bounded pieces. Override with
+# ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, legacy layout).
+_codegen_fn_node_cap() =
+    something(tryparse(Int, get(ENV, "ESS_CODEGEN_FN_NODE_CAP", "")), 20_000)
+
+# Every Symbol referenced anywhere in `ex` (recursively). Used to compute the
+# exact set of outer-scope locals a chunk function must receive as arguments.
+function _cg_collect_syms!(acc::Set{Symbol}, ex)
+    if ex isa Symbol
+        push!(acc, ex)
+    elseif ex isa Expr
+        for a in ex.args
+            _cg_collect_syms!(acc, a)
+        end
+    end
+    return acc
+end
+
+# LHS symbol of a prologue `local s = …` statement (the invariant-slot name).
+function _cg_local_lhs(stmt)
+    stmt isa Expr && stmt.head === :local || return nothing
+    a = stmt.args[1]
+    a isa Expr && a.head === :(=) ? a.args[1] : nothing
+end
+
+# Emit + compile every codegen-able kernel into a RuntimeGeneratedFunction
+# `(du, u, p, t, tabs) -> nothing`. The shared invariant prologue is computed
+# once in the outer function; the kernel loop nests are partitioned into
+# `@noinline` sub-functions (each ≤ `_codegen_fn_node_cap()` nodes) so no single
+# function is too large for LLVM to compile. Each sub-function receives du/u/p/t
+# plus exactly the outer locals (tables, `_cgT`, invariant slots) its loops
+# reference, as explicit arguments — it captures nothing, so the RHS stays
+# allocation-free. Kernels that decline stay on their existing runners
+# (`covered[j] == false`). Returns `nothing` when no kernel could be emitted.
 function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
     isempty(acc_kernels) && return nothing
     t0 = time_ns()
     ctx = _CGCtx(_codegen_node_budget())
     covered = fill(false, length(acc_kernels))
-    loops = Any[]
+    kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
     for (j, K) in enumerate(acc_kernels)
         # Snapshot for rollback: a mid-kernel decline must discard its partial
         # prologue statements AND its invariant registrations (a later kernel
@@ -523,7 +557,8 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
         ninvlog = length(ctx.invlog)
         nodes0 = ctx.nodes
         try
-            push!(loops, _cg_emit_kernel!(ctx, K))
+            lx = _cg_emit_kernel!(ctx, K)
+            push!(kloops, (lx, ctx.nodes - nodes0))
             covered[j] = true
             _tally_cascade!(:codegen_kernel)
         catch err
@@ -542,11 +577,60 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
     any(covered) || return nothing
     tabstmts = Any[:(local $(Symbol("_cgtab", i)) = tabs[$i]) for i in 1:length(ctx.tabs)]
     ln = LineNumberNode(0, Symbol("ess-codegen"))
+
+    # Outer locals a chunk may need as arguments: the table locals and every
+    # invariant-slot local defined in the prologue. `_cgT` is deliberately NOT
+    # passed — it is the value TYPE (a runtime `DataType`), and passing it across
+    # the call boundary loses the constant-propagation that keeps `convert(_cgT,
+    # …)` type-stable, boxing every scalar. Each chunk recomputes `_cgT` locally
+    # from (u, p, t) instead, so inference constant-propagates it as before.
+    outer_passed = Set{Symbol}()
+    for i in 1:length(ctx.tabs)
+        push!(outer_passed, Symbol("_cgtab", i))
+    end
+    for stmt in ctx.prologue
+        s = _cg_local_lhs(stmt)
+        s === nothing || push!(outer_passed, s)
+    end
+
+    # Partition the loop nests into chunks capped by emitted-node count.
+    cap = _codegen_fn_node_cap()
+    chunks = Vector{Vector{Any}}()
+    cur = Any[]; curcost = 0
+    for (lx, cost) in kloops
+        if !isempty(cur) && cap > 0 && curcost + cost > cap
+            push!(chunks, cur); cur = Any[]; curcost = 0
+        end
+        push!(cur, lx); curcost += cost
+    end
+    isempty(cur) || push!(chunks, cur)
+
+    # One `@noinline` sub-function per chunk, taking du/u/p/t + exactly the outer
+    # locals its loops reference (sorted for a deterministic signature). It
+    # captures nothing, so calling it allocates nothing.
+    fndefs = Any[]; callstmts = Any[]
+    for (ci, chunk) in enumerate(chunks)
+        used = Set{Symbol}()
+        for lx in chunk
+            _cg_collect_syms!(used, lx)
+        end
+        passed = sort!(collect(intersect(used, outer_passed)); by = string)
+        fname = Symbol("_cgchunk_", ci)
+        fbody = Expr(:block,
+                     :(local _cgT = _rhs_value_type(u, p, t)),
+                     Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, chunk...)),
+                     :(return nothing))
+        fdef = Expr(:function, Expr(:call, fname, :du, :u, :p, :t, passed...), fbody)
+        push!(fndefs, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+        push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
+    end
+
     body = Expr(:block,
                 tabstmts...,
                 :(local _cgT = _rhs_value_type(u, p, t)),
-                Expr(:macrocall, Symbol("@inbounds"), ln,
-                     Expr(:block, ctx.prologue..., loops...)),
+                Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, ctx.prologue...)),
+                fndefs...,
+                callstmts...,
                 :(return nothing))
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs), body)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
@@ -554,8 +638,8 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
     if _codegen_debug()
         ms = (time_ns() - t0) / 1e6
         println(stderr, "[ess-codegen] emitted $(count(covered))/$(length(covered)) ",
-                "kernels, $(ctx.nodes) nodes, $(length(ctx.tabs)) tab objects, ",
-                "build $(round(ms; digits=1)) ms")
+                "kernels in $(length(chunks)) fn(s), $(ctx.nodes) nodes, ",
+                "$(length(ctx.tabs)) tab objects, build $(round(ms; digits=1)) ms")
     end
     return _CGBuilt(f, Tuple(ctx.tabs), covered)
 end
