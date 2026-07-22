@@ -716,11 +716,40 @@ end
     return _eval_node(ce.node, _NO_STATE_U, p_nt, 0.0)
 end
 
+# ENGAGEMENT DIAGNOSTICS (wall2). Permanent module-level counters that record how
+# often the compile-once fast path ENGAGES (`_cellwise_compile_once` returns a
+# non-nothing `_CellEval`) versus FALLS BACK to the per-cell loop (returns
+# `nothing`). Purely observational — reading/incrementing them never alters the
+# evaluator's output. Reset them (`[] = 0`) around a build to attribute HITS/MISS
+# to one run. Every caller (the Phase C site in `evaluate_cellwise` and the
+# Phase D BLAS-wrapper site) flows through the thin wrapper below, so both are
+# tallied.
+const _CELLWISE_FASTPATH_HITS = Ref{Int}(0)
+const _CELLWISE_FASTPATH_MISS = Ref{Int}(0)
+
+# Thin instrumentation wrapper: forwards verbatim to `_cellwise_compile_once_impl`
+# and bumps the HIT/MISS counter by the impl's result. Behaviour-identical to the
+# impl — same return value, same signature — so no call site changes.
+function _cellwise_compile_once(expr::EarthSciAST.ASTExpr, nidx::Int,
+                                const_arrays::AbstractDict,
+                                registered_functions::AbstractDict,
+                                params::AbstractDict;
+                                bind_syms::Union{Nothing,Vector{String}}=nothing)
+    ce = _cellwise_compile_once_impl(expr, nidx, const_arrays,
+                                     registered_functions, params; bind_syms=bind_syms)
+    if ce === nothing
+        _CELLWISE_FASTPATH_MISS[] += 1
+    else
+        _CELLWISE_FASTPATH_HITS[] += 1
+    end
+    return ce
+end
+
 # Build the compile-once evaluator for `expr` over an `nidx`-D output grid, or
 # `nothing` if the fast path cannot apply (the caller falls back to per-cell). The
 # resolve+compile is attempted ONCE with the output indices bound as reserved
 # parameters; ANY failure (unsupported construct, unbound name, …) yields `nothing`.
-function _cellwise_compile_once(expr::EarthSciAST.ASTExpr, nidx::Int,
+function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
                                 const_arrays::AbstractDict,
                                 registered_functions::AbstractDict,
                                 params::AbstractDict;
