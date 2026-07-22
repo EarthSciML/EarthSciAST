@@ -111,6 +111,17 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
                            const_arrays::AbstractDict=Dict{String,Any}(),
                            registered_functions::AbstractDict=Dict{String,Function}(),
                            params::AbstractDict=Dict{String,Float64}())::Vector{Float64}
+    isempty(cells) && return Float64[]
+    # Compile-once fast path (wall2 Phase C — THE Wall #2 fix): resolve+compile the
+    # observed body ONCE with the output indices bound as parameters, then evaluate
+    # each cell by rebinding only those params. Applies only when every cell shares
+    # one output rank; it is a pure optimisation and returns `nothing` (→ per-cell
+    # fallback below, output byte-identical) on any unsupported construct.
+    nidx = length(first(cells))
+    if nidx >= 1 && all(c -> length(c) == nidx, cells)
+        ce = _cellwise_compile_once(expr, nidx, const_arrays, registered_functions, params)
+        ce === nothing || return _eval_cells(ce, cells)
+    end
     return Float64[_eval_cellwise(expr, collect(Int, c);
                                   const_arrays=const_arrays,
                                   registered_functions=registered_functions,

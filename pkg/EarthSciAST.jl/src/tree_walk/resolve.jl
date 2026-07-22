@@ -258,7 +258,8 @@ _expand_contract_range(rspec, idx_env::Dict{String,Int}, const_arrays::AbstractD
 function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{ASTExpr},
                                     array_var_info, var_map, const_arrays,
                                     pgather::AbstractDict=_EMPTY_PGATHER,
-                                    memo::_MaybeMemo=nothing)
+                                    memo::_MaybeMemo=nothing,
+                                    bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     output_idx_strs = _output_idx_strings(arrayop_expr)
     length(output_idx_strs) == length(idx_args) ||
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_INDEX_NDIM",
@@ -271,37 +272,68 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{ASTExp
     ranges_dict = _ranges_dict(arrayop_expr)
     oplus, zerobar = _aggregate_oplus_identity(arrayop_expr.semiring, arrayop_expr.reduce)
 
-    # Substitute concrete output-index values into body.
-    k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
-    idx_exprs = Dict{String,ASTExpr}(
-        output_idx_strs[d] => IntExpr(Int64(k_vals[d]))
-        for d in 1:length(output_idx_strs))
+    # Output-index substitution. Each output-index arg is EITHER a bound symbol —
+    # kept SYMBOLIC, substituted as its own resolved-in-place expression so the
+    # unrolled body reads `A[c, <sym>]` and lowers to a runtime `_ConstGatherRef`
+    # (wall2 Phase C, compile-once fast path) — OR a build-time constant, folded to
+    # an `IntExpr` exactly as before. With an EMPTY `bound_syms` every arg is
+    # constant, so this is byte-identical to the pre-Phase-C concrete expansion.
+    nd = length(output_idx_strs)
+    symbolic = falses(nd)
+    k_vals = Vector{Int}(undef, nd)
+    idx_exprs = Dict{String,ASTExpr}()
+    for d in 1:nd
+        a = idx_args[d]
+        if _refs_bound_sym(a, bound_syms)
+            symbolic[d] = true
+            idx_exprs[output_idx_strs[d]] = a           # keep symbolic
+        else
+            k_vals[d] = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+            idx_exprs[output_idx_strs[d]] = IntExpr(Int64(k_vals[d]))
+        end
+    end
+    any_symbolic = any(symbolic)
     sub_body = _sub_preserving(body, idx_exprs)
 
     # Contracted indices: all range keys NOT appearing in output_idx. A
     # contracted bound may be *expression-valued* — see `_expand_contract_range`;
-    # the parent index of a ragged bound is one of THIS gather's (now concrete)
-    # output indices, so the bounds evaluate under the output-index environment.
+    # the parent index of a ragged bound is one of THIS gather's output indices,
+    # so a ragged bound is evaluable ONLY when that parent index is CONCRETE. In
+    # symbolic mode a ragged bound over a symbolic output index has no concrete
+    # value in `_out_idx_env`, so `_expand_int_range_dyn` throws `unbound loop var`
+    # and the compile-once fast path falls back — exactly the intended coverage.
     contract_names = _contracted_index_names(ranges_dict, output_idx_strs)
     _out_idx_env = Dict{String,Int}(output_idx_strs[d] => k_vals[d]
-                                    for d in 1:length(output_idx_strs))
+                                    for d in 1:nd if !symbolic[d])
     contract_iters = [_expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
                       for n in contract_names]
 
     gates = arrayop_expr.join_gates
     filt0 = arrayop_expr.filter
+    # Build-time join gates / runtime filter guards need CONCRETE output-index
+    # bindings (the join binding is seeded from `_out_idx_env`; the filter is
+    # substituted with `idx_exprs`). A symbolic output index has neither, so
+    # refuse the fast path here — the compile-once wrapper catches this and falls
+    # back to the exact per-cell expansion (concrete mode is unaffected).
+    any_symbolic && (gates !== nothing || filt0 !== nothing) &&
+        throw(TreeWalkError("E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
+            "aggregate join_gates/filter are not supported on the symbolic " *
+            "compile-once path; falling back to per-cell resolution"))
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather, memo)
+        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays,
+                                pgather, memo, bound_syms)
     end
 
     # Join/filter expansion via the shared core; the filter carries the (fixed)
-    # output-index substitution already, matching the hoisted `sub_body`.
+    # output-index substitution already, matching the hoisted `sub_body`. The
+    # term resolution forwards `bound_syms` so the symbolic subscripts survive
+    # into `_ConstGatherRef`s (in concrete mode `bound_syms` is empty → no-op).
     filt = filt0 === nothing ? nothing : _sub_preserving(filt0, idx_exprs)
     terms = ASTExpr[]
     _foreach_aggregate_term(sub_body, contract_names, contract_iters,
                             gates, filt, zerobar, _out_idx_env) do term
         push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
-                                      pgather, memo))
+                                      pgather, memo, bound_syms))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -313,7 +345,8 @@ end
 function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{ASTExpr},
                                       array_var_info, var_map, const_arrays,
                                       pgather::AbstractDict=_EMPTY_PGATHER,
-                                      memo::_MaybeMemo=nothing)
+                                      memo::_MaybeMemo=nothing,
+                                      bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     regions = makearray_expr.regions === nothing ?
               Vector{Vector{Vector{Int}}}() : makearray_expr.regions
     values  = makearray_expr.values  === nothing ? ASTExpr[] : makearray_expr.values
@@ -361,11 +394,12 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{AS
         sel_exprs = ASTExpr[IntExpr(Int64(v)) for v in sel]
         return re.op == "makearray" ?
             _resolve_index_of_makearray(re, sel_exprs, array_var_info, var_map,
-                                        const_arrays, pgather) :
+                                        const_arrays, pgather, memo, bound_syms) :
             _resolve_index_of_arrayop(re, sel_exprs, array_var_info, var_map,
-                                      const_arrays, pgather)
+                                      const_arrays, pgather, memo, bound_syms)
     end
-    return _resolve_indices(result_expr, array_var_info, var_map, const_arrays, pgather, memo)
+    return _resolve_indices(result_expr, array_var_info, var_map, const_arrays,
+                            pgather, memo, bound_syms)
 end
 
 # Expand a scalar arrayop (empty output_idx) to a plain scalar ASTExpr by
@@ -374,7 +408,8 @@ end
 # general expression body — compile once, evaluate cheaply at every RHS call.
 function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, const_arrays,
                                  pgather::AbstractDict=_EMPTY_PGATHER,
-                                 memo::_MaybeMemo=nothing)
+                                 memo::_MaybeMemo=nothing,
+                                 bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     body = arrayop_expr.expr_body
     body === nothing &&
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
@@ -399,13 +434,14 @@ function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, 
     gates = arrayop_expr.join_gates
     filt0 = arrayop_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(body, array_var_info, var_map, const_arrays, pgather, memo)
+        return _resolve_indices(body, array_var_info, var_map, const_arrays,
+                                pgather, memo, bound_syms)
     end
     terms = ASTExpr[]
     _foreach_aggregate_term(body, contract_names, contract_iters,
                             gates, filt0, zerobar) do term
         push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
-                                      pgather, memo))
+                                      pgather, memo, bound_syms))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -449,6 +485,27 @@ end
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_PGATHER = Dict{String,_PGatherArray}()
 
+# The set of OUTPUT-INDEX symbol names kept SYMBOLIC through `_resolve_indices`
+# (wall2 Phase C). It is EMPTY on every path except the compile-once
+# `evaluate_cellwise` fast path, so the DEFAULT threaded through the whole
+# resolve recursion is this shared read-only empty set — making every existing
+# caller byte-identical to the pre-Phase-C behaviour (a name in this set is the
+# ONLY thing that turns a const-array read into a runtime `_ConstGatherRef`
+# instead of a folded `NumExpr`). Read-only sentinel — see the `_EMPTY_*`
+# invariant block next to `_EMPTY_DERIVED_EXTENTS`.
+const _EMPTY_BOUND_SYMS = Set{String}()
+
+# True iff a subscript expression references any BOUND OUTPUT-INDEX symbol — the
+# predicate that classifies one gather subscript as runtime-varying (→ keep
+# symbolic, lower to `_NK_CONST_GATHER`) vs. build-time-constant (→ fold). Only
+# the plain arithmetic subscripts an `index` gather ever carries are walked
+# (`args`); an empty `bound_syms` makes this uniformly `false`, the fast exit on
+# every non-fast-path call.
+_refs_bound_sym(e::VarExpr, bound_syms::Set{String}) = e.name in bound_syms
+_refs_bound_sym(e::OpExpr, bound_syms::Set{String}) =
+    any(a -> _refs_bound_sym(a, bound_syms), e.args)
+_refs_bound_sym(::ASTExpr, ::Set{String}) = false
+
 # Resolve each expression in `args`, returning `(resolved, changed)`. When no
 # element changes under resolution the ORIGINAL `args` vector is returned (no
 # allocation) and `changed` is false, letting the caller keep its node verbatim;
@@ -459,7 +516,8 @@ function _resolve_arg_vec(args::Vector{ASTExpr},
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict,
                           pgather::AbstractDict,
-                          memo::_MaybeMemo=nothing)
+                          memo::_MaybeMemo=nothing,
+                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
@@ -469,8 +527,8 @@ function _resolve_arg_vec(args::Vector{ASTExpr},
         # `IntExpr` resolve to themselves, so short-circuit them; `VarExpr` may
         # const-fold (scalar loader field) so it keeps its call; `OpExpr` recurses —
         # both now dispatch statically.
-        r = a isa OpExpr  ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo) :
-            a isa VarExpr ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo) :
+        r = a isa OpExpr  ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo, bound_syms) :
+            a isa VarExpr ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo, bound_syms) :
             a                                            # NumExpr / IntExpr: verbatim
         if r !== a
             if !changed
@@ -488,7 +546,8 @@ function _resolve_indices(expr::NumExpr,
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing)
+                          memo::_MaybeMemo=nothing,
+                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     return expr
 end
 function _resolve_indices(expr::IntExpr,
@@ -496,7 +555,8 @@ function _resolve_indices(expr::IntExpr,
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing)
+                          memo::_MaybeMemo=nothing,
+                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     return expr
 end
 function _resolve_indices(expr::VarExpr,
@@ -504,7 +564,8 @@ function _resolve_indices(expr::VarExpr,
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing)
+                          memo::_MaybeMemo=nothing,
+                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     # Bare (un-indexed) reference to a const-array-backed SCALAR field
     # (RFC pure-io-data-loaders §4.3): a pure-I/O data-loader subsystem lowers
     # each of its variables to a const-array-backed observed keyed
@@ -530,13 +591,19 @@ function _resolve_indices(expr::OpExpr,
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing)
+                          memo::_MaybeMemo=nothing,
+                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+    # The memo is keyed on node identity and is a pure function of the node ONLY
+    # for a fixed `bound_syms`. It is threaded exclusively on the empty-`bound_syms`
+    # RHS-build path (the compile-once fast path passes `memo=nothing`), so the two
+    # modes never share a memo — a symbolic resolution can never be served from a
+    # concrete memo entry.
     memo === nothing &&
-        return _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, nothing)
+        return _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, nothing, bound_syms)
     m = memo.resolve
     r = get(m, expr, nothing)
     r === nothing || return r
-    r = _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, memo)
+    r = _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
     m[expr] = r
     return r
 end
@@ -545,7 +612,8 @@ function _resolve_indices_op(expr::OpExpr,
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing)
+                          memo::_MaybeMemo=nothing,
+                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     if expr.op == "polygon_intersection_area"
         # FUSED clip+area scalar leaf (esm-spec §8.6.1). Both operands are
         # build-time-known const polygon rings (registered in `const_arrays`), so the
@@ -570,13 +638,13 @@ function _resolve_indices_op(expr::OpExpr,
         # branch of `_build_evaluator_impl`'s derivative loop).
         if first_arg isa OpExpr && _is_aggregate_op(first_arg.op)
             return _resolve_index_of_arrayop(first_arg::OpExpr, expr.args[2:end],
-                                             array_var_info, var_map, const_arrays, pgather, memo)
+                                             array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
         # Expression-position makearray: index(makearray(...), k1, k2, ...)
         # Select the value whose region covers (k1,...); later regions win.
         if first_arg isa OpExpr && first_arg.op == "makearray"
             return _resolve_index_of_makearray(first_arg::OpExpr, expr.args[2:end],
-                                               array_var_info, var_map, const_arrays, pgather, memo)
+                                               array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
         if first_arg isa VarExpr && haskey(array_var_info, first_arg.name)
             vname = first_arg.name
@@ -630,8 +698,7 @@ function _resolve_indices_op(expr::OpExpr,
             return OpExpr("index", ASTExpr[];
                           value=_PGatherRef(pg.flat, lin, first_arg.name))
         end
-        # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays):
-        # inline the value as a NumExpr literal.
+        # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays).
         if first_arg isa VarExpr && haskey(const_arrays, first_arg.name)
             vals = const_arrays[first_arg.name]
             idx_args_expr = expr.args[2:end]
@@ -639,6 +706,32 @@ function _resolve_indices_op(expr::OpExpr,
                 throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
                       "const array '$(first_arg.name)' is $(ndims(vals))D " *
                       "but got $(length(idx_args_expr)) indices"))
+            # RUNTIME-VARYING gather (wall2 Phase C): if ANY subscript references a
+            # bound output-index symbol kept symbolic, the offset is not known at
+            # build time. Emit a `_ConstGatherRef` (lowered to `_NK_CONST_GATHER` by
+            # `_compile`) instead of folding — the CONSTANT subscripts still fold to
+            # `IntExpr`s (with the same `_resolve_const_index` boundary policy the
+            # frozen path applies), the SYMBOLIC ones resolve in place and survive as
+            # the gather node's subscript children. With an empty `bound_syms` no
+            # subscript is ever symbolic, so this branch is dead and the fold below
+            # is byte-identical to pre-Phase-C.
+            if any(a -> _refs_bound_sym(a, bound_syms), idx_args_expr)
+                sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
+                for d in 1:ndims(vals)
+                    a = idx_args_expr[d]
+                    if _refs_bound_sym(a, bound_syms)
+                        sub_nodes[d] = _resolve_indices(a, array_var_info, var_map,
+                                                        const_arrays, pgather, memo, bound_syms)
+                    else
+                        ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+                        ci = _resolve_const_index(vals, first_arg.name, d, ci, size(vals, d))
+                        sub_nodes[d] = IntExpr(Int64(ci))
+                    end
+                end
+                return OpExpr("index", sub_nodes;
+                              value=_ConstGatherRef(vals, first_arg.name))
+            end
+            # Fully-constant subscripts: inline the value as a NumExpr literal.
             int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
                            for a in idx_args_expr]
             for d in 1:ndims(vals)
@@ -647,7 +740,7 @@ function _resolve_indices_op(expr::OpExpr,
             return NumExpr(Float64(vals[int_indices...]))
         end
         # scalar or unknown variable inside index — recurse on sub-exprs only
-        new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo)
+        new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         changed || return expr   # nothing under this index resolved → keep node intact
         return reconstruct(expr; args=new_args)
     end
@@ -686,20 +779,20 @@ function _resolve_indices_op(expr::OpExpr,
     # handled by the _resolve_indices index-of-aggregate branch above.
     if _is_aggregate_op(expr.op)
         if isempty(_output_idx_strings(expr))
-            return _resolve_scalar_arrayop(expr, array_var_info, var_map, const_arrays, pgather, memo)
+            return _resolve_scalar_arrayop(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
         # Non-scalar arrayop without index() — pass through (will become a
         # compile-time error in _compile with a helpful message).
     end
-    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo)
+    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
     new_body = expr.expr_body
     if expr.expr_body !== nothing
-        new_body = _resolve_indices(expr.expr_body, array_var_info, var_map, const_arrays, pgather, memo)
+        new_body = _resolve_indices(expr.expr_body, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         changed |= new_body !== expr.expr_body
     end
     new_values = expr.values
     if expr.values !== nothing
-        nv, vchanged = _resolve_arg_vec(expr.values, array_var_info, var_map, const_arrays, pgather, memo)
+        nv, vchanged = _resolve_arg_vec(expr.values, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         new_values = nv
         changed |= vchanged
     end

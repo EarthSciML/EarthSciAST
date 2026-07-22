@@ -101,6 +101,33 @@ struct _PGatherRef
     name::String
 end
 
+# Build-time side channel from `_resolve_indices` to `_compile` (wall2 Phase C):
+# the const/provider-array analogue of `_PGatherRef`. A `_ConstGatherRef` is
+# emitted for a `index(const_array, subs…)` read whose subscripts are NOT all
+# build-time constants — at least one references a BOUND OUTPUT-INDEX symbol kept
+# SYMBOLIC through the aggregate unrolling (the compile-once `evaluate_cellwise`
+# fast path binds the output indices as parameters). It is carried in the `value`
+# slot of an `index` node whose `args` are the RESOLVED subscript expressions
+# (concrete `IntExpr` for constant dims, the bound `VarExpr` / arithmetic for the
+# runtime dim(s)); `_compile`'s `index` branch compiles each subscript arg as a
+# child and lowers the node to a `_NK_CONST_GATHER` via `_const_gather_node`, so
+# the column-major offset is recomputed AT EVAL TIME from the (now runtime) output
+# index — no per-cell re-resolve/re-compile.
+#
+# Unlike `_PGatherRef` (a LIVE buffer read at a FIXED offset) this reads a FROZEN
+# const array at a RUNTIME-computed offset. Like `_PGatherRef` it exists only
+# between the resolve and compile passes of one build. Crucially it is created
+# ONLY when a non-empty `bound_syms` set is threaded through `_resolve_indices`
+# — i.e. exclusively on the compile-once `evaluate_cellwise` fast path. The
+# RHS-build path (`_build_evaluator_impl` / `_cse_compile_scalar`) threads an
+# EMPTY `bound_syms`, so a `_ConstGatherRef` NEVER reaches the CSE / canonical
+# machinery (`_cse_key` / `canonical_json`) that `_PGatherRef`'s stand-in exists
+# to guard — `evaluate_cellwise` compiles straight through `_compile`, no CSE.
+struct _ConstGatherRef
+    vals::AbstractArray   # the frozen const/provider source array (read at eval time)
+    name::String          # its `const_arrays` registry name — diagnostics / identity
+end
+
 # ── Per-equation build memo (ess-perf: compile one representative per group) ──
 # Within one array equation's cell loop every cell resolves/compiles against the
 # SAME resolve context (array_var_info / var_map / const_arrays / pgather) and
@@ -157,7 +184,19 @@ function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node})
     length(subscript_nodes) == length(sz) || throw(ArgumentError(
         "_const_gather_node: expected $(length(sz)) subscript node(s) for a " *
         "$(length(sz))-D array, got $(length(subscript_nodes))"))
-    flat = Vector{Float64}(vec(A))
+    # SHARE the source array's buffer rather than COPY it. A dense `Float64` array
+    # `vec`s to a `Vector{Float64}` ALIASING the same memory (no data copy), so every
+    # gather into the same const array references ONE buffer. A plain
+    # `Vector{Float64}(vec(A))` copies the WHOLE array on every call — and an unrolled
+    # contraction lowers one `_const_gather_node` PER reduced term, so that copy is
+    # O(N_terms · sizeof(A)): at model scale (1520 terms × a ~0.6 GiB SR slab ≈ 1 TiB)
+    # it OOMs the machine (wall2 Phase C regression). Const arrays are build-time
+    # read-only, so aliasing is safe (the same sharing `_NK_PARAM_GATHER` relies on
+    # for a live buffer). Non-dense / non-`Float64` inputs fall back to one
+    # convert-copy — bounded, since those are not the hot contraction path.
+    flat = A isa Vector{Float64} ? A :
+           A isa Array{Float64}  ? vec(A)::Vector{Float64} :
+           Vector{Float64}(vec(A))
     strides = Vector{Int}(undef, length(sz))
     acc = 1
     @inbounds for d in eachindex(sz)
@@ -411,6 +450,16 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         if expr.value isa _PGatherRef
             ref = expr.value::_PGatherRef
             return _mknode(kind=_NK_PARAM_GATHER, idx=ref.lin, payload=ref.flat)
+        end
+        # A const/provider-array read at a RUNTIME-computed offset (wall2 Phase C).
+        # `_resolve_indices` (const-array branch) stashed a `_ConstGatherRef` in
+        # `value` and kept the subscripts as `args`; the generic `children` compile
+        # above already lowered each subscript (a constant → `_NK_LITERAL`, a bound
+        # output-index `VarExpr` → `_NK_PARAM`). Hand those subscript nodes to
+        # `_const_gather_node` (Phase B) so the offset is computed at eval time.
+        if expr.value isa _ConstGatherRef
+            ref = expr.value::_ConstGatherRef
+            return _const_gather_node(ref.vals, children)
         end
         # Otherwise: index ops must be resolved to state-slot references by
         # _resolve_indices before reaching _compile; encountering one here
