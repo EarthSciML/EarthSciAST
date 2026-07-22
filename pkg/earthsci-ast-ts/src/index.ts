@@ -109,6 +109,9 @@ export { toUnicode, toLatex, toAscii, toMathML, formatChemicalName } from './pre
 // Export the expression text-form parser (inverse of toAscii for the scalar tier)
 export { parseExpression, parseEquation, ExpressionParseError } from './parse-expression.js'
 
+// Export the reaction text-form parser (inverse of toAscii for a single reaction)
+export { parseReaction } from './parse-reaction.js'
+
 // Export substitution utilities
 export { substitute, substituteInModel, substituteInReactionSystem } from './substitute.js'
 

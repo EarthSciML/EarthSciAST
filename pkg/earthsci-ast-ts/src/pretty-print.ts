@@ -15,7 +15,7 @@
  * Based on ESM Format Specification Section 6.1
  */
 
-import type { Expr, Equation, Model, EsmFile, ReactionSystem, ExprNode } from './types.js'
+import type { Expr, Equation, Model, EsmFile, ReactionSystem, Reaction, ExprNode } from './types.js'
 import { isNumericLiteral, numericValue } from './numeric-literal.js'
 import { opPrecedence, isFunctionCallOp } from './op-registry.js'
 import { isExprNode } from './expression.js'
@@ -734,7 +734,15 @@ function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false)
 type TextFormat = 'unicode' | 'latex' | 'ascii'
 
 /** The renderable top-level kinds, distinguished once by {@link classifyExpr}. */
-type ExprKind = 'numeric' | 'variable' | 'node' | 'equation' | 'file' | 'model' | 'reactionSystem'
+type ExprKind =
+  | 'numeric'
+  | 'variable'
+  | 'node'
+  | 'equation'
+  | 'file'
+  | 'model'
+  | 'reactionSystem'
+  | 'reaction'
 
 /**
  * The ONE type discriminator shared by every top-level entry point
@@ -743,11 +751,14 @@ type ExprKind = 'numeric' | 'variable' | 'node' | 'equation' | 'file' | 'model' 
  * Checked in a fixed order (file before model, since an EsmFile also has the
  * summary fields a Model does not).
  */
-function classifyExpr(expr: Expr | Equation | Model | ReactionSystem | EsmFile): ExprKind {
+function classifyExpr(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): ExprKind {
   if (typeof expr === 'number' || isNumericLiteral(expr)) return 'numeric'
   if (typeof expr === 'string') return 'variable'
   if (isExprNode(expr)) return 'node'
   if ('lhs' in expr && 'rhs' in expr) return 'equation'
+  // A single reaction is discriminated by its substrate/product/rate triple —
+  // `substrates` is unique to a Reaction among the structural node types.
+  if ('substrates' in expr && 'products' in expr && 'rate' in expr) return 'reaction'
   if ('models' in expr || 'metadata' in expr) return 'file'
   if ('variables' in expr && 'equations' in expr) return 'model'
   if ('species' in expr && 'reactions' in expr) return 'reactionSystem'
@@ -759,7 +770,7 @@ function classifyExpr(expr: Expr | Equation | Model | ReactionSystem | EsmFile):
  * name, expression node, equation, or a file/model/reaction-system summary.
  */
 function formatAny(
-  expr: Expr | Equation | Model | ReactionSystem | EsmFile,
+  expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile,
   format: TextFormat,
 ): string {
   switch (classifyExpr(expr)) {
@@ -788,6 +799,8 @@ function formatAny(
       const equation = expr as Equation
       return `${formatAny(equation.lhs, format)} = ${formatAny(equation.rhs, format)}`
     }
+    case 'reaction':
+      return formatReaction(expr as Reaction, format)
     // Summaries (spec Section 6.3) render as text: unicode keeps unicode
     // symbols; latex falls back to plain ascii text.
     case 'file':
@@ -802,21 +815,21 @@ function formatAny(
 /**
  * Format an expression as Unicode mathematical notation
  */
-export function toUnicode(expr: Expr | Equation | Model | ReactionSystem | EsmFile): string {
+export function toUnicode(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
   return formatAny(expr, 'unicode')
 }
 
 /**
  * Format an expression as LaTeX mathematical notation
  */
-export function toLatex(expr: Expr | Equation | Model | ReactionSystem | EsmFile): string {
+export function toLatex(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
   return formatAny(expr, 'latex')
 }
 
 /**
  * Format an expression as plain ASCII text
  */
-export function toAscii(expr: Expr | Equation | Model | ReactionSystem | EsmFile): string {
+export function toAscii(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
   return formatAny(expr, 'ascii')
 }
 
@@ -832,7 +845,7 @@ export function formatChemicalName(name: string): string {
 /**
  * Format an expression as MathML markup for web/academic publishing
  */
-export function toMathML(expr: Expr | Equation | Model | ReactionSystem | EsmFile): string {
+export function toMathML(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
   switch (classifyExpr(expr)) {
     case 'numeric':
       return `<mn>${formatNumber(numericValue(expr)!, 'ascii')}</mn>`
@@ -844,6 +857,8 @@ export function toMathML(expr: Expr | Equation | Model | ReactionSystem | EsmFil
       const equation = expr as Equation
       return `<math><mrow>${toMathML(equation.lhs)}<mo>=</mo>${toMathML(equation.rhs)}</mrow></math>`
     }
+    case 'reaction':
+      return formatReactionMathML(expr as Reaction)
     // Summaries render as plain text inside a MathML <mtext> element.
     case 'file':
       return `<math><mtext>${formatEsmFileSummary(expr as EsmFile)}</mtext></math>`
@@ -852,6 +867,59 @@ export function toMathML(expr: Expr | Equation | Model | ReactionSystem | EsmFil
     case 'reactionSystem':
       return `<math><mtext>${formatReactionSystemSummary(expr as ReactionSystem)}</mtext></math>`
   }
+}
+
+/**
+ * Format a single reaction in the text DSL — the inverse of
+ * {@link parseReaction} for the `ascii` format. Empty substrate/product sides
+ * render as the source/sink empty set (blank in ascii so the text round-trips
+ * back to `null`; `∅` / `\emptyset` for display formats). The rate rides in
+ * brackets on the arrow, e.g. `2 NO + O3 -> [k1] NO2 + O2`.
+ */
+function formatReaction(reaction: Reaction, format: TextFormat): string {
+  const emptySide = format === 'ascii' ? '' : format === 'latex' ? '\\emptyset' : '∅'
+  const side = (entries: Reaction['substrates']): string => {
+    if (entries == null) return emptySide
+    return entries
+      .map((e) => {
+        const coef =
+          e.stoichiometry != null && e.stoichiometry !== 1
+            ? `${formatNumber(e.stoichiometry, format)} `
+            : ''
+        return `${coef}${formatAny(e.species, format)}`
+      })
+      .join(' + ')
+  }
+  const arrow = format === 'ascii' ? '->' : format === 'latex' ? '\\rightarrow' : '→'
+  const rate =
+    reaction.rate != null && reaction.rate !== '' ? ` [${formatAny(reaction.rate, format)}]` : ''
+  return `${side(reaction.substrates)} ${arrow}${rate} ${side(reaction.products)}`
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Format a single reaction as MathML: `substrates ⟶ products` with the rate set
+ * over a stretchy long arrow, and `∅` for an empty (source/sink) side.
+ */
+function formatReactionMathML(reaction: Reaction): string {
+  const side = (entries: Reaction['substrates']): string => {
+    if (entries == null) return '<mi>&#x2205;</mi>'
+    return entries
+      .map((e) => {
+        const coef =
+          e.stoichiometry != null && e.stoichiometry !== 1
+            ? `<mn>${formatNumber(e.stoichiometry, 'ascii')}</mn>`
+            : ''
+        return `${coef}${formatMathMLVariable(e.species)}`
+      })
+      .join('<mo>+</mo>')
+  }
+  const arrow =
+    reaction.rate != null && reaction.rate !== ''
+      ? `<mover><mo stretchy="true">&#x27F6;</mo><mpadded lspace="0.3em" rspace="0.3em" voffset="0.2em">${toMathML(reaction.rate)}</mpadded></mover>`
+      : `<mo stretchy="true">&#x27F6;</mo>`
+  return `<math><mrow>${side(reaction.substrates)}${arrow}${side(reaction.products)}</mrow></math>`
 }
 
 /**

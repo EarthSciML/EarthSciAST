@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest'
-import { render, screen, fireEvent, within } from '@solidjs/testing-library'
+import { render, screen, fireEvent } from '@solidjs/testing-library'
 import type { ReactionSystem } from '@earthsciml/ast'
 import { ReactionEditor } from './ReactionEditor'
 
@@ -48,15 +48,15 @@ describe('ReactionEditor', () => {
     expect(screen.getByText('Reactions (1)')).toBeInTheDocument()
   })
 
-  it('renders chemical reaction in proper notation', () => {
+  it('renders a reaction as clickable rendered math when not editing', () => {
     const { container } = render(() => <ReactionEditor {...mockProps} />)
 
-    // Scope to the reaction equation itself rather than counting NO across the
-    // whole document (species panel, etc.). NO appears on both sides: the NO
-    // reactant and the NO₂ product.
-    const equation = within(container.querySelector('.reaction-equation') as HTMLElement)
-    expect(equation.getAllByText(/NO/)).toHaveLength(2)
-    expect(equation.getByText(/→/)).toBeInTheDocument()
+    // The reaction reads as rendered chemistry (MathML), and the whole line is a
+    // click-to-edit affordance — not the old plain-string reactants/products.
+    const equation = container.querySelector('.reaction-equation') as HTMLElement
+    expect(equation).toBeInTheDocument()
+    expect(equation).toHaveAttribute('role', 'button')
+    expect(equation.querySelector('.esm-math')).toBeInTheDocument()
   })
 
   it('renders species panel', () => {
@@ -87,17 +87,6 @@ describe('ReactionEditor', () => {
     render(() => <ReactionEditor {...mockProps} readonly={true} />)
 
     expect(screen.queryByText('+ Add Reaction')).not.toBeInTheDocument()
-  })
-
-  it('handles rate expression clicking', () => {
-    render(() => <ReactionEditor {...mockProps} />)
-
-    // Find the rate expression (displayed as [k])
-    const rateExpression = screen.getByText('[k]')
-    expect(rateExpression).toBeInTheDocument()
-
-    // Click should be possible (though we can't easily test the expansion in this test)
-    fireEvent.click(rateExpression)
   })
 
   it('displays empty state for reaction system without reactions', () => {
@@ -171,24 +160,26 @@ describe('ReactionEditor', () => {
     )
   })
 
-  it('adds a species through the inline form (no prompt dialogs)', () => {
+  it('adds a species with default value and units through the inline form', () => {
     const onReactionSystemChange = vi.fn()
     render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />)
 
     fireEvent.click(screen.getByLabelText('Add new species'))
     fireEvent.input(screen.getByLabelText('Name (chemical formula)'), { target: { value: 'SO2' } })
+    fireEvent.input(screen.getByLabelText('Default value'), { target: { value: '5' } })
+    fireEvent.input(screen.getByLabelText('Units'), { target: { value: 'ppb' } })
     fireEvent.click(screen.getByText('Add'))
 
     expect(onReactionSystemChange).toHaveBeenCalledWith(
       expect.objectContaining({
         species: expect.objectContaining({
-          SO2: {},
+          SO2: expect.objectContaining({ default: 5, units: 'ppb' }),
         }),
       }),
     )
   })
 
-  it('edits a species through the inline form', () => {
+  it('edits a species default value and units through the inline form', () => {
     const onReactionSystemChange = vi.fn()
     render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />)
 
@@ -198,36 +189,21 @@ describe('ReactionEditor', () => {
 
     expect(screen.getByText('Edit species NO')).toBeInTheDocument()
 
-    fireEvent.input(screen.getByLabelText('Description'), { target: { value: 'Nitric oxide' } })
+    fireEvent.input(screen.getByLabelText('Default value'), { target: { value: '12.5' } })
+    fireEvent.input(screen.getByLabelText('Units'), { target: { value: 'ppb' } })
     fireEvent.click(screen.getByText('Save'))
 
     expect(onReactionSystemChange).toHaveBeenCalledWith(
       expect.objectContaining({
         species: expect.objectContaining({
-          NO: expect.objectContaining({ description: 'Nitric oxide' }),
+          NO: expect.objectContaining({
+            default: 12.5,
+            units: 'ppb',
+            description: 'Nitrogen monoxide',
+          }),
         }),
       }),
     )
-  })
-
-  it('handles species with different formulas and names', () => {
-    render(() => <ReactionEditor {...mockProps} />)
-
-    // O3 should show its formula (O₃) in the species panel
-    // Note: In JSDOM, Unicode subscripts might not render exactly as expected
-    const speciesItems = screen.getAllByText(/O/)
-    expect(speciesItems.length).toBeGreaterThan(0)
-  })
-
-  it('does not expand the rate editor (or show any toggle) in readonly mode', () => {
-    render(() => <ReactionEditor {...mockProps} readonly={true} />)
-
-    // The rate editor cannot be expanded in readonly, so no rate textarea or
-    // toggle appears.
-    fireEvent.click(screen.getByText('[k]'))
-    expect(screen.queryByLabelText('Rate expression text')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Edit as text' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Structural' })).not.toBeInTheDocument()
   })
 
   it('assigns the first unused R-id when adding after a deletion (regression)', () => {
@@ -260,9 +236,9 @@ describe('ReactionEditor', () => {
   })
 })
 
-describe('ReactionEditor — rate text mode (DSL, the default surface)', () => {
+describe('ReactionEditor — whole-reaction text editing (the DSL surface)', () => {
   const system: ReactionSystem = {
-    species: { NO: {}, O3: {}, NO2: {} },
+    species: { NO: {}, O3: {}, NO2: {}, O2: {} },
     parameters: {},
     reactions: [
       {
@@ -274,53 +250,85 @@ describe('ReactionEditor — rate text mode (DSL, the default surface)', () => {
     ],
   }
 
-  // Expanding the rate editor lands on the text surface by default.
-  const expand = () => fireEvent.click(screen.getByText('[k]'))
-  const textarea = () => screen.getByLabelText('Rate expression text') as HTMLTextAreaElement
+  const clickEquation = (container: HTMLElement) =>
+    fireEvent.click(container.querySelector('.reaction-equation') as HTMLElement)
+  const textarea = () => screen.getByLabelText('Reaction text') as HTMLTextAreaElement
 
   beforeEach(() => vi.clearAllMocks())
 
-  it('shows the rate as a textarea seeded with its ascii form when expanded', () => {
-    render(() => <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} />)
-    expand()
+  it('opens a textarea seeded with the reaction ascii form on click', () => {
+    const { container } = render(() => (
+      <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} />
+    ))
+    clickEquation(container)
     expect(textarea()).toBeInTheDocument()
-    expect(textarea().value).toBe('k_NO_O3')
+    expect(textarea().value).toBe('NO -> [k_NO_O3] NO2')
   })
 
-  it('commits a valid rate edit on blur, routing the parsed rate through onReactionSystemChange', () => {
+  it('commits a reactant/stoichiometry edit on blur, routing the whole reaction through onReactionSystemChange', () => {
     const onReactionSystemChange = vi.fn()
-    render(() => (
+    const { container } = render(() => (
       <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
     ))
-    expand()
-    fireEvent.input(textarea(), { target: { value: 'k_NO_O3 * 2' } })
+    clickEquation(container)
+    fireEvent.input(textarea(), { target: { value: '2 NO + O3 -> [k_NO_O3] NO2 + O2' } })
     fireEvent.blur(textarea())
 
     expect(onReactionSystemChange).toHaveBeenCalledTimes(1)
+    const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem
+    expect(updated.reactions[0].substrates).toEqual([
+      { species: 'NO', stoichiometry: 2 },
+      { species: 'O3', stoichiometry: 1 },
+    ])
+    expect(updated.reactions[0].products).toEqual([
+      { species: 'NO2', stoichiometry: 1 },
+      { species: 'O2', stoichiometry: 1 },
+    ])
+    // Untouched id survives the merge.
+    expect(updated.reactions[0].id).toBe('R1')
+  })
+
+  it('commits a rate edit made on the same line', () => {
+    const onReactionSystemChange = vi.fn()
+    const { container } = render(() => (
+      <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
+    ))
+    clickEquation(container)
+    fireEvent.input(textarea(), { target: { value: 'NO -> [k_NO_O3 * 2] NO2' } })
+    fireEvent.blur(textarea())
+
     const updated = onReactionSystemChange.mock.calls[0][0] as ReactionSystem
     expect(updated.reactions[0].rate).toEqual({ op: '*', args: ['k_NO_O3', 2] })
   })
 
   it('blocks emit on a parse error and surfaces the error', () => {
     const onReactionSystemChange = vi.fn()
-    render(() => (
+    const { container } = render(() => (
       <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
     ))
-    expand()
-    fireEvent.input(textarea(), { target: { value: 'k_NO_O3 *' } }) // trailing operator
+    clickEquation(container)
+    fireEvent.input(textarea(), { target: { value: 'NO -> NO2' } }) // no rate
     fireEvent.blur(textarea())
 
     expect(onReactionSystemChange).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toBeInTheDocument()
   })
 
-  it('does not emit when the reprint is unchanged (rate AST left untouched)', () => {
+  it('does not emit when the reprint is unchanged (reaction AST left untouched)', () => {
     const onReactionSystemChange = vi.fn()
-    render(() => (
+    const { container } = render(() => (
       <ReactionEditor reactionSystem={system} onReactionSystemChange={onReactionSystemChange} />
     ))
-    expand()
+    clickEquation(container)
     fireEvent.blur(textarea())
     expect(onReactionSystemChange).not.toHaveBeenCalled()
+  })
+
+  it('does not open a text editor in readonly mode', () => {
+    const { container } = render(() => (
+      <ReactionEditor reactionSystem={system} onReactionSystemChange={vi.fn()} readonly={true} />
+    ))
+    clickEquation(container)
+    expect(screen.queryByLabelText('Reaction text')).not.toBeInTheDocument()
   })
 })
