@@ -1500,6 +1500,13 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     live_forcing = _has_live_forcing(cse_prelude, rhs_list) ||
                    any(_acc_has_live_forcing, acc_kernels)
     # Vectorized lane plans for the acc kernels (host index data, built once).
+    # The kernel-CLASS merge (oop_merge.jl) no longer runs here: it is hoisted
+    # into `_build_evaluator_impl` phase 4 (`_merge_acc_kernel_classes`), before
+    # the xcse gate, so BOTH emitters receive already-merged kernels and this
+    # plan build is over the merged (fewer) list. `acc_kernels` (parameter,
+    # never reassigned) and `acc_plans` (bound exactly once) are captured
+    # UNBOXED by the `rhs` closure below, with the stable field names
+    # :acc_kernels / :acc_plans that external tooling reflects on.
     acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
     # The buffers container (B2): every live forcing buffer this build registered
     # — raw `param_arrays` entries AND DiscreteMaterializer caches, both of which

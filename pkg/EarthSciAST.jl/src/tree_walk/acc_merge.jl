@@ -322,6 +322,9 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # plan for the vectorized (traceable) `:oop` form — `:oop_vec` when it
     # vectorizes whole-array, else `:oopdecl_<reason>` — into the cascade tally, so
     # the corpus's oop-fallback coverage is readable from an ordinary in-place build.
+    # Since the kernel-CLASS merge hoisted into build.jl, `acc_kernels` here is the
+    # POST-merge list, so the tally reflects exactly the kernels a `:oop` build of
+    # the same model would plan — which is the point of the probe.
     if get(ENV, "ESS_OOP_PROBE", "") == "1"
         for K in acc_kernels
             P = _build_oop_acc_plan(K)

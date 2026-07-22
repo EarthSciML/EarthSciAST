@@ -57,9 +57,20 @@ function _xc_percall_fn(prelude, kernels)
     return total
 end
 
-# Build with the pass ON / OFF (everything else identical).
-_xc_build(model; ics=Dict{String,Float64}(), on::Bool=true, kw...) =
-    withenv("ESS_XCSE_DISABLE" => (on ? nothing : "1")) do
+# Build with the pass ON / OFF (everything else identical). `classmerge=false`
+# additionally disables the kernel-CLASS merge (oop_merge.jl), which since its
+# hoist into build.jl runs BEFORE xcse on `:inplace` builds too: the testsets
+# that pin xcse's OWN counters over a multi-kernel fixture (slots minted,
+# kernel defs rewritten) must see the pre-merge kernel multiplicity, because
+# the class merge legitimately collapses the same-structure fixture kernels
+# first (one kernel per shared-table class, its identical inv defs kept as ONE
+# preserved inv tier) — after which a def occurring in a single kernel is not
+# cross-kernel shareable and xcse rightly mints fewer/no slots. The bit-exact
+# oracles keep the merge ON: value-identity must hold through both passes
+# composed, and it is asserted that way below.
+_xc_build(model; ics=Dict{String,Float64}(), on::Bool=true, classmerge::Bool=true, kw...) =
+    withenv("ESS_XCSE_DISABLE" => (on ? nothing : "1"),
+            "ESS_OOP_MERGE_DISABLE" => (classmerge ? nothing : "1")) do
         ESM._build_evaluator_impl(model; initial_conditions=ics, kw...)
     end
 
@@ -101,8 +112,12 @@ end
     @testset "FastJX-like: oracle + fn evaluation count" begin
         K, N = 6, 8
         model, ics = _xc_fastjx(K, N)
-        fon!, u0, p, _, vm, don = _xc_build(model; ics, on=true)
-        foff!, u0f, pf, _, _, doff = _xc_build(_xc_fastjx(K, N)[1]; ics, on=false)
+        # classmerge=false: these counter pins instrument xcse over the
+        # PRE-class-merge kernel multiplicity (one kernel per band) — see
+        # `_xc_build`. The composed default build is pinned right below.
+        fon!, u0, p, _, vm, don = _xc_build(model; ics, on=true, classmerge=false)
+        foff!, u0f, pf, _, _, doff = _xc_build(_xc_fastjx(K, N)[1]; ics,
+                                               on=false, classmerge=false)
 
         # The pass fired: the shared query chain (0.1·t, cos) + the interp the
         # first two bands share = 3 shared slots; every kernel's copies of the
@@ -119,6 +134,22 @@ end
             J1 = ESM._interp_linear_core([1.0, 2.0, 4.0], [0.0, 0.5, 1.0],
                                          cos(0.1t))
             @test don_du[vm["c1[1]"]] === J1 * u0[vm["c1[1]"]]
+        end
+
+        # Composed with the kernel-CLASS merge (the DEFAULT build, since the
+        # merge hoisted before xcse in build.jl): the two shared-table band
+        # kernels collapse to ONE class kernel that KEEPS their value-identical
+        # interp def as a preserved inv tier, so the interp is a single-kernel
+        # def xcse no longer needs to share — only the query chain (0.1·t, cos)
+        # is still cross-kernel: 2 slots, 2 defs rewritten in each of the K-1
+        # kernels. Values must stay bit-identical through both passes composed.
+        fmg!, u0m, pm, _, _, dmg = _xc_build(_xc_fastjx(K, N)[1]; ics, on=true)
+        @test dmg.n_acc_kernels == K - 1
+        @test dmg.n_classmerge_in == K
+        @test dmg.n_xcse_slots == 2
+        @test dmg.n_xcse_kernel_shared == 2(K - 1)
+        for t in (0.0, 0.7, 13.9)
+            @test _xc_du(fmg!, u0m, pm, t) == _xc_du(foff!, u0f, pf, t)
         end
     end
 
@@ -142,9 +173,12 @@ end
         # way. `_make_rhs` still captures `kernel_section` (B1), whose `.kernels`
         # holds all kernels when nothing is emitted.
         withenv("ESS_CODEGEN_DISABLE" => "1") do
+            # classmerge=false: the ON==1 / OFF==K contrast is a property of
+            # xcse over the K per-band kernels, so the class merge (which
+            # would collapse them first) is disabled for these two builds.
             for (on, expected_fn) in ((true, 1), (false, K))
                 f!, _, _, _, _, diag = _xc_build(_xc_fastjx(K, N; nshared=K)[1];
-                                                 ics, on=on)
+                                                 ics, on=on, classmerge=false)
                 fields = fieldnames(typeof(f!))
                 @test :cse_prelude in fields && :kernel_section in fields
                 prelude = getfield(f!, :cse_prelude)
@@ -152,6 +186,19 @@ end
                 @test _xc_percall_fn(prelude, kernels) == expected_fn
                 @test diag.n_xcse_slots == (on ? 3 : 0)
             end
+            # The kernel-CLASS merge alone (xcse OFF) now ALSO achieves
+            # evaluate-once on this fully-shared fixture: all K bands are one
+            # class, and the merge keeps their value-identical interp chain as
+            # ONE preserved inv tier on the single merged kernel — 1 fn eval
+            # per call, no scalar slot minted.
+            fmg!, _, _, _, _, dmg = _xc_build(_xc_fastjx(K, N; nshared=K)[1];
+                                              ics, on=false)
+            @test dmg.n_acc_kernels == 1
+            @test dmg.n_classmerge_in == K
+            @test dmg.n_xcse_slots == 0
+            preludem = getfield(fmg!, :cse_prelude)
+            kernelsm = getfield(getfield(fmg!, :kernel_section), :kernels)
+            @test _xc_percall_fn(preludem, kernelsm) == 1
         end
     end
 
@@ -212,12 +259,21 @@ end
             ics["b[$i]"] = 0.2i
         end
         mk() = ESM.Model(vars, eqs)
-        fon!, u0, p, _, _, don = _xc_build(mk(); ics, on=true)
-        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, on=false)
+        # classmerge=false: with the class merge on, the twin a/b kernels
+        # collapse to ONE (shared table) whose interp def is single-kernel —
+        # xcse then mints nothing for the D(s) site to join. The pins below
+        # are about the kernel↔scalar direction over TWO kernels.
+        fon!, u0, p, _, _, don = _xc_build(mk(); ics, on=true, classmerge=false)
+        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, on=false, classmerge=false)
         @test don.n_xcse_slots == 3            # 0.1t · cos · interp
         @test don.n_xcse_scalar_shared == 1    # the D(s) site reads the slot
         for t in (0.0, 0.7, 5.3)
             @test _xc_du(fon!, u0, p, t) == _xc_du(foff!, u0f, pf, t)
+        end
+        # And the DEFAULT (merged) build stays bit-identical to both.
+        fmg!, u0m, pm, _, _, _ = _xc_build(mk(); ics, on=true)
+        for t in (0.0, 0.7, 5.3)
+            @test _xc_du(fmg!, u0m, pm, t) == _xc_du(foff!, u0f, pf, t)
         end
     end
 

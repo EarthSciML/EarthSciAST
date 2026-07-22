@@ -1673,12 +1673,31 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
-    scalar_entries, percell_scalar, acc_kernels = _compile_derivative_equations(derivative_eqs,
+    scalar_entries, percell_scalar, acc_kernels_pre = _compile_derivative_equations(derivative_eqs,
         resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states; template_sites=template_sites,
         scalar_obs_inline=obs_plan.inline)
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
+
+    # ---- Kernel-CLASS merge (oop_merge.jl), for BOTH emitters ----
+    # Collapse per-cell-fragmented same-structure kernels into lane-batched
+    # class kernels — value-exact (bit-identical output on every runner), and
+    # a large constant-factor win on class-fragmented models (ReSEACT
+    # transport 7×7×8: 4,119 → 346 kernels; the in-place RHS 2.2× faster with
+    # codegen disabled, codegen source generation 3.4× faster; for the :oop
+    # emitter it is the difference between an XLA trace that finishes in
+    # minutes and one that runs for hours). MUST run here, before the xcse
+    # gate below: xcse rewrites kernel invariant-tier defs into SCALAR-cache
+    # reads (`_NK_CACHED` payloads that are no kernel's scratch), which the
+    # merge signature/clone does not model — merge first, then xcse runs over
+    # the (fewer) merged kernels. Bound ONCE to a fresh local (`acc_kernels`),
+    # never reassigned, so every downstream closure captures it unboxed.
+    # ESS_OOP_MERGE_DISABLE=1 (or its form-neutral alias
+    # ESS_KERNEL_CLASS_MERGE_DISABLE=1) restores the unmerged build byte for
+    # byte. The ESS_STENCIL_DISABLE per-cell reference is untouched either
+    # way: its trees live on `percell_scalar`, never in the kernel list.
+    acc_kernels, class_merge_diag = _merge_acc_kernel_classes(acc_kernels_pre)
 
     # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
     # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
@@ -1771,10 +1790,28 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # runtime, and a large body of tests (and downstream tooling) asserts
     # `n_vec_kernels == 0` — meaning "the unified IR owns every array
     # equation" — which is now true by construction.
+    # `n_acc_kernels` (and the slot sums below) count the POST-class-merge
+    # list — the kernels the emitted RHS actually carries — deliberately: the
+    # N-independence property still holds (a class is a structural fact of the
+    # document, not of the grid), and the pre-merge count is available as
+    # `n_classmerge_in`. A merged class folds varying inv defs into the cell
+    # tier (value-identical ones keep a real inv tier), so `n_acc_inv_slots`
+    # can shrink relative to a disabled-merge build.
     diag = (; n_vec_kernels = 0,
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
               n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
+              # Kernel-CLASS merge (oop_merge.jl, hoisted pre-xcse for both
+              # emitters): pre-merge kernel count / merge-ineligible kernels /
+              # classes whose group merge declined at build. All three equal
+              # their no-op values (n_acc_kernels / 0 / 0) when the pass is
+              # disabled or trivially small.
+              n_classmerge_in = class_merge_diag === nothing ?
+                                length(acc_kernels) : class_merge_diag.n_in,
+              n_classmerge_blocked = class_merge_diag === nothing ? 0 :
+                                     class_merge_diag.n_blocked,
+              n_classmerge_failed = class_merge_diag === nothing ? 0 :
+                                    class_merge_diag.n_failed,
               n_scalar_entries = length(rhs_list),
               template_node_count = 0,
               n_cse_slots = cse_diag.n_slots,
