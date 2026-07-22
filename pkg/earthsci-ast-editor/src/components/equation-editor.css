@@ -1,23 +1,55 @@
 /**
- * Styling for the EquationEditor text-mode surface: the editable textarea and
- * the parse-error banner. The read-only render keeps its existing (app-provided)
- * `.equation-*` layout classes; only the text-mode UI is styled here, with
- * `.esm-`-prefixed classes to match the other components.
+ * Styling for the EquationEditor. The non-editing surface renders pretty math
+ * (native MathML) and is click-to-edit; the edit surface is a wide textarea for
+ * the equation's ascii DSL plus an inline description field and a parse-error
+ * banner. The read-only render keeps its existing (app-provided) `.equation-*`
+ * layout classes; the `.esm-`-prefixed classes here match the other components.
+ *
+ * NOTE: an app that can't reach this stylesheet (deep CSS imports blocked by the
+ * package `exports` map) must mirror these rules under its own editor host.
  */
 
-.esm-eq-text {
+/* Click-to-edit math display. */
+.esm-eq-display {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: text;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background-color 0.12s ease;
+}
+
+.esm-eq-display:hover {
+  background: rgba(95, 157, 161, 0.08);
+}
+
+.esm-eq-display:focus-visible {
+  outline: 2px solid rgba(13, 110, 253, 0.4);
+  outline-offset: 1px;
+}
+
+.esm-eq-ascii {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+/* Edit surface. */
+.esm-eq-edit {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  width: 100%;
 }
 
 .esm-eq-textarea {
   width: 100%;
   box-sizing: border-box;
-  min-height: 2.4em;
-  padding: 6px 8px;
+  min-height: 2.6em;
+  padding: 8px 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   color: #212529;
   background: #fff;
@@ -40,8 +72,56 @@
   box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.15);
 }
 
+.esm-eq-desc-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #495057;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+}
+
+.esm-eq-desc-input:focus {
+  outline: none;
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
+}
+
 .esm-eq-error {
   font-size: 12px;
   color: #dc3545;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.esm-eq-hint {
+  font-size: 11px;
+  color: #9aa0a6;
+}
+
+/* Description line under the math. */
+.esm-eq-desc-clickable {
+  cursor: text;
+  border-radius: 3px;
+}
+
+.esm-eq-desc-clickable:hover {
+  background: rgba(95, 157, 161, 0.08);
+}
+
+.esm-eq-add-desc {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  font-size: 12px;
+  color: #9aa0a6;
+  cursor: pointer;
+}
+
+.esm-eq-add-desc:hover {
+  color: #5f9da1;
+  text-decoration: underline;
 }
