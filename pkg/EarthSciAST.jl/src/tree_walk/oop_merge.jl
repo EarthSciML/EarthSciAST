@@ -2,9 +2,11 @@
 # tree_walk/oop_merge.jl — part of the tree-walk evaluator (array-IR B).
 # Included by src/tree_walk.jl AFTER oop.jl (`_OopAccPlan`,
 # `_build_oop_acc_plan`) and acc_merge.jl (`_fn_spec_hash`,
-# `_check_fn_group_specs`). Owns the :oop KERNEL-CLASS merge: the post-plan
-# pass `_make_rhs_oop` runs to collapse per-cell-fragmented `_AccKernel`s
-# into lane-batched class kernels.
+# `_check_fn_group_specs`). Owns the KERNEL-CLASS merge: a build-time pass
+# (`_merge_acc_kernel_classes`, called from `_build_evaluator_impl` phase 4
+# BEFORE the xcse gate and the emitter branch, so BOTH the `:inplace` and the
+# `:oop` RHS run over merged kernels) that collapses per-cell-fragmented
+# `_AccKernel`s into lane-batched class kernels.
 #
 # WHY. `_acc_from_cell_entries` merges the per-cell entries OF ONE ARRAY
 # EQUATION; what it cannot see is that a stencil model instantiates the same
@@ -25,8 +27,18 @@
 # Per-lane index/const data comes from each member's already-built
 # `_OopAccPlan` tables; template-body sub-kernels are merged recursively the
 # same way (their plans are parent-lane-aligned), with the sub inv-CSE tier
-# folded into the cell tier (same values, lane-vectorized). Evaluation is
-# stock `_build_oop_acc_plan` + `_oop_run_acc_vec` — per-lane semantics
+# folded into the cell tier (same values, lane-vectorized). The PARENT
+# kernel's inv tier is PRESERVED when every member's inv recipes are
+# VALUE-identical (no access/subcall leaves, equal literals, content-equal fn
+# specs — `_oop_inv_nodes_identical`): the merged kernel then keeps a real
+# invariant tier evaluated once per call, so a FastJX-style interp chain
+# shared by a class of species balances is NOT demoted to a per-lane
+# recompute, the B4 xcse pass still sees it, and the `n_acc_inv_slots` build
+# diagnostic stays truthful. When any inv recipe varies across members
+# (all-or-nothing, per class) the whole tier folds into the cell tier as
+# before — same values, lane-vectorized. Evaluation is stock
+# `_build_oop_acc_plan` + `_oop_run_acc_vec` (`:oop`) or the lane
+# tape / codegen / scalar runners (`:inplace`) — per-lane semantics
 # (fold order, ghost select, interp) stay EarthSciAST's.
 #
 # BIT-IDENTITY BY CONSTRUCTION. A leaf equal across the group stays scalar;
@@ -46,7 +58,12 @@
 # `ESS_OOP_MERGE_DISABLE=1` restores the unmerged build byte for byte.
 # ========================================================================
 
-_oop_merge_disabled() = get(ENV, "ESS_OOP_MERGE_DISABLE", "") == "1"
+# The historical name (the pass landed :oop-only) and a form-neutral alias —
+# the pass now runs for BOTH emitters, but existing tests and tooling set
+# `ESS_OOP_MERGE_DISABLE`, so that name must keep working forever.
+_oop_merge_disabled() =
+    get(ENV, "ESS_OOP_MERGE_DISABLE", "") == "1" ||
+    get(ENV, "ESS_KERNEL_CLASS_MERGE_DISABLE", "") == "1"
 
 _oop_mergeable_acc_kind(k) =
     k in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED,
@@ -135,6 +152,43 @@ function _oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan)
     return why[] === :ok ? String(take!(io)) : nothing, why[]
 end
 
+# Are the members' aligned inv-recipe trees VALUE-identical, so the merged
+# kernel can keep them in a REAL invariant tier (evaluated once per call by
+# `_fill_invariant!` / the oop prelude) instead of folding them into the
+# per-lane cell tier? Deliberately conservative: any access or subcall leaf,
+# any literal that differs across members, or a cached read outside the inv
+# tier declines — the fold-to-cell fallback is always value-correct, this
+# only decides WHERE the (identical) value is computed. fn payloads ride from
+# the rep in the clone, so their specs must be content-equal here.
+function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
+    r = nodes[1]; k = r.kind
+    if k === _NK_LITERAL
+        return all(i -> isequal(nodes[i].literal, r.literal), 1:m)
+    elseif k === _NK_PARAM || k === _NK_TIME
+        return true
+    elseif k === _NK_CACHED
+        # An inv recipe may only read other inv slots (same idx across members
+        # by the signature); a cell-tier read here would not be lane-invariant.
+        return all(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
+    elseif k === _NK_OP || k === _NK_CONTRACTION
+        if k === _NK_OP && r.op === :fn && r.payload isa Tuple
+            fn1, spec1 = (r.payload)::Tuple{String,Any}
+            for i in 2:m
+                fni, speci = (nodes[i].payload)::Tuple{String,Any}
+                (fni == fn1 && (speci === spec1 ||
+                                _fn_spec_content_equal(speci, spec1))) || return false
+            end
+        end
+        for ci in eachindex(r.children)
+            _oop_inv_nodes_identical(_Node[n.children[ci] for n in nodes],
+                                     Kof, m) || return false
+        end
+        return true
+    else # _NK_ACCESS / _NK_SUBCALL / anything else: decline, fold to cell
+        return false
+    end
+end
+
 # Merge one class of lockstep-identical kernels (indices `js` into
 # kernels/plans) into a single lane-batched kernel. Members' lanes are
 # concatenated in `js` order; each varying leaf becomes a table over the
@@ -149,13 +203,23 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     # Merge one aligned tree-family (parent trees or sub-si trees). Kof(i) /
     # Pof(i): member i's context kernel and the plan whose tables resolve that
     # context's descriptors — sub plans are built against PARENT lanes, so
-    # every table below has member-lane length by construction.
-    function merge_trees(Kof, Pof)
+    # every table below has member-lane length by construction. `keep_inv`
+    # (parent trees only): when every member's inv recipes are VALUE-identical
+    # the merged kernel keeps a real inv tier — evaluated once per call — and
+    # only the cell tier goes per-lane; otherwise (and always for subs, whose
+    # runners lane-vectorize the whole prelude) the inv tier folds into the
+    # cell tier exactly as before. Both placements compute the same bits.
+    function merge_trees(Kof, Pof, keep_inv::Bool)
         accvec = _AccDesc[]
         n_inv = length(Kof(1).cse.inv_recipes); n_cell = length(Kof(1).cse.recipes)
         @assert all(i -> length(Kof(i).cse.inv_recipes) == n_inv &&
                          length(Kof(i).cse.recipes) == n_cell, 1:m)
-        newscr = _AccScratch(n_inv + n_cell)
+        keep = keep_inv && n_inv > 0 &&
+               all(i2 -> _oop_inv_nodes_identical(
+                       _Node[Kof(i).cse.inv_recipes[i2] for i in 1:m], Kof, m),
+                   1:n_inv)
+        newscr = _AccScratch(keep ? n_cell : n_inv + n_cell)
+        invscr = _AccScratch(keep ? n_inv : 0)
         function clone(nodes::Vector{_Node})::_Node
             r = nodes[1]; k = r.kind
             if k === _NK_LITERAL
@@ -172,12 +236,20 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
             elseif k === _NK_PARAM || k === _NK_TIME
                 return _Node(k, r.op, r.literal, r.idx, r.sym, r.payload, _Node[])
             elseif k === _NK_CACHED
-                # Sub inv tier folds into the cell tier: recompute per lane
-                # (values identical; the lanes ARE the vectorization).
+                # With `keep`, inv reads stay inv reads (same idx, fresh inv
+                # scratch); otherwise the inv tier folds into the cell tier:
+                # recompute per lane (values identical; the lanes ARE the
+                # vectorization).
                 tier_cell = r.payload === Kof(1).cse.scratch
                 @assert all(i -> (nodes[i].payload === Kof(i).cse.scratch) == tier_cell, 1:m)
-                nidx = tier_cell ? n_inv + r.idx : r.idx
-                return _Node(k, r.op, r.literal, nidx, r.sym, newscr, _Node[])
+                if tier_cell
+                    nidx = keep ? r.idx : n_inv + r.idx
+                    return _Node(k, r.op, r.literal, nidx, r.sym, newscr, _Node[])
+                elseif keep       # preserved inv-tier read
+                    return _Node(k, r.op, r.literal, r.idx, r.sym, invscr, _Node[])
+                else              # folded inv-tier read (slots 1..n_inv of cell)
+                    return _Node(k, r.op, r.literal, r.idx, r.sym, newscr, _Node[])
+                end
             elseif k === _NK_SUBCALL
                 pos = findfirst(s -> s === r.payload, kernels[js[1]].subs)
                 @assert pos !== nothing
@@ -244,6 +316,25 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
             end
         end
         spine = clone(_Node[Kof(i).spine for i in 1:m])
+        if keep
+            recipes = Vector{_Node}(undef, n_cell)
+            for i2 in 1:n_cell
+                recipes[i2] = clone(_Node[Kof(i).cse.recipes[i2] for i in 1:m])
+            end
+            # Kept inv recipes are value-identical across members, so the
+            # clone is a pure remap (cached reads onto the fresh scratches) —
+            # it must not mint a lane table. `nacc0` pins that: a table here
+            # would be read per-lane by a tier evaluated ONCE, i.e. garbage.
+            # The @assert throw degrades to the per-group fallback (the
+            # `try`/`catch` in `_merge_oop_acc_kernels`), never wrong numbers.
+            nacc0 = length(accvec)
+            invrec = Vector{_Node}(undef, n_inv)
+            for i2 in 1:n_inv
+                invrec[i2] = clone(_Node[Kof(i).cse.inv_recipes[i2] for i in 1:m])
+            end
+            @assert length(accvec) == nacc0 "kept-inv recipe minted a lane table"
+            return spine, recipes, invrec, invscr, accvec, newscr
+        end
         recipes = Vector{_Node}(undef, n_inv + n_cell)
         for i2 in 1:n_inv
             recipes[i2] = clone(_Node[Kof(i).cse.inv_recipes[i2] for i in 1:m])
@@ -251,23 +342,25 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
         for i2 in 1:n_cell
             recipes[n_inv + i2] = clone(_Node[Kof(i).cse.recipes[i2] for i in 1:m])
         end
-        return spine, recipes, accvec, newscr
+        return spine, recipes, _Node[], invscr, accvec, newscr
     end
 
     for si in 1:nsubs
         # NOTE: these names must not collide with `clone`'s locals — a nested
         # function assigning a name bound in this scope REBINDS the shared box.
-        msp_, mrc_, mav_, msc_ = merge_trees(i -> kernels[js[i]].subs[si],
-                                             i -> plans[js[i]].sub_plans[si])
+        msp_, mrc_, _mi_, _ms_, mav_, msc_ = merge_trees(i -> kernels[js[i]].subs[si],
+                                                         i -> plans[js[i]].sub_plans[si],
+                                                         false)
         repsub = rep.subs[si]
         merged_subs[si] = _AccKernel(repsub.cells, msp_, mav_, repsub.bound, repsub.zerobar,
                                      _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
                                      _AccKernel[])
     end
-    msp_, mrc_, mav_, msc_ = merge_trees(i -> kernels[js[i]], i -> plans[js[i]])
+    msp_, mrc_, minv_, mis_, mav_, msc_ = merge_trees(i -> kernels[js[i]],
+                                                      i -> plans[js[i]], true)
     outs = reduce(vcat, (plans[j].out_slots for j in js))
     return _AccKernel(_outs_cells(outs), msp_, mav_, rep.bound, rep.zerobar,
-                      _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)), merged_subs)
+                      _AccCSE(mrc_, msc_, minv_, mis_), merged_subs)
 end
 
 """
@@ -329,4 +422,26 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
             n_classes = length(groups), n_blocked = length(passthrough),
             n_failed)
     return (out_kernels, out_plans, diag)
+end
+
+"""
+    _merge_acc_kernel_classes(kernels) -> (kernels′, diag_or_nothing)
+
+The build-time front-door `_build_evaluator_impl` calls once, on the final
+compiled kernel list, BEFORE the xcse gate and before the emitter branch —
+so BOTH `_make_rhs` (`:inplace`) and `_make_rhs_oop` (`:oop`) receive the
+merged kernels. The ordering is a hard correctness constraint: xcse rewrites
+kernel invariant-tier defs into reads of the SCALAR `_CSECache` (`_NK_CACHED`
+nodes whose payload is not any kernel scratch), which the merge signature and
+clone do not model — merge first, then let xcse run over the (fewer) merged
+kernels. The `_OopAccPlan`s built here serve purely as the host-side per-lane
+table source for the merge (`pl.gathers`/`consts`/`forc`/`ghost`); each
+emitter rebuilds its own plans from the merged kernels. Returns the input
+unchanged (diag `nothing`) when disabled or trivially small.
+"""
+function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel})
+    (_oop_merge_disabled() || length(kernels) <= 1) && return (kernels, nothing)
+    plans = _OopAccPlan[_build_oop_acc_plan(K) for K in kernels]
+    merged, _plans, diag = _merge_oop_acc_kernels(kernels, plans)
+    return (merged, diag)
 end

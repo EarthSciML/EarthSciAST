@@ -493,13 +493,19 @@ end
         end
         # The contracted-index form unrolls and lands on the affine path, which
         # splits by makearray REGION (its cuts name the region) exactly as the
-        # old symbolic path did — two boxes, values still exact. The
+        # old symbolic path did — two boxes — and the kernel-CLASS merge
+        # (oop_merge.jl, hoisted into build.jl for both emitters) then
+        # collapses the two same-structure, content-equal-table region kernels
+        # into ONE lane-batched class kernel, values still exact (asserted
+        # against the oracle above). Was `== 2` before the merge hoist;
+        # `n_classmerge_in` pins that the compile still produced two. The
         # content-collapse property of the per-cell merge itself (equal tables
         # as distinct objects → ONE kernel) is pinned white-box in (b).
         du, d = _build_du(rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract=true);
                           disable_stencil=false)
         @test all(_bitsame(x, refA) for x in du)
-        @test d.n_vec_kernels + d.n_acc_kernels == 2
+        @test d.n_vec_kernels + d.n_acc_kernels == 1
+        @test d.n_classmerge_in == 2
     end
 
     # -- (c) N-independence survives ----------------------------------------
