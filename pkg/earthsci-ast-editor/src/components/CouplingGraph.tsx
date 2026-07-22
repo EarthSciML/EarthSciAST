@@ -181,8 +181,19 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   const originalNode = (id: string): ComponentNode | undefined =>
     props.graph.nodes.find((n) => n.id === id)
 
-  // Event handlers
+  // Event handlers.
+  //
+  // Distinguish a click from a drag: dragging a node ends with a browser
+  // `click` event too, which would otherwise select/open the node. If the
+  // pointer moved past a small threshold while pressed, we treat the gesture as
+  // a drag and suppress the ensuing click.
+  let pointerMoved = false
+
   const handleNodeClick = (node: GraphNode) => {
+    if (pointerMoved) {
+      pointerMoved = false
+      return
+    }
     const original = originalNode(node.id) ?? node
     setSelectedNode((prev) => (prev?.id === original.id ? null : original))
     setSelectedEdge(null)
@@ -207,6 +218,10 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
     event.preventDefault()
     endActiveDrag?.()
 
+    pointerMoved = false
+    const startX = event.clientX
+    const startY = event.clientY
+
     node.fx = node.x
     node.fy = node.y
     simulation?.alphaTarget(0.3).restart()
@@ -222,6 +237,11 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
     }
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (!pointerMoved) {
+        const dx = e.clientX - startX
+        const dy = e.clientY - startY
+        if (dx * dx + dy * dy > 16) pointerMoved = true // moved > 4px → a drag
+      }
       const point = toGraphCoords(e)
       node.fx = point.x
       node.fy = point.y
