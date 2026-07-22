@@ -831,7 +831,8 @@ end
 _index_set_deep_equal(a::IndexSet, b::IndexSet) =
     a.kind == b.kind && a.size == b.size && a.members == b.members &&
     a.of == b.of && a.offsets == b.offsets && a.values == b.values &&
-    a.from_faq == b.from_faq && a.members_raw == b.members_raw
+    a.from_faq == b.from_faq && a.members_raw == b.members_raw &&
+    a.member_factor == b.member_factor
 
 # One-line display of an IndexSet for the conflict diagnostic.
 _index_set_show(s::IndexSet) =

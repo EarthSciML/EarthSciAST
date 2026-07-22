@@ -42,6 +42,13 @@ jsonschema = { version = "0.19", default-features = false }
 thiserror = "2.0"
 indexmap = { version = "2", features = ["serde"] }
 ndarray = "0.16"
+# rstar (ess pushdown Phase 3a): a pure-Rust R*-tree for the planar broad-phase
+# spatial index behind the overlap join-gate (src/broad_phase.rs). Pure Rust with
+# no C/FFI/OS deps, so it cross-compiles CLEAN to wasm32 (the in-browser target) —
+# unlike the s2 kernel. Its `AABB` intersection is closed (`<=`/`>=`), matching
+# the brute-force oracle exactly (see the `rstar == brute-force` self-conformance
+# tests), so the fast path is byte-identical to the reference for a given `eps`.
+rstar = "0.13"
 # diffsol (gt-5ws) — the ODE simulation backend, on BOTH native and wasm32: its
 # Faer backend is pure Rust and cross-compiles (spike S1), so the in-browser
 # `simulate` export (src/wasm.rs) can run pure-ODE / 0-D box models client-side.

@@ -360,6 +360,30 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
         for clause in join_clauses
             cld = _as_dict(clause)
             cld === nothing && continue
+            # A Phase-2a `overlap` clause references const-array ENVELOPE factors
+            # via `src_env` / `tgt_env`; each must resolve in factor scope just
+            # like a bin-equality key column.
+            ov = _as_dict(_get(cld, "overlap"))
+            if ov !== nothing
+                for envkey in ("src_env", "tgt_env")
+                    names = _as_vec(_get(ov, envkey))
+                    names === nothing && continue
+                    for nm in names
+                        ref = _as_str(nm)
+                        if ref === nothing || !(ref in scope)
+                            throw(ReferenceResolutionError(
+                                E_REF_UNRESOLVED_JOIN_FACTOR,
+                                "overlap-join env factor '$(ref === nothing ? "" : ref)' of " *
+                                "node $(key) names no factor, range, or output index in " *
+                                "scope (model '$(model_name)', at $(path))"))
+                        end
+                        _ensure_vertex!(g, ReferenceVertex(
+                            _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing))
+                        _add_edge!(g, key, _factor_key(ref), REF_EDGE_JOIN_FACTOR)
+                    end
+                end
+                continue
+            end
             on = _as_vec(_get(cld, "on"))
             on === nothing && continue
             for pair in on

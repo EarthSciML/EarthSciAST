@@ -80,16 +80,46 @@ end
 
 # One resolved key-column pair of an aggregate `join` (RFC §5.3): the two range
 # symbols and, for each, a map from a range position (the loop-variable value)
-# to its bucket code. A combination is admitted iff
+# to its bucket code. A bin-EQUALITY combination is admitted iff
 # `codes_l[pos_l] == codes_r[pos_r]` for every gate. Defined HERE — ahead of
 # `OpExpr` — so the internal `OpExpr.join_gates` field can name this concrete
 # element type; it is BUILT and CONSUMED in tree_walk/semiring.jl
 # (`_resolve_join_gates_for` / `_join_admits`), never parsed or serialized.
+#
+# `candidates` distinguishes the two gate flavours (Phase 2a). When it is
+# `nothing` this is the classic bin-equality gate (compare `codes_l`/`codes_r`).
+# When it is a `Set{(pos_l,pos_r)}` this is an OVERLAP gate: the broad-phase
+# candidate set built ONCE (`_overlap_candidate_set`) from two envelope factor
+# arrays via the Phase-3a primitive, and a combination is admitted iff
+# `(pos_l, pos_r) ∈ candidates` (envelope candidacy, NOT key equality). The
+# `codes_*` maps are empty for an overlap gate.
 struct _JoinGate
     sym_l::String
     sym_r::String
     codes_l::Dict{Int,Int}
     codes_r::Dict{Int,Int}
+    candidates::Union{Set{Tuple{Int,Int}},Nothing}
+end
+# Bin-equality gate convenience ctor (candidates ≡ nothing) — keeps the historic
+# 4-arg construction and any external callers working unchanged.
+_JoinGate(sym_l, sym_r, codes_l, codes_r) = _JoinGate(sym_l, sym_r, codes_l, codes_r, nothing)
+
+# A parsed OVERLAP join clause (Phase 2a) — the spatial-index-backed broad-phase
+# gate that replaces uniform-grid bin equality with envelope candidacy. It names
+# CONST-ARRAY FACTORS interpreted as per-position envelopes:
+#   4 names → rectangles [xmin, ymin, xmax, ymax] (e.g. ISRM cells [W,S,E,N]),
+#   2 names → points [x, y] → degenerate envelope (x,y,x,y) (e.g. emission X/Y),
+#   1 name  → a [pos, verts, coord] ring factor → AABB via `_ring_xybbox`.
+# `src_env` maps to one join range, `tgt_env` to the other (each factor's 1-D
+# shape index set names the range, exactly like the `on` gate's key columns).
+# `eps` is the outward envelope inflation (FP-conservative slack, default 0.0).
+# It is BUILT by `_coerce_join`, round-trips through `serialize`/`namespacing`/
+# `display`, and is CONSUMED by `_resolve_join_gates_for` (main-graph) and
+# `_vi_resolve_join` (value-invention) into the resolved gates above.
+struct _OverlapJoinSpec
+    src_env::Vector{String}
+    tgt_env::Vector{String}
+    eps::Float64
 end
 
 """
@@ -915,10 +945,21 @@ struct IndexSet
     # to `String`) can no longer distinguish. `nothing` for ordinary string-only
     # sets, so they stay byte-identical to before.
     members_raw::Union{Vector{Any},Nothing}
+    # PROJECTION-PUSHDOWN Phase 2b (members-fed-back-as-const-factor). For a
+    # `kind:"derived"` set, names a model `parameter` const factor that the build
+    # fills with this set's materialised value-invention MEMBERS (the invented
+    # 1-based full-grid ids, `vi.members[from_faq]`) — so an in-model gather
+    # `index(W, index(<member_factor>, c))` can pull the full-grid rows the
+    # compact derived axis selects. There is no `member(set,c)` IR op; this
+    # feedback IS the mechanism. `nothing` for every non-feedback set (byte-
+    # identical round-trip).
+    member_factor::Union{String,Nothing}
 
     IndexSet(kind::AbstractString; size=nothing, members=nothing, of=nothing,
-             offsets=nothing, values=nothing, from_faq=nothing, members_raw=nothing) =
-        new(String(kind), size, members, of, offsets, values, from_faq, members_raw)
+             offsets=nothing, values=nothing, from_faq=nothing, members_raw=nothing,
+             member_factor=nothing) =
+        new(String(kind), size, members, of, offsets, values, from_faq, members_raw,
+            member_factor)
 end
 
 """
@@ -2185,6 +2226,7 @@ const RECORD_FIELD_TABLES = (
         (f = :offsets,  wire = "offsets",  kind = :string, mode = :opt, emit = :nonnothing),
         (f = :values,   wire = "values",   kind = :string, mode = :opt, emit = :nonnothing),
         (f = :from_faq, wire = "from_faq", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :member_factor, wire = "member_factor", kind = :string, mode = :opt, emit = :nonnothing),
     )),
     (T = :ModelVariable, fn = :model_variable, rows = (
         (f = :type, wire = "type", kind = :model_variable_type, mode = :req, emit = :always, pos = true),

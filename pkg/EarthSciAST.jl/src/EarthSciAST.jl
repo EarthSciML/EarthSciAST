@@ -26,6 +26,7 @@ module EarthSciAST
 using Dates
 using JSON3
 using JSONSchema
+using LinearAlgebra   # wall2 Phase D: BLAS `mul!` accelerator for linear mat-vec observeds
 using RuntimeGeneratedFunctions
 using Tullio
 
@@ -84,6 +85,10 @@ include("relational.jl")
 include("mtk_export.jl")
 include("geometry.jl")
 include("area_faq.jl")
+# Planar spatial-index broad phase (projection-pushdown Phase 3a): a
+# dependency-free brute-force reference + the generic seam whose fast STRtree
+# method lives in EarthSciASTGeometryOpsExt.
+include("broad_phase.jl")
 # MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
 include("tree_walk.jl")
 include("data_refresh.jl")
@@ -91,6 +96,10 @@ include("simulate.jl")
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
+# Phase 4: the automatic projection-pushdown desugar (recognises the
+# +-aggregate / sparse-binned-factor pattern and generates the Phase-2b
+# derived-set + producer + member_factor + gated_select constructs).
+include("pushdown_rewrite.jl")
 # Inline-test runners (spec §6.6; called as API by downstream model repos)
 include("run_tests.jl")
 include("pde_inline_tests.jl")
@@ -186,6 +195,12 @@ export
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
+    # Planar spatial-index broad phase (projection-pushdown Phase 3a). The fast
+    # STRtree `broad_phase_candidates(query_envs, index)` method + the
+    # `build_spatial_index` producer live in EarthSciASTGeometryOpsExt; the core
+    # `broad_phase_candidates(query_envs, cell_envs)` brute-force method is the
+    # dependency-free fallback + conformance oracle.
+    broad_phase_candidates, build_spatial_index,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
     build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
     DiscreteMaterializer,
@@ -195,6 +210,7 @@ export
     # expression the RHS evaluates (the obsolete RegridApplier seam was removed).
     build_refresh_callback, RefreshBuffers, RefreshError,
     provider_refresh_times, provider_is_const, provider_sample,
+    provider_supports_selection, provider_gate_spec, provider_is_gated,
     # Out-of-place RHS explicit-buffers surface (perf-plan B2): the traced-
     # argument binding of the live forcing buffers, plus the refresh-side hook
     # that mirrors a host refresh into the compiled program's argument arrays.

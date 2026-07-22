@@ -82,8 +82,14 @@ function _namespace_join(join, prefix::String, local_names::Set{String})
             s
         end
     end
-    return Any[Tuple{String,String}[(nsname(l), nsname(r)) for (l, r) in clause]
-               for clause in join]
+    # A `join.overlap` clause (Phase 2a) namespaces its envelope FACTOR names the
+    # same way (a component-local coord/rect buffer gets the prefix); `eps` is a
+    # scalar and never rewrites. A bin-equality clause namespaces its key columns.
+    nsclause(clause::_OverlapJoinSpec) = _OverlapJoinSpec(
+        String[nsname(n) for n in clause.src_env],
+        String[nsname(n) for n in clause.tgt_env], clause.eps)
+    nsclause(clause) = Tuple{String,String}[(nsname(l), nsname(r)) for (l, r) in clause]
+    return Any[nsclause(clause) for clause in join]
 end
 
 function namespace_expr(expr::OpExpr, prefix::String,

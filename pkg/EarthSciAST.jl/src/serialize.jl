@@ -50,6 +50,17 @@ end
 #   `[{ "on": [[left, right], …] }, …]`.
 # - `:scalar`: identity-encoded JSON scalars/arrays (`output` is preserved
 #   verbatim, Int or String).
+# One join clause → its wire form. A bin-equality clause is a list of key-column
+# pairs → `{ "on": [[l,r], …] }`; an overlap clause (Phase 2a) → `{ "overlap":
+# { "src_env": […], "tgt_env": […], "eps": … } }`.
+_serialize_join_clause(clause::_OverlapJoinSpec) = Dict{String,Any}(
+    "overlap" => Dict{String,Any}(
+        "src_env" => copy(clause.src_env),
+        "tgt_env" => copy(clause.tgt_env),
+        "eps" => clause.eps))
+_serialize_join_clause(clause) =
+    Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
+
 function _serialize_opexpr_field(field::Symbol, v)
     kind = getproperty(OPEXPR_FIELD_TABLE, field).kind
     if kind === :expr
@@ -61,8 +72,7 @@ function _serialize_opexpr_field(field::Symbol, v)
     elseif kind === :expr_map
         return Dict{String,Any}(k => serialize_expression(x) for (k, x) in v)
     elseif kind === :join
-        return [Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
-                for clause in v]
+        return [_serialize_join_clause(clause) for clause in v]
     else
         return v
     end

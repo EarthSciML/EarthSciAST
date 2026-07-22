@@ -19,10 +19,13 @@ great-circle-edge model in these bindings, matching the Python sibling.
 """
 module EarthSciASTGeometryOpsExt
 
-# Explicit import so we can add the extension method to this generic.
-import EarthSciAST: _spherical_clip_geometryops
+# Explicit imports so we can add extension methods to these core generics.
+import EarthSciAST: _spherical_clip_geometryops, broad_phase_candidates,
+                    build_spatial_index, _env4
 import GeometryOps as GO
 import GeoInterface as GI
+import SortTileRecursiveTree as STR
+import Extents
 
 # Build a GeoInterface polygon with UnitSphericalPoint coordinates from an `n×2`
 # lon-lat matrix, closing the ring (GeometryOps expects a closed exterior ring).
@@ -80,6 +83,70 @@ function _spherical_clip_geometryops(a::AbstractMatrix, b::AbstractMatrix,
         poly = res
     end
     return _ring_lonlat(poly, to_geo)
+end
+
+# =========================================================================== #
+# Planar spatial-index broad phase — fast STRtree method (projection-pushdown
+# Phase 3a). Accelerates the core brute-force `broad_phase_candidates` (see
+# src/broad_phase.jl) with a `SortTileRecursiveTree.STRtree` driven through
+# GeometryOps' `SpatialTreeInterface` dual-tree traversal — the machinery
+# `ConservativeRegridding.jl` uses. Over EXACT (eps-inflated) envelopes the
+# STRtree yields exactly the envelope-intersecting pairs, so this returns a
+# vector byte-identical to the brute-force reference for the same `eps`.
+# =========================================================================== #
+
+"""
+    EarthSciASTSpatialIndex
+
+Opaque spatial-index marker returned by [`build_spatial_index`](@ref). Wraps a
+`SortTileRecursiveTree.STRtree` built over the cell envelopes inflated outward by
+`eps`; `broad_phase_candidates(query_envs, ::EarthSciASTSpatialIndex)` dispatches
+on it for the fast path. `tree` is `nothing` for an empty cell set.
+"""
+struct EarthSciASTSpatialIndex{T}
+    tree::T          # STRtree over eps-inflated cell extents, or `nothing` if empty
+    n::Int           # number of indexed cells (1-based indices 1:n)
+    eps::Float64     # outward inflation baked into the indexed cell extents
+end
+
+# Envelope `(xmin, ymin, xmax, ymax)` → eps-inflated `Extents.Extent` with X
+# BEFORE Y (the STRtree sort and `Extents.intersects` key dimensions by name;
+# X-first matches the tree's split order). The inflated endpoints are the SAME
+# floats the core method compares, so the closed-interval predicates agree
+# bit-for-bit.
+@inline function _env_to_extent(env, eps::Float64)
+    xmin, ymin, xmax, ymax = _env4(env)
+    return Extents.Extent(X=(xmin - eps, xmax + eps), Y=(ymin - eps, ymax + eps))
+end
+
+function build_spatial_index(cell_envs::AbstractVector; eps::Real=0.0)
+    e = Float64(eps)
+    n = length(cell_envs)
+    n == 0 && return EarthSciASTSpatialIndex(nothing, 0, e)
+    exts = [_env_to_extent(cell_envs[i], e) for i in 1:n]
+    return EarthSciASTSpatialIndex(STR.STRtree(exts), n, e)
+end
+
+function broad_phase_candidates(query_envs::AbstractVector,
+                                index::EarthSciASTSpatialIndex;
+                                eps::Real=index.eps)
+    out = Tuple{Int,Int}[]
+    Float64(eps) == index.eps || throw(ArgumentError(
+        "broad_phase_candidates: eps=$(eps) does not match eps=$(index.eps) baked into " *
+        "build_spatial_index; rebuild the index with the query eps"))
+    (isempty(query_envs) || index.n == 0) && return out
+    e = index.eps
+    qexts = [_env_to_extent(query_envs[i], e) for i in 1:length(query_envs)]
+    qtree = STR.STRtree(qexts)
+    # Dual-tree descent: `f(qi, cj)` fires for each leaf pair whose exact
+    # (inflated) extents intersect; `qi`/`cj` are the original 1-based positions.
+    GO.SpatialTreeInterface.dual_depth_first_search(Extents.intersects, qtree, index.tree) do qi, cj
+        push!(out, (qi, cj))
+        nothing
+    end
+    # Traversal order is tree-internal; sort! pins the (qi, cj)-ascending
+    # determinism contract, byte-identical to the brute-force reference.
+    return sort!(out)
 end
 
 end # module EarthSciASTGeometryOpsExt

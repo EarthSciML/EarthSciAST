@@ -372,14 +372,47 @@ end
 # Only STRUCTURAL validation lives here (≥1 pair, exactly length-2 pairs);
 # key-type / symbol-resolution checks are deferred to build time so they can
 # consult the index-set registry (`_resolve_join_gates`).
+# Structural check of an overlap-clause env-factor arity (1 rings / 2 points /
+# 4 rectangle bounds); the factor→range resolution is deferred to build time.
+_valid_env_arity(k::Int) = (k == 1 || k == 2 || k == 4)
+
+# Coerce a `{ "overlap": { "src_env": [...], "tgt_env": [...], "eps": 0.0 } }`
+# join clause (Phase 2a) into the parsed `_OverlapJoinSpec`. Only STRUCTURAL
+# validation here (present env arrays, legal arity); factor / range resolution
+# runs at build time against the const-array registry + document index sets.
+function _coerce_overlap_clause(ov)
+    src_raw = _get_field(ov, :src_env, nothing)
+    tgt_raw = _get_field(ov, :tgt_env, nothing)
+    (src_raw === nothing || tgt_raw === nothing) && throw(ParseError(
+        "join `overlap` clause requires both `src_env` and `tgt_env` arrays of " *
+        "envelope factor names (Phase 2a spatial overlap gate)"))
+    src_env = String[string(x) for x in src_raw]
+    tgt_env = String[string(x) for x in tgt_raw]
+    _valid_env_arity(length(src_env)) || throw(ParseError(
+        "join `overlap` `src_env` must name 1 (rings), 2 (point [x,y]), or 4 " *
+        "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(src_env))"))
+    _valid_env_arity(length(tgt_env)) || throw(ParseError(
+        "join `overlap` `tgt_env` must name 1 (rings), 2 (point [x,y]), or 4 " *
+        "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(tgt_env))"))
+    eps_raw = _get_field(ov, :eps, nothing)
+    eps = eps_raw === nothing ? 0.0 : Float64(eps_raw)
+    return _OverlapJoinSpec(src_env, tgt_env, eps)
+end
+
 function _coerce_join(data)
     data === nothing && return nothing
     clauses = Vector{Any}()
     for clause in data
+        ov_raw = _get_field(clause, :overlap, nothing)
+        if ov_raw !== nothing
+            push!(clauses, _coerce_overlap_clause(ov_raw))
+            continue
+        end
         on_raw = _get_field(clause, :on, nothing)
         on_raw === nothing && throw(ParseError(
             "join clause requires an `on` array of [left, right] key-column " *
-            "pairs (RFC semiring-faq-unified-ir §5.3)"))
+            "pairs, or an `overlap` object with `src_env`/`tgt_env` envelope " *
+            "factors (RFC semiring-faq-unified-ir §5.3 / Phase 2a)"))
         pairs_vec = Vector{Tuple{String,String}}()
         for pair in on_raw
             length(pair) == 2 || throw(ParseError(

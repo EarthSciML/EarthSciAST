@@ -100,6 +100,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("data_refresh_test.jl")
     include("data_refresh_e2e_test.jl")
     include("refresh_conformance_test.jl")
+    # Phase 1b projection pushdown across the EarthSciIO provider seam. Loads
+    # EarthSciIO (+ Blosc/JSON/SHA) from the test target (Project.toml
+    # [targets].test), which activates the EarthSciASTEarthSciIOExt extension.
+    include("provider_selection_test.jl")
     include("discrete_materialize_test.jl")
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")
@@ -129,6 +133,12 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_assembly_conformance_test.jl")
     include("geometry_overlap_join_conformance_test.jl")
     include("geometry_ranged_clip_test.jl")
+    include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
+    include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
+    include("vi_overlap_scaling_test.jl")         # projection-pushdown Wall #1 (candidate-driven)
+    include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
+    include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
+    include("phase5_clean_auto_test.jl")          # projection-pushdown Phase 5 (LCC@build + fully-automatic)
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
