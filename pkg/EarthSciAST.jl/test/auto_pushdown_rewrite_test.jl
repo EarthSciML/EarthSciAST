@@ -16,6 +16,13 @@
 # fetch; (4) conc / TotalPM25 / deaths == the L1 oracle to machine precision.
 # NEGATIVE: the same model with a `max`-semiring conc leaves the rewrite unfired.
 
+# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
+# stay isolated from other test files' identically-named helpers in the shared
+# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
+# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
+# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
+module AutoPushdownRewriteTests
+
 using Test
 using EarthSciAST
 import JSON3
@@ -345,3 +352,5 @@ end
         @test !haskey(get(td_max["metadata"], "x_esd", Dict()), "pushdown")
     end
 end
+
+end # module AutoPushdownRewriteTests

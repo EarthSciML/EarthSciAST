@@ -15,6 +15,13 @@
 #       and completes in well under a couple seconds (the scaling fix).
 # It also confirms the candidate-set CONSTRUCTION takes the STRtree fast path.
 
+# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
+# stay isolated from other test files' identically-named helpers in the shared
+# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
+# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
+# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
+module VIOverlapScalingTests
+
 using Test
 using EarthSciAST
 import JSON3
@@ -157,3 +164,5 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     @test visits < npts * ncells ÷ 100         # ≪ 4e6 full product
     @test twall < 2.0                          # fast wall-time (post-warmup)
 end
+
+end # module VIOverlapScalingTests

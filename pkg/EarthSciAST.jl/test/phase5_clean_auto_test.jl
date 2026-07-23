@@ -43,6 +43,13 @@
 # independent of this projection change. L1-scale machine precision is the
 # Phase-5 acceptance criterion; Wall #2 remains as documented future work.
 
+# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
+# stay isolated from other test files' identically-named helpers in the shared
+# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
+# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
+# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
+module Phase5CleanAutoTests
+
 using Test
 using EarthSciAST
 import JSON3
@@ -440,3 +447,5 @@ end
         @test !haskey(get(td_max["metadata"], "x_esd", Dict()), "pushdown")
     end
 end
+
+end # module Phase5CleanAutoTests

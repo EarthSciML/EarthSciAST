@@ -19,6 +19,13 @@
 #       A_ij > atol`) the A_j / W_ij weights are tol-identical to the bin-gate
 #       golden — overlap gate + narrow phase == bin gate + narrow phase.
 
+# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
+# stay isolated from other test files' identically-named helpers in the shared
+# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
+# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
+# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
+module OverlapGateConformanceTests
+
 using Test
 using EarthSciAST
 import JSON3
@@ -275,3 +282,5 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         end
     end
 end
+
+end # module OverlapGateConformanceTests

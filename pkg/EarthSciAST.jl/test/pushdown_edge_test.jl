@@ -16,6 +16,13 @@
 # pushed-down selection == members in order with NO wholesale fetch, (3) the
 # members-fed factor + cell_* gathers, and (4) the full oracle match.
 
+# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
+# stay isolated from other test files' identically-named helpers in the shared
+# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
+# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
+# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
+module PushdownEdgeTests
+
 using Test
 using EarthSciAST
 import JSON3
@@ -367,3 +374,5 @@ end
         @test EA._observed_field(insp2, f, "ISRM", "TotalPM25")[1] ≈ oracle_TotalPM25
     end
 end
+
+end # module PushdownEdgeTests
