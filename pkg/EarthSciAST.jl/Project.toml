@@ -69,12 +69,12 @@ EarthSciIO = "0.1"
 JSON = "1"
 SHA = "0.7, 1"
 
-# Dev-track the Phase-1a EarthSciIO (branch `pushdown`) for the extension tests
-# WITHOUT adding it to the package's own [deps] (it stays a weakdep). `[sources]`
-# is honoured only when this Project is the active/develop env (i.e. under
+# Track EarthSciIO (unregistered) from GitHub for the extension tests WITHOUT
+# adding it to the package's own [deps] (it stays a weakdep). `[sources]` is
+# honoured only when this Project is the active/develop env (i.e. under
 # `Pkg.test()` / the test target), so a downstream `add EarthSciAST` ignores it.
 [sources]
-EarthSciIO = {path = "/Users/ctessum/code/earthsciml/EarthSciIO-wt-pushdown/julia"}
+EarthSciIO = {url = "https://github.com/EarthSciML/EarthSciIO.git", subdir = "julia"}
 
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
