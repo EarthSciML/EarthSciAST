@@ -590,6 +590,23 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
             # so it stays AD-clean and concretely inferred.
             return convert(T, _interp_searchsorted_core("interp.searchsorted",
                                                         ev(ch[1]), spec.xs))
+        elseif pl isa Tuple{String,_InterpLinearLaneSpec}
+            # Per-LANE spec table (kernel-class merge): select THIS cell's
+            # member spec by the box lane addressing, then call the SAME core
+            # the member kernel called — bit-identical per lane by construction.
+            h = pl[2]
+            sp = @inbounds h.specs[_interp_lane(h, midx)]
+            return _interp_linear_core(sp.table, sp.axis, ev(ch[1]))
+        elseif pl isa Tuple{String,_InterpBilinearLaneSpec}
+            h = pl[2]
+            sp = @inbounds h.specs[_interp_lane(h, midx)]
+            return _interp_bilinear_core(sp.table, sp.axis_x, sp.axis_y,
+                                         ev(ch[1]), ev(ch[2]))
+        elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
+            h = pl[2]
+            sp = @inbounds h.specs[_interp_lane(h, midx)]
+            return convert(T, _interp_searchsorted_core("interp.searchsorted",
+                                                        ev(ch[1]), sp.xs))
         elseif pl isa Tuple{String,Nothing}
             # `_eval_closed_fn` selects the pinned vs. AD registry on the
             # compile-time `T` — mirrors compile.jl's `:fn` arm, and keeps this
@@ -938,6 +955,12 @@ const _TC_INTERP_SEARCH  = UInt8(9)   # d[l] = Float64(_interp_searchsorted_core
 const _TC_GATHER_STATE_TBL=UInt8(10)  # s = conn[boxaddr(l)]; d[l] = s == 0 ? 0.0 : u[s]
 const _TC_GATHER_ARR_TBL = UInt8(11)  # d[l] = arr[conn[boxaddr(l)]]  (LIVE forcing table)
 const _TC_FN             = UInt8(12)  # d[l] = _eval_closed_fn(name, args[·], Float64)  (boxed closed fn)
+# Per-LANE spec tables (kernel-class merge, oop_merge.jl): lane l's spec is
+# `specs[boxaddr(l)]` (same box addressing as GATHER_*_TBL), evaluated by the
+# SAME `_interp_*_core` the scalar walk calls — bit-identical per lane.
+const _TC_INTERP_LINEAR_TBL   = UInt8(13)  # d[l] = _interp_linear_core(specs[·(l)], q[l])
+const _TC_INTERP_BILINEAR_TBL = UInt8(14)  # d[l] = _interp_bilinear_core(specs[·(l)], x[l], y[l])
+const _TC_INTERP_SEARCH_TBL   = UInt8(15)  # d[l] = Float64(_interp_searchsorted_core(specs[·(l)], q[l]))
 
 # One instruction. Operand `args[k]` is a buffer id into the plan's `bufs`;
 # `strides[k]` is 0 (a length-1 scalar/literal slot, broadcast) or 1 (a lane
@@ -1208,12 +1231,26 @@ function _plan_emit_fn!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
     code = pl isa Tuple{String,_InterpLinearSpec} ? _TC_INTERP_LINEAR :
            pl isa Tuple{String,_InterpBilinearSpec} ? _TC_INTERP_BILINEAR :
            pl isa Tuple{String,_InterpSearchsortedSpec} ? _TC_INTERP_SEARCH :
+           pl isa Tuple{String,_InterpLinearLaneSpec} ? _TC_INTERP_LINEAR_TBL :
+           pl isa Tuple{String,_InterpBilinearLaneSpec} ? _TC_INTERP_BILINEAR_TBL :
+           pl isa Tuple{String,_InterpSearchsortedLaneSpec} ? _TC_INTERP_SEARCH_TBL :
            throw(_AccPlanDecline())    # unknown payload shape
     ops = Tuple{Int,Int,Bool}[_plan_emit!(B, c, K) for c in ch]
     d = _plan_newlane!(B)
-    push!(B.instrs, _mkinstr(code; dest=d,
-                             args=Int[o[1] for o in ops],
-                             strides=Int[o[2] for o in ops], payload=pl[2]))
+    if code === _TC_INTERP_LINEAR_TBL || code === _TC_INTERP_BILINEAR_TBL ||
+       code === _TC_INTERP_SEARCH_TBL
+        # Per-lane spec table: the spec's box lane addressing rides the instr
+        # fields exactly as GATHER_*_TBL's does.
+        h = pl[2]
+        push!(B.instrs, _mkinstr(code; dest=d,
+                                 args=Int[o[1] for o in ops],
+                                 strides=Int[o[2] for o in ops], payload=pl[2],
+                                 s1=h.s1, s2=h.s2, s3=h.s3, off=h.off))
+    else
+        push!(B.instrs, _mkinstr(code; dest=d,
+                                 args=Int[o[1] for o in ops],
+                                 strides=Int[o[2] for o in ops], payload=pl[2]))
+    end
     for o in ops
         o[3] && push!(B.free, o[1])
     end
@@ -1725,6 +1762,42 @@ function _run_acc_instr!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, u,
         @inbounds for l in 1:L
             d[l] = Float64(_interp_searchsorted_core("interp.searchsorted",
                                                      q[1 + (l-1)*sq], spec.xs))
+        end
+    elseif c === _TC_INTERP_LINEAR_TBL
+        # Per-lane spec table (kernel-class merge): lane l uses ITS member's
+        # spec, selected by the same box addressing as GATHER_*_TBL, and the
+        # SAME core the member kernel called — bit-identical per lane.
+        d = bufs[ins.dest]; h = ins.payload::_InterpLinearLaneSpec
+        q = bufs[ins.args[1]]; sq = ins.strides[1]
+        mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+        s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
+        specs = h.specs
+        @inbounds for l in 1:L
+            sp = specs[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+            d[l] = _interp_linear_core(sp.table, sp.axis, q[1 + (l-1)*sq])
+        end
+    elseif c === _TC_INTERP_BILINEAR_TBL
+        d = bufs[ins.dest]; h = ins.payload::_InterpBilinearLaneSpec
+        x = bufs[ins.args[1]]; sx = ins.strides[1]
+        y = bufs[ins.args[2]]; sy = ins.strides[2]
+        mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+        s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
+        specs = h.specs
+        @inbounds for l in 1:L
+            sp = specs[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+            d[l] = _interp_bilinear_core(sp.table, sp.axis_x, sp.axis_y,
+                                         x[1 + (l-1)*sx], y[1 + (l-1)*sy])
+        end
+    elseif c === _TC_INTERP_SEARCH_TBL
+        d = bufs[ins.dest]; h = ins.payload::_InterpSearchsortedLaneSpec
+        q = bufs[ins.args[1]]; sq = ins.strides[1]
+        mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+        s1 = ins.s1; s2 = ins.s2; s3 = ins.s3; off = ins.off
+        specs = h.specs
+        @inbounds for l in 1:L
+            sp = specs[off + (mi1[l]-1)*s1 + (mi2[l]-1)*s2 + (mi3[l]-1)*s3]
+            d[l] = Float64(_interp_searchsorted_core("interp.searchsorted",
+                                                     q[1 + (l-1)*sq], sp.xs))
         end
     else # _TC_FN — boxed closed fn (datetime.*), per-lane through _eval_closed_fn
         d = bufs[ins.dest]

@@ -452,6 +452,101 @@ function _oop_interp_bilinear_lanes(h::_InterpBilinearSpec, x, y, ::Type{T}) whe
     return row_j .+ wy .* (row_jp1 .- row_j)
 end
 
+# ---- interp.* with PER-LANE spec tables (kernel-class merge) -----------------
+#
+# The lane-tabled twins of the three evaluators above, for a merged kernel
+# class whose members carry DIFFERENT same-shape interp tables
+# (`_Interp*LaneSpec`, registered_functions.jl). Same locate → gather → blend
+# select chains, with every scalar knot read (`axis[k]` / `table[k]` / `xs[k]`)
+# replaced by its length-L lane COLUMN (`col[k][l] == specs[l].…[k]`). All the
+# selects are elementwise, so lane `l` computes exactly what the scalar-spec
+# evaluator computes on `specs[l]` — bit-identical to the unmerged kernels by
+# construction. The columns are host `Vector{Float64}` constants, so a
+# Reactant trace embeds them as constant tensors exactly like scalar knots,
+# and the emitted program stays O(table), independent of the lane count's
+# origin. `q` may be a lane vector OR an invariant scalar; the columns force a
+# length-L result either way (each lane still owns its own table).
+function _oop_interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T}
+    axis = h.axis_cols; table = h.table_cols
+    n = length(axis)
+    cnt = ifelse.(axis[1] .<= q, 1.0, 0.0)
+    for k in 2:n
+        cnt = cnt .+ ifelse.(axis[k] .<= q, 1.0, 0.0)
+    end
+    i = min.(max.(cnt, 1.0), Float64(n - 1))
+    ai  = axis[1] .+ zero.(i);  ai1 = axis[2] .+ zero.(i)
+    ti  = table[1] .+ zero.(i); ti1 = table[2] .+ zero.(i)
+    for k in 2:(n - 1)
+        sel = i .== Float64(k)
+        ai  = ifelse.(sel, axis[k],      ai)
+        ai1 = ifelse.(sel, axis[k + 1],  ai1)
+        ti  = ifelse.(sel, table[k],     ti)
+        ti1 = ifelse.(sel, table[k + 1], ti1)
+    end
+    w = (q .- ai) ./ (ai1 .- ai)
+    blend = ti .+ w .* (ti1 .- ti)
+    return ifelse.(q .<= axis[1], table[1],
+                   ifelse.(q .>= axis[n], table[n], blend))
+end
+
+function _oop_interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
+                                        ::Type{T}) where {T}
+    xs = h.xs_cols
+    n = length(xs)
+    n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
+    cnt = ifelse.(xs[1] .< q, 1.0, 0.0)
+    for k in 2:n
+        cnt = cnt .+ ifelse.(xs[k] .< q, 1.0, 0.0)
+    end
+    r = cnt .+ 1.0
+    return ifelse.(q .!= q, Float64(n + 1), r)
+end
+
+function _oop_interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
+                                    ::Type{T}) where {T}
+    ax = h.axis_x_cols; ay = h.axis_y_cols; table = h.table_cols
+    Nx = length(ax); Ny = length(ay)
+    x_q = ifelse.(x .<= ax[1], ax[1], ifelse.(x .>= ax[Nx], ax[Nx], x))
+    y_q = ifelse.(y .<= ay[1], ay[1], ifelse.(y .>= ay[Ny], ay[Ny], y))
+    ci = ifelse.(ax[1] .<= x_q, 1.0, 0.0)
+    for k in 2:Nx
+        ci = ci .+ ifelse.(ax[k] .<= x_q, 1.0, 0.0)
+    end
+    i = min.(max.(ci, 1.0), Float64(Nx - 1))
+    cj = ifelse.(ay[1] .<= y_q, 1.0, 0.0)
+    for k in 2:Ny
+        cj = cj .+ ifelse.(ay[k] .<= y_q, 1.0, 0.0)
+    end
+    j = min.(max.(cj, 1.0), Float64(Ny - 1))
+    xi  = ax[1] .+ zero.(i); xip1 = ax[2] .+ zero.(i)
+    for k in 2:(Nx - 1)
+        sel = i .== Float64(k)
+        xi   = ifelse.(sel, ax[k],     xi)
+        xip1 = ifelse.(sel, ax[k + 1], xip1)
+    end
+    yj  = ay[1] .+ zero.(j); yjp1 = ay[2] .+ zero.(j)
+    for k in 2:(Ny - 1)
+        sel = j .== Float64(k)
+        yj   = ifelse.(sel, ay[k],     yj)
+        yjp1 = ifelse.(sel, ay[k + 1], yjp1)
+    end
+    t_ij   = table[1, 1] .+ zero.(i .+ j); t_i1j  = table[2, 1] .+ zero.(i .+ j)
+    t_ijp1 = table[1, 2] .+ zero.(i .+ j); t_i1jp1 = table[2, 2] .+ zero.(i .+ j)
+    for k in 1:(Nx - 1), l in 1:(Ny - 1)
+        (k == 1 && l == 1) && continue
+        sel = (i .== Float64(k)) .& (j .== Float64(l))
+        t_ij    = ifelse.(sel, table[k, l],         t_ij)
+        t_i1j   = ifelse.(sel, table[k + 1, l],     t_i1j)
+        t_ijp1  = ifelse.(sel, table[k, l + 1],     t_ijp1)
+        t_i1jp1 = ifelse.(sel, table[k + 1, l + 1], t_i1jp1)
+    end
+    wx = (x_q .- xi) ./ (xip1 .- xi)
+    wy = (y_q .- yj) ./ (yjp1 .- yj)
+    row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
+    row_jp1 = t_ijp1 .+ wx .* (t_i1jp1 .- t_ijp1)
+    return row_j .+ wy .* (row_jp1 .- row_j)
+end
+
 # ---- Live forcing buffers as ARGUMENTS (B2) ----------------------------------
 #
 # The compiled IR reaches a live forcing buffer (`param_arrays` entries and
@@ -1369,6 +1464,14 @@ function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     elseif pl isa Tuple{String,_InterpBilinearSpec}
         return _oop_interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
     elseif pl isa Tuple{String,_InterpSearchsortedSpec}
+        return _oop_interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
+    elseif pl isa Tuple{String,_InterpLinearLaneSpec}
+        # Per-lane spec tables (kernel-class merge): the lane-column twins of
+        # the arms above — lane l reads its member's own knots.
+        return _oop_interp_linear_lanes(pl[2], ev(ch[1]), T)
+    elseif pl isa Tuple{String,_InterpBilinearLaneSpec}
+        return _oop_interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
+    elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
         return _oop_interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,Nothing}
         # All-scalar closed functions (`datetime.*`): boxed, one call per lane —
