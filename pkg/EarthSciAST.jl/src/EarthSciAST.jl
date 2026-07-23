@@ -92,6 +92,7 @@ include("broad_phase.jl")
 # MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
 include("tree_walk.jl")
 include("data_refresh.jl")
+include("data_output.jl")
 include("simulate.jl")
 include("reference_graph.jl")
 include("cadence.jl")
@@ -211,6 +212,15 @@ export
     build_refresh_callback, RefreshBuffers, RefreshError,
     provider_refresh_times, provider_is_const, provider_sample,
     provider_supports_selection, provider_gate_spec, provider_is_gated,
+    # Streaming output sinks (streaming-output-sinks RFC §16, Wave 1; callback
+    # ctor in the DiffEqCallbacks/SciMLBase extension). The OUTPUT mirror of the
+    # Provider/refresh input seam: a `PresetTimeCallback` snapshots state and
+    # pushes it to a Sink at each output boundary, so the trajectory streams to
+    # disk instead of accumulating in RAM. Concrete sinks live in the data binding
+    # (EarthSciIO) or a test mock; `state_snapshot` is the host-gather v1 seam.
+    build_output_callback, StateSnapshot, state_snapshot, AbstractSink, OutputError,
+    sink_output_times, sink_open!, sink_write!, sink_flush!, sink_close!,
+    sink_supports_partial, sink_observed_names,
     # Out-of-place RHS explicit-buffers surface (perf-plan B2): the traced-
     # argument binding of the live forcing buffers, plus the refresh-side hook
     # that mirrors a host refresh into the compiled program's argument arrays.
