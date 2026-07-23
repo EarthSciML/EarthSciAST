@@ -1,0 +1,79 @@
+{
+    "esm": "0.8.0",
+    "metadata": {
+        "name": "StreamingDecayGridCoords",
+        "description": "Wave 3 end-to-end fixture for the streaming-output-sinks RFC: the runnable streaming_decay_grid model (single array state `c` over a 3x2 lon/lat grid, pointwise exponential decay D(c) = -k*c) PLUS a `coordinates` registry that supplies rectilinear lon/lat dimension-coordinate values and CF metadata (standard_name / units / axis). Exercises the Wave 3 additions: real index_set dim names (lon/lat, not positional c_d0/c_d1) and CF dimension-coordinate emission with values + attributes. Still fully runnable through EarthSciAST.simulate (scalar param, no data loaders, no array-shaped parameters).",
+        "authors": [
+            "EarthSciML Test Suite"
+        ],
+        "created": "2026-07-23T00:00:00Z",
+        "tags": [
+            "streaming-output",
+            "runnable-simulation",
+            "array-state",
+            "coordinates-registry"
+        ]
+    },
+    "index_sets": {
+        "lon": {
+            "kind": "interval",
+            "size": 3
+        },
+        "lat": {
+            "kind": "interval",
+            "size": 2
+        }
+    },
+    "coordinates": {
+        "lon": {
+            "values": [-100.0, -90.0, -80.0],
+            "standard_name": "longitude",
+            "units": "degrees_east",
+            "axis": "X"
+        },
+        "lat": {
+            "values": [30.0, 40.0],
+            "standard_name": "latitude",
+            "units": "degrees_north",
+            "axis": "Y"
+        }
+    },
+    "models": {
+        "Grid": {
+            "variables": {
+                "c": {
+                    "type": "state",
+                    "units": "kg",
+                    "shape": ["lon", "lat"],
+                    "default": 1.0,
+                    "description": "Gridded tracer with pointwise exponential decay."
+                },
+                "k": {
+                    "type": "parameter",
+                    "units": "1/s",
+                    "default": 0.001,
+                    "description": "Decay rate (scalar)."
+                }
+            },
+            "equations": [
+                {
+                    "lhs": {
+                        "op": "D",
+                        "args": ["c"],
+                        "wrt": "t"
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [
+                            {
+                                "op": "-",
+                                "args": ["k"]
+                            },
+                            "c"
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+}

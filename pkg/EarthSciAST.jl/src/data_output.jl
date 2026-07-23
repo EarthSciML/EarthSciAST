@@ -377,6 +377,211 @@ function scatter_grid!(grid::AbstractArray, g::VarGridding, u::AbstractVector)
     return grid
 end
 
+"""
+    gather_flat!(u, g::VarGridding, grid) -> u
+
+The inverse of [`scatter_grid!`](@ref): read a variable's gridded `grid` back into
+the flat state `u`, `u[flat_indices[k]] = grid[cart[k]]`. This is the restart-read
+direction (streaming-output-sinks RFC §10, §16.7) — reconstruct a flat `u0` from a
+checkpoint store's gridded arrays. `grid` must have size `Tuple(g.shape)`.
+"""
+function gather_flat!(u::AbstractVector, g::VarGridding, grid::AbstractArray)
+    @inbounds for k in eachindex(g.flat_indices)
+        u[g.flat_indices[k]] = grid[g.cart[k]]
+    end
+    return u
+end
+
+# --------------------------------------------------------------------------- #
+# Output metadata (RFC §7, §8, Wave 3). The flat `var_map` gives SHAPE (§7); the
+# run document gives the REAL axis NAMES (a variable's declared `shape` = ordered
+# index-set names), the per-axis sizes (`index_sets`), the per-variable CF attrs
+# (`units`, …), and the additive `coordinates` registry (§8.3). `OutputMeta`
+# distills exactly that slice of the run doc so a sink emits `lon`/`lat` dims (not
+# positional `<base>_d0`) and CF dimension-coordinates, WITHOUT the sink or the
+# writer importing the document model. Built once by [`derive_output_meta`] in
+# `prepare` (the doc is in scope there; `PreparedModel` carries the result).
+# --------------------------------------------------------------------------- #
+
+"""
+    OutputMeta
+
+The document-derived output metadata carried by a [`PreparedModel`](@ref) so a
+streaming sink can name axes and emit CF coordinates (RFC §7–§8). Distilled from
+the flattened run document by [`derive_output_meta`](@ref).
+
+* `model_name::String` — the single flattened model's key (namespacing prefix of
+  the `var_map`'s base names).
+* `index_sets::Dict{String,Int}` — index-set name → axis length (interval `size`;
+  categorical member count).
+* `var_dims::Dict{String,Vector{String}}` — namespaced base variable name → its
+  declared `shape` (ordered index-set / dim names). Absent for scalars.
+* `var_attrs::Dict{String,Dict{String,Any}}` — namespaced base variable name → CF
+  variable attributes retained from the doc (`units`, `standard_name`,
+  `description` when present).
+* `coordinates::Dict{String,Any}` — the additive `coordinates` registry (§8.3),
+  verbatim: entry name → `{values|source, standard_name, units, axis}`. Empty when
+  the document declares none.
+"""
+struct OutputMeta
+    model_name::String
+    index_sets::Dict{String,Int}
+    var_dims::Dict{String,Vector{String}}
+    var_attrs::Dict{String,Dict{String,Any}}
+    coordinates::Dict{String,Any}
+end
+
+const _EMPTY_OUTPUT_META = OutputMeta("", Dict{String,Int}(),
+    Dict{String,Vector{String}}(), Dict{String,Dict{String,Any}}(), Dict{String,Any}())
+
+# Static axis length of an index-set entry: interval `size`; categorical member
+# count; 0 (unknown-here) for derived/ragged whose extent needs the build.
+function _index_set_axis_len(is::AbstractDict)
+    kind = get(is, "kind", nothing)
+    if kind == "interval"
+        return Int(get(is, "size", 0))
+    elseif kind == "categorical"
+        m = get(is, "members", nothing)
+        return m isa AbstractVector ? length(m) : 0
+    else
+        sz = get(is, "size", nothing)
+        return sz === nothing ? 0 : Int(sz)
+    end
+end
+
+"""
+    derive_output_meta(doc) -> OutputMeta
+
+Distill the flattened run document into [`OutputMeta`](@ref): the single model's
+name, the `index_sets` axis lengths, each variable's declared `shape` (real dim
+names) + retained CF attrs, and the additive `coordinates` registry (§8.3).
+Returns an empty `OutputMeta` for a document with no `models` (nothing to name).
+Reads only the doc — no build artifacts — so it composes with `derive_output_gridding`.
+"""
+function derive_output_meta(doc::AbstractDict)
+    models = get(doc, "models", nothing)
+    (models isa AbstractDict && !isempty(models)) || return _EMPTY_OUTPUT_META
+    sname = String(first(keys(models)))
+    model = models[sname]
+
+    idx = Dict{String,Int}()
+    isets = get(doc, "index_sets", nothing)
+    if isets isa AbstractDict
+        for (nm, is) in isets
+            is isa AbstractDict && (idx[String(nm)] = _index_set_axis_len(is))
+        end
+    end
+
+    vdims = Dict{String,Vector{String}}()
+    vattrs = Dict{String,Dict{String,Any}}()
+    vars = model isa AbstractDict ? get(model, "variables", nothing) : nothing
+    if vars isa AbstractDict
+        for (vn, v) in vars
+            v isa AbstractDict || continue
+            base = String(vn)
+            shp = get(v, "shape", nothing)
+            shp isa AbstractVector && (vdims[base] = String[String(s) for s in shp])
+            a = Dict{String,Any}()
+            for k in ("units", "standard_name", "description")
+                haskey(v, k) && v[k] !== nothing && (a[k] = v[k])
+            end
+            isempty(a) || (vattrs[base] = a)
+        end
+    end
+
+    coords = get(doc, "coordinates", nothing)
+    cdict = coords isa AbstractDict ?
+        Dict{String,Any}(String(k) => v for (k, v) in coords) : Dict{String,Any}()
+
+    return OutputMeta(sname, idx, vdims, vattrs, cdict)
+end
+
+"""
+    derive_output_gridding(var_map, meta::OutputMeta) -> Vector{VarGridding}
+
+Doc-aware [`derive_output_gridding`](@ref): first invert the flat `var_map`
+(shape + scatter map, the language-neutral core), then rename each variable's axes
+from positional `<base>_d0` to its REAL declared dim names via `meta.var_dims`
+(RFC §7 → §8). A variable with no declared `shape` in `meta` (a scalar, or a
+`var_map` built without a document) keeps its positional names. Validates that the
+declared dim count and each `index_sets` length agree with the shape recovered
+from the flat state — a mismatch means the document and the built state disagree,
+which must fail loudly rather than mislabel an axis.
+"""
+function derive_output_gridding(var_map::AbstractDict, meta::OutputMeta)
+    return VarGridding[_name_gridding(g, meta) for g in derive_output_gridding(var_map)]
+end
+
+function _name_gridding(g::VarGridding, meta::OutputMeta)
+    dims = get(meta.var_dims, g.base, nothing)
+    dims === nothing && return g                      # scalar / undeclared → positional
+    length(dims) == length(g.shape) || throw(OutputError(
+        "output metadata for '$(g.base)' declares $(length(dims)) dim(s) $(dims), but the " *
+        "flat state grids it to $(length(g.shape)) axis/axes $(g.shape)"))
+    for d in eachindex(dims)
+        sz = get(meta.index_sets, dims[d], nothing)
+        (sz === nothing || sz == 0 || sz == g.shape[d]) || throw(OutputError(
+            "output metadata: '$(g.base)' axis $d is index set '$(dims[d])' of size $sz, " *
+            "but the flat state grids that axis to length $(g.shape[d])"))
+    end
+    return VarGridding(g.base, g.shape, copy(dims), g.flat_indices, g.cart)
+end
+
+"""
+    DimCoord(name, values, attrs)
+
+A CF **dimension coordinate** (§8.3): a 1-D coordinate variable named exactly like
+its dimension, its monotonic `values`, and its CF `attrs` (`standard_name` /
+`units` / `axis`). Emitted once at [`sink_open!`](@ref). Auxiliary (unstructured /
+curvilinear) coordinates — whose registry key differs from the dim name and whose
+values come from a `source` array — are a later drop-in on the same registry; v1
+emits inline-`values` dimension coordinates.
+"""
+struct DimCoord
+    name::String
+    values::Vector{Float64}
+    attrs::Dict{String,Any}
+end
+
+"""
+    plan_dimension_coordinates(gridding, meta::OutputMeta) -> Vector{DimCoord}
+
+Resolve the `coordinates` registry (§8.3) into the CF **dimension coordinates**
+for a set of [`VarGridding`](@ref)s: for each distinct spatial dim, if the registry
+has an entry KEYED BY THAT DIM NAME carrying inline `values`, emit a [`DimCoord`](@ref)
+(validating its length against the dim's grid length) with the entry's
+`standard_name`/`units`/`axis` attrs. Registry entries whose key is not a dim name
+(auxiliary coordinates) and `source`-backed entries are skipped in v1 (the
+dimension-coordinate path handles inline values); they are the documented next
+drop-in. Dims with no registry entry emit no coordinate (bare integer axis, as before).
+"""
+function plan_dimension_coordinates(gridding::AbstractVector{VarGridding}, meta::OutputMeta)
+    dimlen = Dict{String,Int}()
+    order = String[]
+    for g in gridding, d in eachindex(g.dimnames)
+        nm = g.dimnames[d]
+        haskey(dimlen, nm) || push!(order, nm)
+        dimlen[nm] = g.shape[d]
+    end
+    coords = DimCoord[]
+    for nm in order
+        entry = get(meta.coordinates, nm, nothing)
+        entry isa AbstractDict || continue
+        vals = get(entry, "values", nothing)
+        vals isa AbstractVector || continue           # source/aux: not the inline-dim path
+        v = Float64[Float64(x) for x in vals]
+        length(v) == dimlen[nm] || throw(OutputError(
+            "coordinate '$nm' supplies $(length(v)) value(s) but dimension '$nm' has " *
+            "length $(dimlen[nm])"))
+        attrs = Dict{String,Any}()
+        for k in ("standard_name", "units", "axis")
+            haskey(entry, k) && entry[k] !== nothing && (attrs[k] = entry[k])
+        end
+        push!(coords, DimCoord(nm, v, attrs))
+    end
+    return coords
+end
+
 # --------------------------------------------------------------------------- #
 # build_zarr_sink — public surface; concrete ZarrSink lives in the EarthSciIO ext
 # (mirror of build_output_callback / build_refresh_callback: core owns the generic
@@ -400,3 +605,115 @@ function build_zarr_sink end
 build_zarr_sink(args...; kwargs...) = throw(OutputError(
     "build_zarr_sink requires the EarthSciIO extension; add `using EarthSciIO` so " *
     "EarthSciASTEarthSciIOExt (the concrete Zarr sink) is active"))
+
+"""
+    zarr_restart_state(prep, base_url; kwargs...) -> (t0::Float64, u0::Vector{Float64})
+
+Reconstruct a flat restart state from the last committed checkpoint in the Zarr
+store at `base_url` (streaming-output-sinks RFC §10, §16.7): read the output
+manifest for the last durable `t`, read each variable's gridded slab at that time
+index through the `ZarrReader`, and [`gather_flat!`](@ref) it back into a flat `u0`
+in the model's `var_map` order. Continue integrating a fresh run from `(t0, t_end)`
+seeded with `u0` — a valid continuation consistent to solver tolerance (NOT
+bit-identical; the integrator's internal cache is not checkpointed).
+
+Requires `EarthSciIO` to be loaded (the reader/manifest live there); calling it
+without EarthSciIO throws [`OutputError`](@ref).
+"""
+function zarr_restart_state end
+zarr_restart_state(args...; kwargs...) = throw(OutputError(
+    "zarr_restart_state requires the EarthSciIO extension; add `using EarthSciIO` so " *
+    "EarthSciASTEarthSciIOExt (the reader + output manifest) is active"))
+
+# --------------------------------------------------------------------------- #
+# Checkpoint triggers (RFC §10, §16.7). A checkpoint fires on any composition of a
+# fixed INTERVAL (checkpoint times → the ordinary sink cadence / a PresetTimeCallback)
+# and/or one or more PREDICATES (a DiscreteCallback whose condition ORs them). A
+# predicate is a zero-arg `() -> Bool`; EarthSciAST ships an `any_of` combinator plus
+# two built-ins — a SLURM remaining-walltime predicate and a cloud spot-preemption
+# predicate. The predicates are pure and live here (no solver stack); the
+# predicate→`DiscreteCallback` wiring lives in the DiffEqCallbacks extension, and
+# the manifest-driven RESTART read lives in the EarthSciIO extension.
+# --------------------------------------------------------------------------- #
+
+"""
+    any_of(predicates...) -> () -> Bool
+
+OR-compose checkpoint predicates (RFC §10): the returned zero-arg predicate fires
+when ANY of `predicates` fires. Each argument is itself a `() -> Bool`. With no
+arguments the result never fires (`false`, the identity for OR) — a predicate-free
+checkpoint configuration contributes no just-in-time trigger. Predicates compose
+freely with a fixed interval; a user on PBS / Kubernetes / a bespoke scheduler
+passes their own `() -> Bool` with no library change.
+"""
+any_of(predicates...) = () -> any(p -> p()::Bool, predicates)
+
+# Default Unix-seconds wall clock, kept a tiny injectable seam so
+# `slurm_walltime_predicate` is deterministically testable without touching the
+# real clock (pass `clock = () -> fixed`).
+_unix_now() = time()
+
+"""
+    slurm_walltime_predicate(; margin_seconds = 300, clock = EarthSciAST._unix_now,
+                             end_time_env = "SLURM_JOB_END_TIME") -> () -> Bool
+
+Built-in SLURM remaining-walltime checkpoint predicate (RFC §10): fires once the
+job is within `margin_seconds` of its scheduled end, so a full-state checkpoint
+lands before SLURM kills the job. Reads the job end time (Unix epoch seconds) from
+the `end_time_env` environment variable; returns `false` when it is absent or
+unparseable — i.e. not running under SLURM ⇒ never fires. `clock` (a `() -> Real`
+Unix-seconds source) is injectable for testing.
+"""
+function slurm_walltime_predicate(; margin_seconds::Real = 300,
+                                  clock = _unix_now,
+                                  end_time_env::AbstractString = "SLURM_JOB_END_TIME")
+    return function ()
+        endt = tryparse(Float64, get(ENV, end_time_env, ""))
+        endt === nothing && return false
+        return (endt - clock()) <= margin_seconds
+    end
+end
+
+"""
+    spot_preemption_predicate(; poll) -> () -> Bool
+
+Built-in cloud spot / preemptible-instance checkpoint predicate (RFC §10): fires
+when the instance metadata service reports a pending termination notice. `poll` is
+a `() -> Bool` performing the provider-specific metadata check (AWS
+`/latest/meta-data/spot/instance-action`, GCP `preempted`, …) — REQUIRED and
+supplied by the caller, so the core carries no HTTP/provider dependency and the
+predicate stays testable. Combine with [`any_of`](@ref) and/or an interval.
+"""
+spot_preemption_predicate(; poll) = () -> poll()::Bool
+
+# --------------------------------------------------------------------------- #
+# build_checkpoint_callback — public surface; the DiscreteCallback method lives in
+# the DiffEqCallbacks extension (mirror of build_output_callback). Turns a set of
+# checkpoint predicates into a just-in-time `DiscreteCallback` that writes the
+# full-state checkpoint to `sinks`, calls `sink_flush!` (the durable barrier), and
+# optionally `terminate!`s for a clean pre-preemption exit.
+# --------------------------------------------------------------------------- #
+
+"""
+    build_checkpoint_callback(; sinks, predicates, snapshot = state_snapshot,
+                              pre_write = () -> nothing, terminate_on_fire = true)
+        -> cb
+
+Build the PREDICATE-driven checkpoint callback (RFC §10, §16.7): a `DiscreteCallback`
+whose `condition` is the OR of `predicates` ([`any_of`](@ref)-style zero-arg
+`() -> Bool`s, e.g. [`slurm_walltime_predicate`](@ref) /
+[`spot_preemption_predicate`](@ref)) and whose `affect!` snapshots the full state,
+writes it to every sink in `sinks`, calls [`sink_flush!`](@ref) (the durable commit
+barrier), and — when `terminate_on_fire` — `terminate!`s the integrator for a clean
+pre-preemption exit. Compose the returned callback in the same `CallbackSet` as the
+diagnostic output and input-refresh callbacks. Interval-only checkpointing needs no
+predicate callback — a checkpoint-profile sink's `sink_output_times` already ride the
+ordinary `PresetTimeCallback` cadence.
+
+Requires `DiffEqCallbacks` + `SciMLBase` (the constructor is a package extension);
+calling it without them throws [`OutputError`](@ref).
+"""
+function build_checkpoint_callback end
+build_checkpoint_callback(args...; kwargs...) = throw(OutputError(
+    "build_checkpoint_callback requires the DiffEqCallbacks + SciMLBase extension; " *
+    "add `using DiffEqCallbacks, SciMLBase` so EarthSciASTDataOutputExt is active"))

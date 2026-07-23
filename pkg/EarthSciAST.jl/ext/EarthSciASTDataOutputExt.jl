@@ -17,10 +17,11 @@ user what to load. This module is the OUTPUT mirror of `EarthSciASTDataRefreshEx
 module EarthSciASTDataOutputExt
 
 using EarthSciAST: OutputError, StateSnapshot,
-    sink_output_times, sink_write!
-# Explicit import so we can add the extension method to this generic.
-import EarthSciAST: build_output_callback
+    sink_output_times, sink_write!, sink_flush!
+# Explicit import so we can add the extension methods to these generics.
+import EarthSciAST: build_output_callback, build_checkpoint_callback
 import DiffEqCallbacks: PresetTimeCallback
+import SciMLBase: DiscreteCallback, terminate!
 
 # Coerce a `snapshot(integrator)` return value into a `StateSnapshot` at time `t`.
 # A caller may supply a `snapshot` that already captures its observed caches and
@@ -73,6 +74,39 @@ function build_output_callback(;
 
     cb = PresetTimeCallback(tstops, affect!)
     return cb, tstops
+end
+
+# Predicate-driven checkpoint callback (RFC §10, §16.7). A `DiscreteCallback` whose
+# `condition` — checked at every accepted step — is the OR of the caller's zero-arg
+# checkpoint predicates (SLURM walltime, spot notice, custom; OR-composed via the
+# core `any_of`). When any fires, `affect!` freshens observed caches (`pre_write`),
+# snapshots the FULL state, writes it to every checkpoint sink, calls `sink_flush!`
+# (the durable commit barrier), and — when `terminate_on_fire` — `terminate!`s the
+# integrator for a clean pre-preemption exit. Interval-only checkpointing needs none
+# of this (a checkpoint-profile sink's cadence rides the ordinary PresetTimeCallback).
+function build_checkpoint_callback(;
+                                   sinks,
+                                   predicates,
+                                   snapshot,
+                                   pre_write::Function = () -> nothing,
+                                   terminate_on_fire::Bool = true)
+    # OR the predicates once; the DiscreteCallback `condition` is a pure Bool test
+    # of (u, t, integrator) that ignores its args and consults the predicates.
+    preds = collect(predicates)
+    condition(u, t, integrator) = any(p -> p()::Bool, preds)
+
+    function affect!(integrator)
+        pre_write()
+        snap = _as_snapshot(Float64(integrator.t), snapshot(integrator))
+        for sink in sinks
+            sink_write!(sink, snap)
+            sink_flush!(sink)                 # durable barrier at the checkpoint boundary
+        end
+        terminate_on_fire && terminate!(integrator)
+        return nothing
+    end
+
+    return DiscreteCallback(condition, affect!)
 end
 
 end # module EarthSciASTDataOutputExt

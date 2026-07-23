@@ -417,6 +417,11 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     if file.metaparameters !== nothing && !isempty(file.metaparameters)
         result["metaparameters"] = file.metaparameters
     end
+    # streaming-output-sinks RFC §8.3: the additive `coordinates` registry, written
+    # back VERBATIM (same round-trip contract as the two above).
+    if file.coordinates !== nothing && !isempty(file.coordinates)
+        result["coordinates"] = file.coordinates
+    end
 
     # esm-spec §9.6.4 rule 5 (Option B): re-inject each component's MATERIALIZED
     # `expression_templates` registry so `save(EsmFile)` emits the

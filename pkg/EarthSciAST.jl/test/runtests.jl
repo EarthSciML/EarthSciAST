@@ -111,6 +111,12 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # Streaming output sinks (Wave 2): end-to-end ZarrSink write → ZarrReader
     # read-back round-trip through the EarthSciIO write boundary (RFC §16).
     include("zarr_sink_e2e_test.jl")
+    # Streaming output sinks (Wave 3): the `coordinates` registry → CF
+    # dimension-coordinate emission (real dim names + values + standard_name/units/axis).
+    include("streaming_coords_test.jl")
+    # Streaming output sinks (Wave 3): predicate-driven checkpoint (DiscreteCallback
+    # + SLURM/spot/any_of builtins) + manifest-driven `zarr_restart_state`.
+    include("streaming_checkpoint_test.jl")
     include("discrete_materialize_test.jl")
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")

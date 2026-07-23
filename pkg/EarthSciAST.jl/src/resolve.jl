@@ -264,6 +264,10 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     # taken here, off the raw document, or the emitted registry is a mangled one.
     raw_templates = _verbatim_decl(raw_data, :expression_templates)
     raw_metaparams = _verbatim_decl(raw_data, :metaparameters)
+    # streaming-output-sinks RFC §8.3: the additive document-scoped `coordinates`
+    # registry, snapshotted verbatim like the two above (coercion ignores it) so it
+    # survives to `serialize_esm_file` and to the streaming-output writer.
+    raw_coordinates = _verbatim_decl(raw_data, :coordinates)
 
     injected_root = apply_scope_injections(raw_data, injected_imports)
     machinery_input = injected_root === nothing ? raw_data : injected_root
@@ -327,7 +331,8 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
         coerce_esm_file(expanded)
     end
     return _with_declarations(file, raw_templates, raw_metaparams;
-                              component_templates=comp_tpls, esm=esm_stamp)
+                              component_templates=comp_tpls, esm=esm_stamp,
+                              coordinates=raw_coordinates)
 end
 
 """
@@ -356,9 +361,9 @@ end
 # (Option B), the per-component MATERIALIZED template registries + a possibly
 # version-stamped `esm`. `EsmFile` is immutable.
 _with_declarations(file::EsmFile, templates, metaparams;
-                   component_templates=nothing, esm=nothing) =
+                   component_templates=nothing, esm=nothing, coordinates=nothing) =
     (templates === nothing && metaparams === nothing &&
-     component_templates === nothing && esm === nothing) ? file :
+     component_templates === nothing && esm === nothing && coordinates === nothing) ? file :
     EsmFile(esm === nothing ? file.esm : esm, file.metadata;
             models=file.models,
             reaction_systems=file.reaction_systems,
@@ -370,7 +375,8 @@ _with_declarations(file::EsmFile, templates, metaparams;
             index_sets=file.index_sets,
             expression_templates=templates,
             metaparameters=metaparams,
-            component_templates=component_templates)
+            component_templates=component_templates,
+            coordinates=coordinates)
 
 # ========================================
 # Top-level model {ref} resolution (schema §4.7: models.* = oneOf [Model, {ref}])

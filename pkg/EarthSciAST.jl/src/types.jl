@@ -1604,6 +1604,15 @@ struct EsmFile
     # load) or for a document with no surviving references.
     component_templates::Union{Dict{String,Any},Nothing}
 
+    # Document-scoped `coordinates` registry (streaming-output-sinks RFC §8.3): each
+    # entry marks an existing data array (by `source` name) or an inline `values`
+    # vector as a CF coordinate and attaches `standard_name`/`units`/`axis`.
+    # PRESERVED VERBATIM across parse → emit, exactly like `metaparameters` — nothing
+    # in the pipeline reads it back after load; its job is to survive the round trip
+    # and be distilled by the streaming-output writer (`derive_output_meta`) into CF
+    # dimension/auxiliary coordinate emission. `nothing` when the document declares none.
+    coordinates::Union{Dict{String,Any},Nothing}
+
     # Constructor with optional parameters
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
@@ -1616,11 +1625,13 @@ struct EsmFile
             index_sets=Dict{String,IndexSet}(),
             expression_templates=nothing,
             metaparameters=nothing,
-            component_templates=nothing) =
+            component_templates=nothing,
+            coordinates=nothing) =
         new(esm, metadata, models, reaction_systems, data_loaders,
             coupling, domain, enums, function_tables,
             Dict{String,IndexSet}(index_sets),
-            expression_templates, metaparameters, component_templates)
+            expression_templates, metaparameters, component_templates,
+            coordinates)
 end
 
 # ========================================

@@ -45,9 +45,12 @@ using OrdinaryDiffEqTsit5: Tsit5
     @test man.zarr_format == 3
 
     # --- read the store back through the real reader ---
-    grid = derive_output_gridding(prep.var_map)
+    # Wave 3: meta-aware gridding names axes by their REAL index-set names
+    # (lon/lat), matching what the sink wrote — not positional <base>_d0.
+    grid = derive_output_gridding(prep.var_map, prep.output_meta)
     varnames = String[g.base for g in grid]
     @test length(grid) == 1                       # single state c[lon,lat] (6 cells)
+    @test grid[1].dimnames == ["lon", "lat"]      # real dim names, not Grid.c_d0/_d1
 
     cache = EarthSciIO.Cache(EarthSciIO.LocalStore(joinpath(dir, "cache")); offline = false)
     nds = EarthSciIO.read_store(EarthSciIO.ZarrReader(), cache, base_url;
@@ -67,6 +70,7 @@ using OrdinaryDiffEqTsit5: Tsit5
         dims = v.dims
         data = v.data
         @test length(dims) == length(g.dimnames) + 1     # spatial dims + time
+        @test Set(dims) == Set(String[g.dimnames..., "time"])   # real names on disk
         for t in times
             r = findfirst(x -> isapprox(x, t; atol = 1e-9), tdata)
             kref = findfirst(x -> isapprox(x, t; atol = 1e-9), ref.t)
