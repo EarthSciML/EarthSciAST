@@ -790,3 +790,31 @@ Two stale claims in §5–§6 are corrected: EarthSciIO's Zarr **read** path is
 already `active`/landed (not a stub to flip), and the **s3 transport** is already
 active — only the **s3 store** is a stub. This RFC adds the *write* half of Zarr
 and activates the **s3 store**'s `put`; it does not "flip the zarr read stub."
+
+### 16.11 Implementation status (Julia)
+
+The Julia reference path is implemented and verified on branch
+`feat/streaming-output-sinks` (EarthSciAST + the sibling EarthSciIO checkout, host-gather):
+
+- **Sink seam + `build_output_callback`** (§4, §16.4–16.5): `PresetTimeCallback`
+  cadence, `save_everystep=false`, tstops unioned with input-refresh.
+- **`ZarrWriter` v3 + reader upgrade + output manifest** (§5, §16.1): sharded Zarr
+  v3, Blosc zstd, staging→atomic-commit, `earthsciio/output-manifest/v1`.
+- **Flat→gridded scatter** (§7): column-major inversion of the `name[i,j]` keys.
+- **Real dim names + CF coordinates** (§7–§8): `derive_output_meta` +
+  `plan_dimension_coordinates` emit real index-set axis names and CF **dimension
+  coordinates** (values + `standard_name`/`units`/`axis`) from the additive
+  `coordinates` registry (threaded verbatim through `EsmFile`); per-variable CF attrs.
+- **Checkpoint / restart** (§10, §16.7): `:checkpoint` lossless profile; predicate
+  builtins (`any_of`, SLURM walltime, spot preemption) → a `DiscreteCallback`
+  (`build_checkpoint_callback`) that writes + `sink_flush!`es + optionally
+  `terminate!`s; manifest-driven `zarr_restart_state` reconstructs a flat `u0`.
+- **Multi-grid** (§9): `group_gridding_by_grid` partitions variables by spatial-dim
+  signature; one Sink per grid to its own store (the "separable" layout).
+
+**Remaining:** per-grid **Zarr groups in one store** (the §9 default layout) — needs
+EarthSciIO group-path support; **s3 store** `put` (§16.8; the multipart-commit
+object-store path); the **Python** (`zarr` v3) and **Rust** (`zarrs`) writers and the
+golden **conformance corpus** (§11, §16.6); and the deferred Reactant **shard-local**
+output (§6, phase 8). Cross-language conformance is tolerance-based decoded-array
+agreement, asserted on the language-neutral `zarr.json` for structural metadata.

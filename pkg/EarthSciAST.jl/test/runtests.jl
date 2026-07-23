@@ -117,6 +117,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # Streaming output sinks (Wave 3): predicate-driven checkpoint (DiscreteCallback
     # + SLURM/spot/any_of builtins) + manifest-driven `zarr_restart_state`.
     include("streaming_checkpoint_test.jl")
+    # Streaming output sinks (Wave 3): multi-grid — partition variables by
+    # spatial-dim signature (`group_gridding_by_grid`) → one sink per grid/store.
+    include("streaming_multigrid_test.jl")
     include("discrete_materialize_test.jl")
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")

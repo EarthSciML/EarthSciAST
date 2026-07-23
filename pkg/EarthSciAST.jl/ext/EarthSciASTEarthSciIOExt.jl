@@ -159,9 +159,20 @@ function build_zarr_sink(var_map::AbstractDict, base_url::AbstractString;
                          output_times, profile::Symbol = :diagnostic,
                          records_per_shard::Integer = 8,
                          time_dim::AbstractString = "time",
-                         meta::Union{Nothing,OutputMeta} = nothing)
+                         meta::Union{Nothing,OutputMeta} = nothing,
+                         variables::Union{Nothing,AbstractVector} = nothing)
     g = meta === nothing ? derive_output_gridding(var_map) :
         derive_output_gridding(var_map, meta)
+    # Optional per-grid restriction (RFC §9): keep only the named base variables, so
+    # one sink writes exactly one grid's variables to its own store.
+    if variables !== nothing
+        want = Set(String(v) for v in variables)
+        available = String[x.base for x in g]
+        g = VarGridding[x for x in g if x.base in want]
+        isempty(g) && throw(OutputError(
+            "build_zarr_sink: `variables` $(collect(want)) selected no variables from " *
+            "$(available)"))
+    end
     coords = meta === nothing ? DimCoord[] : plan_dimension_coordinates(g, meta)
     vattrs = meta === nothing ? Dict{String,Dict{String,Any}}() : meta.var_attrs
     return ZarrSink(String(base_url), g, coords, vattrs, collect(Float64, output_times),

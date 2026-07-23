@@ -227,6 +227,7 @@ export
     # Document-derived output metadata (RFC §7–§8): real dim names + CF
     # coordinate emission (dimension coordinates from the `coordinates` registry).
     OutputMeta, derive_output_meta, DimCoord, plan_dimension_coordinates,
+    group_gridding_by_grid,
     # Checkpoint / restart (RFC §10, §16.7): flat-gather (restart-read inverse of
     # scatter), predicate constructors + OR-combinator, and the predicate-driven
     # checkpoint callback (DiscreteCallback in the DiffEqCallbacks extension).

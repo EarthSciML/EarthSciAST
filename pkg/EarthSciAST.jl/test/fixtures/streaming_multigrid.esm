@@ -1,0 +1,41 @@
+{
+    "esm": "0.8.0",
+    "metadata": {
+        "name": "StreamingMultiGrid",
+        "description": "Wave 3 (streaming-output-sinks RFC §9) multi-grid fixture: two decoupled array states on DIFFERENT grids in one model — `a` over a 1-D `col` axis (size 3) and `b` over a 2-D `row`x`lev` grid (2x2) — each with pointwise exponential decay. The two distinct spatial-dim signatures make two emergent grids, so `group_gridding_by_grid` splits them and one ZarrSink per grid writes to its own store. Fully runnable (scalar params, no data loaders).",
+        "authors": ["EarthSciML Test Suite"],
+        "created": "2026-07-23T00:00:00Z",
+        "tags": ["streaming-output", "runnable-simulation", "multi-grid"]
+    },
+    "index_sets": {
+        "col": {"kind": "interval", "size": 3},
+        "row": {"kind": "interval", "size": 2},
+        "lev": {"kind": "interval", "size": 2}
+    },
+    "models": {
+        "Grid": {
+            "variables": {
+                "a": {
+                    "type": "state", "units": "kg", "shape": ["col"], "default": 1.0,
+                    "description": "Grid-1 tracer (1-D col axis)."
+                },
+                "b": {
+                    "type": "state", "units": "kg", "shape": ["row", "lev"], "default": 1.0,
+                    "description": "Grid-2 tracer (2-D row x lev)."
+                },
+                "ka": {"type": "parameter", "units": "1/s", "default": 0.001},
+                "kb": {"type": "parameter", "units": "1/s", "default": 0.002}
+            },
+            "equations": [
+                {
+                    "lhs": {"op": "D", "args": ["a"], "wrt": "t"},
+                    "rhs": {"op": "*", "args": [{"op": "-", "args": ["ka"]}, "a"]}
+                },
+                {
+                    "lhs": {"op": "D", "args": ["b"], "wrt": "t"},
+                    "rhs": {"op": "*", "args": [{"op": "-", "args": ["kb"]}, "b"]}
+                }
+            ]
+        }
+    }
+}

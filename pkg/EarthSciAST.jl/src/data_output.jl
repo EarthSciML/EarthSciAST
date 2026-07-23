@@ -528,6 +528,30 @@ function _name_gridding(g::VarGridding, meta::OutputMeta)
 end
 
 """
+    group_gridding_by_grid(gridding) -> Vector{Vector{VarGridding}}
+
+Partition output variables into GRIDS by their spatial-dim signature (RFC §9):
+variables that live on the same set of axes form one grid, so an atmosphere over
+`[lev, lat, lon]` and an ocean over `[depth, lat, lon]` split into two grids by
+construction (grids are emergent, not declared). The signature is the SORTED set of
+a variable's `dimnames`, so axis order does not fragment a grid. Groups come back in
+first-seen signature order (deterministic). One Sink per returned group is the RFC's
+recommended multi-grid decomposition — each grid gets its own cadence, chunking, and
+checkpoint frequency; restrict a sink to a grid's variables via `build_zarr_sink`'s
+`variables` keyword.
+"""
+function group_gridding_by_grid(gridding::AbstractVector{VarGridding})
+    order = Vector{String}[]
+    groups = Dict{Vector{String},Vector{VarGridding}}()
+    for g in gridding
+        sig = sort(collect(String, g.dimnames))
+        haskey(groups, sig) || push!(order, sig)
+        push!(get!(groups, sig, VarGridding[]), g)
+    end
+    return Vector{VarGridding}[groups[sig] for sig in order]
+end
+
+"""
     DimCoord(name, values, attrs)
 
 A CF **dimension coordinate** (§8.3): a 1-D coordinate variable named exactly like
