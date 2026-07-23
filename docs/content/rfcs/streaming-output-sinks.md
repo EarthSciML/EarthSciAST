@@ -813,8 +813,34 @@ The Julia reference path is implemented and verified on branch
   signature; one Sink per grid to its own store (the "separable" layout).
 
 **Remaining:** per-grid **Zarr groups in one store** (the §9 default layout) — needs
-EarthSciIO group-path support; **s3 store** `put` (§16.8; the multipart-commit
-object-store path); the **Python** (`zarr` v3) and **Rust** (`zarrs`) writers and the
-golden **conformance corpus** (§11, §16.6); and the deferred Reactant **shard-local**
+EarthSciIO group-path support; live **s3** bucket I/O (the object-store `put` path is
+wired but only exercised offline — see §16.12); and the deferred Reactant **shard-local**
 output (§6, phase 8). Cross-language conformance is tolerance-based decoded-array
-agreement, asserted on the language-neutral `zarr.json` for structural metadata.
+agreement (§16.6).
+
+### 16.12 Implementation status (Python / Rust / conformance)
+
+The Python and Rust runner counterparts are implemented on library-backed backends
+(no hand-rolled codecs), on EarthSciIO branches merged into `feat/streaming-conformance`:
+
+- **Python** (`earthsciio/backends/zarr_write.py`, `zarr.py`, `s3.py`): reader **and**
+  new v3 sharded writer rebuilt on **zarr-python 3.x** (native sharding + `BloscCodec`),
+  S3 via **s3fs/fsspec**. Reads both the legacy v2 corpus and v3 sharded stores. Requires
+  Python ≥3.11 (the `zarr`/`s3` extras); the lean core still installs on 3.9. Existing
+  read conformance stays exact (`verify.py` 5/5); a write→read round-trip pytest passes.
+- **Rust** (`rust/src/format/zarr.rs`, `zarr_write.rs`, object-store path): reader and v3
+  sharded writer rebuilt on **`zarrs`** with **`object_store`** for local/S3/HTTP. This
+  gives up the crate's former C-free build (codec crates `zstd-sys`/`blosc-src` now build
+  via `cc`/gcc alone — no clang/bindgen); `#![forbid(unsafe_code)]` on the crate's own
+  code is preserved. Corpus read tests + a write↔read round-trip pass.
+- **Cross-language write conformance** (§11, §16.6): `conformance/run_write_conformance.sh`
+  drives all three writers from a shared spec (`write_spec.json`), cross-reads every
+  store with every reader, and asserts decoded-array agreement within tolerance
+  (atol 1e-9, rtol 1e-6) plus structural/CF-metadata agreement. All three tracks executed:
+  **15/15 pairwise** decoded arrays agree. The compressed shard **bytes differ** across
+  languages (three distinct sha256s for the same shard) while decoding identically —
+  empirically confirming the §16.6 tolerance-not-bytes policy is load-bearing.
+
+Live S3-bucket I/O is verified only offline (fsspec-memory / `object_store` LocalFileSystem;
+no credentials in the test environment). The `s3` **cache** store remains a spec-pinned
+stub pending a coordinated cross-language activation.
