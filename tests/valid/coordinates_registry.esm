@@ -1,0 +1,132 @@
+{
+    "esm": "0.8.0",
+    "metadata": {
+        "name": "CoordinatesRegistry",
+        "description": "Exercises the additive document-scoped `coordinates` registry (RFC streaming-output-sinks §8). Demonstrates all three CF coordinate forms under one rule: (1) rectilinear DIMENSION coordinates for a lon/lat grid supplied as inline literal `values` with an `axis` role; (2) an `interval`-axis dimension coordinate (vertical level) whose values come from an existing parameter array by `source`; (3) unstructured AUXILIARY coordinates `cell_lat`/`cell_lon`, each 1-D over the shared `cells` dimension, referenced by `source` with no `axis` (their source shape, not an axis attachment, drives CF emission). Purely additive: removing `coordinates` leaves a still-valid document that emits bare integer axes.",
+        "authors": [
+            "EarthSciML Test Suite"
+        ],
+        "created": "2026-07-23T00:00:00Z",
+        "tags": [
+            "coordinates",
+            "cf-conventions",
+            "streaming-output",
+            "unstructured",
+            "additive-schema"
+        ]
+    },
+    "index_sets": {
+        "lon": {
+            "kind": "interval",
+            "size": 4
+        },
+        "lat": {
+            "kind": "interval",
+            "size": 3
+        },
+        "lev": {
+            "kind": "interval",
+            "size": 2
+        },
+        "cells": {
+            "kind": "interval",
+            "size": 5
+        }
+    },
+    "coordinates": {
+        "grid_lon": {
+            "values": [-100.0, -99.0, -98.0, -97.0],
+            "standard_name": "longitude",
+            "units": "degrees_east",
+            "axis": "X"
+        },
+        "grid_lat": {
+            "values": [30.0, 31.0, 32.0],
+            "standard_name": "latitude",
+            "units": "degrees_north",
+            "axis": "Y"
+        },
+        "level": {
+            "source": "lev_pressure",
+            "standard_name": "air_pressure",
+            "units": "Pa",
+            "axis": "Z"
+        },
+        "cell_lat": {
+            "source": "mesh_lat",
+            "standard_name": "latitude",
+            "units": "degrees_north"
+        },
+        "cell_lon": {
+            "source": "mesh_lon",
+            "standard_name": "longitude",
+            "units": "degrees_east"
+        }
+    },
+    "models": {
+        "AtmosphereField": {
+            "reference": {
+                "notes": "Minimal carrier for coordinate-registry validation: a gridded tracer over [lon,lat,lev] plus an unstructured tracer over [cells]. `lev_pressure`, `mesh_lat`, `mesh_lon` are the parameter arrays the `coordinates` registry references by `source`. A streaming writer would emit grid_lon/grid_lat/level as CF DIMENSION coordinates on the gridded tracer and cell_lat/cell_lon as AUXILIARY coordinates on the unstructured tracer, deriving each data variable's `coordinates` attribute from the subset-by-dimension rule."
+            },
+            "variables": {
+                "tracer": {
+                    "type": "state",
+                    "units": "kg/kg",
+                    "shape": ["lon", "lat", "lev"],
+                    "default": 0.0,
+                    "description": "Gridded tracer over the rectilinear atmosphere grid; carries grid_lon/grid_lat/level as CF dimension coordinates."
+                },
+                "cell_tracer": {
+                    "type": "state",
+                    "units": "kg/kg",
+                    "shape": ["cells"],
+                    "default": 0.0,
+                    "description": "Unstructured tracer over the shared `cells` dimension; carries cell_lat/cell_lon as CF auxiliary coordinates."
+                },
+                "lev_pressure": {
+                    "type": "parameter",
+                    "units": "Pa",
+                    "shape": ["lev"],
+                    "description": "Vertical-level pressure values; source of the `level` dimension coordinate."
+                },
+                "mesh_lat": {
+                    "type": "parameter",
+                    "units": "degrees_north",
+                    "shape": ["cells"],
+                    "description": "Per-cell latitude; source of the `cell_lat` auxiliary coordinate (1-D over `cells`, non-monotonic)."
+                },
+                "mesh_lon": {
+                    "type": "parameter",
+                    "units": "degrees_east",
+                    "shape": ["cells"],
+                    "description": "Per-cell longitude; source of the `cell_lon` auxiliary coordinate (1-D over `cells`, non-monotonic)."
+                }
+            },
+            "equations": [
+                {
+                    "_comment": "Trivial decay so the document is a runnable ODE carrier; coordinates are metadata, not dynamics.",
+                    "lhs": {
+                        "op": "D",
+                        "args": ["tracer"],
+                        "wrt": "t"
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [-0.001, "tracer"]
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "D",
+                        "args": ["cell_tracer"],
+                        "wrt": "t"
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [-0.001, "cell_tracer"]
+                    }
+                }
+            ]
+        }
+    }
+}

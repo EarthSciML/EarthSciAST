@@ -129,6 +129,13 @@ export const schema: AnySchemaObject = {
         "$ref": "#/$defs/IndexSet"
       }
     },
+    "coordinates": {
+      "type": "object",
+      "description": "Document-scoped, OPTIONAL registry of coordinate variables (RFC streaming-output-sinks §8), keyed by name. Purely additive: a document without it validates and emits exactly as before (bare integer axes). Each entry marks an existing data array — a model variable, parameter, or loader field referenced BY NAME (exactly as a ragged `IndexSet` references its `offsets`/`values` factors), or an inline literal `values` vector — as a physical coordinate and attaches CF metadata (`standard_name`, `units`, optional `axis`). The coordinate's SHAPE is read from its source, so it is NOT attached to any single axis: this is the CF coordinate data model, covering rectilinear (1-D monotonic → CF dimension coordinate), unstructured (1-D over a shared dimension → CF auxiliary coordinate) and curvilinear (2-D `lat(y,x)`/`lon(y,x)` → auxiliary coordinate) grids under one rule. A streaming writer derives each data variable's CF `coordinates` attribute mechanically: every coordinate whose source DIMENSIONS (by identity, NOT by length) are a subset of the data variable's dimensions applies to it.",
+      "additionalProperties": {
+        "$ref": "#/$defs/Coordinate"
+      }
+    },
     "expression_templates": {
       "type": "object",
       "description": "Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `template_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`template_import_version_too_old`).",
@@ -3151,6 +3158,55 @@ export const schema: AnySchemaObject = {
           }
         }
       ]
+    },
+    "Coordinate": {
+      "type": "object",
+      "description": "One entry of the document-scoped `coordinates` registry (RFC streaming-output-sinks §8): marks an existing data array (or an inline literal vector) as a physical coordinate and attaches CF metadata. Exactly one of `source` (reference an existing array by name) or `values` (inline literal) MUST be present. The coordinate's shape/dimensions come from its source, so no per-axis attachment is needed; the writer resolves CF role (dimension vs auxiliary) from that shape.",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "required": [
+            "values"
+          ]
+        }
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Name of an existing data array — a model variable, parameter, or data-loader field — supplying this coordinate's values. Referenced by name exactly as a ragged `IndexSet` references its `offsets`/`values` factors. Mutually exclusive with `values`. The array's declared shape (its ordered index-set dimensions) IS the coordinate's shape: 1-D monotonic over a grid axis → CF dimension coordinate; 1-D over a shared dimension (e.g. `lat(cells)`) or 2-D (`lat(y,x)`) → CF auxiliary coordinate."
+        },
+        "values": {
+          "type": "array",
+          "description": "Inline literal 1-D coordinate vector for the simple rectilinear case, mirroring `FunctionTableAxis.values` (finite floats). Mutually exclusive with `source`. Use `source` for anything not a plain 1-D literal (unstructured/curvilinear coordinates live in data arrays).",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1
+        },
+        "standard_name": {
+          "type": "string",
+          "description": "CF standard name (e.g. \"latitude\", \"longitude\", \"air_pressure\"). Emitted verbatim as the coordinate variable's `standard_name` attribute."
+        },
+        "units": {
+          "type": "string",
+          "description": "CF/UDUNITS units string (e.g. \"degrees_north\", \"degrees_east\", \"Pa\"). Emitted as the coordinate variable's `units` attribute. Advisory at load time (no unit checking), matching `FunctionTableAxis.units`."
+        },
+        "axis": {
+          "type": "string",
+          "description": "Optional CF axis role for a rectilinear dimension coordinate. Set it ONLY for a 1-D monotonic dimension coordinate; omit it for auxiliary coordinates (unstructured/curvilinear), which have no single axis. Emitted as the `axis` attribute.",
+          "enum": [
+            "X",
+            "Y",
+            "Z",
+            "T"
+          ]
+        }
+      }
     },
     "IndexSet": {
       "type": "object",
