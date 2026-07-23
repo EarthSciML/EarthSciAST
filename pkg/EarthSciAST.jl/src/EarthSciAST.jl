@@ -221,6 +221,9 @@ export
     build_output_callback, StateSnapshot, state_snapshot, AbstractSink, OutputError,
     sink_output_times, sink_open!, sink_write!, sink_flush!, sink_close!,
     sink_supports_partial, sink_observed_names,
+    # Flat→gridded inversion (RFC §7) + the concrete Zarr sink constructor
+    # (implemented in the EarthSciIO extension, mirror of build_output_callback).
+    VarGridding, derive_output_gridding, scatter_grid!, build_zarr_sink,
     # Out-of-place RHS explicit-buffers surface (perf-plan B2): the traced-
     # argument binding of the live forcing buffers, plus the refresh-side hook
     # that mirrors a host refresh into the compiled program's argument arrays.

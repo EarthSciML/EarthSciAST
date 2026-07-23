@@ -523,9 +523,19 @@ function simulate(prep::PreparedModel, tspan;
         save_everystep = false
     end
 
-    return _simulate_solve(prep.f!, u0, (t0, Float64(tspan[2])), prep.p, alg, prep.var_map;
-                           callback = callback, tstops = tstops, save_everystep = save_everystep,
-                           reltol = reltol, abstol = abstol, saveat = saveat)
+    # Sink lifecycle: open each sink (declares its store dims/coords/chunk-shard
+    # grid ONCE) BEFORE the solve, and close each (flush + end-of-run manifest)
+    # AFTER — in a `finally` so a solver error still finalizes a partially-written
+    # store into a readable, restartable state. The per-tick `sink_write!` fires
+    # from the output callback in between; `simulate` owns only open/close.
+    isempty(sinks) || foreach(sink_open!, sinks)
+    try
+        return _simulate_solve(prep.f!, u0, (t0, Float64(tspan[2])), prep.p, alg, prep.var_map;
+                               callback = callback, tstops = tstops, save_everystep = save_everystep,
+                               reltol = reltol, abstol = abstol, saveat = saveat)
+    finally
+        isempty(sinks) || foreach(sink_close!, sinks)
+    end
 end
 
 # Sorted, de-duplicated union of two tstop vectors — the refresh anchors and the

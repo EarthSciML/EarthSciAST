@@ -278,3 +278,125 @@ build_output_callback(args...; kwargs...) = throw(OutputError(
     "build_output_callback requires the DiffEqCallbacks + SciMLBase extension; " *
     "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
     "EarthSciASTDataOutputExt is active"))
+
+# --------------------------------------------------------------------------- #
+# Flat→gridded inversion (RFC §7). The shared, language-neutral piece: invert the
+# column-major `name[i,j]` cell-key scheme (`_parse_cell_key`) so a flat `u` slab
+# scatters into per-variable gridded arrays. Pure EarthSciAST (no EarthSciIO), so
+# the same derivation feeds any Writer backend and can be specified once in the
+# shared conformance spec.
+#
+# Wave 2 note: dimension NAMES here are POSITIONAL (`<base>_d0`, …). Binding an
+# axis to its real `index_sets` name + the `coordinates` registry (CF metadata) is
+# the next wave (needs the run document, which `PreparedModel` does not carry); the
+# SCATTER (shape + placement) is already final and correct.
+# --------------------------------------------------------------------------- #
+
+"""
+    VarGridding
+
+The gridded layout of one output base-variable, derived from a flat `var_map`
+(RFC §7). Scatter a flat state vector `u` into this variable's gridded array with
+`grid[cart[k]] = u[flat_indices[k]]` — placement is by explicit `CartesianIndex`,
+so it is correct regardless of enumeration order.
+
+* `base::String` — the variable's base name (the cell key minus its `[…]`).
+* `shape::Vector{Int}` — the gridded spatial shape (a scalar variable gets the
+  singleton shape `[1]`, so it always has at least one spatial axis to name).
+* `dimnames::Vector{String}` — one positional dim name per axis of `shape`
+  (Wave 2: `"<base>_d0"`, …; real `index_sets` names are a later wave).
+* `flat_indices::Vector{Int}` — the flat `u` indices of this variable's cells.
+* `cart::Vector{CartesianIndex}` — the 1-based grid position of each
+  `flat_indices` entry (same order).
+"""
+struct VarGridding
+    base::String
+    shape::Vector{Int}
+    dimnames::Vector{String}
+    flat_indices::Vector{Int}
+    cart::Vector{CartesianIndex}
+end
+
+"""
+    derive_output_gridding(var_map) -> Vector{VarGridding}
+
+Invert the flat `var_map` (state-element name → flat index) into one
+[`VarGridding`](@ref) per output base-variable (RFC §7). Groups the cell keys by
+base name via [`_parse_cell_key`](@ref) (a key with no `[…]` suffix is a scalar
+variable), derives each axis length as the max cell index along that axis, and
+records the flat-index → `CartesianIndex` scatter map. Base-variable order is the
+first-seen order in `var_map`'s iteration, made deterministic by sorting on the
+base name so the derived schema is reproducible.
+"""
+function derive_output_gridding(var_map::AbstractDict)
+    groups = Dict{String,Vector{Tuple{Int,Vector{Int}}}}()  # base => [(flat_idx, indices)]
+    for (key, idx) in var_map
+        parsed = _parse_cell_key(String(key))
+        base, inds = parsed === nothing ? (String(key), Int[]) : parsed
+        push!(get!(groups, base, Tuple{Int,Vector{Int}}[]), (Int(idx), inds))
+    end
+    out = VarGridding[]
+    for base in sort!(collect(keys(groups)))
+        entries = groups[base]
+        ndim = maximum(length(e[2]) for e in entries)
+        if ndim == 0
+            length(entries) == 1 || throw(OutputError(
+                "scalar variable '$base' maps to $(length(entries)) flat indices; a " *
+                "scalar cell key must be unique"))
+            fi = entries[1][1]
+            push!(out, VarGridding(base, [1], ["$(base)_d0"], [fi], [CartesianIndex(1)]))
+        else
+            shape = zeros(Int, ndim)
+            for (_, inds) in entries
+                length(inds) == ndim || throw(OutputError(
+                    "variable '$base' has cells of differing dimensionality " *
+                    "($(length(inds)) vs $ndim); a gridded variable must be rectangular"))
+                @inbounds for d in 1:ndim
+                    shape[d] = max(shape[d], inds[d])
+                end
+            end
+            flat = Int[e[1] for e in entries]
+            cart = CartesianIndex[CartesianIndex(Tuple(e[2])...) for e in entries]
+            dimnames = String["$(base)_d$(d-1)" for d in 1:ndim]
+            push!(out, VarGridding(base, shape, dimnames, flat, cart))
+        end
+    end
+    return out
+end
+
+"""
+    scatter_grid!(grid, g::VarGridding, u) -> grid
+
+Scatter the flat state `u` into the pre-allocated gridded `grid` for variable
+`g`: `grid[cart[k]] = u[flat_indices[k]]`. `grid` must have size `Tuple(g.shape)`.
+"""
+function scatter_grid!(grid::AbstractArray, g::VarGridding, u::AbstractVector)
+    @inbounds for k in eachindex(g.flat_indices)
+        grid[g.cart[k]] = u[g.flat_indices[k]]
+    end
+    return grid
+end
+
+# --------------------------------------------------------------------------- #
+# build_zarr_sink — public surface; concrete ZarrSink lives in the EarthSciIO ext
+# (mirror of build_output_callback / build_refresh_callback: core owns the generic
+# + a throwing fallback, the data binding supplies the method).
+# --------------------------------------------------------------------------- #
+
+"""
+    build_zarr_sink(source, base_url; output_times, kwargs...) -> sink
+
+Construct a concrete Zarr [streaming sink](@ref sink_output_times) writing to the
+store at `base_url` (a `file://` URL or path). `source` is a [`PreparedModel`](@ref)
+(or a bare `var_map` dict); `output_times` are the solver-second anchors at which
+the sink writes. The returned object implements the Sink protocol and is passed to
+[`simulate`](@ref)'s `sinks` keyword.
+
+Requires `EarthSciIO` to be loaded (the concrete sink is in the
+`EarthSciASTEarthSciIOExt` extension); calling it without EarthSciIO throws
+[`OutputError`](@ref).
+"""
+function build_zarr_sink end
+build_zarr_sink(args...; kwargs...) = throw(OutputError(
+    "build_zarr_sink requires the EarthSciIO extension; add `using EarthSciIO` so " *
+    "EarthSciASTEarthSciIOExt (the concrete Zarr sink) is active"))
