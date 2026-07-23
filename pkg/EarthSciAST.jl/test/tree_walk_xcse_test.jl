@@ -137,17 +137,21 @@ end
         end
 
         # Composed with the kernel-CLASS merge (the DEFAULT build, since the
-        # merge hoisted before xcse in build.jl): the two shared-table band
-        # kernels collapse to ONE class kernel that KEEPS their value-identical
-        # interp def as a preserved inv tier, so the interp is a single-kernel
-        # def xcse no longer needs to share — only the query chain (0.1·t, cos)
-        # is still cross-kernel: 2 slots, 2 defs rewritten in each of the K-1
-        # kernels. Values must stay bit-identical through both passes composed.
+        # merge hoisted before xcse in build.jl): the class signature keys an
+        # interp spec's SHAPE, not its content (oop_merge.jl), so ALL K
+        # same-shape band kernels collapse to ONE class kernel whose per-band
+        # tables ride a per-lane spec table (`_InterpLinearLaneSpec`). The
+        # specs VARY across the class, so the merged kernel's formerly
+        # invariant defs (query chain + interp) fold into the per-lane cell
+        # tier — no cross-kernel inv defs remain and xcse rightly mints
+        # nothing. Values must stay bit-identical through both passes
+        # composed — the fold and the per-lane tables move WHERE each band's
+        # numbers are computed, never the numbers.
         fmg!, u0m, pm, _, _, dmg = _xc_build(_xc_fastjx(K, N)[1]; ics, on=true)
-        @test dmg.n_acc_kernels == K - 1
+        @test dmg.n_acc_kernels == 1
         @test dmg.n_classmerge_in == K
-        @test dmg.n_xcse_slots == 2
-        @test dmg.n_xcse_kernel_shared == 2(K - 1)
+        @test dmg.n_xcse_slots == 0
+        @test dmg.n_xcse_kernel_shared == 0
         for t in (0.0, 0.7, 13.9)
             @test _xc_du(fmg!, u0m, pm, t) == _xc_du(foff!, u0f, pf, t)
         end
@@ -283,12 +287,18 @@ end
     @testset "Float64 zero-alloc and Dual bit-identity" begin
         K, N = 4, 8
         model, ics = _xc_fastjx(K, N)
-        fon!, u0, p, _, _, don = _xc_build(model; ics, on=true)
+        # classmerge=false: the property under test is zero-alloc / Dual
+        # bit-identity WITH SHARED SLOTS LIVE, which needs the per-band
+        # kernel multiplicity — the shape-keyed class merge would collapse
+        # all K bands into one lane-tabled kernel and leave xcse nothing to
+        # share (that composition is pinned in the FastJX testset above).
+        fon!, u0, p, _, _, don = _xc_build(model; ics, on=true, classmerge=false)
         @test don.n_xcse_slots > 0
         du = zeros(length(u0))
         @test rhs_alloc_bytes(fon!, du, u0, p, 0.3) == 0
 
-        foff!, u0f, pf, _, _, _ = _xc_build(_xc_fastjx(K, N)[1]; ics, on=false)
+        foff!, u0f, pf, _, _, _ = _xc_build(_xc_fastjx(K, N)[1]; ics, on=false,
+                                            classmerge=false)
         DT = ForwardDiff.Dual{Nothing,Float64,1}
         uD = DT.(u0)
         duD = similar(uD)
@@ -377,9 +387,13 @@ end
     # N-independence: shared-slot count is a property of the document.
     # ----------------------------------------------------------------
     @testset "shared-slot count is N-independent" begin
+        # classmerge=false: the count under test is xcse's own slot count
+        # over the per-band kernel multiplicity (the shape-keyed class merge
+        # would collapse the bands first and leave 0 slots at every N —
+        # trivially N-independent, but not the property this pins).
         counts = map((4, 16, 64)) do N
             model, ics = _xc_fastjx(4, N)
-            _xc_build(model; ics, on=true)[6].n_xcse_slots
+            _xc_build(model; ics, on=true, classmerge=false)[6].n_xcse_slots
         end
         @test all(==(counts[1]), counts)
         @test counts[1] > 0
