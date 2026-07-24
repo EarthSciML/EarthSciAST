@@ -664,6 +664,92 @@ function _build_interp_searchsorted_spec(name::String, xs_raw)::_InterpSearchsor
     return _InterpSearchsortedSpec(_coerce_f64_vec(name, xs_raw, "xs"))
 end
 
+# ---- Per-LANE interp specs (kernel-class merge; tree_walk/oop_merge.jl) -----
+#
+# A merged kernel CLASS whose member kernels call the same `interp.*` function
+# with DIFFERENT (but same-shape) build-time const tables cannot carry ONE
+# scalar spec — evaluating every lane against the representative's table would
+# be the silent wrong numbers `_check_fn_group_specs` exists to prevent. The
+# class merge instead tables the SPECS per lane, exactly as it tables varying
+# state slots / consts / forcing indices (`_AccStateTblBox` / `_AccConstBox`):
+#   * `specs[lane]` is the member's ORIGINAL spec object for that lane. The
+#     scalar walker and the lane tape evaluate lane `l` by calling the SAME
+#     `_interp_*_core` kernel on `specs[lane]`'s own table/axis, so per-lane
+#     results are bit-identical to the unmerged kernels by construction.
+#   * `*_cols` is the knot-major transpose (`col[k][lane] == specs[lane].…[k]`)
+#     the :oop lane evaluator broadcasts over: `_oop_interp_*_lanes` runs the
+#     IDENTICAL locate/select/blend op sequence with each scalar knot replaced
+#     by its length-L lane column, so lane `l` sees exactly its own knots.
+#   * `s1..off` mirror the `_AccStateTblBox` box lane addressing
+#     (lane = off + (midx₁-1)s1 + (midx₂-1)s2 + (midx₃-1)s3; the merge mints
+#     `(1,0,0,1)` with `_outs_cells`, i.e. lane == the merged cell ordinal).
+# Every member spec of one node shares one shape (knot count): the merge
+# signature keys the shape and `_oop_merge_fn_payload` re-verifies it loudly.
+struct _InterpLinearLaneSpec
+    specs::Vector{_InterpLinearSpec}
+    table_cols::Vector{Vector{Float64}}
+    axis_cols::Vector{Vector{Float64}}
+    s1::Int; s2::Int; s3::Int; off::Int
+end
+function _InterpLinearLaneSpec(specs::Vector{_InterpLinearSpec},
+                               s1::Int, s2::Int, s3::Int, off::Int)
+    L = length(specs); n = length(specs[1].axis)
+    table_cols = Vector{Vector{Float64}}(undef, n)
+    axis_cols  = Vector{Vector{Float64}}(undef, n)
+    for k in 1:n
+        table_cols[k] = Float64[specs[l].table[k] for l in 1:L]
+        axis_cols[k]  = Float64[specs[l].axis[k]  for l in 1:L]
+    end
+    return _InterpLinearLaneSpec(specs, table_cols, axis_cols, s1, s2, s3, off)
+end
+
+struct _InterpBilinearLaneSpec
+    specs::Vector{_InterpBilinearSpec}
+    table_cols::Matrix{Vector{Float64}}    # Nx×Ny; table_cols[i,j][lane]
+    axis_x_cols::Vector{Vector{Float64}}
+    axis_y_cols::Vector{Vector{Float64}}
+    s1::Int; s2::Int; s3::Int; off::Int
+end
+function _InterpBilinearLaneSpec(specs::Vector{_InterpBilinearSpec},
+                                 s1::Int, s2::Int, s3::Int, off::Int)
+    L = length(specs)
+    Nx = length(specs[1].axis_x); Ny = length(specs[1].axis_y)
+    table_cols = Matrix{Vector{Float64}}(undef, Nx, Ny)
+    for i in 1:Nx, j in 1:Ny
+        table_cols[i, j] = Float64[specs[l].table[i][j] for l in 1:L]
+    end
+    axis_x_cols = Vector{Vector{Float64}}(undef, Nx)
+    for k in 1:Nx
+        axis_x_cols[k] = Float64[specs[l].axis_x[k] for l in 1:L]
+    end
+    axis_y_cols = Vector{Vector{Float64}}(undef, Ny)
+    for k in 1:Ny
+        axis_y_cols[k] = Float64[specs[l].axis_y[k] for l in 1:L]
+    end
+    return _InterpBilinearLaneSpec(specs, table_cols, axis_x_cols, axis_y_cols,
+                                   s1, s2, s3, off)
+end
+
+struct _InterpSearchsortedLaneSpec
+    specs::Vector{_InterpSearchsortedSpec}
+    xs_cols::Vector{Vector{Float64}}
+    s1::Int; s2::Int; s3::Int; off::Int
+end
+function _InterpSearchsortedLaneSpec(specs::Vector{_InterpSearchsortedSpec},
+                                     s1::Int, s2::Int, s3::Int, off::Int)
+    L = length(specs); n = length(specs[1].xs)
+    xs_cols = Vector{Vector{Float64}}(undef, n)
+    for k in 1:n
+        xs_cols[k] = Float64[specs[l].xs[k] for l in 1:L]
+    end
+    return _InterpSearchsortedLaneSpec(specs, xs_cols, s1, s2, s3, off)
+end
+
+# The lane a per-lane spec serves at cell multi-index `midx` — byte-for-byte
+# the `_AccStateTblBox`/`_AccConstBox` box addressing in `_fetch`.
+@inline _interp_lane(h, midx::NTuple{3,Int}) =
+    h.off + (midx[1]-1)*h.s1 + (midx[2]-1)*h.s2 + (midx[3]-1)*h.s3
+
 @inline function _expect_arity(name::String, args::AbstractVector, n::Int)
     length(args) == n ||
         throw(ClosedFunctionError("closed_function_arity",

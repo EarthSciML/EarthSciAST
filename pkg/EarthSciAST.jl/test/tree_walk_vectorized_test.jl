@@ -471,15 +471,23 @@ end
         @test _bitsame(du[2], refA)
         @test _bitsame(du[3], refB)
         @test _bitsame(du[4], refB)
-        # Two distinct tables ⇒ two kernels on the default paths. (Before the
-        # fix the per-cell paths collapsed to ONE kernel and returned refA in
-        # all four cells.) The DISABLED reference builds per-cell SCALAR
-        # entries — no array kernels at all, by design.
+        # Two distinct tables ⇒ two kernels out of the COMPILE (pinned via
+        # `n_classmerge_in`); the kernel-CLASS merge then collapses the two
+        # same-SHAPE region kernels into ONE lane-batched kernel whose interp
+        # specs ride a per-lane spec table (oop_merge.jl `_Interp*LaneSpec`) —
+        # each lane still evaluates against ITS OWN region's table, exactly
+        # what the per-cell value pins above assert. (Before the original fix
+        # the per-cell paths collapsed to one kernel with ONE shared spec and
+        # returned refA in all four cells — that hazard is now excluded by the
+        # per-lane spec table, not by keeping the kernels apart.) The DISABLED
+        # reference builds per-cell SCALAR entries — no array kernels at all,
+        # by design.
         if disable
             @test d.n_vec_kernels + d.n_acc_kernels == 0
             @test d.n_scalar_entries == N
         else
-            @test d.n_vec_kernels + d.n_acc_kernels == 2
+            @test d.n_vec_kernels + d.n_acc_kernels == 1
+            @test d.n_classmerge_in == 2
         end
     end
 
@@ -531,7 +539,12 @@ end
             ds = [_diag(N, false) for N in (8, 16, 64)]
             akerns(d) = d.n_vec_kernels + d.n_acc_kernels
             @test akerns(ds[1]) == akerns(ds[2]) == akerns(ds[3])
-            @test akerns(ds[1]) == 2   # one kernel per distinct table, not per cell
+            # One kernel per distinct-table CLASS out of the compile (pinned
+            # below), collapsed by the class merge into ONE lane-batched
+            # kernel with a per-lane spec table — still not per cell, and
+            # still N-independent.
+            @test akerns(ds[1]) == 1
+            @test all(d -> d.n_classmerge_in == 2, ds)
         end
         @testset "per-cell scalar reference (disabled)" begin
             # The forced reference is DELIBERATELY per-cell: scalar entries grow
