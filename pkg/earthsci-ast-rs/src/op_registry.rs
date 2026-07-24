@@ -216,9 +216,13 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         "and" | "or" => Arity::AtLeast(2),
         "not" => Arity::Exact(1),
 
-        // --- Calculus (§4.2). A `D` with `wrt: "t"` is the structural time
-        // derivative (evaluable-core); a SPATIAL `D` is a rewrite target and is
-        // caught by `classify` below, which inspects `wrt`.
+        // --- Calculus (§4.2 "Arity of `D`"). This table is keyed by op STRING,
+        // so it states the STRUCTURAL time derivative's contract: `wrt: "t"` (or
+        // an absent `wrt`) is evaluable-core, consumed by system assembly, and
+        // STRICTLY UNARY. A SPATIAL `D` is a rewrite target — it never reaches
+        // an arity check here (`check_node` short-circuits it to `Unlowered`
+        // first via `is_rewrite_target_derivative`), so it may carry trailing
+        // auxiliary boundary operands (esm-spec §4.2 "Arity of `D`").
         "D" | "ic" => Arity::Exact(1),
 
         // --- Events (§4.2).
@@ -271,6 +275,24 @@ pub fn is_core_op(op: &str) -> bool {
     arity_of(op).is_some()
 }
 
+/// Is this node a **rewrite-target** `D` — a derivative whose `wrt` names a
+/// SPATIAL axis rather than the time variable (esm-spec §4.2 / §9.6.8)?
+///
+/// `D` is the one op whose tier — and therefore whose operand contract — depends
+/// on a FIELD of the node rather than on its name. A spatial `D` has no
+/// evaluator (it MUST be lowered to a stencil by a discretization rule), which
+/// is exactly why it MAY carry TRAILING AUXILIARY OPERANDS after `args[0]`: the
+/// per-face boundary/halo values the rule binds as ordinary §9.6.1 wildcards and
+/// consumes. The STRUCTURAL time derivative (`wrt: "t"`, or absent — an absent
+/// `wrt` means `t`) is not a rewrite target and stays strictly unary.
+///
+/// This is the single home of that predicate; both `check_node` and the
+/// dimensional checker (`crate::units`) read it rather than re-deriving it.
+#[must_use]
+pub fn is_rewrite_target_derivative(node: &ExpressionNode) -> bool {
+    node.op == "D" && node.wrt.as_deref().is_some_and(|w| w != "t")
+}
+
 /// Classify one operator node: `Ok(())` if it is an evaluable-core op with a
 /// legal arity, otherwise the reason it may not reach an evaluator.
 ///
@@ -288,7 +310,7 @@ pub fn check_node(node: &ExpressionNode) -> Result<(), OpError> {
 
     // A spatial `D` — or any `D` carrying a non-time `wrt` — is a rewrite
     // target, not the structural time derivative.
-    if op == "D" && node.wrt.as_deref().is_some_and(|w| w != "t") {
+    if is_rewrite_target_derivative(node) {
         return Err(OpError::Unlowered { op: op.to_string() });
     }
 

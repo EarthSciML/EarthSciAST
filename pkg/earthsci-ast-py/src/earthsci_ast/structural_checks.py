@@ -512,8 +512,18 @@ def _check_expression_arity(expr, errors: list[str], path: str) -> None:
     if isinstance(expr, dict) and "op" in expr and "args" in expr:
         op = expr["op"]
         args = expr["args"]
-        if op in _OPERATOR_ARITY:
-            min_args, max_args = _OPERATOR_ARITY[op]
+        # `D` is the ONE op whose operand contract depends on a FIELD of the node
+        # rather than on the op string alone (esm-spec §4.2 "Arity of `D`"): the
+        # STRUCTURAL time derivative (`wrt: "t"`, or absent) is strictly unary,
+        # while a REWRITE-TARGET `D` (spatial `wrt`) MAY carry unbounded trailing
+        # auxiliary operands — the per-face boundary/halo values a discretization
+        # rule binds and consumes (§9.6.8). The predicate lives in the registry so
+        # this walk does not re-derive it.
+        bounds = _OPERATOR_ARITY.get(op)
+        if op_registry.is_rewrite_target_derivative(op, expr.get("wrt")):
+            bounds = op_registry.REWRITE_TARGET_DERIVATIVE_ARITY_BOUNDS
+        if bounds is not None:
+            min_args, max_args = bounds
             n = len(args)
             if n < min_args:
                 errors.append(f"{path}: operator '{op}' requires at least {min_args} args, got {n}")

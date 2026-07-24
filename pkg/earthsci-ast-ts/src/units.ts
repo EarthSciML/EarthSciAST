@@ -17,7 +17,11 @@ import {
   UnitConversionError,
 } from './unit-conversion.js'
 import { isNumericLiteral } from './numeric-literal.js'
-import { getOpInfo } from './op-registry.js'
+import {
+  getOpInfo,
+  isRewriteTargetDerivative,
+  REWRITE_TARGET_DERIVATIVE_ARITY,
+} from './op-registry.js'
 import { forEachComponent, forEachEquation } from './traverse.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
@@ -462,7 +466,15 @@ function computeDimensions(
     }
 
     case 'D': {
-      const arity = arityWarning('D', 'Derivative D()', args.length)
+      // A REWRITE-TARGET `D` may carry trailing auxiliary boundary operands after
+      // `args[0]` (esm-spec §4.2 "Arity of `D`"); the dimensional rule reads
+      // `args[0]` alone and must not report them as an arity defect. The
+      // structural time derivative stays strictly unary.
+      const arity = isRewriteTargetDerivative(node)
+        ? args.length < REWRITE_TARGET_DERIVATIVE_ARITY.min
+          ? `Derivative D() requires at least ${REWRITE_TARGET_DERIVATIVE_ARITY.min} argument, got ${args.length}`
+          : null
+        : arityWarning('D', 'Derivative D()', args.length)
       if (arity) {
         warn(arity, 'analysis')
         return unknown()

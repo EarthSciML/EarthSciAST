@@ -330,7 +330,19 @@ const _OP_TABLE = _OpSpec[
     #    handling that REJECTS them, not a privilege. `D`/`ic` keep `cse=true`:
     #    `D` is in T but `ic` is not, and both stay CSE barriers via their own
     #    `_compile_op` arms regardless.
-    _op("D";         category=:calculus, cse=true, known=true),
+    #    `D`'s arity is FIELD-dependent (esm-spec §4.2 "Arity of `D`"), which is
+    #    why the nominal range below is open-ended rather than `1:1`. The
+    #    STRUCTURAL time derivative (`wrt == "t"`, or an absent `wrt`) is
+    #    evaluable-core, consumed by system assembly, and STRICTLY UNARY — that
+    #    half is enforced by the schema's `D`/`wrt:"t"` clause, which every
+    #    binding validates against. A REWRITE-TARGET `D` (spatial `wrt`) MAY
+    #    carry TRAILING AUXILIARY OPERANDS after `args[1]`: the per-face
+    #    boundary/halo values a discretization rule binds as ordinary §9.6.1
+    #    wildcards and consumes (§9.6.8). Their count is unbounded — a property
+    #    of the scheme, not of the format — and they carry no evaluator
+    #    semantics, since a spatial `D` is never evaluated directly. Declaring
+    #    the range makes that union EXPLICIT instead of leaving it to `nothing`.
+    _op("D";         arity=1:typemax(Int), category=:calculus, cse=true, known=true),
     _op("ic";        category=:calculus, cse=true, known=true),
     _op("grad";      category=:calculus),
     _op("div";       category=:calculus),

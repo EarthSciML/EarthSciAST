@@ -1,0 +1,1568 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "advection_1d_ppm_periodic",
+    "description": "SELF-CONTAINED regression fixture (earthsci-ast-rs only) for the deep PPM template chain. Byte-equivalent in meaning to EarthSciDiscretizations problems/advection_1d_ppm_periodic.esm with its grids/cartesian_uniform_1d/rules/ppm_D_periodic import chain (rule + ppm_D_interior + ppm_flux + ppm_face_value{,_mono} + ppm_slope{,_mono} + ppm_limit_right + grid) resolved INLINE, so the test needs no sibling repository. MMS driver: 1-D linear advection u_t = -c u_x on the periodic unit interval [0, 1], discretized by grids/cartesian_uniform_1d/rules/ppm_D_periodic (Piecewise Parabolic Method, Colella-Woodward 1984; conservative finite-volume, semi-discrete method-of-lines flux, non-negative speed). Exact solution u(x,t) = sin(2 pi (x - c t)) transported at speed c with no change of shape, so no forcing term is required. FLUX FORM: the rule uses the semi-discrete reconstructed-edge PPM flux F_{i+1/2} = qr_lim(cell i) (the CW84-limited right edge of the upwind cell), not the fully-discrete Courant-integral flux, because the ESS simulate() pathway is method-of-lines (the rule provides only D(u,x); the ODE integrator owns dt) -- see the rule file for the full rationale. OBSERVED ORDER (honest): PPM is nominally 3rd order (parabolic reconstruction) and the unlimited flux-difference is exactly 4th-order central, but the original CW84 monotonicity limiter still clips the two smooth extrema of the sine (the classic smooth-extremum clipping of the 1984 limiter), flattening the parabola there to first order. The global order is therefore sub-nominal and norm-dependent -- about 1.7 in L2 and 1.3 in Linf over N=16..128; the convergence gate (tests/conformance/convergence/advection_1d_ppm_periodic) asserts the honestly-observed order, NOT the nominal 3. CONSERVATION: the flux-difference telescopes on the periodic ring and neighbouring cells share the identical float face flux, so sum(u) (hence mean(u)) is preserved to the bit -- the t=0.1 mean-conservation assertion pins this. The grid's consumer-supplied geometry contract (grids/cartesian_uniform_1d/grid.esm) is fulfilled for [0, 1]: x0 = 0 (parameter) and dx = 1/N (an observed dividing the extent by the metaparameter name N, esm-spec 9.7.6, so the convergence sweep's loader-API rebinding of N keeps dx consistent) resolve the rule body's free dx at evaluation. Initial condition and test references spell the grid's index-to-coordinate conversion x_i = x0 + (i - 1/2) dx = 0 + (i - 1/2)(1/N) inline with load-foldable scalars, not via the free-name x_coord template: the official 6.6.5/ic build-time cellwise evaluation is scope-free (model parameters/observeds are not in scope there).",
+    "license": "MIT",
+    "tags": [
+      "esd:problem",
+      "grid:cartesian_uniform_1d",
+      "equation:advection",
+      "mms"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "LeVeque, R. J. (2002). Finite Volume Methods for Hyperbolic Problems. Cambridge University Press. Chapter 6 (high-resolution methods) and Chapter 9 (systems)."
+      }
+    ]
+  },
+  "metaparameters": {
+    "N": {
+      "type": "integer",
+      "default": 64,
+      "description": "Number of cells along x."
+    }
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": "N"
+    }
+  },
+  "models": {
+    "AdvectionPPM": {
+      "expression_templates": {
+        "x_coord": {
+          "params": [],
+          "description": "Cell-center coordinates x_i = x0 + (i - 1/2) dx, shaped over the x index set. x0 and dx are free names supplied by the consuming model (see metadata.description for the contract).",
+          "body": {
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "x0",
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "i",
+                        0.5
+                      ]
+                    },
+                    "dx"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "ppm_slope": {
+          "params": [
+            "am",
+            "ap"
+          ],
+          "description": "CW84 eq.(1.7) uniform-mesh average slope (ap - am)/2",
+          "body": {
+            "op": "*",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  1,
+                  2
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "ap",
+                  "am"
+                ]
+              }
+            ]
+          }
+        },
+        "ppm_slope_mono": {
+          "params": [
+            "am",
+            "a0",
+            "ap"
+          ],
+          "description": "CW84 eq.(1.8) monotonized slope: 0 at an extremum, else the raw slope clamped to +-2 min(|a0-am|,|ap-a0|)",
+          "body": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "ap",
+                          "a0"
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          "a0",
+                          "am"
+                        ]
+                      }
+                    ]
+                  },
+                  0
+                ]
+              },
+              {
+                "op": "max",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          2,
+                          {
+                            "op": "min",
+                            "args": [
+                              {
+                                "op": "abs",
+                                "args": [
+                                  {
+                                    "op": "-",
+                                    "args": [
+                                      "a0",
+                                      "am"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "abs",
+                                "args": [
+                                  {
+                                    "op": "-",
+                                    "args": [
+                                      "ap",
+                                      "a0"
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "min",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          2,
+                          {
+                            "op": "min",
+                            "args": [
+                              {
+                                "op": "abs",
+                                "args": [
+                                  {
+                                    "op": "-",
+                                    "args": [
+                                      "a0",
+                                      "am"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "abs",
+                                "args": [
+                                  {
+                                    "op": "-",
+                                    "args": [
+                                      "ap",
+                                      "a0"
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_slope",
+                        "bindings": {
+                          "am": "am",
+                          "ap": "ap"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              0
+            ]
+          }
+        },
+        "ppm_face_value_mono": {
+          "params": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "description": "face = b + (1/2)(c-b) + (1/6)(slope_mono(a,b,c) - slope_mono(b,c,d))",
+          "body": {
+            "op": "+",
+            "args": [
+              "b",
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      1,
+                      2
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "c",
+                      "b"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      1,
+                      6
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_slope_mono",
+                        "bindings": {
+                          "am": "a",
+                          "a0": "b",
+                          "ap": "c"
+                        }
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_slope_mono",
+                        "bindings": {
+                          "am": "b",
+                          "a0": "c",
+                          "ap": "d"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "ppm_limit_right": {
+          "params": [
+            "ql",
+            "qr",
+            "qi"
+          ],
+          "description": "CW84 limited right edge qr_lim(ql,qr,qi)",
+          "body": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": "<=",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "qr",
+                          "qi"
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          "qi",
+                          "ql"
+                        ]
+                      }
+                    ]
+                  },
+                  0
+                ]
+              },
+              "qi",
+              {
+                "op": "ifelse",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "^",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "qr",
+                                  "ql"
+                                ]
+                              },
+                              2
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              "qr",
+                              "ql"
+                            ]
+                          },
+                          {
+                            "op": "*",
+                            "args": [
+                              6,
+                              {
+                                "op": "-",
+                                "args": [
+                                  "qi",
+                                  {
+                                    "op": "*",
+                                    "args": [
+                                      {
+                                        "op": "/",
+                                        "args": [
+                                          1,
+                                          2
+                                        ]
+                                      },
+                                      {
+                                        "op": "+",
+                                        "args": [
+                                          "ql",
+                                          "qr"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          3,
+                          "qi"
+                        ]
+                      },
+                      {
+                        "op": "*",
+                        "args": [
+                          2,
+                          "ql"
+                        ]
+                      }
+                    ]
+                  },
+                  "qr"
+                ]
+              }
+            ]
+          }
+        },
+        "ppm_flux": {
+          "params": [
+            "um2",
+            "um1",
+            "u0",
+            "up1",
+            "up2"
+          ],
+          "description": "F_{i+1/2}=CW84 limited right edge of the upwind cell u0",
+          "body": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_limit_right",
+            "bindings": {
+              "ql": {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "ppm_face_value_mono",
+                "bindings": {
+                  "a": "um2",
+                  "b": "um1",
+                  "c": "u0",
+                  "d": "up1"
+                }
+              },
+              "qr": {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "ppm_face_value_mono",
+                "bindings": {
+                  "a": "um1",
+                  "b": "u0",
+                  "c": "up1",
+                  "d": "up2"
+                }
+              },
+              "qi": "u0"
+            }
+          }
+        },
+        "ppm_D_interior": {
+          "params": [
+            "f"
+          ],
+          "description": "interior (F_{i+1/2}-F_{i-1/2})/dx over [4,N-2]",
+          "body": {
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "args": [
+              "f"
+            ],
+            "ranges": {
+              "i": [
+                4,
+                {
+                  "op": "-",
+                  "args": [
+                    "N",
+                    2
+                  ]
+                }
+              ]
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "apply_expression_template",
+                      "args": [],
+                      "name": "ppm_flux",
+                      "bindings": {
+                        "um2": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        "um1": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "u0": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            "i"
+                          ]
+                        },
+                        "up1": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "up2": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                2
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "op": "apply_expression_template",
+                      "args": [],
+                      "name": "ppm_flux",
+                      "bindings": {
+                        "um2": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                3
+                              ]
+                            }
+                          ]
+                        },
+                        "um1": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        "u0": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "up1": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            "i"
+                          ]
+                        },
+                        "up2": {
+                          "op": "index",
+                          "args": [
+                            "f",
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                "dx"
+              ]
+            }
+          }
+        },
+        "ppm_D_periodic": {
+          "params": [
+            "u"
+          ],
+          "priority": 10,
+          "match": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "x"
+          },
+          "where": {
+            "u": {
+              "shape": [
+                "x"
+              ]
+            }
+          },
+          "body": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  4,
+                  {
+                    "op": "-",
+                    "args": [
+                      "N",
+                      2
+                    ]
+                  }
+                ]
+              ],
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ],
+              [
+                [
+                  {
+                    "op": "-",
+                    "args": [
+                      "N",
+                      1
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "N",
+                      1
+                    ]
+                  }
+                ]
+              ],
+              [
+                [
+                  "N",
+                  "N"
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "ppm_D_interior",
+                "bindings": {
+                  "f": "u"
+                }
+              },
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              2
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              3
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  2
+                                ]
+                              }
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              2
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "dx"
+                ]
+              },
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              2
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              3
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              4
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              2
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              3
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "dx"
+                ]
+              },
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              2
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              3
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              4
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              5
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              2
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              3
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              4
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "dx"
+                ]
+              },
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  3
+                                ]
+                              }
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  2
+                                ]
+                              }
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  4
+                                ]
+                              }
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  3
+                                ]
+                              }
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  2
+                                ]
+                              }
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "dx"
+                ]
+              },
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  2
+                                ]
+                              }
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              2
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "ppm_flux",
+                        "bindings": {
+                          "um2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  3
+                                ]
+                              }
+                            ]
+                          },
+                          "um1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  2
+                                ]
+                              }
+                            ]
+                          },
+                          "u0": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "N",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          "up1": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              "N"
+                            ]
+                          },
+                          "up2": {
+                            "op": "index",
+                            "args": [
+                              "u",
+                              1
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "dx"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "state",
+          "units": "kg/m^3",
+          "shape": [
+            "x"
+          ],
+          "description": "Advected tracer field over the x index set."
+        },
+        "c": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1.0,
+          "description": "Constant transport speed (non-negative; the PPM upwind flux assumes flow in +x)."
+        },
+        "x0": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0,
+          "description": "Left domain edge a = 0 (unit interval): the grid's x0 free name (consumer-supplied geometry contract, grids/cartesian_uniform_1d/grid.esm)."
+        },
+        "dx": {
+          "type": "observed",
+          "units": "m",
+          "expression": {
+            "op": "/",
+            "args": [
+              1,
+              "N"
+            ]
+          },
+          "description": "Grid spacing (b - a)/N = 1/N: the grid's dx free name, resolved inside the rewrite rule's expanded body at evaluation. N is the document-scoped metaparameter (re-exported up the import chain), substituted as an integer literal at load (esm-spec 9.7.6), so loader-API rebinding for the convergence sweep keeps dx consistent."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "sin",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  6.283185307179586,
+                  {
+                    "op": "aggregate",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "args": [],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    },
+                    "expr": {
+                      "op": "+",
+                      "args": [
+                        0,
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                0.5
+                              ]
+                            },
+                            {
+                              "op": "/",
+                              "args": [
+                                1,
+                                "N"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "c"
+                ]
+              },
+              {
+                "op": "D",
+                "args": [
+                  "u"
+                ],
+                "wrt": "x"
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "mms_transport",
+          "description": "Exact solution u(x,t) = sin(2 pi (x - c t)) with c = 1. Derivation: u_t = -2 pi c cos(2 pi (x - c t)) = -c u_x exactly, periodic on [0,1]; no forcing term. References evaluate at the cell centers x_i = x0 + (i - 1/2) dx = 0 + (i - 1/2)/N, spelled inline per esm-spec 6.6.5 (1-based index space; build-time evaluation folds literals and metaparameters only). The t=0 assertion pins the ic wiring (L2_error 0 within 1e-9). The t=0.1 L2_error assertion bounds the PPM transport error (about 5e-4 relative L2 at the default N=64, well under the 0.01 cap, which holds across the convergence sweep). The t=0.1 mean assertion pins EXACT conservation: the semi-discrete PPM flux-difference telescopes on the periodic ring, so mean(u) is preserved to the bit at its analytic value 0 (the discrete sine has zero mean over the full period). Exact per-resolution errors are pinned in tests/conformance/convergence/advection_1d_ppm_periodic/golden/errors.json.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.1
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "sin",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      6.283185307179586,
+                      {
+                        "op": "aggregate",
+                        "output_idx": [
+                          "i"
+                        ],
+                        "args": [],
+                        "ranges": {
+                          "i": {
+                            "from": "x"
+                          }
+                        },
+                        "expr": {
+                          "op": "+",
+                          "args": [
+                            0,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    "N"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.1,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 0.01
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "sin",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      6.283185307179586,
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "aggregate",
+                            "output_idx": [
+                              "i"
+                            ],
+                            "args": [],
+                            "ranges": {
+                              "i": {
+                                "from": "x"
+                              }
+                            },
+                            "expr": {
+                              "op": "+",
+                              "args": [
+                                0,
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "i",
+                                        0.5
+                                      ]
+                                    },
+                                    {
+                                      "op": "/",
+                                      "args": [
+                                        1,
+                                        "N"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          0.1
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.1,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "reduce": "mean"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

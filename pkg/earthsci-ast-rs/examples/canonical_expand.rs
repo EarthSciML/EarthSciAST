@@ -21,7 +21,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
-use earthsci_ast::lower_expression_templates::lower_expression_templates;
+use earthsci_ast::lower_expression_templates::{expand, lower_expression_templates};
 use earthsci_ast::template_imports::resolve_template_machinery;
 use serde_json::Value;
 
@@ -166,6 +166,13 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("resolve_template_machinery: {e}"))?;
     let mut doc = resolved.unwrap_or(raw);
     lower_expression_templates(&mut doc).map_err(|e| format!("lower_expression_templates: {e}"))?;
+    // Option B (esm-spec §9.6.4) load resolves but no longer inlines template
+    // references; `lower_expression_templates` leaves surviving
+    // `apply_expression_template` nodes in place. This example emits the
+    // canonical POST-LOWERING (fully-expanded) form — the `Expand` oracle of
+    // §9.6.4 rule 2 / §9.6.7 that the EarthSciDiscretizations `ast` goldens pin
+    // — so materialize those references before canonical emission.
+    expand(&mut doc).map_err(|e| format!("expand: {e}"))?;
     print!("{}", canonical_bytes(&doc)?);
     Ok(())
 }

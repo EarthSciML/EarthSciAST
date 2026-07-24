@@ -323,7 +323,7 @@ export const schema: AnySchemaObject = {
         },
         "args": {
           "type": "array",
-          "description": "Operand list. For most ops these are sub-expressions. Array ops use args for the input array operands (aggregate, broadcast, index, reshape, transpose, concat). makearray has no natural args and uses an empty array.",
+          "description": "Operand list. For most ops these are sub-expressions. Array ops use args for the input array operands (aggregate, broadcast, index, reshape, transpose, concat). makearray has no natural args and uses an empty array. For `D` (esm-spec §4.2 \"Arity of `D`\"): `args[0]` is always the differentiated operand; a STRUCTURAL `D` (`wrt` \"t\", or `wrt` absent) is strictly unary, while a REWRITE-TARGET `D` (spatial `wrt`) MAY carry an unbounded number of TRAILING AUXILIARY OPERANDS after `args[0]` — the per-face boundary/halo data a discretization rule binds and consumes (§9.6.8). Trailing operands carry NO evaluator semantics and no per-position meaning assigned by this format; they are matched positionally by the consuming rule.",
           "items": {
             "$ref": "#/$defs/Expression"
           },
@@ -331,7 +331,7 @@ export const schema: AnySchemaObject = {
         },
         "wrt": {
           "type": "string",
-          "description": "Differentiation variable for the `D` op: the time variable `t` (structural, equation-LHS use) OR a spatial axis (e.g. \"x\", \"lon\"). A `D` with a spatial `wrt`, or any `D` appearing in a right-hand-side expression position, is a rewrite-target (esm-spec §9.6.8): it MUST be lowered to a stencil by a discretization rule before evaluation, else `unlowered_operator`."
+          "description": "Differentiation variable for the `D` op: the time variable `t` (structural, equation-LHS use) OR a spatial axis (e.g. \"x\", \"lon\"). Absent means `t`. A `D` with a spatial `wrt`, or any `D` appearing in a right-hand-side expression position, is a rewrite-target (esm-spec §9.6.8): it MUST be lowered to a stencil by a discretization rule before evaluation, else `unlowered_operator`. `wrt` also fixes this node's ARITY (esm-spec §4.2 \"Arity of `D`\"): `wrt` \"t\" (or absent) is STRICTLY UNARY, enforced by the `D` clause of this object's `allOf`; a spatial `wrt` MAY carry unbounded trailing auxiliary operands in `args[1..]`."
         },
         "dim": {
           "type": "string",
@@ -801,6 +801,31 @@ export const schema: AnySchemaObject = {
               "lower",
               "upper"
             ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1
+              }
+            }
+          }
+        },
+        {
+          "$comment": "esm-spec §4.2 \"Arity of `D`\" / §9.6.8. The STRUCTURAL time derivative is strictly unary: it is evaluable-core and is consumed by system assembly, which has no place for a second operand. An absent `wrt` means `t`, so this clause fires on {op:D} with no `wrt` too (the `properties` subschema is vacuously satisfied). A REWRITE-TARGET `D` (any `wrt` other than \"t\", including a parameter-valued `wrt` inside a rewrite-rule `match`) is deliberately NOT constrained here: it may carry an unbounded number of trailing auxiliary operands — per-face boundary/halo data that a discretization rule binds and consumes — which have no evaluator semantics because a spatial `D` is never evaluated directly.",
+          "if": {
+            "properties": {
+              "op": {
+                "const": "D"
+              },
+              "wrt": {
+                "const": "t"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
             "properties": {
               "args": {
                 "type": "array",

@@ -224,7 +224,10 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("ifelse", "conditional", "ternary", arity_bounds=(3, 3)),
     # --- calculus (esm-spec §4.2 Calculus) ---
     OpSpec("D", "calculus", "unary", arity_bounds=(1, 1),
-           note="structural time-derivative LHS; a spatial/RHS D is rewrite-target"),
+           note="STRUCTURAL time-derivative LHS (`wrt` 't', or absent): STRICTLY UNARY. "
+                "A REWRITE-TARGET D (spatial `wrt`) relaxes to "
+                "REWRITE_TARGET_DERIVATIVE_ARITY_BOUNDS — see "
+                "`is_rewrite_target_derivative`"),
     OpSpec("ic", "calculus", "unary", arity_bounds=(1, 1),
            note="initial-condition declaration (esm-spec §11.4)"),
     # --- event-specific (esm-spec §4.2 Event-specific / §5) ---
@@ -332,6 +335,35 @@ def arity_bounds_map() -> dict[str, tuple[int, int | None]]:
         for name, spec in OPS.items()
         if spec.arity_bounds is not None
     }
+
+
+#: The ``wrt`` value that marks the STRUCTURAL time derivative. A ``D`` node with
+#: this ``wrt`` — or with no ``wrt`` at all, which means the same thing — is the
+#: evaluable-core, equation-LHS derivative consumed by system assembly.
+STRUCTURAL_DERIVATIVE_WRT: str = "t"
+
+#: Arity bounds a REWRITE-TARGET ``D`` relaxes to (esm-spec §4.2 "Arity of `D`").
+#: ``args[0]`` is still the differentiated operand, so the minimum stays 1; the
+#: maximum is UNBOUNDED because how many auxiliary boundary/halo fields a
+#: discretization scheme needs is a property of the scheme, not of the format.
+REWRITE_TARGET_DERIVATIVE_ARITY_BOUNDS: tuple[int, int | None] = (1, None)
+
+
+def is_rewrite_target_derivative(op: str, wrt: str | None) -> bool:
+    """True for a ``D`` whose ``wrt`` names a SPATIAL axis (esm-spec §4.2 / §9.6.8).
+
+    Such a node has no evaluator — it MUST be lowered to a stencil by a
+    discretization rule — which is exactly why it MAY carry trailing auxiliary
+    operands after ``args[0]``: the per-face boundary/halo values the rule binds
+    as ordinary §9.6.1 wildcards and consumes. The STRUCTURAL time derivative
+    (``wrt`` :data:`STRUCTURAL_DERIVATIVE_WRT`, or absent) is *not* a
+    rewrite-target and stays strictly unary.
+
+    This is the ONE op whose operand contract depends on a FIELD of the node
+    rather than on the op string alone, so it lives here — the registry — and
+    every checker inherits it instead of re-deriving the predicate.
+    """
+    return op == "D" and (wrt or STRUCTURAL_DERIVATIVE_WRT) != STRUCTURAL_DERIVATIVE_WRT
 
 
 def is_known(op: str) -> bool:

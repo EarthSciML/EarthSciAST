@@ -794,14 +794,19 @@ end
 # rejects a derivative equation that no choice of time unit could reconcile,
 # which is what the invalid corpus actually pins.
 function _derivative_rule(expr, var_units, findings)
-    if length(expr.args) != 1
+    wrt = expr.wrt !== nothing ? expr.wrt : "t"
+    # esm-spec §4.2 "Arity of `D`": the STRUCTURAL time derivative is strictly
+    # unary, but a REWRITE-TARGET `D` (spatial `wrt`) MAY carry trailing
+    # auxiliary operands after `args[1]` — the per-face boundary/halo values a
+    # discretization rule binds and consumes. They carry no evaluator semantics,
+    # so the dimensional rule reads `args[1]` alone and ignores the rest.
+    max_args = wrt == "t" ? 1 : typemax(Int)
+    if length(expr.args) < 1 || length(expr.args) > max_args
         @debug "Derivative operator D requires exactly 1 argument"
         return nothing
     end
 
     var_dim = _expr_dimensions!(findings, expr.args[1], var_units)
-
-    wrt = expr.wrt !== nothing ? expr.wrt : "t"
     haskey(var_units, wrt) || return nothing
     wrt_dim = _absolute_unit(parse_units(var_units[wrt]))
 

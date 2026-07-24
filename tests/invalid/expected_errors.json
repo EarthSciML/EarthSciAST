@@ -2808,5 +2808,16 @@
     "resolver_only": true,
     "resolver_error_code": "geometry_manifold_invalid",
     "notes": "Resolver-level invalid (esm-spec §9.6.6 `geometry_manifold_invalid`). The manifold \"flat\" is not in the closed set {planar, spherical, geodesic}. The file is SCHEMA-VALID ON PURPOSE and MUST stay that way: the schema types `manifold` as `anyOf: [enum, string]` so a template `body` may carry a template-PARAMETER name there (a §9.6.1 scalar-field substitution site). The closed set is therefore enforced POST-EXPANSION (§9.6.4), not by the schema — so this fixture pins the resolver, exactly like makearray_region_inverted.esm and index_set_conflict.esm. A binding that 'fixed' this by tightening the schema enum would break every parameterised geometry template."
+  },
+  "derivative_time_multi_operand.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/BadTimeDerivative/equations/0/lhs/args",
+        "message": "must NOT have more than 1 items",
+        "keyword": "maxItems"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false
   }
 }

@@ -74,7 +74,7 @@ const (
 // (esm-spec §4.2 / §9). applyExpressionTemplateOp already lives in
 // lower_expression_templates.go and is intentionally not redeclared here. ---
 const (
-	OpDerivative  = "D"            // time-derivative op in its structural equation-LHS role
+	OpDerivative  = "D"            // derivative op (structural time derivative, or a spatial rewrite target)
 	OpIC          = "ic"           // initial-condition wrapper
 	OpConst       = "const"        // inline literal payload node
 	OpFn          = "fn"           // closed-registry function call

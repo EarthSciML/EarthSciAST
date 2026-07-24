@@ -236,8 +236,32 @@ export const OPS: Record<string, OpInfo> = {
 
   // ---- event / structural ops (no scalar evaluator) -----------------------
   Pre: { arity: { min: 1, max: 1 }, cost: 5 },
+  // The registry is keyed by op STRING, so this row states the STRUCTURAL time
+  // derivative's contract (`wrt: 't'`, or an absent `wrt`): evaluable-core,
+  // consumed by system assembly, STRICTLY UNARY. A spatial `D` is a
+  // rewrite-target whose arity relaxes — see `isRewriteTargetDerivative`.
   D: { arity: { min: 1, max: 1 }, cost: 30 },
 }
+
+/**
+ * Is this node a REWRITE-TARGET `D` — a derivative whose `wrt` names a SPATIAL
+ * axis rather than the time variable (esm-spec §4.2 "Arity of `D`" / §9.6.8)?
+ *
+ * `D` is the one op whose tier — and therefore whose operand contract — depends
+ * on a FIELD of the node rather than on its name. A spatial `D` has no evaluator
+ * (it MUST be lowered to a stencil by a discretization rule), which is exactly
+ * why it MAY carry TRAILING AUXILIARY OPERANDS after `args[0]`: the per-face
+ * boundary/halo values the rule binds as ordinary §9.6.1 wildcards and consumes.
+ * Their count is unbounded and they carry no evaluator semantics. The structural
+ * time derivative (`wrt: 't'`, or absent — an absent `wrt` means `t`) is not a
+ * rewrite target and stays strictly unary.
+ */
+export function isRewriteTargetDerivative(node: { op: string; wrt?: string }): boolean {
+  return node.op === 'D' && node.wrt !== undefined && node.wrt !== 't'
+}
+
+/** Arity bounds a REWRITE-TARGET `D` relaxes to (esm-spec §4.2 "Arity of `D`"). */
+export const REWRITE_TARGET_DERIVATIVE_ARITY: OpArity = { min: 1, max: null }
 
 /** Registry entry for an operator, or undefined for unknown ops. */
 export function getOpInfo(op: string): OpInfo | undefined {

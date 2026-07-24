@@ -1198,7 +1198,14 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		return propagateDimension(node.Args[0], env)
 
 	case OpDerivative:
-		if len(node.Args) != 1 {
+		// A REWRITE-TARGET `D` may carry trailing auxiliary boundary operands
+		// after Args[0] (esm-spec §4.2 "Arity of `D`"); the dimensional rule
+		// reads Args[0] alone and must not report them as an arity defect. The
+		// structural time derivative stays strictly unary.
+		if len(node.Args) < 1 {
+			return nil, analysisErrf("'D' requires at least 1 argument, got %d", len(node.Args))
+		}
+		if !isRewriteTargetDerivative(node) && len(node.Args) != 1 {
 			return nil, analysisErrf("'D' requires 1 argument, got %d", len(node.Args))
 		}
 		varDim, err := propagateDimension(node.Args[0], env)
@@ -1321,6 +1328,21 @@ func derivativeWrt(node ExprNode) string {
 		return *node.Wrt
 	}
 	return DefaultIndepVar
+}
+
+// isRewriteTargetDerivative reports whether node is a `D` whose `wrt` names a
+// SPATIAL axis rather than the time variable (esm-spec §4.2 / §9.6.8).
+//
+// `D` is the one op whose tier — and therefore whose operand contract — depends
+// on a FIELD of the node rather than on its name. A spatial `D` has no evaluator
+// (it MUST be lowered to a stencil by a discretization rule), which is exactly
+// why it MAY carry TRAILING AUXILIARY OPERANDS after Args[0]: the per-face
+// boundary/halo values the rule binds as ordinary §9.6.1 wildcards and consumes.
+// Their count is unbounded and they carry no evaluator semantics. The STRUCTURAL
+// time derivative (`wrt: "t"`, or absent — an absent `wrt` means `t`) is not a
+// rewrite target and stays strictly unary.
+func isRewriteTargetDerivative(node ExprNode) bool {
+	return node.Op == OpDerivative && node.Wrt != nil && *node.Wrt != DefaultIndepVar
 }
 
 // derivativeStateDim inspects an equation's LHS. When it is a derivative taken

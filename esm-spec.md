@@ -216,10 +216,55 @@ Every `op` string belongs to one of **two tiers**:
 
 | Op | Additional fields | Meaning |
 |---|---|---|
-| `D` | `"wrt": "t"` or a spatial axis | Derivative ∂/∂(`wrt`). `wrt:"t"` is the **structural** time derivative (equation LHS, consumed by system assembly). A spatial `wrt` — or *any* `D` in a right-hand-side expression — is a **rewrite-target** (§9.6.8): lowered to a stencil by a discretization rule, never evaluated directly. |
+| `D` | `"wrt": "t"` or a spatial axis | Derivative ∂/∂(`wrt`) of `args[0]`. `wrt:"t"` (or an absent `wrt`) is the **structural** time derivative (equation LHS, consumed by system assembly) and is **strictly unary**. A spatial `wrt` — or *any* `D` in a right-hand-side expression — is a **rewrite-target** (§9.6.8): lowered to a stencil by a discretization rule, never evaluated directly; it MAY carry **trailing auxiliary operands** after `args[0]` (see below). |
 | `ic` | — | Initial-condition declaration, used as an equation LHS: `ic(u) ~ <initial field>` (§11.4). `args[0]` is the state variable. |
 
 Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
+
+**Arity of `D` — trailing auxiliary operands (normative).** `args[0]` is always the
+differentiated operand, so every `D` has arity ≥ 1. Beyond that the two tiers of `D` differ:
+
+- **Structural `D` (`wrt:"t"`, or `wrt` absent — which means `t`)** is **strictly unary**:
+  `args` MUST have exactly one entry. It is evaluable-core and is consumed by system
+  assembly, which has no place to put a second operand. A `wrt:"t"` node with more than one
+  operand is rejected at load by the schema (`maxItems` on the `D`/`wrt:"t"` clause); a
+  binding that also carries a structural arity check reports it as `operator_arity`.
+- **Rewrite-target `D` (any `wrt` other than `"t"`, i.e. a spatial axis)** MAY carry
+  **one or more additional operands** after `args[0]`. The count is **unbounded** — the
+  format fixes no upper limit, because how many auxiliary fields a scheme needs is a property
+  of the scheme, not of the format (two lateral faces on one axis, four on a corner-coupled
+  closure, an extra prescribed flux, …). These trailing operands are **auxiliary data for the
+  discretization rule** — canonically the per-face boundary/halo values of a Dirichlet or
+  open-inflow closure — and they carry **no evaluator semantics of any kind**, because a
+  spatial `D` "is lowered to a stencil by a discretization rule, never evaluated directly"
+  (above, §9.6.8). Nothing may attribute a mathematical meaning to them: they do not change
+  the derivative's value, its dimension, or its lowering eligibility. They exist so that the
+  operands a rule consumes are written where the rule can bind them. Concretely, a dimensional
+  checker applies the `D` rule (§4.8.3) to `args[0]` alone and **ignores** `args[1..]`
+  entirely — it MUST NOT report a trailing operand as an arity defect, and MUST NOT let one
+  participate in, or invalidate, the derivative's dimension. Carrying boundary data therefore
+  never changes what a file's dimensional check says.
+
+Trailing operands are **ordinary operands for matching purposes**: a rule's `match` binds
+`args[1..]` by exactly the rules §9.6.1 states for any `args` position — a parameter name is a
+wildcard that binds the matched sub-AST, a non-parameter string is a literal per-variable
+selector — and pattern/node `args` must be equal in length, so a rule written for a bare
+`D(f, wrt:x)` does **not** fire on a `D` carrying trailing operands, and vice versa. That is
+the intended behaviour: the closure is part of the rule's identity, and a rule that does not
+consume the boundary data must not silently discard it. If no rule matches, the node survives
+the fixpoint and the ordinary `unlowered_operator` gate rejects it (§9.6.3, §9.6.8).
+
+**Ordering is positional and rule-defined; the format imposes no normative convention.**
+`args[1..]` are matched by position, so their meaning is fixed entirely by the `match` pattern
+of the rule that consumes them — the format assigns no per-position role and a binding MUST
+NOT infer one (no "args[1] is the low face"). Authors and rule libraries SHOULD, by convention,
+list per-face operands in **ascending order along the differentiated axis** (low/west/south
+face before high/east/north face), which is what the EarthSciDiscretizations lateral-inflow
+rules do; this is a readability convention only and is never enforced.
+
+A `D` in a **`match` pattern** is subject to exactly the same rule: a pattern
+`{"op":"D","args":[...],"wrt":"t"}` is a structural time derivative and must be unary, while a
+pattern with a spatial (or parameter-valued) `wrt` may carry trailing wildcards.
 
 `grad`, `div`, `laplacian`, and `integral` are **not** built-in operators — they are optional
 **rewrite-target sugar** (open tier, §4.2). `grad(f, dim:x)` is just `D(f, wrt:x)`;
@@ -2885,6 +2930,28 @@ A discretization rule names its scheme and BC in its identity. `central_D_lon_ze
 The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized derivative is fully defined with its BC and there is nowhere else a boundary condition could live. At the scheme's **minimum admissible extent** the interior region folds **empty** — a metaparameterized `[2, N−1]` (§9.7.6) at `N = 2` folds to `[2, 1]`, contributing no cells while the two faces still tile the axis; this loads cleanly (§4.3.2). Binding **below** the minimum extent folds the region **inverted** (`[2, N−1]` at `N = 1` → `[2, 0]`) and is rejected at load with `makearray_region_inverted` (§4.3.2, §9.6.6) — the rule's stencil cannot exist on that grid, and failing loudly at the binding site is what surfaces the mis-sized instantiation.
 
 **Choosing a scheme = choosing a rule** (central, upwind, WENO, a specific BC). A periodic-BC rule gathers with the `periodic` boundary policy (CONFORMANCE_SPEC §5.5.5) and needs no face overrides; a Dirichlet rule overwrites the faces with the fixed value; a Robin rule overwrites with the solved boundary expression; a rule for a seam shared with another variable overwrites the face with an `index` into that variable. A **compound** scheme (Godunov / WENO / flux-limited) out-ranks the plain per-derivative rule via `priority` (§9.6.3), so it fires on the whole compound before the inner `D`s are lowered.
+
+**Carrying boundary DATA into the rule: trailing operands on `D`** (§4.2 "Arity of `D`"). Choosing the *rule* fixes the boundary *treatment*, but a Dirichlet / open-inflow closure also needs boundary *values*, and those are per-problem fields, not part of the rule. A rewrite-target `D` therefore MAY carry additional operands after `args[0]`:
+
+```json
+{ "op": "D",
+  "args": [ { "op": "*", "args": ["Mx", "q"] }, "qbc_w", "qbc_e" ],
+  "wrt": "lon" }
+```
+
+matched by a rule that binds them as ordinary `args` wildcards and consumes them in its faces:
+
+```json
+"ppm_flux_D_lon_mono_inflow_bc": {
+  "params": ["q", "U", "qbc_w", "qbc_e"],
+  "match": { "op": "D", "args": [{"op": "*", "args": ["U", "q"]}, "qbc_w", "qbc_e"],
+             "wrt": "lon" },
+  "body":  { "op": "makearray", "regions": [ /* interior + the two lateral faces */ ],
+             "values":  [ /* the faces read `qbc_w` / `qbc_e` */ ] }
+}
+```
+
+This is still "no boundary-condition declaration anywhere in the format": the closure lives in the rule, and the trailing operands are only the *data* the rule reads, written at the site the derivative is taken so that the rule can bind them structurally. They have no evaluator semantics (a spatial `D` is never evaluated), their count is unbounded, and their meaning is positional and defined solely by the consuming `match`. Because `args` arrays match elementwise at equal length (§9.6.1), a rule written for the bare `D(U*q, wrt:"lon")` does not fire on the three-operand node and the closed-boundary rule does not fire on the bare one — the closure is part of the rule's identity, and an unmatched node is caught by the ordinary `unlowered_operator` gate rather than silently losing its boundary data. The **structural** time derivative (`wrt:"t"`) admits none of this and stays strictly unary.
 
 **Scoping a rule = constraining or grounding its match** (§9.6.1). A rule that matches only on `(op, wrt)` — or, like a finite-volume `div` rule, on the bare op — fires on *every* such node in the importing component, so two grids each contributing a `div` scheme, or two different schemes on one axis, would otherwise collide. Two orthogonal, fully static selectors close this:
 

@@ -193,10 +193,44 @@ fn binds_get<'a>(binds: &'a Binds, key: &str) -> Option<&'a Sv> {
 }
 
 /// Pointer-keyed memo table for identity-memoized walks over shared DAGs.
-/// Keys are `Rc::as_ptr` addresses of nodes reachable from a root that is
-/// borrowed alive for the duration of the walk, so no keyed allocation can
-/// be freed (and its address reused) mid-walk.
-type PtrMemo<T> = std::collections::HashMap<*const SNode, T>;
+///
+/// Every entry OWNS an `Rc` handle to its key node, stored beside the value.
+/// That keep-alive is load-bearing, not belt-and-braces: `Rc::as_ptr` is only a
+/// stable identity for as long as the allocation lives, and several walks
+/// deliberately recurse **with the same memo** into freshly substituted template
+/// bodies ([`expand_all`] / [`expand_eager`] re-enter on the result of
+/// [`expand_apply`]) or over successive `to_shared` roots
+/// ([`validate_manifolds_in_refs`]). Those trees are dropped as soon as their
+/// expansion is spliced in; without the keep-alive their addresses are free for
+/// the allocator to hand back to the very next `Rc::new`, and the memo then
+/// reports a hit for a structurally unrelated node — silently splicing a foreign
+/// subtree into the document. That is exactly the corruption observed on deep
+/// PPM / WENO expansions (an `args` array replaced by an unrelated operator
+/// object, which then fails `Expr` deserialization).
+struct PtrMemo<T> {
+    map: std::collections::HashMap<*const SNode, (Sv, T)>,
+}
+
+impl<T> Default for PtrMemo<T> {
+    fn default() -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl<T> PtrMemo<T> {
+    /// Memoized value for `node`, by pointer identity.
+    fn get(&self, node: &Sv) -> Option<&T> {
+        self.map.get(&Rc::as_ptr(node)).map(|(_, v)| v)
+    }
+
+    /// Record `value` for `node`, retaining a handle to `node` so its address
+    /// stays uniquely its own for the memo's lifetime.
+    fn insert(&mut self, node: &Sv, value: T) {
+        self.map.insert(Rc::as_ptr(node), (node.clone(), value));
+    }
+}
 
 /// Reject `apply_expression_template` nodes inside a `match` pattern
 /// (esm-spec §9.7.3: match patterns MUST NOT reference templates).
@@ -560,8 +594,7 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
             None => node.clone(),
         },
         SNode::Arr(items) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
+            if let Some(hit) = memo.get(node) {
                 return hit.clone();
             }
             let mut changed = false;
@@ -576,12 +609,11 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
             } else {
                 node.clone()
             };
-            memo.insert(key, res.clone());
+            memo.insert(node, res.clone());
             res
         }
         SNode::Obj(fields) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
+            if let Some(hit) = memo.get(node) {
                 return hit.clone();
             }
             // esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4: parameter
@@ -605,7 +637,7 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
             } else {
                 node.clone()
             };
-            memo.insert(key, res.clone());
+            memo.insert(node, res.clone());
             res
         }
         _ => node.clone(),
@@ -645,8 +677,21 @@ fn op_in_t(op: &str) -> bool {
     !crate::op_registry::is_core_op(op)
 }
 
-/// Pointer-keyed identity set for seen-pruned walks over shared DAGs.
-type PtrSet = std::collections::HashSet<*const SNode>;
+/// Pointer-keyed identity set for seen-pruned walks over shared DAGs. Retains
+/// an `Rc` handle to every member for the same reason [`PtrMemo`] does: a freed
+/// node's address can be recycled by a later allocation, and a false "already
+/// seen" hit would silently prune an unvisited subtree from a validating walk.
+#[derive(Default)]
+struct PtrSet {
+    set: std::collections::HashMap<*const SNode, Sv>,
+}
+
+impl PtrSet {
+    /// Insert `node`; returns `true` if it was not already present.
+    fn insert(&mut self, node: &Sv) -> bool {
+        self.set.insert(Rc::as_ptr(node), node.clone()).is_none()
+    }
+}
 
 /// True iff `node` contains, ANYWHERE within it (descending through every
 /// field, including the `bindings` of nested `apply_expression_template`
@@ -656,13 +701,13 @@ type PtrSet = std::collections::HashSet<*const SNode>;
 fn direct_t_op(node: &Sv, seen: &mut PtrSet) -> bool {
     match &**node {
         SNode::Arr(items) => {
-            if !seen.insert(Rc::as_ptr(node)) {
+            if !seen.insert(node) {
                 return false;
             }
             items.iter().any(|c| direct_t_op(c, seen))
         }
         SNode::Obj(fields) => {
-            if !seen.insert(Rc::as_ptr(node)) {
+            if !seen.insert(node) {
                 return false;
             }
             if let Some(op) = obj_op(fields)
@@ -681,7 +726,7 @@ fn direct_t_op(node: &Sv, seen: &mut PtrSet) -> bool {
 fn collect_apply_names_sv(node: &Sv, out: &mut Vec<String>, seen: &mut PtrSet) {
     match &**node {
         SNode::Arr(items) => {
-            if !seen.insert(Rc::as_ptr(node)) {
+            if !seen.insert(node) {
                 return;
             }
             for c in items {
@@ -689,7 +734,7 @@ fn collect_apply_names_sv(node: &Sv, out: &mut Vec<String>, seen: &mut PtrSet) {
             }
         }
         SNode::Obj(fields) => {
-            if !seen.insert(Rc::as_ptr(node)) {
+            if !seen.insert(node) {
                 return;
             }
             if obj_op(fields) == Some(APPLY_OP)
@@ -1196,8 +1241,7 @@ fn expand_eager(
 ) -> Result<Sv, ExpressionTemplateError> {
     match &**node {
         SNode::Obj(fields) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
+            if let Some(hit) = memo.get(node) {
                 return Ok(hit.clone());
             }
             let res = if obj_op(fields) == Some(APPLY_OP) {
@@ -1239,12 +1283,11 @@ fn expand_eager(
                     node.clone()
                 }
             };
-            memo.insert(key, res.clone());
+            memo.insert(node, res.clone());
             Ok(res)
         }
         SNode::Arr(items) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
+            if let Some(hit) = memo.get(node) {
                 return Ok(hit.clone());
             }
             let mut changed = false;
@@ -1259,7 +1302,7 @@ fn expand_eager(
             } else {
                 node.clone()
             };
-            memo.insert(key, res.clone());
+            memo.insert(node, res.clone());
             Ok(res)
         }
         _ => Ok(node.clone()),
@@ -1289,8 +1332,7 @@ fn expand_all(
 ) -> Result<Sv, ExpressionTemplateError> {
     match &**node {
         SNode::Obj(fields) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
+            if let Some(hit) = memo.get(node) {
                 return Ok(hit.clone());
             }
             let res = if obj_op(fields) == Some(APPLY_OP) {
@@ -1325,12 +1367,11 @@ fn expand_all(
                     node.clone()
                 }
             };
-            memo.insert(key, res.clone());
+            memo.insert(node, res.clone());
             Ok(res)
         }
         SNode::Arr(items) => {
-            let key = Rc::as_ptr(node);
-            if let Some(hit) = memo.get(&key) {
+            if let Some(hit) = memo.get(node) {
                 return Ok(hit.clone());
             }
             let mut changed = false;
@@ -1345,7 +1386,7 @@ fn expand_all(
             } else {
                 node.clone()
             };
-            memo.insert(key, res.clone());
+            memo.insert(node, res.clone());
             Ok(res)
         }
         _ => Ok(node.clone()),
@@ -1443,7 +1484,7 @@ fn check_surviving_refs(
 ) -> Result<(), ExpressionTemplateError> {
     match &**node {
         SNode::Arr(items) => {
-            if !seen.insert(Rc::as_ptr(node)) {
+            if !seen.insert(node) {
                 return Ok(());
             }
             for c in items {
@@ -1451,7 +1492,7 @@ fn check_surviving_refs(
             }
         }
         SNode::Obj(fields) => {
-            if !seen.insert(Rc::as_ptr(node)) {
+            if !seen.insert(node) {
                 return Ok(());
             }
             if obj_op(fields) == Some(APPLY_OP) {
@@ -1501,8 +1542,7 @@ fn rewrite_pass(
 ) -> Result<(Sv, bool), ExpressionTemplateError> {
     match &**node {
         SNode::Arr(items) => {
-            let key = Rc::as_ptr(node);
-            if let Some((res, ch, l)) = memo.get(&key) {
+            if let Some((res, ch, l)) = memo.get(node) {
                 if let Some(l) = l {
                     *last = l.clone();
                 }
@@ -1520,12 +1560,11 @@ fn rewrite_pass(
             } else {
                 node.clone()
             };
-            memo.insert(key, (res.clone(), changed, changed.then(|| last.clone())));
+            memo.insert(node, (res.clone(), changed, changed.then(|| last.clone())));
             Ok((res, changed))
         }
         SNode::Obj(fields) => {
-            let key = Rc::as_ptr(node);
-            if let Some((res, ch, l)) = memo.get(&key) {
+            if let Some((res, ch, l)) = memo.get(node) {
                 if let Some(l) = l {
                     *last = l.clone();
                 }
@@ -1543,10 +1582,10 @@ fn rewrite_pass(
                 if ref_is_eager(fields, ctx.target_bearing) {
                     *last = APPLY_OP.to_string();
                     let res = expand_eager_root(node, ctx.named, ctx.target_bearing, scope)?;
-                    memo.insert(key, (res.clone(), true, Some(last.clone())));
+                    memo.insert(node, (res.clone(), true, Some(last.clone())));
                     return Ok((res, true));
                 }
-                memo.insert(key, (node.clone(), false, None));
+                memo.insert(node, (node.clone(), false, None));
                 return Ok((node.clone(), false));
             }
             for rule in ctx.rules {
@@ -1565,7 +1604,7 @@ fn rewrite_pass(
                     // of the same rewrite (§9.6.4 rule 4).
                     let body = substitute(&rule.body, &binds);
                     let res = expand_eager_root(&body, ctx.named, ctx.target_bearing, scope)?;
-                    memo.insert(key, (res.clone(), true, Some(last.clone())));
+                    memo.insert(node, (res.clone(), true, Some(last.clone())));
                     return Ok((res, true));
                 }
             }
@@ -1582,7 +1621,7 @@ fn rewrite_pass(
             } else {
                 node.clone()
             };
-            memo.insert(key, (res.clone(), changed, changed.then(|| last.clone())));
+            memo.insert(node, (res.clone(), changed, changed.then(|| last.clone())));
             Ok((res, changed))
         }
         _ => Ok((node.clone(), false)),
@@ -2098,13 +2137,13 @@ fn template_manifold_bearing(named: &Named) -> std::collections::HashMap<String,
     fn direct(node: &Sv, seen: &mut PtrSet) -> bool {
         match &**node {
             SNode::Arr(items) => {
-                if !seen.insert(Rc::as_ptr(node)) {
+                if !seen.insert(node) {
                     return false;
                 }
                 items.iter().any(|c| direct(c, seen))
             }
             SNode::Obj(fields) => {
-                if !seen.insert(Rc::as_ptr(node)) {
+                if !seen.insert(node) {
                     return false;
                 }
                 if let Some(op) = obj_op(fields)
@@ -2179,7 +2218,7 @@ fn validate_manifolds_in_refs(
 ) -> Result<(), ExpressionTemplateError> {
     match &**node {
         SNode::Arr(items) => {
-            if !memo.insert(Rc::as_ptr(node)) {
+            if !memo.insert(node) {
                 return Ok(());
             }
             for (i, c) in items.iter().enumerate() {
@@ -2193,7 +2232,7 @@ fn validate_manifolds_in_refs(
             }
         }
         SNode::Obj(fields) => {
-            if !memo.insert(Rc::as_ptr(node)) {
+            if !memo.insert(node) {
                 return Ok(());
             }
             let name = if obj_op(fields) == Some(APPLY_OP) {

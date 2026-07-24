@@ -489,6 +489,23 @@ fn require_arity(op: &ExpressionNode, n: usize, findings: &mut Vec<UnitFinding>)
     false
 }
 
+/// Like [`require_arity`], but a LOWER bound: the node is well-formed when it has
+/// at least `n` operands. Used for the ops whose operand list is open-ended at
+/// this end — a rewrite-target `D` carrying trailing auxiliary boundary operands
+/// (esm-spec §4.2 "Arity of `D`").
+fn require_min_arity(op: &ExpressionNode, n: usize, findings: &mut Vec<UnitFinding>) -> bool {
+    if op.args.len() >= n {
+        return true;
+    }
+    findings.push(UnitFinding::analysis(format!(
+        "'{}' expects at least {} argument(s) but has {}; not dimension-checked",
+        op.op,
+        n,
+        op.args.len()
+    )));
+    false
+}
+
 /// Dispatch one operator node to its family's propagation helper. Kept as a
 /// thin match so each family's dimensional rules live in one named function;
 /// the rules mirror the Python (`units.py::_get_expression_dimension`) and
@@ -733,7 +750,18 @@ fn propagate_calculus_dim(
     env: &HashMap<String, Unit>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
-    if !require_arity(op, 1, findings) {
+    // esm-spec §4.2 "Arity of `D`": a REWRITE-TARGET `D` (spatial `wrt`) MAY
+    // carry trailing auxiliary operands after `args[0]` — the per-face
+    // boundary/halo values a discretization rule binds and consumes. They carry
+    // no evaluator semantics, so the dimensional rule reads `args[0]` alone and
+    // MUST NOT report them as an arity defect. The STRUCTURAL time derivative
+    // (and `ic`) stay strictly unary.
+    let well_formed = if crate::op_registry::is_rewrite_target_derivative(op) {
+        require_min_arity(op, 1, findings)
+    } else {
+        require_arity(op, 1, findings)
+    };
+    if !well_formed {
         return Dim::Unknown;
     }
     let arg = propagate_dim(&op.args[0], env, findings);

@@ -1,0 +1,53 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "derivative_time_multi_operand",
+    "description": "INVALID (esm-spec §4.2 \"Arity of `D`\"): the STRUCTURAL time derivative carries a second operand. `wrt: \"t\"` (or an absent `wrt`) is the evaluable-core, equation-LHS derivative consumed by system assembly, which has nowhere to put a second operand — so it is STRICTLY UNARY. The trailing-operand allowance is scoped to a REWRITE-TARGET `D` (a spatial `wrt`), whose operands are auxiliary boundary data a discretization rule binds and consumes and which is never evaluated directly (tests/valid/derivative_trailing_boundary_operands.esm). Rejected by the schema's `D`/`wrt:\"t\"` clause (`maxItems`) in every binding.",
+    "authors": [
+      "EarthSciAST trailing-D-operand spec extension"
+    ],
+    "tags": [
+      "calculus",
+      "derivative",
+      "arity",
+      "invalid",
+      "schema"
+    ]
+  },
+  "models": {
+    "BadTimeDerivative": {
+      "variables": {
+        "u": {
+          "type": "state",
+          "units": "1",
+          "default": 1.0,
+          "description": "State variable"
+        },
+        "ubc": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "A boundary value; legal only on a SPATIAL D, never on the time derivative"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u",
+              "ubc"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "derivative_trailing_boundary_operands",
+    "description": "VALID (esm-spec §4.2 \"Arity of `D`\" / §9.6.8): a REWRITE-TARGET derivative carrying TRAILING AUXILIARY OPERANDS. `flux_div` is D(Mx*q, wrt: x) with two extra operands — `qbc_w` and `qbc_e`, the prescribed lateral-inflow (Dirichlet) values on the low and high faces of the `x` axis. A spatial `D` is never evaluated directly, so the trailing operands carry no evaluator semantics: they are data the discretization rule binds and consumes. The in-file rule `advect_D_x_inflow_bc` does exactly that — its `match` binds `f` from the ground-selected product `Mx*f`, and `w`/`e` from `args[1]`/`args[2]` as ordinary §9.6.1 wildcards — so the node lowers and no `unlowered_operator` survives. Ordering is positional and rule-defined; the ascending-along-the-axis (west-before-east) order used here is the recommended convention only. The STRUCTURAL time derivative stays strictly unary (see tests/invalid/derivative_time_multi_operand.esm).",
+    "authors": [
+      "EarthSciAST trailing-D-operand spec extension"
+    ],
+    "tags": [
+      "calculus",
+      "derivative",
+      "rewrite-target",
+      "discretization",
+      "boundary-conditions",
+      "expression-templates"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 16
+    }
+  },
+  "models": {
+    "LateralInflow": {
+      "variables": {
+        "q": {
+          "type": "state",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "Advected tracer over the limited-area x axis"
+        },
+        "Mx": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Zonal mass flux factor; a ground (non-parameter) selector in the rule's match"
+        },
+        "qbc_w": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.2,
+          "description": "Prescribed inflow value on the LOW (west) face of x"
+        },
+        "qbc_e": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1,
+          "description": "Prescribed inflow value on the HIGH (east) face of x"
+        },
+        "interior_coef": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25,
+          "description": "Stand-in interior stencil coefficient"
+        },
+        "face_coef": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.75,
+          "description": "Stand-in boundary-face coefficient applied to the inflow values"
+        },
+        "flux_div": {
+          "type": "observed",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "D(Mx*q, wrt: x) with the two lateral-boundary operands the rule consumes",
+          "expression": {
+            "op": "D",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "Mx",
+                  "q"
+                ]
+              },
+              "qbc_w",
+              "qbc_e"
+            ],
+            "wrt": "x"
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "q"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "flux_div"
+            ]
+          }
+        }
+      ],
+      "expression_templates": {
+        "advect_D_x_inflow_bc": {
+          "params": [
+            "f",
+            "w",
+            "e"
+          ],
+          "match": {
+            "op": "D",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "Mx",
+                  "f"
+                ]
+              },
+              "w",
+              "e"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "interior_coef",
+                  "f"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "face_coef",
+                  "w"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "face_coef",
+                  "e"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
