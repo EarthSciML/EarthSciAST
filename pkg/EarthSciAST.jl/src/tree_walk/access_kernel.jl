@@ -1002,6 +1002,21 @@ struct _AccScalarSrc
 end
 const _SS_NO_SCRATCH = _AccScratch(0)
 
+# Threading state for one plan's CELL axis (see `_run_acc_plan_threaded!`).
+# Built lazily on the first threaded call and then reused for the life of the
+# plan, so the steady-state RHS never allocates: `state` is the one-time verdict
+# (0 unexamined, 1 threadable, -1 serial-only) and `ws` holds one scratch clone
+# per chunk. `ws` is `Vector{Any}` only to break the `_AccPlan` ↔ cache
+# definition cycle; every read re-tightens it with `::_AccPlan`, so the walk
+# stays as concretely typed as the serial one.
+mutable struct _PlanTCache
+    state::Int
+    ncells::Int
+    nchunks::Int
+    ws::Vector{Any}
+end
+_PlanTCache() = _PlanTCache(0, 0, 0, Any[])
+
 struct _AccPlan
     tile::Int
     bufs::Vector{Vector{Float64}}
@@ -1013,7 +1028,15 @@ struct _AccPlan
     mi1::Vector{Int}           # per-tile loop multi-index (padded with 1s)
     mi2::Vector{Int}
     mi3::Vector{Int}
+    tcache::_PlanTCache        # cell-axis threading state (lazily built)
 end
+# Pre-threading positional form: every existing construction site (and the tests)
+# builds a plan with a fresh, unexamined thread cache.
+_AccPlan(tile::Int, bufs::Vector{Vector{Float64}}, scalars::Vector{_AccScalarSrc},
+         instrs::Vector{_AccInstr}, result::Int, result_stride::Int,
+         oln::Vector{Int}, mi1::Vector{Int}, mi2::Vector{Int}, mi3::Vector{Int}) =
+    _AccPlan(tile, bufs, scalars, instrs, result, result_stride,
+             oln, mi1, mi2, mi3, _PlanTCache())
 
 # Plan-build decline: the kernel keeps the scalar runner. Never an error.
 struct _AccPlanDecline <: Exception end
@@ -1848,11 +1871,11 @@ end
 # args per lane exactly as the scalar `:fn` arm does. `Float64` only —
 # `_make_rhs` gates on `T === Float64` and sends every other value type to the
 # scalar runner.
-function _run_acc_plan!(du, u, p, t, K::_AccKernel, P::_AccPlan)
-    _fill_invariant!(K, u, p, t, Float64)
-    # Per-call scalar sources → their 1-length stride-0 buffers.
-    scs = P.scalars
-    bufs = P.bufs
+# Per-call scalar sources → their 1-length stride-0 buffers. Reads only `u`,
+# `p`, `t` and the ALREADY-FILLED invariant scratch, so it is safe to run
+# concurrently once per chunk against that chunk's private `bufs`.
+@inline function _plan_fill_scalars!(bufs::Vector{Vector{Float64}},
+                                     scs::Vector{_AccScalarSrc}, u, p, t)
     @inbounds for i in eachindex(scs)
         s = scs[i]
         v = s.kind === _SS_PARAM ? Float64(getfield(p, s.sym)) :
@@ -1862,7 +1885,21 @@ function _run_acc_plan!(du, u, p, t, K::_AccKernel, P::_AccPlan)
                                    _acc_scratch_read(s.scratch, s.idx, Float64)
         bufs[s.dest][1] = v
     end
+    return nothing
+end
+
+function _run_acc_plan!(du, u, p, t, K::_AccKernel, P::_AccPlan)
+    _fill_invariant!(K, u, p, t, Float64)
     cs = K.cells
+    # Threaded cell axis (opt-in; `_plan_prep_threads!` decides ONCE per plan).
+    # The invariant scratch above is filled before any chunk starts and is only
+    # read from here on, so the chunks share it safely.
+    if _threads_available()
+        tc = _plan_prep_threads!(P, cs)
+        tc.state == 1 && return _run_acc_plan_threaded!(du, u, p, t, P, cs, tc)
+    end
+    # ---- serial path: unchanged, instruction for instruction ----
+    _plan_fill_scalars!(P.bufs, P.scalars, u, p, t)
     oln = P.oln; mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
     tile = P.tile
     if _is_outs(cs)
@@ -1919,5 +1956,264 @@ function _run_acc_plan!(du, u, p, t, K::_AccKernel, P::_AccPlan)
         end
     end
     L > 0 && _flush_acc_tile!(du, u, P, L)
+    return du
+end
+
+# ---- Threaded cell axis (RFC threaded-eval-tier) ----------------------------
+#
+# WHY THE CELL AXIS IS THE SAFE ONE. Every tape instruction is per-LANE (`for l
+# in 1:L`) and every ⊕-fold the tape hosts is WITHIN a lane: `_plan_emit!`
+# declines `_NK_REDUCE` and `_NK_SUBCALL` outright, and an `_NK_CONTRACTION`
+# folds a FIXED set of operand buffers at the same lane. Nothing accumulates
+# across lanes, across tiles, or into `du` — each cell's value is computed from
+# `u`/`p`/`t` alone and stored to exactly one `du` slot. Two consequences:
+#
+#   1. Tile boundaries are not observable. A cell computes the same instruction
+#      sequence on the same inputs whichever tile it lands in, so splitting the
+#      ordinal axis anywhere reproduces the serial values BIT FOR BIT. (This is
+#      what makes a static chunk partition safe without reordering any fold.)
+#   2. Chunks race only if two cells target the same `du` slot, which
+#      `_plan_output_disjoint` rules out up front (see below).
+#
+# The KERNEL axis is deliberately NOT parallelized: separate kernels can share
+# `du` slots through indirect-out / scatter merges. One `@batch` per kernel keeps
+# an implicit barrier between kernels, exactly matching the serial write order.
+_threads_disabled() = get(ENV, "ESS_THREADS_DISABLE", "") == "1"
+
+# One-time per-plan threading verdicts, in the `_CASCADE_TALLY` spirit: bumped
+# once per PLAN (not per eval) by `_plan_prep_threads!`. Read it via
+# `EarthSciAST._THREAD_TALLY`, reset with `EarthSciAST._reset_thread_tally!()`.
+#   :threaded                 — cell axis runs as `nchunks` static chunks
+#   :serial_small             — fewer than 2 chunks' worth of cells
+#   :serial_overlapping_outs  — two cells target the same `du` slot
+const _THREAD_TALLY = Dict{Symbol,Int}()
+_tally_thread!(k::Symbol) = (_THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1; nothing)
+_reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
+
+# Minimum cells per chunk. Below this a kernel is not worth a thread dispatch
+# (and a whole plan below it stays serial), which keeps the many tiny kernels of
+# a chemistry mechanism on the untouched serial path.
+_thread_min_cells() =
+    something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")), 512)
+
+@inline _threads_available() = Threads.nthreads() > 1 && !_threads_disabled()
+
+# Total cells in a cell set, in the runners' own enumeration.
+function _plan_ncells(cs::_CellSet)
+    _is_outs(cs) && return length(cs.outs)
+    _is_contig(cs) && return length(cs.ranges[1])
+    n = 1
+    for r in cs.ranges
+        n *= length(r)
+    end
+    return n
+end
+
+# Are the kernel's output slots pairwise DISTINCT? Only then may two chunks run
+# concurrently: a repeated slot would make two cells read-modify-write the same
+# `du` entry and the last writer would win non-deterministically. A contiguous
+# set writes `du[c]` for distinct `c`, so it is disjoint by construction; a box
+# is an affine map that is injective for ordinary grid strides but NOT provably
+# so for arbitrary ones, and an indirect-outs set is an arbitrary scatter — both
+# are checked explicitly, once, at first-call. Any duplicate ⇒ serial forever.
+function _plan_output_disjoint(cs::_CellSet, ncells::Int)
+    _is_contig(cs) && return true
+    seen = Set{Int}()
+    sizehint!(seen, ncells)
+    if _is_outs(cs)
+        for o in cs.outs
+            o in seen && return false
+            push!(seen, o)
+        end
+        return true
+    end
+    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
+    if nd == 1
+        s1 = st[1]
+        for i in rg[1]
+            o = b + i*s1
+            o in seen && return false
+            push!(seen, o)
+        end
+    elseif nd == 2
+        s1 = st[1]; s2 = st[2]
+        for j in rg[2], i in rg[1]
+            o = b + i*s1 + j*s2
+            o in seen && return false
+            push!(seen, o)
+        end
+    else
+        s1 = st[1]; s2 = st[2]; s3 = st[3]
+        for k in rg[3], j in rg[2], i in rg[1]
+            o = b + i*s1 + j*s2 + k*s3
+            o in seen && return false
+            push!(seen, o)
+        end
+    end
+    return true
+end
+
+# One instruction clone carrying a PRIVATE boxed-fn arg buffer. `_TC_FN` is the
+# only opcode with mutable per-lane state inside the instruction itself; every
+# other instruction is a pure descriptor and is shared between chunks as-is.
+function _clone_fn_instr(ins::_AccInstr)
+    name, argbuf = ins.payload::Tuple{String,Vector{Any}}
+    return _AccInstr(ins.code, ins.op, ins.dest, ins.args, ins.strides, ins.delta,
+                     ins.arr, ins.conn, ins.s1, ins.s2, ins.s3, ins.off,
+                     (name, copy(argbuf)))
+end
+
+# A per-chunk scratch clone of `P`: a full `_AccPlan` that SHARES every immutable
+# descriptor (tile/result ids, the scalar-source table, the interp spec tables
+# and the connectivity/forcing arrays hanging off the instructions) and OWNS
+# every mutable per-call buffer — the lane buffers, the length-1 scalar/literal
+# slots, and the oln/mi index vectors. Sharing the descriptors is what keeps a
+# clone O(tile · #bufs) instead of a copy of the model's tables.
+#
+# Allocated ONCE per plan (first threaded call) and reused for every subsequent
+# eval, which is what keeps the threaded RHS free of per-eval allocation.
+function _clone_plan_scratch(P::_AccPlan)
+    bufs = Vector{Vector{Float64}}(undef, length(P.bufs))
+    @inbounds for i in eachindex(P.bufs)
+        bufs[i] = copy(P.bufs[i])
+    end
+    instrs = P.instrs
+    if any(ins -> ins.code === _TC_FN, instrs)
+        instrs = _AccInstr[ins.code === _TC_FN ? _clone_fn_instr(ins) : ins
+                           for ins in instrs]
+    end
+    tile = P.tile
+    return _AccPlan(tile, bufs, P.scalars, instrs, P.result, P.result_stride,
+                    Vector{Int}(undef, tile), Vector{Int}(undef, tile),
+                    fill(1, tile), fill(1, tile), _PlanTCache())
+end
+
+# Decide once whether this plan may run threaded, and if so build its per-chunk
+# scratch. Runs on the first threaded call (single-threaded, before any chunk
+# starts) and short-circuits on `state != 0` thereafter.
+function _plan_prep_threads!(P::_AccPlan, cs::_CellSet)
+    tc = P.tcache
+    tc.state == 0 || return tc
+    ncells = _plan_ncells(cs)
+    tc.ncells = ncells
+    minc = _thread_min_cells()
+    nchunks = min(Threads.nthreads(), max(1, div(ncells, max(minc, 1))))
+    if nchunks < 2
+        tc.state = -1                 # too few cells to be worth a dispatch
+        _tally_thread!(:serial_small)
+        return tc
+    end
+    if !_plan_output_disjoint(cs, ncells)
+        tc.state = -1                 # overlapping out-slots: chunks would race
+        _tally_thread!(:serial_overlapping_outs)
+        return tc
+    end
+    ws = Any[_clone_plan_scratch(P) for _ in 1:nchunks]
+    tc.ws = ws
+    tc.nchunks = nchunks
+    tc.state = 1
+    _tally_thread!(:threaded)
+    return tc
+end
+
+# Walk cell ordinals `[t0, t1)` (0-based, half-open) of `cs` with `P`'s scratch,
+# tiling by `P.tile` exactly as the serial walk does. Mirrors the serial cell
+# enumeration order per kind, so `[0, ncells)` reproduces it exactly; a chunk
+# just takes a contiguous slice of the same ordinal axis.
+function _plan_walk!(du, u, P::_AccPlan, cs::_CellSet, t0::Int, t1::Int)
+    tile = P.tile
+    oln = P.oln; mi1 = P.mi1; mi2 = P.mi2; mi3 = P.mi3
+    t = t0
+    if _is_outs(cs)
+        outs = cs.outs
+        while t < t1
+            L = min(tile, t1 - t)
+            @inbounds for l in 1:L
+                c = t + l                      # 1-based cell ordinal
+                oln[l] = outs[c]; mi1[l] = c
+            end
+            _flush_acc_tile!(du, u, P, L)
+            t += L
+        end
+        return du
+    elseif _is_contig(cs)
+        lo = first(cs.ranges[1])
+        while t < t1
+            L = min(tile, t1 - t)
+            @inbounds for l in 1:L
+                s = lo + t + l - 1
+                oln[l] = s; mi1[l] = s
+            end
+            _flush_acc_tile!(du, u, P, L)
+            t += L
+        end
+        return du
+    end
+    # Strided box, in the EXACT `_run_box_kernel!` iteration order (k-outer,
+    # i-inner), reached by decoding the flat ordinal instead of nesting loops.
+    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
+    if nd == 1
+        i0 = first(rg[1]); s1 = st[1]
+        while t < t1
+            L = min(tile, t1 - t)
+            @inbounds for l in 1:L
+                i = i0 + t + l - 1
+                oln[l] = b + i*s1; mi1[l] = i
+            end
+            _flush_acc_tile!(du, u, P, L)
+            t += L
+        end
+    elseif nd == 2
+        i0 = first(rg[1]); j0 = first(rg[2]); ni = length(rg[1])
+        s1 = st[1]; s2 = st[2]
+        while t < t1
+            L = min(tile, t1 - t)
+            @inbounds for l in 1:L
+                o = t + l - 1
+                i = i0 + o % ni; j = j0 + o ÷ ni
+                oln[l] = b + i*s1 + j*s2; mi1[l] = i; mi2[l] = j
+            end
+            _flush_acc_tile!(du, u, P, L)
+            t += L
+        end
+    else # nd == 3 (plan build capped rank at 3)
+        i0 = first(rg[1]); j0 = first(rg[2]); k0 = first(rg[3])
+        ni = length(rg[1]); nj = length(rg[2])
+        s1 = st[1]; s2 = st[2]; s3 = st[3]
+        while t < t1
+            L = min(tile, t1 - t)
+            @inbounds for l in 1:L
+                o = t + l - 1
+                i = i0 + o % ni; r = o ÷ ni
+                j = j0 + r % nj; k = k0 + r ÷ nj
+                oln[l] = b + i*s1 + j*s2 + k*s3
+                mi1[l] = i; mi2[l] = j; mi3[l] = k
+            end
+            _flush_acc_tile!(du, u, P, L)
+            t += L
+        end
+    end
+    return du
+end
+
+# Run the plan's cells as `nchunks` STATIC contiguous ordinal ranges, one private
+# scratch clone each. The partition is a pure function of `(ncells, nchunks)`, so
+# it is identical run to run — no dynamic work stealing, nothing that could
+# reorder a fold.
+function _run_acc_plan_threaded!(du, u, p, t, P::_AccPlan, cs::_CellSet,
+                                 tc::_PlanTCache)
+    ncells = tc.ncells
+    nchunks = tc.nchunks
+    ws = tc.ws
+    scs = P.scalars
+    base = div(ncells, nchunks)
+    rem = ncells - base * nchunks
+    Polyester.@batch for c in 1:nchunks
+        W = ws[c]::_AccPlan
+        a = (c - 1) * base + min(c - 1, rem)
+        b = c * base + min(c, rem)
+        _plan_fill_scalars!(W.bufs, scs, u, p, t)
+        _plan_walk!(du, u, W, cs, a, b)
+    end
     return du
 end
