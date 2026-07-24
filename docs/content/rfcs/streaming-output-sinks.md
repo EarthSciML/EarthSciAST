@@ -844,3 +844,51 @@ The Python and Rust runner counterparts are implemented on library-backed backen
 Live S3-bucket I/O is verified only offline (fsspec-memory / `object_store` LocalFileSystem;
 no credentials in the test environment). The `s3` **cache** store remains a spec-pinned
 stub pending a coordinated cross-language activation.
+
+### 16.13 Codec profiles (and the `wasm` profile)
+
+The writers pin **three** inner-codec profiles. Only the inner (per-chunk) compressor
+differs; the `sharding_indexed` outer codec and its `[bytes, crc32c]` shard index are
+identical across all three, as are dtype, `dimension_names`, CF attrs and `fill_value`:
+
+| profile | inner chain | purpose |
+| --- | --- | --- |
+| `diagnostic` | `bytes(le)` → Blosc(zstd, clevel 5, byte-shuffle) | default streaming output |
+| `checkpoint` | `bytes(le)` → Blosc(zstd, clevel 7, byte-shuffle) | lossless durability (§16.7) |
+| `wasm` | `bytes(le)` → **zstd(level 5)**, no Blosc | browser/WebAssembly-loadable |
+
+**Why `wasm` exists.** Blosc is a *container* (block splitting + byte-shuffle filter)
+wrapping the same zstd compressor. Its C sources (`blosc-src`) do not target
+`wasm32-unknown-unknown`, whereas the standard Zarr v3 `zstd` codec does (`zstd-sys`
+gained wasm32 support), and `sharding_indexed`/`crc32c` are pure Rust. So dropping *only*
+the Blosc container yields a store a wasm Zarr reader (e.g. `zarrs` compiled to wasm) can
+decode, with no other structural change. Implemented in all three writers plus the Julia
+v3 reader (a `CodecZstd` weakdep extension); write conformance runs **both** profiles with
+30/30 pairwise decoded-array agreement.
+
+**The `wasm` profile is not a compression sacrifice.** Measured on float64 geophysical
+fields at a realistic ~108 KiB inner chunk, plain zstd *beats* Blosc on ratio, because the
+byte-shuffle filter destroys the long-range spatial matches a whole-chunk zstd stream
+exploits on smooth data:
+
+| data (≈108 KiB inner chunk) | zstd-5 (`wasm`) | Blosc zstd-5 shuffle |
+| --- | --- | --- |
+| smooth geophysical field | **2.58×** | 1.96× |
+| plume / concentration | **2.49×** | 1.90× |
+| signal + 1% noise | 1.05× | **1.14×** |
+
+Blosc's genuine advantages are (a) **decode throughput** — ~4.2 GB/s vs ~1.1 GB/s
+single-threaded per core — and (b) ratio on **small chunks or noisy fields**, where LZ
+matching fails and the shuffle filter is the only remaining source of redundancy. For a
+network-bound reader the end-to-end crossover is ≈**200 MB/s of object-store bandwidth per
+decoding core**: below that the `wasm` profile is *faster* overall because it transfers
+~24% fewer bytes; above it Blosc wins. Typical cloud runners sit well below the crossover;
+cache-local re-reads and checkpoint restart sit above it — which is why the profiles stay
+separate and `diagnostic`/`checkpoint` keep Blosc, with `wasm` strictly opt-in.
+(Indicative numbers: one machine, level 5, synthetic-but-representative fields; the
+ranking is stable, the absolute ratios are data- and chunk-shape-dependent.)
+
+**Status caveat.** Wasm-loadability is established *structurally* — the emitted chain is
+verified on disk to be blosc-free plain v3 zstd in all three writers — but **no
+`wasm32-unknown-unknown` target has been built or executed** against these stores yet.
+That remains the acceptance test before browser support is advertised.
