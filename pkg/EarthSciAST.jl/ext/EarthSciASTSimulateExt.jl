@@ -28,12 +28,29 @@ import SciMLBase
 function _simulate_solve(f!, u0, tspan, p, alg::SciMLBase.AbstractODEAlgorithm,
                          var_map; callback = nothing, tstops = Float64[],
                          reltol = DEFAULT_SIM_RELTOL,
-                         abstol = DEFAULT_SIM_ABSTOL, saveat = nothing)
+                         abstol = DEFAULT_SIM_ABSTOL, saveat = nothing,
+                         save_everystep::Bool = true)
     prob = SciMLBase.ODEProblem(f!, u0, tspan, p)
     kw = Dict{Symbol,Any}(:reltol => reltol, :abstol => abstol)
-    callback === nothing || (kw[:callback] = callback)
+    # `callback` may be `nothing` (none), a single callback (the refresh-only path,
+    # byte-identical to before), or a collection of callbacks (refresh + one or
+    # more output sinks) — the latter composes into a `CallbackSet` here, keeping
+    # SciMLBase out of the core `simulate.jl` (`[[library-exposes-rhs-not-solver]]`).
+    if callback !== nothing
+        kw[:callback] = callback isa Union{Tuple,AbstractVector} ?
+            SciMLBase.CallbackSet(callback...) : callback
+    end
     isempty(tstops) || (kw[:tstops] = collect(Float64, tstops))
     saveat === nothing || (kw[:saveat] = saveat)
+    # Streaming-output mode (RFC §16.5): the sink owns persistence, so stop the
+    # solver from accumulating the dense RAM trajectory — keep only the start/end
+    # points. The no-sink path leaves `save_everystep=true` and never sets these,
+    # so `solve`'s defaults (and today's behavior) are byte-identical.
+    if !save_everystep
+        kw[:save_everystep] = false
+        kw[:save_start] = true
+        kw[:save_end] = true
+    end
     sol = SciMLBase.solve(prob, alg; kw...)
 
     success = sol.retcode == SciMLBase.ReturnCode.Success

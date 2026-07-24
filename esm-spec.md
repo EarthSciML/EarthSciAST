@@ -50,6 +50,7 @@ The full authoring stance, normatively:
   "coupling": [ ... ],
   "domain": { ... },
   "index_sets": { ... },
+  "coordinates": { ... },
   "expression_templates": { ... },
   "expression_template_imports": [ ... ],
   "metaparameters": { ... }
@@ -68,6 +69,7 @@ The full authoring stance, normatively:
 | `coupling` | | Composition and coupling rules |
 | `domain` | | The single temporal domain shared by all components (see Section 11) |
 | `index_sets` | | Document-scoped registry of named iteration domains (grid axes, categorical dimensions, data-derived sets) referenced by `aggregate` ranges (RFC semiring-faq-unified-ir §5.2) |
+| `coordinates` | | Document-scoped, **optional** registry marking existing data arrays (or inline literal vectors) as physical coordinates and attaching CF metadata (`standard_name`/`units`/`axis`). Purely additive — a document without it validates and emits bare integer axes (§2.1; RFC streaming-output-sinks §8) |
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / example (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
@@ -75,6 +77,66 @@ The full authoring stance, normatively:
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded from a `data_loaders` primitive or declared as variables/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
 At least one of `models`, `reaction_systems`, `data_loaders`, or `expression_templates` must be present. A document whose sole top-level component is `data_loaders` is a valid loader-only file — referenceable as a loader subsystem (§4.7). A document whose payload is top-level `expression_templates` is a **template-library file** (§9.7.1) — importable via `expression_template_imports`, and the carrier format of the [EarthSciDiscretizations](../earthscidiscretizations) standard library.
+
+### 2.1 Coordinate registry (`coordinates`)
+
+The `coordinates` block is a **document-scoped, optional** registry that marks
+existing data arrays (or inline literal vectors) as physical **coordinates** and
+attaches CF metadata to them. It is the annotation layer that lets a run's output
+be self-describing — real lon/lat/level values with `standard_name`/`units`,
+rather than bare `0..N` integer axes — without reintroducing the coordinate-space
+grid descriptors removed in v0.8.0. It is **purely additive**: a document without
+`coordinates` validates and emits exactly as before (§8.5 keeps grid geometry as
+ordinary data), and adding it changes only the metadata a streaming writer emits
+(RFC streaming-output-sinks §8), never the dynamics or the flattened system.
+
+Each entry is keyed by a coordinate name and has exactly one of:
+
+- **`source`** — the name of an existing data array (a model variable, parameter,
+  or data-loader field), referenced by name exactly as a `ragged` `IndexSet`
+  references its `offsets`/`values` factors. The coordinate's **shape is read from
+  that array's declared `shape`** (its ordered index-set dimensions).
+- **`values`** — an inline literal 1-D vector of finite floats, for the simple
+  rectilinear case (mirrors `FunctionTableAxis.values`).
+
+plus optional CF attributes: `standard_name`, `units`, and `axis` (one of
+`X`/`Y`/`Z`/`T`).
+
+**One rule spans all grid topologies**, because CF role follows the coordinate's
+source shape, not a per-axis attachment:
+
+| Grid | Coordinate source shape | CF role | `axis` |
+|---|---|---|---|
+| rectilinear | 1-D, monotonic, over one interval axis (e.g. `grid_lat[lat]`) | **dimension** coordinate | set (`X`/`Y`/`Z`) |
+| unstructured | 1-D over a shared dimension (e.g. `cell_lat[cells]`, `cell_lon[cells]`, non-monotonic) | **auxiliary** coordinate | omit |
+| curvilinear | 2-D spanning two axes (e.g. `lat[y,x]`, `lon[y,x]`) | **auxiliary** coordinate | omit |
+
+Set `axis` **only** for a 1-D monotonic dimension coordinate; omit it for
+auxiliary coordinates, which have no single axis. A consumer (streaming writer or
+reader) derives each data variable's CF `coordinates` attribute mechanically:
+**every coordinate whose source dimensions — matched by dimension identity, not by
+length — are a subset of the data variable's dimensions applies to it.** Matching
+by identity (not length) is required so that two distinct same-length axes (e.g.
+`atm_lat` and `ocn_lat` in a coupled run) never cross-attach.
+
+```jsonc
+"index_sets": { "lon": {"kind":"interval","size":4}, "lat": {"kind":"interval","size":3},
+                "lev": {"kind":"interval","size":2}, "cells": {"kind":"interval","size":5} },
+"coordinates": {
+  "grid_lon": { "values": [-100.0,-99.0,-98.0,-97.0], "standard_name":"longitude", "units":"degrees_east", "axis":"X" },
+  "grid_lat": { "values": [30.0,31.0,32.0],            "standard_name":"latitude",  "units":"degrees_north","axis":"Y" },
+  "level":    { "source": "lev_pressure", "standard_name":"air_pressure", "units":"Pa", "axis":"Z" },
+  "cell_lat": { "source": "mesh_lat", "standard_name":"latitude",  "units":"degrees_north" },  // auxiliary: 1-D over `cells`, no axis
+  "cell_lon": { "source": "mesh_lon", "standard_name":"longitude", "units":"degrees_east"  }   // auxiliary
+}
+```
+
+See `tests/valid/coordinates_registry.esm` for the complete worked fixture. Mesh
+**topology** (connectivity, node/edge/face location) is unchanged and already
+expressible: connectivity is a `ragged`/`derived` `IndexSet`, and mesh location is
+`ModelVariable.location` — so UGRID-compliant output is a mapping choice over
+existing constructs, with plain-CF auxiliary coordinates the default emission
+(RFC streaming-output-sinks §8.4).
 
 ---
 

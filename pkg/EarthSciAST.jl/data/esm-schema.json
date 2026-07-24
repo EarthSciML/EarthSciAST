@@ -112,6 +112,13 @@
         "$ref": "#/$defs/IndexSet"
       }
     },
+    "coordinates": {
+      "type": "object",
+      "description": "Document-scoped, OPTIONAL registry of coordinate variables (RFC streaming-output-sinks §8), keyed by name. Purely additive: a document without it validates and emits exactly as before (bare integer axes). Each entry marks an existing data array — a model variable, parameter, or loader field referenced BY NAME (exactly as a ragged `IndexSet` references its `offsets`/`values` factors), or an inline literal `values` vector — as a physical coordinate and attaches CF metadata (`standard_name`, `units`, optional `axis`). The coordinate's SHAPE is read from its source, so it is NOT attached to any single axis: this is the CF coordinate data model, covering rectilinear (1-D monotonic → CF dimension coordinate), unstructured (1-D over a shared dimension → CF auxiliary coordinate) and curvilinear (2-D `lat(y,x)`/`lon(y,x)` → auxiliary coordinate) grids under one rule. A streaming writer derives each data variable's CF `coordinates` attribute mechanically: every coordinate whose source DIMENSIONS (by identity, NOT by length) are a subset of the data variable's dimensions applies to it.",
+      "additionalProperties": {
+        "$ref": "#/$defs/Coordinate"
+      }
+    },
     "expression_templates": {
       "type": "object",
       "description": "Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `template_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`template_import_version_too_old`).",
@@ -413,17 +420,8 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "oneOf": [
-              {
-                "required": [
-                  "on"
-                ]
-              },
-              {
-                "required": [
-                  "overlap"
-                ]
-              }
+            "required": [
+              "on"
             ],
             "properties": {
               "on": {
@@ -437,37 +435,6 @@
                   },
                   "minItems": 2,
                   "maxItems": 2
-                }
-              },
-              "overlap": {
-                "type": "object",
-                "additionalProperties": false,
-                "description": "Phase-2a spatial OVERLAP broad-phase gate: replaces uniform-grid bin equality with envelope candidacy. `src_env` / `tgt_env` name const-array ENVELOPE factors — 4 names [xmin,ymin,xmax,ymax] (rectangles, e.g. cell [W,S,E,N]), 2 names [x,y] (points → degenerate envelope), or 1 name (a [pos,verts,coord] ring factor → AABB). A ⊗-product term is contributed only for (src_pos, tgt_pos) index combinations whose envelopes intersect (inflated outward by `eps`); the narrow phase (exact rectangle/polygon test) stays as the aggregate `filter`. The candidate set is built once at build time via the planar broad-phase primitive (STRtree/brute-force).",
-                "required": [
-                  "src_env",
-                  "tgt_env"
-                ],
-                "properties": {
-                  "src_env": {
-                    "type": "array",
-                    "description": "Envelope factor names for the source (query) side: 1 (rings), 2 (point [x,y]), or 4 (rect [xmin,ymin,xmax,ymax]) const-array factor names.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "minItems": 1
-                  },
-                  "tgt_env": {
-                    "type": "array",
-                    "description": "Envelope factor names for the target (indexed cell) side: 1, 2, or 4 const-array factor names, same convention as src_env.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "minItems": 1
-                  },
-                  "eps": {
-                    "type": "number",
-                    "description": "Outward envelope inflation (FP-conservative slack). Default 0.0; eps >= 0 grows the candidate set monotonically."
-                  }
                 }
               }
             }
@@ -3165,6 +3132,40 @@
         }
       ]
     },
+    "Coordinate": {
+      "type": "object",
+      "description": "One entry of the document-scoped `coordinates` registry (RFC streaming-output-sinks §8): marks an existing data array (or an inline literal vector) as a physical coordinate and attaches CF metadata. Exactly one of `source` (reference an existing array by name) or `values` (inline literal) MUST be present. The coordinate's shape/dimensions come from its source, so no per-axis attachment is needed; the writer resolves CF role (dimension vs auxiliary) from that shape.",
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["source"] },
+        { "required": ["values"] }
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Name of an existing data array — a model variable, parameter, or data-loader field — supplying this coordinate's values. Referenced by name exactly as a ragged `IndexSet` references its `offsets`/`values` factors. Mutually exclusive with `values`. The array's declared shape (its ordered index-set dimensions) IS the coordinate's shape: 1-D monotonic over a grid axis → CF dimension coordinate; 1-D over a shared dimension (e.g. `lat(cells)`) or 2-D (`lat(y,x)`) → CF auxiliary coordinate."
+        },
+        "values": {
+          "type": "array",
+          "description": "Inline literal 1-D coordinate vector for the simple rectilinear case, mirroring `FunctionTableAxis.values` (finite floats). Mutually exclusive with `source`. Use `source` for anything not a plain 1-D literal (unstructured/curvilinear coordinates live in data arrays).",
+          "items": { "type": "number" },
+          "minItems": 1
+        },
+        "standard_name": {
+          "type": "string",
+          "description": "CF standard name (e.g. \"latitude\", \"longitude\", \"air_pressure\"). Emitted verbatim as the coordinate variable's `standard_name` attribute."
+        },
+        "units": {
+          "type": "string",
+          "description": "CF/UDUNITS units string (e.g. \"degrees_north\", \"degrees_east\", \"Pa\"). Emitted as the coordinate variable's `units` attribute. Advisory at load time (no unit checking), matching `FunctionTableAxis.units`."
+        },
+        "axis": {
+          "type": "string",
+          "description": "Optional CF axis role for a rectilinear dimension coordinate. Set it ONLY for a 1-D monotonic dimension coordinate; omit it for auxiliary coordinates (unstructured/curvilinear), which have no single axis. Emitted as the `axis` attribute.",
+          "enum": ["X", "Y", "Z", "T"]
+        }
+      }
+    },
     "IndexSet": {
       "type": "object",
       "description": "A named index set (RFC semiring-faq-unified-ir §5.2): the declaration shape for an iteration domain referenced from an `aggregate` range via { \"from\": <name> }. Covers grid axes and categorical dimensions under one shape. Exactly one of four kinds, each requiring its own fields.",
@@ -3194,10 +3195,6 @@
         "from_faq": {
           "type": "string",
           "description": "derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is \"derived\"."
-        },
-        "member_factor": {
-          "type": "string",
-          "description": "derived (projection-pushdown, RFC semiring-faq-unified-ir Phase 2b): optional name of a model `parameter` const factor that the build fills with this derived set's materialized value-invention MEMBERS — the invented, sorted-distinct, 1-based full-grid ids. Lets an in-model gather (e.g. cell_W[c] = index(W, index(<member_factor>, c))) pull the full-grid rows the compact derived axis selects; there is no member(set,c) IR op, so this feedback IS the mechanism. Admissible only when kind is \"derived\"; purely additive (a set omitting it validates and resolves exactly as before)."
         },
         "of": {
           "type": "array",

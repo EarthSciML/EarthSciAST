@@ -1,0 +1,64 @@
+{
+    "esm": "0.8.0",
+    "metadata": {
+        "name": "StreamingDecayGrid",
+        "description": "Minimal runnable model for the streaming-output-sinks Wave 2 end-to-end test: a single array state `c` over a 3x2 lon/lat grid with pointwise exponential decay D(c) = -k*c (k scalar). No data loaders, no array-shaped parameters, so it flattens to six per-cell ODEs (c[i,j]) and runs straight through EarthSciAST.simulate — the streamed Zarr store is compared cell-by-cell against an in-RAM reference run.",
+        "authors": [
+            "EarthSciML Test Suite"
+        ],
+        "created": "2026-07-23T00:00:00Z",
+        "tags": [
+            "streaming-output",
+            "runnable-simulation",
+            "array-state"
+        ]
+    },
+    "index_sets": {
+        "lon": {
+            "kind": "interval",
+            "size": 3
+        },
+        "lat": {
+            "kind": "interval",
+            "size": 2
+        }
+    },
+    "models": {
+        "Grid": {
+            "variables": {
+                "c": {
+                    "type": "state",
+                    "units": "kg",
+                    "shape": ["lon", "lat"],
+                    "default": 1.0,
+                    "description": "Gridded tracer with pointwise exponential decay."
+                },
+                "k": {
+                    "type": "parameter",
+                    "units": "1/s",
+                    "default": 0.001,
+                    "description": "Decay rate (scalar)."
+                }
+            },
+            "equations": [
+                {
+                    "lhs": {
+                        "op": "D",
+                        "args": ["c"],
+                        "wrt": "t"
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [
+                            {
+                                "op": "-",
+                                "args": ["k"]
+                            },
+                            "c"
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+}

@@ -32,6 +32,11 @@ The outcome of a [`simulate`](@ref) run.
 
 Index a single state element's trajectory with `result["name"]`, and read the
 final state with `final_state(result)`.
+
+When [`simulate`](@ref) is run with streaming output `sinks`, the sink owns the
+trajectory and the solver is told `save_everystep=false`, so `t`/`u` carry only
+the start/end points (the full trajectory lives in the sink, not in RAM). A
+no-sink run is unaffected — `u` holds every saved point as before.
 """
 struct SimulationResult
     t::Vector{Float64}
@@ -103,7 +108,12 @@ function _prepare_run_doc(input)
     if input isa AbstractDict
         input = load(input; base_path=pwd())
     end
+    # Capture the verbatim document-scoped `coordinates` registry (RFC §8.3) BEFORE
+    # flattening drops it (it rides on `EsmFile`, not `FlattenedSystem`); re-inject
+    # it into the run doc below so `derive_output_meta` can emit CF coordinates.
+    run_coordinates = nothing
     if input isa EsmFile
+        run_coordinates = input.coordinates
         # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
         # `apply_expression_template` references into the FlattenedSystem; they
         # ride to the tree-walk build boundary below. Under
@@ -133,7 +143,13 @@ function _prepare_run_doc(input)
         # array observeds, so an already-array (discretized) or purely-scalar (0-D)
         # run is byte-identical.
         input = promote_downstream_shapes(algebraic_states_to_observeds(input))
-        return flattened_to_esm(input)
+        doc = flattened_to_esm(input)
+        # Re-attach the verbatim `coordinates` registry (captured pre-flatten) so the
+        # streaming-output writer sees it (RFC §8.3). Document-scoped + un-namespaced,
+        # like `index_sets`, so it drops straight onto the run doc.
+        run_coordinates !== nothing && !isempty(run_coordinates) &&
+            (doc["coordinates"] = run_coordinates)
+        return doc
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
                         "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"))
@@ -276,6 +292,7 @@ struct PreparedModel
     n_equations::Int                      # flattened equation count (display only)
     buffer_time::Base.RefValue{Float64}   # t the discrete buffers currently hold
     dirty::Base.RefValue{Bool}            # true once a run may have refreshed them
+    output_meta::OutputMeta               # doc-derived output naming/CF metadata (RFC §7–§8)
 end
 
 function Base.show(io::IO, prep::PreparedModel)
@@ -413,7 +430,8 @@ function prepare(input;
 
     return PreparedModel(f!, u0, p, var_map, merged_param, discrete_providers, dm,
                          Float64(sample_time), _doc_equation_count(doc),
-                         Ref(Float64(sample_time)), Ref(false))
+                         Ref(Float64(sample_time)), Ref(false),
+                         derive_output_meta(doc))
 end
 
 # Re-seed the DISCRETE forcing buffers at the run's t0 and recompute the
@@ -447,6 +465,19 @@ Keyword arguments: `alg` (REQUIRED, e.g. `Tsit5()`), `initial_conditions`,
 prepared `u0`, so repeated runs are independent; discrete forcing buffers are
 re-seeded at this run's `t0` when needed (see [`PreparedModel`](@ref)).
 
+Streaming output (streaming-output-sinks RFC §16):
+* `sinks` — a collection of objects implementing the Sink protocol
+  ([`sink_output_times`](@ref) / [`sink_write!`](@ref) / …). When non-empty,
+  [`build_output_callback`](@ref) wires a `PresetTimeCallback` that snapshots
+  state at each sink's output anchors and pushes it to the sink, its tstops
+  UNIONed with the refresh tstops and its callback composed with the refresh
+  callback; the solve runs `save_everystep=false` so the sink — not RAM — owns the
+  trajectory. Empty (the default) ⇒ the historical in-RAM path, byte-identical.
+* `snapshot` — an `integrator -> StateSnapshot` (or `-> state-slabs`) function;
+  defaults to the host-gather [`state_snapshot`](@ref).
+* `pre_write` — a `() -> nothing` hook run at each output boundary BEFORE the
+  snapshot, to freshen caller-named observed caches. Defaults to a no-op.
+
 `parameters` is NOT accepted here (non-empty throws [`SimulateError`](@ref)):
 overrides are baked into the evaluator at `prepare` time because they feed
 build-time constant folding. Call `prepare(input; parameters = …)` instead.
@@ -458,7 +489,13 @@ function simulate(prep::PreparedModel, tspan;
                   seed_ic! = nothing,
                   reltol::Float64 = DEFAULT_SIM_RELTOL,
                   abstol::Float64 = DEFAULT_SIM_ABSTOL,
-                  saveat = nothing)
+                  saveat = nothing,
+                  sinks = [],
+                  snapshot = state_snapshot,
+                  pre_write = () -> nothing,
+                  checkpoint_predicates = (),
+                  checkpoint_sinks = nothing,
+                  terminate_on_checkpoint::Bool = true)
     isempty(parameters) || throw(SimulateError(
         "simulate(prep::PreparedModel, …): parameter overrides are baked into the " *
         "evaluator at prepare() time (they feed build-time constant folding: setup " *
@@ -481,9 +518,86 @@ function simulate(prep::PreparedModel, tspan;
         prep.dirty[] = true   # the solve will mutate the buffers at each anchor
     end
 
-    return _simulate_solve(prep.f!, u0, (t0, Float64(tspan[2])), prep.p, alg, prep.var_map;
-                           callback = cb, tstops = tstops,
-                           reltol = reltol, abstol = abstol, saveat = saveat)
+    # Streaming output sinks (streaming-output-sinks RFC §16.5). When any sink is
+    # present, build the output callback, UNION its output tstops into the refresh
+    # tstops (so input-refresh and output-write stop the solver at the union of
+    # their anchors, exactly as multiple providers' refresh times union), and pass
+    # BOTH callbacks to the solve — the extension composes them into one
+    # `CallbackSet` (SciMLBase is solver-adjacent, so the composition stays out of
+    # this core file, `[[library-exposes-rhs-not-solver]]`). `save_everystep=false`
+    # then tells the solver to stop accumulating the dense RAM trajectory — the sink
+    # IS the trajectory store. With no sinks, `callback`/`tstops`/`save_everystep`
+    # are byte-identical to before (single refresh callback or nothing, default
+    # `save_everystep=true` ⇒ the extension leaves it unset).
+    callbacks = Any[]
+    cb === nothing || push!(callbacks, cb)
+    save_everystep = true
+    if !isempty(sinks)
+        out_cb, out_tstops = build_output_callback(;
+            sinks = sinks, snapshot = snapshot, pre_write = pre_write)
+        tstops = _union_tstops(tstops, out_tstops)
+        push!(callbacks, out_cb)
+        save_everystep = false
+    end
+
+    # Predicate-driven checkpointing (streaming-output-sinks RFC §10, §16.7). When
+    # `checkpoint_predicates` is non-empty, compose a `DiscreteCallback` that writes a
+    # full-state checkpoint to `checkpoint_sinks` (default: `sinks`) + flushes the
+    # durable barrier the instant any predicate (SLURM walltime, spot notice, custom)
+    # fires, optionally terminating for a clean pre-preemption exit. Interval-only
+    # checkpointing needs none of this — a checkpoint-profile sink's cadence rides the
+    # ordinary output callback above.
+    ck_sinks = checkpoint_sinks === nothing ? sinks : checkpoint_sinks
+    if !isempty(checkpoint_predicates)
+        ck_cb = build_checkpoint_callback(;
+            sinks = ck_sinks, predicates = checkpoint_predicates, snapshot = snapshot,
+            pre_write = pre_write, terminate_on_fire = terminate_on_checkpoint)
+        push!(callbacks, ck_cb)
+        save_everystep = false
+    end
+
+    callback = isempty(callbacks) ? nothing : Tuple(callbacks)
+
+    # Sink lifecycle: open each sink (declares its store dims/coords/chunk-shard
+    # grid ONCE) BEFORE the solve, and close each (flush + end-of-run manifest)
+    # AFTER — in a `finally` so a solver error still finalizes a partially-written
+    # store into a readable, restartable state. The per-tick `sink_write!` fires
+    # from the output callback in between; `simulate` owns only open/close. The
+    # lifecycle set is the UNION of the diagnostic and checkpoint sinks.
+    all_sinks = _distinct_sinks(sinks, ck_sinks)
+    isempty(all_sinks) || foreach(sink_open!, all_sinks)
+    try
+        return _simulate_solve(prep.f!, u0, (t0, Float64(tspan[2])), prep.p, alg, prep.var_map;
+                               callback = callback, tstops = tstops, save_everystep = save_everystep,
+                               reltol = reltol, abstol = abstol, saveat = saveat)
+    finally
+        isempty(all_sinks) || foreach(sink_close!, all_sinks)
+    end
+end
+
+# The distinct sinks across the diagnostic + checkpoint sets, by object identity —
+# a sink that is BOTH a diagnostic and checkpoint target opens/closes exactly once.
+function _distinct_sinks(sinks, ck_sinks)
+    out = Any[]
+    for s in sinks
+        any(x -> x === s, out) || push!(out, s)
+    end
+    for s in ck_sinks
+        any(x -> x === s, out) || push!(out, s)
+    end
+    return out
+end
+
+# Sorted, de-duplicated union of two tstop vectors — the refresh anchors and the
+# output anchors merge into the single `tstops` the solver stops at (mirrors the
+# per-provider / per-sink union inside build_refresh_callback / build_output_callback).
+function _union_tstops(a::AbstractVector{Float64}, b::AbstractVector{Float64})
+    out = Float64[]
+    append!(out, a)
+    append!(out, b)
+    sort!(out)
+    unique!(out)
+    return out
 end
 
 """
@@ -559,6 +673,9 @@ function simulate(input, tspan;
                   reltol::Float64 = DEFAULT_SIM_RELTOL,
                   abstol::Float64 = DEFAULT_SIM_ABSTOL,
                   saveat = nothing,
+                  sinks = [],
+                  snapshot = state_snapshot,
+                  pre_write = () -> nothing,
                   inspect::Union{Nothing,BuildInspection} = nothing,
                   materialize_out::Union{Nothing,DiscreteMaterializer} = nothing)
     # BUILD-time knobs go to `prepare` (providers sampled at this run's t0, the
@@ -578,5 +695,6 @@ function simulate(input, tspan;
                     alg = alg,
                     initial_conditions = initial_conditions,
                     seed_ic! = seed_ic!,
-                    reltol = reltol, abstol = abstol, saveat = saveat)
+                    reltol = reltol, abstol = abstol, saveat = saveat,
+                    sinks = sinks, snapshot = snapshot, pre_write = pre_write)
 end
