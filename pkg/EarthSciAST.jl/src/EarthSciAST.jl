@@ -27,11 +27,13 @@ using Dates
 using JSON3
 using JSONSchema
 using LinearAlgebra   # wall2 Phase D: BLAS `mul!` accelerator for linear mat-vec observeds
-# Zero-dependency-free choice, deliberately: the threaded RHS tier needs a
-# thread dispatch that does NOT allocate a task per call (see access_kernel.jl,
-# "Threaded cell axis"). Base `Threads.@threads :static` allocates ~1.6 kB per
-# dispatch; Polyester reuses a persistent, spin-then-sleep pool.
-using Polyester
+# The threaded RHS tier needs a thread dispatch that does NOT allocate a task
+# per call (see access_kernel.jl, "Threaded cell axis"). Base
+# `Threads.@threads :static` allocates ~1.6 kB per dispatch; Polyester reuses a
+# persistent, spin-then-sleep pool. Polyester is a WEAK dependency: loading it
+# activates `EarthSciASTPolyesterExt`, which installs the batch runner via
+# `_set_batch_runner!`. Without Polyester loaded the RHS stays on the serial
+# path, so the common (unthreaded) case carries no mandatory dependency.
 using RuntimeGeneratedFunctions
 using Tullio
 
