@@ -1988,13 +1988,23 @@ end
 # and every per-kernel dispatch pays a wake-up latency that dwarfs the few
 # hundred microseconds of per-kernel work it parallelizes.
 #
-# So the default is OFF: `ESS_THREADS_ENABLE=1` opts a process in, and
-# `ESS_THREADS_DISABLE=1` is the hard kill switch that wins over it (the
-# `ESS_*_DISABLE` convention). Enable it for RHS-dominated workloads with cell
-# counts far above `ESS_THREADS_MIN_CELLS`, where per-kernel work amortizes the
-# dispatch; measure the SOLVE, not the RHS, before trusting it.
-_threads_enabled() = get(ENV, "ESS_THREADS_ENABLE", "") == "1"
+# So the default is OFF, and the opt-in is LOADING POLYESTER: the batch runner
+# lives in `EarthSciASTPolyesterExt` and is null until the user does
+# `using Polyester` (which activates the extension and calls `_set_batch_runner!`).
+# `ESS_THREADS_DISABLE=1` is the hard kill switch that forces serial even with
+# Polyester loaded (the `ESS_*_DISABLE` convention). Enable it (by loading
+# Polyester) for RHS-dominated workloads with cell counts far above
+# `ESS_THREADS_MIN_CELLS`, where per-kernel work amortizes the dispatch; measure
+# the SOLVE, not the RHS, before trusting it.
 _threads_disabled() = get(ENV, "ESS_THREADS_DISABLE", "") == "1"
+
+# The `nchunks`-way static batch runner, supplied by EarthSciASTPolyesterExt when
+# Polyester is loaded. Signature: `runner(chunkbody, nchunks)` calls
+# `chunkbody(c)` for `c in 1:nchunks`, in parallel, with a barrier at the end.
+# Null (⇒ serial path) until the extension installs it.
+const _BATCH_RUNNER = Ref{Any}(nothing)
+_set_batch_runner!(f) = (_BATCH_RUNNER[] = f; nothing)
+@inline _polyester_loaded() = _BATCH_RUNNER[] !== nothing
 
 # One-time per-plan threading verdicts, in the `_CASCADE_TALLY` spirit: bumped
 # once per PLAN (not per eval) by `_plan_prep_threads!`. Read it via
@@ -2013,7 +2023,7 @@ _thread_min_cells() =
     something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")), 512)
 
 @inline _threads_available() =
-    Threads.nthreads() > 1 && _threads_enabled() && !_threads_disabled()
+    Threads.nthreads() > 1 && _polyester_loaded() && !_threads_disabled()
 
 # Total cells in a cell set, in the runners' own enumeration.
 function _plan_ncells(cs::_CellSet)
@@ -2225,12 +2235,17 @@ function _run_acc_plan_threaded!(du, u, p, t, P::_AccPlan, cs::_CellSet,
     scs = P.scalars
     base = div(ncells, nchunks)
     rem = ncells - base * nchunks
-    Polyester.@batch for c in 1:nchunks
+    # Body for one static chunk `c`; the Polyester `@batch` over `1:nchunks` lives
+    # in EarthSciASTPolyesterExt (installed via `_set_batch_runner!`). This is only
+    # reached when `_threads_available()` was true, so the runner is non-null.
+    run_chunk = function (c::Int)
         W = ws[c]::_AccPlan
         a = (c - 1) * base + min(c - 1, rem)
         b = c * base + min(c, rem)
         _plan_fill_scalars!(W.bufs, scs, u, p, t)
         _plan_walk!(du, u, W, cs, a, b)
+        return nothing
     end
+    _BATCH_RUNNER[](run_chunk, nchunks)
     return du
 end
