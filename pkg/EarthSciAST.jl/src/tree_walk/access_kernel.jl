@@ -1978,6 +1978,22 @@ end
 # The KERNEL axis is deliberately NOT parallelized: separate kernels can share
 # `du` slots through indirect-out / scatter merges. One `@batch` per kernel keeps
 # an implicit barrier between kernels, exactly matching the serial write order.
+# OPT-IN, and deliberately so. Threading the cell axis is a large WIN on an
+# isolated RHS (the ReSEACT chemistry half: 4.82 -> 2.00 ms/eval at 4 threads)
+# but a LOSS inside the ODE solve that RHS actually lives in: measured on the
+# native ReSEACT runner at 8 threads, a 60 s window solves in 38.96 s serial and
+# 67.83 s threaded (1.74x SLOWER), with identical results. The cause is the call
+# PATTERN, not the kernels — the stiff half calls the RHS in short bursts
+# separated by linear-algebra work, so the pool has gone to sleep by each call
+# and every per-kernel dispatch pays a wake-up latency that dwarfs the few
+# hundred microseconds of per-kernel work it parallelizes.
+#
+# So the default is OFF: `ESS_THREADS_ENABLE=1` opts a process in, and
+# `ESS_THREADS_DISABLE=1` is the hard kill switch that wins over it (the
+# `ESS_*_DISABLE` convention). Enable it for RHS-dominated workloads with cell
+# counts far above `ESS_THREADS_MIN_CELLS`, where per-kernel work amortizes the
+# dispatch; measure the SOLVE, not the RHS, before trusting it.
+_threads_enabled() = get(ENV, "ESS_THREADS_ENABLE", "") == "1"
 _threads_disabled() = get(ENV, "ESS_THREADS_DISABLE", "") == "1"
 
 # One-time per-plan threading verdicts, in the `_CASCADE_TALLY` spirit: bumped
@@ -1996,7 +2012,8 @@ _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
 _thread_min_cells() =
     something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")), 512)
 
-@inline _threads_available() = Threads.nthreads() > 1 && !_threads_disabled()
+@inline _threads_available() =
+    Threads.nthreads() > 1 && _threads_enabled() && !_threads_disabled()
 
 # Total cells in a cell set, in the runners' own enumeration.
 function _plan_ncells(cs::_CellSet)
