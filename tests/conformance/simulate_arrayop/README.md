@@ -40,22 +40,29 @@ index against an output index (esm-spec §4.3.1); the format ships no `cumsum` /
 | `26_cumulative_integral_measure` | `<=` | + | Riemann-sum integral on a **non-uniform** grid; the measure is an author-supplied factor, never inferred |
 
 **Forward scans are evaluated in `O(N)`, and that is a correctness claim, not just
-a speed one.** Rust and Python recognize the forward rows (`<=`, `<`) and replace
-the `O(N²)` triangle with one running accumulator. This is legitimate only because
-it is *bit-identical*: the oracle folds the admitted window ascending, lowest `j`
-first, and `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces exactly that fold with exactly that
+a speed one.** All three executing ports recognize the forward rows (`<=`, `<`,
+and the mirrored spellings `i >= j` / `i > j`) and replace the `O(N²)` triangle
+with one running accumulator. This is legitimate only because it is
+*bit-identical*: the oracle folds the admitted window ascending, lowest `j` first,
+and `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces exactly that fold with exactly that
 association. Reverse rows (`>=`, `>`) are deliberately **not** scanned under an
 inexact ⊕ — each reverse cell folds its own suffix from that suffix's low end, so
 consecutive cells share no partial result. Bit-identity is pinned against an
 independent triangular oracle, at catastrophic-cancellation magnitudes, by
-`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs` and
-`pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py`.
+`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`,
+`pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py` and
+`pkg/EarthSciAST.jl/test/scan_prefix_test.jl`.
 
-Julia evaluates these fixtures correctly but does **not** scan: its array backend
-unrolls a constant-bound contraction into per-cell-*independent* kernels
-(`_unrolled_contraction_body` → the affine access-kernel build), whereas a scan is
-sequential *across* output cells. Adding it is a change to that kernel model, not
-a local optimization.
+Julia gets there differently, because its array backend builds per-cell
+*independent* kernels and a scan is sequential across cells. Rather than teach a
+carried accumulator to all four kernel runners, the build splits the equation
+(`tree_walk/scan.jl`): the body with the contracted symbol renamed to the output
+symbol goes through the ordinary affine build as an elementwise **term** pass, and
+a `_ScanFold` accumulates over those terms after the kernel section. Both passes
+are `O(N)`, and the term pass keeps the affine lowering, the codegen tier,
+threading and AD unchanged. The Julia tests pin the result bit-for-bit against
+*both* the per-cell reference (`ESS_STENCIL_DISABLE=1`) and the interpreted affine
+tier (`ESS_CODEGEN_DISABLE=1`), neither of which sees the rewrite.
 
 ## Executing ports
 

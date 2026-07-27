@@ -1680,7 +1680,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
-    scalar_entries, percell_scalar, acc_kernels_pre = _compile_derivative_equations(derivative_eqs,
+    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds = _compile_derivative_equations(derivative_eqs,
         resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states; template_sites=template_sites,
         scalar_obs_inline=obs_plan.inline)
@@ -1770,12 +1770,13 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
         _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
-                  const_slots, time_slots, dyn_slots)
+                  const_slots, time_slots, dyn_slots, scan_folds)
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
         # (`_OopRHS` / `rhs_with_buffers`, B2) — the traceable binding.
-        _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather)
+        _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
+                      scan_folds)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
@@ -1805,6 +1806,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # tier (value-identical ones keep a real inv tier), so `n_acc_inv_slots`
     # can shrink relative to a disabled-merge build.
     diag = (; n_vec_kernels = 0,
+              # ess-scan: forward cumulative (prefix) reductions rewritten into a
+              # term pass + an O(N) accumulation (scan.jl). Zero on every model
+              # without one; the per-equation cascade tally records `:scan`.
+              n_scan_folds = length(scan_folds),
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
               n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
@@ -2026,6 +2031,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     scalar_entries = Tuple{Int,ASTExpr}[]
     percell_scalar = Tuple{Int,_Node}[]
     acc_kernels = _AccKernel[]
+    scan_folds = _ScanFold[]           # ess-scan post-passes (scan.jl); usually empty
     covered = falses(n_states)
     # A3: ONE cross-equation store for this build's whole equation loop — the
     # compile-once variant / bound-body caches and the shared obs-inline memo
@@ -2071,13 +2077,13 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_arrayop_D_lhs(eq.lhs)
-            _compile_arrayop_equation!(percell_scalar, acc_kernels, covered, eq, resolved_obs,
+            _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs;
                                        template_sites=template_sites, xeq=xeq)
         end
     end
-    return scalar_entries, percell_scalar, acc_kernels
+    return scalar_entries, percell_scalar, acc_kernels, scan_folds
 end
 
 # ---- Stage: one arrayop derivative equation → whole-array kernels ----
@@ -2119,6 +2125,119 @@ function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{St
     return OpExpr(oplus, ASTExpr[NumExpr(zerobar); terms])
 end
 
+# ess-scan: recognize a CUMULATIVE (prefix) reduction — an aggregate whose
+# filter admits the monotone window `j ⋚ i` against one output index — so the
+# equation can be evaluated as a term pass plus an O(N) accumulation instead of
+# the O(N²) guarded fold `_unrolled_contraction_body` would emit. See scan.jl
+# for the rewrite, the bit-exactness argument, and why forward-only.
+#
+# Returns `(axis, inclusive, j_name)` — `axis` the POSITION of the scanned
+# symbol in `idx_names` — or `nothing` for anything that is not exactly this
+# shape. Every condition below is load-bearing:
+#
+#   * one contracted symbol, constant-bound: a second contraction or a ragged
+#     bound means the admitted set is not a simple prefix of one axis;
+#   * no join gates: a join can drop terms per output cell, so consecutive
+#     cells would no longer share a prefix;
+#   * the filter is EXACTLY one comparison between the contracted symbol and an
+#     output symbol — a conjunction, a shifted bound (`j <= i-1`) or a compare
+#     against anything else is not this pattern (and `j <= i-1` is just the
+#     strict form, which the caller can already spell as `<`);
+#   * the two ranges coincide: cell `i` must accumulate over the same axis it
+#     indexes, or `acc_{i-1}` is not a prefix of cell `i`'s window;
+#   * the body does not mention the scanned OUTPUT symbol. This is the
+#     condition that makes the rewrite sound rather than merely faster: if the
+#     term at `j` depends on `i` (`u[j] * w[i]`, `u[i-j]`), then consecutive
+#     cells sum DIFFERENT terms and share no partial result at all.
+function _detect_prefix_scan(idx_names::Vector{String}, range_iters,
+        contract_names::Vector{String}, contract_const, agg_gates, agg_filter,
+        rhs_body::ASTExpr)
+    agg_gates === nothing || return nothing
+    length(contract_names) == 1 || return nothing
+    citer = contract_const[1]
+    citer === nothing && return nothing
+    agg_filter isa OpExpr || return nothing
+    f = agg_filter::OpExpr
+    length(f.args) == 2 || return nothing
+    # `j <= i` and its mirror `i >= j` are the SAME forward scan; `j >= i` is a
+    # reverse scan and is declined by the `j_side` check below.
+    local j_side::ASTExpr, i_side::ASTExpr, inclusive::Bool
+    if f.op == "<=" || f.op == "<"
+        j_side, i_side, inclusive = f.args[1], f.args[2], f.op == "<="
+    elseif f.op == ">=" || f.op == ">"
+        j_side, i_side, inclusive = f.args[2], f.args[1], f.op == ">="
+    else
+        return nothing
+    end
+    (j_side isa VarExpr && i_side isa VarExpr) || return nothing
+    (j_side::VarExpr).name == contract_names[1] || return nothing
+    i_name = (i_side::VarExpr).name
+    axis = findfirst(isequal(i_name), idx_names)
+    axis === nothing && return nothing
+    collect(range_iters[axis]) == citer || return nothing
+    # `_referenced_var_names` routes through the generated field walk, so a
+    # reference buried in a nested aggregate's body/filter/ranges counts.
+    i_name in _referenced_var_names(rhs_body) && return nothing
+    return (axis::Int, inclusive, contract_names[1])
+end
+
+# Resolve the output slots a prefix-scan equation owns, grouped into lanes
+# along the scanned axis (see `_ScanFold`). One lane per combination of the
+# NON-scanned output indices; within a lane the slots ascend.
+#
+# Slots come from the same `lhs_body` → `_cell_key` → `var_map` path the
+# per-cell build uses (`_compile_arrayop_percell!`), deliberately: the state
+# ordering is a derived fact, not a convention, and this must not re-derive it.
+function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
+        range_iters, lhs_body::OpExpr, var_map::Dict{String,Int},
+        oplus::String, zerobar::Float64)
+    nd = length(idx_names)
+    scan_range = collect(range_iters[axis])
+    len = length(scan_range)
+    # Unreachable — `_try_affine_stencil` already refused an empty range before
+    # the caller got here — but a `nothing` return would leave the term kernels
+    # in place with no fold behind them, which is a WRONG ANSWER rather than a
+    # slow one. Fail loudly instead.
+    len >= 1 || throw(TreeWalkError("E_TREEWALK_SCAN_EMPTY_RANGE",
+        "prefix scan over an empty range on index '$(idx_names[axis])'"))
+    # Pin the scanned axis to a single placeholder so the product enumerates
+    # LANES; the scan coordinate is substituted in the inner loop.
+    outer_iters = Vector{Vector{Int}}(undef, nd)
+    for d in 1:nd
+        outer_iters[d] = d == axis ? Int[first(range_iters[d])] :
+                                     collect(range_iters[d])
+    end
+    slots = Int[]
+    sizehint!(slots, len * prod(length(it) for it in outer_iters; init=1))
+    idx_exprs = Dict{String,ASTExpr}()
+    for outer in Iterators.product(outer_iters...)
+        for s in scan_range
+            for d in 1:nd
+                idx_exprs[idx_names[d]] = IntExpr(Int64(d == axis ? s : outer[d]))
+            end
+            sub_lhs = _sub_preserving(lhs_body, idx_exprs)
+            (sub_lhs isa OpExpr && (sub_lhs::OpExpr).op == "D") ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "expected D(index(...)) in arrayop body"))
+            inner = (sub_lhs::OpExpr).args[1]
+            (inner isa OpExpr && (inner::OpExpr).op == "index") ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "expected index(var,...) inside D"))
+            ve = (inner::OpExpr).args[1]
+            ve isa VarExpr ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "index first arg must be a variable name"))
+            cname = _cell_key((ve::VarExpr).name,
+                              [_eval_const_int(a, _EMPTY_IDX_ENV)
+                               for a in (inner::OpExpr).args[2:end]])
+            slot = get(var_map, cname, 0)
+            slot == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
+            push!(slots, slot)
+        end
+    end
+    return _ScanFold(slots, len, Symbol(oplus), zerobar, inclusive)
+end
+
 # ---- Cascade coverage tally (build observability) ----
 # Which of the array-equation build attempts each equation LANDS on:
 #   :affine             — the polyhedral access-kernel build, first try
@@ -2126,6 +2245,11 @@ end
 #                         template tier back in
 #   :percell_acc        — the per-cell scalarize fallback, merged into
 #                         indirect-outs `_AccKernel`s (acc_merge.jl)
+#   :scan               — a forward cumulative (prefix) reduction, rewritten
+#                         into an affine TERM build plus an O(N) accumulation
+#                         (ess-scan, scan.jl). Counted instead of `:affine`,
+#                         since the term kernels are what the affine build
+#                         actually produced.
 #   :percell_disabled   — ESS_STENCIL_DISABLE=1 forced the per-cell reference
 #                         (plain compiled scalar nodes on `rhs_list`, evaluated
 #                         by `_eval_node` — the differential oracle)
@@ -2136,7 +2260,7 @@ const _CASCADE_TALLY = Dict{Symbol,Int}()
 _tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
 
-function _compile_arrayop_equation!(percell_scalar, acc_kernels,
+function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
@@ -2204,11 +2328,24 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels,
     # processor — no runtime reduce, no per-cell loop. A variable-valence bound or
     # a join gate (either can vary the term set per output cell) is left to the
     # per-cell path.
+    #
+    # A FORWARD CUMULATIVE (prefix) reduction is split instead (ess-scan,
+    # scan.jl): the body with the contracted symbol renamed to the output
+    # symbol goes through this same affine build as an ordinary elementwise
+    # body, and a `_ScanFold` accumulates over the result after the kernel
+    # section. Both passes are O(N); the unrolled guarded fold below is O(N²).
+    # Declining leaves `scan_fold === nothing` and changes nothing.
+    scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
     if !_stencil_disabled()
+        scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
+                                   contract_const, agg_gates, agg_filter, rhs_body)
         affine_body =
             isempty(contract_names) ? rhs_body :
+            scan !== nothing ?
+                _sub_preserving(rhs_body,
+                    Dict{String,ASTExpr}(scan[3] => VarExpr(idx_names[scan[1]]))) :
             (agg_gates === nothing && all(c -> c !== nothing, contract_const)) ?
                 _unrolled_contraction_body(rhs_body, contract_names, contract_const,
                                            agg_filter, rhs_oplus, rhs_zerobar) :
@@ -2229,13 +2366,22 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels,
                                     const_registry, pgather, param_sym_set,
                                     reg_funcs, covered; xeq=xeq)
         end
+        # The term kernels are in hand — resolve the slots they write, in scan
+        # order, so the post-pass can fold them. Only now, so a declined affine
+        # build costs nothing.
+        if scan !== nothing && affine_kernels !== nothing
+            scan_fold = _build_scan_fold(scan[1], scan[2], idx_names, range_iters,
+                                         lhs_body, var_map, rhs_oplus, rhs_zerobar)
+        end
     end
     if affine_kernels !== nothing
-        _tally_cascade!(affine_first_try ? :affine : :affine_fused_retry)
+        _tally_cascade!(scan_fold !== nothing ? :scan :
+                        affine_first_try ? :affine : :affine_fused_retry)
         get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
             (println(stderr, "[ess-affine] FIRED: ", length(affine_kernels),
                      " access kernels for ", _output_idx_strings(lhs_op)); flush(stderr))
         append!(acc_kernels, affine_kernels)
+        scan_fold === nothing || push!(scan_folds, scan_fold)
         return nothing
     end
     # Anything the affine build cannot model takes the per-cell fallback, whose
