@@ -698,6 +698,65 @@ pub(super) fn evaluate_rhs_with_scratch(
                     derived_rings: &derived_rings,
                     forcing,
                 };
+                // ---- Forward prefix scan (O(N) instead of the O(N²) triangle)
+                // A cumulative reduction (esm-spec §4.3.1) is a triangular double
+                // loop that re-sums, for every output cell, the window the
+                // previous cell already summed — and it never vectorizes, because
+                // its filter reads an output index symbol as a value. Recognized
+                // here it collapses to one sweep with a running accumulator,
+                // bit-identical because both fold the window ascending in the same
+                // association (`PrefixScan`).
+                if let Some(scan) = detect_prefix_scan(
+                    output_idx_names,
+                    output_ranges,
+                    contract_names,
+                    static_ranges.as_deref(),
+                    body,
+                    filter,
+                ) {
+                    let (scan_lo, scan_hi) = output_ranges[scan.axis];
+                    let outer_ranges: Vec<(i64, i64)> = output_ranges
+                        .iter()
+                        .enumerate()
+                        .filter(|(d, _)| *d != scan.axis)
+                        .map(|(_, r)| *r)
+                        .collect();
+                    let outer_names: Vec<&String> = output_idx_names
+                        .iter()
+                        .enumerate()
+                        .filter(|(d, _)| *d != scan.axis)
+                        .map(|(_, n)| n)
+                        .collect();
+                    let mut outer = CartesianTuples::new(&outer_ranges);
+                    while let Some(otuple) = outer.next() {
+                        for (name, val) in outer_names.iter().zip(otuple.iter()) {
+                            set_bind(&mut ctx.loop_binds, name, *val);
+                        }
+                        run_prefix_scan(
+                            scan,
+                            &output_idx_names[scan.axis],
+                            &contract_names[0],
+                            (scan_lo, scan_hi),
+                            body,
+                            *reduce,
+                            &mut ctx,
+                            |_, acc, ctx| {
+                                // Address the destination exactly as the oracle
+                                // does — through the LHS index expressions under
+                                // the current binds, not by assuming a bare index.
+                                let actual_multi: Vec<i64> = lhs_idx_exprs
+                                    .iter()
+                                    .map(|e| eval_simple_index(e, &ctx.loop_binds))
+                                    .collect();
+                                let flat =
+                                    multi_to_flat_col_major(&actual_multi, &vs.shape, &vs.origin);
+                                dy[vs.flat_offset + flat] = acc;
+                            },
+                        );
+                    }
+                    continue;
+                }
+
                 let mut tuples = CartesianTuples::new(output_ranges);
                 while let Some(tuple) = tuples.next() {
                     for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
