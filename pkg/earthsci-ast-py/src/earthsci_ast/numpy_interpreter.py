@@ -373,14 +373,35 @@ _SEMIRINGS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The empty-⊕-reduction identity 0̄ for each ⊕ operator the bare ``reduce``
+#: shorthand can name. The shorthand fixes ⊗ = ``"*"``, so each row here IS a row
+#: of :data:`_SEMIRINGS` — ``"+"`` is ``sum_product``, ``"max"`` is
+#: ``max_product``, ``"min"`` is the ⊗-``*`` analogue of ``min_sum`` — and the
+#: identity must come from the semiring, never be assumed to be ``0.0``. A
+#: ``reduce: "max"`` seeded with ``0.0`` silently clamps every all-negative
+#: reduction to zero, which is what this table exists to prevent. Mirrors the
+#: Rust ``ReduceKind::identity`` (aggregate.rs) exactly.
+_REDUCE_IDENTITY: dict[str, float] = {
+    "+": 0.0,
+    "*": 1.0,
+    "max": -np.inf,
+    "min": np.inf,
+}
+
+
 def _resolve_semiring(expr: ExprNode) -> tuple[str, float, str]:
     """Return ``(reduce_op ⊕, empty_zero 0̄, otimes ⊗)`` for an aggregate node.
 
     When ``semiring`` is present it supersedes ``reduce``: the ⊕/⊗ operators and
     both identities come from the closed registry (:data:`_SEMIRINGS`). When it
-    is absent the legacy behaviour is reproduced exactly — ⊕ is the ``reduce``
-    field (default ``"+"``), ⊗ is ``"*"``, and an empty reduction returns ``0.0``
-    as it does today (the implicit ``sum_product`` row, RFC §5.1).
+    is absent, the schema's shorthand applies — ⊕ is the ``reduce`` field
+    (default ``"+"``) and ⊗ is ``"*"`` — and the empty-reduction identity 0̄ is the
+    one belonging to that ⊕ (:data:`_REDUCE_IDENTITY`), *not* an unconditional
+    ``0.0``. The shorthand names only the ⊕ operator; it does not re-point the
+    node at the ``sum_product`` row, so ``reduce: "max"`` reduces an empty set to
+    −∞ exactly as ``semiring: "max_product"`` does. An unrecognized ``reduce``
+    falls back to ``0.0``, leaving the downstream "unsupported reducer" error to
+    report it rather than masking it here.
     """
     semiring = getattr(expr, "semiring", None)
     if semiring is not None:
@@ -391,7 +412,8 @@ def _resolve_semiring(expr: ExprNode) -> tuple[str, float, str]:
                 f"{sorted(_SEMIRINGS)} (RFC semiring-faq-unified-ir §5.1)"
             )
         return sr["oplus"], sr["zero"], sr["otimes"]
-    return (expr.reduce or "+"), 0.0, "*"
+    reducer = expr.reduce or "+"
+    return reducer, _REDUCE_IDENTITY.get(reducer, 0.0), "*"
 
 
 @dataclass
@@ -1674,6 +1696,23 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 "supported; equi-join keys are dense interval / categorical index "
                 "sets (RFC semiring-faq-unified-ir §5.3)"
             )
+        # Forward cumulative (prefix) reduction (esm-spec §4.3.1): recognized
+        # BEFORE the dense gated paths, because they would materialize the whole
+        # N×N triangle just to mask half of it away. Declines (→ None) for
+        # anything that is not exactly a forward scan.
+        scan = _eval_arrayop_prefix_scan(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            reducer,
+            empty_zero,
+        )
+        if scan is not None:
+            return scan
         # Cached constant-geometry OPERATOR path (#3): a join-gated sum_product
         # shaped like the regrid APPLY factors into a reusable weight operator
         # W_op (built once, cached on ctx.op_cache) applied to the current field
@@ -2435,6 +2474,148 @@ def _eval_arrayop_reduce_vectorized(
     with np.errstate(divide="ignore", invalid="ignore"):
         out = ufunc.reduce(np.ascontiguousarray(term), axis=red_axes, initial=empty_zero)
     return np.asarray(out, dtype=float).reshape(out_shape)
+
+
+def _expr_mentions(node: Expr, name: str) -> bool:
+    """Whether ``name`` occurs anywhere in ``node`` as a bare symbol reference.
+
+    Walks ``args`` PLUS every sidecar Expression field, not just ``args``
+    (esm-spec §4.9.5) — a reference hiding in a nested body, filter, key or
+    bound is still a reference. Used to decline a prefix scan whose body reads
+    the scanned output symbol.
+    """
+    if isinstance(node, str):
+        return node == name
+    if not isinstance(node, ExprNode):
+        return False
+    for child in node.args or []:
+        if _expr_mentions(child, name):
+            return True
+    for field in ("expr", "filter", "key", "lower", "upper"):
+        child = getattr(node, field, None)
+        if child is not None and _expr_mentions(child, name):
+            return True
+    for child in getattr(node, "values", None) or []:
+        if _expr_mentions(child, name):
+            return True
+    return False
+
+
+def _match_forward_prefix_filter(filter_expr: Expr | None) -> tuple[str, str, bool] | None:
+    """Match a FORWARD prefix-scan filter, returning ``(j_name, i_name, inclusive)``.
+
+    Recognizes ``j <= i`` / ``j < i`` and their mirrored spellings ``i >= j`` /
+    ``i > j``. The reverse rows are deliberately NOT matched: each reverse output
+    cell folds its own suffix from that suffix's low end, so consecutive cells
+    share no partial result and any right-to-left accumulation would re-associate
+    (esm-spec §4.3.1).
+    """
+    if not isinstance(filter_expr, ExprNode) or len(filter_expr.args or []) != 2:
+        return None
+    lhs, rhs = filter_expr.args[0], filter_expr.args[1]
+    if not isinstance(lhs, str) or not isinstance(rhs, str):
+        return None
+    op = filter_expr.op
+    if op in ("<=", "<"):
+        return lhs, rhs, op == "<="
+    if op in (">=", ">"):
+        return rhs, lhs, op == ">="
+    return None
+
+
+def _eval_arrayop_prefix_scan(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+) -> np.ndarray | None:
+    """`O(N)` fast path for a FORWARD cumulative (prefix) reduction, esm-spec §4.3.1.
+
+    A prefix reduction reaches the general reducing paths as a full triangular
+    box: ``N`` output cells × ``N`` contracted terms, of which half are masked
+    away. That is ``O(N²)`` time *and* ``O(N²)`` memory in the dense vectorized
+    path. Recognized here, the body is evaluated over the contracted axis ALONE
+    and the answer falls out of one ``ufunc.accumulate`` — ``O(N)`` in both.
+
+    It is also *more* conformant, not merely faster. ``ufunc.reduce`` over the
+    dense box sums pairwise, whereas ``ufunc.accumulate`` is a sequential left
+    fold — exactly the ascending-``j`` fold the spec pins as normative and the
+    order the scalar oracle and the Rust binding use. So this path makes a prefix
+    sum bit-identical across bindings where the dense path was merely close.
+
+    Declines (``None``) — leaving the general paths to handle it — unless every
+    precondition holds. Each is a correctness requirement, not a heuristic:
+
+    * exactly one contracted index, named by the filter (otherwise the admitted
+      set is not a prefix of a single axis);
+    * the filter is exactly a forward comparison against an output symbol, with
+      no conjunction, so "admitted" and "j ≤ i" coincide;
+    * the contracted range equals the scanned output range, so ``j = i`` is the
+      term entering the window at step ``i``;
+    * the body does not read the scanned symbol — if it did, every cell's summand
+      would differ and no partial result could be reused;
+    * no ``join`` / ``distinct`` / ``key``, and a ⊕ with an accumulate ufunc.
+    """
+    if getattr(expr, "join", None) or getattr(expr, "distinct", None):
+        return None
+    if getattr(expr, "key", None) is not None:
+        return None
+    ufunc = _REDUCE_UFUNCS.get(reducer)
+    if ufunc is None or len(reduce_syms) != 1 or not out_syms or 0 in out_shape:
+        return None
+
+    matched = _match_forward_prefix_filter(getattr(expr, "filter", None))
+    if matched is None:
+        return None
+    j_name, i_name, inclusive = matched
+    if j_name != reduce_syms[0] or i_name not in out_syms:
+        return None
+    scan_axis = out_syms.index(i_name)
+
+    # `j = i` must be the newly admitted term at step `i`: same interval.
+    try:
+        j_range = _expand_range(resolved[j_name])
+    except (NumpyInterpreterError, KeyError, IndexError, ValueError, TypeError):
+        return None
+    if j_range != out_ranges_exp[scan_axis]:
+        return None
+    if _expr_mentions(expr.expr, i_name):
+        return None
+
+    # Evaluate the body over [other output axes…, j] — the scanned output axis is
+    # absent by construction, since the body cannot reference it.
+    other_syms = [s for k, s in enumerate(out_syms) if k != scan_axis]
+    other_ranges = [r for k, r in enumerate(out_ranges_exp) if k != scan_axis]
+    box_syms = other_syms + [j_name]
+    box_ranges = other_ranges + [j_range]
+    box_shape = tuple(len(r) for r in box_ranges)
+    try:
+        with _bound_index_box(ctx, box_syms, box_ranges):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                terms = np.asarray(_compile_expr(expr.expr)(ctx), dtype=float)
+                terms = np.broadcast_to(terms, box_shape)
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+        return None
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        acc = ufunc.accumulate(np.ascontiguousarray(terms), axis=terms.ndim - 1)
+    acc = np.asarray(acc, dtype=float)
+    if not inclusive:
+        # `<`: cell k sees only strictly-earlier terms, so shift right by one and
+        # seed cell 0 with the identity — the empty reduction, not an error.
+        shifted = np.empty_like(acc)
+        shifted[..., :1] = empty_zero
+        shifted[..., 1:] = acc[..., :-1]
+        acc = shifted
+
+    # Move the scanned axis from last position back to where it sits in out_syms.
+    result = np.moveaxis(acc, -1, scan_axis)
+    return np.ascontiguousarray(result, dtype=float).reshape(out_shape)
 
 
 def _eval_arrayop_scalar(

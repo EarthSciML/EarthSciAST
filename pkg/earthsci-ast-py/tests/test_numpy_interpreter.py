@@ -429,6 +429,46 @@ def test_no_semiring_defaults_to_sum_product_unchanged() -> None:
     assert eval_expr(_scalar_aggregate(None, prod, {"i": [1, 3]}), ctx) == pytest.approx(15.0)
 
 
+@pytest.mark.parametrize(
+    "reduce_op,expected",
+    [
+        ("+", 0.0),
+        ("*", 1.0),
+        ("max", -np.inf),
+        ("min", np.inf),
+    ],
+)
+def test_bare_reduce_shorthand_uses_its_own_identity(reduce_op, expected) -> None:
+    """The bare ``reduce`` shorthand carries ⊕'s OWN 0̄, not an assumed ``0.0``.
+
+    ``reduce`` names only the ⊕ operator (⊗ is fixed to ``"*"``), so each value
+    denotes a row of the closed semiring registry and inherits that row's
+    empty-reduction identity. Seeding a ``max`` fold with ``0.0`` — the bug this
+    pins — silently clamps every all-negative reduction up to zero. Mirrors the
+    Rust ``ReduceKind::identity`` table.
+    """
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0])})
+    body = ExprNode(op="index", args=["a", "i"])
+    # Empty range [1, 0] contracts over nothing, exposing the identity directly.
+    out = eval_expr(_scalar_aggregate(None, body, {"i": [1, 0]}, reduce=reduce_op), ctx)
+    assert out == expected
+
+
+def test_bare_reduce_max_over_all_negative_terms_is_not_clamped_to_zero() -> None:
+    """A NON-empty ``reduce: "max"`` over negative terms must stay negative.
+
+    The identity is the fold seed, so a wrong ``0.0`` seed corrupts non-empty
+    reductions too, not just empty ones: ``max(0, -2, -5, -1)`` is ``0`` where
+    the answer is ``-1``. This is the form the cumulative-reduction fixture
+    ``tests/fixtures/arrayop/25_cumulative_prefix_reduction.esm`` exercises
+    through a ``filter``.
+    """
+    ctx = _ctx({"a": np.array([-2.0, -5.0, -1.0])})
+    body = ExprNode(op="index", args=["a", "i"])
+    node = _scalar_aggregate(None, body, {"i": [1, 3]}, reduce="max")
+    assert eval_expr(node, ctx) == pytest.approx(-1.0)
+
+
 def test_semiring_supersedes_reduce_field() -> None:
     """When both are present the semiring's ⊕ wins over `reduce` (§5.1)."""
     ctx = _ctx({"a": np.array([3.0, 1.0, 4.0])})
