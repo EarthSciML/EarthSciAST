@@ -1496,6 +1496,58 @@ def _finalize_document(
     return root
 
 
+def _collect_direct_edge_const_bindings(root: Any) -> dict[str, int]:
+    """Gather the integer-literal metaparameter values the ROOT document fixes at
+    its OWN direct import edges (esm-spec §9.7.6 binding site 1). These names are
+    consumed by the edge and never re-exported (site 2 inherits only the names an
+    edge leaves open), so they are not document metaparameters — but a name the
+    document also spells in its own expression positions is a reference to the
+    value the edge fixed and must fold to that integer. Only concrete integer
+    literals are collected; a symbolic value (`NX*NY`, resolved per edge) and a
+    name fixed to DIFFERENT integers at two edges are both ambiguous and dropped,
+    leaving the name symbolic for the ordinary undefined-reference paths. Scans
+    the raw edges before the import resolvers consume them; does not mutate."""
+
+    def _edges_of(container: Any):
+        if _is_object(container):
+            imports = container.get("expression_template_imports")
+            if _is_array(imports):
+                for entry in imports:
+                    if _is_object(entry):
+                        yield entry
+
+    entries: list[dict[str, Any]] = []
+    entries.extend(_edges_of(root) if _is_object(root) else [])
+    for compkind in _COMPONENT_KINDS:
+        comps = root.get(compkind) if _is_object(root) else None
+        if not _is_object(comps):
+            continue
+        for comp in comps.values():
+            # A §4.7 ref-stub (`{"ref": ...}`) carries §9.7.10 injections aimed at
+            # the referenced leaf, not the root's own expressions — skip it (as
+            # `_resolve_component_imports` does).
+            if _is_object(comp) and "ref" not in comp:
+                entries.extend(_edges_of(comp))
+
+    out: dict[str, int] = {}
+    ambiguous: set[str] = set()
+    for entry in entries:
+        bindings = entry.get("bindings")
+        if not _is_object(bindings):
+            continue
+        for name, v in bindings.items():
+            key = str(name)
+            if isinstance(v, bool) or not isinstance(v, int):
+                ambiguous.add(key)  # symbolic / non-integer edge value
+                continue
+            if key in out and out[key] != v:
+                ambiguous.add(key)  # fixed to two different integers
+            out[key] = v
+    for key in ambiguous:
+        out.pop(key, None)
+    return out
+
+
 def resolve_template_machinery(
     raw: Any,
     base_path: str,
@@ -1538,6 +1590,20 @@ def resolve_template_machinery(
         for n, d in root["index_sets"].items():
             doc_isets[str(n)] = d
 
+    # A metaparameter the document CLOSES at its own direct import edges (esm-spec
+    # §9.7.6 binding site 1) is consumed by that edge and NOT re-exported (site 2
+    # only inherits the names left *open*), so it never becomes a document
+    # metaparameter. But the document may still spell that name in its OWN
+    # expression positions — e.g. a grid consumer that binds `NY: 8` at the rule
+    # edge and defines its `dy = 1/NY` observed against the size it chose. That
+    # bare `NY` is a reference to the value the edge fixed, so it must fold to the
+    # same integer literal the author would have written by hand (an AST fixture
+    # spells the equivalent `dy = 1/8` outright). Collect those edge-fixed integer
+    # constants here, BEFORE the import resolvers consume the edges; the closed
+    # document metaparameters (`values`, below) always win, and a name bound to
+    # DIFFERENT integers at two edges is ambiguous and left symbolic.
+    edge_consts = _collect_direct_edge_const_bindings(root)
+
     # Innermost-first resolution (esm-spec §9.7.6), one phase per helper. Each
     # threads the shared registries (root / doc_meta / doc_isets, mutated in
     # place); the two phases that rebind a registry return the new value.
@@ -1545,7 +1611,11 @@ def resolve_template_machinery(
     _resolve_component_imports(root, base_dir, stack, doc_meta, doc_isets)
     values = _close_document_metaparameters(doc_meta, api_raw)
     _reject_metaparameter_shadowing(root, doc_meta, doc_isets)
-    doc_isets = _substitute_closed_metaparameters(root, top_templates, doc_isets, values)
+    # Expression-position substitution folds the closed document metaparameters
+    # plus the edge-fixed constants for any name the document did not itself
+    # declare (document metaparameters win on any overlap).
+    sub_values = {**{k: v for k, v in edge_consts.items() if k not in values}, **values}
+    doc_isets = _substitute_closed_metaparameters(root, top_templates, doc_isets, sub_values)
     _fold_closed_document(root, top_templates, doc_isets)
     return _finalize_document(root, is_library, top_templates, doc_isets)
 

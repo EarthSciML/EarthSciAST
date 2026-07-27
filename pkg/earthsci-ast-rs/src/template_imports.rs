@@ -1881,8 +1881,24 @@ pub fn resolve_template_machinery(
     // --- §9.7.6 name-collision check: no shadowing of visible names ---
     check_metaparam_collisions(&root, &doc_meta, &doc_isets)?;
 
+    // A metaparameter the document CLOSES at its own direct import edges (§9.7.6
+    // binding site 1) is consumed by that edge and NOT re-exported (site 2 only
+    // inherits the names an edge leaves open), so it never becomes a document
+    // metaparameter. But the document may still spell that name in its OWN
+    // expression positions — e.g. a grid consumer that binds `NY: 8` at the rule
+    // edge and defines its `dy = 1/NY` observed against the size it chose. That
+    // bare `NY` is a reference to the value the edge fixed and must fold to the
+    // same integer literal the author would have written by hand (an AST fixture
+    // spells the equivalent `dy = 1/8` outright). The closed document
+    // metaparameters win on any overlap; a name fixed to two different integers
+    // at two edges is ambiguous and left symbolic.
+    let mut sub_values = collect_direct_edge_const_bindings(raw_data);
+    for (k, v) in &values {
+        sub_values.insert(k.clone(), *v);
+    }
+
     // --- expression-position substitution of the closed values ---
-    substitute_closed_metaparams(&mut root, &mut top_templates, &mut doc_isets, &values);
+    substitute_closed_metaparams(&mut root, &mut top_templates, &mut doc_isets, &sub_values);
 
     // --- fold structural sites on the closed document ---
     fold_closed_document(&mut root, &mut top_templates, &mut doc_isets)?;
@@ -2081,6 +2097,72 @@ fn resolve_component_imports(
         }
     }
     Ok(())
+}
+
+/// Gather the integer-literal metaparameter values the ROOT document fixes at
+/// its OWN direct import edges (esm-spec §9.7.6 binding site 1). These names are
+/// consumed by the edge and never re-exported (site 2 inherits only the names an
+/// edge leaves open), so they are not document metaparameters — but a name the
+/// document also spells in its own expression positions is a reference to the
+/// value the edge fixed and must fold to that integer. Only concrete integer
+/// literals are collected; a symbolic value (`NX*NY`, resolved per edge) and a
+/// name fixed to DIFFERENT integers at two edges are both ambiguous and dropped,
+/// leaving the name symbolic for the ordinary undefined-reference paths. Scans
+/// the pristine `raw_data` (edges are consumed by the resolvers); no mutation.
+fn collect_direct_edge_const_bindings(raw_data: &Value) -> BTreeMap<String, i64> {
+    fn edges_of<'a>(container: &'a Value, out: &mut Vec<&'a Map<String, Value>>) {
+        if let Some(imports) = container
+            .get("expression_template_imports")
+            .and_then(Value::as_array)
+        {
+            for entry in imports {
+                if let Some(e) = entry.as_object() {
+                    out.push(e);
+                }
+            }
+        }
+    }
+
+    let mut entries: Vec<&Map<String, Value>> = Vec::new();
+    edges_of(raw_data, &mut entries);
+    for compkind in COMPONENT_KINDS {
+        if let Some(comps) = raw_data.get(compkind).and_then(Value::as_object) {
+            for comp in comps.values() {
+                // A §4.7 ref-stub (`{"ref": ...}`) carries §9.7.10 injections
+                // aimed at the referenced leaf, not the root's own expressions.
+                if comp.as_object().is_some_and(|c| !c.contains_key("ref")) {
+                    edges_of(comp, &mut entries);
+                }
+            }
+        }
+    }
+
+    let mut out: BTreeMap<String, i64> = BTreeMap::new();
+    let mut ambiguous: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in entries {
+        let Some(bindings) = entry.get("bindings").and_then(Value::as_object) else {
+            continue;
+        };
+        for (name, v) in bindings {
+            // `as_i64` rejects booleans and non-integers; a symbolic `{op,args}`
+            // value returns None too and is therefore treated as ambiguous.
+            match v.as_i64() {
+                Some(iv) => {
+                    if out.get(name).is_some_and(|prev| *prev != iv) {
+                        ambiguous.insert(name.clone());
+                    }
+                    out.insert(name.clone(), iv);
+                }
+                None => {
+                    ambiguous.insert(name.clone());
+                }
+            }
+        }
+    }
+    for name in ambiguous {
+        out.remove(&name);
+    }
+    out
 }
 
 /// Phase 3 of [`resolve_template_machinery`]: close the document's
