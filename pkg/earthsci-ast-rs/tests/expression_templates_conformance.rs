@@ -119,6 +119,33 @@ fn unlowered_spatial_d_loads_but_is_gated_before_evaluation() {
     );
 }
 
+/// unlowered_integral: the `integral` op in its partial/cumulative mode is an
+/// ORDINARY open-tier rewrite target — this format ships no quadrature rule for
+/// it — so a PIDE document loads, round-trips, and then fails at compilation with
+/// `unlowered_operator`. Pinning it here makes that the op's asserted status
+/// rather than something a user discovers at run time (esm-spec §4.2).
+///
+/// Note what this fixture is NOT: a discrete cumulative sum. That is an
+/// `aggregate` with a monotone `filter`, is evaluable core, and runs today — see
+/// `tests/cumulative_prefix_scan.rs` and esm-spec §4.3.1.
+#[test]
+fn unlowered_integral_loads_but_is_gated_before_evaluation() {
+    let fixture_path = conf("unlowered_integral").join("fixture.esm");
+
+    // (1) Loads clean: schema, structural validation, and the rewrite fixpoint
+    //     all tolerate the surviving `integral`.
+    let file =
+        earthsci_ast::load_path(&fixture_path).expect("fixture must load under open namespace");
+
+    // (2) Reaching compilation, it is rejected with the uniform code.
+    let err = earthsci_ast::Compiled::from_file(&file)
+        .expect_err("integral must be rejected before evaluation");
+    assert!(
+        err.to_string().contains("unlowered_operator"),
+        "expected uniform `unlowered_operator` code, got: {err}"
+    );
+}
+
 /// attrs on a rewrite-target op bind as scalar metavariables (esm-spec §4.2 open
 /// tier / RFC Change A): a `match` pattern's `attrs.<key>` set to a bare param
 /// binds it to the matched literal. This falls out of generic structural

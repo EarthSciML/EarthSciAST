@@ -1,0 +1,136 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "cumulative_prefix_reduction",
+    "description": "Round-trip fixture for cumulative (prefix) reductions — esm-spec §4.3.1. A running total over an index set is an ordinary `aggregate` whose `filter` compares the contracted index symbol against an output index symbol; the format ships no separate cumsum/scan op, and `integral` (§4.2) is NOT the discrete cumulative form (it is an unlowered rewrite target). Three shapes in one document: an unweighted forward prefix sum, its measure-weighted Riemann-sum counterpart — the discrete stand-in for the PIDE term integral from x_min to x of u dx' — and an exclusive scan whose first cell reduces over the empty set and so takes the semiring's additive identity. Numeric conformance for these lives in tests/fixtures/arrayop/25_* and 26_*; this fixture exists so every binding, including the non-executing ones, round-trips the idiom.",
+    "authors": [
+      "EarthSciAST cumulative-reduction conformance"
+    ],
+    "tags": [
+      "aggregate",
+      "filter",
+      "cumulative",
+      "prefix-sum",
+      "scan",
+      "measure"
+    ]
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": 8 }
+  },
+  "models": {
+    "column_burden": {
+      "variables": {
+        "u": {
+          "type": "state",
+          "units": "kg/m^3",
+          "shape": ["x"],
+          "default": 0.0,
+          "description": "Tracer concentration on a vertical column."
+        },
+        "dz": {
+          "type": "parameter",
+          "units": "m",
+          "shape": ["x"],
+          "default": 100.0,
+          "description": "Per-cell layer thickness — the measure. Ordinary data since v0.8.0; nothing infers it."
+        },
+        "count_below": {
+          "type": "observed",
+          "units": "kg/m^3",
+          "shape": ["x"],
+          "description": "Unweighted inclusive forward prefix SUM. Dimensionally this is a sum of concentrations, not a burden — which is exactly why the measure-weighted form below exists.",
+          "expression": {
+            "op": "aggregate",
+            "args": ["u"],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": {
+              "i": { "from": "x" },
+              "j": { "from": "x" }
+            },
+            "filter": { "op": "<=", "args": ["j", "i"] },
+            "expr": { "op": "index", "args": ["u", "j"] }
+          }
+        },
+        "burden_below": {
+          "type": "observed",
+          "units": "kg/m^2",
+          "shape": ["x"],
+          "description": "Measure-weighted cumulative INTEGRAL: the column burden up to layer i. The Riemann-sum counterpart of the `integral` op's partial/cumulative mode, but evaluable core. The measure enters as an ordinary factor, which is also what gives the node its kg/m^2 dimension.",
+          "expression": {
+            "op": "aggregate",
+            "args": ["u", "dz"],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": {
+              "i": { "from": "x" },
+              "j": { "from": "x" }
+            },
+            "filter": { "op": "<=", "args": ["j", "i"] },
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["u", "j"] },
+                { "op": "index", "args": ["dz", "j"] }
+              ]
+            }
+          }
+        },
+        "burden_strictly_below": {
+          "type": "observed",
+          "units": "kg/m^2",
+          "shape": ["x"],
+          "description": "EXCLUSIVE forward scan (`<`): layer i sees only the layers strictly beneath it, so the bottom layer reduces over the empty set and takes the additive identity 0. That is a legal value, not an error.",
+          "expression": {
+            "op": "aggregate",
+            "args": ["u", "dz"],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": {
+              "i": { "from": "x" },
+              "j": { "from": "x" }
+            },
+            "filter": { "op": "<", "args": ["j", "i"] },
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["u", "j"] },
+                { "op": "index", "args": ["dz", "j"] }
+              ]
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Settling drives each layer toward the burden beneath it; the RHS reads the cumulative observed, which is the point of the fixture.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["u", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": { "from": "x" } }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": ["burden_below"],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                -0.001,
+                { "op": "index", "args": ["burden_below", "i"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

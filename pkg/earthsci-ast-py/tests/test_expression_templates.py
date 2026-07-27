@@ -364,6 +364,30 @@ def test_unlowered_spatial_D_loads_but_errors_before_evaluation():
     assert "unlowered_operator" in (res.message or "")
 
 
+def test_unlowered_integral_loads_but_errors_before_evaluation():
+    """``integral`` is an ORDINARY open-tier rewrite target (esm-spec §4.2).
+
+    This format ships no quadrature rule for it, so a PIDE document loads and
+    round-trips cleanly and then fails at evaluation with ``unlowered_operator``.
+    Pinning it makes that the op's asserted status rather than something a user
+    discovers at run time.
+
+    Note what this is NOT: a discrete cumulative sum. That is an ``aggregate``
+    with a monotone ``filter``, is evaluable core, and runs today — see
+    ``test_cumulative_prefix_scan.py`` and esm-spec §4.3.1.
+    """
+    from earthsci_ast.simulation import simulate
+
+    # (a) Loads clean — the surviving `integral` is tolerated.
+    f = load(os.path.join(_conf_dir("unlowered_integral"), "fixture.esm"))
+    assert "m" in f.models
+
+    # (b) Reaching evaluation surfaces the uniform code.
+    res = simulate(f, tspan=(0.0, 1.0))
+    assert res.success is False
+    assert "unlowered_operator" in (res.message or "")
+
+
 def test_attrs_match_binds_scalar_metavariable():
     """esm-spec §4.2 open tier / RFC Change A: a custom op carries scheme params in
     ``attrs``; a ``match`` pattern's ``attrs.<key>`` set to a bare param binds it to

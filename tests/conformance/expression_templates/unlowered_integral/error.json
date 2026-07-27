@@ -1,0 +1,6 @@
+{
+  "code": "unlowered_operator",
+  "stage": "evaluate",
+  "operator": "integral",
+  "description": "The `integral` op (partial/cumulative mode, esm-spec §4.2) with no lowering rule loads cleanly — the op namespace is open — but is rejected with `unlowered_operator` when the model reaches evaluation/compilation (§9.6.3 constraint 6, §9.6.8). The gate fires before evaluation, not at load. This pins `integral`'s designed status: the format ships no quadrature rules for it, so it is representable and round-trippable but never runnable in-repo. Bindings that never build an evaluator for a file (parse/validate-only paths) mark this fixture N/A, exactly as for ../unlowered_operator. A discrete cumulative sum is NOT this op — it is an `aggregate` with a monotone `filter` (esm-spec §4.3.1) and is evaluable core."
+}
