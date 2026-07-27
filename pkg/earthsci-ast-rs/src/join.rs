@@ -233,6 +233,14 @@ fn lower_node_joins(
 
     let mut conjuncts: Vec<Expr> = Vec::new();
     for clause in &joins {
+        // A spatial OVERLAP gate (CONFORMANCE_SPEC §5.5.6) is a broad-phase
+        // superset resolved on the value-invention path; the dense evaluator
+        // computes the geometric narrow phase densely, so the gate is
+        // numerically inert here (every real overlap survives the exact `filter`)
+        // — drop it as a no-op, exactly like a degenerate positional `on` pair.
+        if clause.overlap.is_some() {
+            continue;
+        }
         if clause.on.is_empty() {
             return Err(CompileError::InterpreterBuildError {
                 details: "`join` clause has an empty `on` list; at least one [left, right] \
@@ -711,6 +719,7 @@ mod tests {
             output_idx: Some(vec![]),
             join: Some(vec![JoinClause {
                 on: vec![["i".into(), "j".into()]],
+                ..Default::default()
             }]),
             expr: Some(Box::new(Expr::Number(1.0))),
             ..Default::default()
@@ -744,6 +753,7 @@ mod tests {
                 ["src".into(), "sourceType".into()],
                 ["fuel".into(), "fuelType".into()],
             ],
+            ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src", "fuel"]);
         lower_expr_joins(&mut expr, &HashMap::new()).unwrap();
@@ -763,6 +773,7 @@ mod tests {
         // genuine data column ⇒ clear UnsupportedFeatureError.
         let join = vec![JoinClause {
             on: vec![["srcCol".into(), "sourceType".into()]],
+            ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src", "fuel"]);
         let err = lower_expr_joins(&mut expr, &HashMap::new()).unwrap_err();
@@ -777,7 +788,10 @@ mod tests {
 
     #[test]
     fn rejects_empty_on_list() {
-        let join = vec![JoinClause { on: vec![] }];
+        let join = vec![JoinClause {
+            on: vec![],
+            ..Default::default()
+        }];
         let mut expr = agg_with_join(join, vec!["src"]);
         assert!(lower_expr_joins(&mut expr, &HashMap::new()).is_err());
     }
@@ -789,6 +803,7 @@ mod tests {
             op: "+".into(),
             join: Some(vec![JoinClause {
                 on: vec![["a".into(), "b".into()]],
+                ..Default::default()
             }]),
             args: vec![Expr::Variable("x".into())],
             ..Default::default()

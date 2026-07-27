@@ -416,10 +416,35 @@ impl RangeSpec {
 /// equi-join). At least one pair is required and each pair is exactly length-2
 /// (enforced by the schema). Resolved at build time by
 /// [`crate::join::resolve_aggregate_joins`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct JoinClause {
-    /// The `[left, right]` key-column pairs to equi-join on.
+    /// The `[left, right]` key-column pairs to equi-join on. Empty when this is
+    /// a spatial `overlap` gate clause instead of a value-equality clause.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on: Vec<[String; 2]>,
+    /// A spatial OVERLAP broad-phase gate (CONFORMANCE_SPEC §5.5.6). Mutually
+    /// exclusive with `on`. Resolved on the value-invention (raw-JSON) path via
+    /// [`crate::value_invention`]; on the dense array evaluator it is a
+    /// numerically-inert broad-phase superset (every real overlap survives the
+    /// exact narrow-phase `filter`), so join lowering treats it as a no-op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlap: Option<OverlapClause>,
+}
+
+/// A spatial overlap join-gate clause (`{ "overlap": { … } }`), the broad-phase
+/// alternative to an `on` value-equality clause on an `aggregate` (CONFORMANCE_SPEC
+/// §5.5.6). `src_env`/`tgt_env` name const-array envelope factors (arity 1 rings /
+/// 2 point / 4 rectangle); `eps` inflates both envelopes outward before the
+/// closed-AABB intersection test. Resolved by [`crate::value_invention`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverlapClause {
+    /// QUERY-side envelope factor name(s).
+    pub src_env: Vec<String>,
+    /// INDEXED (cell) side envelope factor name(s).
+    pub tgt_env: Vec<String>,
+    /// Non-negative outward envelope inflation (default `0.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eps: Option<f64>,
 }
 
 /// (De)serialize [`ExpressionNode::output_idx`] as a heterogeneous list of
