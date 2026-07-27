@@ -298,6 +298,25 @@ Reference lowering target: MethodOfLines.jl `Integral(x in DomainSets.ClosedInte
 See https://docs.sciml.ai/MethodOfLines/stable/tutorials/PIDE/ for the auxiliary-variable PIDE idiom.
 Discretization of the resulting integral term is handled by EarthSciDiscretizations (tracked in esd-yfj).
 
+**`integral` carries no in-repo lowering — a file using it loads but cannot simulate.**
+Like every open-tier op, `integral` has no evaluator, and this format ships **no** rewrite
+rule that eliminates it. A document containing one round-trips, pretty-prints, and passes
+validation, and then fails at evaluation/compilation with `unlowered_operator` (§9.6.6) unless
+the author supplies a rewrite rule or imports one from EarthSciDiscretizations. This is the
+op's designed status, not a defect, and it is pinned by a conformance fixture
+(`tests/conformance/expression_templates/unlowered_integral/`) so it is asserted rather than
+discovered at run time. Two consequences follow from the open tier and are worth stating explicitly:
+`integral` has **no dimensional rule**, so a checker reports its dimension as `unknown` and
+skips the enclosing check (§4.8.3, §4.8.4) — dimensional analysis does not propagate through
+one; and its bounds carry **no measure**, because the format has none (§6.6.5 convention 2).
+
+**Do not reach for `integral` to write a discrete cumulative sum.** If what you want is a
+prefix reduction over an index set — a running total, a cumulative distribution, a
+column-integrated burden on a discretized axis — that is an ordinary `aggregate` with a
+monotone `filter`, it is in the evaluable core, and every executing binding runs it today.
+See §4.3.1 "Cumulative (prefix) reductions", which also gives the measure-weighted Riemann-sum
+form that is the discrete counterpart of ∫ₓₘᵢₙˣ u dx′.
+
 #### Elementary Functions
 
 `exp`, `log`, `log10`, `sqrt`, `abs`, `sign`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `min`, `max`, `floor`, `ceil`
@@ -458,6 +477,97 @@ The `ranges` entries use the form `[start, stop]` to say that the interior point
 ```
 
 Here `i` is contracted with `+`, yielding `result[j] = Σᵢ A[i, j]`.
+
+**Cumulative (prefix) reductions — normative.** A cumulative sum, running maximum, or any
+other prefix reduction over an index set is expressed as an ordinary `aggregate` whose
+`filter` compares the contracted index symbol against an output index symbol. This is the
+**canonical spelling**; the format ships no separate `cumsum` / `scan` operator, and a
+binding MUST NOT introduce one under a private op name. The `integral` op (§4.2) is *not* the
+discrete cumulative form — it is an unlowered rewrite target (see the note there).
+
+```json
+{
+  "op": "aggregate",
+  "output_idx": ["i"],
+  "reduce": "+",
+  "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
+  "filter": { "op": "<=", "args": ["j", "i"] },
+  "expr": { "op": "index", "args": ["u", "j"] },
+  "args": ["u"]
+}
+```
+
+yielding `result[i] = Σ_{j ≤ i} u[j]`. The four monotone comparisons select the four
+variants, exactly as the general `filter` rule (RFC semiring-faq-unified-ir §5.3) already
+implies — a combination for which the predicate is false contributes the additive identity,
+so no special case is introduced:
+
+| `filter` | Variant | Result |
+|---|---|---|
+| `{"op": "<=", "args": ["j", "i"]}` | inclusive forward scan | `result[i] = ⊕_{j ≤ i} body` |
+| `{"op": "<",  "args": ["j", "i"]}` | exclusive forward scan | `result[i] = ⊕_{j < i} body` |
+| `{"op": ">=", "args": ["j", "i"]}` | inclusive reverse scan | `result[i] = ⊕_{j ≥ i} body` |
+| `{"op": ">",  "args": ["j", "i"]}` | exclusive reverse scan | `result[i] = ⊕_{j > i} body` |
+
+An exclusive variant's first (respectively last) output element reduces over the empty set
+and therefore takes the semiring's **additive identity** — `0` under `sum_product`, `−∞`
+under `max_sum`, and so on per the closed semiring registry (RFC semiring-faq-unified-ir
+§5.1, mirrored in the schema's `semiring` description). It is not an error.
+
+**Accumulation order is ascending `j` for every variant, and is normative.** A `filter`
+selects *which* combinations contribute; it never reorders them. So the reduction visits the
+contracted index in increasing order in all four rows above, and under `sum_product` the
+result is the left fold `((u_a ⊕ u_{a+1}) ⊕ u_{a+2}) ⊕ …` over the admitted window, lowest
+admitted `j` first — including the **reverse** rows, whose window is a suffix but is still
+folded from its low end upward. Floating-point `+` is not associative, so this order is what
+a prefix reduction's low bits mean.
+
+Note the scope of that guarantee as it stands today. The **forward** rows are pinned
+bit-identical across the executing bindings, because each evaluates them with the sequential
+accumulator licensed below (Rust's running fold, Python's `ufunc.accumulate`). The **reverse**
+rows fall through to each binding's general contraction machinery, whose summation order is
+already binding-specific — Python's dense vectorized reduce sums *pairwise*, a pre-existing
+deviation it shares with the einsum fast path. So a reverse scan is reproducible to within
+floating-point reassociation, not to the bit, until those paths are made sequential. Authors
+who need bit-level agreement across bindings should prefer a forward scan, reversing the axis
+in the data rather than in the predicate.
+
+**The `O(N)` running-accumulation optimization is licensed for forward scans only.** A
+binding MAY evaluate `<=` and `<` with a single running accumulator instead of the `O(N²)`
+triangular double loop, because `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces the left fold above
+*exactly* — same order, same association, bit-identical result. It MUST NOT do so for `>=`
+and `>` under an inexact ⊕: each reverse output cell folds its own suffix from that suffix's
+low end, so consecutive cells share no partial result, and any right-to-left accumulator
+re-associates `((b_i ⊕ b_{i+1}) ⊕ b_{i+2})` into `(b_i ⊕ (b_{i+1} ⊕ b_{i+2}))` and changes the
+low bits. Reverse scans under an **exactly associative** ⊕ (`max`, `min`) are exempt, since
+re-association cannot change their result. No binding may use a reassociating scan (pairwise,
+blocked, or parallel-prefix) for an inexact ⊕ in any direction.
+
+**A cumulative sum is not a cumulative integral.** The body is summed with no measure
+weighting — the format carries no measure concept (§6.6.5 convention 2). A Riemann-sum
+cumulative integral `F(xᵢ) = ∫ u dx′` is spelled by multiplying the per-cell measure into the
+body as an ordinary factor, which the author declares as an ordinary variable or loads from a
+`data_loaders` primitive like any other grid geometry:
+
+```json
+{
+  "op": "aggregate",
+  "output_idx": ["i"],
+  "reduce": "+",
+  "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
+  "filter": { "op": "<=", "args": ["j", "i"] },
+  "expr": { "op": "*", "args": [
+    { "op": "index", "args": ["u",  "j"] },
+    { "op": "index", "args": ["dx", "j"] }
+  ] },
+  "args": ["u", "dx"]
+}
+```
+
+Written this way the node also carries the right dimension: the ⊗-product of the integrand
+and the measure, checked by the ordinary rules of §4.8.3. Nothing infers or supplies `dx` —
+omitting it silently yields an unweighted sum, which is the correct behaviour for a genuine
+prefix sum and an authoring error for an integral.
 
 #### 4.3.2 `makearray`
 

@@ -1,0 +1,205 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "arrayop_25_cumulative_prefix_reduction",
+    "description": "Cross-port conformance fixture for CUMULATIVE (prefix) reductions — esm-spec §4.3.1 'Cumulative (prefix) reductions'. A prefix reduction is an ordinary `aggregate` whose `filter` compares the contracted index symbol against an output index symbol; the format ships no separate cumsum/scan op. All four monotone variants are exercised over the same 4-element source field u = [1, 2, 4, 8], each driven into a state through a constant-RHS ODE from a zero IC so the value at t = 1 IS the reduction:\n  fwd_inc[i] = sum_{j <= i} u[j] = [1, 3, 7, 15]\n  fwd_exc[i] = sum_{j <  i} u[j] = [0, 1, 3, 7]   (i = 1 reduces over the EMPTY set -> additive identity 0)\n  rev_inc[i] = sum_{j >= i} u[j] = [15, 14, 12, 8]\n  run_max[i] = max_{j <= i} (u[j] - 3) = [-2, -1, 1, 5]  (reduce = max, still a forward scan)\nThe exclusive variant's empty first cell pins the 'empty reduction takes the additive identity, and is not an error' rule. The running max pins that the pattern is not +-specific. Accumulation order is ascending j for EVERY variant, including the reverse ones, and is NORMATIVE — a reverse scan folds its suffix from the low end upward, not right to left. That order is what makes the result bitwise reproducible and what licenses an O(N) running-accumulation evaluation of the O(N^2) triangular form for the FORWARD variants only; consecutive reverse cells share no partial result under it. Executing ports: Python, Rust, Julia. Non-executing: TypeScript, Go (no arrayop numeric executor).",
+    "authors": [
+      "EarthSciAST cumulative-reduction conformance"
+    ],
+    "tags": [
+      "arrayop",
+      "aggregate",
+      "conformance",
+      "cumulative",
+      "prefix-sum",
+      "scan",
+      "filter",
+      "reduce-plus",
+      "reduce-max"
+    ]
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "CumulativePrefixReduction": {
+      "tolerance": {
+        "rel": 1e-6,
+        "abs": 1e-9
+      },
+      "variables": {
+        "u": {
+          "type": "observed",
+          "units": "1",
+          "shape": ["x"],
+          "description": "Source field [1, 2, 4, 8] — powers of two so every prefix window has a distinct sum.",
+          "expression": {
+            "op": "makearray",
+            "regions": [[[1, 1]], [[2, 2]], [[3, 3]], [[4, 4]]],
+            "values": [1.0, 2.0, 4.0, 8.0],
+            "args": []
+          }
+        },
+        "fwd_inc": {
+          "type": "state",
+          "units": "1",
+          "shape": ["x"],
+          "default": 0.0,
+          "description": "Inclusive forward scan: filter j <= i."
+        },
+        "fwd_exc": {
+          "type": "state",
+          "units": "1",
+          "shape": ["x"],
+          "default": 0.0,
+          "description": "Exclusive forward scan: filter j < i. Cell 1 reduces over the empty set."
+        },
+        "rev_inc": {
+          "type": "state",
+          "units": "1",
+          "shape": ["x"],
+          "default": 0.0,
+          "description": "Inclusive reverse scan: filter j >= i."
+        },
+        "run_max": {
+          "type": "state",
+          "units": "1",
+          "shape": ["x"],
+          "default": 0.0,
+          "description": "Running maximum of (u - 3): forward scan under reduce = max."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(fwd_inc[i])/dt = sum_{j<=i} u[j] = [1, 3, 7, 15].",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["fwd_inc", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": { "from": "x" } }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": ["u"],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
+            "filter": { "op": "<=", "args": ["j", "i"] },
+            "expr": { "op": "index", "args": ["u", "j"] }
+          }
+        },
+        {
+          "_comment": "D(fwd_exc[i])/dt = sum_{j<i} u[j] = [0, 1, 3, 7]. Cell 1 is the empty reduction.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["fwd_exc", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": { "from": "x" } }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": ["u"],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
+            "filter": { "op": "<", "args": ["j", "i"] },
+            "expr": { "op": "index", "args": ["u", "j"] }
+          }
+        },
+        {
+          "_comment": "D(rev_inc[i])/dt = sum_{j>=i} u[j] = [15, 14, 12, 8].",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["rev_inc", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": { "from": "x" } }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": ["u"],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
+            "filter": { "op": ">=", "args": ["j", "i"] },
+            "expr": { "op": "index", "args": ["u", "j"] }
+          }
+        },
+        {
+          "_comment": "D(run_max[i])/dt = max_{j<=i} (u[j] - 3) = [-2, -1, 1, 5].",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["run_max", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": { "from": "x" } }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": ["u"],
+            "output_idx": ["i"],
+            "reduce": "max",
+            "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
+            "filter": { "op": "<=", "args": ["j", "i"] },
+            "expr": {
+              "op": "-",
+              "args": [{ "op": "index", "args": ["u", "j"] }, 3.0]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "prefix_reductions_t1",
+          "description": "Every RHS is constant in time, so integrating from a zero IC over a unit interval makes the value at t = 1 equal the prefix reduction itself.",
+          "initial_conditions": {
+            "fwd_inc[1]": 0.0, "fwd_inc[2]": 0.0, "fwd_inc[3]": 0.0, "fwd_inc[4]": 0.0,
+            "fwd_exc[1]": 0.0, "fwd_exc[2]": 0.0, "fwd_exc[3]": 0.0, "fwd_exc[4]": 0.0,
+            "rev_inc[1]": 0.0, "rev_inc[2]": 0.0, "rev_inc[3]": 0.0, "rev_inc[4]": 0.0,
+            "run_max[1]": 0.0, "run_max[2]": 0.0, "run_max[3]": 0.0, "run_max[4]": 0.0
+          },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "fwd_inc[1]", "time": 1.0, "expected": 1.0 },
+            { "variable": "fwd_inc[2]", "time": 1.0, "expected": 3.0 },
+            { "variable": "fwd_inc[3]", "time": 1.0, "expected": 7.0 },
+            { "variable": "fwd_inc[4]", "time": 1.0, "expected": 15.0 },
+
+            { "variable": "fwd_exc[1]", "time": 1.0, "expected": 0.0 },
+            { "variable": "fwd_exc[2]", "time": 1.0, "expected": 1.0 },
+            { "variable": "fwd_exc[3]", "time": 1.0, "expected": 3.0 },
+            { "variable": "fwd_exc[4]", "time": 1.0, "expected": 7.0 },
+
+            { "variable": "rev_inc[1]", "time": 1.0, "expected": 15.0 },
+            { "variable": "rev_inc[2]", "time": 1.0, "expected": 14.0 },
+            { "variable": "rev_inc[3]", "time": 1.0, "expected": 12.0 },
+            { "variable": "rev_inc[4]", "time": 1.0, "expected": 8.0 },
+
+            { "variable": "run_max[1]", "time": 1.0, "expected": -2.0 },
+            { "variable": "run_max[2]", "time": 1.0, "expected": -1.0 },
+            { "variable": "run_max[3]", "time": 1.0, "expected": 1.0 },
+            { "variable": "run_max[4]", "time": 1.0, "expected": 5.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

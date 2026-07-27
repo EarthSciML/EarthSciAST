@@ -79,6 +79,7 @@
 include("tree_walk/errors.jl")
 include("tree_walk/geometry_setup.jl")
 include("tree_walk/build_helpers.jl")
+include("tree_walk/scan.jl")           # ess-scan: `_ScanFold` (annotated in build.jl)
 include("tree_walk/build.jl")
 include("tree_walk/compile.jl")
 include("tree_walk/geometry_compile.jl")   # §2c: needs _Node (compile.jl)

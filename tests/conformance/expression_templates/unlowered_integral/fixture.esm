@@ -1,0 +1,44 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "unlowered_integral",
+    "description": "The `integral` op in its partial/cumulative mode (`upper` = the integration variable, esm-spec §4.2) with NO rewrite rule to lower it. Like every open-tier rewrite target it loads fine — schema, structural validation, and the §9.6.3 fixpoint all tolerate it — and is rejected with the uniform `unlowered_operator` code when the model reaches evaluation/compilation. This format ships no quadrature rules for `integral` (they live in EarthSciDiscretizations), so this is the op's designed status, pinned here rather than discovered at run time. Twin of ../unlowered_operator/fixture.esm, which pins the same gate for a spatial `D`. Authors wanting a DISCRETE cumulative sum should use an `aggregate` with a monotone `filter` instead (esm-spec §4.3.1 'Cumulative (prefix) reductions'), which is evaluable core.",
+    "authors": ["EarthSciAST cumulative-reduction conformance"]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "u": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0,
+          "description": "Scalar field"
+        },
+        "xmin": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "Left edge of the x domain — the fixed lower bound of the cumulative integral."
+        },
+        "cumu": {
+          "type": "observed",
+          "units": "1",
+          "description": "The cumulative integral of u up to the current grid point: the PIDE term this fixture exists to leave unlowered.",
+          "expression": {
+            "op": "integral",
+            "args": ["u"],
+            "var": "x",
+            "lower": "xmin",
+            "upper": "x"
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "rhs": { "op": "-", "args": ["cumu"] }
+        }
+      ]
+    }
+  }
+}

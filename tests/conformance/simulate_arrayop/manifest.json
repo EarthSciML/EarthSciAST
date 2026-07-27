@@ -78,6 +78,28 @@
         "go": "Go binding has no arrayop numeric executor."
       },
       "notes": "Exercises the embedded contraction form: arrayop appears as the RHS of a scalar D equation, not as the LHS-arrayop form. This is the form that ess-n0w adds support for in the Julia tree-walk path."
+    },
+    {
+      "id": "fixtures/arrayop/25_cumulative_prefix_reduction",
+      "path": "fixtures/arrayop/25_cumulative_prefix_reduction.esm",
+      "tags": ["arrayop", "aggregate", "cumulative", "prefix-sum", "scan", "filter", "reduce-plus", "reduce-max"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no arrayop numeric executor; round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; round-trip only."
+      },
+      "notes": "Cumulative (prefix) reductions, esm-spec §4.3.1 — the canonical spelling of a running total is an `aggregate` whose `filter` compares the contracted index against an output index; the format ships no cumsum/scan op. All four monotone variants over one source field: inclusive/exclusive forward, inclusive reverse, and a forward running `max`. The exclusive variant's first cell reduces over the EMPTY set and pins that it takes the semiring's additive identity rather than erroring; the running max pins that the pattern is not `+`-specific — and caught a real bug, the Python bare-`reduce` shorthand seeding every fold with 0.0 instead of ⊕'s own identity, which clamped all-negative maxima to zero. Rust and Python recognize the FORWARD rows and evaluate them with an O(N) running accumulator instead of the O(N²) triangle; the rewrite is bit-identical because both fold the admitted window ascending in the same association (pinned by pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs and pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py). Julia evaluates the triangular form correctly but does not yet scan: its array backend unrolls a constant-bound contraction into per-cell-INDEPENDENT kernels (_unrolled_contraction_body), and a scan is sequential ACROSS output cells, which that kernel model has no slot for."
+    },
+    {
+      "id": "fixtures/arrayop/26_cumulative_integral_measure",
+      "path": "fixtures/arrayop/26_cumulative_integral_measure.esm",
+      "tags": ["arrayop", "aggregate", "cumulative", "integral", "measure", "quadrature", "filter", "reduce-plus"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no arrayop numeric executor; round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; round-trip only."
+      },
+      "notes": "The measure-weighted counterpart of fixture 25, esm-spec §4.3.1 'a cumulative sum is not a cumulative integral'. The format carries no measure concept (§6.6.5 convention 2), so a Riemann-sum cumulative integral multiplies the per-cell measure into the body as an ordinary factor. NON-UNIFORM cell widths are the point: an unweighted prefix sum of the same field would give [0.5, 1.75, 3.375, 5.25] instead of the analytic [0.25, 0.5625, 0.765625, 1.0], so this fixture fails loudly if any binding ever supplies or infers a measure of its own. The midpoint rule is exact for the linear integrand 2x, so the assertions are equalities, not discretization-error bounds."
     }
   ]
 }

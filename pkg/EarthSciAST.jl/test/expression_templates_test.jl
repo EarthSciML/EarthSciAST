@@ -334,6 +334,22 @@ end
         @test f isa EarthSciAST.EsmFile
     end
 
+    @testset "unlowered integral loads under the open namespace" begin
+        # `integral` is an ORDINARY open-tier rewrite target (esm-spec §4.2):
+        # this format ships no quadrature rule for it, so a PIDE document loads
+        # and round-trips cleanly and is rejected with `unlowered_operator` only
+        # when it reaches evaluation/compilation. Pinning it makes that the op's
+        # asserted status rather than something discovered at run time.
+        #
+        # Note what this is NOT: a discrete cumulative sum. That is an
+        # `aggregate` with a monotone `filter` (esm-spec §4.3.1), is evaluable
+        # core, and runs today — see the cumulative-reduction fixtures
+        # tests/fixtures/arrayop/25_* and 26_*.
+        io = IOBuffer(read(joinpath(_conf("unlowered_integral"), "fixture.esm")))
+        f = EarthSciAST.load(io)
+        @test f isa EarthSciAST.EsmFile
+    end
+
     @testset "attrs on a rewrite-target op bind as scalar metavariables" begin
         # esm-spec §4.2 open tier / RFC Change A: a custom op carries scheme
         # params in `attrs`; a `match` pattern's `attrs.<key>` set to a bare

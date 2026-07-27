@@ -1201,6 +1201,181 @@ pub(super) fn reduce_contraction(
     acc
 }
 
+/// A recognized **forward prefix scan**: an `aggregate` whose single contracted
+/// index is admitted by a monotone `filter` against one output index symbol
+/// (esm-spec §4.3.1 "Cumulative (prefix) reductions").
+///
+/// Recognizing it turns the `O(N²)` triangular double loop into one `O(N)` sweep
+/// with a running accumulator. The rewrite is **bit-identical, not approximate**:
+/// the oracle folds the admitted window ascending, lowest `j` first, so
+/// `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces the same left fold with the same
+/// association. That is the whole justification, and it is why only the FORWARD
+/// rows (`<=`, `<`) are recognized here — a reverse scan's cells each fold their
+/// own suffix from that suffix's low end, share no partial result, and cannot be
+/// accumulated right-to-left without re-associating (esm-spec §4.3.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PrefixScan {
+    /// Position of the scanned symbol within the output-index tuple: the axis
+    /// the accumulator sweeps along.
+    pub axis: usize,
+    /// `true` for `<=` (the newly admitted term joins BEFORE the cell is
+    /// written), `false` for `<` (the cell is written first, so its window is
+    /// the strictly-earlier terms and cell one is the empty reduction).
+    pub inclusive: bool,
+}
+
+/// Match `filter` against the forward-prefix-scan shape and return the output
+/// axis it scans along, or `None` if this aggregate is not one.
+///
+/// Every precondition below is a correctness requirement, not a heuristic:
+///
+/// * **Exactly one contracted index**, and the filter names it. With two, the
+///   admitted set is not a prefix of a single axis.
+/// * **Static contraction bounds** matching the output axis's own bounds — the
+///   scan visits `j = i` at step `i`, which is only the newly admitted term when
+///   the two axes are the same interval. A ragged/derived bound varies per cell.
+/// * **The body must not reference the scanned output symbol.** If it did, every
+///   output cell would have a *different* summand for the same `j` and no
+///   partial result could be reused. (It may reference the contracted symbol and
+///   any OTHER output symbol — those axes are just independent scans.)
+/// * **The filter is exactly the comparison** — no conjunction, no extra
+///   predicate — so "admitted" and "j ≤ i" coincide.
+pub(super) fn detect_prefix_scan(
+    output_idx_names: &[String],
+    output_ranges: &[(i64, i64)],
+    contract_names: &[String],
+    static_ranges: Option<&[(i64, i64)]>,
+    body: &Expr,
+    filter: Option<&Expr>,
+) -> Option<PrefixScan> {
+    let filter = filter?;
+    let [j_name] = contract_names else {
+        return None;
+    };
+    let [(c_lo, c_hi)] = *static_ranges? else {
+        return None;
+    };
+
+    let Expr::Operator(node) = filter else {
+        return None;
+    };
+    if node.args.len() != 2 {
+        return None;
+    }
+    // Accept both spellings of the same predicate: `j <= i` and `i >= j`.
+    let (lhs, rhs) = (&node.args[0], &node.args[1]);
+    let (i_name, inclusive) = match node.op.as_str() {
+        "<=" | "<" => (var_name(rhs)?, node.op == "<="),
+        ">=" | ">" => (var_name(lhs)?, node.op == ">="),
+        _ => return None,
+    };
+    let j_side = match node.op.as_str() {
+        "<=" | "<" => var_name(lhs)?,
+        _ => var_name(rhs)?,
+    };
+    if j_side != j_name {
+        return None;
+    }
+
+    let axis = output_idx_names.iter().position(|s| s == i_name)?;
+    // Same interval, or `j = i` is not the term entering the window at step `i`.
+    if output_ranges.get(axis)? != &(c_lo, c_hi) {
+        return None;
+    }
+    // A body that reads the scanned symbol makes each cell's summand distinct.
+    if expr_references(body, i_name) {
+        return None;
+    }
+    Some(PrefixScan { axis, inclusive })
+}
+
+/// The variable name of a bare-string expression, else `None`. Index symbols
+/// reach the evaluator as ordinary variable references.
+fn var_name(e: &Expr) -> Option<&str> {
+    match e {
+        Expr::Variable(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Whether `name` occurs anywhere in `e` as a bare variable reference —
+/// including inside every sidecar Expression field, not just `args` (esm-spec
+/// §4.9.5). Used to reject a scan whose body reads the scanned output symbol.
+fn expr_references(e: &Expr, name: &str) -> bool {
+    match e {
+        Expr::Variable(v) => v == name,
+        Expr::Integer(_) | Expr::Number(_) => false,
+        Expr::Operator(node) => {
+            node.args.iter().any(|a| expr_references(a, name))
+                || [
+                    node.expr.as_deref(),
+                    node.filter.as_deref(),
+                    node.key.as_deref(),
+                    node.lower.as_deref(),
+                    node.upper.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|c| expr_references(c, name))
+                || node
+                    .values
+                    .as_ref()
+                    .is_some_and(|vs| vs.iter().any(|v| expr_references(v, name)))
+        }
+    }
+}
+
+/// Run one forward prefix scan along `scan.axis`, writing each output cell
+/// through `emit`.
+///
+/// The caller has already bound every output symbol EXCEPT the scanned one; this
+/// sweeps that axis ascending, carrying a single accumulator. At step `i` the
+/// contracted symbol is bound to `i` — the term entering the window — so the
+/// body is evaluated exactly once per cell rather than once per (cell, j) pair.
+///
+/// Inclusive (`<=`) folds the new term in *before* writing; exclusive (`<`)
+/// writes first, so the first cell emits the untouched identity — the empty
+/// reduction the spec requires, not an error.
+pub(super) fn run_prefix_scan(
+    scan: PrefixScan,
+    i_name: &str,
+    j_name: &str,
+    (lo, hi): (i64, i64),
+    body: &Expr,
+    reduce: ReduceKind,
+    ctx: &mut EvalCtx,
+    mut emit: impl FnMut(i64, f64, &EvalCtx),
+) {
+    // Evaluate the one term admitted at step `i` (the body at `j = i`). The
+    // scanned output symbol is bound too: it is out of scope for the body by
+    // construction (`detect_prefix_scan` rejected a body that reads it), but
+    // keeping it bound means an ARRAY-valued sub-read aligns to the same cell
+    // the oracle would have aligned it to.
+    let term_at = |i: i64, ctx: &mut EvalCtx| {
+        set_bind(&mut ctx.loop_binds, i_name, i);
+        set_bind(&mut ctx.loop_binds, j_name, i);
+        eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
+    };
+
+    let mut acc = reduce.identity();
+    for i in lo..=hi {
+        if scan.inclusive {
+            // `<=`: the new term joins the window BEFORE this cell is written.
+            let term = term_at(i, ctx);
+            acc = reduce.combine(acc, term);
+            set_bind(&mut ctx.loop_binds, i_name, i);
+            emit(i, acc, ctx);
+        } else {
+            // `<`: this cell sees only strictly-earlier terms, so cell `lo`
+            // emits the untouched identity — the empty reduction, not an error.
+            set_bind(&mut ctx.loop_binds, i_name, i);
+            emit(i, acc, ctx);
+            let term = term_at(i, ctx);
+            acc = reduce.combine(acc, term);
+        }
+    }
+}
+
 /// Precompute the contraction bounds when every dim is static (cell-independent),
 /// so [`reduce_contraction`] can skip the per-cell re-derivation. Returns `None`
 /// if any dim is ragged/derived (those must be resolved per output tuple).
@@ -1334,26 +1509,81 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // Hoist cell-independent (all-static) contraction bounds out of the per-cell
     // loop; ragged/derived dims are re-derived per output tuple inside.
     let static_ranges = static_contract_ranges(&contract_dims);
-    let mut tuples = CartesianTuples::new(&ranges);
-    while let Some(tuple) = tuples.next() {
-        for (name, val) in idx_names.iter().zip(tuple.iter()) {
-            set_bind(&mut ctx.loop_binds, name, *val);
+
+    // ---- Forward prefix scan (O(N) instead of the O(N²) triangle) -----------
+    // A cumulative reduction (esm-spec §4.3.1) reaches here as a full triangular
+    // double loop: N output cells × N contracted terms, each re-summing a window
+    // the previous cell already summed. Recognized, it becomes one sweep with a
+    // running accumulator — bit-identical, because both fold the window ascending
+    // in the same association (see [`PrefixScan`]).
+    let scan = detect_prefix_scan(
+        idx_names,
+        &ranges,
+        &contract_names,
+        static_ranges.as_deref(),
+        body,
+        filter,
+    );
+    if let Some(scan) = scan {
+        let (scan_lo, scan_hi) = ranges[scan.axis];
+        // Sweep the scanned axis inside; every OTHER output axis is an
+        // independent scan and forms the outer loop.
+        let outer_ranges: Vec<(i64, i64)> = ranges
+            .iter()
+            .enumerate()
+            .filter(|(d, _)| *d != scan.axis)
+            .map(|(_, r)| *r)
+            .collect();
+        // Axis position and symbol name of each outer axis, paired once so the
+        // per-tuple loop binds the symbol and records the coordinate together.
+        let outer_axes: Vec<(usize, &String)> = idx_names
+            .iter()
+            .enumerate()
+            .filter(|(d, _)| *d != scan.axis)
+            .collect();
+        let mut full = vec![0i64; ranges.len()];
+        let mut outer = CartesianTuples::new(&outer_ranges);
+        while let Some(otuple) = outer.next() {
+            for ((d, name), val) in outer_axes.iter().zip(otuple.iter()) {
+                set_bind(&mut ctx.loop_binds, name, *val);
+                full[*d] = *val;
+            }
+            run_prefix_scan(
+                scan,
+                &idx_names[scan.axis],
+                &contract_names[0],
+                (scan_lo, scan_hi),
+                body,
+                reduce,
+                ctx,
+                |i, acc, _| {
+                    full[scan.axis] = i;
+                    buf[multi_to_flat_col_major(&full, &shape, &origin)] = acc;
+                },
+            );
         }
-        let v = reduce_contraction(
-            &contract_names,
-            &contract_dims,
-            static_ranges.as_deref(),
-            body,
-            reduce,
-            filter,
-            Some(&CellBox {
-                names: idx_names,
-                origin: &origin,
-            }),
-            ctx,
-        );
-        let flat = multi_to_flat_col_major(tuple, &shape, &origin);
-        buf[flat] = v;
+    } else {
+        let mut tuples = CartesianTuples::new(&ranges);
+        while let Some(tuple) = tuples.next() {
+            for (name, val) in idx_names.iter().zip(tuple.iter()) {
+                set_bind(&mut ctx.loop_binds, name, *val);
+            }
+            let v = reduce_contraction(
+                &contract_names,
+                &contract_dims,
+                static_ranges.as_deref(),
+                body,
+                reduce,
+                filter,
+                Some(&CellBox {
+                    names: idx_names,
+                    origin: &origin,
+                }),
+                ctx,
+            );
+            let flat = multi_to_flat_col_major(tuple, &shape, &origin);
+            buf[flat] = v;
+        }
     }
     for (name, saved) in saved_binds {
         match saved {

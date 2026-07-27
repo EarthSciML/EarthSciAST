@@ -1594,7 +1594,8 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        acc_kernels::AbstractVector{_AccKernel},
                        n_states::Int,
-                       pgather::AbstractDict=_EMPTY_PGATHER)
+                       pgather::AbstractDict=_EMPTY_PGATHER,
+                       scan_folds::AbstractVector{_ScanFold}=_ScanFold[])
     n_cse = length(cse_prelude)
     # J5 covers BOTH IR families: the `_NK_PARAM_GATHER` scalar scan and the
     # acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`/`_AK_ARR_TBL_BOX`)
@@ -1663,6 +1664,10 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                  _oop_run_acc_vec(du, u, p, t, acc_kernels[j], plan, T, fb) :
                  _oop_run_acc_kernel(du, u, p, t, acc_kernels[j], T)
         end
+
+        # Cumulative (prefix) reductions (ess-scan, scan.jl): fold the per-cell
+        # terms the kernels above just stored, along each scanned axis.
+        isempty(scan_folds) || (du = _apply_scan_folds_oop(du, scan_folds))
         return du
     end
     return _OopRHS(rhs, host_bufs, buffer_index)

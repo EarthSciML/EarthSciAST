@@ -28,6 +28,42 @@ stencils, no per-cell scalarization — ess-bdm).
 | `15_discretized_1d_heat` | 4 cells | (pure map) | 1 | 1-D heat, Dirichlet ghosts; λ₁=−9.5492 |
 | `16_discretized_2d_heat` | 3×3 | (pure map) | 2 | 2-D heat, edge/corner ghost regions |
 
+### Cumulative (prefix) reductions
+
+A running total is an ordinary `aggregate` whose `filter` compares the contracted
+index against an output index (esm-spec §4.3.1); the format ships no `cumsum` /
+`scan` op. These two fixtures pin the semantics and the measure rule.
+
+| Fixture | Variants | Reducer | Notes |
+|---------|----------|---------|-------|
+| `25_cumulative_prefix_reduction` | `<=`, `<`, `>=` | +, max | Exclusive first cell = additive identity (empty reduction, not an error) |
+| `26_cumulative_integral_measure` | `<=` | + | Riemann-sum integral on a **non-uniform** grid; the measure is an author-supplied factor, never inferred |
+
+**Forward scans are evaluated in `O(N)`, and that is a correctness claim, not just
+a speed one.** All three executing ports recognize the forward rows (`<=`, `<`,
+and the mirrored spellings `i >= j` / `i > j`) and replace the `O(N²)` triangle
+with one running accumulator. This is legitimate only because it is
+*bit-identical*: the oracle folds the admitted window ascending, lowest `j` first,
+and `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces exactly that fold with exactly that
+association. Reverse rows (`>=`, `>`) are deliberately **not** scanned under an
+inexact ⊕ — each reverse cell folds its own suffix from that suffix's low end, so
+consecutive cells share no partial result. Bit-identity is pinned against an
+independent triangular oracle, at catastrophic-cancellation magnitudes, by
+`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`,
+`pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py` and
+`pkg/EarthSciAST.jl/test/scan_prefix_test.jl`.
+
+Julia gets there differently, because its array backend builds per-cell
+*independent* kernels and a scan is sequential across cells. Rather than teach a
+carried accumulator to all four kernel runners, the build splits the equation
+(`tree_walk/scan.jl`): the body with the contracted symbol renamed to the output
+symbol goes through the ordinary affine build as an elementwise **term** pass, and
+a `_ScanFold` accumulates over those terms after the kernel section. Both passes
+are `O(N)`, and the term pass keeps the affine lowering, the codegen tier,
+threading and AD unchanged. The Julia tests pin the result bit-for-bit against
+*both* the per-cell reference (`ESS_STENCIL_DISABLE=1`) and the interpreted affine
+tier (`ESS_CODEGEN_DISABLE=1`), neither of which sees the rewrite.
+
 ## Executing ports
 
 | Port | Contraction (23/20) | PDE stencils (15/16) | How |

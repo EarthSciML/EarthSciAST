@@ -311,7 +311,8 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    acc_kernels::AbstractVector{_AccKernel},
                    const_slots::AbstractVector{Int},
                    time_slots::AbstractVector{Int},
-                   dyn_slots::AbstractVector{Int})
+                   dyn_slots::AbstractVector{Int},
+                   scan_folds::AbstractVector{_ScanFold}=_ScanFold[])
     # Lane tapes for the affine access kernels (access_kernel.jl): compiled once
     # here, run in place of the per-cell scalar walk wherever a strided
     # formulation exists (`nothing` ⇒ that kernel keeps the scalar runner). The
@@ -418,6 +419,14 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # de-scalarized (`_run_acc_plan!`, bit-identical + zero-alloc); everything
         # else walks the eltype-generic scalar runner.
         kernel_section(du, u, p, t, T)
+
+        # ---- Cumulative (prefix) reductions (ess-scan, scan.jl) ----
+        # Each fold reads back the per-cell TERMS its own kernels just wrote
+        # into `du` and accumulates them along the scanned axis in place. Runs
+        # here, after the whole kernel section, so it is ordered behind every
+        # threaded chunk and every codegen'd loop nest. Empty on every model
+        # without a forward prefix reduction, which is the common case.
+        isempty(scan_folds) || _apply_scan_folds!(du, scan_folds)
         return nothing
     end
     return f!
