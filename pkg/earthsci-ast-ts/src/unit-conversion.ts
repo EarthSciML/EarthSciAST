@@ -200,6 +200,13 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // ---- Plane angle ----
   deg: { dims: { rad: 1 }, scale: Math.PI / 180 },
 
+  // ---- Solid angle ----
+  // The steradian, `sr = rad²` (esm-spec §4.8.1). `rad` is an axis, so a solid
+  // angle is that axis SQUARED, not a ninth axis (just as an area is `m²`).
+  // Spherical-mesh cell areas — a patch of the unit sphere, e.g. an MPAS
+  // Voronoi cell or a Girard triangle — declare `units: "sr"`.
+  sr: { dims: { rad: 2 }, scale: 1 },
+
   // ---- Mixing ratios (dimensionless) ----
   // ppmv/ppbv/pptv are volume-mixing-ratio spellings of the same quantity under
   // the ideal-gas approximation — identical dims and scale.

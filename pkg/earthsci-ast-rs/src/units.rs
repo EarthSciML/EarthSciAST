@@ -1579,6 +1579,13 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("degree".to_string(), degree.clone());
     units.insert("deg".to_string(), degree);
 
+    // Solid angle — the steradian, `sr = rad²` (esm-spec §4.8.1). `rad` is the
+    // Angle axis, so a solid angle is that axis SQUARED, not a ninth axis, just
+    // as an area is `m²` and not a new axis. Spherical-mesh cell areas (a patch
+    // of the unit sphere: MPAS Voronoi cells, Girard triangles) declare
+    // `units: "sr"`, and this makes those declarations resolve.
+    units.insert("sr".to_string(), Unit::base(Dimension::Angle, 2, 1.0));
+
     // Volume (L = dm³ = 10⁻³ m³)
     units.insert("L".to_string(), Unit::base(Dimension::Length, 3, 0.001));
 

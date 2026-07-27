@@ -738,6 +738,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
 | Temperature / angle | `degC` `degF` `deg` |
+| Solid angle | `sr` (steradian — `rad²`) |
 | Mixing ratios (dimensionless) | `ppm` `ppb` `ppt` `ppmv` `ppbv` `pptv` |
 | Fractions (dimensionless) | `%` (scale 0.01) · `psu` (scale 1 — practical salinity is a pure number by definition) |
 | Counts (dimensionless) | `molec` `molecule` `individuals` `vehicles` `units` `count` |
@@ -751,6 +752,8 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 { "carbon_pool": { "type": "state", "units": "kg/m^2",
                    "description": "Total soil carbon pool (kilograms of CARBON per m^2)" } }
 ```
+
+**The steradian is `sr = rad²`** — the SI unit of SOLID ANGLE. `rad` is one of the eight axes, so a solid angle is `rad^2` and NOT a ninth axis, exactly as an area is `m^2` and not a new axis. This is what lets a spherical-mesh cell area declared `"units": "sr"` (a patch of the unit sphere, e.g. an MPAS Voronoi cell or a Girard triangle) parse and stay commensurate with itself; a binding whose underlying library types `sr` as dimensionless (Unitful models both `rad` and `sr` as `NoDims`) is admissible so long as `sr` resolves and matches `rad^2`.
 
 **Counts are DIMENSIONLESS.** `molec`, `molecule`, `count`, `individuals`, `vehicles`, `units` carry NO dimension — not `mol`, not `cd`. A count is a pure number; `molec/cm^3` is a number density with dimension `m^-3`, and `cm^3/(molec*s)` is the second-order rate constant that pairs with it.
 

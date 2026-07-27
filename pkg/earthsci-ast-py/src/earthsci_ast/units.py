@@ -146,6 +146,11 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "degC = K",
     "degF = 5 / 9 K",
     "deg = 0.017453292519943295 rad",
+    # Solid angle — the steradian, `sr = rad ** 2` (esm-spec §4.8.1). `rad` is an
+    # axis, so a solid angle is that axis SQUARED, not a ninth axis (just as an
+    # area is `m ** 2`). Spherical-mesh cell areas — a patch of the unit sphere,
+    # e.g. an MPAS Voronoi cell or a Girard triangle — declare `units: "sr"`.
+    "sr = rad ** 2",
     # --- mixing ratios (dimensionless) --------------------------------------
     # ppmv/ppbv/pptv are volume-mixing-ratio spellings that equal ppm/ppb/ppt
     # under the ideal-gas approximation, so every binding treats them as one.

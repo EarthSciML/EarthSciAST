@@ -400,6 +400,12 @@ func buildUnitRegistry() map[string]Unit {
 	r["deg"] = Unit{Dim: r["rad"].Dim, Scale: math.Pi / 180}
 	r["degrees"] = r["deg"]
 
+	// Solid angle — the steradian, sr = rad^2 (esm-spec §4.8.1). rad is the
+	// dimAngle axis, so a solid angle is that axis SQUARED, not a ninth axis
+	// (just as an area is m^2). Spherical-mesh cell areas (a patch of the unit
+	// sphere: MPAS Voronoi cells, Girard triangles) declare units "sr".
+	r["sr"] = r["rad"].Multiply(r["rad"])
+
 	// Amount of substance, scaled ("μmol/(m^2*s)" — photosynthesis flux — is in
 	// the valid corpus; μ normalizes to u, see normalizeUnitString).
 	r["kmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e3}

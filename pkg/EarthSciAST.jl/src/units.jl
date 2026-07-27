@@ -103,6 +103,14 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     # to dimensional analysis and is not modelled (see `_absolute_unit`).
     "degC" => u"°C", "degF" => u"°F", "deg" => u"°",
 
+    # Solid angle — the steradian, `sr = rad^2` (esm-spec §4.8.1). `rad` is an
+    # axis, so a solid angle is that axis SQUARED, not a ninth axis. Unitful
+    # models both `rad` and `sr` as `NoDims`; `u"sr"` is the canonical
+    # steradian and is commensurate with `u"rad"^2`. Spherical-mesh cell areas
+    # (a patch of the unit sphere — MPAS Voronoi cells, Girard triangles)
+    # declare `units: "sr"`, so this makes those declarations resolve.
+    "sr" => u"sr",
+
     # Mixing ratios — dimensionless. The "v" (by-volume) spellings name the
     # same quantity.
     "ppm" => u"ppm", "ppb" => u"ppb", "ppt" => u"ppt",
