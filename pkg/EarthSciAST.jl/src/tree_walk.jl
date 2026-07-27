@@ -47,7 +47,12 @@
 #                           whole-array lift, WS4 elementwise fold
 #   build.jl           §2b  BuildInspection, build-pipeline stages,
 #                           _build_evaluator_impl, build_evaluator entry
-#                           points, evaluate_expr
+#                           points, evaluate_expr; §2b-f the FACTORED
+#                           array-observed buffers (an array observed is
+#                           evaluated once per RHS call into a buffer above
+#                           the state instead of being inlined into every
+#                           reader — `ESS_ARRAY_OBS_INLINE=1` restores the
+#                           inlining build)
 #   compile.jl         §3-4 _Node IR compilation, CSE (ess-r7h), the compiled
 #                           scalar walker (zero-alloc hot path), the RHS value
 #                           type (_rhs_value_type) both walkers compute in

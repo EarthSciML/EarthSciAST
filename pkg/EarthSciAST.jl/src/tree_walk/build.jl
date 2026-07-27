@@ -245,6 +245,250 @@ function _collect_array_inline_vars(model::Model, equations::Vector{Equation},
     return array_inline_vars
 end
 
+# ---- Stage: FACTORED array observeds (the array analogue of the scalar slot) ----
+#
+# STOP INLINING ARRAY OBSERVEDS INTO EVERY READER. `_collect_array_inline_vars`
+# above hands the whole class to the `index(obs, i…)` beta-reduction, which
+# splices the observed's WHOLE defining body into each gather site. A
+# discretization stencil gathers its operand at many points (a PPM rule reads it
+# at 7 offsets, across ~7 `makearray` regions), so ONE array observed is
+# duplicated ~50× per reader, and a chain of array observeds nests
+# MULTIPLICATIVELY — the build allocates until it is killed before the solve
+# starts.
+#
+# A materialized array observed is instead evaluated ONCE PER RHS CALL into a
+# dense buffer, in dependency order, and every reader GATHERS that buffer. The
+# buffer lives in the same flat vector as the state (slots `n_states+1…`), so a
+# reader's `index(obs, i…)` resolves through the SAME `array_var_info`/`var_map`
+# path a state array's gather does: no new node kind, no new access descriptor,
+# full affine/stencil coverage, and — because the read compiles to `_NK_STATE` —
+# the cadence classifier (const_tier.jl) calls it DYNAMIC for free, which is what
+# it must be for a state-dependent field. It is also eltype-generic, so an
+# AD-driven `f!` (`Dual` state or `Dual` parameters) differentiates THROUGH the
+# buffer instead of truncating it to Float64 (the reason the discrete-cadence
+# `pgather` cache — a state-FREE field — could not be reused here).
+#
+# WHAT STAYS INLINED (every one of these keeps its own path, untouched):
+#   * geometry `inline_vars` / clip rings / setup vars / `polygon_intersection_area`
+#     operand arrays / `const`-op + bare-alias array observeds — none of them is
+#     in `array_inline_vars` to begin with;
+#   * the discrete-cadence and const-cadence cadence cuts (they are removed from
+#     `array_inline_vars` BEFORE this selection runs, so a per-refresh cache is
+#     never also a per-call buffer), plus anything a discrete-cadence fill reads
+#     (its fill kernel runs outside the RHS, where the buffer is not filled);
+#   * an observed whose declared shape does not resolve to concrete extents, or
+#     whose defining aggregate's own output ranges are not the dense `1…n` the
+#     buffer layout addresses;
+#   * every array observed at all under the `:oop` emitter (which builds its own
+#     traced `du` vector) or with `ESS_ARRAY_OBS_INLINE=1` — both restore the
+#     pre-change build exactly.
+#
+# GHOST CELLS. A materialized observed is a first-class array field of its
+# declared shape, so a gather OUTSIDE that shape reads the ghost literal 0.0 —
+# identical to the rule for an array STATE, and to a `makearray`-defined
+# observed's own "no region covers ⇒ 0" default. (An aggregate-defined observed
+# that a reader gathers out of range used to beta-reduce its body at the
+# out-of-range index instead; the discretizations' region-split boundary
+# stencils keep their gathers in range, which the conformance goldens pin.)
+_array_obs_inline_forced() = get(ENV, "ESS_ARRAY_OBS_INLINE", "") == "1"
+
+# Candidate set: the promoted array observeds (post cadence cut) that are not
+# read by a discrete-cadence fill. `discrete_defs_refs` is the set of names
+# reachable from the discrete fills through the observed definitions.
+function _collect_materialized_array_obs(model::Model, equations::Vector{Equation},
+                                         array_inline_vars, discrete_vars)
+    (_array_obs_inline_forced() || isempty(array_inline_vars)) && return Set{String}()
+    defs = Dict{String,ASTExpr}()
+    for eq in equations
+        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
+    end
+    # Names a discrete-cadence fill can reach: its fill kernel runs at refresh
+    # time (outside `f!`), where a per-call observed buffer holds stale values —
+    # so anything it reads keeps the inline path.
+    blocked = Set{String}()
+    if !isempty(discrete_vars)
+        frontier = String[n for n in discrete_vars]
+        while !isempty(frontier)
+            n = pop!(frontier)
+            haskey(defs, n) || continue
+            for r in _referenced_var_names(defs[n])
+                r in blocked && continue
+                push!(blocked, r); push!(frontier, r)
+            end
+        end
+    end
+    # LIVE names: everything the non-observed equations (the `D`/`ic` stream and
+    # the initialization equations) can reach through the observed definitions.
+    # An observed NOTHING reads costs nothing while it is inlined — its body is
+    # spliced into no reader — but a buffer would be refilled on every RHS call
+    # forever. So an unread diagnostic array observed keeps the inline path.
+    live = Set{String}()
+    let frontier = String[]
+        seed(e) = append!(frontier, collect(_referenced_var_names(e)))
+        for eq in equations
+            eq.lhs isa VarExpr && continue      # an observed definition, not a root
+            seed(eq.lhs); seed(eq.rhs)
+        end
+        for eq in model.initialization_equations
+            seed(eq.lhs); seed(eq.rhs)
+        end
+        while !isempty(frontier)
+            n = pop!(frontier)
+            n in live && continue
+            push!(live, n)
+            haskey(defs, n) && seed(defs[n])
+        end
+    end
+    out = Set{String}()
+    for name in array_inline_vars
+        (name in blocked || !(name in live)) && continue
+        v = get(model.variables, name, nothing)
+        (v !== nothing && v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
+        push!(out, name)
+    end
+    # STRUCTURAL positions (mirrors the scalar slot plan's `_obs_structural_refs!`):
+    # a buffer read is a RUNTIME value, so an observed referenced where the build
+    # needs a CONCRETE value — a gather SUBSCRIPT, an aggregate range bound, an
+    # integral bound, a value-invention key, a table-lookup axis — must stay
+    # inlined. The gather TARGET itself is exempt: `index(obs, i…)` naming a
+    # materialized observed is exactly the buffer read.
+    if !isempty(out)
+        hits = Set{String}()
+        seen = _ObsSeen()
+        for eq in equations
+            _array_obs_structural_refs!(eq.lhs, out, hits, seen)
+            _array_obs_structural_refs!(eq.rhs, out, hits, seen)
+        end
+        for (_, v) in model.variables
+            v.expression isa ASTExpr &&
+                _array_obs_structural_refs!(v.expression, out, hits, seen)
+        end
+        setdiff!(out, hits)
+        get(ENV, "ESS_ARRAY_OBS_DEBUG", "") == "1" && !isempty(hits) &&
+            (println(stderr, "[array-obs] structural, kept inline: ",
+                     join(sort(collect(hits)), ", ")); flush(stderr))
+    end
+    get(ENV, "ESS_ARRAY_OBS_DEBUG", "") == "1" &&
+        (println(stderr, "[array-obs] materialize candidates: ",
+                 join(sort(collect(out)), ", ")); flush(stderr))
+    return out
+end
+
+# STRUCTURAL-POSITION scan for ARRAY observeds — `_obs_structural_refs!`
+# (helpers.jl) with one exemption: that walker flags EVERYTHING under an
+# `index` gather, including the gather's own target, because a scalar
+# observed's value must be build-time-known there. For an ARRAY observed the
+# target IS the array being read, so a bare-name target that names a candidate
+# is skipped while every SUBSCRIPT (and a computed target) still flags.
+# Shares the (node, mode) visited-set discipline of `_obs_structural_refs!`.
+function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{String},
+                                     seen)
+    e isa OpExpr || return nothing
+    bits = get(seen, e, 0x00)
+    bits == 0x00 || return nothing   # spine-visited, or mark-all (its superset)
+    seen[e] = _OBS_SEEN_SPINE
+    if e.op == "index"
+        # Only the SUBSCRIPTS are build-time-resolved (`_eval_const_int`, which
+        # knows loop indices and const arrays). The gather TARGET is either the
+        # array being read — a materialized observed's buffer, resolved by name —
+        # or an inline array PRODUCER whose region/aggregate body is an ordinary
+        # EXPRESSION position (`_resolve_index_of_{makearray,arrayop}` resolves
+        # the selected value through `_resolve_indices`), so recurse into it
+        # rather than flagging its whole subtree.
+        for k in 2:length(e.args)
+            _obs_mark_refs!(e.args[k], names, hits, seen)
+        end
+        isempty(e.args) ||
+            _array_obs_structural_refs!(e.args[1], names, hits, seen)
+        return nothing
+    end
+    if e.ranges !== nothing
+        for (_, v) in e.ranges
+            v isa AbstractVector || continue
+            for b in v
+                b isa ASTExpr && _obs_mark_refs!(b, names, hits, seen)
+            end
+        end
+    end
+    e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
+    e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
+    e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
+    if e.table_axes !== nothing
+        for (_, ax) in e.table_axes
+            _obs_mark_refs!(ax, names, hits, seen)
+        end
+    end
+    for a in e.args
+        _array_obs_structural_refs!(a, names, hits, seen)
+    end
+    e.expr_body === nothing ||
+        _array_obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen)
+    e.filter === nothing ||
+        _array_obs_structural_refs!(e.filter::ASTExpr, names, hits, seen)
+    if e.values !== nothing
+        for v in e.values
+            _array_obs_structural_refs!(v, names, hits, seen)
+        end
+    end
+    return nothing
+end
+
+# The dense per-dimension extents of a materialized array observed's buffer.
+#
+# The DECLARED SHAPE is the authority whenever it resolves: it is what a reader's
+# `index(obs, i…)` addresses, and therefore what the buffer's cell keys must
+# match. An `aggregate`/`arrayop` producer ALSO carries its own (already
+# range-resolved) output ranges — those size the buffer when there is no
+# resolvable declared shape, and when both are present they must AGREE. A
+# disagreement means the producer does not actually cover the declared field —
+# the corpus has one such observed, whose `output_idx` repeats a single loop
+# name (`["gl", "gl"]`) so its "rank-2" output ranges are really one axis twice.
+# Inlining tolerates that (the gather beta-reduces per reader); a buffer cannot,
+# so decline and leave it inlined.
+#
+# Returns `nothing` — i.e. keep the inline path — when the extents do not
+# resolve, disagree, are not a dense `1…n` per dimension (the layout the
+# column-major cell keys address), or repeat an output-index name.
+function _materialized_obs_dims(def::ASTExpr, shape, index_sets::AbstractDict,
+                                derived_extents::AbstractDict)
+    declared = _declared_shape_extents(shape, index_sets, derived_extents)
+    produced = nothing
+    if def isa OpExpr && _is_aggregate_op((def::OpExpr).op)
+        dop = def::OpExpr
+        idx_names = _output_idx_strings(dop)
+        if !isempty(idx_names)
+            length(unique(idx_names)) == length(idx_names) || return nothing
+            ranges = _ranges_dict(dop)
+            dims = Int[]
+            for n in idx_names
+                haskey(ranges, n) || return nothing
+                r = try
+                    collect(_expand_int_range(ranges[n]))
+                catch
+                    return nothing
+                end
+                (!isempty(r) && r == collect(1:length(r))) || return nothing
+                push!(dims, length(r))
+            end
+            produced = dims
+        end
+    end
+    if declared !== nothing && produced !== nothing
+        declared == produced || return nothing
+    end
+    dims = declared === nothing ? produced : declared
+    dims === nothing && return nothing
+    # A `makearray` producer must be indexable at the declared rank (its regions
+    # carry one `[lo, hi]` pair per dimension); a mismatch would only surface as
+    # a gather-arity error deep in the fill compile, so decline here instead.
+    if def isa OpExpr && (def::OpExpr).op == "makearray"
+        regs = (def::OpExpr).regions
+        (regs === nothing || isempty(regs) || length(regs[1]) != length(dims)) &&
+            return nothing
+    end
+    return dims
+end
+
 # ---- Stage: polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
 # `polygon_intersection_area(a, b)` is a SCALAR overlap-area leaf (the fused
 # clip+shoelace). Its polygon operands are build-time-known const vertex rings;
@@ -639,30 +883,40 @@ function _enumerate_declared_array_cells!(array_cells, model::Model,
     for (n, v) in model.variables
         (v.type == StateVariable && _is_array_shape(v.shape) && !(n in vi_vars)) || continue
         (haskey(array_cells, n) && !isempty(array_cells[n])) && continue
-        exts = Int[]
-        ok = true
-        for s in v.shape
-            ss = String(s)
-            e = if haskey(index_sets, ss)
-                is = index_sets[ss]
-                if is.kind == "interval"
-                    is.size
-                elseif is.kind == "categorical"
-                    _maybe(length, is.members)
-                else
-                    get(derived_extents, ss, nothing)
-                end
-            else
-                get(derived_extents, ss, nothing)
-            end
-            e === nothing && (ok = false; break)
-            push!(exts, Int(e))
-        end
-        ok || continue
+        exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
+        exts === nothing && continue
         cells = Vector{Int}[collect(Int, Tuple(I)) for I in CartesianIndices(Tuple(exts))]
         array_cells[n] = sort!(cells)
     end
     return nothing
+end
+
+# Per-dimension extents of a DECLARED shape, resolved against the document's
+# index-set registry (interval `size` / categorical `members`) with the
+# geometry- and value-invention-derived extents as the fallback. `nothing` when
+# any axis does not resolve — the caller then leaves that variable alone.
+function _declared_shape_extents(shape, index_sets::AbstractDict,
+                                 derived_extents::AbstractDict)
+    shape === nothing && return nothing
+    exts = Int[]
+    for s in shape
+        ss = String(s)
+        e = if haskey(index_sets, ss)
+            is = index_sets[ss]
+            if is.kind == "interval"
+                is.size
+            elseif is.kind == "categorical"
+                _maybe(length, is.members)
+            else
+                get(derived_extents, ss, nothing)
+            end
+        else
+            get(derived_extents, ss, nothing)
+        end
+        e === nothing && return nothing
+        push!(exts, Int(e))
+    end
+    return exts
 end
 
 # ---- Stage: fold scoped-reference / array `ic` equations (spec §11.4.1) ----
@@ -773,10 +1027,19 @@ end
 function _split_observed_and_derivatives(equations::Vector{Equation},
                                          observed_names, geom_ring_vars,
                                          geom_setup_vars, geom_inline_vars,
-                                         array_inline_vars)
+                                         array_inline_vars,
+                                         mat_array_vars=_EMPTY_NAME_SET)
     observed_exprs = Dict{String,ASTExpr}()
+    # FACTORED array observeds are pulled OUT of the substitution map: their
+    # readers gather the buffer by name (`index(obs, i…)` → a slot read), so
+    # inlining their bodies is exactly what the buffer exists to avoid.
+    mat_defs = Dict{String,ASTExpr}()
     derivative_eqs = Equation[]
     for eq in equations
+        if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in mat_array_vars
+            mat_defs[(eq.lhs::VarExpr).name] = eq.rhs
+            continue
+        end
         if eq.lhs isa VarExpr && ((eq.lhs::VarExpr).name in geom_ring_vars ||
                                   (eq.lhs::VarExpr).name in geom_setup_vars)
             # intersect_polygon clip ring / ranged-clip / per-pair area / A_ij —
@@ -798,8 +1061,10 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                 _equation_tag(eq)))
         end
     end
-    return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs
+    return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
 end
+
+const _EMPTY_NAME_SET = Set{String}()
 
 # ---- Stage: scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
 #
@@ -1299,6 +1564,171 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
 end
 
 # ============================================================
+# 2b-f. Factored array-observed buffers (per-RHS-call materialization)
+# ============================================================
+#
+# The runtime half of `_collect_materialized_array_obs`. Each materialized array
+# observed owns a dense block of slots above the ODE state in ONE extended value
+# vector; `f!` copies the integrator's `u` into it, fills the observed blocks in
+# dependency order, and then runs the ordinary state RHS against the extended
+# vector. Since the reads compiled to plain state gathers, nothing downstream
+# (the affine box processor, the kernel-class merge, the codegen tier, the
+# cadence classifier) needed to learn a new leaf.
+
+# The extended value vector. Two buffers — Float64 plus a lazily-allocated `alt`
+# for the value type an AD-driven `f!` is called at — exactly like `_CSECache` /
+# `_AccScratch`, so the RHS stays zero-alloc at Float64 AND differentiable.
+# Allocated ONCE at build and reused across every RHS call.
+mutable struct _ObsExtVec
+    f64::Vector{Float64}
+    alt::Any
+end
+_ObsExtVec(n::Int) = _ObsExtVec(zeros(Float64, n), nothing)
+@inline _obsext_buf(s::_ObsExtVec, ::Type{Float64}) = s.f64
+@inline function _obsext_buf(s::_ObsExtVec, ::Type{T}) where {T}
+    b = s.alt
+    b isa Vector{T} && return b
+    nb = zeros(T, length(s.f64))
+    s.alt = nb
+    return nb
+end
+
+# Synthesize the per-cell fill equation for one materialized array observed:
+#
+#     arrayop(D(index(obs, i…)), output_idx=[i…], ranges=1…n) = index(<def>, i…)
+#
+# i.e. exactly the shape `_compile_arrayop_equation!` consumes for an array
+# STATE equation, so the fill reuses the whole array-equation cascade (affine
+# polyhedral build, per-cell fallback, per-cell CSE, class merge, codegen) with
+# no bespoke kernel path.
+#
+# THE RHS IS ALWAYS THE GATHER FORM `index(<def>, i…)`, never the bare producer
+# — even when `<def>` is an `aggregate` whose own `output_idx` matches. That is
+# deliberate, and it is a CORRECTNESS choice, not a style one: `index(<def>, i…)`
+# is EXACTLY the expression every reader of this observed used to present after
+# inlining, so the fill lowers through the identical, already-exercised path.
+# Handing `_compile_arrayop_equation!` the bare aggregate instead routes its
+# contraction through `_unrolled_contraction_body` + the affine LANE derivation,
+# whose const-lane fold (`_derive_lane_repl`, stencil_affine.jl) decides a lane
+# is loop-invariant by comparing its VALUES at the box CORNERS only. A const
+# gather whose values coincide at the corners but differ INSIDE the box — a
+# conservative-regrid weight column `W[i, j]`, zero at j = 1 and j = 3 and 0.5 at
+# j = 2 — is then folded to a literal 0.0 and the interior cell silently
+# computes the wrong number. (That is a pre-existing latent hole in the corner
+# check, not one this file introduces; the gather form simply does not reach it.)
+function _materialized_fill_equation(name::String, def::ASTExpr, dims::Vector{Int})
+    nd = length(dims)
+    # Fresh loop names; the `_mo` prefix is engine-internal and never part of a
+    # cell key. Guard against the (pathological) case of a body that already
+    # binds one by falling back to a name-qualified variant.
+    loops = String["_mo$(d-1)" for d in 1:nd]
+    let clash = false
+        foreach_subexpr_once(def) do x
+            clash || (x isa VarExpr && x.name in loops && (clash = true))
+            nothing
+        end
+        clash && (loops = String["_mo$(d-1)_$(name)" for d in 1:nd])
+    end
+    ranges = Dict{String,Any}(loops[d] => Any[1, dims[d]] for d in 1:nd)
+    idx_args = ASTExpr[VarExpr(name)]
+    for l in loops
+        push!(idx_args, VarExpr(l))
+    end
+    lhs = OpExpr("arrayop", ASTExpr[];
+                 output_idx=Any[l for l in loops], ranges=ranges,
+                 expr_body=OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt="t"))
+    rhs = OpExpr("index", ASTExpr[def, (VarExpr(l) for l in loops)...])
+    return Equation(lhs, rhs)
+end
+
+# Dependency LEVELS over the materialized observeds: level 1 reads none of them,
+# level k only levels < k. Within a level the fills are order-independent, which
+# is what lets each level run its scalar entries and then its (class-merged)
+# kernel section in one go. A cycle is a genuine authoring error and is reported
+# with the existing observed-cycle code.
+#
+# The edges must be TRANSITIVE THROUGH THE OBSERVEDS THAT STAYED INLINED: if a
+# materialized `M` reads an inlined observed `X` whose body reads a materialized
+# `N`, then `M`'s fill reads `N`'s buffer (X is spliced into M) even though `N`
+# never appears in `M`'s own def. Ordering on direct references alone would let
+# `M` fill from an unfilled `N` — a silently wrong RHS, not an error. So the
+# walk expands through every non-materialized observed definition and stops at
+# the materialized ones (their buffers are the dependency).
+function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
+                                  inline_obs::Dict{String,ASTExpr})
+    nm = Set{String}(names)
+    function reach(root::ASTExpr)
+        out = Set{String}()
+        seen = Set{String}()
+        frontier = collect(_referenced_var_names(root))
+        while !isempty(frontier)
+            r = pop!(frontier)
+            if r in nm
+                push!(out, r)
+            elseif !(r in seen) && haskey(inline_obs, r)
+                push!(seen, r)
+                append!(frontier, collect(_referenced_var_names(inline_obs[r])))
+            end
+        end
+        return out
+    end
+    deps = Dict{String,Set{String}}(n => setdiff(reach(mat_defs[n]), (n,))
+                                    for n in names)
+    order = _dependency_order(sort(collect(names)), n -> deps[n];
+        on_cycle=done -> throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
+            join(sort(collect(setdiff(nm, done))), ","))))
+    depth = Dict{String,Int}()
+    for n in order
+        depth[n] = isempty(deps[n]) ? 1 : 1 + maximum(depth[d] for d in deps[n])
+    end
+    nlev = isempty(order) ? 0 : maximum(values(depth))
+    return [String[n for n in order if depth[n] == k] for k in 1:nlev]
+end
+
+# Wrap the compiled state RHS with the per-call observed fills. Returns `f_state!`
+# UNCHANGED when nothing is materialized, so every model without a factored array
+# observed keeps a byte-identical closure (and its zero-allocation property).
+# `levels` is a vector of `(scalar_nodes, kernel_section, scan_folds)` in
+# dependency order.
+function _make_rhs_with_obs_buffers(f_state!, ext::_ObsExtVec, n_states::Int,
+                                    levels::Tuple)
+    isempty(levels) && return f_state!
+    function f!(du, u, p, t)
+        T = _rhs_value_type(u, p, t)
+        ue = _obsext_buf(ext, T)
+        @inbounds copyto!(ue, 1, u, 1, n_states)
+        # Fill the observed buffers level by level: a level's defs read only the
+        # state and STRICTLY LOWER levels, both already valid in `ue`.
+        _fill_obs_levels!(levels, ue, p, t, T)
+        f_state!(du, ue, p, t)
+        return nothing
+    end
+    return f!
+end
+
+# The levels are a TUPLE, walked by tail recursion so the loop unrolls and every
+# `_KernelSection` call site is statically dispatched — a `Vector` of levels
+# would box each heterogeneously-parameterized section and cost an allocation
+# per level per RHS call (the RHS must stay allocation-free in steady state).
+@inline _fill_obs_levels!(::Tuple{}, ue, p, t, ::Type{T}) where {T} = nothing
+@inline function _fill_obs_levels!(levels::Tuple, ue, p, t, ::Type{T}) where {T}
+    lv = levels[1]
+    ents = lv[1]
+    @inbounds for k in eachindex(ents)
+        e = ents[k]
+        ue[e[1]] = _eval_node(e[2], ue, p, t, T)
+    end
+    lv[2](ue, ue, p, t, T)
+    # ess-scan: this level's forward prefix reductions accumulate in place over
+    # the terms the kernel section just wrote — the same post-pass, in the same
+    # position, that `_make_rhs` runs behind the state kernel section. Empty for
+    # every level whose observeds carry no cumulative reduction.
+    sf = lv[3]
+    isempty(sf) || _apply_scan_folds!(ue, sf)
+    return _fill_obs_levels!(Base.tail(levels), ue, p, t, T)
+end
+
+# ============================================================
 # 2c. Build phases
 # ============================================================
 # `_build_evaluator_impl` runs as four named phases, each a function of the
@@ -1323,7 +1753,8 @@ end
 # discrete-cut-adjusted when a `materialize_out` sink opted in.
 function _build_lower_and_classify(model::Model;
         const_arrays::AbstractDict, param_arrays::AbstractDict,
-        vi_vars, has_value_invention::Bool, materialize_out)
+        vi_vars, has_value_invention::Bool, materialize_out,
+        form::Symbol=:inplace)
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
     # WS4 elementwise array-observed fold, whole-array derivative lift)
@@ -1397,13 +1828,24 @@ function _build_lower_and_classify(model::Model;
         geom_ring_vars=geo.ring_vars, geom_setup_vars=geo.setup_vars,
         geom_inline_vars=geom_inline_vars, array_inline_vars=array_inline_vars)
 
+    # ---- Factored array observeds (buffer-materialized, per RHS call) ----
+    # A SUBSET of `array_inline_vars` (so every ownership/partition exclusion
+    # keyed on that set keeps holding): the promoted array observeds that get a
+    # dense buffer instead of being spliced into each reader. Phase 3 narrows it
+    # again to the ones whose extents actually resolve. Empty (byte-identical)
+    # for the `:oop` emitter, under `ESS_ARRAY_OBS_INLINE=1`, and for any model
+    # with no promoted array observed.
+    mat_array_vars = form === :inplace ?
+        _collect_materialized_array_obs(model, equations, array_inline_vars,
+                                        discrete_vars) : Set{String}()
+
     return (; equations, folded_array_obs,
             has_geometry=geo.has_geometry,
             has_setup_geometry=geo.has_setup_geometry,
             geom_ring_vars=geo.ring_vars, geom_setup_vars=geo.setup_vars,
             geom_defs=geo.defs, geom_inline_vars, array_inline_vars,
             discrete_vars, pia_operand_vars, pia_operand_arrays,
-            const_obs_vars, const_obs_arrays)
+            const_obs_vars, const_obs_arrays, mat_array_vars)
 end
 
 # ---- Phase 2: ODE variable partition + setup materialization + equation rewrites ----
@@ -1651,8 +2093,53 @@ function _build_state_layout(model::Model, cls, parts;
     p = isempty(p_syms) ? nothing :
         NamedTuple{Tuple(p_syms)}(Tuple(p_vals))
 
+    # ---- Factored array-observed buffer layout (perf: array-observed slots) ----
+    # Each materialized array observed gets a dense block of slots ABOVE the
+    # ODE state (`n_states+1 …`) in the same flat vector, laid out column-major
+    # exactly as an array state's cells are (`_enumerate_array_cell_names`), and
+    # is registered in `array_var_info` + `var_map` so a reader's
+    # `index(obs, i…)` resolves through the ordinary array-gather path. `u0`,
+    # `all_state_names` and the PUBLIC `var_map` keep only the ODE slots — the
+    # buffers are build-owned scratch, never an integrator slot.
+    mat_dims = Dict{String,Vector{Int}}()
+    mat_cell_names = String[]
+    var_map_ext = var_map
+    array_var_info_ext = array_var_info
+    if !isempty(cls.mat_array_vars)
+        mat_defs_raw = Dict{String,ASTExpr}()
+        for eq in parts.equations
+            eq.lhs isa VarExpr &&
+                ((eq.lhs::VarExpr).name in cls.mat_array_vars) &&
+                (mat_defs_raw[(eq.lhs::VarExpr).name] = eq.rhs)
+        end
+        var_map_ext = copy(var_map)
+        array_var_info_ext = copy(array_var_info)
+        for name in sort(collect(cls.mat_array_vars))
+            haskey(mat_defs_raw, name) || continue
+            haskey(array_var_info_ext, name) && continue   # never shadow a state
+            v = model.variables[name]
+            dims = _materialized_obs_dims(mat_defs_raw[name], v.shape,
+                                          index_sets, parts.derived_extents)
+            (dims === nothing || isempty(dims) || any(d -> d <= 0, dims)) && continue
+            # A declared shape of a different rank than the producer's output
+            # would make the cell keys ambiguous — leave it inlined.
+            (v.shape !== nothing && length(v.shape) != length(dims)) && continue
+            mat_dims[name] = dims
+            array_var_info_ext[name] = (ones(Int, length(dims)), copy(dims))
+            for I in CartesianIndices(Tuple(dims))
+                push!(mat_cell_names, _cell_key(name, collect(Int, Tuple(I))))
+            end
+        end
+        n_st = length(all_state_names)
+        for (i, cn) in enumerate(mat_cell_names)
+            var_map_ext[cn] = n_st + i
+        end
+    end
+
     return (; all_state_names, var_map, u0, p,
-            param_sym_set=Set(p_syms), array_var_info)
+            param_sym_set=Set(p_syms), array_var_info,
+            var_map_ext, array_var_info_ext, mat_dims,
+            n_total=length(all_state_names) + length(mat_cell_names))
 end
 
 # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
@@ -1668,15 +2155,25 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing)
     u0 = layout.u0
     p = layout.p
-    var_map = layout.var_map
     param_sym_set = layout.param_sym_set
     n_states = length(layout.all_state_names)
+    # The layout hands back TWO maps: the ODE-only one (`var_map` — the public
+    # return, and the scope the setup-time seeding evaluates in, where the
+    # observed buffers do not exist yet) and the EXTENDED one that also carries
+    # the factored array-observed buffer slots. Everything the per-call RHS
+    # compiles against uses the extended pair.
+    var_map = layout.var_map_ext
+    array_var_info = layout.array_var_info_ext
+    n_total = layout.n_total
+    # The materialized set, narrowed to the observeds whose buffer extents
+    # actually resolved (`mat_dims`); the rest stayed on the inline path.
+    mat_vars = Set{String}(keys(layout.mat_dims))
 
     # ---- Observed substitution / derivative-equation split ----
-    derivative_eqs, resolved_obs, raw_obs = _split_observed_and_derivatives(
+    derivative_eqs, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
         parts.equations,
         parts.observed_names, cls.geom_ring_vars, cls.geom_setup_vars,
-        cls.geom_inline_vars, cls.array_inline_vars)
+        cls.geom_inline_vars, cls.array_inline_vars, mat_vars)
 
     # ---- Registered-function handlers ----
     reg_funcs = Dict{String,Any}(String(k) => v
@@ -1697,7 +2194,18 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         for (k, arr) in const_registry
             inspect.const_arrays[String(k)] = arr
         end
-        for (k, e) in resolved_obs
+        # The observed map published here is the FULLY RESOLVED one — the same
+        # bytes as before this change. A factored array observed no longer sits
+        # in the RHS substitution map (its readers gather its buffer), but the
+        # observability surface is not the RHS: `_observed_field`
+        # (pde_inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
+        # observed's expression CELLWISE, off the ODE path, so every reference
+        # in it must be substituted — including references between factored
+        # observeds. Re-resolving the merged map restores exactly that, and only
+        # when a sink asked for it.
+        published = isempty(mat_defs) ? resolved_obs :
+            _resolve_observed(merge(Dict{String,ASTExpr}(resolved_obs), mat_defs))
+        for (k, e) in published
             inspect.observed_exprs[String(k)] = e
         end
         # Resolved scalar parameter values (load-time constants) so a build-time
@@ -1718,14 +2226,18 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # later discrete fill) GATHERS it live instead of inlining the whole met→physics
     # stack. Runs BEFORE u0 seeding + derivative compile so both read the caches; the
     # initial fill (inside) makes them valid immediately. No-op without the sink.
+    # Both the discrete fills and the u0 seeding run OUTSIDE the per-call RHS, so
+    # they compile against the ODE-ONLY layout: an observed buffer holds nothing
+    # valid there (a name that reaches one keeps the inline path — see
+    # `_collect_materialized_array_obs`).
     if materialize_out !== nothing
         _build_discrete_materializer!(materialize_out, cls.discrete_vars,
-            parts.discrete_defs, resolved_obs, layout.array_var_info, var_map,
+            parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
     end
 
     # ---- Evaluate arrayop-valued initialization_equations into u0 ----
-    _seed_arrayop_init_u0!(u0, parts.init_equations, initial_conditions, var_map,
+    _seed_arrayop_init_u0!(u0, parts.init_equations, initial_conditions, layout.var_map,
                            layout.array_var_info, const_registry, pgather,
                            param_sym_set, reg_funcs, p)
 
@@ -1740,14 +2252,79 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # in dependency order (a def may read a state gather / const array / live
     # forcing buffer exactly as its inlined copy did).
     obs_defs = Pair{String,ASTExpr}[
-        name => _resolve_indices(body, layout.array_var_info, var_map,
+        name => _resolve_indices(body, array_var_info, var_map,
                                  const_registry, pgather)
         for (name, body) in obs_plan.defs]
 
+    # ---- Factored array-observed fill kernels (per RHS call, dependency order) ----
+    # Each materialized observed compiles through the SAME array-equation cascade
+    # its readers do, via a synthesized `arrayop(D(index(obs, i…))) = <body>`
+    # equation whose output slots land in the observed's buffer block. Kernels are
+    # class-merged WITHIN a level only — the merge reorders, and levels are an
+    # ordering constraint. Empty (and the closure below unwrapped) when nothing
+    # is materialized.
+    #
+    # ess-scan INSIDE A FILL. The fill cascade is the SAME cascade the state
+    # equations take, so it can return `_ScanFold`s, and they are collected PER
+    # LEVEL and applied after that level's kernel section over the extended
+    # vector the fills write into — a fold reads back only the slots its own term
+    # kernels wrote, and no observed in a level can read another observed of the
+    # SAME level (that is what a level means), so folding once behind the
+    # class-merged section is exactly the ordering `_make_rhs` gives the state
+    # equations. Dropping them would leave the buffer holding the per-cell TERMS
+    # instead of their running accumulation — a silent wrong answer, so the
+    # plumbing is not optional even while the list is empty.
+    #
+    # It IS empty today, and deliberately so: `_detect_prefix_scan` fires only on
+    # an equation whose RHS is a top-level `aggregate`, and a fill's RHS is the
+    # GATHER `index(<def>, i…)` (see `_materialized_fill_equation` for why that
+    # spelling, and what handing it the bare aggregate would reach). An observed
+    # whose own body is a prefix reduction therefore keeps the triangular path —
+    # exactly as it did BEFORE this change, where it was inlined into a reader
+    # and the scan sat buried inside that reader's body. Measured, both ways, on
+    # `S[i] = Σ_{j<=i} u[j]`: `n_scan_folds == 0` under the factored build, the
+    # inlining build, and pristine pre-change `main`. What the scan path does
+    # keep, unchanged, is the shape it was written for — a STATE equation that is
+    # itself a prefix reduction — including in a model that also materializes
+    # observeds, where the two mechanisms compose bit-for-bit.
+    mat_levels = Any[]
+    mat_scan_fold_count = 0
+    if !isempty(mat_vars)
+        for lvl in _materialized_obs_levels(mat_defs, mat_vars, raw_obs)
+            lvl_scalars = Tuple{Int,_Node}[]
+            lvl_kernels = _AccKernel[]
+            lvl_scans = _ScanFold[]
+            for name in lvl
+                feq = _materialized_fill_equation(name, mat_defs[name],
+                                                  layout.mat_dims[name])
+                se, pcs, aks, sfs = _compile_derivative_equations(Equation[feq],
+                    resolved_obs, array_var_info, var_map, const_registry,
+                    pgather, param_sym_set, reg_funcs, n_total;
+                    template_sites=template_sites)
+                for (slot, ex) in se
+                    push!(lvl_scalars,
+                          (slot, _compile(ex, var_map, param_sym_set, reg_funcs)))
+                end
+                append!(lvl_scalars, pcs)
+                append!(lvl_kernels, aks)
+                append!(lvl_scans, sfs)
+            end
+            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
+            plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in merged]
+            mat_scan_fold_count += length(lvl_scans)
+            push!(mat_levels,
+                  (lvl_scalars, _make_kernel_section(merged, plans), lvl_scans))
+        end
+    end
+
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
+    # `array_var_info` here is the EXTENDED map (`layout.array_var_info_ext`,
+    # bound above): a reader's `index(<materialized observed>, i…)` must resolve
+    # through the ordinary array-gather path onto the observed's buffer block.
+    # `scan_folds` is the ess-scan post-pass list for the STATE equations.
     scalar_entries, percell_scalar, acc_kernels_pre, scan_folds = _compile_derivative_equations(derivative_eqs,
-        resolved_obs, layout.array_var_info, var_map, const_registry, pgather,
+        resolved_obs, array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states; template_sites=template_sites,
         scalar_obs_inline=obs_plan.inline)
     # States without a D(...) equation get du=0 (integrator leaves them
@@ -1835,8 +2412,17 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # exist): `:inplace` is the zero-alloc Float64 production RHS; `:oop` is the
     # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
     f! = if form === :inplace
-        _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
-                  const_slots, time_slots, dyn_slots, scan_folds)
+        # The factored array-observed fills wrap the state RHS: `f!` copies `u`
+        # into the extended value vector, fills every observed buffer in
+        # dependency order, and hands the extended vector to the state RHS as its
+        # `u`. With nothing materialized the wrapper is not applied at all, so the
+        # closure (and its zero-allocation property) is byte-identical.
+        # The inner state RHS keeps its own `scan_folds` (the prefix reductions
+        # among the STATE equations); each fill level carries its own.
+        _make_rhs_with_obs_buffers(
+            _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
+                      const_slots, time_slots, dyn_slots, scan_folds),
+            _ObsExtVec(n_total), n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
@@ -1875,7 +2461,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # ess-scan: forward cumulative (prefix) reductions rewritten into a
               # term pass + an O(N) accumulation (scan.jl). Zero on every model
               # without one; the per-equation cascade tally records `:scan`.
-              n_scan_folds = length(scan_folds),
+              # Counts BOTH the state equations' folds and those inside the
+              # factored array-observed fills — a prefix reduction that defines a
+              # materialized observed is the same rewrite in the same position,
+              # just over the observed's buffer block instead of the state.
+              n_scan_folds = length(scan_folds) + mat_scan_fold_count,
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
               n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
@@ -1916,9 +2506,19 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               n_vec_prelude_nodes = 0,
               n_const_slots = length(const_slots),
               n_time_slots = length(time_slots),
-              n_dynamic_slots = length(dyn_slots))
+              n_dynamic_slots = length(dyn_slots),
+              # Factored array observeds (this change): how many array observeds
+              # were cut out of their readers into per-call buffers, how many
+              # buffer cells that is, and the dependency depth the fills run in.
+              n_mat_array_obs = length(mat_vars),
+              n_mat_array_cells = n_total - n_states,
+              n_mat_levels = length(mat_levels))
 
-    return f!, u0, p, tspan_default, var_map, diag
+    # The PUBLIC map is the ODE layout only: the factored array-observed buffer
+    # slots are build-owned scratch above `length(u0)`, not integrator slots, and
+    # every caller (solution indexing, cellwise evaluation, the conformance
+    # runners) reads `var_map` as "state name → `u` index".
+    return f!, u0, p, tspan_default, layout.var_map, diag
 end
 
 function _build_evaluator_impl(model::Model;
@@ -2051,7 +2651,8 @@ function _build_evaluator_impl(model::Model;
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
         const_arrays=const_arrays, param_arrays=param_arrays, vi_vars=_vi_vars,
-        has_value_invention=_has_value_invention, materialize_out=materialize_out)
+        has_value_invention=_has_value_invention, materialize_out=materialize_out,
+        form=form)
 
     # ---- Phase 2: ODE partition + setup materialization + equation rewrites ----
     parts = _build_partition_and_materialize(model, cls;
