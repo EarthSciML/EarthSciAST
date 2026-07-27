@@ -420,8 +420,17 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "on"
+            "oneOf": [
+              {
+                "required": [
+                  "on"
+                ]
+              },
+              {
+                "required": [
+                  "overlap"
+                ]
+              }
             ],
             "properties": {
               "on": {
@@ -435,6 +444,39 @@
                   },
                   "minItems": 2,
                   "maxItems": 2
+                }
+              },
+              "overlap": {
+                "type": "object",
+                "description": "Spatial OVERLAP gate — the alternative to an `on` value-equality gate (CONFORMANCE_SPEC §5.5). Replaces uniform-grid bin-equality with envelope candidacy: a contracted (src_pos, tgt_pos) tuple is admitted iff the two range positions are in a broad-phase candidate set computed once from two envelope factor arrays. The narrow phase (exact rectangle / polygon test) stays as the aggregate's `filter`; this gate is ONLY the conservative broad phase, so the materialized result is identical to the full-product path.",
+                "additionalProperties": false,
+                "required": [
+                  "src_env",
+                  "tgt_env"
+                ],
+                "properties": {
+                  "src_env": {
+                    "type": "array",
+                    "description": "The QUERY-side envelope factors: const-array factor names interpreted as per-position envelopes. Arity 4 → rectangles [xmin, ymin, xmax, ymax]; arity 2 → points [x, y] (degenerate envelope (x, y, x, y)); arity 1 → a [pos, verts, coord] 3-D ring factor reduced to its axis-aligned bbox. These factors share a 1-D shape index set which names the source loop symbol.",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tgt_env": {
+                    "type": "array",
+                    "description": "The INDEXED (cell) side envelope factors, e.g. [\"W\",\"S\",\"E\",\"N\"]. Same arity rules as src_env, chosen independently. These factors share a 1-D shape index set which names the target loop symbol.",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "eps": {
+                    "type": "number",
+                    "default": 0.0,
+                    "minimum": 0.0,
+                    "description": "Inflates BOTH envelopes of a pair OUTWARD by eps (xmin−=eps, ymin−=eps, xmax+=eps, ymax+=eps) before the intersection test. The broad-phase predicate is a CLOSED per-axis AABB test (edge-touching admitted). Absent ⇒ 0.0."
+                  }
                 }
               }
             }
@@ -3220,6 +3262,10 @@
         "from_faq": {
           "type": "string",
           "description": "derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is \"derived\"."
+        },
+        "member_factor": {
+          "type": "string",
+          "description": "derived: name of the buffer that receives the surviving member key per invented position (CONFORMANCE_SPEC §5.5, Hook 1) — fed back as a `const` factor so downstream aggregates gather on the compact derived axis. OPTIONAL, and only meaningful when kind is \"derived\" and `from_faq` names an overlap-gated `distinct` aggregate. Pairs with a provider axis marked `gated_by: \"<this set>\"`, which is DEFERRED past value-invention and then fetched with a Selection built from the materialised members in sorted order (the `gated_select` pushdown)."
         },
         "of": {
           "type": "array",
