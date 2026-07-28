@@ -523,11 +523,16 @@ pub(super) fn broadcast_value(v: &Value, target: &[usize]) -> ArrayD<f64> {
 pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
     match (a, b) {
         (Value::Scalar(x), Value::Scalar(y)) => Value::Scalar(apply_binary(op, x, y)),
+        // The name is resolved ONCE, outside the element loop, rather than
+        // re-matched per element by `apply_binary` — `binary_kernel` is pinned
+        // bit-identical to it (`binary_kernels_match_apply_binary`).
         (Value::Scalar(x), Value::Array(ya)) => {
-            Value::Array(Box::new(ya.mapv(|y| apply_binary(op, x, y))))
+            let f = binary_kernel(op);
+            Value::Array(Box::new(ya.mapv(|y| f(x, y))))
         }
         (Value::Array(xa), Value::Scalar(y)) => {
-            Value::Array(Box::new(xa.mapv(|x| apply_binary(op, x, y))))
+            let f = binary_kernel(op);
+            Value::Array(Box::new(xa.mapv(|x| f(x, y))))
         }
         (Value::Array(xa), Value::Array(ya)) => {
             // Use ndarray broadcasting.
@@ -571,24 +576,95 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
 /// IEEE bit equality over every op name and a spread of operands (±0, ±inf,
 /// NaN, subnormals), so a divergence is a test failure, not a silent one.
 pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
+    binary_kernel_of(BinCode::of(op))
+}
+
+/// A binary/elementwise operator resolved to a compact code.
+///
+/// The overlay used to carry the operator around as a `&str` and re-match the
+/// NAME at every dispatch point: once in `eval_vec_op`, again in `vec_combine`,
+/// and a third time inside [`binary_kernel`] — and the comparison arms matched a
+/// FOURTH time, per element, inside `scalar_compare`. A perf profile of the
+/// solve attributed ~2.5% to that (`__memcmp_evex_movbe` plus the inlined
+/// `str PartialEq::eq` chain under `eval_vec_op`). Resolving the name ONCE per
+/// AST node into this code and dispatching on the code afterwards removes every
+/// downstream string compare.
+///
+/// [`BinCode::Unknown`] is the "not a binary kernel" code; its kernel is the NaN
+/// sentinel, matching `apply_binary`'s catch-all arm.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BinCode {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Pow,
+    Atan2,
+    Min,
+    Max,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    Unknown,
+}
+
+impl BinCode {
+    /// Resolve an operator name. The arms are exactly [`apply_binary`]'s.
+    pub(crate) fn of(op: &str) -> BinCode {
+        match op {
+            "+" => BinCode::Add,
+            "-" => BinCode::Sub,
+            "*" => BinCode::Mul,
+            "/" => BinCode::Div,
+            "^" => BinCode::Pow,
+            "atan2" => BinCode::Atan2,
+            "min" => BinCode::Min,
+            "max" => BinCode::Max,
+            "==" => BinCode::Eq,
+            "!=" => BinCode::Ne,
+            "<" => BinCode::Lt,
+            "<=" => BinCode::Le,
+            ">" => BinCode::Gt,
+            ">=" => BinCode::Ge,
+            "and" => BinCode::And,
+            "or" => BinCode::Or,
+            _ => BinCode::Unknown,
+        }
+    }
+}
+
+/// [`binary_kernel`] with the name already resolved to a [`BinCode`].
+///
+/// The comparison arms inline the relop rather than calling `scalar_compare(op,
+/// …)` — which would re-match the operator NAME once per element — but compute
+/// the identical value: `scalar_compare` is itself `if a <relop> b { 1.0 } else
+/// { 0.0 }`. `binary_kernel` delegates here, so
+/// `binary_kernels_match_apply_binary` pins this table to `apply_binary` bit for
+/// bit over every op name and a spread of operands.
+pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
     match op {
-        "+" => |x, y| x + y,
-        "-" => |x, y| x - y,
-        "*" => |x, y| x * y,
-        "/" => |x, y| x / y,
-        "^" => |x: f64, y: f64| x.powf(y),
-        "atan2" => |x: f64, y: f64| x.atan2(y),
-        "min" => |x: f64, y: f64| x.min(y),
-        "max" => |x: f64, y: f64| x.max(y),
-        "==" => |x, y| scalar_compare("==", x, y),
-        "!=" => |x, y| scalar_compare("!=", x, y),
-        "<" => |x, y| scalar_compare("<", x, y),
-        "<=" => |x, y| scalar_compare("<=", x, y),
-        ">" => |x, y| scalar_compare(">", x, y),
-        ">=" => |x, y| scalar_compare(">=", x, y),
-        "and" => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
-        "or" => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
-        _ => |_, _| f64::NAN,
+        BinCode::Add => |x, y| x + y,
+        BinCode::Sub => |x, y| x - y,
+        BinCode::Mul => |x, y| x * y,
+        BinCode::Div => |x, y| x / y,
+        BinCode::Pow => |x: f64, y: f64| x.powf(y),
+        BinCode::Atan2 => |x: f64, y: f64| x.atan2(y),
+        BinCode::Min => |x: f64, y: f64| x.min(y),
+        BinCode::Max => |x: f64, y: f64| x.max(y),
+        BinCode::Eq => |x: f64, y: f64| (x == y) as i32 as f64,
+        BinCode::Ne => |x: f64, y: f64| (x != y) as i32 as f64,
+        BinCode::Lt => |x: f64, y: f64| (x < y) as i32 as f64,
+        BinCode::Le => |x: f64, y: f64| (x <= y) as i32 as f64,
+        BinCode::Gt => |x: f64, y: f64| (x > y) as i32 as f64,
+        BinCode::Ge => |x: f64, y: f64| (x >= y) as i32 as f64,
+        BinCode::And => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
+        BinCode::Or => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
+        BinCode::Unknown => |_, _| f64::NAN,
     }
 }
 
@@ -611,11 +687,13 @@ pub(super) fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> Ar
         return ArrayD::<f64>::from_elem(IxDyn(&nan_shape), f64::NAN);
     };
     let mut out = ArrayD::<f64>::zeros(IxDyn(&target_shape));
+    // Operator name resolved once, not per element (see `binary_kernel`).
+    let f = binary_kernel(op);
     ndarray::Zip::from(&mut out)
         .and(&av)
         .and(&bv)
         .for_each(|o, &x, &y| {
-            *o = apply_binary(op, x, y);
+            *o = f(x, y);
         });
     out
 }
@@ -668,7 +746,12 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     let v = eval(arg0, ctx);
     match v {
         Value::Scalar(s) => Value::Scalar(apply_unary(op, s)),
-        Value::Array(a) => Value::Array(Box::new(a.mapv(|x| apply_unary(op, x)))),
+        // Name resolved once, not per element (`unary_kernel` is pinned
+        // bit-identical to `apply_unary`).
+        Value::Array(a) => {
+            let f = unary_kernel(op);
+            Value::Array(Box::new(a.mapv(f)))
+        }
     }
 }
 
@@ -712,13 +795,79 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
 /// overlay applied it inside an N-element loop). Arms mirror [`apply_unary`]
 /// exactly; `unary_kernels_match_apply_unary` pins them to bit equality.
 pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
+    unary_kernel_of(UnCode::of(op))
+}
+
+/// A unary operator resolved to a compact code — the counterpart of
+/// [`BinCode`], for the same reason (see its docs).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum UnCode {
+    Exp,
+    Ln,
+    Log10,
+    Sqrt,
+    Abs,
+    Sign,
+    Floor,
+    Ceil,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Sinh,
+    Cosh,
+    Tanh,
+    Asinh,
+    Acosh,
+    Atanh,
+    Not,
+    Unknown,
+}
+
+impl UnCode {
+    /// Resolve an operator name. The arms are exactly [`apply_unary`]'s
+    /// (including the `log`/`ln` alias).
+    pub(crate) fn of(op: &str) -> UnCode {
+        match op {
+            "exp" => UnCode::Exp,
+            "log" | "ln" => UnCode::Ln,
+            "log10" => UnCode::Log10,
+            "sqrt" => UnCode::Sqrt,
+            "abs" => UnCode::Abs,
+            "sign" => UnCode::Sign,
+            "floor" => UnCode::Floor,
+            "ceil" => UnCode::Ceil,
+            "sin" => UnCode::Sin,
+            "cos" => UnCode::Cos,
+            "tan" => UnCode::Tan,
+            "asin" => UnCode::Asin,
+            "acos" => UnCode::Acos,
+            "atan" => UnCode::Atan,
+            "sinh" => UnCode::Sinh,
+            "cosh" => UnCode::Cosh,
+            "tanh" => UnCode::Tanh,
+            "asinh" => UnCode::Asinh,
+            "acosh" => UnCode::Acosh,
+            "atanh" => UnCode::Atanh,
+            "not" => UnCode::Not,
+            _ => UnCode::Unknown,
+        }
+    }
+}
+
+/// [`unary_kernel`] with the name already resolved to a [`UnCode`]. Arms mirror
+/// [`apply_unary`] exactly; `unary_kernels_match_apply_unary` pins them to bit
+/// equality through [`unary_kernel`], which delegates here.
+pub(crate) fn unary_kernel_of(op: UnCode) -> fn(f64) -> f64 {
     match op {
-        "exp" => |x: f64| x.exp(),
-        "log" | "ln" => |x: f64| x.ln(),
-        "log10" => |x: f64| x.log10(),
-        "sqrt" => |x: f64| x.sqrt(),
-        "abs" => |x: f64| x.abs(),
-        "sign" => |x: f64| {
+        UnCode::Exp => |x: f64| x.exp(),
+        UnCode::Ln => |x: f64| x.ln(),
+        UnCode::Log10 => |x: f64| x.log10(),
+        UnCode::Sqrt => |x: f64| x.sqrt(),
+        UnCode::Abs => |x: f64| x.abs(),
+        UnCode::Sign => |x: f64| {
             if x > 0.0 {
                 1.0
             } else if x < 0.0 {
@@ -727,22 +876,22 @@ pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
                 0.0
             }
         },
-        "floor" => |x: f64| x.floor(),
-        "ceil" => |x: f64| x.ceil(),
-        "sin" => |x: f64| x.sin(),
-        "cos" => |x: f64| x.cos(),
-        "tan" => |x: f64| x.tan(),
-        "asin" => |x: f64| x.asin(),
-        "acos" => |x: f64| x.acos(),
-        "atan" => |x: f64| x.atan(),
-        "sinh" => |x: f64| x.sinh(),
-        "cosh" => |x: f64| x.cosh(),
-        "tanh" => |x: f64| x.tanh(),
-        "asinh" => |x: f64| x.asinh(),
-        "acosh" => |x: f64| x.acosh(),
-        "atanh" => |x: f64| x.atanh(),
-        "not" => |x: f64| (x == 0.0) as i32 as f64,
-        _ => |_| f64::NAN,
+        UnCode::Floor => |x: f64| x.floor(),
+        UnCode::Ceil => |x: f64| x.ceil(),
+        UnCode::Sin => |x: f64| x.sin(),
+        UnCode::Cos => |x: f64| x.cos(),
+        UnCode::Tan => |x: f64| x.tan(),
+        UnCode::Asin => |x: f64| x.asin(),
+        UnCode::Acos => |x: f64| x.acos(),
+        UnCode::Atan => |x: f64| x.atan(),
+        UnCode::Sinh => |x: f64| x.sinh(),
+        UnCode::Cosh => |x: f64| x.cosh(),
+        UnCode::Tanh => |x: f64| x.tanh(),
+        UnCode::Asinh => |x: f64| x.asinh(),
+        UnCode::Acosh => |x: f64| x.acosh(),
+        UnCode::Atanh => |x: f64| x.atanh(),
+        UnCode::Not => |x: f64| (x == 0.0) as i32 as f64,
+        UnCode::Unknown => |_| f64::NAN,
     }
 }
 

@@ -98,7 +98,7 @@ use std::cell::RefCell;
 /// deliberately ABSENT because they rebind the box (`eval_vec_nested_aggregate`
 /// re-enters `try_eval_arrayop_vectorized`; `eval_vec_makearray` builds a
 /// per-region `rbx`), and everything else in `eval_vec_op` bails.
-const BOX_TRANSPARENT_OPS: &[&str] = &[
+pub(super) const BOX_TRANSPARENT_OPS: &[&str] = &[
     "+", "-", "*", "/", "^", "min", "max", "atan2", "and", "or", "neg", "index", "==", "!=", "<",
     "<=", ">", ">=", "ifelse", "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil",
     "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
