@@ -359,6 +359,10 @@ pub(super) fn materialize_observeds_append(
     for rule in observed_rules {
         match rule {
             AlgebraicRule::Scalar { var, body } => {
+                if vec_trace_on() {
+                    let _ = take_bail_log();
+                }
+                let t_start = std::time::Instant::now();
                 let mut ctx = EvalCtx {
                     state_arrays,
                     observed_arrays: &*dst,
@@ -373,6 +377,28 @@ pub(super) fn materialize_observeds_append(
                     Value::Array(a) => *a,
                     Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
                 };
+                // `ESS_VEC_DEBUG`: a scalar-shaped observed rule whose body is an
+                // `aggregate` is materialized by `eval_arrayop`, which tries the
+                // same overlay first. A non-empty bail log means it fell back to
+                // the per-cell walk — the dominant per-step cost for a model whose
+                // stencils live in observeds rather than in the `D(...)` rules.
+                if vec_trace_on() {
+                    let log = take_bail_log();
+                    let us = t_start.elapsed().as_micros();
+                    if log.is_empty() {
+                        eprintln!("[vec-obs] {var}: vectorized, {us} us");
+                    } else {
+                        eprintln!("[vec-obs] {var}: PER-CELL, {us} us");
+                        for (i, l) in log.iter().enumerate() {
+                            if i < 14 {
+                                eprintln!("[vec-obs]   {l}");
+                            }
+                        }
+                        if log.len() > 14 {
+                            eprintln!("[vec-obs]   … {} more frames", log.len() - 14);
+                        }
+                    }
+                }
                 dst.insert(var.clone(), arr);
             }
             AlgebraicRule::ArrayLoop {
