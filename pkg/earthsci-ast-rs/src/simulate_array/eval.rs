@@ -1861,25 +1861,6 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     }
 }
 
-/// Positional output-index symbol names for a top-level `makearray` box.
-///
-/// A `makearray` that reaches the SCALAR evaluator as an observed's whole body
-/// has no enclosing output-index symbols — it is not a cell of an `arrayop` —
-/// but [`VecBox`] wants one name per axis (they are what a coordinate ramp and
-/// the nested-aggregate dependence test are matched against). These placeholders
-/// carry a control character, which no `esm` identifier may contain
-/// (esm-spec §2.2), so they can never alias a real symbol: no `Variable` read
-/// resolves to a ramp over them, and no nested aggregate is rejected because it
-/// "mentions" one.
-fn makearray_box_syms(ndim: usize) -> Option<&'static [String]> {
-    /// Rank ceiling for the placeholder table (grid rank ≤ 4 in practice); a
-    /// deeper `makearray` simply takes the per-cell path.
-    const MAX_RANK: usize = 8;
-    static SYMS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    let syms = SYMS.get_or_init(|| (0..MAX_RANK).map(|d| format!("\u{1}ma{d}")).collect());
-    syms.get(..ndim)
-}
-
 /// Would the per-cell [`eval_arrayop`] path recognize this `makearray` region
 /// value as a forward prefix scan (esm-spec §4.3.1)?
 ///
@@ -1974,14 +1955,22 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // Gated on `loop_binds` being empty: inside a per-cell loop the nested
     // aggregates depend on the enclosing bindings and the overlay would bail
     // anyway — once per cell, which is pure loss.
+    //
+    // The box carries NO output-index symbols, because a `makearray` reached
+    // here is not a cell of an enclosing `arrayop`: nothing is bound around it,
+    // and each region value is evaluated exactly once (not once per cell), so
+    // `eval_vec_nested_aggregate`'s hoisting precondition — "the nested body
+    // must not depend on an enclosing bound index" — is vacuously satisfied and
+    // its `expr_mentions` scan has nothing to test. That is not cosmetic:
+    // placeholder names cost one full walk of the region body PER AXIS PER
+    // REGION, and on a 7-region PPM template that scan alone was 43% of the run.
     if !vec_disabled()
         && ctx.loop_binds.is_empty()
         && !shape.contains(&0)
         && !values.iter().any(region_value_is_prefix_scan)
-        && let Some(syms) = makearray_box_syms(ndim)
     {
         let bx = VecBox {
-            syms,
+            syms: &[],
             lo: &lo,
             shape: &shape,
             cnames: &[],
