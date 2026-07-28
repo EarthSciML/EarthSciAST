@@ -370,6 +370,33 @@ impl ArrayCompiled {
         Ok(compiled)
     }
 
+    /// [`Self::from_file`], consuming the file. The peak-memory-lean build for
+    /// a large expanded discretization: the single model is MOVED out of the
+    /// file (nothing is cloned), the rest of the document is dropped here, and
+    /// [`Self::from_model_owned`] then moves each observed body into its
+    /// compiled rule instead of deep-copying it. For `simpleclimate.esm` at
+    /// the production grid the borrowed `from_file` holds three ~1 GiB copies
+    /// live at once (the caller's file, the compile's private model clone, the
+    /// compiled rules); this path holds ~one. Same build stages, same result.
+    pub fn from_file_owned(file: EsmFile) -> Result<Self, CompileError> {
+        let Some(models) = file.models else {
+            return Err(CompileError::InterpreterBuildError {
+                details: "File has no models to simulate".to_string(),
+            });
+        };
+        if models.len() != 1 {
+            return Err(CompileError::InterpreterBuildError {
+                details: "Array-op path currently only supports a single model file (no coupling)"
+                    .to_string(),
+            });
+        }
+        let index_sets = file.index_sets.unwrap_or_default();
+        let (model_name, model) = models.into_iter().next().unwrap();
+        let mut compiled = Self::from_model_owned(model, &index_sets)?;
+        compiled.namespace = Some(model_name);
+        Ok(compiled)
+    }
+
     /// Build from a [`FlattenedSystem`] — the array-runtime analogue of the
     /// scalar [`crate::simulate::Compiled::from_flattened`].
     ///
@@ -486,12 +513,29 @@ impl ArrayCompiled {
         model: &Model,
         index_sets: &HashMap<String, IndexSet>,
     ) -> Result<Self, CompileError> {
+        // The rewrite passes below need an owned model; clone so the caller's
+        // model — and its serialized form — is untouched. A caller that can
+        // give up its model avoids this copy via [`Self::from_model_owned`]
+        // (reached through [`Self::from_file_owned`] / `compile_array`).
+        Self::from_model_owned(model.clone(), index_sets)
+    }
+
+    /// [`Self::from_model`], consuming the model: the compile pipeline's
+    /// rewrite passes mutate it in place (no private clone), and the observed
+    /// bodies — the dominant allocation of a large expanded discretization —
+    /// are MOVED into the compiled rules rather than deep-copied
+    /// (`build_observed_rules` takes each `var.expression`). Behaviourally
+    /// identical to `from_model`: every stage runs in the same order on the
+    /// same values.
+    fn from_model_owned(
+        mut model_owned: Model,
+        index_sets: &HashMap<String, IndexSet>,
+    ) -> Result<Self, CompileError> {
         // Resolve `{ "from": <index set> }` range references (RFC
         // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
-        // before any shape inference or rule building. Operates on an owned
-        // clone so the caller's model — and its serialized form — is untouched;
-        // every downstream consumer then sees only dense interval ranges.
-        let mut model_owned = model.clone();
+        // before any shape inference or rule building; every downstream
+        // consumer then sees only dense interval ranges.
+        //
         // Mount subsystems under dot-prefixed names (esm-spec §4.6) and resolve
         // each ragged index set's keyed factors against the resulting model
         // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
@@ -535,39 +579,70 @@ impl ArrayCompiled {
         // into a concrete `[lo, hi]` interval before shape inference / rule
         // building, so every downstream consumer sees only dense intervals.
         resolve_aggregate_ranges(&mut model_owned, index_sets)?;
+
+        // Stages (0)-(5) read the model immutably; only OWNED products leave
+        // this block, so stage (6) below can borrow the model mutably (it
+        // moves each observed body out of the variable registry).
+        let (
+            observed_names,
+            eliminated,
+            held_at_ic,
+            slots,
+            param_names,
+            param_index,
+            param_defaults,
+        ) = {
+            let model = &model_owned;
+
+            // (0) Reject spatial differential operators anywhere in the model's
+            // equations or observed-variable expressions (esm-i7b).
+            reject_unlowered_spatial_ops(model)?;
+
+            // (0b) Reject a reference to a variable bound in NONE of the model's
+            // binding categories — the array-path analogue of the scalar
+            // interpreter's `resolve_expr` "Unknown variable" gate. Without it a
+            // typo'd/undeclared bare name falls through `lookup_variable`'s final
+            // arm to a silent `NaN`, poisoning the trajectory.
+            check_free_variables(model, index_sets)?;
+
+            // (1) Collect state / parameter / observed variables.
+            let (state_vars, param_vars, observed_vars) = classify_variables(model)?;
+
+            // (2)+(2b) Infer state shapes from every equation usage, seeding
+            // declared array shapes where the index-usage inference left an
+            // array state scalar.
+            let shape_map = infer_state_shapes(model, &state_vars, index_sets)?;
+
+            // (3) Partition state variables into integrated / eliminated /
+            // held-at-ic.
+            let (final_states, eliminated, held_at_ic) = partition_states(model, &state_vars);
+
+            // (4) Build flat offsets and scalar-slot names per state variable.
+            let slots = build_slot_tables(model, &final_states, &shape_map);
+
+            // (5) Build the param tables.
+            let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
+
+            // Stage (6) consumes the observed bodies by NAME (sorted order,
+            // exactly the order `classify_variables` produced them in).
+            let observed_names: Vec<String> =
+                observed_vars.iter().map(|(n, _)| (*n).clone()).collect();
+            (
+                observed_names,
+                eliminated,
+                held_at_ic,
+                slots,
+                param_names,
+                param_index,
+                param_defaults,
+            )
+        };
+
+        // (6)+(6b) Build the dependency-ordered observed algebraic rules,
+        // MOVING each declared observed's body expression out of the model.
+        let observed_rules = build_observed_rules(&mut model_owned, &observed_names, &eliminated);
+
         let model = &model_owned;
-
-        // (0) Reject spatial differential operators anywhere in the model's
-        // equations or observed-variable expressions (esm-i7b).
-        reject_unlowered_spatial_ops(model)?;
-
-        // (0b) Reject a reference to a variable bound in NONE of the model's
-        // binding categories — the array-path analogue of the scalar
-        // interpreter's `resolve_expr` "Unknown variable" gate. Without it a
-        // typo'd/undeclared bare name falls through `lookup_variable`'s final
-        // arm to a silent `NaN`, poisoning the trajectory.
-        check_free_variables(model, index_sets)?;
-
-        // (1) Collect state / parameter / observed variables.
-        let (state_vars, param_vars, observed_vars) = classify_variables(model)?;
-
-        // (2)+(2b) Infer state shapes from every equation usage, seeding
-        // declared array shapes where the index-usage inference left an
-        // array state scalar.
-        let shape_map = infer_state_shapes(model, &state_vars, index_sets)?;
-
-        // (3) Partition state variables into integrated / eliminated /
-        // held-at-ic.
-        let (final_states, eliminated, held_at_ic) = partition_states(model, &state_vars);
-
-        // (4) Build flat offsets and scalar-slot names per state variable.
-        let slots = build_slot_tables(model, &final_states, &shape_map);
-
-        // (5) Build the param tables.
-        let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
-
-        // (6)+(6b) Build the dependency-ordered observed algebraic rules.
-        let observed_rules = build_observed_rules(model, &observed_vars, &eliminated);
 
         // Classify scoped-reference / array `ic` equations (esm-spec §11.4.1)
         // out of the rule builder into `field_ics` (see [`classify_field_ics`]).
@@ -1117,8 +1192,8 @@ fn build_param_tables(
 /// preserves declaration order among independent observeds (mirrors Python
 /// `simulation._order_observed_equations`).
 fn build_observed_rules(
-    model: &Model,
-    observed_vars: &[(&String, &ModelVariable)],
+    model: &mut Model,
+    observed_names: &[String],
     eliminated: &HashSet<String>,
 ) -> Vec<AlgebraicRule> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
@@ -1131,11 +1206,22 @@ fn build_observed_rules(
     // readable intermediate decomposition (WS4) already runs as authored. The
     // rules are dependency-ordered below, so `grad_mag` materializes before
     // `U_n`/`S_n` read it.
-    for (name, var) in observed_vars {
-        if let Some(expr) = &var.expression {
+    //
+    // The body is MOVED out of the (compile-private) model rather than cloned:
+    // for a large expanded discretization the observed bodies are the model's
+    // dominant allocation, and nothing downstream of this stage reads
+    // `variables[..].expression`. `observed_names` preserves the sorted order
+    // `classify_variables` produced, so the rule order — and the stable
+    // dependency ordering below — is unchanged.
+    for name in observed_names {
+        if let Some(expr) = model
+            .variables
+            .get_mut(name)
+            .and_then(|var| var.expression.take())
+        {
             observed_rules.push(AlgebraicRule::Scalar {
-                var: (*name).clone(),
-                body: Rc::new(expr.clone()),
+                var: name.clone(),
+                body: Rc::new(expr),
             });
         }
     }

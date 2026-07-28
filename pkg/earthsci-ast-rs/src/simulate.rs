@@ -1269,6 +1269,49 @@ fn build_array_compiled(
     }
 }
 
+/// Two-step entry point for array/spatial files: CONSUME the parsed
+/// [`EsmFile`] and compile it into the array runtime's
+/// [`crate::simulate_array::ArrayCompiled`], which the caller then solves
+/// with [`crate::simulate_array::ArrayCompiled::simulate`]. The one-shot
+/// [`simulate`] borrows `file` and so keeps it alive for the whole solve; for
+/// a large expanded discretization the typed file is on the order of the
+/// compiled rules themselves (~1 GiB for `simpleclimate.esm` at its
+/// production grid), and taking the file by value both lets it die before
+/// the solve AND lets the single-model build move the observed bodies into
+/// the compiled rules instead of deep-copying them
+/// ([`crate::simulate_array::ArrayCompiled::from_file_owned`]).
+///
+/// ```text
+/// let compiled = compile_array(file)?;          // file is consumed here
+/// let sol = compiled.simulate(tspan, &params, &ics, &opts)?;
+/// ```
+///
+/// Routing matches the one-shot entry points ([`build_array_compiled`]): a
+/// coupled (multi-model) file is flattened first (the file is dropped right
+/// after flattening); a single-model file compiles directly. Errors with
+/// [`SimulateError`] if `file` has no array-op or spatial structure — a
+/// pure-scalar file belongs to [`Compiled::from_file`], whose build is cheap
+/// enough that a two-step split buys nothing.
+pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
+    if !is_array_file(&file) {
+        return Err(SimulateError::Compile(
+            CompileError::InterpreterBuildError {
+                details: "compile_array requires an array/spatial model (this file has none); \
+                      use Compiled::from_file for pure-scalar files"
+                    .to_string(),
+            },
+        ));
+    }
+    let model_count = file.models.as_ref().map_or(0, |m| m.len());
+    if model_count > 1 {
+        let flat = flatten(&file).map_err(CompileError::from)?;
+        drop(file);
+        Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
+    } else {
+        Ok(crate::simulate_array::ArrayCompiled::from_file_owned(file)?)
+    }
+}
+
 /// One-shot convenience: flatten -> compile -> simulate.
 ///
 /// Dispatches to the array-op interpreter ([`crate::simulate_array`]) when
