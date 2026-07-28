@@ -173,7 +173,9 @@ impl<'a> VecValue<'a> {
         match self {
             VecValue::Owned { data, origin } => (data, origin),
             VecValue::View { data, origin } => {
-                let mut buf = pool.take_array(data.shape());
+                // `assign` writes every element of the box, so the checkout
+                // does not need to be zero-filled.
+                let mut buf = pool.take_array_uninit(data.shape());
                 buf.assign(data);
                 (buf, origin)
             }
@@ -396,7 +398,8 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     }
     let out = match v {
         VecValue::Scalar(s) => {
-            let mut buf = pool.take_array(&shape);
+            // `fill` writes every element, so no zero-fill on checkout.
+            let mut buf = pool.take_array_uninit(&shape);
             buf.fill(s);
             VecValue::Owned {
                 data: buf,
@@ -645,7 +648,8 @@ pub(super) fn eval_vec_variable<'a>(
     // exactly the value the oracle produces in each cell, so downstream
     // arithmetic stays bit-identical.
     if let Some(a) = bx.syms.iter().position(|s| s == name) {
-        let mut ramp = pool.take_array(bx.shape);
+        // The ramp writes every element of the box below, so no zero-fill.
+        let mut ramp = pool.take_array_uninit(bx.shape);
         let lo = bx.lo[a];
         ramp.indexed_iter_mut()
             .for_each(|(idx, v)| *v = (lo + idx[a] as i64) as f64);
@@ -945,7 +949,8 @@ pub(super) fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
             VecValue::Owned { data, origin }
         }
         VecValue::View { data, origin } => {
-            let mut buf = pool.take_array(data.shape());
+            // The `Zip` writes every element, so no zero-fill on checkout.
+            let mut buf = pool.take_array_uninit(data.shape());
             ndarray::Zip::from(&mut buf)
                 .and(data)
                 .for_each(|o, &x| *o = -x);
@@ -975,7 +980,8 @@ pub(super) fn vec_unary<'a>(op: &str, v: VecValue<'a>, pool: &mut Pool) -> VecVa
             VecValue::Owned { data, origin }
         }
         VecValue::View { data, origin } => {
-            let mut buf = pool.take_array(data.shape());
+            // The `Zip` writes every element, so no zero-fill on checkout.
+            let mut buf = pool.take_array_uninit(data.shape());
             ndarray::Zip::from(&mut buf)
                 .and(data)
                 .for_each(|o, &x| *o = f(x));
@@ -1073,7 +1079,8 @@ fn vec_combine_with<'a, F: Fn(f64, f64) -> f64>(
                     let origin: DimI = a2.origin().expect("array origin").iter().copied().collect();
                     let av = a2.view().expect("array operand has a view");
                     let bv = b2.view().expect("array operand has a view");
-                    let mut buf = pool.take_array(av.shape());
+                    // The `Zip` writes every element, so no zero-fill.
+                    let mut buf = pool.take_array_uninit(av.shape());
                     ndarray::Zip::from(&mut buf)
                         .and(&av)
                         .and(&bv)
@@ -1116,7 +1123,7 @@ pub(super) fn vec_select<'a>(
     let fill = |v: VecValue<'a>, pool: &mut Pool| -> ArrayD<f64> {
         match v {
             VecValue::Scalar(s) => {
-                let mut buf = pool.take_array(&shp);
+                let mut buf = pool.take_array_uninit(&shp);
                 buf.fill(s);
                 buf
             }
@@ -1125,7 +1132,8 @@ pub(super) fn vec_select<'a>(
     };
     let a_arr = fill(a, pool);
     let b_arr = fill(b, pool);
-    let mut out = pool.take_array(&shp);
+    // The 4-array `Zip` writes every element of `out`, so no zero-fill.
+    let mut out = pool.take_array_uninit(&shp);
     ndarray::Zip::from(&mut out)
         .and(&cond_data)
         .and(&a_arr)
