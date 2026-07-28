@@ -560,19 +560,28 @@ impl CseRt {
             }
             VecValue::View { data, origin } => VecValue::View { data, origin },
             VecValue::Owned { data, origin } => {
-                let mut i = self.inner.borrow_mut();
-                let idx = i.used;
-                if idx == i.slabs.len() {
-                    i.slabs.push(Box::new(Slab::empty()));
-                }
                 let out_origin = origin.clone();
-                *i.slabs[idx] = Slab { data, origin };
-                i.used += 1;
-                let scope = i.scope;
-                i.memo.insert((scope, class), Slot::Arr(idx));
+                let idx = {
+                    let mut i = self.inner.borrow_mut();
+                    let idx = i.used;
+                    if idx == i.slabs.len() {
+                        i.slabs.push(Box::new(Slab::empty()));
+                    }
+                    *i.slabs[idx] = Slab { data, origin };
+                    i.used += 1;
+                    let scope = i.scope;
+                    i.memo.insert((scope, class), Slot::Arr(idx));
+                    idx
+                };
+                // The exclusive borrow above has been released; derive the
+                // returned reference from a fresh SHARED borrow so no `&mut` to
+                // this slab is ever live at the same time as it.
+                let i = self.inner.borrow();
                 let ptr: *const ArrayD<f64> = &i.slabs[idx].data;
-                // SAFETY: see `get` — the slab is boxed, is below `used` from
-                // here on, and is not recycled while this evaluation is live.
+                // SAFETY: see `get` — the slab is boxed (its address is stable
+                // as `slabs` grows), it is below `used` from here on so no
+                // further write can reach it, and recycling only happens in
+                // `enter_scope` at `depth == 0`, where no value can be alive.
                 VecValue::View {
                     data: unsafe { &*ptr },
                     origin: out_origin,
