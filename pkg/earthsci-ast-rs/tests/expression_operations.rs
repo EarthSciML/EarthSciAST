@@ -20,7 +20,7 @@ fn test_free_variables() {
     assert!(vars2.is_empty());
 
     // Operator with multiple variables
-    let expr3 = Expr::Operator(ExpressionNode {
+    let expr3 = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![
             Expr::Variable("x".to_string()),
@@ -37,11 +37,11 @@ fn test_free_variables() {
     assert_eq!(vars3.len(), 2);
 
     // Nested operators
-    let expr4 = Expr::Operator(ExpressionNode {
+    let expr4 = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
             Expr::Variable("a".to_string()),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "^".to_string(),
                 args: vec![Expr::Variable("b".to_string()), Expr::Number(2.0)],
                 wrt: None,
@@ -64,7 +64,7 @@ fn test_free_variables() {
 fn test_free_parameters() {
     // This would typically distinguish between state variables and parameters
     // For now, test basic functionality
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
             Expr::Variable("k".to_string()), // Typically a parameter
@@ -95,7 +95,7 @@ fn test_contains() {
     assert!(!contains(&expr2, target));
 
     // Target in operator arguments
-    let expr3 = Expr::Operator(ExpressionNode {
+    let expr3 = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
         wrt: None,
@@ -105,11 +105,11 @@ fn test_contains() {
     assert!(contains(&expr3, target));
 
     // Target in nested expression
-    let expr4 = Expr::Operator(ExpressionNode {
+    let expr4 = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
             Expr::Number(2.0),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "^".to_string(),
                 args: vec![Expr::Variable("x".to_string()), Expr::Number(2.0)],
                 wrt: None,
@@ -124,7 +124,7 @@ fn test_contains() {
     assert!(contains(&expr4, target));
 
     // Target not in nested expression
-    let expr5 = Expr::Operator(ExpressionNode {
+    let expr5 = Expr::operator(ExpressionNode {
         op: "sin".to_string(),
         args: vec![Expr::Variable("y".to_string())],
         wrt: None,
@@ -153,7 +153,7 @@ fn test_evaluate() {
     assert_eq!(result2, 2.0);
 
     // Evaluate addition
-    let expr3 = Expr::Operator(ExpressionNode {
+    let expr3 = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![
             Expr::Variable("x".to_string()),
@@ -167,7 +167,7 @@ fn test_evaluate() {
     assert_eq!(result3, 5.0);
 
     // Evaluate multiplication
-    let expr4 = Expr::Operator(ExpressionNode {
+    let expr4 = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(3.0)],
         wrt: None,
@@ -190,7 +190,7 @@ fn test_evaluate() {
 #[test]
 fn test_simplify() {
     // Test identity simplifications
-    let expr1 = Expr::Operator(ExpressionNode {
+    let expr1 = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(0.0)],
         wrt: None,
@@ -201,7 +201,7 @@ fn test_simplify() {
     // Should simplify x + 0 to x (depending on implementation)
 
     // Test zero multiplication
-    let expr2 = Expr::Operator(ExpressionNode {
+    let expr2 = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(0.0)],
         wrt: None,
@@ -212,7 +212,7 @@ fn test_simplify() {
     // Should simplify x * 0 to 0 (depending on implementation)
 
     // Test unit multiplication
-    let expr3 = Expr::Operator(ExpressionNode {
+    let expr3 = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
         wrt: None,
@@ -232,17 +232,17 @@ fn test_simplify() {
 #[test]
 fn test_complex_expression_operations() {
     // Create a complex mathematical expression: (a*x^2 + b*x + c)
-    let complex_expr = Expr::Operator(ExpressionNode {
+    let complex_expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "+".to_string(),
                 args: vec![
-                    Expr::Operator(ExpressionNode {
+                    Expr::operator(ExpressionNode {
                         op: "*".to_string(),
                         args: vec![
                             Expr::Variable("a".to_string()),
-                            Expr::Operator(ExpressionNode {
+                            Expr::operator(ExpressionNode {
                                 op: "^".to_string(),
                                 args: vec![Expr::Variable("x".to_string()), Expr::Number(2.0)],
                                 wrt: None,
@@ -254,7 +254,7 @@ fn test_complex_expression_operations() {
                         dim: None,
                         ..Default::default()
                     }),
-                    Expr::Operator(ExpressionNode {
+                    Expr::operator(ExpressionNode {
                         op: "*".to_string(),
                         args: vec![
                             Expr::Variable("b".to_string()),
@@ -306,7 +306,7 @@ fn test_complex_expression_operations() {
 #[test]
 fn test_derivative_expressions() {
     // Test D expression (derivative operator)
-    let derivative_expr = Expr::Operator(ExpressionNode {
+    let derivative_expr = Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![Expr::Variable("x".to_string())],
         wrt: Some("t".to_string()),
@@ -319,9 +319,9 @@ fn test_derivative_expressions() {
     // 't' might or might not be considered a free variable depending on implementation
 
     // Test partial derivative
-    let partial_derivative = Expr::Operator(ExpressionNode {
+    let partial_derivative = Expr::operator(ExpressionNode {
         op: "∂/∂x".to_string(),
-        args: vec![Expr::Operator(ExpressionNode {
+        args: vec![Expr::operator(ExpressionNode {
             op: "^".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(2.0)],
             wrt: None,
@@ -343,7 +343,7 @@ fn test_special_function_expressions() {
     let functions = ["sin", "cos", "tan", "exp", "log", "sqrt"];
 
     for func in &functions {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: func.to_string(),
             args: vec![Expr::Variable("x".to_string())],
             wrt: None,
@@ -378,10 +378,10 @@ fn test_public_evaluate() {
     assert!((evaluate(&expr_var, &bindings).unwrap() - 7.0).abs() < 1e-10);
 
     // arithmetic: (x + 2) * y with x=3, y=4 → 20
-    let expr_arith = Expr::Operator(ExpressionNode {
+    let expr_arith = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "+".to_string(),
                 args: vec![Expr::Variable("x".to_string()), Expr::Integer(2)],
                 ..Default::default()
@@ -445,7 +445,7 @@ fn test_deeply_nested_expressions() {
     // Create deeply nested expression: ((((x))))
     let mut expr = Expr::Variable("x".to_string());
     for _ in 0..5 {
-        expr = Expr::Operator(ExpressionNode {
+        expr = Expr::operator(ExpressionNode {
             op: "identity".to_string(),
             args: vec![expr],
             wrt: None,

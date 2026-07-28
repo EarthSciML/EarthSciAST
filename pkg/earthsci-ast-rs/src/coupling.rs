@@ -156,7 +156,7 @@ pub(crate) fn validate_coupling(
                 // scoped references, and nothing checked its symbols (§4.9.5).
                 if let Some(node) = transform.as_expression() {
                     validate_coupling_expression(
-                        &crate::Expr::Operator(node.clone()),
+                        &crate::Expr::operator(node.clone()),
                         &HashSet::new(),
                         system_refs,
                         &format!("{coupling_path}/transform"),

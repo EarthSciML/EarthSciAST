@@ -278,12 +278,36 @@ pub(crate) fn resolve_expr_ranges(
 /// itself — rather than through [`crate::simulate_array::ArrayCompiled`] — holds
 /// a bare [`Expr`] and the engine's extents, and has no other way to turn the
 /// document's `{ "from": <derived set> }` references into evaluable bounds.
+/// `true` iff any node in `e`'s subtree still carries an unresolved
+/// `{ "from": <index set> }` range reference. The sharing-aware gate for
+/// [`resolve_expr_ranges_with_extents`]: after load-time interning
+/// (`crate::intern`) operator payloads are shared `Arc`s, and a mutable
+/// descent copy-on-write splits every node it touches — so a subtree whose
+/// ranges are all already concrete (every subtree of a discretized stencil,
+/// which emits dense `[lo, hi]` intervals) is left fully shared.
+fn contains_unresolved_range(e: &Expr) -> bool {
+    match e {
+        Expr::Operator(node) => {
+            node.ranges
+                .as_ref()
+                .is_some_and(|r| r.values().any(|s| matches!(s, RangeSpec::IndexSetRef { .. })))
+                || node.any_child(&mut contains_unresolved_range)
+        }
+        _ => false,
+    }
+}
+
 pub fn resolve_expr_ranges_with_extents(
     expr: &mut Expr,
     index_sets: &HashMap<String, IndexSet>,
     derived_extents: &HashMap<String, i64>,
 ) -> Result<(), CompileError> {
-    let Expr::Operator(node) = expr else {
+    // Sharing-aware gate: only branches actually containing an unresolved
+    // reference are descended (and thereby copy-on-write split).
+    if !contains_unresolved_range(expr) {
+        return Ok(());
+    }
+    let Some(node) = expr.node_mut() else {
         return Ok(());
     };
 

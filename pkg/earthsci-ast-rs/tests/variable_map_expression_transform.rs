@@ -91,7 +91,7 @@ fn make_model(variables: HashMap<String, ModelVariable>, equations: Vec<Equation
 }
 
 fn ddt(var: &str) -> Expr {
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![Expr::Variable(var.to_string())],
         wrt: Some("t".to_string()),
@@ -105,7 +105,7 @@ fn transform_node() -> ExpressionNode {
     ExpressionNode {
         op: "+".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![Expr::Number(2.0), Expr::Variable("Src.F".to_string())],
                 ..Default::default()
@@ -349,7 +349,7 @@ fn flatten_expression_transform_creates_observed_and_removes_parameter() {
         .get("Sink.F_in")
         .expect("expected observed Sink.F_in");
     assert_eq!(obs.var_type, VariableType::Observed);
-    assert_eq!(obs.expression, Some(Expr::Operator(node)));
+    assert_eq!(obs.expression, Some(Expr::operator(node)));
     // Units / description metadata carry over from the removed parameter.
     assert_eq!(obs.units.as_deref(), Some("kg/s"));
     assert_eq!(obs.description.as_deref(), Some("coupled inflow"));

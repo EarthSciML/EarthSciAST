@@ -58,14 +58,14 @@ fn test_analysis_features_integration() {
         name: Some("Simple Model".to_string()),
         variables,
         equations: vec![Equation {
-            lhs: Expr::Operator(ExpressionNode {
+            lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![Expr::Variable("x".to_string())],
                 wrt: Some("t".to_string()),
                 dim: None,
                 ..Default::default()
             }),
-            rhs: Expr::Operator(ExpressionNode {
+            rhs: Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![
                     Expr::Variable("k".to_string()),
@@ -124,7 +124,7 @@ fn test_analysis_features_integration() {
             species: "B".to_string(),
             coefficient: 1.0,
         }]),
-        rate: Expr::Operator(ExpressionNode {
+        rate: Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![
                 Expr::Variable("k".to_string()),
@@ -268,7 +268,7 @@ fn test_editing_operations() {
     assert_eq!(model_with_eq.equations.len(), 1);
 
     // Test variable substitution
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
         wrt: None,

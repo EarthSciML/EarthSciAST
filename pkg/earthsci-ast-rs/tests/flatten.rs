@@ -51,7 +51,7 @@ fn empty_file() -> EsmFile {
 }
 
 fn ddt(var: &str) -> Expr {
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![Expr::Variable(var.to_string())],
         wrt: Some("t".to_string()),
@@ -534,7 +534,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
             reference: None,
             variables: vars_b,
             equations: vec![Equation {
-                lhs: Expr::Operator(ExpressionNode {
+                lhs: Expr::operator(ExpressionNode {
                     op: "D".to_string(),
                     args: vec![Expr::Variable("A.u".to_string())],
                     wrt: Some("t".to_string()),
@@ -880,7 +880,7 @@ fn flatten_rejects_spatial_operators() {
             equations: vec![Equation {
                 lhs: ddt("c"),
                 // RHS contains grad(c, x) — not supported at Rust Core tier.
-                rhs: Expr::Operator(ExpressionNode {
+                rhs: Expr::operator(ExpressionNode {
                     op: "grad".to_string(),
                     args: vec![var("c")],
                     wrt: None,
@@ -952,7 +952,7 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
             variables: vars,
             equations: vec![Equation {
                 lhs: ddt("c"),
-                rhs: Expr::Operator(ExpressionNode {
+                rhs: Expr::operator(ExpressionNode {
                     op: "D".to_string(),
                     args: vec![var("c")],
                     wrt: Some("x".to_string()),

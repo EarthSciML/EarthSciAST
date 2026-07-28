@@ -661,7 +661,7 @@ mod tests {
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
-                    lhs: Expr::Operator(ExpressionNode {
+                    lhs: Expr::operator(ExpressionNode {
                         op: "D".to_string(),
                         args: vec![Expr::Variable("x".to_string())],
                         wrt: Some("t".to_string()),
@@ -772,7 +772,7 @@ mod tests {
                 equations: vec![
                     // Only one equation for two state variables
                     Equation {
-                        lhs: Expr::Operator(ExpressionNode {
+                        lhs: Expr::operator(ExpressionNode {
                             op: "D".to_string(),
                             args: vec![Expr::Variable("x".to_string())],
                             wrt: Some("t".to_string()),
@@ -1020,7 +1020,7 @@ mod tests {
                 units: Some("m/s".to_string()),
                 default: None,
                 description: Some("Rate of change".to_string()),
-                expression: Some(Expr::Operator(ExpressionNode {
+                expression: Some(Expr::operator(ExpressionNode {
                     op: "*".to_string(),
                     args: vec![
                         Expr::Variable("k".to_string()),
@@ -1045,7 +1045,7 @@ mod tests {
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
-                    lhs: Expr::Operator(ExpressionNode {
+                    lhs: Expr::operator(ExpressionNode {
                         op: "D".to_string(),
                         args: vec![Expr::Variable("x".to_string())],
                         wrt: Some("t".to_string()),
@@ -1212,14 +1212,14 @@ mod tests {
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
-                    lhs: Expr::Operator(ExpressionNode {
+                    lhs: Expr::operator(ExpressionNode {
                         op: "D".to_string(),
                         args: vec![Expr::Variable("x".to_string())],
                         wrt: Some("t".to_string()),
                         dim: None,
                         ..Default::default()
                     }),
-                    rhs: Expr::Operator(ExpressionNode {
+                    rhs: Expr::operator(ExpressionNode {
                         op: "*".to_string(),
                         args: vec![
                             Expr::Variable("k".to_string()),
@@ -1335,7 +1335,7 @@ mod tests {
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
-                    lhs: Expr::Operator(ExpressionNode {
+                    lhs: Expr::operator(ExpressionNode {
                         op: "D".to_string(),
                         args: vec![Expr::Variable("x".to_string())],
                         wrt: Some("t".to_string()),
@@ -1450,7 +1450,7 @@ mod tests {
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
-                    lhs: Expr::Operator(ExpressionNode {
+                    lhs: Expr::operator(ExpressionNode {
                         op: "D".to_string(),
                         args: vec![Expr::Variable("position".to_string())],
                         wrt: Some("t".to_string()),
@@ -1545,14 +1545,14 @@ mod tests {
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
-                    lhs: Expr::Operator(ExpressionNode {
+                    lhs: Expr::operator(ExpressionNode {
                         op: "D".to_string(),
                         args: vec![Expr::Variable("x".to_string())],
                         wrt: Some("t".to_string()),
                         dim: None,
                         ..Default::default()
                     }),
-                    rhs: Expr::Operator(ExpressionNode {
+                    rhs: Expr::operator(ExpressionNode {
                         op: "exp".to_string(),
                         args: vec![Expr::Variable("x".to_string())], // exp(x) where x has units - should warn
                         wrt: None,

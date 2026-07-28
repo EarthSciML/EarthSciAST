@@ -110,7 +110,7 @@ fn num(n: f64) -> Expr {
 }
 
 fn op(name: &str, args: Vec<Expr>) -> Expr {
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: name.to_string(),
         args,
         wrt: None,
@@ -121,7 +121,7 @@ fn op(name: &str, args: Vec<Expr>) -> Expr {
 
 fn ddt(state_name: &str, rhs: Expr) -> Equation {
     Equation {
-        lhs: Expr::Operator(ExpressionNode {
+        lhs: Expr::operator(ExpressionNode {
             op: "D".to_string(),
             args: vec![var(state_name)],
             wrt: Some("t".to_string()),
@@ -843,7 +843,7 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
         brownian_variables: IndexMap::new(),
         field_ics: Vec::new(),
         equations: vec![Equation {
-            lhs: Expr::Operator(ExpressionNode {
+            lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![var("u")],
                 wrt: Some("t".to_string()),
@@ -910,7 +910,7 @@ fn test_error_spatial_d_in_simulator_rejected() {
     // consumed by flatten and never resolved here) is an unlowered
     // rewrite-target op, surfaced with the same uniform `unlowered_operator`
     // code as the sugar ops.
-    let flat = flat_with_one_state_rhs(Expr::Operator(ExpressionNode {
+    let flat = flat_with_one_state_rhs(Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![var("u")],
         wrt: Some("x".to_string()),
@@ -946,7 +946,7 @@ fn test_error_grad_in_array_simulator_rejected() {
     // registry now rejects that dead name as an unlowered operator in its own
     // right, which would shadow the `grad` this test is actually about — so use
     // the current `aggregate` tag and keep asserting on the inner `grad`.
-    let arrayop_body = Expr::Operator(ExpressionNode {
+    let arrayop_body = Expr::operator(ExpressionNode {
         op: "aggregate".to_string(),
         args: vec![],
         expr: Some(Box::new(op("grad", vec![var("u")]))),
@@ -956,7 +956,7 @@ fn test_error_grad_in_array_simulator_rejected() {
         dim: None,
         ..Default::default()
     });
-    let lhs = Expr::Operator(ExpressionNode {
+    let lhs = Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![var("u")],
         wrt: Some("t".to_string()),
@@ -1002,7 +1002,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
         "i".to_string(),
         earthsci_ast::types::RangeSpec::Interval([1i64, 2i64]),
     );
-    let good_lhs = Expr::Operator(ExpressionNode {
+    let good_lhs = Expr::operator(ExpressionNode {
         op: "aggregate".to_string(),
         args: vec![],
         expr: Some(Box::new(op(
@@ -1013,7 +1013,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
         ranges: Some(ranges.clone()),
         ..Default::default()
     });
-    let good_rhs = Expr::Operator(ExpressionNode {
+    let good_rhs = Expr::operator(ExpressionNode {
         op: "aggregate".to_string(),
         args: vec![],
         expr: Some(Box::new(op(

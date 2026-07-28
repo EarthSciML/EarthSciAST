@@ -257,11 +257,6 @@ pub struct DaeInfo {
 /// `Number`: strict integer JSON tokens bind to `Integer`, float tokens to
 /// `Number`.
 #[derive(Debug, Clone, PartialEq)]
-// Boxing the large variant would change the wire-facing construction/match
-// ergonomics on one of the crate's most-touched types for a size win that
-// profiling has not justified; when a variant IS boxed the field carries its
-// own rationale (see AssertionReference::Expression).
-#[allow(clippy::large_enum_variant)]
 pub enum Expr {
     /// Integer literal (JSON integer token, no `.`, no `e`/`E`).
     Integer(i64),
@@ -272,8 +267,49 @@ pub enum Expr {
     /// Variable or parameter reference string
     Variable(String),
 
-    /// Operator node with children
-    Operator(ExpressionNode),
+    /// Operator node with children.
+    ///
+    /// The payload is an `Arc<ExpressionNode>`, not an inline `ExpressionNode`:
+    /// a §9.7-expanded discretization repeats the same subtree tens of
+    /// thousands of times (measured on `simpleclimate.esm` at the production
+    /// grid: 1.21M operator/leaf occurrences, 6,961 distinct subtrees — 0.58%),
+    /// and with an unboxed 832-byte node every occurrence was a full copy
+    /// (~978 MiB). Sharing the payload lets the load-time interner
+    /// ([`crate::intern`]) collapse structurally identical subtrees to one
+    /// allocation, and makes `Expr::clone` O(1) for operator trees. `Arc`
+    /// rather than `Rc` so `Expr` stays `Send + Sync` (the feature-gated
+    /// `performance::ParallelEvaluator` iterates `&[Expr]` with rayon); the
+    /// atomic refcount is off every evaluation hot path.
+    ///
+    /// Mutation goes through [`std::sync::Arc::make_mut`] (see
+    /// [`Expr::node_mut`]), i.e. copy-on-write: a mutated node is split from
+    /// its sharers first, so sharing is invisible to single-tree semantics.
+    Operator(std::sync::Arc<ExpressionNode>),
+}
+
+impl Expr {
+    /// Wrap `node` as an [`Expr::Operator`], interning it when a load-scoped
+    /// interner is active on this thread (see [`crate::intern`]); otherwise a
+    /// plain fresh allocation.
+    pub fn operator(node: ExpressionNode) -> Expr {
+        Expr::Operator(crate::intern::intern_node(node))
+    }
+
+    /// Mutable access to an operator payload, copy-on-write. Returns `None`
+    /// for a leaf. Splits the node from any sharers first (`Arc::make_mut`),
+    /// so mutating through this never affects another tree.
+    pub fn node_mut(&mut self) -> Option<&mut ExpressionNode> {
+        match self {
+            Expr::Operator(rc) => Some(std::sync::Arc::make_mut(rc)),
+            _ => None,
+        }
+    }
+}
+
+impl From<ExpressionNode> for Expr {
+    fn from(node: ExpressionNode) -> Expr {
+        Expr::operator(node)
+    }
 }
 
 // `Expr` used to derive `Deserialize` with `#[serde(untagged)]`. That derive
@@ -360,7 +396,7 @@ impl<'de> serde::de::Visitor<'de> for ExprVisitor {
         A: serde::de::MapAccess<'de>,
     {
         ExpressionNode::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-            .map(Expr::Operator)
+            .map(Expr::operator)
     }
 
     fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
@@ -368,7 +404,7 @@ impl<'de> serde::de::Visitor<'de> for ExprVisitor {
         A: serde::de::SeqAccess<'de>,
     {
         ExpressionNode::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
-            .map(Expr::Operator)
+            .map(Expr::operator)
     }
 }
 
@@ -416,7 +452,7 @@ pub(crate) fn serialize_canonical_f64<S: serde::Serializer>(
 /// the document `index_sets` registry by
 /// [`crate::aggregate::resolve_aggregate_ranges`] before the evaluator runs, so
 /// every range the evaluator actually iterates is a [`RangeSpec::Interval`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RangeSpec {
     /// Dense inclusive integer interval `[lo, hi]`.

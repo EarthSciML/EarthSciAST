@@ -56,7 +56,7 @@ fn leaf() -> BoxedStrategy<Expr> {
 // ---------------------------------------------------------------------------
 
 fn mk_plain(op: &'static str, args: Vec<Expr>) -> Expr {
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: op.to_string(),
         args,
         ..Default::default()
@@ -97,7 +97,7 @@ fn op_ifelse(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
 fn op_derivative(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     (child, var_name())
         .prop_map(|(a, v)| {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "D".into(),
                 args: vec![a],
                 wrt: Some(v),
@@ -110,7 +110,7 @@ fn op_derivative(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
 fn op_grad(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     (child, var_name())
         .prop_map(|(a, d)| {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "grad".into(),
                 args: vec![a],
                 dim: Some(d),
@@ -128,7 +128,7 @@ fn op_grad(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
 fn op_reshape(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     (child, prop::collection::vec(1_i64..=16, 1..=4))
         .prop_map(|(a, shape)| {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "reshape".into(),
                 args: vec![a],
                 shape: Some(shape),
@@ -141,7 +141,7 @@ fn op_reshape(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
 fn op_transpose(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     // perm is optional; cover both shapes.
     let with_perm = (child.clone(), prop::collection::vec(0_i64..=8, 1..=4)).prop_map(|(a, p)| {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "transpose".into(),
             args: vec![a],
             perm: Some(p),
@@ -157,7 +157,7 @@ fn op_concat(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     // `if axis {…}` check would drop.
     (prop::collection::vec(child, 2..=3), 0_i64..=3_i64)
         .prop_map(|(args, axis)| {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "concat".into(),
                 args,
                 axis: Some(axis),
@@ -178,7 +178,7 @@ fn op_broadcast(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     ];
     (prop::collection::vec(child, 1..=3), fn_strategy)
         .prop_map(|(args, f)| {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "broadcast".into(),
                 args,
                 broadcast_fn: Some(f),
@@ -209,7 +209,7 @@ fn op_arrayop(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     let args = prop::collection::vec(child.clone(), 1..=2);
     (args, output_idx, child, reduce, ranges)
         .prop_map(|(args, oi, body, red, rngs)| {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "arrayop".into(),
                 args,
                 output_idx: Some(oi),
@@ -230,7 +230,7 @@ fn op_makearray(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     prop::collection::vec(pair, 1..=3)
         .prop_map(|pairs| {
             let (regions, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "makearray".into(),
                 args: vec![],
                 regions: Some(regions),
@@ -361,7 +361,7 @@ proptest! {
 /// binding, so this now asserts the collapse instead.)
 #[test]
 fn negative_zero_canonicalizes_to_integer_zero() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "+".into(),
         args: vec![Expr::Number(-0.0), Expr::Number(0.0)],
         ..Default::default()
@@ -384,7 +384,7 @@ fn negative_zero_canonicalizes_to_integer_zero() {
 
 #[test]
 fn round_trip_preserves_unary_minus_arity() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "-".into(),
         args: vec![Expr::Variable("x".into())],
         ..Default::default()

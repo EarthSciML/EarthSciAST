@@ -257,14 +257,14 @@ fn test_model_expression_graph() {
         name: Some("ExprTest".to_string()),
         variables,
         equations: vec![Equation {
-            lhs: Expr::Operator(ExpressionNode {
+            lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![Expr::Variable("x".to_string())],
                 wrt: Some("t".to_string()),
                 dim: None,
                 ..Default::default()
             }),
-            rhs: Expr::Operator(ExpressionNode {
+            rhs: Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![
                     Expr::Variable("k".to_string()),
@@ -349,7 +349,7 @@ fn test_reaction_system_expression_graph() {
             species: "B".to_string(),
             coefficient: 1.0,
         }]),
-        rate: Expr::Operator(ExpressionNode {
+        rate: Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![
                 Expr::Variable("k".to_string()),

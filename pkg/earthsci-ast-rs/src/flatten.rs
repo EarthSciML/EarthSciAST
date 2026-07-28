@@ -700,7 +700,7 @@ fn apply_variable_map_removals(
                             default: None,
                             default_units: None,
                             description,
-                            expression: Some(Expr::Operator(node.clone())),
+                            expression: Some(Expr::operator(node.clone())),
                             shape,
                             location: None,
                             noise_kind: None,
@@ -1163,7 +1163,7 @@ fn namespace_expr_scoped(
                     format!("{system_name}.{w}")
                 }
             });
-            Expr::Operator(out)
+            Expr::operator(out)
         }
     }
 }
@@ -1475,7 +1475,7 @@ fn apply_operator_compose(
 }
 
 fn sum_exprs(a: Expr, b: Expr) -> Expr {
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![a, b],
         wrt: None,
@@ -1553,7 +1553,7 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
     // (Parameter removal for param_to_var/conversion_factor is in the collection
     // phase, so this function no longer needs `transform`.)
     let replacement = match factor {
-        Some(f) if f != 1.0 => Expr::Operator(ExpressionNode {
+        Some(f) if f != 1.0 => Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![Expr::Variable(from.to_string()), Expr::Number(f)],
             wrt: None,
@@ -1878,13 +1878,13 @@ fn lift_rhs_to_cell(expr: &Expr, arrayvars: &HashSet<String>, loops: &[String]) 
             if matches!(node.op.as_str(), "index" | "aggregate" | "arrayop") {
                 return expr.clone();
             }
-            let mut out = node.clone();
+            let mut out = ExpressionNode::clone(node);
             out.args = node
                 .args
                 .iter()
                 .map(|a| lift_rhs_to_cell(a, arrayvars, loops))
                 .collect();
-            Expr::Operator(out)
+            Expr::operator(out)
         }
     }
 }
@@ -1896,7 +1896,7 @@ fn index_node(name: &str, loops: &[String]) -> Expr {
     for l in loops {
         args.push(Expr::Variable(l.clone()));
     }
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: "index".to_string(),
         args,
         ..Default::default()
@@ -1906,11 +1906,11 @@ fn index_node(name: &str, loops: &[String]) -> Expr {
 /// Build `index(<makearray>, loops…)`.
 fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
     let mut args = Vec::with_capacity(loops.len() + 1);
-    args.push(Expr::Operator(ma.clone()));
+    args.push(Expr::operator(ma.clone()));
     for l in loops {
         args.push(Expr::Variable(l.clone()));
     }
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: "index".to_string(),
         args,
         ..Default::default()
@@ -2008,20 +2008,20 @@ fn apply_pointwise_lift(
         }
 
         let idx_species = index_node(&species, &loops);
-        let d_body = Expr::Operator(ExpressionNode {
+        let d_body = Expr::operator(ExpressionNode {
             op: "D".to_string(),
             args: vec![idx_species],
             wrt: Some("t".to_string()),
             ..Default::default()
         });
-        let new_lhs = Expr::Operator(ExpressionNode {
+        let new_lhs = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             output_idx: Some(loops.clone()),
             ranges: Some(ranges.clone()),
             expr: Some(Box::new(d_body)),
             ..Default::default()
         });
-        let new_rhs = Expr::Operator(ExpressionNode {
+        let new_rhs = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             output_idx: Some(loops.clone()),
             ranges: Some(ranges),
@@ -2125,7 +2125,7 @@ mod tests {
                 reference: None,
                 variables: vars,
                 equations: vec![Equation {
-                    lhs: Expr::Operator(ExpressionNode {
+                    lhs: Expr::operator(ExpressionNode {
                         op: "D".to_string(),
                         args: vec![Expr::Variable("x".to_string())],
                         wrt: Some("t".to_string()),
@@ -2171,7 +2171,7 @@ mod tests {
     // resolver only recognizes bare `t` as [`ResolvedExpr::Time`].
     #[test]
     fn test_namespace_expr_preserves_bare_t() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![
                 Expr::Variable("decay_rate".to_string()),
@@ -2211,7 +2211,7 @@ mod tests {
 
     fn ddt(target: &str, rhs: Expr) -> Equation {
         Equation {
-            lhs: Expr::Operator(ExpressionNode {
+            lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![Expr::Variable(target.to_string())],
                 wrt: Some("t".to_string()),
@@ -2316,7 +2316,7 @@ mod tests {
     // PointwiseLiftFailed.
     #[test]
     fn test_pointwise_lift_failure_yields_dimension_promotion() {
-        let makearray = Expr::Operator(ExpressionNode {
+        let makearray = Expr::operator(ExpressionNode {
             op: "makearray".to_string(),
             regions: Some(vec![vec![[1, 3]]]),
             // Constant body — no `index(C, i)` interior stencil to read loops from.
@@ -2346,12 +2346,12 @@ mod tests {
     // the byte-identical `UnloweredOperator` diagnostic.
     #[test]
     fn test_reject_spatial_operator_hidden_in_aggregate_body() {
-        let grad = Expr::Operator(ExpressionNode {
+        let grad = Expr::operator(ExpressionNode {
             op: "grad".to_string(),
             args: vec![Expr::Variable("u".to_string())],
             ..Default::default()
         });
-        let aggregate = Expr::Operator(ExpressionNode {
+        let aggregate = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             // Nothing reachable through `args`; the op lives only in `expr`.
             args: vec![],
@@ -2368,13 +2368,13 @@ mod tests {
 
         // A spatial `D` (wrt a spatial axis) hidden in a `filter` predicate is
         // likewise caught now that recursion goes through `for_each_child`.
-        let spatial_d = Expr::Operator(ExpressionNode {
+        let spatial_d = Expr::operator(ExpressionNode {
             op: "D".to_string(),
             args: vec![Expr::Variable("u".to_string())],
             wrt: Some("x".to_string()),
             ..Default::default()
         });
-        let filtered = Expr::Operator(ExpressionNode {
+        let filtered = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             args: vec![Expr::Variable("w".to_string())],
             filter: Some(Box::new(spatial_d)),
@@ -2394,7 +2394,7 @@ mod tests {
     // loop indices introduced by `output_idx`.
     #[test]
     fn test_namespace_expr_covers_aggregate_key() {
-        let key = Expr::Operator(ExpressionNode {
+        let key = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![
                 // A model variable — must be namespaced.
@@ -2404,7 +2404,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let aggregate = Expr::Operator(ExpressionNode {
+        let aggregate = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             args: vec![Expr::Variable("w".to_string())],
             output_idx: Some(vec!["i".to_string()]),
@@ -2416,7 +2416,7 @@ mod tests {
         match out {
             Expr::Operator(node) => {
                 assert_eq!(node.args[0], Expr::Variable("sys.w".to_string()));
-                let key = node.key.expect("aggregate key preserved");
+                let key = node.key.clone().expect("aggregate key preserved");
                 match *key {
                     Expr::Operator(k) => {
                         assert_eq!(k.args[0], Expr::Variable("sys.region".to_string()));

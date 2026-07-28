@@ -743,7 +743,7 @@ mod tests {
     #[test]
     #[allow(deprecated)]
     fn test_substitute_in_expression() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             wrt: None,

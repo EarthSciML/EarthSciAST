@@ -2043,10 +2043,10 @@ mod tests {
 
     #[test]
     fn test_operator_precedence() {
-        let add = Expr::Operator(ExpressionNode {
+        let add = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![
-                Expr::Operator(ExpressionNode {
+                Expr::operator(ExpressionNode {
                     op: "*".to_string(),
                     args: vec![
                         Expr::Variable("a".to_string()),
@@ -2064,10 +2064,10 @@ mod tests {
         });
         assert_eq!(format!("{add}"), "a·b + c");
 
-        let mul = Expr::Operator(ExpressionNode {
+        let mul = Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![
-                Expr::Operator(ExpressionNode {
+                Expr::operator(ExpressionNode {
                     op: "+".to_string(),
                     args: vec![
                         Expr::Variable("a".to_string()),
@@ -2201,7 +2201,7 @@ mod tests {
         use crate::types::*;
 
         // Test Unicode formatting for Pre operator with x⁻ notation
-        let pre_expr = Expr::Operator(ExpressionNode {
+        let pre_expr = Expr::operator(ExpressionNode {
             op: "Pre".to_string(),
             args: vec![Expr::Variable("x".to_string())],
             wrt: None,
@@ -2215,9 +2215,9 @@ mod tests {
         assert_eq!(to_ascii(&pre_expr), "Pre(x)");
 
         // Test with complex expression as argument
-        let complex_pre = Expr::Operator(ExpressionNode {
+        let complex_pre = Expr::operator(ExpressionNode {
             op: "Pre".to_string(),
-            args: vec![Expr::Operator(ExpressionNode {
+            args: vec![Expr::operator(ExpressionNode {
                 op: "+".to_string(),
                 args: vec![
                     Expr::Variable("a".to_string()),
@@ -2237,7 +2237,7 @@ mod tests {
         assert_eq!(to_ascii(&complex_pre), "Pre(a + b)");
 
         // Test with multiple arguments (should fall back to Pre(...) format)
-        let multi_arg_pre = Expr::Operator(ExpressionNode {
+        let multi_arg_pre = Expr::operator(ExpressionNode {
             op: "Pre".to_string(),
             args: vec![
                 Expr::Variable("x".to_string()),
@@ -2255,7 +2255,7 @@ mod tests {
 
     /// Build an operator node for the precedence tests below.
     fn op_node(op: &str, args: Vec<Expr>) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: op.to_string(),
             args,
             wrt: None,
@@ -2337,14 +2337,14 @@ mod tests {
     #[test]
     fn test_operator_matrix_all_backends() {
         fn opn(op: &str, args: Vec<Expr>) -> Expr {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: op.to_string(),
                 args,
                 ..Default::default()
             })
         }
         fn dop(wrt: &str, arg: Expr) -> Expr {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![arg],
                 wrt: Some(wrt.to_string()),

@@ -142,7 +142,7 @@ fn test_structural_validation() {
 /// Test expression operations
 #[test]
 fn test_expression_operations() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(5.0)],
         wrt: None,

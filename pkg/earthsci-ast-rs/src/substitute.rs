@@ -32,7 +32,7 @@ fn substitute_expr(expr: &Expr, resolve: &mut dyn FnMut(&str) -> Option<Expr>) -
         Expr::Integer(n) => Expr::Integer(*n),
         Expr::Variable(name) => resolve(name).unwrap_or_else(|| Expr::Variable(name.clone())),
         Expr::Operator(node) => {
-            Expr::Operator(node.map_children(&mut |child| substitute_expr(child, resolve)))
+            Expr::operator(node.map_children(&mut |child| substitute_expr(child, resolve)))
         }
     }
 }
@@ -515,7 +515,7 @@ mod tests {
         subs.insert("x".to_string(), Expr::Number(2.0));
         subs.insert("y".to_string(), Expr::Number(3.0));
 
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![
                 Expr::Variable("x".to_string()),
@@ -889,7 +889,7 @@ mod tests {
         let context = ScopedContext::from_esm_file(&esm_file);
 
         // Test complex expression with multiple scoped references
-        let complex_expr = Expr::Operator(ExpressionNode {
+        let complex_expr = Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![
                 Expr::Variable("Atmosphere.Chemistry.FastChem.k_rate".to_string()),

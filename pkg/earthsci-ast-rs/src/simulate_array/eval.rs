@@ -2475,7 +2475,7 @@ mod evaluability_gate_tests {
     use crate::types::Expr;
 
     fn node(op: &str, args: Vec<Expr>) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: op.to_string(),
             args,
             ..ExpressionNode::default()
@@ -2927,7 +2927,7 @@ mod ragged_eval_tests {
             "ranges": { "i": [1, 2], "k": [1, 1] }
         }))
         .unwrap();
-        if let Expr::Operator(node) = &mut agg {
+        if let Some(node) = agg.node_mut() {
             node.ranges.as_mut().unwrap().insert(
                 "k".to_string(),
                 RangeSpec::RaggedDyn {
