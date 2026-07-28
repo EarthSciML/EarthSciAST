@@ -362,15 +362,6 @@ pub(super) fn materialize_observeds_append(
                 if vec_trace_on() {
                     let _ = take_bail_log();
                 }
-                if std::env::var("ESS_VEC_DEBUG").as_deref() == Ok("2") {
-                    let path = format!("/tmp/vec_obs_{var}.json");
-                    if !std::path::Path::new(&path).exists() {
-                        let _ = std::fs::write(
-                            &path,
-                            serde_json::to_string(&**body).unwrap_or_default(),
-                        );
-                    }
-                }
                 let t_start = std::time::Instant::now();
                 let mut ctx = EvalCtx {
                     state_arrays,
@@ -685,16 +676,6 @@ pub(super) fn evaluate_rhs_with_scratch(
                 // (`try_eval_arrayop_vectorized`); a ragged/derived-bound filter
                 // (dynamic contraction window) bails to the per-cell oracle.
                 let lhs_shifts = lhs_constant_shifts(lhs_idx_exprs, output_idx_names);
-                // `ESS_VEC_DEBUG=2`: dump the rule body once, for inspection.
-                if std::env::var("ESS_VEC_DEBUG").as_deref() == Ok("2") {
-                    let path = format!("/tmp/vec_rule_{var_name}.json");
-                    if !std::path::Path::new(&path).exists() {
-                        let _ = std::fs::write(
-                            &path,
-                            serde_json::to_string_pretty(&**body).unwrap_or_default(),
-                        );
-                    }
-                }
                 // Clear any stale trace so the log below belongs to THIS rule.
                 if vec_trace_on() {
                     let _ = take_bail_log();
