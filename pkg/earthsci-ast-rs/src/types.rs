@@ -1019,6 +1019,150 @@ pub(crate) const EXPR_ARRAY_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_ARRAY)
 /// sorted-key order.
 pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_MAP);
 
+/// Pins the JSON-token → [`Expr`] variant mapping that the hand-written
+/// `Deserialize` impl performs, INCLUDING the corner cases where it has to
+/// reproduce a decision the old `#[serde(untagged)]` derive reached only by
+/// trying variants in order. A hand-written impl that silently widened or
+/// narrowed what parses is the one real hazard of dropping the derive, so each
+/// case below states which untagged behavior it is standing in for.
+#[cfg(test)]
+mod expr_deserialize_token_mapping_tests {
+    use super::*;
+
+    fn parse(src: &str) -> Result<Expr, serde_json::Error> {
+        serde_json::from_str::<Expr>(src)
+    }
+
+    /// The same document routed through `serde_json::Value` — the shape the
+    /// LOADER actually uses (`load_with_options` ends in a `from_value`) —
+    /// must land on the same variant as parsing the text directly.
+    fn parse_via_value(src: &str) -> Result<Expr, serde_json::Error> {
+        let v: serde_json::Value = serde_json::from_str(src).expect("fixture is JSON");
+        serde_json::from_value::<Expr>(v)
+    }
+
+    #[test]
+    fn integer_tokens_bind_to_integer_and_float_tokens_to_number() {
+        // Untagged tried `Integer(i64)` first; `deserialize_integer` accepts
+        // only Content's integer variants, so a float token fell through to
+        // `Number`. §5.4.6 round-trip parse rule.
+        for (src, want) in [
+            ("0", Expr::Integer(0)),
+            ("-7", Expr::Integer(-7)),
+            ("9223372036854775807", Expr::Integer(i64::MAX)),
+            ("-9223372036854775808", Expr::Integer(i64::MIN)),
+            ("0.0", Expr::Number(0.0)),
+            ("9.0", Expr::Number(9.0)),
+            ("1e3", Expr::Number(1e3)),
+            ("-104.52369275835723", Expr::Number(-104.52369275835723)),
+        ] {
+            assert_eq!(parse(src).expect(src), want, "from_str {src}");
+            assert_eq!(parse_via_value(src).expect(src), want, "from_value {src}");
+        }
+    }
+
+    #[test]
+    fn unsigned_tokens_above_i64_max_become_number() {
+        // Untagged: `i64`'s visitor rejects `visit_u64` past `i64::MAX`, so the
+        // `Number(f64)` variant took it (its `deserialize_float` forwards
+        // `Content::U64` to `visit_u64`, which `f64` accepts).
+        let src = "9223372036854775808";
+        let want = Expr::Number(9223372036854775808u64 as f64);
+        assert_eq!(parse(src).expect(src), want);
+        assert_eq!(parse_via_value(src).expect(src), want);
+    }
+
+    #[test]
+    fn string_tokens_bind_to_variable() {
+        assert_eq!(parse(r#""theta""#).unwrap(), Expr::Variable("theta".into()));
+        assert_eq!(
+            parse_via_value(r#""theta""#).unwrap(),
+            Expr::Variable("theta".into())
+        );
+        // A numeric-looking STRING is still a variable reference, never a
+        // number: `Integer` / `Number` reject `Content::Str`.
+        assert_eq!(parse(r#""12""#).unwrap(), Expr::Variable("12".into()));
+    }
+
+    #[test]
+    fn objects_bind_to_operator_nodes() {
+        let src = r#"{"op":"+","args":[1,2.5,"x"]}"#;
+        let Expr::Operator(node) = parse(src).expect(src) else {
+            panic!("expected an operator node");
+        };
+        assert_eq!(node.op, "+");
+        assert_eq!(
+            node.args,
+            vec![
+                Expr::Integer(1),
+                Expr::Number(2.5),
+                Expr::Variable("x".into())
+            ]
+        );
+        assert_eq!(parse_via_value(src).expect(src), Expr::Operator(node));
+    }
+
+    #[test]
+    fn non_expression_tokens_are_rejected() {
+        // Untagged rejected these too (no variant matched) — only the message
+        // wording changes. `[1,2]` is a SHORT positional array: it stands in
+        // for the seq case, which `ExpressionNode`'s derived `visit_seq`
+        // rejects for want of the remaining fields, exactly as it did when
+        // `ContentDeserializer::deserialize_struct` fed it a `Content::Seq`.
+        // `{"op":"x"}` covers the required-field rule: `ExpressionNode::args`
+        // carries no `#[serde(default)]`, so an operator node without `args`
+        // is rejected here exactly as it was under the derive.
+        for src in ["null", "true", "false", "[]", "[1,2]", "{}", r#"{"op":"x"}"#] {
+            assert!(parse(src).is_err(), "{src} must not parse as an Expr");
+            assert!(
+                parse_via_value(src).is_err(),
+                "{src} must not parse as an Expr via Value"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_expressions_recurse_through_every_child_slot() {
+        // The nesting is the whole reason the untagged derive was expensive
+        // (each level re-buffered its own subtree); make sure the streaming
+        // impl still reaches children in `args`, the scalar slots, and the
+        // map slots.
+        let src = r#"{
+            "op":"arrayop","args":[],"output_idx":["i"],
+            "expr":{"op":"*","args":[{"op":"-","args":["a",1]},2.0]},
+            "filter":{"op":">","args":["i",0]},
+            "axes":{"z":{"op":"+","args":["b",3]}}
+        }"#;
+        let Expr::Operator(node) = parse(src).expect("nested fixture parses") else {
+            panic!("expected an operator node");
+        };
+        let Some(Expr::Operator(inner)) = node.expr.as_deref() else {
+            panic!("expr slot must hold an operator node");
+        };
+        assert_eq!(inner.op, "*");
+        assert_eq!(inner.args[1], Expr::Number(2.0));
+        let Expr::Operator(lhs) = &inner.args[0] else {
+            panic!("nested arg must be an operator node");
+        };
+        assert_eq!(lhs.args, vec![Expr::Variable("a".into()), Expr::Integer(1)]);
+        assert!(node.filter.is_some());
+        assert!(node.axes.as_ref().is_some_and(|m| m.contains_key("z")));
+    }
+
+    #[test]
+    fn parse_emit_round_trip_is_byte_identical() {
+        // The `Serialize` half is unchanged, but the round trip is what the
+        // AST byte-identity conformance actually pins, so guard the pair.
+        for src in [
+            r#"{"op":"+","args":[1,"x"]}"#,
+            r#"{"op":"/","args":[{"op":"sin","args":["t"]},2.5]}"#,
+        ] {
+            let expr = parse(src).expect(src);
+            assert_eq!(serde_json::to_string(&expr).unwrap(), src);
+        }
+    }
+}
+
 #[cfg(test)]
 mod expr_child_spec_tests {
     use super::*;
