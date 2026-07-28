@@ -33,7 +33,7 @@ from typing import Any
 
 import numpy as np
 
-from . import cadence, relational
+from . import broad_phase, cadence, relational
 from .errors import EarthSciAstError
 from .esm_types import ExprNode
 
@@ -637,15 +637,85 @@ def _vi_join_index_sym(vname: str, producer_ranges: Mapping[str, Any], ctx: _ViC
     )
 
 
-def _vi_join_ok(
-    join: Sequence[Any], producer_ranges: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]
-) -> bool:
-    """True iff every ``join.on`` key-column pair compares equal at this binding
-    (the value-equality equi-join gate, §5.3); each key is a materialised map
-    buffer."""
+@dataclass
+class _ViJoinGate:
+    """One RESOLVED join gate (§5.3 bin-equality or §5.5.6 spatial overlap).
+
+    Both flavours admit on a pair of range SYMBOLS; they differ only in what
+    they consult. A bin-equality gate compares two materialised map buffers
+    (``map_l``/``map_r``) at the bound positions. An OVERLAP gate tests
+    membership of the ``(pos_l, pos_r)`` pair in a broad-phase ``candidates``
+    set built ONCE per node from the const-array envelope factors — never per
+    tuple, which is the whole point of the pushdown.
+    """
+
+    sym_l: str
+    sym_r: str
+    map_l: Mapping[Any, Any] | None = None
+    map_r: Mapping[Any, Any] | None = None
+    candidates: set[tuple[int, int]] | None = None
+
+
+def _vi_overlap_spec(clause: Any) -> Mapping[str, Any] | None:
+    """The ``overlap`` payload of a join clause, or ``None`` for an ``on`` clause.
+
+    A clause is one or the other (esm-schema.json pins this with a ``oneOf``);
+    a clause carrying BOTH is a malformed gate and is rejected rather than
+    silently resolved by precedence.
+    """
+    if not isinstance(clause, Mapping):
+        return None
+    ov = clause.get("overlap")
+    if ov is None:
+        return None
+    if clause.get("on") is not None:
+        raise ValueInventionError(
+            "a join clause is either an `on` equi-join or an `overlap` spatial gate, not both"
+        )
+    if not isinstance(ov, Mapping):
+        raise ValueInventionError(f"join `overlap` must be an object; got {type(ov).__name__}")
+    return ov
+
+
+def _vi_resolve_join(
+    join: Sequence[Any], producer_ranges: Mapping[str, Any], ctx: _ViCtx
+) -> list[_ViJoinGate]:
+    """Resolve an aggregate's ``join`` clauses into :class:`_ViJoinGate`s ONCE —
+    the candidate set / buffer bindings are shared across every contracted tuple.
+
+    An ``overlap`` clause maps ``src_env`` -> ``sym_l`` and ``tgt_env`` -> ``sym_r``
+    via each factor's 1-D shape index set (:func:`_vi_join_index_sym`, exactly as
+    an ``on`` key column does) and builds its candidate set from the const-array
+    envelope factors (CONFORMANCE_SPEC §5.5.6).
+    """
+    gates: list[_ViJoinGate] = []
     for clause in join:
-        for pair in clause.get("on") or []:
-            lname, rname = pair[0], pair[1]
+        ov = _vi_overlap_spec(clause)
+        if ov is not None:
+            src_env = list(ov.get("src_env") or [])
+            tgt_env = list(ov.get("tgt_env") or [])
+            if not src_env or not tgt_env:
+                raise ValueInventionError(
+                    "join `overlap` requires both `src_env` (query side) and `tgt_env` "
+                    "(indexed side) envelope factor lists"
+                )
+            eps = float(ov.get("eps") or 0.0)
+            if eps < 0.0:
+                raise ValueInventionError(
+                    f"join `overlap` eps must be >= 0 (it inflates both envelopes "
+                    f"OUTWARD and so grows the candidate set monotonically); got {eps}"
+                )
+            sym_l = _vi_join_index_sym(str(src_env[0]), producer_ranges, ctx)
+            sym_r = _vi_join_index_sym(str(tgt_env[0]), producer_ranges, ctx)
+            cands = broad_phase.overlap_candidate_set(
+                broad_phase.envelope_vectors(src_env, ctx.const_arrays),
+                broad_phase.envelope_vectors(tgt_env, ctx.const_arrays),
+                eps=eps,
+            )
+            gates.append(_ViJoinGate(sym_l, sym_r, candidates=cands))
+            continue
+        for pair in (clause.get("on") if isinstance(clause, Mapping) else None) or []:
+            lname, rname = str(pair[0]), str(pair[1])
             ls = _vi_join_index_sym(lname, producer_ranges, ctx)
             rs = _vi_join_index_sym(rname, producer_ranges, ctx)
             lbuf = _vi_scope_get(ctx.maps, lname)
@@ -654,9 +724,102 @@ def _vi_join_ok(
                 raise ValueInventionError(f"join key buffer {lname!r} is not materialised")
             if rbuf is None:
                 raise ValueInventionError(f"join key buffer {rname!r} is not materialised")
-            if lbuf[1][bindings[ls]] != rbuf[1][bindings[rs]]:
+            gates.append(_ViJoinGate(ls, rs, map_l=lbuf[1], map_r=rbuf[1]))
+    return gates
+
+
+def _vi_join_ok(gates: Sequence[_ViJoinGate], bindings: Mapping[str, Any]) -> bool:
+    """True iff every resolved gate admits this binding (§5.3 / §5.5.6): a
+    bin-equality gate compares materialised buffer values; an overlap gate tests
+    membership of the ``(pos_l, pos_r)`` range positions in the broad-phase set."""
+    for g in gates:
+        if g.candidates is None:
+            if g.map_l[bindings[g.sym_l]] != g.map_r[bindings[g.sym_r]]:
                 return False
+        elif (int(bindings[g.sym_l]), int(bindings[g.sym_r])) not in g.candidates:
+            return False
     return True
+
+
+# Instrumentation: number of leaf bindings the enumerator VISITED (a tuple the
+# callback was invoked on). Reset by callers / tests; this is what proves an
+# overlap-gated producer visits O(|candidates| * PROD ungated) tuples rather than
+# the full O(PROD ranges) product (projection-pushdown Wall #1).
+_VI_ENUM_VISITS = [0]
+
+
+def _vi_overlap_driver(gates: Sequence[_ViJoinGate] | None) -> _ViJoinGate | None:
+    """The first OVERLAP gate among the resolved gates, or ``None``. This is the
+    gate whose candidate pairs DRIVE enumeration: it resolves its entire
+    admissible pair set once, so we iterate those pairs directly instead of
+    membership-testing every product tuple."""
+    if gates is None:
+        return None
+    for g in gates:
+        if g.candidates is not None:
+            return g
+    return None
+
+
+def _vi_enumerate_join(
+    ranges: Mapping[str, Any],
+    gates: Sequence[_ViJoinGate] | None,
+    ctx: _ViCtx,
+    cb,
+) -> None:
+    """Enumerate an aggregate's ``ranges``, DRIVING from an OVERLAP gate's
+    prebuilt candidate pairs when one is present (§5.5.6).
+
+    Instead of building the full product over every range and membership-testing
+    each tuple — ``O(PROD ranges)``, e.g. ``O(N_query * N_cell)`` — iterate ONLY
+    the gate's ``(query_pos, cell_pos)`` candidate pairs, bind the two gated range
+    symbols from each pair, and take the cartesian product with any OTHER (ungated)
+    ranges. Cost drops to ``O(|candidates| * PROD ungated)``.
+
+    With NO overlap gate this is EXACTLY :func:`_vi_enumerate` — identical
+    enumeration order and leaf set, so bin-equality / ungated producers are
+    untouched. The callback is identical on both paths and STILL applies the
+    narrow ``filter`` and the full :func:`_vi_join_ok` re-check downstream, so the
+    gated leaf set differs from the full product only by provably-non-candidate
+    tuples the membership test would have rejected anyway — the materialised
+    member SET (after ``distinct`` canonicalises order) is identical.
+    """
+
+    def counted(bindings: dict[str, Any]) -> None:
+        _VI_ENUM_VISITS[0] += 1
+        cb(bindings)
+
+    ov = _vi_overlap_driver(gates)
+    if ov is None:
+        _vi_enumerate(ranges, ctx, counted)  # full product — unchanged behaviour
+        return
+    # DETERMINISTIC (query_pos, cell_pos)-ascending drive order. The member set is
+    # canonicalised downstream (`distinct` / `rank`), but a sorted drive keeps any
+    # order-sensitive reduction stable.
+    pairs = sorted(ov.candidates)
+    # The remaining ungated symbols, in the SAME topological order the full product
+    # visits them (ragged `of` parents before children), minus the two driven
+    # symbols. Overlap-gated symbols index a 1-D buffer (interval / categorical),
+    # so they are never ragged `of` parents — pre-binding them is order-safe.
+    rest = [s for s in _vi_order_syms(ranges) if s not in (ov.sym_l, ov.sym_r)]
+    bindings: dict[str, Any] = {}
+
+    def rec(k: int) -> None:
+        if k >= len(rest):
+            counted(bindings)
+            return
+        s = rest[k]
+        for v in _vi_range_values(ranges[s], ctx, bindings):
+            bindings[s] = v
+            rec(k + 1)
+        bindings.pop(s, None)
+
+    for pos_l, pos_r in pairs:
+        bindings[ov.sym_l] = pos_l
+        bindings[ov.sym_r] = pos_r
+        rec(0)
+    bindings.pop(ov.sym_l, None)
+    bindings.pop(ov.sym_r, None)
 
 
 def _vi_argreduce(
@@ -699,6 +862,11 @@ def _vi_argreduce(
     # Combined ranges so a ``join`` column over an OUTER-indexed map buffer (the
     # point's bin) resolves alongside the inner candidate's bin (§5.3 equi-join).
     combined: dict[str, Any] = {**outer_ranges, **inner_ranges}
+    # Resolve the gates ONCE per node, not per candidate (an overlap gate's
+    # broad phase is O(nq*nc) to build and would otherwise be rebuilt for every
+    # outer point). The inner reduction still membership-tests per tuple: its
+    # gated symbol may be an OUTER binding, so it cannot drive enumeration here.
+    gates = _vi_resolve_join(join, combined, ctx) if join is not None else None
     syms = _vi_order_syms(inner_ranges)
     bindings: dict[str, Any] = dict(outer_bindings)
     is_max = op == "argmax"
@@ -712,7 +880,7 @@ def _vi_argreduce(
                 fv is True or (isinstance(fv, (int, float)) and not isinstance(fv, bool) and fv > 0)
             ):
                 return
-        if join is not None and not _vi_join_ok(join, combined, ctx, bindings):
+        if gates is not None and not _vi_join_ok(gates, bindings):
             return
         v = float(_vi_eval(value_expr, ctx, bindings))
         a = _vi_key_int(bindings[arg_sym])
@@ -783,6 +951,7 @@ def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> list[Any]:
     ranges = node.get("ranges") or {}
     filt = node.get("filter")
     join = node.get("join")
+    gates = _vi_resolve_join(join, ranges, ctx) if join is not None else None
     members: list[Any] = []
 
     def visit(bindings: dict[str, Any]) -> None:
@@ -792,11 +961,13 @@ def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> list[Any]:
                 fv is True or (isinstance(fv, (int, float)) and not isinstance(fv, bool) and fv > 0)
             ):
                 return
-        if join is not None and not _vi_join_ok(join, ranges, ctx, bindings):
+        if gates is not None and not _vi_join_ok(gates, bindings):
             return
         members.append(_vi_skolem(key, ctx, bindings))
 
-    _vi_enumerate(ranges, ctx, visit)
+    # An overlap-gated producer DRIVES enumeration from its candidate pairs
+    # (§5.5.6); every other producer takes the unchanged full-product path.
+    _vi_enumerate_join(ranges, gates, ctx, visit)
     return relational.distinct(members)
 
 
