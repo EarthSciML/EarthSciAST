@@ -1,0 +1,42 @@
+{
+    "fixture": "ic_param_override_rank3",
+    "assertions": [
+        {
+            "test_id": "amp_via_override",
+            "assertion_idx": 1,
+            "variable": "w",
+            "reduce": null,
+            "actual": 1.8669073387796196
+        },
+        {
+            "test_id": "amp_via_override",
+            "assertion_idx": 2,
+            "variable": "w",
+            "reduce": null,
+            "actual": 2.9337115323679726
+        },
+        {
+            "test_id": "amp_via_override",
+            "assertion_idx": 3,
+            "variable": "w",
+            "reduce": "max",
+            "actual": 2.9337115323679734
+        },
+        {
+            "test_id": "amp_via_override",
+            "assertion_idx": 4,
+            "variable": "w",
+            "reduce": "min",
+            "actual": -2.9337115323679734
+        },
+        {
+            "test_id": "amp_via_override",
+            "assertion_idx": 5,
+            "variable": "s",
+            "reduce": null,
+            "actual": 1.8669073387796191
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_pde_tests` (Tsit5, reltol=1e-12, abstol=1e-14). This golden is SHARED by the pair: `ic_param_override_rank3` carries the amplitude as an inline test's `parameter_overrides` and `ic_param_default_rank3` carries the SAME value as the parameter's declared `default`, so the two fixtures must reproduce it identically. That equality IS the gate -- a binding that drops an ic-only override from the build-time scope passes the default half and fails the override half."
+}

@@ -86,7 +86,7 @@ def test_local_and_qualified_override_keys_both_bind_the_build_scope() -> None:
     """Direct coverage of the naming contract the category gates: esm-spec §6.6
     keys `parameter_overrides` by LOCAL parameter name, while flattening
     qualifies it (``M.A``). Both spellings must reach the coordinate-expression
-    `ic` seed; an override naming no parameter stays inert."""
+    `ic` seed; an override naming no parameter is REJECTED (§6.6.2)."""
     from earthsci_ast.parse import load
     from earthsci_ast.simulation import simulate
 
@@ -107,15 +107,19 @@ def test_local_and_qualified_override_keys_both_bind_the_build_scope() -> None:
         for cell in cells:
             assert result.y[idx[cell]][0] == 0.0, f"{key}: {cell} not zeroed"
 
-    # No parameter named `not_a_param`: the default 1.0 stands.
-    result = simulate(
-        esm,
-        tspan=(0.0, 1.0),
-        method="RK45",
-        rtol=1e-12,
-        atol=1e-14,
-        parameters={"not_a_param": 7.0},
-    )
-    assert result.success, result.message
-    idx = {name: k for k, name in enumerate(result.vars)}
-    assert result.y[idx["M.u[1]"]][0] == pytest.approx(0.9510565162951535, abs=1e-12)
+    # No parameter named `not_a_param`: esm-spec §6.6.2 makes that an ERROR.
+    # This assertion previously pinned the opposite — that the default 1.0
+    # simply stood — which is the same silent-wrong-answer shape the category
+    # exists to close, one level up: the override does nothing and the run
+    # still reports a verdict.
+    from earthsci_ast.errors import UnknownParameterError
+
+    with pytest.raises(UnknownParameterError, match="not_a_param"):
+        simulate(
+            esm,
+            tspan=(0.0, 1.0),
+            method="RK45",
+            rtol=1e-12,
+            atol=1e-14,
+            parameters={"not_a_param": 7.0},
+        )

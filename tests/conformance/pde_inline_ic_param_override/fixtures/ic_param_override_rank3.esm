@@ -1,0 +1,339 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "ic_param_override_rank3",
+    "description": "esm-spec 6.6.5 build-time evaluation scope for a RANK-3 (lon/lat/lev) coordinate-expression ic (11.4.1) whose amplitude parameter appears ONLY in the ic. amp is declared 1.0 and overridden to 2.0 through the inline test's parameter_overrides. The sibling fixture ic_param_default_rank3 is the same document with amp DECLARED 2.0 and no override; the two share one golden, so the pair is the controlled defaults-vs-overrides comparison a real model reproduced by hand -- if the override were dropped from the build-time ic scope, this fixture would read the 1.0 default and the pair would diverge.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "pde-inline-test",
+      "esm-spec-6.6",
+      "esm-spec-6.6.5",
+      "esm-spec-11.4.1",
+      "parameter-overrides",
+      "coordinate-expression-ic",
+      "rank-3"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 4
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "amp": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Amplitude of the 3-D initial field. Referenced ONLY by ic(w) -- never by an equation -- so it can move the answer through the build-time ic scope and nowhere else."
+        },
+        "w": {
+          "type": "state",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "Seeded by the rank-3 coordinate-expression ic amp*cos(pi x)cos(pi y)(1+z); held constant by D(w)/dt = 0."
+        },
+        "s": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integrates the (0-D) sum of w's corner cell, so the seeded field also has to reach the trajectory."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "w"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "amp",
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "cos",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            3.141592653589793,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    4
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "cos",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3.141592653589793,
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "j",
+                                        0.5
+                                      ]
+                                    },
+                                    {
+                                      "op": "/",
+                                      "args": [
+                                        1,
+                                        3
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            1.0,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "k",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    3
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "s"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ],
+              "j": [
+                1,
+                3
+              ],
+              "k": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "i",
+                    "j",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ],
+              "j": [
+                1,
+                3
+              ],
+              "k": [
+                1,
+                3
+              ]
+            },
+            "expr": 0
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "index",
+            "args": [
+              "w",
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-09,
+        "abs": 1e-11
+      },
+      "tests": [
+        {
+          "id": "amp_via_override",
+          "description": "amp is DECLARED 1.0 and OVERRIDDEN to 2.0 by this test. The assertions are the ones the sibling fixture reaches with amp DECLARED 2.0 and no override, so the pair is a controlled defaults-vs-overrides comparison: the two must agree cell for cell.",
+          "parameter_overrides": {
+            "amp": 2.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "w",
+              "time": 0.0,
+              "coords": {
+                "lon": 1,
+                "lat": 1,
+                "lev": 1
+              },
+              "expected": 1.8669073387796196
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "coords": {
+                "lon": 4,
+                "lat": 3,
+                "lev": 3
+              },
+              "expected": 2.9337115323679726
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "reduce": "max",
+              "expected": 2.9337115323679734
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "reduce": "min",
+              "expected": -2.9337115323679734
+            },
+            {
+              "variable": "s",
+              "time": 1.0,
+              "expected": 1.8669073387796191
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

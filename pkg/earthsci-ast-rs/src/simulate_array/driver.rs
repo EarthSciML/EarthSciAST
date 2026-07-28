@@ -207,37 +207,20 @@ impl ArrayCompiled {
     }
 
     /// Run the simulation.
-    /// Rewrite override-map keys to the BARE names this single-model system uses,
-    /// stripping a leading `<namespace>.` when present (WS3 parity). A no-op clone
-    /// when `namespace` is `None` (the already-namespaced `from_flattened` path)
-    /// or when a key carries no such prefix.
-    fn normalize_override_keys(&self, m: &HashMap<String, f64>) -> HashMap<String, f64> {
-        let Some(ns) = &self.namespace else {
-            return m.clone();
-        };
-        let prefix = format!("{ns}.");
-        m.iter()
-            .map(|(k, v)| {
-                let key = k
-                    .strip_prefix(&prefix)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| k.clone());
-                (key, *v)
-            })
-            .collect()
-    }
-
     /// Validate override parameter names and build the positional param
     /// vector (override > variable default; a parameter with neither is an
     /// [`SimulateError::InvalidParameter`]). The strict simulate-time
     /// counterpart of the lenient [`Self::debug_resolve_params`].
     fn build_param_vec(&self, params: &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError> {
-        // Validate param names and build the param vec.
-        for key in params.keys() {
-            if !self.param_index.contains_key(key) {
-                return Err(SimulateError::InvalidParameter { name: key.clone() });
-            }
-        }
+        // esm-spec §6.6.2 caller-key canonicalization (see
+        // `crate::simulate::canonicalize_override_keys`). This subsumes the
+        // former `normalize_override_keys`, which only stripped this model's
+        // `<namespace>.` prefix: rule 2 resolves `M.A` against a bare-named
+        // single-model system, and rule 3 resolves the LOCAL `A` against a
+        // flattening-qualified `M.A` — which the prefix strip could not do.
+        let params =
+            crate::simulate::canonicalize_override_keys(&self.param_index, params)
+                .map_err(crate::simulate::param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -263,12 +246,12 @@ impl ArrayCompiled {
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
     ) -> Result<Vec<f64>, SimulateError> {
-        // Validate IC names and build the initial state vector.
-        for key in initial_conditions.keys() {
-            if !self.scalar_state_index.contains_key(key) {
-                return Err(SimulateError::InvalidInitialCondition { name: key.clone() });
-            }
-        }
+        // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
+        let initial_conditions = crate::simulate::canonicalize_override_keys(
+            &self.scalar_state_index,
+            initial_conditions,
+        )
+        .map_err(crate::simulate::ic_key_error)?;
         // Resolved scalar-parameter scope (load-time constants) for the ic
         // coordinate-expression path — a parameter-dependent grid-geometry
         // template (`x0 + (i − 1/2)·dx`) binds here; STATE is not in scope.
@@ -378,13 +361,8 @@ impl ArrayCompiled {
         boundaries: &[f64],
         mut refresh_fn: impl FnMut(f64) -> Result<(), SimulateError>,
     ) -> Result<Solution, SimulateError> {
-        // WS3 override-naming parity: on the single-model path names are BARE
-        // (`R_0`), but callers (and the Julia toolkit) key overrides by the
-        // namespaced `Model.R_0`. Strip this model's `<namespace>.` prefix from
-        // any override key so both forms resolve; keys without the prefix pass
-        // through unchanged. No-op on the already-namespaced `from_flattened` path.
-        let params_owned = self.normalize_override_keys(params);
-        let ics_owned = self.normalize_override_keys(initial_conditions);
+        let params_owned = params;
+        let ics_owned = initial_conditions;
         let (t0, t_end) = tspan;
         let n_states = self.n_states;
 

@@ -1,0 +1,49 @@
+{
+    "fixture": "scalar_ic_in_array_model",
+    "assertions": [
+        {
+            "test_id": "array_and_scalar_ic_defaults",
+            "assertion_idx": 1,
+            "variable": "f",
+            "actual": 1.5
+        },
+        {
+            "test_id": "array_and_scalar_ic_defaults",
+            "assertion_idx": 2,
+            "variable": "f",
+            "actual": 1.5
+        },
+        {
+            "test_id": "array_and_scalar_ic_defaults",
+            "assertion_idx": 3,
+            "variable": "f",
+            "actual": 1.5
+        },
+        {
+            "test_id": "array_and_scalar_ic_defaults",
+            "assertion_idx": 4,
+            "variable": "s",
+            "actual": 6
+        },
+        {
+            "test_id": "array_and_scalar_ic_defaults",
+            "assertion_idx": 5,
+            "variable": "s",
+            "actual": 6
+        },
+        {
+            "test_id": "array_and_scalar_ic_param_override",
+            "assertion_idx": 1,
+            "variable": "s",
+            "actual": 20
+        },
+        {
+            "test_id": "array_and_scalar_ic_param_override",
+            "assertion_idx": 2,
+            "variable": "f",
+            "actual": 1.5
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_pde_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/scalar_ic_in_array_model.esm. Every state is held constant by a zero RHS, so all actuals are exact in every binding."
+}

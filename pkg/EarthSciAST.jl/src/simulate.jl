@@ -162,27 +162,85 @@ end
 # --------------------------------------------------------------------------- #
 function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
                                     ics::AbstractDict)
+    isempty(ics) && return u0
+    # esm-spec §6.6.2 keys `initial_conditions` by LOCAL variable name (`u`),
+    # but every document front-door reaches the run through `flatten`, which
+    # renames each state after its owning component (`M.u`) — so an EXACT-key
+    # lookup missed the very spelling the spec tells authors to write, and a
+    # test's `initial_conditions: {"u": 9.0}` died with "unknown state element
+    # 'u'". Same defect as `parameter_overrides` had, on the state side; it
+    # merely failed loudly instead of silently. Resolve the caller's key onto
+    # the name the build uses with the SAME rules (build.jl
+    # `_canonicalize_override_keys`): exact hit, else a dotted key whose
+    # trailing segment is a state name, else a bare key that is the trailing
+    # segment of exactly one — an ambiguous local name is rejected, never
+    # guessed at.
+    #
+    # Two name spaces are tried in order: the ELEMENT names (`M.u`, `M.f[1]`),
+    # then the array BASE names for the broadcast form (`M.f` sets every
+    # `M.f[...]` cell). `_parse_cell_key` (tree_walk.jl) is the single inverse
+    # of `_cell_key`'s "name[i,j]" element encoding.
+    element_names = Set{String}(String(k) for k in keys(var_map))
+    cells_of = Dict{String,Vector{Int}}()
+    for (vname, idx) in var_map
+        parsed = _parse_cell_key(String(vname))
+        parsed === nothing && continue
+        push!(get!(cells_of, parsed[1], Int[]), idx)
+    end
+    base_names = Set{String}(keys(cells_of))
+    element_alias = _bare_alias_groups(element_names)
+    base_alias = _bare_alias_groups(base_names)
     for (rawkey, value) in ics
         key = String(rawkey)
-        if haskey(var_map, key)
-            u0[var_map[key]] = Float64(value)
+        v = Float64(value)
+        resolved = _resolve_state_key(key, element_names, element_alias)
+        if resolved !== nothing
+            u0[var_map[resolved]] = v
             continue
         end
-        # Broadcast: `name` names an array → set every `name[...]` element.
-        # `_parse_cell_key` (tree_walk.jl) is the single inverse of
-        # `_cell_key`'s "name[i,j]" element encoding.
-        hit = false
-        for (vname, idx) in var_map
-            parsed = _parse_cell_key(String(vname))
-            if parsed !== nothing && parsed[1] == key
-                u0[idx] = Float64(value)
-                hit = true
+        resolved = _resolve_state_key(key, base_names, base_alias)
+        if resolved !== nothing
+            for idx in cells_of[resolved]
+                u0[idx] = v
             end
+            continue
         end
-        hit || throw(SimulateError("simulate: initial_conditions names unknown " *
-                                   "state element '$key'"))
+        throw(SimulateError("simulate: initial_conditions names unknown " *
+                            "state element '$key'"))
     end
     return u0
+end
+
+# `bare trailing segment => every qualified name carrying it`, built once per
+# name space so key resolution below stays O(1) per key.
+function _bare_alias_groups(names::AbstractSet{String})
+    groups = Dict{String,Vector{String}}()
+    for n in names
+        b = _bare_param_name(n)
+        b == n && continue
+        push!(get!(groups, b, String[]), n)
+    end
+    return groups
+end
+
+# Resolve ONE caller-spelled state key against a set of build-resolved names,
+# by the esm-spec §6.6.2 precedence shared with `parameter_overrides`. Returns
+# the resolved name, or `nothing` when the key designates none of them. An
+# AMBIGUOUS bare name (the local name of two mounted components' states) raises
+# its own diagnostic rather than being lumped in with "unknown" — silently
+# binding one of the candidates would be a wrong answer, not a missing one.
+function _resolve_state_key(key::AbstractString, names::AbstractSet{String},
+                            alias::AbstractDict{String,Vector{String}})
+    key in names && return String(key)
+    bare = _bare_param_name(key)
+    bare != key && bare in names && return bare
+    cands = get(alias, String(key), nothing)
+    cands === nothing && return nothing
+    length(cands) == 1 && return cands[1]
+    throw(SimulateError("simulate: initial_conditions names the ambiguous local " *
+                        "state '$key' — $(length(cands)) states carry it " *
+                        "($(join(sort(cands), ", "))). Qualify it with its owning " *
+                        "component (esm-spec §6.6.2)."))
 end
 
 """

@@ -1,0 +1,85 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "override_key_diagnostics",
+    "description": "esm-spec 6.6.2 'Unrecognized override keys': a `parameter_overrides` key must designate exactly ONE parameter of the flattened system. Two components, `Left` and `Right`, each declare a parameter named `gain`, so after flattening qualifies them (`Left.gain`, `Right.gain`) the BARE key `gain` is AMBIGUOUS while `Left.gain` is an exact hit. `Left` also declares `solo`, whose local name is unique across the document, so the bare key `solo` resolves to `Left.solo` -- the non-vacuity anchor proving the local spelling still binds and the rejection is not blanket. Any other key is UNKNOWN. Each state integrates the sum of its component's parameters from 0, so a resolved override is visible in the trajectory at t=1 and a binding that accepted a key but bound nothing is caught too.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-spec-6.6.2",
+      "parameter-overrides",
+      "override-key-diagnostics",
+      "ambiguous-local-name",
+      "unknown-override-key"
+    ]
+  },
+  "models": {
+    "Left": {
+      "variables": {
+        "gain": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Local name shared with Right.gain -- the ambiguity source."
+        },
+        "solo": {
+          "type": "parameter",
+          "units": "1",
+          "default": 5.0,
+          "description": "Local name unique across the document -- the bare key resolves."
+        },
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              "gain",
+              "solo"
+            ]
+          }
+        }
+      ]
+    },
+    "Right": {
+      "variables": {
+        "gain": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Local name shared with Left.gain -- the ambiguity source."
+        },
+        "y": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "gain"
+        }
+      ]
+    }
+  }
+}

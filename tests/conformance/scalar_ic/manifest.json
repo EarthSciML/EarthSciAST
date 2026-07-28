@@ -1,0 +1,96 @@
+{
+    "category": "scalar_ic",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec §11.4 'Initial conditions (the `ic` op)' at rank ZERO: an `ic`-LHS equation is the initial value of its target, a 0-D component's `ic` RHS is a scalar, a state with no `ic` falls back to its declared `default`, and a test's `initial_conditions` overrides the `ic` for that run. Model PARAMETERS bind in an `ic` RHS's build-time evaluation scope (§6.6.5), keyed by LOCAL parameter name (§6.6). Every state of `scalar_ic.esm` declares a `default` that DIFFERS from its `ic`, so a binding that drops the equation reads the default and is caught rather than masked; `y` integrates `D(y)/dt = u` so the seeded value also has to reach the trajectory. `scalar_ic_in_array_model.esm` re-runs the same contract for a 0-D state that shares a model with an ARRAY state, which routes the document through each binding's ARRAY runtime instead of its scalar one. Before this category, Python dropped every 0-D `ic` on BOTH pathways (the scalar-SymPy one lowers only `D(x)/dt` and algebraic equations; the array-NumPy one folded only array-shaped targets and no-op'd the rest) and Rust dropped it on its scalar interpreter (`ic` matched neither `state_lhs_name` nor `observed_lhs_name` in `classify_equations`). Both were SILENT: `ic(u) ~ 3.0` ran from the default and the inline test still reported a verdict. Julia folded both ranks correctly and is the reference binding: its `run_pde_tests` minted both goldens.",
+    "reference_binding": "julia",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; no simulator / inline test runner",
+        "typescript": "rewrite-only port; no simulator / inline test runner"
+    },
+    "integrators": {
+        "julia": {
+            "algorithm": "Tsit5",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        },
+        "python": {
+            "method": "RK45",
+            "rtol": 1e-12,
+            "atol": 1e-14
+        },
+        "rust": {
+            "solver": "Erk",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        }
+    },
+    "tolerances": {
+        "assertion_rtol": 1e-09,
+        "assertion_atol": 1e-11
+    },
+    "fixtures": [
+        {
+            "id": "scalar_ic",
+            "path": "fixtures/scalar_ic.esm",
+            "model": "M",
+            "tags": [
+                "inline-test",
+                "esm-spec-11.4",
+                "esm-spec-6.6",
+                "esm-spec-6.6.5",
+                "scalar-ic",
+                "zero-dimensional",
+                "initial-conditions",
+                "parameter-overrides"
+            ],
+            "shape": {},
+            "assertions": [
+                { "test_id": "scalar_ic_defaults",           "assertion_idx": 1, "variable": "u", "expected": 3.0,  "note": "ic(u) = 3.0, a plain literal; the declared default is 0.0" },
+                { "test_id": "scalar_ic_defaults",           "assertion_idx": 2, "variable": "q", "expected": 2.0,  "note": "ic(q) = 1.5 + 2*0.25 must const-fold" },
+                { "test_id": "scalar_ic_defaults",           "assertion_idx": 3, "variable": "w", "expected": 4.0,  "note": "ic(w) = 2*A with A at its declared 2.0 (§6.6.5)" },
+                { "test_id": "scalar_ic_defaults",           "assertion_idx": 4, "variable": "z", "expected": 7.0,  "note": "no ic equation: the declared default stands" },
+                { "test_id": "scalar_ic_defaults",           "assertion_idx": 5, "variable": "y", "expected": 0.0,  "note": "ic(y) = 0.0" },
+                { "test_id": "scalar_ic_defaults",           "assertion_idx": 6, "variable": "y", "expected": 3.0,  "note": "non-vacuity: y(1) = integral of the ic-seeded u" },
+                { "test_id": "scalar_ic_parameter_override", "assertion_idx": 1, "variable": "w", "expected": 20.0, "note": "parameter_overrides {A: 10} reaches the ic's build-time scope" },
+                { "test_id": "scalar_ic_parameter_override", "assertion_idx": 2, "variable": "u", "expected": 3.0,  "note": "parameter-free ic unmoved by the override" },
+                { "test_id": "scalar_ic_parameter_override", "assertion_idx": 3, "variable": "y", "expected": 3.0,  "note": "parameter-free trajectory unmoved by the override" },
+                { "test_id": "scalar_ic_run_override",       "assertion_idx": 1, "variable": "u", "expected": 9.0,  "note": "§11.4 run-time override beats the ic equation" },
+                { "test_id": "scalar_ic_run_override",       "assertion_idx": 2, "variable": "y", "expected": 9.0,  "note": "the overridden u reaches the trajectory" },
+                { "test_id": "scalar_ic_run_override",       "assertion_idx": 3, "variable": "w", "expected": 4.0,  "note": "a state the run override does not name keeps its ic" }
+            ],
+            "golden": "golden/scalar_ic.json"
+        },
+        {
+            "id": "scalar_ic_in_array_model",
+            "path": "fixtures/scalar_ic_in_array_model.esm",
+            "model": "N",
+            "tags": [
+                "inline-test",
+                "esm-spec-11.4",
+                "esm-spec-6.6.5",
+                "scalar-ic",
+                "array-ic",
+                "mixed-rank",
+                "initial-conditions"
+            ],
+            "shape": {
+                "x": 4
+            },
+            "assertions": [
+                { "test_id": "array_and_scalar_ic_defaults",           "assertion_idx": 1, "variable": "f", "reduce": null,  "expected": 1.5,  "note": "array ic broadcast: the anchor proving the array path is intact" },
+                { "test_id": "array_and_scalar_ic_defaults",           "assertion_idx": 2, "variable": "f", "reduce": "max", "expected": 1.5 },
+                { "test_id": "array_and_scalar_ic_defaults",           "assertion_idx": 3, "variable": "f", "reduce": "min", "expected": 1.5 },
+                { "test_id": "array_and_scalar_ic_defaults",           "assertion_idx": 4, "variable": "s", "reduce": null,  "expected": 6.0,  "note": "0-D ic inside the ARRAY runtime: 2*B with B at its declared 3.0" },
+                { "test_id": "array_and_scalar_ic_defaults",           "assertion_idx": 5, "variable": "s", "reduce": null,  "expected": 6.0 },
+                { "test_id": "array_and_scalar_ic_param_override",     "assertion_idx": 1, "variable": "s", "reduce": null,  "expected": 20.0, "note": "parameter_overrides {B: 10} reaches the 0-D ic in the array runtime" },
+                { "test_id": "array_and_scalar_ic_param_override",     "assertion_idx": 2, "variable": "f", "reduce": null,  "expected": 1.5 }
+            ],
+            "golden": "golden/scalar_ic_in_array_model.json"
+        }
+    ]
+}

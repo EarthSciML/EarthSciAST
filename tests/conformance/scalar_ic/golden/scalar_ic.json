@@ -1,0 +1,79 @@
+{
+    "fixture": "scalar_ic",
+    "assertions": [
+        {
+            "test_id": "scalar_ic_defaults",
+            "assertion_idx": 1,
+            "variable": "u",
+            "actual": 3
+        },
+        {
+            "test_id": "scalar_ic_defaults",
+            "assertion_idx": 2,
+            "variable": "q",
+            "actual": 2
+        },
+        {
+            "test_id": "scalar_ic_defaults",
+            "assertion_idx": 3,
+            "variable": "w",
+            "actual": 4
+        },
+        {
+            "test_id": "scalar_ic_defaults",
+            "assertion_idx": 4,
+            "variable": "z",
+            "actual": 7
+        },
+        {
+            "test_id": "scalar_ic_defaults",
+            "assertion_idx": 5,
+            "variable": "y",
+            "actual": 0
+        },
+        {
+            "test_id": "scalar_ic_defaults",
+            "assertion_idx": 6,
+            "variable": "y",
+            "actual": 3
+        },
+        {
+            "test_id": "scalar_ic_parameter_override",
+            "assertion_idx": 1,
+            "variable": "w",
+            "actual": 20
+        },
+        {
+            "test_id": "scalar_ic_parameter_override",
+            "assertion_idx": 2,
+            "variable": "u",
+            "actual": 3
+        },
+        {
+            "test_id": "scalar_ic_parameter_override",
+            "assertion_idx": 3,
+            "variable": "y",
+            "actual": 2.9999999999999996
+        },
+        {
+            "test_id": "scalar_ic_run_override",
+            "assertion_idx": 1,
+            "variable": "u",
+            "actual": 9
+        },
+        {
+            "test_id": "scalar_ic_run_override",
+            "assertion_idx": 2,
+            "variable": "y",
+            "actual": 9
+        },
+        {
+            "test_id": "scalar_ic_run_override",
+            "assertion_idx": 3,
+            "variable": "w",
+            "actual": 4
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_pde_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/scalar_ic.esm. Every actual is exact except `scalar_ic_parameter_override` #3, the y(1) integral of the constant state u: the integrator advances u as a state, so its 1-ulp drift reaches y and Julia records 2.9999999999999996 where Python's RK45 records 3.000000000000001. Both sit ~4e-16 from 3.0, six orders inside the manifest's 1e-9 assertion_rtol."
+}

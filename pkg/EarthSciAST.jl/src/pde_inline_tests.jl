@@ -793,6 +793,39 @@ struct _SimulateHandle
     eval_file::EsmFile
 end
 
+# Qualify a test's override keys with the component that OWNS the test.
+#
+# esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
+# name — local to the ENCLOSING component, since a test "exercises one model in
+# isolation" (§6.6). The runner hands them to `simulate`, which resolves against
+# the WHOLE flattened document, where that locality is gone: two mounted
+# components that each declare a `T` flatten to `M1.T` / `M2.T`, and the bare
+# `T` in `M2`'s test is then AMBIGUOUS document-wide even though it is
+# unambiguous where it was written.
+#
+# So re-attach the scope the runner still knows: a key whose `<model>.<key>`
+# form names a real variable of the flattened system is rewritten to it. A key
+# that does not (already qualified, a scoped reference the prefix would double
+# up, or simply wrong) passes through untouched, so `simulate` reports on it
+# exactly as it would have.
+function _scope_to_component(overrides, mname, target)
+    (overrides === nothing || isempty(overrides)) && return overrides
+    known = try
+        flat = flatten(target)
+        union(Set{String}(String(n) for n in keys(flat.parameters)),
+              Set{String}(String(n) for n in keys(flat.state_variables)))
+    catch
+        return overrides   # let `simulate` report the real failure
+    end
+    out = Dict{String,Float64}()
+    for (rawk, v) in overrides
+        k = String(rawk)
+        q = string(mname, ".", k)
+        out[q in known ? q : k] = Float64(v)
+    end
+    return out
+end
+
 function _engine_setup(e::SimulateTestEngine, t)
     target = _resolve_test_target(e.file, e.input, e.mname, t, e.resolved_base)
     target isa String && return target   # injection failed
@@ -802,8 +835,9 @@ function _engine_setup(e::SimulateTestEngine, t)
     try
         sim = simulate(target, (t.time_span.start, t.time_span.stop);
                        alg=e.alg, reltol=e.reltol, abstol=e.abstol,
-                       saveat=times, parameters=t.parameter_overrides,
-                       initial_conditions=t.initial_conditions,
+                       saveat=times,
+                       parameters=_scope_to_component(t.parameter_overrides, e.mname, target),
+                       initial_conditions=_scope_to_component(t.initial_conditions, e.mname, target),
                        inspect=insp)
     catch err
         return "simulate failed: $(sprint(showerror, err))"

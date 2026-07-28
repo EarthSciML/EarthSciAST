@@ -64,6 +64,7 @@ from typing import Any
 import numpy as np
 
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
+from .flatten import flatten
 from .parse import load
 from .simulation import BuildInspection, _eval_buildtime_field, simulate
 
@@ -428,6 +429,39 @@ class SimulatedStates:
     var_map: dict[str, int]
 
 
+def _scope_to_component(
+    overrides: dict[str, float] | None, model_name: str, file: EsmFile
+) -> dict[str, float]:
+    """Qualify a test's override keys with the component that OWNS the test.
+
+    esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
+    name — local to the *enclosing component*, since a test "exercises one model
+    in isolation" (§6.6). The runner hands them to :func:`simulate`, which
+    resolves against the WHOLE flattened document, where that locality is gone:
+    two mounted components that each declare a `T` flatten to `M1.T` / `M2.T`,
+    and the bare `T` in `M2`'s test is then ambiguous document-wide even though
+    it is unambiguous where it was written.
+
+    So re-attach the scope the runner still knows: a key whose
+    ``<model>.<key>`` form names a real variable of the flattened system is
+    rewritten to it. A key that does not (already qualified, a scoped reference
+    the prefix would double up, or simply wrong) is passed through untouched, so
+    `simulate` reports on it exactly as it would have.
+    """
+    if not overrides:
+        return {}
+    try:
+        flat = flatten(file)
+    except Exception:  # noqa: BLE001 — let `simulate` report the real failure
+        return dict(overrides)
+    known = set(flat.parameters) | set(flat.state_variables)
+    out: dict[str, float] = {}
+    for key, value in overrides.items():
+        qualified = f"{model_name}.{key}"
+        out[qualified if qualified in known else key] = value
+    return out
+
+
 def simulate_states(
     file: EsmFile,
     tspan: tuple[float, float],
@@ -764,8 +798,12 @@ def run_pde_tests(
                         rtol=rtol,
                         atol=atol,
                         saveat=times,
-                        parameters=t.parameter_overrides,
-                        initial_conditions=t.initial_conditions,
+                        parameters=_scope_to_component(
+                            t.parameter_overrides, str(mname), run_file
+                        ),
+                        initial_conditions=_scope_to_component(
+                            t.initial_conditions, str(mname), run_file
+                        ),
                         inspect=insp,
                     )
                 except Exception as err:  # noqa: BLE001 — recorded per assertion

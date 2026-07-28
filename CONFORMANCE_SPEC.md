@@ -1879,7 +1879,127 @@ canonicalization was fixed; Python already resolved exact-then-bare per paramete
 in `_resolve_override`, and Rust already stripped the single-model `<namespace>.`
 prefix in `normalize_override_keys`). Each runner additionally pins the naming
 contract directly: BOTH the local (`A`) and the qualified (`M.A`) spelling must
-bind the build-time scope, and an override naming no parameter stays inert.
+bind the build-time scope, and an override naming no parameter is REJECTED
+(§5.15).
+
+### 5.15 Override-Key Diagnostics (normative)
+
+§5.14 governs which parameter values the build-time scope sees when a key
+*resolves*. This section governs the key that resolves to **nothing**. esm-spec
+§6.6.2 ("Unrecognized override keys") makes a `parameter_overrides` /
+`initial_conditions` key that designates no variable an **error**, and requires
+two cases to be told apart. The three simulation bindings — **Julia, Python,
+Rust** — must agree on the classification of every key. The shared **offline**
+fixture lives in `tests/conformance/override_key_diagnostics/`.
+
+Like §5.14 this is a **quiet-wrong-answer** gate. A binding that ignores an
+unmatched key does not error: it runs the model on its declared defaults and, for
+a key inside an inline `test`, still prints PASS or FAIL for a configuration that
+was never exercised. Rust already raised `SimulateError::InvalidParameter`; Julia
+left the key verbatim (hence inert) and Python's `_resolve_override` simply never
+found it.
+
+#### 5.15.1 What is compared
+
+Unlike every other category in this section, this one compares **diagnostic
+outcomes**, not numbers, so it carries **no golden**. Each case in the manifest
+declares the outcome the key must produce; each binding's runner asserts that
+outcome using its own idiomatic error type, which the manifest's `error_surface`
+records:
+
+| Outcome | Julia | Python | Rust |
+|---|---|---|---|
+| resolved | (runs) | (runs) | (runs) |
+| unknown | `ArgumentError` | `UnknownParameterError` | `SimulateError::InvalidParameter` |
+| ambiguous | `ArgumentError` | `AmbiguousParameterError` | `SimulateError::AmbiguousParameter` |
+
+The **type** is per-language and deliberately not part of the contract; the
+**classification** is. An `ambiguous` diagnostic MUST additionally carry every
+candidate name — without them the author is told the key is wrong but not how to
+qualify it — and MUST be distinguishable from `unknown`.
+
+#### 5.15.2 Non-vacuity
+
+The fixture's two components, `Left` and `Right`, both declare a parameter named
+`gain`, so after flattening (`Left.gain`, `Right.gain`) the bare key `gain` is
+ambiguous while `Left.gain` is an exact hit. `Left` alone declares `solo`, so the
+bare key `solo` **resolves** — that case is the anchor: a binding that rejected
+every bare key (the trivially "safe" over-rejection) fails it, and so does a
+binding that accepted a key without binding anything, because `Left.x` integrates
+`Left.gain + Left.solo` and the override is visible in the trajectory at `t = 1`.
+A run with no overrides at all is checked too, so a rejection is provably about
+the key and not about the document.
+
+#### 5.15.3 Gate
+
+Per-binding runners drive every manifest case: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_override_key_diagnostics_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_override_key_diagnostics_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/override_key_diagnostics_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; `reference_binding` is
+**rust**, the only one that already rejected the unknown case.
+
+### 5.16 0-D `ic` Equations (normative)
+
+esm-spec §11.4 makes an `ic`-LHS equation the initial value of its target at
+**every** rank: "A 0-D component's `ic` RHS is a scalar; a PDE component's may be
+a coordinate expression." §5.14 covers the coordinate-expression form; this
+section covers rank zero, which two of the three bindings dropped outright. The
+shared **offline** fixtures live in `tests/conformance/scalar_ic/`.
+
+This is a third **quiet-wrong-answer** gate. A binding that drops a 0-D `ic` does
+not error — it seeds the state from its declared `default` and runs. Python
+dropped it on BOTH pathways (the scalar-SymPy one lowers only `D(x)/dt` and
+algebraic equations, so the `ic` reached neither u0 nor the RHS; the array-NumPy
+one folded only ARRAY-shaped targets and treated the rest as an intentional
+no-op) and Rust dropped it on its scalar interpreter (`flatten` routes `ic`
+equations into `flat.field_ics`, which only the array runtime read). Julia folded
+both ranks and is the reference binding.
+
+#### 5.16.1 What is compared
+
+Each in-scope binding runs the fixtures' inline tests through its official
+inline-test runner (`run_pde_tests`) with the pinned integrator and compares every
+assertion's ACTUAL against the Julia-minted golden, keyed by
+`(test_id, assertion_idx)`.
+
+| Band | rtol | atol |
+|------|------|------|
+| Assertion actual (vs golden) | 1e-9 | 1e-11 |
+
+The seeding precedence being pinned is esm-spec §11.4's: an explicit
+`initial_conditions` override wins ("Run-time overrides ... overrides the `ic`
+equation's value for that run"), else the state's own `ic` equation with the
+model's parameters bound to their `parameter_overrides`-or-default values
+(§6.6.5), else the declared `default`.
+
+#### 5.16.2 Non-vacuity
+
+Every state in `scalar_ic.esm` declares a `default` that **differs** from its
+`ic`, so a binding that drops the equation reads the default and is caught rather
+than masked. The three RHS forms are separated — `u` a plain literal, `q` a
+literal arithmetic expression that must const-fold, `w` a parameter-referencing
+expression — so a binding that handles one and not the others cannot hide behind
+the others. `y` integrates `D(y)/dt = u`, so the seeded value must reach the
+*trajectory* and not merely the reported u0. `z` declares no `ic` at all and pins
+the default fallback, which is what stops "seed everything from the `ic`" from
+being a passing over-correction. `scalar_ic_in_array_model.esm` re-runs the
+contract for a 0-D state sharing a model with an ARRAY state, routing the
+document through each binding's array runtime instead of its scalar one; its
+array state is the anchor proving the array-`ic` path is intact while the 0-D one
+is dropped.
+
+#### 5.16.3 Gate
+
+Per-binding runners drive both fixtures and gate every assertion actual against
+the committed goldens: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_scalar_ic_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_scalar_ic_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/scalar_ic_conformance.rs`. `bindings_required` is
+`["julia", "python", "rust"]`. Each runner additionally pins the §11.4 seeding
+precedence directly on its own typed build path.
 
 ## 6. CI Integration
 

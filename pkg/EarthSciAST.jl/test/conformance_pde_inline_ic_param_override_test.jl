@@ -101,12 +101,15 @@ end
         end
     end
 
-    # An override naming no parameter of the model stays inert (it is not
-    # silently bound to some near-miss), exactly as before the fix.
-    insp = EarthSciAST.BuildInspection()
-    sim = EarthSciAST.simulate(esm_path, (0.0, 1.0);
-                               alg=OrdinaryDiffEqTsit5.Tsit5(), saveat=[0.0],
-                               inspect=insp, parameters=Dict("not_a_param" => 7.0))
-    @test sim.success
-    @test insp.params["M.A"] == 1.0
+    # An override naming NO parameter of the model is REJECTED (esm-spec §6.6.2
+    # "Unrecognized override keys"). This test previously pinned the opposite —
+    # that such a key stayed inert — which was the deliberately-preserved
+    # pre-existing behaviour when the canonicalization landed. It is the same
+    # silent-wrong-answer shape one level up: the author writes an override,
+    # nothing happens, and the run measures the configuration they thought they
+    # had switched off while still reporting a verdict. Rust already raised
+    # `InvalidParameter` here; Julia and Python now match it.
+    @test_throws ArgumentError EarthSciAST.simulate(
+        esm_path, (0.0, 1.0); alg=OrdinaryDiffEqTsit5.Tsit5(), saveat=[0.0],
+        parameters=Dict("not_a_param" => 7.0))
 end

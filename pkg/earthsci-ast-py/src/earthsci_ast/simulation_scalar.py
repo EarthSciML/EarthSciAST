@@ -23,7 +23,7 @@ from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
 )
-from .simulation_array import _densify_solution
+from .simulation_array import _densify_solution, resolve_scalar_ic, scalar_ic_equations
 from .simulation_common import (
     SimulationResult,
     _failure_result,
@@ -217,15 +217,31 @@ def _simulate_scalar(
                 nlu=0,
             )
 
-        # Initial conditions: dot-namespaced wins, then bare name, then default.
-        # Algebraic-only states get their consistent value computed below from
-        # the algebraic body so the t=0 output is faithful regardless of
-        # whether the caller supplied a (possibly stale) initial guess.
+        # Initial conditions, in the esm-spec §11.4 precedence: an explicit
+        # ``initial_conditions`` override (dot-namespaced key, then bare name)
+        # wins; else this state's own ``ic`` equation; else the declared
+        # ``default``; else 0.
+        #
+        # The ``ic`` tier used to be MISSING on this pathway. `_compile_flat_rhs`
+        # lowers only `D(x)/dt = …` / algebraic equations, so an `ic`-LHS
+        # equation reached neither the RHS nor u0 and was dropped without a
+        # word: `ic(u) ~ 3.0` still started the run at `u`'s declared default.
+        # A silent wrong answer, and — since §6.6.5 puts model PARAMETERS in the
+        # build-time scope of an `ic` RHS — one a `parameter_overrides` could
+        # not move either.
+        eq_ics = {
+            target: resolve_scalar_ic(
+                target,
+                rhs,
+                param_values=dict(zip(parameter_names, param_values)),
+                index_sets=flat.index_sets,
+            )
+            for target, rhs in scalar_ic_equations(flat)
+        }
         y0_list: list[float] = []
         for name in state_names:
-            y0_list.append(
-                _resolve_override(name, initial_conditions, flat.state_variables[name].default)
-            )
+            default = eq_ics.get(name, flat.state_variables[name].default)
+            y0_list.append(_resolve_override(name, initial_conditions, default))
         y0 = np.array(y0_list)
 
         # Override y0 for algebraic states so the t=0 sample is consistent.
