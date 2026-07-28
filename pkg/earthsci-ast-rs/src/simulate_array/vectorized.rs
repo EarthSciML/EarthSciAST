@@ -1270,7 +1270,11 @@ pub(super) fn eval_vec_index<'a>(
                         describe_expr(e),
                         (0..out_ndim)
                             .filter(|a| mapped[*a].is_none())
-                            .map(|a| bx.syms[a].as_str())
+                            // `.get`, not `[a]`: a box with no output-index
+                            // symbols at all (a top-level `makearray`, whose
+                            // region values are self-contained arrays) is
+                            // legal, and a diagnostic must not panic on it.
+                            .map(|a| bx.syms.get(a).map(|s| s.as_str()).unwrap_or("<none>"))
                             .collect::<Vec<_>>()
                     )
                 );
