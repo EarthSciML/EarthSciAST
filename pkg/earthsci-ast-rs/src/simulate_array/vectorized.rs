@@ -25,6 +25,74 @@ use super::*;
 use crate::types::ExpressionNode;
 use ndarray::{ArrayViewD, Slice};
 
+// ---------------------------------------------------------------------------
+// Bail-out tracing (diagnostics only; off unless `ESS_VEC_DEBUG` is set).
+//
+// The vectorized overlay returns `None` from dozens of scattered sites and the
+// caller silently falls back to the per-cell oracle, so a model that never
+// vectorizes gives no clue *which* construct is responsible. With
+// `ESS_VEC_DEBUG=1` every bail records a short tag; because the AST walk
+// unwinds innermost-first, the FIRST entry in the log is the deepest — the
+// actual unsupported construct — and the rest are the enclosing nodes that
+// propagated the `None`.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static VEC_BAIL_LOG: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether bail tracing is enabled (`ESS_VEC_DEBUG` set to anything non-empty).
+pub(super) fn vec_trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ESS_VEC_DEBUG")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+/// Record one bail site (no-op unless tracing is on).
+pub(super) fn note_bail(site: impl FnOnce() -> String) {
+    if vec_trace_on() {
+        VEC_BAIL_LOG.with(|l| l.borrow_mut().push(site()));
+    }
+}
+
+/// Drain the recorded bail sites (deepest first).
+pub(super) fn take_bail_log() -> Vec<String> {
+    VEC_BAIL_LOG.with(|l| l.borrow_mut().drain(..).collect())
+}
+
+/// A one-line description of an AST node, for the bail log.
+fn describe_expr(e: &Expr) -> String {
+    match e {
+        Expr::Number(n) => format!("Number({n})"),
+        Expr::Integer(n) => format!("Integer({n})"),
+        Expr::Variable(v) => format!("Variable({v})"),
+        Expr::Operator(n) => {
+            let bf = n
+                .broadcast_fn
+                .as_deref()
+                .map(|f| format!("[fn={f}]"))
+                .unwrap_or_default();
+            format!("op {}{}/{}", n.op, bf, n.args.len())
+        }
+    }
+}
+
+/// `return None`, recording `$site` in the bail log first.
+macro_rules! bail_vec {
+    ($site:literal) => {{
+        note_bail(|| $site.to_string());
+        return None;
+    }};
+    ($site:literal, $fmt:expr) => {{
+        note_bail(|| format!(concat!($site, ": {}"), $fmt));
+        return None;
+    }};
+}
+
 /// A value produced by the vectorized evaluator. Array values carry their
 /// per-axis 1-based `origin` (the index value of the first element along each
 /// axis) so an enclosing `index(A, sym±k)` can align `A` to the output box with
@@ -198,7 +266,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
         .map(|(l, h)| (h - l + 1) as usize)
         .collect();
     if shape.contains(&0) {
-        return None;
+        bail_vec!("arrayop: empty output box");
     }
     let mut ops = 0usize;
     let v = if contract_names.is_empty() {
@@ -269,7 +337,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     // only fires on the pure-map path it targets.
     if matches!(v, VecValue::View { .. }) {
         v.release(pool);
-        return None;
+        bail_vec!("arrayop: body reduced to a bare whole-array view (oracle scalarizes it)");
     }
     // The top-level result must already cover the output box exactly. A bare
     // scalar is broadcast over the box.
@@ -279,7 +347,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     };
     if !matches_box {
         v.release(pool);
-        return None;
+        bail_vec!("arrayop: result box does not match the output box");
     }
     let out = match v {
         VecValue::Scalar(s) => {
@@ -334,14 +402,17 @@ pub(super) fn eval_vec_contracted<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    let combine_op = reduce_combine_op(reduce)?;
+    let combine_op = match reduce_combine_op(reduce) {
+        Some(op) => op,
+        None => bail_vec!("contracted: boolean reduction (or/and) not vectorized"),
+    };
     // Resolve each contracted dim to a static (lo, hi). A non-static dim
     // (ragged/derived — per-output-tuple extent) can't be a uniform whole-array
     // window, so bail to the oracle.
     const MAXC: usize = 4;
     let nc = contract_names.len();
     if nc == 0 || nc > MAXC {
-        return None;
+        bail_vec!("contracted: contraction rank out of range", nc);
     }
     let mut clo = [0i64; MAXC];
     let mut chi = [0i64; MAXC];
@@ -351,7 +422,12 @@ pub(super) fn eval_vec_contracted<'a>(
                 clo[i] = *l;
                 chi[i] = *h;
             }
-            _ => return None,
+            other => {
+                bail_vec!(
+                    "contracted: non-static contraction dim (ragged/derived)",
+                    format!("{other:?}")
+                )
+            }
         }
     }
 
@@ -463,12 +539,16 @@ pub(super) fn eval_vec<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     *ops += 1;
-    match expr {
+    let r = match expr {
         Expr::Number(n) => Some(VecValue::Scalar(*n)),
         Expr::Integer(n) => Some(VecValue::Scalar(*n as f64)),
         Expr::Variable(name) => eval_vec_variable(name, bx, ctx),
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
+    };
+    if r.is_none() {
+        note_bail(|| format!("  in {}", describe_expr(expr)));
     }
+    r
 }
 
 pub(super) fn eval_vec_variable<'a>(
@@ -487,7 +567,7 @@ pub(super) fn eval_vec_variable<'a>(
     // A bare output index symbol as a *value* (rather than inside `index(...)`
     // addressing) is not part of the stencil fast path — bail to the oracle.
     if bx.syms.iter().any(|s| s == name) {
-        return None;
+        bail_vec!("variable: bare output index symbol used as a value", name);
     }
     // State/observed reads return a borrowed view of the persistent array — no
     // clone (ess-mro). The enclosing `index(...)` slices the view directly.
@@ -523,6 +603,7 @@ pub(super) fn eval_vec_variable<'a>(
     // would need the buffer restructured. Correctness holds (the oracle reads
     // the live buffer); only the whole-array fast path is forgone for a rule
     // that reads forcing. Optimizing that is a separate, optional follow-up.
+    note_bail(|| format!("variable: unresolved symbol (forcing/loop-bind?): {name}"));
     None
 }
 
@@ -569,7 +650,10 @@ pub(super) fn eval_vec_op<'a>(
         "const" => match eval_const(node) {
             Value::Scalar(s) => Some(VecValue::Scalar(s)),
             // Array-valued constants are not part of the stencil fast path.
-            Value::Array(_) => None,
+            Value::Array(_) => {
+                note_bail(|| "op: array-valued `const`".to_string());
+                None
+            }
         },
         // Scalar comparisons and `ifelse` over *scalar* operands — the einsum
         // weight idiom `ifelse(k==0,-2,1)` folds to a constant per contraction
@@ -649,7 +733,10 @@ pub(super) fn eval_vec_op<'a>(
         }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
         // concat, `fn` closed-registry calls, atan2, D, …) falls back.
-        _ => None,
+        _ => {
+            note_bail(|| format!("op: unsupported operator `{}`/{}", node.op, node.args.len()));
+            None
+        }
     }
 }
 
@@ -876,7 +963,7 @@ pub(super) fn eval_vec_index<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     if node.args.is_empty() {
-        return None;
+        bail_vec!("index: no arguments");
     }
     let arg0 = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
     let n = node.args.len() - 1;
@@ -885,13 +972,19 @@ pub(super) fn eval_vec_index<'a>(
     if arg0.shape().is_none() {
         return match arg0 {
             VecValue::Scalar(s) if n == 0 => Some(VecValue::Scalar(s)),
-            _ => None,
+            _ => {
+                note_bail(|| format!("index: base is a scalar but {n} index args given"));
+                None
+            }
         };
     }
     let src_ndim = arg0.shape().expect("array").len();
     if n != src_ndim {
         arg0.release(pool);
-        return None;
+        bail_vec!(
+            "index: arg count != source rank",
+            format!("{n} args vs rank {src_ndim}")
+        );
     }
     let src_origin: DimI = arg0
         .origin()
@@ -929,7 +1022,14 @@ pub(super) fn eval_vec_index<'a>(
             }
             None => {
                 arg0.release(pool);
-                return None;
+                bail_vec!(
+                    "index: axis expression is neither an affine/wrap map of the next                      output symbol nor a constant select",
+                    format!(
+                        "axis {d} = {} (next unfilled output sym = {:?})",
+                        describe_expr(e),
+                        bx.syms.get(mapped.len())
+                    )
+                );
             }
         }
     }
@@ -937,7 +1037,10 @@ pub(super) fn eval_vec_index<'a>(
     // a full output-box array. A partial rank cannot broadcast — bail.
     if !mapped.is_empty() && mapped.len() != out_ndim {
         arg0.release(pool);
-        return None;
+        bail_vec!(
+            "index: partial mapped rank cannot broadcast",
+            format!("{} mapped of {out_ndim} output axes", mapped.len())
+        );
     }
 
     // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
@@ -1002,7 +1105,13 @@ pub(super) fn eval_vec_index<'a>(
                 // A roll requires the source axis to be the full period.
                 if so != bx.lo[a] || ssz != period || bx.shape[a] as i64 != period {
                     arg0.release(pool);
-                    return None;
+                    bail_vec!(
+                        "index: periodic wrap axis is not a full-period roll",
+                        format!(
+                            "src_origin={so} src_extent={ssz} period={period}                              out_lo={} out_extent={}",
+                            bx.lo[a], bx.shape[a]
+                        )
+                    );
                 }
                 let p = period as usize;
                 let s = (((k % period) + period) % period) as usize; // shift in [0,period)
@@ -1088,14 +1197,23 @@ pub(super) fn eval_vec_makearray<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    let regions = node.regions.as_ref()?;
-    let values = node.values.as_ref()?;
+    let regions = match node.regions.as_ref() {
+        Some(r) => r,
+        None => bail_vec!("makearray: no `regions`"),
+    };
+    let values = match node.values.as_ref() {
+        Some(v) => v,
+        None => bail_vec!("makearray: no `values`"),
+    };
     if regions.is_empty() || values.len() != regions.len() {
-        return None;
+        bail_vec!("makearray: empty or mismatched regions/values");
     }
     let ndim = regions[0].len();
     if ndim != bx.shape.len() {
-        return None;
+        bail_vec!(
+            "makearray: region rank != output box rank",
+            format!("{ndim} vs {}", bx.shape.len())
+        );
     }
     let mut lo_bb = DimI::from_elem(i64::MAX, ndim);
     let mut hi_bb = DimI::from_elem(i64::MIN, ndim);

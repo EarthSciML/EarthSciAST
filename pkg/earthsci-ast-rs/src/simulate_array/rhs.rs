@@ -448,6 +448,18 @@ pub(super) fn materialize_observeds_append(
                 }
 
                 // ---- Per-cell oracle (fallback) ----------------------------
+                if vec_trace_on() && !force_scalar {
+                    let log = take_bail_log();
+                    eprintln!("[vec-bail] observed {var} -> per-cell oracle:");
+                    for (i, l) in log.iter().enumerate() {
+                        if i < 24 {
+                            eprintln!("[vec-bail]   {l}");
+                        }
+                    }
+                    if log.len() > 24 {
+                        eprintln!("[vec-bail]   … {} more frames", log.len() - 24);
+                    }
+                }
                 stats.obs_scalar_rules += 1;
                 let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
                 let total = padded_shape.iter().copied().product::<usize>().max(1);
@@ -677,6 +689,28 @@ pub(super) fn evaluate_rhs_with_scratch(
                 }
 
                 // ---- Per-cell oracle (fallback / forced reference) ---------
+                // `ESS_VEC_DEBUG=1`: report *why* this rule is not vectorized.
+                // The log is deepest-first, so the first line names the actual
+                // unsupported construct and the rest are the enclosing nodes.
+                if vec_trace_on() && !force_scalar {
+                    let log = take_bail_log();
+                    if log.is_empty() {
+                        eprintln!(
+                            "[vec-bail] rule D({var_name}) fell back before the overlay ran                              (lhs_shifts={:?}, output_ranges={output_ranges:?})",
+                            lhs_shifts
+                        );
+                    } else {
+                        eprintln!("[vec-bail] rule D({var_name}) -> per-cell oracle:");
+                        for (i, l) in log.iter().enumerate() {
+                            if i < 24 {
+                                eprintln!("[vec-bail]   {l}");
+                            }
+                        }
+                        if log.len() > 24 {
+                            eprintln!("[vec-bail]   … {} more frames", log.len() - 24);
+                        }
+                    }
+                }
                 stats.scalar_rules += 1;
                 // Hoist the eval context and the static contraction bounds out of
                 // the per-cell loop: the bound key set (output_idx + contract
