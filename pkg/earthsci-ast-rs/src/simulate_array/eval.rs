@@ -773,15 +773,17 @@ mod kernel_equivalence_tests {
         f64::NAN,
     ];
 
+    #[rustfmt::skip]
     const BIN_OPS: &[&str] = &[
-        "+", "-", "*", "/", "^", "atan2", "min", "max", "==", "!=", "<", "<=", ">", ">=", "and",
-        "or", "no_such_op",
+        "+", "-", "*", "/", "^", "atan2", "min", "max",
+        "==", "!=", "<", "<=", ">", ">=", "and", "or", "no_such_op",
     ];
 
+    #[rustfmt::skip]
     const UN_OPS: &[&str] = &[
-        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos", "tan",
-        "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "not",
-        "no_such_op",
+        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos",
+        "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+        "not", "no_such_op",
     ];
 
     #[test]

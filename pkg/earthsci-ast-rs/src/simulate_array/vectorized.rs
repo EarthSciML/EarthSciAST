@@ -1646,10 +1646,7 @@ pub(super) fn classify_axis_role(expr: &Expr, bx: &VecBox) -> Option<AxisRole> {
 /// `None` also for any non-integer, nonlinear (sym·sym) or MULTI-symbol
 /// construct (`i + j`) — the per-symbol walk it replaces likewise returned
 /// `None` for every candidate there, because the other symbol was unbound.
-pub(super) fn affine_terms_any(
-    expr: &Expr,
-    bx: &VecBox,
-) -> Option<(Option<usize>, i64, i64)> {
+pub(super) fn affine_terms_any(expr: &Expr, bx: &VecBox) -> Option<(Option<usize>, i64, i64)> {
     // Merge two sub-results: at most one distinct output symbol may appear.
     #[inline]
     fn join(a: Option<usize>, b: Option<usize>) -> Option<Option<usize>> {
