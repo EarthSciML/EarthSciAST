@@ -200,7 +200,15 @@ impl ClassTable {
             // vectorized path. It is a singleton in every real body anyway.
             if addr != key
                 && self.counts.get(&(scope, class)).copied().unwrap_or(0) >= 2
-                && self.memoizable.insert(addr, class).is_none()
+                // An address can be RE-classified: the trees handed to
+                // `analyse` are not all long-lived (a lowered aggregate body is
+                // rebuilt per call on the `eval_arrayop` path), so a later root
+                // can occupy storage an earlier one was analysed in. The map
+                // resolves that by last-writer-wins — the live tree is always
+                // the one that wrote last — so `pending` must carry an update,
+                // not just a first insert, or the resolved table goes stale
+                // against it.
+                && self.memoizable.insert(addr, class) != Some(class)
             {
                 self.pending.push((addr, class));
             }
@@ -565,8 +573,8 @@ impl AddrClasses {
                 return;
             }
             if self.slots[i].0 == key {
-                // The caller only ever offers addresses new to `memoizable`, so
-                // this is unreachable; overwrite rather than double-count.
+                // A re-classified address (see `ClassTable::analyse`): update in
+                // place, and do NOT count it — the slot was already occupied.
                 self.slots[i].1 = class;
                 return;
             }
@@ -805,6 +813,14 @@ impl CseRt {
             return None;
         }
         let addr = expr as *const Expr as usize;
+        if std::env::var("ESS_CSE_DBG").is_ok() {
+            let want = i.classes.memoizable.get(&addr).copied();
+            let got = i.addrs.get(addr);
+            assert_eq!(want, got, "addr table disagrees at {addr:#x}");
+            if std::env::var("ESS_CSE_DBG").as_deref() == Ok("map") {
+                return want;
+            }
+        }
         if i.addrs_unusable {
             // The analysed trees could not be indexed by a 32-bit ordinal; the
             // map is still authoritative, so fall back to it rather than lose

@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::load;
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 
 fn compile(json: &str) -> ArrayCompiled {
     let file = load(json).expect("fixture parses");
@@ -36,6 +36,19 @@ fn state(n: usize) -> Vec<f64> {
     (0..n)
         .map(|k| 1.0 + (k as f64) * 0.37 - (k as f64).sin() * 0.11)
         .collect()
+}
+
+fn assert_bits(label: &str, got: &[f64], want: &[f64]) {
+    assert_eq!(got.len(), want.len(), "{label}: length");
+    for (k, (a, b)) in got.iter().zip(want.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "{label}: slot {k} diverged: {a:?} ({:016x}) vs {b:?} ({:016x})",
+            a.to_bits(),
+            b.to_bits()
+        );
+    }
 }
 
 fn assert_bit_identical_to_oracle(label: &str, compiled: &ArrayCompiled, u: &[f64]) {
@@ -147,6 +160,61 @@ fn cse_is_bit_identical_to_the_per_cell_oracle() {
         assert_bit_identical_to_oracle(&format!("makearray repeats N={n}"), &c, &state(n));
         let c = compile(&contracted_repeat_json(n));
         assert_bit_identical_to_oracle(&format!("contraction repeats N={n}"), &c, &state(n));
+    }
+}
+
+/// A `RhsScratch` — and so the CSE class table inside it — outlives the model
+/// it was built for. `CseRt::retarget` exists to throw that classification away
+/// when the rule set under it changes, and everything derived from it (the
+/// resolved address→class table `class_of` actually reads, the class-indexed
+/// memo rows) must go with it. A survivor would hand a node ANOTHER node's
+/// class and produce a wrong answer that still looks plausible.
+///
+/// The hazard is address REUSE, so each model is dropped before the next is
+/// built: the allocator is then free to hand the next model's rule bodies the
+/// very addresses the previous one's were classified under.
+#[test]
+fn a_retargeted_scratch_does_not_reuse_a_stale_classification() {
+    const N: usize = 11;
+    let u = state(N);
+    let params = HashMap::new();
+
+    // Reference answers, each computed on its own private scratch.
+    let (want_a, _) = compile(&repeated_subexpr_json(N)).debug_eval_rhs(&u, 0.0, &params, false);
+    let (want_b, _) = compile(&contracted_repeat_json(N)).debug_eval_rhs(&u, 0.0, &params, false);
+    assert_eq!(want_a.len(), want_b.len(), "the two fixtures share a state shape");
+
+    let a = compile(&repeated_subexpr_json(N));
+    // One scratch, carried across all three models below.
+    let mut scratch = a.debug_new_scratch();
+    let mut got = vec![0.0f64; want_a.len()];
+    let mut stats = RhsStats::default();
+
+    let pv = a.debug_resolve_params(&params);
+    a.debug_eval_rhs_into(&u, 0.0, &pv, &mut got, &mut scratch, &mut stats);
+    assert_bits("A on a fresh scratch", &got, &want_a);
+    drop(a);
+
+    // A DIFFERENT rule set on the same scratch: the class table must be
+    // discarded and rebuilt against B's bodies.
+    let b = compile(&contracted_repeat_json(N));
+    let pv = b.debug_resolve_params(&params);
+    b.debug_eval_rhs_into(&u, 0.0, &pv, &mut got, &mut scratch, &mut stats);
+    assert_bits("B on A's retargeted scratch", &got, &want_b);
+    drop(b);
+
+    // …and back again, on the twice-retargeted scratch.
+    let a2 = compile(&repeated_subexpr_json(N));
+    let pv = a2.debug_resolve_params(&params);
+    a2.debug_eval_rhs_into(&u, 0.0, &pv, &mut got, &mut scratch, &mut stats);
+    assert_bits("A rebuilt on the twice-retargeted scratch", &got, &want_a);
+
+    // Repeated evaluation on the settled scratch must be stable too — the memo
+    // is recycled between calls, and a cell surviving into the next evaluation
+    // would show up here.
+    for _ in 0..4 {
+        a2.debug_eval_rhs_into(&u, 0.0, &pv, &mut got, &mut scratch, &mut stats);
+        assert_bits("A repeated on a warm scratch", &got, &want_a);
     }
 }
 
