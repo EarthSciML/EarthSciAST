@@ -2774,6 +2774,7 @@ mod subsystem_ragged_and_inspection_tests {
                 size: None,
                 members: None,
                 from_faq: None,
+                member_factor: None,
                 of: Some(vec!["cells".to_string()]),
                 offsets: Some(offsets.to_string()),
                 values: Some(values.to_string()),

@@ -1420,6 +1420,25 @@ pub struct IndexSet {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_faq: Option<String>,
 
+    /// Members-fed-back-as-const-factor for `kind: "derived"` (projection-
+    /// pushdown Phase 2b Hook 1, CONFORMANCE_SPEC §5.5.6).
+    ///
+    /// Names a model `parameter` const factor that the build fills with this
+    /// set's materialized value-invention MEMBERS — the invented 1-based
+    /// full-grid ids, `vi.members[from_faq]` — so an in-model gather
+    /// `index(W, index(<member_factor>, c))` can pull the full-grid rows the
+    /// compact derived axis selects. There is no `member(set, c)` IR op; this
+    /// feedback IS the mechanism.
+    ///
+    /// `None` for every non-feedback set, so ordinary sets round-trip
+    /// byte-identically. Mirrors the Julia reference's `IndexSet.member_factor`
+    /// and the `member_factor` property of esm-schema.json. Without it the Rust
+    /// binding silently DROPPED a normative field on parse, so a parse→emit
+    /// round-trip of an overlap-gated document (the shared
+    /// `overlap_gate_point_in_rect.esm` fixture among them) lost it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_factor: Option<String>,
+
     /// Parent index sets for `kind: "ragged"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub of: Option<Vec<String>>,
