@@ -886,6 +886,87 @@ def _fold_field_ics(
             )
 
 
+def resolve_scalar_ic(
+    target: str,
+    rhs: Expr,
+    param_values: dict[str, float] | None = None,
+    index_sets: dict[str, Any] | None = None,
+) -> float:
+    """Const-fold one 0-D ``ic`` equation's RHS to its scalar initial value.
+
+    esm-spec §11.4: "A 0-D component's `ic` RHS is a scalar". The RHS may be a
+    plain literal, a literal arithmetic expression, or an expression over the
+    model's PARAMETERS — parameters are load-time constants, so §6.6.5's
+    build-time evaluation scope binds them here to their
+    ``parameter_overrides``-or-default values. Model STATE is not in scope
+    (there is no trajectory value at build time).
+
+    An RHS that does not fold to a scalar is a hard error, so a declared
+    initial condition is never silently dropped — the failure mode this
+    function exists to end. Mirrors the Julia tree-walk `_fold_ic_equations`
+    scalar branch.
+    """
+    if isinstance(rhs, (int, float)) and not isinstance(rhs, bool):
+        return float(rhs)
+    try:
+        value = _eval_buildtime_field(rhs, index_sets=index_sets, param_values=param_values)
+    except (NumpyInterpreterError, SimulationError, ValueError) as err:
+        raise SimulationError(
+            f"ic({target}): RHS must const-fold to a scalar for a 0-D state "
+            f"(esm-spec §11.4); model parameters are in scope, state is not ({err})"
+        ) from err
+    if value is None or np.ndim(value) != 0:
+        raise SimulationError(
+            f"ic({target}): RHS of a 0-D state must fold to a SCALAR "
+            f"(esm-spec §11.4), not a field"
+        )
+    return float(value)
+
+
+def _fold_scalar_ics(
+    y0: np.ndarray,
+    scalar_ic_eqs: list[tuple[str, Expr]],
+    state_layout: dict[str, slice],
+    index_sets: dict[str, Any] | None = None,
+    param_values: dict[str, float] | None = None,
+) -> None:
+    """Fold every 0-D ``ic`` equation into its ``y0`` slot (esm-spec §11.4).
+
+    An ``ic`` naming something that is not a state of the flattened system is a
+    hard error, matching :func:`_fold_field_ics`."""
+    for target, rhs in scalar_ic_eqs:
+        if target not in state_layout:
+            raise SimulationError(
+                f"ic({target}): target is not a state variable of the flattened system"
+            )
+        y0[state_layout[target]] = resolve_scalar_ic(
+            target, rhs, param_values=param_values, index_sets=index_sets
+        )
+
+
+def scalar_ic_equations(flat: FlattenedSystem) -> list[tuple[str, Expr]]:
+    """Every ``ic(<0-D state>) ~ <scalar>`` equation of a flattened system
+    (esm-spec §11.4), as ``(target_state_name, rhs)`` pairs in document order.
+
+    Array-shaped / lifted targets (§11.4.1) are excluded — their per-cell field
+    RHS is folded by :func:`_fold_field_ics` once the grid shape is known. Used
+    by the scalar-SymPy pathway, which has no array machinery of its own."""
+    out: list[tuple[str, Expr]] = []
+    for eq in flat.equations:
+        lhs = eq.lhs
+        if (
+            isinstance(lhs, ExprNode)
+            and lhs.op == "ic"
+            and lhs.args
+            and isinstance(lhs.args[0], str)
+        ):
+            var = flat.state_variables.get(lhs.args[0])
+            if var is not None and getattr(var, "shape", None):
+                continue
+            out.append((lhs.args[0], eq.rhs))
+    return out
+
+
 def _resolve_index_set_shape(
     decl_shape: list[str],
     index_sets: dict[str, Any],
@@ -1389,12 +1470,21 @@ def _build_numpy_rhs(
     # algebraic constraints) flows through the existing driver path.
     observed_eqs: list[tuple[str, Expr]] = []
     driver_equations: list[FlattenedEquation] = []
-    # Scoped-reference / array ``ic`` equations (esm-spec §11.4.1): LHS is an
-    # ``ic`` op naming a (lifted) ARRAY state; RHS is the initial FIELD. These are
-    # NOT ODE drivers — they fold into u0 at build time (below), so route them
-    # out. Scalar ``ic`` targets are left on the driver path (their historic,
-    # no-op handling) so scalar-ic fixtures behave exactly as before.
+    # ``ic`` equations (esm-spec §11.4): the LHS is an ``ic`` op naming a state
+    # and the RHS is its initial value. These are NOT ODE drivers — they fold
+    # into u0 at build time (below), so route them out by the TARGET's rank:
+    #   * an ARRAY / lifted target (§11.4.1) carries a per-cell FIELD RHS and is
+    #     folded once the grid shape is known (``_fold_field_ics``);
+    #   * a 0-D target carries a SCALAR RHS (§11.4 "A 0-D component's `ic` RHS
+    #     is a scalar") and is const-folded in the parameter scope.
+    # The 0-D branch used to be missing entirely: a scalar ``ic`` fell through
+    # to the driver path, where ``_apply_equation_to_dy`` recognizes an ``ic``
+    # LHS as an intentional no-op, so the equation was dropped and the state
+    # silently started at its declared ``default``. Nothing warned, because the
+    # no-op is deliberate for the ARRAY case whose value has already been
+    # folded.
     field_ic_eqs: list[tuple[str, Expr]] = []
+    scalar_ic_eqs: list[tuple[str, Expr]] = []
     for eq in flat.equations:
         # Value-invention state assignments (bin skolem maps, distinct
         # candidate-set membership) are materialized at setup, not integrated.
@@ -1406,9 +1496,11 @@ def _build_numpy_rhs(
             and eq.lhs.op == "ic"
             and eq.lhs.args
             and isinstance(eq.lhs.args[0], str)
-            and shapes.get(eq.lhs.args[0])
         ):
-            field_ic_eqs.append((eq.lhs.args[0], eq.rhs))
+            if shapes.get(eq.lhs.args[0]):
+                field_ic_eqs.append((eq.lhs.args[0], eq.rhs))
+            else:
+                scalar_ic_eqs.append((eq.lhs.args[0], eq.rhs))
         elif isinstance(eq.lhs, str) and eq.lhs in observed_names:
             observed_eqs.append((eq.lhs, eq.rhs))
         else:
@@ -1503,6 +1595,17 @@ def _build_numpy_rhs(
         shapes,
         state_layout,
         loader_arrays,
+        index_sets=flat.index_sets,
+        param_values=param_values,
+    )
+    # 0-D ``ic`` fold (esm-spec §11.4): a scalar state living in this array
+    # model gets its initial value from its own ``ic`` equation, const-folded in
+    # the parameter scope, in the same slot in the precedence order as the array
+    # fold above — after the declared defaults, before the explicit overrides.
+    _fold_scalar_ics(
+        y0,
+        scalar_ic_eqs,
+        state_layout,
         index_sets=flat.index_sets,
         param_values=param_values,
     )
