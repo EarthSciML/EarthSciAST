@@ -956,8 +956,13 @@ impl ArrayCompiled {
                 .filter(|r| !observed_rule_is_array_valued(r))
                 .map(|r| observed_rule_var(r).clone())
                 .collect();
-            probe_owned = dependency_cone(varying_rules, &unknown);
-            &probe_owned
+            match dependency_cone(varying_rules, &unknown) {
+                None => varying_rules,
+                Some(cone) => {
+                    probe_owned = cone;
+                    &probe_owned
+                }
+            }
         } else {
             varying_rules
         };
@@ -996,8 +1001,13 @@ impl ArrayCompiled {
         let value_owned: Vec<AlgebraicRule>;
         let value_rules: &[AlgebraicRule] = if prune {
             let seeds: HashSet<String> = scalar_obs.iter().cloned().collect();
-            value_owned = dependency_cone(varying_rules, &seeds);
-            &value_owned
+            match dependency_cone(varying_rules, &seeds) {
+                None => varying_rules,
+                Some(cone) => {
+                    value_owned = cone;
+                    &value_owned
+                }
+            }
         } else {
             varying_rules
         };
@@ -1233,21 +1243,34 @@ fn expr_blocks_output_pruning(expr: &Expr) -> bool {
 /// evaluation order). One backward pass suffices: a rule's dependencies always
 /// precede it, so by the time the sweep reaches a rule every consumer of it has
 /// already been visited and has registered its name.
-fn dependency_cone(rules: &[AlgebraicRule], seeds: &HashSet<String>) -> Vec<AlgebraicRule> {
+///
+/// `None` means "the cone is the whole slice" — the caller then keeps using the
+/// original slice rather than paying a deep AST clone of every rule for nothing.
+fn dependency_cone(
+    rules: &[AlgebraicRule],
+    seeds: &HashSet<String>,
+) -> Option<Vec<AlgebraicRule>> {
     let mut needed: HashSet<String> = seeds.clone();
     let mut keep = vec![false; rules.len()];
+    let mut n_kept = 0usize;
     for (i, rule) in rules.iter().enumerate().rev() {
         if needed.contains(observed_rule_var(rule)) {
             keep[i] = true;
+            n_kept += 1;
             collect_expr_var_refs(observed_rule_body(rule), &mut needed);
         }
     }
-    rules
-        .iter()
-        .zip(keep)
-        .filter(|(_, k)| *k)
-        .map(|(r, _)| r.clone())
-        .collect()
+    if n_kept == rules.len() {
+        return None;
+    }
+    Some(
+        rules
+            .iter()
+            .zip(keep)
+            .filter(|(_, k)| *k)
+            .map(|(r, _)| r.clone())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
