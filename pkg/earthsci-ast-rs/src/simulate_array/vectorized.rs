@@ -52,11 +52,41 @@ pub(super) fn vec_trace_on() -> bool {
     })
 }
 
+/// Kill-switch for the whole vectorized overlay (`ESS_VEC_DISABLE=1`).
+///
+/// `RhsStats`'s `force_scalar` flag only gates the two *compiled-rule* call
+/// sites; an array observed whose body is a standalone `aggregate` reaches the
+/// overlay through `eval_arrayop`, which has no such flag. This switch turns the
+/// overlay off everywhere at once, so a run with it set is the pure per-cell
+/// oracle — the reference a bit-identity check needs.
+pub(super) fn vec_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| {
+        std::env::var("ESS_VEC_DISABLE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
 /// Record one bail site (no-op unless tracing is on).
 pub(super) fn note_bail(site: impl FnOnce() -> String) {
     if vec_trace_on() {
         VEC_BAIL_LOG.with(|l| l.borrow_mut().push(site()));
     }
+}
+
+thread_local! {
+    static VEC_OPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one vectorized AST-node visit (tracing only).
+fn note_op() {
+    VEC_OPS.with(|c| c.set(c.get() + 1));
+}
+
+/// Read and reset the visited-node counter (tracing only).
+pub(super) fn take_op_count() -> usize {
+    VEC_OPS.with(|c| c.replace(0))
 }
 
 /// Drain the recorded bail sites (deepest first).
@@ -260,6 +290,9 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     ctx: &EvalCtx<'a>,
     pool: &mut Pool,
 ) -> Option<(VecValue<'a>, usize)> {
+    if vec_disabled() {
+        return None;
+    }
     let lo: DimI = output_ranges.iter().map(|(l, _)| *l).collect();
     let shape: DimU = output_ranges
         .iter()
@@ -539,6 +572,9 @@ pub(super) fn eval_vec<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     *ops += 1;
+    if vec_trace_on() {
+        note_op();
+    }
     let r = match expr {
         Expr::Number(n) => Some(VecValue::Scalar(*n)),
         Expr::Integer(n) => Some(VecValue::Scalar(*n as f64)),

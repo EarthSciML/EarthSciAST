@@ -362,6 +362,15 @@ pub(super) fn materialize_observeds_append(
                 if vec_trace_on() {
                     let _ = take_bail_log();
                 }
+                if std::env::var("ESS_VEC_DEBUG").as_deref() == Ok("2") {
+                    let path = format!("/tmp/vec_obs_{var}.json");
+                    if !std::path::Path::new(&path).exists() {
+                        let _ = std::fs::write(
+                            &path,
+                            serde_json::to_string(&**body).unwrap_or_default(),
+                        );
+                    }
+                }
                 let t_start = std::time::Instant::now();
                 let mut ctx = EvalCtx {
                     state_arrays,
@@ -386,7 +395,10 @@ pub(super) fn materialize_observeds_append(
                     let log = take_bail_log();
                     let us = t_start.elapsed().as_micros();
                     if log.is_empty() {
-                        eprintln!("[vec-obs] {var}: vectorized, {us} us");
+                        eprintln!(
+                            "[vec-obs] {var}: vectorized, {us} us, {} node visits",
+                            take_op_count()
+                        );
                     } else {
                         eprintln!("[vec-obs] {var}: PER-CELL, {us} us");
                         for (i, l) in log.iter().enumerate() {
