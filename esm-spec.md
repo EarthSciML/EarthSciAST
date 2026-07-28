@@ -1576,6 +1576,23 @@ Because a test lives inside its parent component, there is no `model_ref` field:
 | `expression_template_imports` | | Ordered `TemplateImport[]` (§9.7.2 shape) registered into the enclosing component's template scope **for this run only** — the discretization under which this test runs (§6.6.6, §9.7.10). |
 | `assertions` | ✓ | Array of scalar checks; must contain at least one. |
 
+**Override-key resolution.** `parameter_overrides` and `initial_conditions` are keyed by **local** name, but a runtime resolves them against a **flattened** system, in which every variable has been renamed after its owning component (`M.pert_amp`). A binding MUST resolve each key against the flattened names by this precedence, stopping at the first rule that applies:
+
+1. **Exact hit** — the key is a flattened name.
+2. **Dotted key, unqualified target** — the key contains a `.` and its trailing segment is itself a flattened name. (This is what lets one authored test run against both a single-model system whose names are bare and its composed, qualified form.)
+3. **Bare key, unique local name** — the key contains no `.` and is the trailing segment of exactly **one** flattened name. This is the spelling this section mandates, and it is the rule that makes it work.
+
+A key that reaches none of the three is **unrecognized** and MUST be rejected — see below. Note that rule 3 is restricted to bare keys, so a qualified key naming a component that does not exist (`Missing.pert_amp` where the parameter is `M.pert_amp`) is unrecognized rather than being silently re-pointed at `M.pert_amp` by its trailing segment.
+
+**Unrecognized override keys.** A `parameter_overrides` or `initial_conditions` key that resolves to no variable under the rules above is an **error**. A conforming runtime MUST reject the run rather than ignore the key. Two cases are distinguished, because the author's remedy differs and so must the diagnostic:
+
+| Case | Condition | Diagnostic MUST |
+|---|---|---|
+| **unknown** | The key matches no flattened name under any rule. | Name the offending key. Reporting the names the system does declare is RECOMMENDED. |
+| **ambiguous** | The key is bare and is the trailing segment of **two or more** flattened names — the same local name in two mounted components. | Name the offending key **and every candidate**, so the author can qualify it. It MUST be distinguishable from the unknown case; binding one candidate arbitrarily is NOT conforming. |
+
+Silently ignoring an unrecognized key is specifically non-conforming. It produces a *wrong answer rather than a missing one*: the author writes an override, nothing happens, the run proceeds on the declared defaults, and — for a key inside an inline `test` — the runner still reports a pass/fail verdict for a configuration that was never actually exercised. The error type is language-idiomatic (an exception, a `Result` error, a returned diagnostic); the **classification** of each key is the cross-binding contract, gated by the `override_key_diagnostics` conformance category (CONFORMANCE_SPEC §5.15).
+
 #### 6.6.3 Assertion Semantics
 
 Each assertion is a per-(variable, time) check against a scalar expected value:
