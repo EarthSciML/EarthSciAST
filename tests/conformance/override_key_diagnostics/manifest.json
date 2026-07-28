@@ -1,0 +1,107 @@
+{
+    "category": "override_key_diagnostics",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec \u00a76.6.2 'Unrecognized override keys': every `parameter_overrides` key must designate exactly ONE parameter of the flattened system, and a key that designates none is an ERROR \u2014 not a silently-ignored no-op. Three outcomes are pinned, and they are DISTINCT: a key that resolves (exactly, or by the local spelling \u00a76.6 mandates) runs; a BARE key that is the local name of two or more parameters is AMBIGUOUS; anything else is UNKNOWN. Ambiguous is kept apart from unknown because the fixes differ \u2014 qualify the name versus correct it \u2014 and because silently binding one of two candidates would be a wrong answer rather than a missing one. Rust already raised `SimulateError::InvalidParameter` for the unknown case; Julia and Python silently ignored it, so an author's override did nothing and the run still reported a verdict. This category is what keeps the three from drifting apart again: unlike the other categories it compares DIAGNOSTIC OUTCOMES, not numbers, so it carries no golden \u2014 each binding's runner asserts its own idiomatic error type per case.",
+    "reference_binding": "rust",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; no simulator, so no override-key surface",
+        "typescript": "rewrite-only port; no simulator, so no override-key surface"
+    },
+    "error_surface": {
+        "_comment": "The idiomatic error each binding raises per outcome. The TYPE is per-language; the OUTCOME classification is the cross-binding contract.",
+        "unknown": {
+            "julia": "ArgumentError",
+            "python": "earthsci_ast.errors.UnknownParameterError",
+            "rust": "SimulateError::InvalidParameter"
+        },
+        "ambiguous": {
+            "julia": "ArgumentError",
+            "python": "earthsci_ast.errors.AmbiguousParameterError",
+            "rust": "SimulateError::AmbiguousParameter"
+        }
+    },
+    "fixtures": [
+        {
+            "id": "override_key_diagnostics",
+            "path": "fixtures/override_key_diagnostics.esm",
+            "tags": [
+                "esm-spec-6.6",
+                "esm-spec-6.6.2",
+                "parameter-overrides",
+                "override-key-diagnostics",
+                "ambiguous-local-name",
+                "unknown-override-key"
+            ],
+            "parameters": [
+                "Left.gain",
+                "Left.solo",
+                "Right.gain"
+            ],
+            "cases": [
+                {
+                    "key": "Left.gain",
+                    "value": 9.0,
+                    "outcome": "resolved",
+                    "rule": 1,
+                    "binds": "Left.gain",
+                    "note": "Exact hit on the flattening-qualified name.",
+                    "trajectory_at_t1": {
+                        "Left.x": 14.0,
+                        "Right.y": 3.0
+                    }
+                },
+                {
+                    "key": "solo",
+                    "value": 9.0,
+                    "outcome": "resolved",
+                    "rule": 3,
+                    "binds": "Left.solo",
+                    "note": "The LOCAL spelling \u00a76.6 mandates, unique across the document. The non-vacuity anchor: a binding that rejected every bare key would fail here.",
+                    "trajectory_at_t1": {
+                        "Left.x": 11.0,
+                        "Right.y": 3.0
+                    }
+                },
+                {
+                    "key": "gain",
+                    "value": 9.0,
+                    "outcome": "ambiguous",
+                    "rule": 4,
+                    "candidates": [
+                        "Left.gain",
+                        "Right.gain"
+                    ],
+                    "note": "Two components carry this local name; binding either would be a wrong answer."
+                },
+                {
+                    "key": "not_a_parameter",
+                    "value": 9.0,
+                    "outcome": "unknown",
+                    "rule": 5,
+                    "note": "Matches nothing under any rule."
+                },
+                {
+                    "key": "Missing.solo",
+                    "value": 9.0,
+                    "outcome": "unknown",
+                    "rule": 5,
+                    "note": "A DOTTED key resolves only under rule 2, which needs its trailing segment to be a parameter name outright; here the parameter is `Left.solo`, not `solo`, so rule 2 fails. Rule 3 is for BARE keys only, so the qualifier is never discarded and `Missing.solo` does not quietly become `Left.solo` \u2014 an author who names a component that does not exist is told so."
+                }
+            ],
+            "defaults_at_t1": {
+                "Left.x": 7.0,
+                "Right.y": 3.0
+            },
+            "_trajectory_comment": "`Left.x` integrates (Left.gain + Left.solo) and `Right.y` integrates Right.gain, both from 0 over [0,1], so a resolved override is VISIBLE at t=1 and a binding that accepted a key without actually binding it is caught too. The RHS is constant, so every solver reproduces these within the manifest tolerance."
+        }
+    ],
+    "tolerances": {
+        "trajectory_rtol": 1e-09,
+        "trajectory_atol": 1e-11
+    }
+}

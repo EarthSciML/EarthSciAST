@@ -745,48 +745,91 @@ end
 #      resolves to that parameter (`M.A` against a bare-named `Model`);
 #   3. else a BARE key that is the trailing segment of exactly ONE parameter
 #      resolves to it (`A` against the flattened `M.A`);
-#   4. else the key is left verbatim — an unknown override stays as inert as
-#      it was before, and an AMBIGUOUS bare name (the same local parameter in
-#      two mounted components) is never silently bound to one of them.
-# This is the Julia counterpart of Python's `_resolve_override` (exact key,
-# then bare trailing segment) and Rust's `normalize_override_keys` (strip the
-# single-model `<namespace>.` prefix), so one authored test behaves identically
-# in all three executing bindings.
+#   4. a BARE key that is the trailing segment of MORE THAN ONE parameter is
+#      AMBIGUOUS — the caller named one local parameter that two mounted
+#      components both carry — and is rejected naming the candidates, never
+#      guessed at;
+#   5. anything else matches no parameter and is rejected as UNKNOWN.
+# This is the Julia counterpart of Python's `_resolve_override` and Rust's
+# `Compiled::normalize_override_keys`, so one authored test behaves identically
+# in all three executing bindings — see esm-spec §6.6.2 "Unrecognized override
+# keys" and CONFORMANCE_SPEC §5.15.
+#
+# Rules 4 and 5 used to leave the key verbatim, so an unmatched override was
+# INERT: the run silently used the declared default and still reported a
+# verdict. That is the same silent-wrong-answer shape this canonicalization was
+# introduced to fix, one level up — the author writes an override, nothing
+# happens, and the model quietly measures the configuration they thought they
+# had switched off. Rust already raised `InvalidParameter` here; Julia and
+# Python now match it.
 function _normalize_param_override_keys(model::Model, overrides::AbstractDict)
     isempty(overrides) && return overrides
     param_names = Set{String}(n for (n, v) in model.variables
                               if v.type == ParameterVariable)
-    isempty(param_names) && return overrides
-    # Bare trailing segment → the unique parameter carrying it (ambiguous bare
-    # names are dropped from the alias table, never guessed at).
-    bare_counts = Dict{String,Int}()
-    for n in param_names
-        b = _bare_param_name(n)
-        bare_counts[b] = get(bare_counts, b, 0) + 1
+    normalized, unknown, ambiguous =
+        _canonicalize_override_keys(param_names, overrides)
+    if !isempty(ambiguous)
+        k, cands = first(sort!(collect(ambiguous), by = first))
+        throw(ArgumentError(
+            "parameter_overrides: ambiguous parameter name '$(k)' — it is the " *
+            "local name of $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
+            "Qualify it with its owning component (esm-spec §6.6.2)."))
     end
-    bare_alias = Dict{String,String}()
-    for n in param_names
-        b = _bare_param_name(n)
-        (b == n || bare_counts[b] != 1 || b in param_names) && continue
-        bare_alias[b] = n
-    end
-    # Two passes so precedence is DETERMINISTIC when a caller supplies both
-    # spellings of one parameter (`A` and `M.A`): the alias-resolved keys land
-    # first, the exact-name keys overwrite them. Same order as Python's
-    # `_resolve_override` (exact key checked before the bare segment).
-    normalized = Dict{String,Float64}()
-    for (rawk, v) in overrides
-        k = String(rawk)
-        k in param_names && continue
-        bare = _bare_param_name(k)
-        key = bare in param_names ? bare : get(bare_alias, k, k)
-        normalized[key] = Float64(v)
-    end
-    for (rawk, v) in overrides
-        k = String(rawk)
-        k in param_names && (normalized[k] = Float64(v))
+    if !isempty(unknown)
+        throw(ArgumentError(
+            "parameter_overrides: unknown parameter '$(first(sort(unknown)))' — " *
+            "this model declares no such parameter " *
+            "(known: $(isempty(param_names) ? "none" : join(sort(collect(param_names)), ", "))). " *
+            "esm-spec §6.6.2 keys parameter_overrides by LOCAL parameter name."))
     end
     return normalized
+end
+
+# ---- Shared caller-key canonicalization (esm-spec §6.6.2) ----
+# Rewrite each caller key onto the build-resolved name it designates, and
+# classify the ones that designate none. `names` is the set of names the build
+# actually resolves (flattening-qualified parameters, or state elements).
+# Returns `(normalized, unknown, ambiguous)` where `ambiguous` maps a bare key
+# to the candidates that carry it, so the caller can raise the two cases apart.
+function _canonicalize_override_keys(names::AbstractSet{String}, overrides::AbstractDict)
+    # Bare trailing segment → the unique name carrying it. A bare segment
+    # carried by two or more names is AMBIGUOUS: recorded here with its
+    # candidates rather than resolved, so it is never bound to one of them.
+    bare_group = Dict{String,Vector{String}}()
+    for n in names
+        b = _bare_param_name(n)
+        b == n && continue
+        push!(get!(bare_group, b, String[]), n)
+    end
+    normalized = Dict{String,Float64}()
+    unknown = String[]
+    ambiguous = Dict{String,Vector{String}}()
+    # Two passes so precedence is DETERMINISTIC when a caller supplies both
+    # spellings of one name (`A` and `M.A`): the alias-resolved keys land first,
+    # the exact-name keys overwrite them. Same order as Python's
+    # `_resolve_override` (exact key checked before the bare segment).
+    for (rawk, v) in overrides
+        k = String(rawk)
+        k in names && continue
+        bare = _bare_param_name(k)
+        if bare in names                      # rule 2: dotted key, bare target
+            normalized[bare] = Float64(v)
+        elseif haskey(bare_group, k)
+            cands = bare_group[k]
+            if length(cands) == 1             # rule 3: unique bare alias
+                normalized[cands[1]] = Float64(v)
+            else                              # rule 4: ambiguous local name
+                ambiguous[k] = cands
+            end
+        else                                  # rule 5: matches nothing
+            push!(unknown, k)
+        end
+    end
+    for (rawk, v) in overrides
+        k = String(rawk)
+        k in names && (normalized[k] = Float64(v))   # rule 1: exact hit
+    end
+    return normalized, unknown, ambiguous
 end
 
 _bare_param_name(name::AbstractString) =

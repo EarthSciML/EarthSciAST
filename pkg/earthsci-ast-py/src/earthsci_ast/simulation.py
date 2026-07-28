@@ -52,6 +52,7 @@ from .simulation_common import (  # noqa: F401
     SCIPY_AVAILABLE,
     SimulationResult,
     _failure_result,
+    check_parameter_override_keys,
     solve_ivp,
 )
 
@@ -205,6 +206,16 @@ def simulate(
 
     parameters = parameters or {}
     initial_conditions = initial_conditions or {}
+
+    # esm-spec §6.6.2 "Unrecognized override keys": a `parameter_overrides` key
+    # that names no single parameter is an ERROR, raised here at the one front
+    # door every pathway routes through (scalar-SymPy, array-NumPy, loader- and
+    # provider-segmented) so the three executing bindings agree. Ignoring it
+    # silently — which is what `_resolve_override` did by simply never finding
+    # the key — leaves every parameter at its default, so the author's override
+    # does nothing and the run still reports a verdict: a wrong answer, not a
+    # missing one. An AMBIGUOUS bare name gets its own diagnostic.
+    check_parameter_override_keys(flat.parameters, parameters)
 
     if not SCIPY_AVAILABLE:
         return _failure_result("SciPy is required for simulation but not available.")

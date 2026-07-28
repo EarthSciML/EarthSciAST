@@ -10,10 +10,13 @@ dense-output point budget — so the pathway submodules
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+from .errors import AmbiguousParameterError, UnknownParameterError
 
 # Optional scipy import - only needed for actual simulation
 try:
@@ -173,6 +176,71 @@ def _observed_rows(vals, n: int) -> np.ndarray:
             else:
                 block[i, :] = float(arr.reshape(-1)[0])
     return block
+
+
+def check_parameter_override_keys(
+    parameter_names: Iterable[str], overrides: dict[str, Any] | None
+) -> None:
+    """Reject any ``parameter_overrides`` key that names no single parameter
+    (esm-spec §6.6.2 "Unrecognized override keys").
+
+    A key resolves under the same precedence :func:`_resolve_override` reads
+    with, and that Julia's ``_canonicalize_override_keys`` and Rust's
+    ``canonicalize_override_keys`` implement:
+
+    1. an exact hit on a flattened parameter name wins;
+    2. else a DOTTED key whose trailing segment is itself a parameter name
+       resolves to it (``M.A`` against a bare-named single-model system);
+    3. else a BARE key that is the trailing segment of exactly ONE parameter
+       resolves to it (``A`` against the flattened ``M.A``);
+    4. else a BARE key carried by two or more parameters is AMBIGUOUS —
+       :class:`AmbiguousParameterError`, reported with its candidates;
+    5. else it is UNKNOWN — :class:`UnknownParameterError`.
+
+    Rules 4 and 5 used to be silent: ``_resolve_override`` simply never found
+    the key and every parameter kept its default, so a mis-keyed override ran
+    the model unperturbed and the inline test still reported a verdict. That is
+    a wrong answer, not a missing one. Rust already raised
+    ``SimulateError::InvalidParameter``; this makes the three bindings agree.
+
+    Offending keys are reported in sorted order so the diagnostic does not
+    depend on ``dict`` insertion order.
+    """
+    if not overrides:
+        return
+    known = set(parameter_names)
+    groups: dict[str, list[str]] = {}
+    for name in known:
+        bare = name.rsplit(".", 1)[-1]
+        if bare != name:
+            groups.setdefault(bare, []).append(name)
+    unknown: list[str] = []
+    ambiguous: list[tuple[str, list[str]]] = []
+    for key in overrides:
+        if key in known:
+            continue
+        bare = key.rsplit(".", 1)[-1]
+        if bare != key and bare in known:
+            continue
+        candidates = groups.get(key)
+        if candidates is None:
+            unknown.append(key)
+        elif len(candidates) > 1:
+            ambiguous.append((key, sorted(candidates)))
+    if ambiguous:
+        key, candidates = sorted(ambiguous)[0]
+        raise AmbiguousParameterError(
+            f"parameter_overrides: ambiguous parameter name {key!r} — it is the local "
+            f"name of {len(candidates)} parameters ({', '.join(candidates)}). Qualify "
+            f"it with its owning component (esm-spec §6.6.2)."
+        )
+    if unknown:
+        listed = ", ".join(sorted(known)) if known else "none"
+        raise UnknownParameterError(
+            f"parameter_overrides: unknown parameter {sorted(unknown)[0]!r} — this "
+            f"system declares no such parameter (known: {listed}). esm-spec §6.6.2 "
+            f"keys parameter_overrides by LOCAL parameter name."
+        )
 
 
 def _resolve_override(name: str, overrides: dict[str, Any], default: Any) -> float:
