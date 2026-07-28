@@ -523,16 +523,11 @@ pub(super) fn broadcast_value(v: &Value, target: &[usize]) -> ArrayD<f64> {
 pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
     match (a, b) {
         (Value::Scalar(x), Value::Scalar(y)) => Value::Scalar(apply_binary(op, x, y)),
-        // The name is resolved ONCE, outside the element loop, rather than
-        // re-matched per element by `apply_binary` — `binary_kernel` is pinned
-        // bit-identical to it (`binary_kernels_match_apply_binary`).
         (Value::Scalar(x), Value::Array(ya)) => {
-            let f = binary_kernel(op);
-            Value::Array(Box::new(ya.mapv(|y| f(x, y))))
+            Value::Array(Box::new(ya.mapv(|y| apply_binary(op, x, y))))
         }
         (Value::Array(xa), Value::Scalar(y)) => {
-            let f = binary_kernel(op);
-            Value::Array(Box::new(xa.mapv(|x| f(x, y))))
+            Value::Array(Box::new(xa.mapv(|x| apply_binary(op, x, y))))
         }
         (Value::Array(xa), Value::Array(ya)) => {
             // Use ndarray broadcasting.
@@ -687,13 +682,11 @@ pub(super) fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> Ar
         return ArrayD::<f64>::from_elem(IxDyn(&nan_shape), f64::NAN);
     };
     let mut out = ArrayD::<f64>::zeros(IxDyn(&target_shape));
-    // Operator name resolved once, not per element (see `binary_kernel`).
-    let f = binary_kernel(op);
     ndarray::Zip::from(&mut out)
         .and(&av)
         .and(&bv)
         .for_each(|o, &x, &y| {
-            *o = f(x, y);
+            *o = apply_binary(op, x, y);
         });
     out
 }
@@ -746,12 +739,7 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     let v = eval(arg0, ctx);
     match v {
         Value::Scalar(s) => Value::Scalar(apply_unary(op, s)),
-        // Name resolved once, not per element (`unary_kernel` is pinned
-        // bit-identical to `apply_unary`).
-        Value::Array(a) => {
-            let f = unary_kernel(op);
-            Value::Array(Box::new(a.mapv(f)))
-        }
+        Value::Array(a) => Value::Array(Box::new(a.mapv(|x| apply_unary(op, x)))),
     }
 }
 
