@@ -889,59 +889,176 @@ impl ArrayCompiled {
         if self.observed_rules.is_empty() || time.is_empty() {
             return;
         }
-        // Which observeds resolve to scalars? Reconstruct the full observed
-        // picture at each node by SEEDING the hoisted static observeds (constant
-        // across nodes — the regrid geometry, terrain slopes, Rothermel
-        // coefficients) and materializing only the VARYING rules over them, so the
-        // expensive build-once conservative regrid is NOT recomputed at every one
-        // of the NT output nodes (which, unhoisted, dominated the whole run).
-        let obs_at = |k: usize| -> ArrMap {
-            let flat: Vec<f64> = (0..self.n_states).map(|i| state[i][k]).collect();
-            let sa = build_state_arrays(&self.var_shapes, &flat);
-            let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-            let mut obs = ArrMap::default();
-            for (name, arr) in static_obs {
-                obs.insert(name.clone(), arr.clone());
+        let nt = time.len();
+
+        // ---- per-node evaluation state, allocated ONCE ----------------------
+        // The old shape of this pass built a fresh `ArrMap`, a fresh state-array
+        // map and a deep `arr.clone()` of every hoisted static observed at every
+        // one of the NT output nodes. All three are hoisted out of the node loop
+        // here: the state arrays are refilled in place (the same
+        // `refill_state_arrays` the RHS uses — identical column-major placement),
+        // and the observed map keeps its static entries in place across nodes,
+        // dropping only the varying ones with `retain`, exactly as `RhsScratch`
+        // does between RHS calls.
+        let mut flat = vec![0.0f64; self.n_states];
+        for (i, slot) in flat.iter_mut().enumerate() {
+            *slot = state[i][0];
+        }
+        let mut sa = build_state_arrays(&self.var_shapes, &flat);
+        let static_keys: HashSet<String> = static_obs.keys().cloned().collect();
+        let mut obs: ArrMap = ArrMap::default();
+        for (name, arr) in static_obs {
+            obs.insert(name.clone(), arr.clone());
+        }
+        let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+
+        // ess-cse: this pass walks the SAME expanded discretization bodies the
+        // RHS does (one `simpleclimate` advection observed is 45k+ operator
+        // nodes) and used to run with `cse: None` — i.e. with no memoization at
+        // all, re-evaluating every repeated subtree at every occurrence at every
+        // output node. Give it its own runtime. The class table is keyed by AST
+        // node address, so it is (re)bound to whichever rule slice is about to be
+        // evaluated; see [`CseRt::retarget`].
+        let cse = CseRt::default();
+        let bind_cse = |rules: &[AlgebraicRule]| {
+            cse.retarget(
+                (rules.as_ptr() as u64).rotate_left(17)
+                    ^ ((rules.len() as u64) << 16)
+                    ^ 0x0b5e_0b5e_0b5e_0b5e,
+            );
+        };
+
+        // ---- dependency-cone pruning ---------------------------------------
+        // Only the 0-D observeds become rows, but every varying rule — the whole
+        // PPM stencil chain — was materialized at every node and then thrown
+        // away. Restrict the work to the transitive dependency cone of what is
+        // actually read.
+        //
+        // The cone is computed from `Expr::Variable` leaves, so it is only valid
+        // for rules whose dependency edges are all expressible that way: a FAQ
+        // ring producer/consumer pair and a ragged/derived contraction bound
+        // couple two rules through the `derived_rings` registry / an `offsets`
+        // factor name instead, and a `join` couples them through key COLUMN
+        // names. A model using any of those keeps the old un-pruned behaviour.
+        let prune = !outobs_prune_disabled()
+            && varying_rules
+                .iter()
+                .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+
+        // Probe: the rules that must actually run before 0-D-ness is known. A
+        // rule whose value is provably an array needs no probe at all, and a
+        // hoisted static observed's rank is already in `obs`.
+        let probe_owned: Vec<AlgebraicRule>;
+        let probe_rules: &[AlgebraicRule] = if prune {
+            let unknown: HashSet<String> = self
+                .observed_rules
+                .iter()
+                .filter(|r| !observed_rule_is_array_valued(r))
+                .map(|r| observed_rule_var(r).clone())
+                .collect();
+            match dependency_cone(varying_rules, &unknown) {
+                None => varying_rules,
+                Some(cone) => {
+                    probe_owned = cone;
+                    &probe_owned
+                }
             }
+        } else {
+            varying_rules
+        };
+        if !probe_rules.is_empty() {
+            bind_cse(probe_rules);
             materialize_observeds_append(
                 &mut obs,
-                varying_rules,
+                probe_rules,
                 &sa,
                 param_vec,
                 &self.param_names,
-                time[k],
+                time[0],
                 &dr,
                 &self.forcing,
-                // Per-segment observed snapshot (inspection): vectorized overlay.
+                // Output-node observed snapshot: vectorized overlay.
                 false,
                 &mut RhsStats::default(),
-                None,
+                Some(&cse),
             );
-            obs
-        };
-        let obs0 = obs_at(0);
+        }
+        // A name the probe did not materialize is, by construction, either
+        // array-valued or outside the cone of anything that could be 0-D, so the
+        // `unwrap_or(false)` verdict is the same one the full materialization
+        // would have produced.
         let scalar_obs: Vec<String> = self
             .observed_rules
             .iter()
             .map(|r| observed_rule_var(r).clone())
-            .filter(|name| obs0.get(name).map(|a| a.ndim() == 0).unwrap_or(false))
+            .filter(|name| obs.get(name).map(|a| a.ndim() == 0).unwrap_or(false))
             .collect();
-        if !scalar_obs.is_empty() {
-            let mut rows: Vec<Vec<f64>> = vec![Vec::with_capacity(time.len()); scalar_obs.len()];
-            for k in 0..time.len() {
-                let obs = if k == 0 { obs0.clone() } else { obs_at(k) };
-                for (j, name) in scalar_obs.iter().enumerate() {
-                    rows[j].push(
-                        obs.get(name)
-                            .and_then(|a| a.first().copied())
-                            .unwrap_or(f64::NAN),
-                    );
+        if scalar_obs.is_empty() {
+            return;
+        }
+
+        // Value pass: the cone of the rows we actually emit.
+        let value_owned: Vec<AlgebraicRule>;
+        let value_rules: &[AlgebraicRule] = if prune {
+            let seeds: HashSet<String> = scalar_obs.iter().cloned().collect();
+            match dependency_cone(varying_rules, &seeds) {
+                None => varying_rules,
+                Some(cone) => {
+                    value_owned = cone;
+                    &value_owned
                 }
             }
-            for (name, row) in scalar_obs.into_iter().zip(rows) {
-                state_variable_names.push(name);
-                state.push(row);
+        } else {
+            varying_rules
+        };
+
+        let mut rows: Vec<Vec<f64>> = vec![Vec::with_capacity(nt); scalar_obs.len()];
+        let record = |obs: &ArrMap, rows: &mut Vec<Vec<f64>>| {
+            for (j, name) in scalar_obs.iter().enumerate() {
+                rows[j].push(
+                    obs.get(name)
+                        .and_then(|a| a.first().copied())
+                        .unwrap_or(f64::NAN),
+                );
             }
+        };
+        record(&obs, &mut rows);
+        if value_rules.is_empty() {
+            // Every 0-D observed sits in the hoisted static set, so its value is
+            // node-independent: replicate node 0 instead of re-running the whole
+            // varying rule set NT times for a number that cannot change.
+            for row in rows.iter_mut() {
+                let v = row[0];
+                row.resize(nt, v);
+            }
+        } else {
+            bind_cse(value_rules);
+            for k in 1..nt {
+                for (i, slot) in flat.iter_mut().enumerate() {
+                    *slot = state[i][k];
+                }
+                refill_state_arrays(&mut sa, &self.var_shapes, &flat);
+                obs.retain(|name, _| static_keys.contains(name));
+                dr.borrow_mut().clear();
+                materialize_observeds_append(
+                    &mut obs,
+                    value_rules,
+                    &sa,
+                    param_vec,
+                    &self.param_names,
+                    time[k],
+                    &dr,
+                    &self.forcing,
+                    false,
+                    &mut RhsStats::default(),
+                    Some(&cse),
+                );
+                record(&obs, &mut rows);
+            }
+        }
+        for (name, row) in scalar_obs.into_iter().zip(rows) {
+            state_variable_names.push(name);
+            state.push(row);
         }
     }
 
@@ -1037,6 +1154,123 @@ impl ArrayCompiled {
             }
         }
     }
+}
+
+/// `true` when the observed-trajectory dependency-cone pruning is switched off
+/// by `ESS_OUTOBS_PRUNE_DISABLE=1`. The A/B kill switch for that optimization,
+/// mirroring `ESS_VEC_DISABLE` / `ESS_CSE_DISABLE`: with it set,
+/// [`ArrayCompiled::append_scalar_observed_trajectories`] materializes the full
+/// varying rule set at every output node exactly as it did before.
+fn outobs_prune_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| {
+        std::env::var("ESS_OUTOBS_PRUNE_DISABLE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+/// Is this observed rule's value provably an ARRAY (`ndim ≥ 1`) *without*
+/// evaluating it? Used only to keep a rule out of the 0-D probe in
+/// [`ArrayCompiled::append_scalar_observed_trajectories`], so it must never
+/// claim "array" for a rule that can materialize 0-D. Both arms read the rank
+/// straight off the rule's own output box:
+///
+///   * an `ArrayLoop` writes a box of rank `output_ranges.len()` on BOTH the
+///     vectorized fast path and the per-cell oracle (see
+///     [`materialize_observeds_append`]);
+///   * a `Scalar` rule whose body is an `aggregate` carrying a body (`expr`) and
+///     a non-empty `output_idx` is evaluated by [`eval_arrayop`], which returns
+///     a `Value::Array` of rank `output_idx.len()`. (Without `expr` the oracle
+///     reports the scalar `NaN` sentinel, hence the `expr.is_some()` guard.)
+///
+/// Anything else — a bare variable reference, an arithmetic body, a contraction
+/// with no free index — is "unknown" and gets probed.
+fn observed_rule_is_array_valued(rule: &AlgebraicRule) -> bool {
+    match rule {
+        AlgebraicRule::ArrayLoop { output_ranges, .. } => !output_ranges.is_empty(),
+        AlgebraicRule::Scalar { body, .. } => match &**body {
+            Expr::Operator(node) => {
+                node.op == "aggregate"
+                    && node.expr.is_some()
+                    && node.output_idx.as_ref().is_some_and(|ix| !ix.is_empty())
+            }
+            _ => false,
+        },
+    }
+}
+
+/// Does `expr` carry a dependency edge that a `Expr::Variable` walk cannot see?
+/// Such an edge makes the observed-trajectory dependency cone unsound, so the
+/// pruning is disabled wholesale for a model containing one:
+///
+///   * `intersect_polygon` / `polygon_intersection_area` register a FAQ overlap
+///     ring in `derived_rings` under their node id, and a `kind:"derived"`
+///     contraction bound elsewhere consumes it by that id — not by name;
+///   * a `distinct` aggregate likewise produces a data-dependent index set;
+///   * a ragged range names its `offsets` FACTOR as a bare string;
+///   * a `join` clause couples factors through key COLUMN names.
+///
+/// `simpleclimate.esm` (and any pure-stencil model) contains none of these, so
+/// pruning is live there; a conservative-regrid / relational model keeps the
+/// old un-pruned behaviour, bit-for-bit.
+fn expr_blocks_output_pruning(expr: &Expr) -> bool {
+    let Expr::Operator(node) = expr else {
+        return false;
+    };
+    if matches!(
+        node.op.as_str(),
+        "intersect_polygon" | "polygon_intersection_area" | "skolem" | "rank" | "distinct"
+    ) {
+        return true;
+    }
+    if node.join.is_some() || node.distinct == Some(true) {
+        return true;
+    }
+    if let Some(ranges) = &node.ranges
+        && ranges
+            .values()
+            .any(|r| r.ragged().is_some() || r.derived().is_some())
+    {
+        return true;
+    }
+    node.any_child(&mut expr_blocks_output_pruning)
+}
+
+/// The transitive dependency cone of `seeds` within a dependency-ORDERED rule
+/// slice, returned in the original order (which is therefore still a valid
+/// evaluation order). One backward pass suffices: a rule's dependencies always
+/// precede it, so by the time the sweep reaches a rule every consumer of it has
+/// already been visited and has registered its name.
+///
+/// `None` means "the cone is the whole slice" — the caller then keeps using the
+/// original slice rather than paying a deep AST clone of every rule for nothing.
+fn dependency_cone(
+    rules: &[AlgebraicRule],
+    seeds: &HashSet<String>,
+) -> Option<Vec<AlgebraicRule>> {
+    let mut needed: HashSet<String> = seeds.clone();
+    let mut keep = vec![false; rules.len()];
+    let mut n_kept = 0usize;
+    for (i, rule) in rules.iter().enumerate().rev() {
+        if needed.contains(observed_rule_var(rule)) {
+            keep[i] = true;
+            n_kept += 1;
+            collect_expr_var_refs(observed_rule_body(rule), &mut needed);
+        }
+    }
+    if n_kept == rules.len() {
+        return None;
+    }
+    Some(
+        rules
+            .iter()
+            .zip(keep)
+            .filter(|(_, k)| *k)
+            .map(|(r, _)| r.clone())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
