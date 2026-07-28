@@ -45,10 +45,37 @@ mutable struct BuildInspection
     const_arrays::Dict{String,Any}
     observed_exprs::Dict{String,ASTExpr}
     params::Dict{String,Float64}
+    # ---- UN-inlined observed definitions, for BUILD-TIME field evaluation ---
+    # `observed_exprs` above is the fully SUBSTITUTED view: every observed
+    # inlined into its readers. That is self-contained, but it makes a build-time
+    # `evaluate_cellwise` of one observed re-execute its ENTIRE producer chain
+    # once per OUTPUT CELL. On the ISRM source-receptor model that is
+    # 5 pathways x |ppl| x |emission records| terms at EVERY receptor cell — the
+    # spatial join re-run 52,411 times (~1.7e13 evaluations at full scale).
+    #
+    # This is the per-observed definition BEFORE observed-into-observed
+    # substitution, so `_observed_field` can materialize each producer ONCE in
+    # dependency order and let its readers gather the buffer.
+    #
+    # NOTE this is deliberately independent of the RHS-side factoring
+    # (`_collect_materialized_array_obs`), whose liveness roots are the `D`/`ic`
+    # equations. A PURE-ALGEBRAIC model — `system_kind: nonlinear`, no state, every
+    # result an observed, which is exactly the ISRM case — has NO such roots, so
+    # nothing is RHS-factored and the whole chain stays inlined. The build-time
+    # observability path has a different root: the observed a caller asks for.
+    observed_defs::Dict{String,ASTExpr}
+    # Extents of DATA-DERIVED index sets (RFC §5.5 value invention), keyed by
+    # index-set name. An observed shaped on a derived axis — the ISRM emission
+    # binning is shaped on `emis_src_cells`, whose size is discovered by value
+    # invention — cannot have its extents read from `index_sets` alone, so
+    # without these it could not be materialized at all.
+    derived_extents::Dict{String,Int}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
-                                    Dict{String,Float64}())
+                                    Dict{String,Float64}(),
+                                    Dict{String,ASTExpr}(),
+                                    Dict{String,Int}())
 
 """
     DiscreteMaterializer()
@@ -2250,6 +2277,20 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             _resolve_observed(merge(Dict{String,ASTExpr}(resolved_obs), mat_defs))
         for (k, e) in published
             inspect.observed_exprs[String(k)] = e
+        end
+        # ALSO publish the UN-inlined per-observed definitions, so a build-time
+        # field evaluation can materialize each producer once in dependency order
+        # instead of re-executing the chain per output cell (see the
+        # BuildInspection docstring). `observed_exprs` above is left exactly as
+        # it was, so callers that do not know about this field are unaffected.
+        for (k, e) in raw_obs
+            inspect.observed_defs[String(k)] = e
+        end
+        # Keyed by the PRODUCER id (`"emis_src_cells_faq" => 9`), exactly as the
+        # build holds it. A consumer resolving a `kind:"derived"` axis follows the
+        # set's `from_faq` to this map (see `_materialized_obs_scope`).
+        for (k, n) in parts.derived_extents
+            inspect.derived_extents[String(k)] = Int(n)
         end
         # Resolved scalar parameter values (load-time constants) so a build-time
         # cellwise re-evaluation of a parameter-dependent observed / reference
