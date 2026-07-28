@@ -532,6 +532,17 @@ floating-point reassociation, not to the bit, until those paths are made sequent
 who need bit-level agreement across bindings should prefer a forward scan, reversing the axis
 in the data rather than in the predicate.
 
+That scope is the **executing** bindings — the ones that evaluate a scan numerically. An
+**export/lowering** path, which re-expresses a document in a foreign system rather than
+evaluating it (Julia's ModelingToolkit lowering is the one that exists today), is bound by
+the *window* — which `j` values contribute — but NOT by the association order, and is not
+expected to be. Handing the admitted terms to a symbolic algebra means that algebra owns
+their order, and the difference is not confined to the last ulp: over `u = [1e16, 1, -1e16,
+1]` the normative fold gives `⊕_{j ≤ i} u = [1e16, 1e16, 0, 1]` while a reassociating sum
+gives `[1e16, 1e16, 1, 2]`. Exactly-representable, non-cancelling data hides this, so
+agreement on such a case is not evidence of order preservation. A document whose low bits
+matter must be run through an executing binding.
+
 **The `O(N)` running-accumulation optimization is licensed for forward scans only.** A
 binding MAY evaluate `<=` and `<` with a single running accumulator instead of the `O(N²)`
 triangular double loop, because `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces the left fold above

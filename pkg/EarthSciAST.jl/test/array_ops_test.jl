@@ -145,13 +145,30 @@ function _run_fixture_test(simp, model_name::Symbol,
     end
 end
 
+# Build the MTK system for ONE model of a fixture file.
+#
+# Not `MTK2.System(model)`: that convenience method wraps the bare `Model` in a
+# synthetic `EsmFile` with an EMPTY index-set registry (src/flatten.jl
+# `flatten(::Model)`), so an aggregate range spelled as an index-set reference
+# — `"ranges": {"i": {"from": "x"}}` — has no extent to resolve against. The
+# registry is document-scoped, so re-wrap the model in a single-model file that
+# CARRIES the real one. Namespacing is unchanged (`<model name>.<var>`), so
+# every `_arr` lookup below resolves exactly as before.
+function _fixture_system(file, mname::AbstractString, model)
+    one_model = EarthSciAST.EsmFile(file.esm, file.metadata;
+        models=Dict{String,EarthSciAST.Model}(String(mname) => model),
+        index_sets=file.index_sets,
+        function_tables=file.function_tables)
+    return MTK2.System(EarthSciAST.flatten(one_model); name=Symbol(mname))
+end
+
 # Run every inline test inside every model found in the given .esm file.
 function _run_fixture(path::AbstractString)
     file = EarthSciAST.load(path)
     models_dict = file.models
     @assert models_dict !== nothing "Fixture $path has no models"
     for (mname, model) in models_dict
-        sys = MTK2.System(model; name=Symbol(mname))
+        sys = _fixture_system(file, String(mname), model)
         simp = MTK2.mtkcompile(sys)
         for t in model.tests
             @testset "$(mname)/$(t.id)" begin
@@ -466,5 +483,127 @@ end
                 end
             end
         end
+    end
+
+    # ================================================================
+    # Cumulative (prefix) reductions through the MTK path (esm-spec §4.3.1).
+    #
+    # These fixtures are why `_range_bounds_int` grew an `IndexSetRef` method.
+    # Three things are pinned, because each failing silently is worse than the
+    # `MethodError` this replaced:
+    #
+    #   1. DIAGNOSTICS — a range the MTK path cannot resolve must raise a
+    #      descriptive `ArgumentError`. `System(::Model)` in particular cannot
+    #      see the document-scoped index-set registry (`flatten(::Model)`
+    #      synthesizes an EsmFile with an empty one), so it must decline
+    #      loudly rather than MethodError or guess a bound.
+    #   2. THE ADMITTED WINDOW — the MTK RHS must match the tree-walk
+    #      evaluator, the reference implementation for these fixtures, cell by
+    #      cell. An aggregate `filter` dropped on the floor would contract the
+    #      FULL range (every fwd_inc cell = 15 instead of 1/3/7/15) and be
+    #      caught here even if the fixture's own assertions were loosened.
+    #   3. THE ORDER LIMITATION, honestly — §4.3.1 also makes the ascending-`j`
+    #      LEFT FOLD normative, and this path does NOT honor it: SymbolicUtils
+    #      emits the gated terms in its own canonical order. The bit-identity
+    #      asserted in (2) holds only because those fixtures' summands are
+    #      exactly representable and do not cancel. The cancellation case below
+    #      is `@test_broken` so the suite records the gap instead of implying a
+    #      guarantee this path cannot deliver — and flips to a failure the day
+    #      someone makes the lowering order-preserving.
+    # ================================================================
+    @testset "Cumulative prefix reductions (MTK lowering)" begin
+        MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
+        @test MTKExt !== nothing
+
+        # ---- 1. diagnostics: ArgumentError, never MethodError ----
+        ref = EarthSciAST.IndexSetRef("x")
+        @test MTKExt._range_bounds_int(ref, Dict("x" => 4)) == (1, 4)
+        # Unresolvable set, ragged (`of`-parented) set, and a form that is
+        # neither a dense array nor an index-set reference.
+        @test_throws ArgumentError MTKExt._range_bounds_int(ref, Dict{String,Int}())
+        @test_throws ArgumentError MTKExt._range_bounds_int(
+            EarthSciAST.IndexSetRef("x"; of=["p"]), Dict("x" => 4))
+        @test_throws ArgumentError MTKExt._range_bounds_int(:not_a_range)
+
+        mname = "CumulativePrefixReduction"
+        path = joinpath(@__DIR__, "..", "..", "..", "tests", "fixtures",
+                        "arrayop", "25_cumulative_prefix_reduction.esm")
+        file = EarthSciAST.load(path)
+        model = file.models[mname]
+
+        # No registry reachable from a bare `Model` ⇒ ArgumentError, not MethodError.
+        @test_throws ArgumentError MTK2.System(model; name=Symbol(mname))
+
+        # ---- 2. admitted window: MTK RHS ≡ tree-walk RHS, cell by cell ----
+        # Exactly-representable summands (powers of two), no cancellation, so
+        # the canonical term order cannot change the result: bit-identity here
+        # is a real property of THIS fixture, not a general guarantee.
+        f!, u0, p, _tspan, vm = EarthSciAST.build_evaluator(file)
+        fill!(u0, 0.0)
+        du_tw = zeros(length(u0))
+        f!(du_tw, u0, p, 0.0)
+
+        simp = MTK2.mtkcompile(_fixture_system(file, mname, model))
+        unk = MTK2.unknowns(simp)
+        prob = MTK2.ODEProblem(simp, Dict(u => 0.0 for u in unk), (0.0, 1.0))
+        du_mtk = similar(prob.u0)
+        prob.f(du_mtk, prob.u0, prob.p, 0.0)
+        @test length(unk) == length(du_tw)
+        for (k, u) in enumerate(unk)
+            name = replace(string(u), "(t)" => "", "$(mname)_" => "",
+                           "(" => "", ")" => "")
+            @test haskey(vm, name)
+            @test du_mtk[k] == du_tw[vm[name]]   # bit-identical, not approx
+        end
+
+        # ---- 3. accumulation order: the limitation, pinned as broken ----
+        # Same prefix sum over u = [1e16, 1, -1e16, 1]. The §4.3.1 ascending-`j`
+        # left fold gives [1e16, 1e16, 0, 1] — what the tree-walk produces. The
+        # MTK path re-associates and gives [1e16, 1e16, 1, 2]: an O(1) error,
+        # not a last-ulp one. Cells 1-2 agree (nothing has cancelled yet).
+        cancel = EarthSciAST.Model(
+            Dict("u" => EarthSciAST.ModelVariable(EarthSciAST.ObservedVariable;
+                     shape=["x"],
+                     expression=_op("makearray";
+                         regions=[[[1, 1]], [[2, 2]], [[3, 3]], [[4, 4]]],
+                         values=EarthSciAST.ASTExpr[_num(1e16), _num(1.0),
+                                                    _num(-1e16), _num(1.0)])),
+                 "c" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable;
+                     shape=["x"], default=0.0)),
+            [EarthSciAST.Equation(
+                _op("aggregate"; output_idx=Any["i"],
+                    expr_body=_op("D", _idx("c", _var("i")); wrt="t"),
+                    ranges=Dict("i" => EarthSciAST.IndexSetRef("x"))),
+                _op("aggregate", _var("u"); output_idx=Any["i"], reduce="+",
+                    ranges=Dict("i" => EarthSciAST.IndexSetRef("x"),
+                                "j" => EarthSciAST.IndexSetRef("x")),
+                    filter=_op("<=", _var("j"), _var("i")),
+                    expr_body=_idx("u", _var("j"))))])
+        cfile = EarthSciAST.EsmFile(file.esm, file.metadata;
+            models=Dict{String,EarthSciAST.Model}("Cancel" => cancel),
+            index_sets=Dict("x" => EarthSciAST.IndexSet("interval"; size=4)))
+
+        cf!, cu0, cp, _cts, cvm = EarthSciAST.build_evaluator(cfile)
+        fill!(cu0, 0.0)
+        cdu_tw = zeros(length(cu0))
+        cf!(cdu_tw, cu0, cp, 0.0)
+        # The tree-walk IS the normative left fold — assert that outright.
+        @test cdu_tw[cvm["c[3]"]] == 0.0
+        @test cdu_tw[cvm["c[4]"]] == 1.0
+
+        csimp = MTK2.mtkcompile(_fixture_system(cfile, "Cancel", cancel))
+        cunk = MTK2.unknowns(csimp)
+        cprob = MTK2.ODEProblem(csimp, Dict(u => 0.0 for u in cunk), (0.0, 1.0))
+        cdu_mtk = similar(cprob.u0)
+        cprob.f(cdu_mtk, cprob.u0, cprob.p, 0.0)
+        cell = Dict(replace(string(u), "(t)" => "", "Cancel_" => "",
+                            "(" => "", ")" => "") => k
+                    for (k, u) in enumerate(cunk))
+        # Cells 1-2: nothing has cancelled, so the orders still coincide.
+        @test cdu_mtk[cell["c[1]"]] == cdu_tw[cvm["c[1]"]]
+        @test cdu_mtk[cell["c[2]"]] == cdu_tw[cvm["c[2]"]]
+        # Cells 3-4: the re-association bites. SHOULD hold per §4.3.1; does not.
+        @test_broken cdu_mtk[cell["c[3]"]] == cdu_tw[cvm["c[3]"]]
+        @test_broken cdu_mtk[cell["c[4]"]] == cdu_tw[cvm["c[4]"]]
     end
 end
