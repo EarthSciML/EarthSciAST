@@ -477,9 +477,26 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     exts = Int[]
     for s in v.shape
         iset = get(file.index_sets, String(s), nothing)
-        (iset !== nothing && iset.kind == "interval" && iset.size !== nothing) ||
-            return nothing
-        push!(exts, Int(iset.size))
+        iset === nothing && return nothing
+        e = if iset.kind == "interval"
+            iset.size
+        elseif iset.kind == "categorical"
+            iset.members === nothing ? nothing : length(iset.members)
+        elseif iset.kind == "derived"
+            # A DERIVED axis is sized by value invention, which has already run
+            # by the time an observed field is requested. `derived_extents` is
+            # keyed by the PRODUCER id, so resolve through `from_faq` — without
+            # this an observed shaped on an invented axis (ISRM's per-source
+            # `E_VOC` over `emis_src_cells`) is simply unreadable, even though
+            # the same axis resolves fine one level down when the observed is a
+            # producer of something else.
+            iset.from_faq === nothing ? nothing :
+                get(insp.derived_extents, String(iset.from_faq), nothing)
+        else
+            nothing
+        end
+        e === nothing && return nothing
+        push!(exts, Int(e))
     end
     qualified = String(mname) * "." * String(variable)
     # The fully-substituted form: self-contained, always evaluable, and the only
