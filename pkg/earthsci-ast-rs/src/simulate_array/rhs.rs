@@ -386,6 +386,15 @@ pub(super) fn materialize_observeds_append(
                     loop_binds: IdxMap::default(),
                     t,
                     derived_rings,
+                    // EMPTY on every compiled-RHS context in this file, and
+                    // deliberately so: `ArrayCompiled::from_model` densifies each
+                    // value-invented derived set to an `interval` (via
+                    // `rewrite_derived_index_sets`) BEFORE resolving ranges, so a
+                    // compiled rule's axes are already static bounds and no
+                    // `DerivedDyn` survives to consult the map. The channel earns
+                    // its keep on the standalone `eval_expression_with_extents`
+                    // entry point instead. See `EvalCtx::derived_extents`.
+                    derived_extents: empty_derived_extents(),
                     forcing,
                     cse,
                 };
@@ -462,6 +471,7 @@ pub(super) fn materialize_observeds_append(
                             loop_binds: IdxMap::default(),
                             t,
                             derived_rings,
+                            derived_extents: empty_derived_extents(),
                             forcing,
                             cse,
                         };
@@ -528,6 +538,7 @@ pub(super) fn materialize_observeds_append(
                         loop_binds: IdxMap::default(),
                         t,
                         derived_rings,
+                        derived_extents: empty_derived_extents(),
                         forcing,
                         cse: None,
                     };
@@ -709,6 +720,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                     loop_binds: IdxMap::default(),
                     t,
                     derived_rings: &derived_rings,
+                    derived_extents: empty_derived_extents(),
                     forcing,
                     cse,
                 };
@@ -724,6 +736,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                     loop_binds: IdxMap::default(),
                     t,
                     derived_rings: &derived_rings,
+                    derived_extents: empty_derived_extents(),
                     forcing,
                     cse,
                 };
@@ -778,6 +791,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                             loop_binds: IdxMap::default(),
                             t,
                             derived_rings: &derived_rings,
+                            derived_extents: empty_derived_extents(),
                             forcing,
                             cse,
                         };
@@ -852,6 +866,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                     loop_binds: IdxMap::default(),
                     t,
                     derived_rings: &derived_rings,
+                    derived_extents: empty_derived_extents(),
                     forcing,
                     cse: None,
                 };
