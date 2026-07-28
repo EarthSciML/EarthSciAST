@@ -9,6 +9,11 @@ use crate::aggregate::effective_reduce_kind;
 use crate::compile_error::CompileError;
 use crate::types::ExpressionNode;
 
+/// Stack-inlined per-axis `(lo, hi)` range list, the same rank≤4 argument
+/// [`DimI`]/[`DimU`] rest on. Used where a range list is rebuilt on every RHS
+/// evaluation ([`ArrayOpSpec`]), so it does not reach the allocator.
+pub(super) type RangeVec = SmallVec<[(i64, i64); 4]>;
+
 /// The distinct-vertex extent of the FAQ-materialized ring registered under
 /// `from_faq` (RFC §8.1): the producing `intersect_polygon` clip stores the
 /// **closed** ring (`n+1` rows, first vertex repeated so the `polygon_area`
@@ -1562,6 +1567,37 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
     arr.get(IxDyn(&idx)).map(|v| v.round() as i64).unwrap_or(0)
 }
 
+thread_local! {
+    /// Kernel-buffer pool for the vectorized overlay reached OUTSIDE the
+    /// compiled-rule driver: a standalone `aggregate` materialized by
+    /// [`eval_arrayop`], and an `AlgebraicRule::ArrayLoop` observed. Both used
+    /// to build a `Pool::default()` per call, so their pool was empty every
+    /// time and every kernel intermediate hit the allocator — the RHS-rule path
+    /// has recycled through [`RhsScratch`]'s pool since ess-mro, but the
+    /// observed path (where a stencil-heavy model does most of its work) never
+    /// did.
+    ///
+    /// Thread-local rather than a field on `EvalCtx`: the overlay takes the
+    /// pool by `&mut` while `EvalCtx` is borrowed shared, and the observed and
+    /// aggregate call sites construct their contexts independently.
+    static ARRAYOP_POOL: RefCell<Pool> = RefCell::new(Pool::default());
+}
+
+/// Run `f` with this thread's persistent kernel-buffer pool.
+///
+/// Re-entrancy is possible in principle — an outer aggregate whose vectorized
+/// attempt FAILED falls back to the per-cell oracle, which may evaluate an
+/// inner aggregate — but only after the outer borrow has been released, since
+/// the borrow spans just the overlay attempt. The `try_borrow_mut` fallback to
+/// a private pool makes that structural claim unnecessary: a nested use loses
+/// the recycling, never correctness, and never panics.
+pub(super) fn with_arrayop_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
+    ARRAYOP_POOL.with(|p| match p.try_borrow_mut() {
+        Ok(mut pool) => f(&mut pool),
+        Err(_) => f(&mut Pool::default()),
+    })
+}
+
 /// The evaluation parameters of a standalone `aggregate`/`arrayop` node.
 ///
 /// Extracted in ONE place so the per-cell oracle ([`eval_arrayop`]) and the
@@ -1571,7 +1607,10 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
 /// compute a *different* array while both look correct in isolation.
 pub(super) struct ArrayOpSpec<'n> {
     pub(super) idx_names: &'n [String],
-    pub(super) ranges: Vec<(i64, i64)>,
+    /// Stack-inlined (grid rank ≤ 4 in practice): a standalone aggregate is
+    /// re-specified on every observed materialization of every RHS call, and a
+    /// `Vec` here was one heap allocation per aggregate per call.
+    pub(super) ranges: RangeVec,
     pub(super) body: &'n Expr,
     pub(super) contract_names: Vec<String>,
     pub(super) contract_dims: Vec<ContractDim>,
@@ -1594,7 +1633,7 @@ pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
         .as_ref()
         .unwrap_or_else(|| EMPTY_RANGES.get_or_init(HashMap::new));
     let body: &Expr = node.expr.as_deref()?;
-    let ranges: Vec<(i64, i64)> = idx_names
+    let ranges: RangeVec = idx_names
         .iter()
         .map(|n| {
             let r = ranges_map.get(n).and_then(|s| s.bounds()).unwrap_or([0, 0]);
@@ -1602,11 +1641,13 @@ pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
         })
         .collect();
 
-    // Contracted indices: in ranges_map but not in output_idx.
-    let output_idx_set: std::collections::HashSet<&String> = idx_names.iter().collect();
+    // Contracted indices: in ranges_map but not in output_idx. A linear scan of
+    // `idx_names` (rank ≤ 4) rather than a `HashSet` built per call — the set
+    // was a heap allocation on every aggregate of every RHS evaluation, and it
+    // was probed at most `ranges_map.len()` times.
     let mut sorted_contract_keys: Vec<&String> = ranges_map
         .keys()
-        .filter(|k| !output_idx_set.contains(k))
+        .filter(|k| !idx_names.iter().any(|n| n == *k))
         .collect();
     sorted_contract_keys.sort();
     let contract_names: Vec<String> = sorted_contract_keys.iter().map(|k| (*k).clone()).collect();
@@ -1650,11 +1691,12 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         None => return Value::Scalar(f64::NAN),
     };
 
-    let shape: Vec<usize> = ranges
+    // Stack-inlined (rank ≤ 4): rebuilt for every aggregate of every RHS call.
+    let shape: DimU = ranges
         .iter()
         .map(|(lo, hi)| (hi - lo + 1) as usize)
         .collect();
-    let origin: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
+    let origin: DimI = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
 
     // Hoist cell-independent (all-static) contraction bounds out of the per-cell
@@ -1699,23 +1741,33 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // per-cell oracle below; any op / ragged-bound the overlay does not handle
     // returns `None` and we fall through. A local `Pool` recycles intermediates.
     if !shape.is_empty() && scan.is_none() {
-        let mut pool = Pool::default();
-        if let Some((vv, _ops)) = try_eval_arrayop_vectorized(
-            idx_names,
-            &ranges,
-            body,
-            &contract_names,
-            &contract_dims,
-            reduce,
-            filter,
-            &*ctx,
-            &mut pool,
-        ) {
-            // `try_eval_arrayop_vectorized` already verified the value covers the
-            // output box exactly (bailing to `None` otherwise) and lifted a bare
-            // scalar into an owned box buffer, so a plain view→owned suffices.
-            let out = vv.view().expect("vectorized arrayop has a view").to_owned();
-            vv.release(&mut pool);
+        // The pool is the THREAD's, not a fresh one per call: a stencil-heavy
+        // model materializes dozens of standalone aggregates per RHS evaluation
+        // and a per-call `Pool::default()` started empty every time, so every
+        // kernel intermediate went to the allocator.
+        let materialized = with_arrayop_pool(|pool| {
+            try_eval_arrayop_vectorized(
+                idx_names,
+                &ranges,
+                body,
+                &contract_names,
+                &contract_dims,
+                reduce,
+                filter,
+                &*ctx,
+                pool,
+            )
+            .map(|(vv, _ops)| {
+                // `try_eval_arrayop_vectorized` already verified the value covers
+                // the output box exactly (bailing to `None` otherwise) and lifted
+                // a bare scalar into an owned box buffer, so a plain view→owned
+                // suffices.
+                let out = vv.view().expect("vectorized arrayop has a view").to_owned();
+                vv.release(pool);
+                out
+            })
+        });
+        if let Some(out) = materialized {
             return Value::Array(Box::new(out));
         }
     }
