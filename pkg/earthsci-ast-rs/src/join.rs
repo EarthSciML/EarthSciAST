@@ -672,6 +672,7 @@ mod tests {
             size: None,
             members: Some(members.iter().map(|m| Value::from(*m)).collect()),
             from_faq: None,
+            member_factor: None,
             of: None,
             offsets: None,
             values: None,
