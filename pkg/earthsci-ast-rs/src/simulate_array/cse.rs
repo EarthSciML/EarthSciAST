@@ -427,6 +427,9 @@ struct Inner {
     /// Number of `slabs` entries holding live values this evaluation. Slabs at
     /// or above this index are free for reuse.
     used: usize,
+    /// Identity of the rule set the class table was built against. See
+    /// [`CseRt::retarget`].
+    tag: u64,
     /// Nesting depth of `enter_scope`. Zero means no vectorized evaluation is
     /// in flight, which is the only point at which the memo may be recycled.
     depth: u32,
@@ -444,15 +447,32 @@ pub(super) struct CseRt {
 }
 
 impl CseRt {
+    /// Point the class table at a rule set, discarding it if this is a
+    /// DIFFERENT one from the last call.
+    ///
+    /// The table is keyed by AST node ADDRESS, which is only meaningful while
+    /// the analysed trees are alive. That holds by construction today — a
+    /// `CseRt` lives inside a [`RhsScratch`], which is already model-specific
+    /// (it is sized to one model's variable shapes) and is co-owned with the
+    /// cloned rule bodies by the RHS closure, so the trees outlive it. This
+    /// guard makes a violation of that contract (a scratch reused across two
+    /// models whose rule bodies happened to land on the same addresses) cost a
+    /// re-analysis rather than produce a wrong sharing decision: `tag` is
+    /// derived from the rule slices' own identity, so a different rule set
+    /// invalidates the table.
+    pub(super) fn retarget(&self, tag: u64) {
+        if cse_disabled() {
+            return;
+        }
+        let mut i = self.inner.borrow_mut();
+        if i.tag != tag {
+            i.tag = tag;
+            i.classes = ClassTable::default();
+        }
+    }
+
     /// Analyse a rule body so its repeated subtrees become memoizable. Cheap to
     /// call repeatedly: the walk runs once per distinct body root.
-    ///
-    /// SOUNDNESS: the table is keyed by AST node ADDRESS, so a `CseRt` is only
-    /// valid for the rule set whose bodies it analysed. That holds by
-    /// construction — a `CseRt` lives inside a [`RhsScratch`], which is already
-    /// model-specific (it is sized to one model's variable shapes) and is
-    /// co-owned with the cloned rule bodies by the RHS closure, so the analysed
-    /// trees outlive it.
     pub(super) fn analyse(&self, body: &Expr) {
         if cse_disabled() {
             return;

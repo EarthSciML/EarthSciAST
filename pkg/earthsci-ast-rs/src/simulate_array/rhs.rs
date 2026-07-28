@@ -572,6 +572,16 @@ pub(super) fn evaluate_rhs_with_scratch(
     //     flat state vector (no per-call allocation).
     refill_state_arrays(&mut scratch.state_arrays, var_shapes, state);
 
+    // ess-cse: bind the CSE class table to THIS rule set. Its keys are AST node
+    // addresses, so handing the same scratch a different rule set must discard
+    // it rather than reuse stale classification.
+    scratch.cse.retarget(
+        (rhs_rules.as_ptr() as u64)
+            ^ (observed_rules.as_ptr() as u64).rotate_left(32)
+            ^ ((rhs_rules.len() as u64) << 16)
+            ^ (observed_rules.len() as u64),
+    );
+
     // FAQ-materialized derived rings (RFC §8.1), keyed by producer node id. An
     // `intersect_polygon` clip self-registers its closed overlap ring here as it
     // evaluates (see `eval_intersect_polygon`); a downstream `aggregate` over a
