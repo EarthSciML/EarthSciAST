@@ -1,7 +1,7 @@
 {
     "category": "pde_inline_ic_param_override",
     "version": "1.0",
-    "description": "Cross-binding conformance for esm-spec §6.6.5 'Build-time evaluation scope': every reference resolved BEFORE the simulation runs — a coordinate-expression `ic` (§11.4.1) and an inline analytic assertion `reference` — binds the model's parameters to their `parameter_overrides`-or-default values, with the overrides keyed by LOCAL parameter name (§6.6). Parameter `A` (default 1.0) appears ONLY inside `ic(u)` and inside assertion references, never in an equation, so a test that overrides `A` can change the answer through the build-time scope and nowhere else. State `v` is seeded by the parameter-FREE `ic(v) = cos(pi x)` and is the independent anchor the parameter-dependent `reference` is measured against, so a binding that ignored the override in BOTH the ic and the reference cannot have the two errors cancel and still pass. Julia's tree-walk build previously resolved `parameter_overrides` by EXACT key against the flattening-qualified parameter name (`M.A`), so the spec-spelled local key (`A`) missed: the run silently used the default and the inline test still reported a verdict. Python (`_resolve_override`: exact key, then bare trailing segment) and Rust (`normalize_override_keys`: strip the single-model `<namespace>.` prefix) already honoured the local spelling. Julia is the reference binding: its `run_pde_tests` minted golden/ic_param_override.json.",
+    "description": "Cross-binding conformance for esm-spec \u00a76.6.5 'Build-time evaluation scope': every reference resolved BEFORE the simulation runs \u2014 a coordinate-expression `ic` (\u00a711.4.1) and an inline analytic assertion `reference` \u2014 binds the model's parameters to their `parameter_overrides`-or-default values, with the overrides keyed by LOCAL parameter name (\u00a76.6). Parameter `A` (default 1.0) appears ONLY inside `ic(u)` and inside assertion references, never in an equation, so a test that overrides `A` can change the answer through the build-time scope and nowhere else. State `v` is seeded by the parameter-FREE `ic(v) = cos(pi x)` and is the independent anchor the parameter-dependent `reference` is measured against, so a binding that ignored the override in BOTH the ic and the reference cannot have the two errors cancel and still pass. Julia's tree-walk build previously resolved `parameter_overrides` by EXACT key against the flattening-qualified parameter name (`M.A`), so the spec-spelled local key (`A`) missed: the run silently used the default and the inline test still reported a verdict. Python (`_resolve_override`: exact key, then bare trailing segment) and Rust (`normalize_override_keys`: strip the single-model `<namespace>.` prefix) already honoured the local spelling. Julia is the reference binding: its `run_pde_tests` minted golden/ic_param_override.json. A second, RANK-3 (lon/lat/lev) pair generalises the category along the two axes a real model differs on: the `ic` is a separable coordinate expression over three index sets rather than one, and the pair is a CONTROLLED defaults-vs-overrides comparison -- `ic_param_override_rank3` carries the amplitude as an inline test's `parameter_overrides` while `ic_param_default_rank3` carries the same value as the parameter's declared `default`, and the two share one golden. That equality is what a hand-run control on a production model checks, promoted to a gate: a binding that drops an ic-only override from the build-time scope passes the default half and fails the override half.",
     "reference_binding": "julia",
     "bindings_required": [
         "julia",
@@ -52,19 +52,203 @@
                 "x": 5
             },
             "assertions": [
-                { "test_id": "ic_param_default", "assertion_idx": 1, "variable": "u", "reduce": null,          "expected": 0.9510565162951535 },
-                { "test_id": "ic_param_default", "assertion_idx": 2, "variable": "u", "reduce": null,          "expected": -0.9510565162951535 },
-                { "test_id": "ic_param_default", "assertion_idx": 3, "variable": "u", "reduce": "max",         "expected": 0.9510565162951535 },
-                { "test_id": "ic_param_zero",    "assertion_idx": 1, "variable": "u", "reduce": null,          "expected": 0.0 },
-                { "test_id": "ic_param_zero",    "assertion_idx": 2, "variable": "u", "reduce": "max",         "expected": 0.0 },
-                { "test_id": "ic_param_zero",    "assertion_idx": 3, "variable": "u", "reduce": "min",         "expected": 0.0 },
-                { "test_id": "ic_param_zero",    "assertion_idx": 4, "variable": "u", "reduce": null,          "expected": 0.0 },
-                { "test_id": "ic_param_zero",    "assertion_idx": 5, "variable": "v", "reduce": "Linf_error",  "expected": 0.9510565162951535 },
-                { "test_id": "ic_param_double",  "assertion_idx": 1, "variable": "u", "reduce": null,          "expected": 1.902113032590307 },
-                { "test_id": "ic_param_double",  "assertion_idx": 2, "variable": "u", "reduce": "min",         "expected": -1.902113032590307 },
-                { "test_id": "ic_param_double",  "assertion_idx": 3, "variable": "v", "reduce": "Linf_error",  "expected": 0.9510565162951535 }
+                {
+                    "test_id": "ic_param_default",
+                    "assertion_idx": 1,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 0.9510565162951535
+                },
+                {
+                    "test_id": "ic_param_default",
+                    "assertion_idx": 2,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": -0.9510565162951535
+                },
+                {
+                    "test_id": "ic_param_default",
+                    "assertion_idx": 3,
+                    "variable": "u",
+                    "reduce": "max",
+                    "expected": 0.9510565162951535
+                },
+                {
+                    "test_id": "ic_param_zero",
+                    "assertion_idx": 1,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "ic_param_zero",
+                    "assertion_idx": 2,
+                    "variable": "u",
+                    "reduce": "max",
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "ic_param_zero",
+                    "assertion_idx": 3,
+                    "variable": "u",
+                    "reduce": "min",
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "ic_param_zero",
+                    "assertion_idx": 4,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "ic_param_zero",
+                    "assertion_idx": 5,
+                    "variable": "v",
+                    "reduce": "Linf_error",
+                    "expected": 0.9510565162951535
+                },
+                {
+                    "test_id": "ic_param_double",
+                    "assertion_idx": 1,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 1.902113032590307
+                },
+                {
+                    "test_id": "ic_param_double",
+                    "assertion_idx": 2,
+                    "variable": "u",
+                    "reduce": "min",
+                    "expected": -1.902113032590307
+                },
+                {
+                    "test_id": "ic_param_double",
+                    "assertion_idx": 3,
+                    "variable": "v",
+                    "reduce": "Linf_error",
+                    "expected": 0.9510565162951535
+                }
             ],
             "golden": "golden/ic_param_override.json"
+        },
+        {
+            "id": "ic_param_override_rank3",
+            "path": "fixtures/ic_param_override_rank3.esm",
+            "model": "M",
+            "tags": [
+                "pde-inline-test",
+                "esm-spec-6.6",
+                "esm-spec-6.6.5",
+                "esm-spec-11.4.1",
+                "parameter-overrides",
+                "coordinate-expression-ic",
+                "rank-3",
+                "defaults-vs-overrides-control"
+            ],
+            "shape": {
+                "lon": 4,
+                "lat": 3,
+                "lev": 3
+            },
+            "note": "Override half of the controlled pair: `amp` is DECLARED 1.0 and moved to 2.0 by the inline test's `parameter_overrides`.",
+            "assertions": [
+                {
+                    "test_id": "amp_via_override",
+                    "assertion_idx": 1,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 1.8669073387796196
+                },
+                {
+                    "test_id": "amp_via_override",
+                    "assertion_idx": 2,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 2.9337115323679726
+                },
+                {
+                    "test_id": "amp_via_override",
+                    "assertion_idx": 3,
+                    "variable": "w",
+                    "reduce": "max",
+                    "expected": 2.9337115323679734
+                },
+                {
+                    "test_id": "amp_via_override",
+                    "assertion_idx": 4,
+                    "variable": "w",
+                    "reduce": "min",
+                    "expected": -2.9337115323679734
+                },
+                {
+                    "test_id": "amp_via_override",
+                    "assertion_idx": 5,
+                    "variable": "s",
+                    "reduce": null,
+                    "expected": 1.8669073387796191
+                }
+            ],
+            "golden": "golden/ic_param_override_rank3.json"
+        },
+        {
+            "id": "ic_param_default_rank3",
+            "path": "fixtures/ic_param_default_rank3.esm",
+            "model": "M",
+            "tags": [
+                "pde-inline-test",
+                "esm-spec-6.6",
+                "esm-spec-6.6.5",
+                "esm-spec-11.4.1",
+                "parameter-overrides",
+                "coordinate-expression-ic",
+                "rank-3",
+                "defaults-vs-overrides-control"
+            ],
+            "shape": {
+                "lon": 4,
+                "lat": 3,
+                "lev": 3
+            },
+            "note": "Control half: the SAME value carried as `amp`'s declared `default`, no override. Identical assertions and golden actuals, so any divergence between the two halves is the override handling and nothing else.",
+            "assertions": [
+                {
+                    "test_id": "amp_via_default",
+                    "assertion_idx": 1,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 1.8669073387796196
+                },
+                {
+                    "test_id": "amp_via_default",
+                    "assertion_idx": 2,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 2.9337115323679726
+                },
+                {
+                    "test_id": "amp_via_default",
+                    "assertion_idx": 3,
+                    "variable": "w",
+                    "reduce": "max",
+                    "expected": 2.9337115323679734
+                },
+                {
+                    "test_id": "amp_via_default",
+                    "assertion_idx": 4,
+                    "variable": "w",
+                    "reduce": "min",
+                    "expected": -2.9337115323679734
+                },
+                {
+                    "test_id": "amp_via_default",
+                    "assertion_idx": 5,
+                    "variable": "s",
+                    "reduce": null,
+                    "expected": 1.8669073387796191
+                }
+            ],
+            "golden": "golden/ic_param_default_rank3.json"
         }
     ]
 }
