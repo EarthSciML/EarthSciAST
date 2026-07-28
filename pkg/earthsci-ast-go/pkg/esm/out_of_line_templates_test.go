@@ -499,8 +499,9 @@ func TestOOL_FlattenRegistryMergeTransitive(t *testing.T) {
 // flattenTemplateRegistries is the UNION half only, over the un-namespaced
 // component view: identical bodies dedupe under their bare names, and the pair
 // it returns is self-consistent with the un-namespaced document. Go reaches this
-// surface only from conformance — it is parse + validate by design and carries
-// no flattened registry at all, so no scoping step exists here and none is
+// surface only from conformance — LowerExpressionTemplates runs Expand-at-build
+// (§9.6.4 rule 2) so the load path never leaves a surviving reference, and Go's
+// flatten carries no registry, so no scoping step exists here and none is
 // required (§10.7, "Applicability across bindings"). The Julia twin of this test
 // also pins the scoping∘merge composition, which its reference-preserving
 // `flatten` does carry; a binding that grows that path inherits the obligation,
