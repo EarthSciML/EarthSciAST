@@ -1095,10 +1095,26 @@ pub(super) fn vec_combine<'a>(
     // the element order/association is unchanged, so this is a pure dispatch
     // hoist.
     //
-    // `^` is monomorphized too, and deliberately: through the function-pointer
-    // arm every element paid an INDIRECT call before reaching libm's `pow`
-    // (`vec_combine_with::{{closure}} -> Fn::call -> pow` in the profile).
-    // `x.powf(y)` is the identical libm entry point, so this is exact.
+    // `min`/`max` were NOT on the monomorphized list and should have been: they
+    // are the hot operators of a monotone PPM limiter, which is most of what
+    // simpleclimate's RHS is, and every element went through an indirect `fn`
+    // call. Giving them their own arms is measurably the WHOLE win of this
+    // change. Retired instructions, `--days 0.05 --samples 2` (878 RHS calls,
+    // 27360 state slots), each config built and run identically:
+    //
+    //     main                               332.93e9   (mean of 4)
+    //     op-code dispatch, no `min`/`max`    332.91e9   (neutral)
+    //     `min`/`max` monomorphized only      329.60e9   (-1.0%)
+    //     both (this commit)                  329.53e9   (-1.0%)
+    //
+    // `^` is monomorphized on the same principle — through the function-pointer
+    // arm every element paid an indirect call before reaching libm's `pow`
+    // (`vec_combine_with::{{closure}} -> Fn::call -> pow` in the profile), and
+    // `x.powf(y)` is the identical libm entry point, so it is exact — but here
+    // it measures NEUTRAL (329.61e9 / 329.52e9 with the arm removed). This
+    // model has few `^` NODES even though they cover many elements, so the
+    // per-node call overhead it removes is not where the time goes. Kept for
+    // the models where `^` is a hot operator, not because it pays on this one.
     match op {
         BinCode::Add => vec_combine_with(|x, y| x + y, a, b, pool),
         BinCode::Sub => vec_combine_with(|x, y| x - y, a, b, pool),
