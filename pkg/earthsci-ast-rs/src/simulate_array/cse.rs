@@ -24,6 +24,19 @@
 //! array observeds — factor a repeated array-valued computation into a
 //! per-call buffer instead of inlining it at every reader.
 //!
+//! Outcome on that model, RHS wall time at u0, bit-identical throughout:
+//!
+//! ```text
+//!                        12x7x7      24x13x13    ratio (6.9x the cells)
+//!   before (ef51292c)    0.3332 s    0.7303 s    2.19x
+//!   after                0.0136 s    0.0479 s    3.52x
+//! ```
+//!
+//! The ratio moving toward the cell ratio is the point: what was removed is the
+//! FIXED per-node component, so what is left is closer to real per-element work.
+//! A 0.25-day solve of `simpleclimate.esm` goes 360.2 s -> 60.1 s (the Julia
+//! reference for the same run is 92 s).
+//!
 //! ## The equivalence relation (this is the part that must be right)
 //!
 //! Two occurrences of a structurally identical subtree may share one evaluation
@@ -423,6 +436,9 @@ struct Inner {
     classes: ClassTable,
     /// Live memo for the CURRENT top-level evaluation: (scope, class) → slot.
     memo: FxHashMap<(u32, u32), Slot>,
+    // `Box` is load-bearing, not incidental: a memo hit hands out a reference
+    // INTO a slab, so the slab's address must not move when this `Vec` grows.
+    #[allow(clippy::vec_box)]
     slabs: Vec<Box<Slab>>,
     /// Number of `slabs` entries holding live values this evaluation. Slabs at
     /// or above this index are free for reuse.
@@ -610,12 +626,6 @@ impl CseRt {
         }
     }
 
-    /// Number of distinct evaluations memoized during the last top-level
-    /// evaluation (diagnostics only).
-    #[cfg(test)]
-    pub(super) fn memo_len(&self) -> usize {
-        self.inner.borrow().memo.len()
-    }
 }
 
 /// RAII scope handle: closes the evaluation scope on every exit path, including
