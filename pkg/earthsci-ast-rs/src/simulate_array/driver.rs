@@ -694,12 +694,19 @@ impl ArrayCompiled {
         // never re-cloned) so each RHS eval materializes only the CONTINUOUS
         // observeds. `RefCell` gives the interior mutability diffsol's `Fn` RHS
         // requires; the Jacobian closure carries its own so the two never alias.
+        let seg_seed = Rc::new(seg_seed);
         let mut rhs_scratch_val = RhsScratch::new(&var_shapes);
-        rhs_scratch_val.set_static(seg_seed.clone());
+        rhs_scratch_val.set_static((*seg_seed).clone());
         let rhs_scratch = RefCell::new(rhs_scratch_val);
-        let mut jac_scratch_val = RhsScratch::new(&var_shapes_jac);
-        jac_scratch_val.set_static(seg_seed);
-        let jac_scratch = RefCell::new(jac_scratch_val);
+        // The Jacobian scratch is built LAZILY on the first Jacobian call:
+        // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
+        // the explicit (ERK) solver, which then never invokes it — so an eager
+        // scratch (state-array buffers + a full copy of the seeded observed map)
+        // was memory spent on a closure that never runs. The implicit solvers
+        // (BDF/SDIRK) build it on their first Jacobian evaluation instead;
+        // construction is deterministic, so results are bit-identical either way.
+        let jac_seed = Rc::clone(&seg_seed);
+        let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
         // each closure so both the RHS and the Jacobian read the *same*
@@ -757,7 +764,12 @@ impl ArrayCompiled {
 
             let mut f_y = vec![0.0f64; n];
             let mut f_yp = vec![0.0f64; n];
-            let mut scratch = jac_scratch.borrow_mut();
+            let mut scratch_slot = jac_scratch.borrow_mut();
+            let mut scratch = scratch_slot.get_or_insert_with(|| {
+                let mut s = RhsScratch::new(&var_shapes_jac);
+                s.set_static((*jac_seed).clone());
+                s
+            });
             evaluate_rhs_with_scratch(
                 &rhs_rules_jac,
                 &varying_rules_jac,

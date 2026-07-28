@@ -1135,7 +1135,7 @@ fn build_observed_rules(
         if let Some(expr) = &var.expression {
             observed_rules.push(AlgebraicRule::Scalar {
                 var: (*name).clone(),
-                body: Box::new(expr.clone()),
+                body: Rc::new(expr.clone()),
             });
         }
     }
@@ -1149,7 +1149,7 @@ fn build_observed_rules(
                 var,
                 output_idx_names: idx_names,
                 output_ranges: ranges,
-                body: Box::new(body),
+                body: Rc::new(body),
             });
             continue;
         }
@@ -1159,7 +1159,7 @@ fn build_observed_rules(
         {
             observed_rules.push(AlgebraicRule::Scalar {
                 var: name.clone(),
-                body: Box::new(eq.rhs.clone()),
+                body: Rc::new(eq.rhs.clone()),
             });
         }
     }
