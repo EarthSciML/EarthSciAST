@@ -98,35 +98,53 @@ def parse_trace(stderr: str) -> dict:
     return {f"{v['kind']}:{v['name']}": v for v in recs.values()}
 
 
+CAP = 16 << 20  # bytes of stderr to parse; trace blocks repeat every RHS call
+
+
 def run_case(job) -> dict:
-    ess, case, problem, model, mode, extra, timeout = job
+    ess, case, problem, model, mode, extra, timeout, errdir, excluded = job
     env = dict(os.environ)
     env["ESS_VEC_DEBUG"] = "1"
-    cmd = ["cargo", "run", "--release", "--quiet", "--manifest-path",
-           str(Path(ess) / "pkg/earthsci-ast-rs/Cargo.toml"),
+    exe = Path(ess) / "pkg/earthsci-ast-rs/Cargo.toml"
+    cmd = ["cargo", "run", "--release", "--quiet", "--manifest-path", str(exe),
            "--example", "pde_conformance", "--", mode, str(problem),
            "--model", model, "--solver", "Erk", "--reltol", "1e-10",
            "--abstol", "1e-12"] + list(extra)
-    rec = {"case": case, "mode": mode, "problem": str(problem), "model": model}
-    try:
-        p = subprocess.run(cmd, capture_output=True, env=env, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        rec["status"] = "timeout"
-        rec["message"] = f"timeout after {timeout}s"
-        rec["entries"] = parse_trace((e.stderr or b"").decode("utf-8", "replace"))
-        return rec
-    err = p.stderr.decode("utf-8", "replace")
+    rec = {"case": case, "mode": mode, "problem": str(problem), "model": model,
+           "manifest_excluded_rust": excluded}
+    # stderr to a FILE (lustre), not a pipe: a non-terminating case emits a
+    # trace block per RHS call and would otherwise buffer hundreds of MB of
+    # duplicate text in RAM (/ is tmpfs here).
+    ep = Path(errdir) / f"{case}.{mode}.err"
+    status = "ok"
+    with ep.open("wb") as fh:
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=fh,
+                               env=env, timeout=timeout)
+            if p.returncode != 0:
+                status = "error"
+        except subprocess.TimeoutExpired:
+            status = "timeout"
+    with ep.open("rb") as fh:
+        err = fh.read(CAP).decode("utf-8", "replace")
+    rec["status"] = status
+    rec["stderr_bytes"] = ep.stat().st_size
     rec["entries"] = parse_trace(err)
-    if p.returncode != 0:
-        rec["status"] = "error"
+    if status != "ok":
         rec["message"] = "\n".join(
-            l for l in err.splitlines() if not l.startswith("[vec-"))[-1500:]
-    else:
-        rec["status"] = "ok"
+            l for l in err.splitlines() if not l.startswith("[vec-"))[-1200:]
     return rec
 
 
-def discover(esd: Path, category: str):
+def discover(esd: Path, category: str, which: str = "included"):
+    """`which`: included | excluded | all.
+
+    A manifest that excludes the Rust binding is still worth TRACING: the
+    exclusions in this corpus say "Rust hangs / does not terminate", which is a
+    statement about solve time, not about whether the RHS evaluates. The bail
+    log is emitted on the very first RHS call, so a short-timeout run of an
+    excluded case still yields a complete coverage verdict for it.
+    """
     root = esd / "tests" / "conformance" / category
     out = []
     if not root.is_dir():
@@ -136,18 +154,21 @@ def discover(esd: Path, category: str):
         if not mf.is_file():
             continue
         m = json.loads(mf.read_text())
-        if "rust" in m.get("scope_excluded", {}) or "rust" in m.get(
-                "blocked_upstream_bindings", {}):
+        excl = m.get("scope_excluded", {}).get("rust") or m.get(
+            "blocked_upstream_bindings", {}).get("rust")
+        if which == "included" and excl:
+            continue
+        if which == "excluded" and not excl:
             continue
         problem = (d / m["problem"]).resolve()
         if not problem.is_file():
             continue
         if category == "simulation":
-            out.append((m["case"], problem, m["model"], "pde-tests", []))
+            out.append((m["case"], problem, m["model"], "pde-tests", [], excl))
         elif category == "convergence":
             at = str(m.get("assert_time", 0.1))
             out.append((m["case"], problem, m["model"], "convergence",
-                        ["--assert-time", at]))
+                        ["--assert-time", at], excl))
     return out
 
 
@@ -160,14 +181,19 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--which", default="included",
+                    choices=["included", "excluded", "all"])
+    ap.add_argument("--errdir", default=None)
     a = ap.parse_args()
 
-    cases = discover(Path(a.esd), a.category)
+    errdir = Path(a.errdir or (Path(a.out).parent / f"err-{a.category}-{a.which}"))
+    errdir.mkdir(parents=True, exist_ok=True)
+    cases = discover(Path(a.esd), a.category, a.which)
     if a.limit:
         cases = cases[: a.limit]
-    print(f"{len(cases)} {a.category} cases", file=sys.stderr)
-    jobs = [(a.ess, c, p, m, mode, extra, a.timeout)
-            for (c, p, m, mode, extra) in cases]
+    print(f"{len(cases)} {a.category} cases ({a.which})", file=sys.stderr)
+    jobs = [(a.ess, c, p, m, mode, extra, a.timeout, str(errdir), excl)
+            for (c, p, m, mode, extra, excl) in cases]
     results = []
     with cf.ThreadPoolExecutor(max_workers=a.jobs) as ex:
         for i, r in enumerate(ex.map(run_case, jobs), 1):
