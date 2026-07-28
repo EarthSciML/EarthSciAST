@@ -1861,6 +1861,64 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     }
 }
 
+/// Positional output-index symbol names for a top-level `makearray` box.
+///
+/// A `makearray` that reaches the SCALAR evaluator as an observed's whole body
+/// has no enclosing output-index symbols — it is not a cell of an `arrayop` —
+/// but [`VecBox`] wants one name per axis (they are what a coordinate ramp and
+/// the nested-aggregate dependence test are matched against). These placeholders
+/// carry a control character, which no `esm` identifier may contain
+/// (esm-spec §2.2), so they can never alias a real symbol: no `Variable` read
+/// resolves to a ramp over them, and no nested aggregate is rejected because it
+/// "mentions" one.
+fn makearray_box_syms(ndim: usize) -> Option<&'static [String]> {
+    /// Rank ceiling for the placeholder table (grid rank ≤ 4 in practice); a
+    /// deeper `makearray` simply takes the per-cell path.
+    const MAX_RANK: usize = 8;
+    static SYMS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let syms = SYMS.get_or_init(|| (0..MAX_RANK).map(|d| format!("\u{1}ma{d}")).collect());
+    syms.get(..ndim)
+}
+
+/// Would the per-cell [`eval_arrayop`] path recognize this `makearray` region
+/// value as a forward prefix scan (esm-spec §4.3.1)?
+///
+/// The whole-array overlay evaluates a region value through
+/// `eval_vec_nested_aggregate` → `try_eval_arrayop_vectorized`, which does NOT
+/// consult [`detect_prefix_scan`]: a cumulative aggregate would come out
+/// bit-identical but as an O(N²) triangular fold where the scan is O(N) — the
+/// exact regression `forward_scan_work_grows_linearly_not_quadratically` pins.
+/// So the overlay is declined for a `makearray` whose region value the scan
+/// would have claimed. Only the region values themselves need this test: an
+/// aggregate nested DEEPER already reaches the overlay's nested arm on the
+/// existing paths, scan-detection included or not, and this change does not
+/// alter that.
+///
+/// The check is one field test (`detect_prefix_scan` needs a `filter`) for the
+/// unfiltered region values that make up every stencil template, so the
+/// expensive spec build never runs on the hot path.
+fn region_value_is_prefix_scan(value: &Expr) -> bool {
+    let Expr::Operator(n) = value else {
+        return false;
+    };
+    if n.filter.is_none() {
+        return false;
+    }
+    let Some(spec) = arrayop_spec(n) else {
+        return false;
+    };
+    let static_ranges = static_contract_ranges(&spec.contract_dims);
+    detect_prefix_scan(
+        spec.idx_names,
+        &spec.ranges,
+        &spec.contract_names,
+        static_ranges.as_deref(),
+        spec.body,
+        spec.filter,
+    )
+    .is_some()
+}
+
 pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // Borrow (don't clone) the region boxes and their value exprs — a boundary
     // `makearray` is rebuilt on every observed materialization, and its `values`
@@ -1897,6 +1955,51 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         .map(|d| (hi[d] - lo[d] + 1).max(0) as usize)
         .collect();
     let origin = lo.clone();
+
+    // ---- Vectorized fast path (whole-array region writes) ------------------
+    // A `makearray` used as an observed's whole body — every boundary-dispatch
+    // stencil a discretization template expands to — reaches the evaluator HERE,
+    // not through `eval_arrayop`, so it had no overlay entry at all: its region
+    // values vectorized (they are `aggregate`s, which try the overlay
+    // themselves) but the assembly around them stayed a per-cell
+    // `CartesianTuples` walk writing through bounds-checked dynamic-stride
+    // `ArrayD` indexing. `ESS_VEC_DEBUG` reported these observeds as
+    // "vectorized" precisely because nothing bailed — there was no bail site.
+    //
+    // `eval_vec_makearray` is the same region-sub-range-write assembly the
+    // compiled-rule path already uses (pinned bit-identical by
+    // `covered_makearray_region_dispatch`), so routing to it keeps the answer
+    // identical while making the work N-independent and pool-backed.
+    //
+    // Gated on `loop_binds` being empty: inside a per-cell loop the nested
+    // aggregates depend on the enclosing bindings and the overlay would bail
+    // anyway — once per cell, which is pure loss.
+    if !vec_disabled()
+        && ctx.loop_binds.is_empty()
+        && !shape.contains(&0)
+        && !values.iter().any(region_value_is_prefix_scan)
+        && let Some(syms) = makearray_box_syms(ndim)
+    {
+        let bx = VecBox {
+            syms,
+            lo: &lo,
+            shape: &shape,
+            cnames: &[],
+            cvals: &[],
+        };
+        let materialized = with_arrayop_pool(|pool| {
+            let mut ops = 0usize;
+            eval_vec_makearray(node, &bx, &*ctx, pool, &mut ops).map(|vv| {
+                let out = vv.view().expect("vectorized makearray has a view").to_owned();
+                vv.release(pool);
+                out
+            })
+        });
+        if let Some(out) = materialized {
+            return Value::Array(Box::new(out));
+        }
+    }
+
     let mut arr = ArrayD::<f64>::zeros(IxDyn(&shape));
     for (region, value_expr) in regions.iter().zip(values.iter()) {
         let v = eval(value_expr, ctx);
@@ -1927,37 +2030,49 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
             if a.shape() != region_shape.as_slice() {
                 return Value::Scalar(f64::NAN);
             }
-            let mut tuples = CartesianTuples::new(&ranges);
-            while let Some(tuple) = tuples.next() {
-                let out_ix: Vec<usize> = tuple
-                    .iter()
-                    .enumerate()
-                    .map(|(d, x)| (x - origin[d]) as usize)
-                    .collect();
-                let src_ix: Vec<usize> = tuple
-                    .iter()
-                    .enumerate()
-                    .map(|(d, x)| (x - ranges[d].0) as usize)
-                    .collect();
-                arr[IxDyn(&out_ix)] = a[IxDyn(&src_ix)];
+            // The legal EMPTY region spelling (`stop == start - 1`, §4.3.2)
+            // writes nothing — and its `start` may sit one past the bounding
+            // box, which is not a slicable offset. The per-cell walk produced no
+            // tuples here; skip explicitly.
+            if region_shape.contains(&0) {
+                continue;
             }
+            // Whole-region slice assign. This used to be a `CartesianTuples`
+            // walk that built TWO `Vec<usize>` index tuples per cell and wrote
+            // through `ArrayD`'s bounds-checked, dynamic-stride `Index`/
+            // `IndexMut` — two heap allocations and two `stride_offset_checked`
+            // computations per element, for what is a straight sub-block copy.
+            // `assign` moves the same values to the same places (both arrays are
+            // in the evaluator's row-major layout and the shapes were just
+            // checked equal), so the result is bit-identical.
+            arr.slice_each_axis_mut(|ax| {
+                let d = ax.axis.index();
+                let s0 = (ranges[d].0 - origin[d]) as usize;
+                ndarray::Slice::from(s0..s0 + region_shape[d])
+            })
+            .assign(a);
             continue;
         }
-        let mut tuples = CartesianTuples::new(&ranges);
-        while let Some(tuple) = tuples.next() {
-            let indices: Vec<usize> = tuple
-                .iter()
-                .enumerate()
-                .map(|(d, x)| (x - origin[d]) as usize)
-                .collect();
-            let ix = IxDyn(&indices);
-            let scalar = match &v {
-                Value::Scalar(s) => *s,
-                Value::Array(a) if a.ndim() == 0 => a[IxDyn(&[])],
-                _ => continue,
-            };
-            arr[ix] = scalar;
+        let scalar = match &v {
+            Value::Scalar(s) => *s,
+            Value::Array(a) if a.ndim() == 0 => a[IxDyn(&[])],
+            // Unreachable: the `ndim() > 0` array case returned/continued above.
+            _ => continue,
+        };
+        // Whole-region fill (was the same per-cell `Vec`-building walk).
+        let region_shape: Vec<usize> = ranges
+            .iter()
+            .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+            .collect();
+        if region_shape.contains(&0) {
+            continue;
         }
+        arr.slice_each_axis_mut(|ax| {
+            let d = ax.axis.index();
+            let s0 = (ranges[d].0 - origin[d]) as usize;
+            ndarray::Slice::from(s0..s0 + region_shape[d])
+        })
+        .fill(scalar);
     }
     Value::Array(Box::new(arr))
 }
