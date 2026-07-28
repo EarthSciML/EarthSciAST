@@ -550,6 +550,43 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
     }
 }
 
+/// [`apply_binary`]'s per-element arithmetic with the **op-name lookup lifted
+/// out**: resolve the name once, then call the returned kernel per element.
+///
+/// The per-cell oracle calls `apply_binary(op, x, y)` once per cell, so the
+/// `match op` costs one string dispatch per element either way. The whole-array
+/// overlay ran the *same* call inside an N-element `ndarray::Zip`, so every
+/// element of every kernel node re-matched the operator name — `apply_binary`
+/// plus `__memcmp_evex` were 14% of a vectorized RHS profile, and the string
+/// compare also blocked the loop from vectorizing. Hoisting the lookup to once
+/// per AST node leaves an inlinable `f64`-only body in the loop.
+///
+/// The arms are the arms of [`apply_binary`], in the same order, evaluating the
+/// same expressions — `binary_kernels_match_apply_binary` pins the two to raw
+/// IEEE bit equality over every op name and a spread of operands (±0, ±inf,
+/// NaN, subnormals), so a divergence is a test failure, not a silent one.
+pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
+    match op {
+        "+" => |x, y| x + y,
+        "-" => |x, y| x - y,
+        "*" => |x, y| x * y,
+        "/" => |x, y| x / y,
+        "^" => |x: f64, y: f64| x.powf(y),
+        "atan2" => |x: f64, y: f64| x.atan2(y),
+        "min" => |x: f64, y: f64| x.min(y),
+        "max" => |x: f64, y: f64| x.max(y),
+        "==" => |x, y| scalar_compare("==", x, y),
+        "!=" => |x, y| scalar_compare("!=", x, y),
+        "<" => |x, y| scalar_compare("<", x, y),
+        "<=" => |x, y| scalar_compare("<=", x, y),
+        ">" => |x, y| scalar_compare(">", x, y),
+        ">=" => |x, y| scalar_compare(">=", x, y),
+        "and" => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
+        "or" => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
+        _ => |_, _| f64::NAN,
+    }
+}
+
 pub(super) fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> ArrayD<f64> {
     // Julia-style left-align: pad the lower-rank operand with trailing
     // singletons before broadcasting.
@@ -662,6 +699,118 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
         "atanh" => x.atanh(),
         "not" => (x == 0.0) as i32 as f64,
         _ => f64::NAN,
+    }
+}
+
+/// [`apply_unary`]'s per-element map with the op-name lookup lifted out — the
+/// unary counterpart of [`binary_kernel`], for the same reason (the whole-array
+/// overlay applied it inside an N-element loop). Arms mirror [`apply_unary`]
+/// exactly; `unary_kernels_match_apply_unary` pins them to bit equality.
+pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
+    match op {
+        "exp" => |x: f64| x.exp(),
+        "log" | "ln" => |x: f64| x.ln(),
+        "log10" => |x: f64| x.log10(),
+        "sqrt" => |x: f64| x.sqrt(),
+        "abs" => |x: f64| x.abs(),
+        "sign" => |x: f64| {
+            if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        },
+        "floor" => |x: f64| x.floor(),
+        "ceil" => |x: f64| x.ceil(),
+        "sin" => |x: f64| x.sin(),
+        "cos" => |x: f64| x.cos(),
+        "tan" => |x: f64| x.tan(),
+        "asin" => |x: f64| x.asin(),
+        "acos" => |x: f64| x.acos(),
+        "atan" => |x: f64| x.atan(),
+        "sinh" => |x: f64| x.sinh(),
+        "cosh" => |x: f64| x.cosh(),
+        "tanh" => |x: f64| x.tanh(),
+        "asinh" => |x: f64| x.asinh(),
+        "acosh" => |x: f64| x.acosh(),
+        "atanh" => |x: f64| x.atanh(),
+        "not" => |x: f64| (x == 0.0) as i32 as f64,
+        _ => |_| f64::NAN,
+    }
+}
+
+#[cfg(test)]
+mod kernel_equivalence_tests {
+    //! The whole-array overlay resolves an operator name to a kernel ONCE per
+    //! AST node ([`binary_kernel`]/[`unary_kernel`]) where the per-cell oracle
+    //! re-matches it per element ([`apply_binary`]/[`apply_unary`]). The two
+    //! paths must stay bit-identical, so pin them here rather than trusting two
+    //! hand-kept copies of the same match to drift together.
+    use super::*;
+
+    /// Operand spread: signed zeros, subnormals, ±inf and NaN, so a divergence
+    /// in a branchy arm (`min`/`max`/`sign`/the comparisons) cannot hide.
+    const XS: &[f64] = &[
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        -3.25,
+        2.0,
+        f64::MIN_POSITIVE,
+        5e-324,
+        1e300,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+
+    const BIN_OPS: &[&str] = &[
+        "+", "-", "*", "/", "^", "atan2", "min", "max", "==", "!=", "<", "<=", ">", ">=", "and",
+        "or", "no_such_op",
+    ];
+
+    const UN_OPS: &[&str] = &[
+        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos", "tan",
+        "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "not",
+        "no_such_op",
+    ];
+
+    #[test]
+    fn binary_kernels_match_apply_binary() {
+        for op in BIN_OPS {
+            let k = binary_kernel(op);
+            for &x in XS {
+                for &y in XS {
+                    let a = apply_binary(op, x, y);
+                    let b = k(x, y);
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "binary_kernel(\"{op}\")({x}, {y}) = {b} != apply_binary = {a}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unary_kernels_match_apply_unary() {
+        for op in UN_OPS {
+            let k = unary_kernel(op);
+            for &x in XS {
+                let a = apply_unary(op, x);
+                let b = k(x);
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "unary_kernel(\"{op}\")({x}) = {b} != apply_unary = {a}"
+                );
+            }
+        }
     }
 }
 

@@ -927,17 +927,23 @@ pub(super) fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
 /// Lets a stencil whose speed/flux uses `sqrt`/`abs`/`exp`/… (e.g. the level-set
 /// Godunov `|∇φ|`) stay on the whole-array fast path instead of scalarizing.
 pub(super) fn vec_unary<'a>(op: &str, v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
+    // Resolve the operator NAME once per AST node instead of once per element:
+    // the element loop below runs over the whole output box, and
+    // `apply_unary(op, x)` re-matched the name string on every one of those
+    // elements. `unary_kernel` is pinned bit-identical to `apply_unary`
+    // (`unary_kernels_match_apply_unary`), so this is a pure dispatch hoist.
+    let f = unary_kernel(op);
     match v {
-        VecValue::Scalar(s) => VecValue::Scalar(apply_unary(op, s)),
+        VecValue::Scalar(s) => VecValue::Scalar(f(s)),
         VecValue::Owned { mut data, origin } => {
-            data.mapv_inplace(|x| apply_unary(op, x));
+            data.mapv_inplace(f);
             VecValue::Owned { data, origin }
         }
         VecValue::View { data, origin } => {
             let mut buf = pool.take_array(data.shape());
             ndarray::Zip::from(&mut buf)
                 .and(data)
-                .for_each(|o, &x| *o = apply_unary(op, x));
+                .for_each(|o, &x| *o = f(x));
             VecValue::Owned { data: buf, origin }
         }
     }
@@ -956,20 +962,46 @@ pub(super) fn vec_combine<'a>(
     b: VecValue<'a>,
     pool: &mut Pool,
 ) -> Option<VecValue<'a>> {
+    // Resolve the operator NAME once per AST node, then run an `f64`-only
+    // element loop. `apply_binary(op, …)` was called inside the whole-array
+    // `Zip`s below, so every element of every kernel node re-matched the name
+    // string — `apply_binary` + `__memcmp_evex` were 14% of a vectorized RHS
+    // profile, and the string compare also kept the loop scalar.
+    //
+    // The four arithmetic ops that dominate a stencil get a monomorphized,
+    // inlinable closure; everything else uses the shared [`binary_kernel`]
+    // function pointer (still one dispatch per node rather than per element).
+    // Both are pinned bit-identical to `apply_binary`
+    // (`binary_kernels_match_apply_binary`), and the element order/association
+    // is unchanged, so this is a pure dispatch hoist.
+    match op {
+        "+" => vec_combine_with(|x, y| x + y, a, b, pool),
+        "-" => vec_combine_with(|x, y| x - y, a, b, pool),
+        "*" => vec_combine_with(|x, y| x * y, a, b, pool),
+        "/" => vec_combine_with(|x, y| x / y, a, b, pool),
+        other => vec_combine_with(binary_kernel(other), a, b, pool),
+    }
+}
+
+/// [`vec_combine`] with the elementwise kernel already resolved.
+fn vec_combine_with<'a, F: Fn(f64, f64) -> f64>(
+    f: F,
+    a: VecValue<'a>,
+    b: VecValue<'a>,
+    pool: &mut Pool,
+) -> Option<VecValue<'a>> {
     match (a, b) {
-        (VecValue::Scalar(x), VecValue::Scalar(y)) => {
-            Some(VecValue::Scalar(apply_binary(op, x, y)))
-        }
+        (VecValue::Scalar(x), VecValue::Scalar(y)) => Some(VecValue::Scalar(f(x, y))),
         // scalar ∘ array
         (VecValue::Scalar(x), barr) => {
             let (mut data, origin) = barr.into_owned(pool);
-            data.mapv_inplace(|y| apply_binary(op, x, y));
+            data.mapv_inplace(|y| f(x, y));
             Some(VecValue::Owned { data, origin })
         }
         // array ∘ scalar
         (aarr, VecValue::Scalar(y)) => {
             let (mut data, origin) = aarr.into_owned(pool);
-            data.mapv_inplace(|x| apply_binary(op, x, y));
+            data.mapv_inplace(|x| f(x, y));
             Some(VecValue::Owned { data, origin })
         }
         // array ∘ array
@@ -987,7 +1019,7 @@ pub(super) fn vec_combine<'a>(
                         let bv = b2.view().expect("array operand has a view");
                         ndarray::Zip::from(&mut data)
                             .and(&bv)
-                            .for_each(|x, &y| *x = apply_binary(op, *x, y));
+                            .for_each(|x, &y| *x = f(*x, y));
                     }
                     b2.release(pool);
                     Some(VecValue::Owned { data, origin })
@@ -998,7 +1030,7 @@ pub(super) fn vec_combine<'a>(
                     let av = a2.view().expect("array operand has a view");
                     ndarray::Zip::from(&mut data)
                         .and(&av)
-                        .for_each(|bslot, &aval| *bslot = apply_binary(op, aval, *bslot));
+                        .for_each(|bslot, &aval| *bslot = f(aval, *bslot));
                     Some(VecValue::Owned { data, origin })
                 }
                 // both Views: a fresh pooled buffer.
@@ -1010,7 +1042,7 @@ pub(super) fn vec_combine<'a>(
                     ndarray::Zip::from(&mut buf)
                         .and(&av)
                         .and(&bv)
-                        .for_each(|o, &x, &y| *o = apply_binary(op, x, y));
+                        .for_each(|o, &x, &y| *o = f(x, y));
                     Some(VecValue::Owned { data: buf, origin })
                 }
             }
