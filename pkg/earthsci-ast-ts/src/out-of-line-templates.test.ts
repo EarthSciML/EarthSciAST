@@ -16,6 +16,7 @@ import {
   expandDocument,
   emitEsmString,
   flattenTemplateRegistries,
+  collectApplyNames,
   EsmMachineryError,
 } from './lower-expression-templates.js'
 import { resolveTemplateMachinery, emitDocument } from './template-imports.js'
@@ -233,6 +234,38 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     // per-component blocks surrendered to the merged registry
     expect('expression_templates' in models.A).toBe(false)
     expect('expression_templates' in models.B).toBe(false)
+  })
+
+  // -------------------------------------------------------------------------
+  // flatten_registry_merge_transitive (§9.6.4 rule 7, §10.7): TWO models in ONE
+  // document import the same rule library. `interior_stencil` folds differently
+  // per model (B rebinds its free `inv_dx`) and collides; the byte-identical
+  // `outer_stencil` that REFERENCES it must collide too — a single deduped
+  // `outer_stencil` would carry a reference the merged registry no longer holds,
+  // and expansion would fail with `apply_expression_template_unknown_template`
+  // naming a transitively imported stencil no model ever mentioned.
+  // -------------------------------------------------------------------------
+  it('flatten_registry_merge_transitive: collisions propagate along the reference DAG', () => {
+    const loaded = loadRefPreserving('flatten_registry_merge_transitive')
+    const { root, merged } = flattenTemplateRegistries(loaded)
+    expect(new Set(Object.keys(merged))).toEqual(
+      new Set(['A.interior_stencil', 'A.outer_stencil', 'B.interior_stencil', 'B.outer_stencil']),
+    )
+    // Each owner's wrapper reaches its OWN leaf, never the other model's.
+    const names = (x: unknown): string[] => collectApplyNames(x, [])
+    expect(names((merged['A.outer_stencil'] as any).body)).toEqual(['A.interior_stencil'])
+    expect(names((merged['B.outer_stencil'] as any).body)).toEqual(['B.interior_stencil'])
+    // Component reference sites follow in lockstep.
+    const models = root.models as Record<string, any>
+    expect(names(models.A.equations)).toEqual(['A.outer_stencil'])
+    expect(names(models.B.equations)).toEqual(['B.outer_stencil'])
+    // Nothing dangles: every surviving reference resolves in the merged registry.
+    for (const decl of Object.values(merged)) {
+      for (const r of names(decl)) expect(Object.keys(merged)).toContain(r)
+    }
+    for (const m of ['A', 'B']) {
+      for (const r of names(models[m].equations)) expect(Object.keys(merged)).toContain(r)
+    }
   })
 
   // -------------------------------------------------------------------------
