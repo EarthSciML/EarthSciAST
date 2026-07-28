@@ -1987,6 +1987,21 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         if let Some(out) = materialized {
             return Value::Array(Box::new(out));
         }
+        // `eval_vec_makearray` records its own bail site, so the log already
+        // names the offending region value.
+    } else if !vec_disabled() {
+        // Declined before the overlay ran, so nothing else recorded a reason.
+        // Without this, a `makearray` observed that took the per-cell path
+        // reported as "vectorized" under `ESS_VEC_DEBUG` — an empty bail log —
+        // and was invisible to exactly the tracing built to find it.
+        note_bail(|| {
+            format!(
+                "makearray: overlay not attempted (loop_binds={}, empty axis={}, prefix-scan region={})",
+                ctx.loop_binds.len(),
+                shape.contains(&0),
+                values.iter().any(region_value_is_prefix_scan),
+            )
+        });
     }
 
     let mut arr = ArrayD::<f64>::zeros(IxDyn(&shape));
