@@ -920,8 +920,17 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
 /// already passed at this point; a document that fails to type (e.g. an
 /// unlowered template node) carries no model cycle in the corpus, so skipping it
 /// cannot miss a rejection.
+///
+/// Deserializes THROUGH a borrow of the document (`&Value` is itself a
+/// `Deserializer`) rather than `from_value(json_value.clone())`. This runs
+/// AFTER §9.7 template-import resolution, so `json_value` is the fully expanded
+/// document — orders of magnitude larger than the authored file — and the clone
+/// was a full deep copy of it that existed only to be consumed by the very next
+/// line and dropped. Same typed result, same verdict; one fewer copy of the
+/// expanded AST.
 fn check_circular_model_dependencies_typed(json_value: &Value, errors: &mut Vec<String>) {
-    let Ok(esm_file) = serde_json::from_value::<EsmFile>(json_value.clone()) else {
+    use serde::Deserialize as _;
+    let Ok(esm_file) = EsmFile::deserialize(json_value) else {
         return;
     };
     let Some(models) = esm_file.models.as_ref() else {
