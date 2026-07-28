@@ -503,6 +503,27 @@ The categories a divergence can be scored against, and what "agree" means in eac
 > let a *fraction of the fixtures* disagree — that is the construction that made
 > the old gate unable to fail.
 
+> **Note (Rust simulation: results depend on the machine's core count).** The
+> Rust binding's simulation trajectories are **not** reproducible across machines
+> with different CPU counts, and a "bit-identical" claim about a Rust trajectory
+> is only ever a same-machine, same-thread-count claim. `rayon` is not enabled in
+> `earthsci-ast-rs`; it arrives transitively as `diffsol → faer → rayon`, and
+> faer's `GLOBAL_PARALLELISM` defaults to `Par::Rayon(0)` whenever its `rayon`
+> feature is on, which diffsol then passes into every dense operation. faer's
+> parallel `matvec` accumulates per-thread partials and sums them at the end, so
+> **summation order is a function of the thread count.** Measured directly on one
+> binary with `RAYON_NUM_THREADS` set to 1 / 2 / 4 / 20: four distinct, each
+> individually reproducible, trajectories, differing in RHS-call count as well as
+> in the values. This is a property of the dense linear algebra under the ODE
+> solver, not of the array evaluator — the *Forward cumulative (prefix)
+> reductions* row above is unaffected, since those are folded in the evaluator.
+> Sequential execution is available (`set_global_parallelism(Par::Seq)`, or
+> dropping faer's `rayon` feature) but changes the numbers, so adopting it means
+> re-baselining every pinned Rust reference; it is **not** a way to reproduce an
+> existing one. Until that is done, pin the thread count alongside any Rust
+> trajectory golden, and read §5.9's tolerances as the operative gate rather than
+> exact agreement.
+
 > **Note (graph structure).** `tests/graphs/*.json` carries `expected_nodes` /
 > `expected_edges` for 14 fixtures and `tests/graphs/expected_{dot,mermaid,graphml}/`
 > carries export goldens. **No binding asserts any of them**, and the

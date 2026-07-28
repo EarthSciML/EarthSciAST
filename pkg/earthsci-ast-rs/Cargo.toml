@@ -80,6 +80,12 @@ bumpalo = { version = "3.14", optional = true }
 wide = { version = "0.7", optional = true }
 bytemuck = { version = "1.14", optional = true }
 criterion = { version = "0.5", optional = true }
+# OPT-IN data-provider bridge (feature `esio`, src/esio_provider.rs). A PATH dep
+# because both crates live in this working tree; a published build would pin a
+# version/git rev. Optional so the default build neither links EarthSciIO nor
+# inherits its netcdf/hdf5 C build requirements.
+earthsciio = { path = "../../../EarthSciIO/rust", optional = true }
+time = { version = "0.3", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
@@ -119,6 +125,14 @@ required-features = ["benchmarks"]
 default = ["cli"]
 cli = ["clap"]
 wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "web-sys"]
+# OPT-IN EarthSciIO data-provider bridge (src/esio_provider.rs): a
+# `CadenceProvider` delegating to a real `earthsciio::Provider`, so the loader
+# seam runs through EarthSciIO's transport + content-addressed cache and can push
+# a projection down to a store-backed reader. OFF by default — ESS does not link
+# EarthSciIO on the default path (the rigs are deliberately decoupled; the Python
+# binding's `esio_provider` is opt-in for the same reason), and EarthSciIO pulls
+# netcdf/hdf5 C libraries that would otherwise burden every consumer's build.
+esio = ["dep:earthsciio", "dep:time"]
 # Performance features
 parallel = ["rayon"]
 simd = ["wide", "bytemuck"]

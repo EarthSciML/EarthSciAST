@@ -173,7 +173,9 @@ impl<'a> VecValue<'a> {
         match self {
             VecValue::Owned { data, origin } => (data, origin),
             VecValue::View { data, origin } => {
-                let mut buf = pool.take_array(data.shape());
+                // `assign` writes every element of the box, so the checkout
+                // does not need to be zero-filled.
+                let mut buf = pool.take_array_uninit(data.shape());
                 buf.assign(data);
                 (buf, origin)
             }
@@ -301,6 +303,18 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     if shape.contains(&0) {
         bail_vec!("arrayop: empty output box");
     }
+    // ess-cse: this box is one CSE scope. Analysing the body is idempotent (it
+    // runs once per distinct body root per scratch); the scope guard closes on
+    // every path, including the `?`/`bail_vec!` early returns below. At the
+    // OUTERMOST entry the guard also recycles the previous evaluation's memo
+    // arrays into `pool` — safe there because no `VecValue` from the previous
+    // top-level evaluation can still be alive (each caller consumes its result
+    // before returning). A nested aggregate re-enters here and gets its own
+    // scope, so a subtree under a different box never shares a memo entry.
+    if let Some(rt) = ctx.cse {
+        rt.analyse(body, output_idx_names, contract_names);
+    }
+    let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
     let mut ops = 0usize;
     let v = if contract_names.is_empty() {
         let bx = VecBox {
@@ -384,7 +398,8 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     }
     let out = match v {
         VecValue::Scalar(s) => {
-            let mut buf = pool.take_array(&shape);
+            // `fill` writes every element, so no zero-fill on checkout.
+            let mut buf = pool.take_array_uninit(&shape);
             buf.fill(s);
             VecValue::Owned {
                 data: buf,
@@ -399,12 +414,12 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
 /// Map a reduction's ⊕ to the elementwise [`apply_binary`] op used to combine
 /// term arrays. `None` for the boolean reductions, which the fast path leaves to
 /// the oracle.
-pub(super) fn reduce_combine_op(reduce: ReduceKind) -> Option<&'static str> {
+pub(super) fn reduce_combine_op(reduce: ReduceKind) -> Option<BinCode> {
     match reduce {
-        ReduceKind::Sum => Some("+"),
-        ReduceKind::Product => Some("*"),
-        ReduceKind::Max => Some("max"),
-        ReduceKind::Min => Some("min"),
+        ReduceKind::Sum => Some(BinCode::Add),
+        ReduceKind::Product => Some(BinCode::Mul),
+        ReduceKind::Max => Some(BinCode::Max),
+        ReduceKind::Min => Some(BinCode::Min),
         ReduceKind::Or | ReduceKind::And => None,
     }
 }
@@ -485,6 +500,10 @@ pub(super) fn eval_vec_contracted<'a>(
     let mut cvals = [0i64; MAXC];
     cvals[..nc].copy_from_slice(&clo[..nc]);
     loop {
+        // ess-cse: each contraction tuple binds `cvals` differently, so it is a
+        // DISTINCT box and therefore a distinct CSE scope — a subtree memoized
+        // at tuple k must not be served at tuple k+1.
+        let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
         let bx = VecBox {
             syms: output_idx_names,
             lo,
@@ -575,11 +594,38 @@ pub(super) fn eval_vec<'a>(
     if vec_trace_on() {
         note_op();
     }
+    // ---- CSE (ess-cse) -----------------------------------------------------
+    // A discretization template is expanded at every reference site, so one
+    // lowered tendency body evaluates the SAME subtree dozens of times under the
+    // same box (482,961 operator-node evaluations collapse to 14,208 distinct
+    // ones for simpleclimate.esm). `class_of` yields a class id only for a node
+    // whose class repeats inside its own scope, and the memo is keyed by
+    // (scope, class) — a fresh scope per `VecBox` — so a hit is the value this
+    // node WOULD have computed, not merely a syntactic twin. See `cse.rs` for
+    // the scoping argument.
+    //
+    // A class id carrying `PURE_BIT` marks a BOX-PURE subtree (ess-lih): one
+    // built only from this box's index symbols and CONST-tier names, so its
+    // value is fixed for the whole solve. `get`/`put` route those to the
+    // PERSISTENT store keyed by the box SIGNATURE instead of the per-evaluation
+    // memo, so a model's grid geometry — coordinate ramps, `sin`/`cos` of a
+    // latitude, metric factors read off an already-hoisted static observed — is
+    // computed once rather than once per RHS call. See `cse.rs` (§ess-lih).
+    let cse_class = ctx.cse.and_then(|c| c.class_of(expr));
+    if let (Some(rt), Some(class)) = (ctx.cse, cse_class)
+        && let Some(hit) = rt.get(class, bx)
+    {
+        return Some(hit);
+    }
     let r = match expr {
         Expr::Number(n) => Some(VecValue::Scalar(*n)),
         Expr::Integer(n) => Some(VecValue::Scalar(*n as f64)),
         Expr::Variable(name) => eval_vec_variable(name, bx, ctx, pool),
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
+    };
+    let r = match (ctx.cse, cse_class, r) {
+        (Some(rt), Some(class), Some(v)) => Some(rt.put(class, v, bx)),
+        (_, _, r) => r,
     };
     if r.is_none() {
         note_bail(|| format!("  in {}", describe_expr(expr)));
@@ -610,7 +656,8 @@ pub(super) fn eval_vec_variable<'a>(
     // exactly the value the oracle produces in each cell, so downstream
     // arithmetic stays bit-identical.
     if let Some(a) = bx.syms.iter().position(|s| s == name) {
-        let mut ramp = pool.take_array(bx.shape);
+        // The ramp writes every element of the box below, so no zero-fill.
+        let mut ramp = pool.take_array_uninit(bx.shape);
         let lo = bx.lo[a];
         ramp.indexed_iter_mut()
             .for_each(|(idx, v)| *v = (lo + idx[a] as i64) as f64);
@@ -657,6 +704,92 @@ pub(super) fn eval_vec_variable<'a>(
     None
 }
 
+/// An operator resolved to the [`eval_vec_op`] arm that handles it, plus (for
+/// the kernel families) the element kernel's code.
+///
+/// `eval_vec_op` used to select its arm with `match node.op.as_str()` — a chain
+/// of string comparisons run on EVERY node visit, and the enclosed kernel
+/// families then re-matched the same name one to three more times
+/// (`vec_combine`, `binary_kernel`, `scalar_compare`). A perf profile of the
+/// solve put ~2.5% in that chain (`__memcmp_evex_movbe` 1.14% self, plus the
+/// inlined `str PartialEq::eq` under `eval_vec_op`). Commit 857c2768 removed the
+/// per-ELEMENT case; this removes the per-NODE case.
+///
+/// The mapping is pinned to the arm structure it replaces by
+/// `vec_op_code_matches_the_dispatch_arms`, and each kernel code is pinned to
+/// the per-cell oracle's `apply_binary`/`apply_unary` by the equivalence tests
+/// in [`super::eval`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum VecOp {
+    /// `+ - * / ^ min max atan2 and or` — n-ary left fold through [`vec_combine`].
+    Arith(BinCode),
+    /// `== != < <= > >=` — strictly binary, same [`vec_combine`] kernel.
+    Cmp(BinCode),
+    /// The 21 unary transcendental/rounding maps plus `not`.
+    Unary(UnCode),
+    Neg,
+    Index,
+    Aggregate,
+    Makearray,
+    Const,
+    Ifelse,
+    Broadcast,
+    /// Everything the overlay does not vectorize (→ per-cell oracle).
+    Unsupported,
+}
+
+/// Resolve an operator name to its [`eval_vec_op`] arm. ONE string match per AST
+/// node; every dispatch below it is on the returned code.
+pub(super) fn vec_op_code(op: &str) -> VecOp {
+    match op {
+        "+" => VecOp::Arith(BinCode::Add),
+        "-" => VecOp::Arith(BinCode::Sub),
+        "*" => VecOp::Arith(BinCode::Mul),
+        "/" => VecOp::Arith(BinCode::Div),
+        "^" => VecOp::Arith(BinCode::Pow),
+        "min" => VecOp::Arith(BinCode::Min),
+        "max" => VecOp::Arith(BinCode::Max),
+        "atan2" => VecOp::Arith(BinCode::Atan2),
+        "and" => VecOp::Arith(BinCode::And),
+        "or" => VecOp::Arith(BinCode::Or),
+        "==" => VecOp::Cmp(BinCode::Eq),
+        "!=" => VecOp::Cmp(BinCode::Ne),
+        "<" => VecOp::Cmp(BinCode::Lt),
+        "<=" => VecOp::Cmp(BinCode::Le),
+        ">" => VecOp::Cmp(BinCode::Gt),
+        ">=" => VecOp::Cmp(BinCode::Ge),
+        "exp" => VecOp::Unary(UnCode::Exp),
+        "log" | "ln" => VecOp::Unary(UnCode::Ln),
+        "log10" => VecOp::Unary(UnCode::Log10),
+        "sqrt" => VecOp::Unary(UnCode::Sqrt),
+        "abs" => VecOp::Unary(UnCode::Abs),
+        "sign" => VecOp::Unary(UnCode::Sign),
+        "floor" => VecOp::Unary(UnCode::Floor),
+        "ceil" => VecOp::Unary(UnCode::Ceil),
+        "sin" => VecOp::Unary(UnCode::Sin),
+        "cos" => VecOp::Unary(UnCode::Cos),
+        "tan" => VecOp::Unary(UnCode::Tan),
+        "asin" => VecOp::Unary(UnCode::Asin),
+        "acos" => VecOp::Unary(UnCode::Acos),
+        "atan" => VecOp::Unary(UnCode::Atan),
+        "sinh" => VecOp::Unary(UnCode::Sinh),
+        "cosh" => VecOp::Unary(UnCode::Cosh),
+        "tanh" => VecOp::Unary(UnCode::Tanh),
+        "asinh" => VecOp::Unary(UnCode::Asinh),
+        "acosh" => VecOp::Unary(UnCode::Acosh),
+        "atanh" => VecOp::Unary(UnCode::Atanh),
+        "not" => VecOp::Unary(UnCode::Not),
+        "neg" => VecOp::Neg,
+        "index" => VecOp::Index,
+        "aggregate" => VecOp::Aggregate,
+        "makearray" => VecOp::Makearray,
+        "const" => VecOp::Const,
+        "ifelse" => VecOp::Ifelse,
+        "broadcast" => VecOp::Broadcast,
+        _ => VecOp::Unsupported,
+    }
+}
+
 pub(super) fn eval_vec_op<'a>(
     node: &ExpressionNode,
     bx: &VecBox,
@@ -664,7 +797,7 @@ pub(super) fn eval_vec_op<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    match node.op.as_str() {
+    match vec_op_code(&node.op) {
         // Elementwise / n-ary arithmetic, plus `atan2` (binary) and the logical
         // connectives `and`/`or` (n-ary). All fold left-to-right through
         // `vec_combine` → `apply_binary` — the SAME kernel and order the per-cell
@@ -673,7 +806,7 @@ pub(super) fn eval_vec_op<'a>(
         // than bailing to the oracle) is what lets a behaviour-stack observed
         // whose body mixes arithmetic with a wind/slope `atan2` or an
         // `and(code>=1, code<=13)` fuel gate stay on the vectorized path.
-        "+" | "-" | "*" | "/" | "^" | "min" | "max" | "atan2" | "and" | "or" => {
+        VecOp::Arith(code) => {
             // `args[0]` was indexed with no emptiness guard, so an aggregate body
             // containing e.g. `{"op":"+","args":[]}` PANICKED here while the
             // oracle tolerated it — the two paths did not even agree on whether
@@ -681,21 +814,21 @@ pub(super) fn eval_vec_op<'a>(
             // before evaluation; bailing to the oracle (`None`) keeps this path
             // panic-free for the `eval_expression` bypass, which is not gated.
             let (first, rest) = node.args.split_first()?;
-            if node.op == "-" && rest.is_empty() {
+            if code == BinCode::Sub && rest.is_empty() {
                 return Some(vec_negate(eval_vec(first, bx, ctx, pool, ops)?, pool));
             }
             let mut acc = eval_vec(first, bx, ctx, pool, ops)?;
             for a in rest {
                 let v = eval_vec(a, bx, ctx, pool, ops)?;
-                acc = vec_combine(&node.op, acc, v, pool)?;
+                acc = vec_combine(code, acc, v, pool)?;
             }
             Some(acc)
         }
-        "neg" => Some(vec_negate(
+        VecOp::Neg => Some(vec_negate(
             eval_vec(node.args.first()?, bx, ctx, pool, ops)?,
             pool,
         )),
-        "index" => eval_vec_index(node, bx, ctx, pool, ops),
+        VecOp::Index => eval_vec_index(node, bx, ctx, pool, ops),
         // A nested `aggregate` used as an array-valued sub-expression — the
         // shape every discretized primitive-equation tendency lowers to:
         // `D(u[i,j,k]) = index(aggregate[i,j,k](…), i, j, k)`. Materialize it
@@ -705,9 +838,9 @@ pub(super) fn eval_vec_op<'a>(
         // then re-materialized the ENTIRE nested array once per output cell —
         // an O(N²) walk that dominated the RHS. See [`eval_vec_nested_aggregate`]
         // for the binding-independence precondition that makes hoisting sound.
-        "aggregate" => eval_vec_nested_aggregate(node, bx, ctx, pool, ops),
-        "makearray" => eval_vec_makearray(node, bx, ctx, pool, ops),
-        "const" => match eval_const(node) {
+        VecOp::Aggregate => eval_vec_nested_aggregate(node, bx, ctx, pool, ops),
+        VecOp::Makearray => eval_vec_makearray(node, bx, ctx, pool, ops),
+        VecOp::Const => match eval_const(node) {
             Value::Scalar(s) => Some(VecValue::Scalar(s)),
             // Array-valued constants are not part of the stencil fast path.
             Value::Array(_) => {
@@ -720,7 +853,7 @@ pub(super) fn eval_vec_op<'a>(
         // tuple. Bit-identical to the oracle's `eval_op` (same exact-equality
         // `scalar_compare` and `c != 0.0` branch test). An *array* operand (a
         // per-cell-varying condition) is not on the fast path and bails to the oracle.
-        "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+        VecOp::Cmp(code) => {
             if node.args.len() != 2 {
                 return None;
             }
@@ -731,9 +864,9 @@ pub(super) fn eval_vec_op<'a>(
             // bit-identically to the oracle, from the same kernel.
             let a = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
             let b = eval_vec(&node.args[1], bx, ctx, pool, ops)?;
-            vec_combine(&node.op, a, b, pool)
+            vec_combine(code, a, b, pool)
         }
-        "ifelse" => {
+        VecOp::Ifelse => {
             if node.args.len() != 3 {
                 return None;
             }
@@ -766,34 +899,32 @@ pub(super) fn eval_vec_op<'a>(
         // which handles `not`). Keeping these on the fast path is what lets a
         // level-set / upwind stencil whose speed uses `sqrt`/`abs` (Godunov
         // `|∇φ|`) — or a mask that negates a per-cell predicate — avoid scalarizing.
-        "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
-        | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-        | "acosh" | "atanh" | "not" => {
+        VecOp::Unary(code) => {
             if node.args.len() != 1 {
                 return None;
             }
             let v = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
-            Some(vec_unary(&node.op, v, pool))
+            Some(vec_unary(code, v, pool))
         }
         // Elementwise `broadcast(fn; a, b, …)` — the whole-array analogue of
         // `eval_broadcast`, folding operands with the SAME `apply_binary` kernel
         // (via `vec_combine`) in the SAME left-to-right order, so it is
         // bit-identical to the oracle. `vec_combine` returns `None` for a
         // `broadcast_fn` it does not vectorize (e.g. `atan2`), bailing safely.
-        "broadcast" => {
-            let fn_name = node.broadcast_fn.as_deref().unwrap_or("+");
+        VecOp::Broadcast => {
+            let code = BinCode::of(node.broadcast_fn.as_deref().unwrap_or("+"));
             let mut it = node.args.iter();
             let first = it.next()?;
             let mut acc = eval_vec(first, bx, ctx, pool, ops)?;
             for a in it {
                 let v = eval_vec(a, bx, ctx, pool, ops)?;
-                acc = vec_combine(fn_name, acc, v, pool)?;
+                acc = vec_combine(code, acc, v, pool)?;
             }
             Some(acc)
         }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
         // concat, `fn` closed-registry calls, atan2, D, …) falls back.
-        _ => {
+        VecOp::Unsupported => {
             note_bail(|| format!("op: unsupported operator `{}`/{}", node.op, node.args.len()));
             None
         }
@@ -910,7 +1041,8 @@ pub(super) fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
             VecValue::Owned { data, origin }
         }
         VecValue::View { data, origin } => {
-            let mut buf = pool.take_array(data.shape());
+            // The `Zip` writes every element, so no zero-fill on checkout.
+            let mut buf = pool.take_array_uninit(data.shape());
             ndarray::Zip::from(&mut buf)
                 .and(data)
                 .for_each(|o, &x| *o = -x);
@@ -926,18 +1058,25 @@ pub(super) fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
 /// place (no allocation, ess-mro); a `View` is mapped into a fresh pooled buffer.
 /// Lets a stencil whose speed/flux uses `sqrt`/`abs`/`exp`/… (e.g. the level-set
 /// Godunov `|∇φ|`) stay on the whole-array fast path instead of scalarizing.
-pub(super) fn vec_unary<'a>(op: &str, v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
+pub(super) fn vec_unary<'a>(op: UnCode, v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
+    // The operator name was resolved to `op` once, at the top of `eval_vec_op`;
+    // the element loop below runs over the whole output box, and
+    // `apply_unary(op, x)` re-matched the name string on every one of those
+    // elements. `unary_kernel_of` is pinned bit-identical to `apply_unary`
+    // (`unary_kernels_match_apply_unary`), so this is a pure dispatch hoist.
+    let f = unary_kernel_of(op);
     match v {
-        VecValue::Scalar(s) => VecValue::Scalar(apply_unary(op, s)),
+        VecValue::Scalar(s) => VecValue::Scalar(f(s)),
         VecValue::Owned { mut data, origin } => {
-            data.mapv_inplace(|x| apply_unary(op, x));
+            data.mapv_inplace(f);
             VecValue::Owned { data, origin }
         }
         VecValue::View { data, origin } => {
-            let mut buf = pool.take_array(data.shape());
+            // The `Zip` writes every element, so no zero-fill on checkout.
+            let mut buf = pool.take_array_uninit(data.shape());
             ndarray::Zip::from(&mut buf)
                 .and(data)
-                .for_each(|o, &x| *o = apply_unary(op, x));
+                .for_each(|o, &x| *o = f(x));
             VecValue::Owned { data: buf, origin }
         }
     }
@@ -951,25 +1090,76 @@ pub(super) fn vec_unary<'a>(op: &str, v: VecValue<'a>, pool: &mut Pool) -> VecVa
 /// and returns `None` (bail to oracle). The result reuses an `Owned` operand's
 /// pooled buffer in place when possible, so no array is allocated (ess-mro).
 pub(super) fn vec_combine<'a>(
-    op: &str,
+    op: BinCode,
+    a: VecValue<'a>,
+    b: VecValue<'a>,
+    pool: &mut Pool,
+) -> Option<VecValue<'a>> {
+    // The operator NAME was resolved to `op` once per AST node (`vec_op_code`);
+    // what is left here is an `f64`-only element loop. `apply_binary(op, …)` was
+    // originally called inside the whole-array `Zip`s below, so every element of
+    // every kernel node re-matched the name string — `apply_binary` +
+    // `__memcmp_evex` were 14% of a vectorized RHS profile, and the string
+    // compare also kept the loop scalar.
+    //
+    // The ops that dominate a stencil get a monomorphized, inlinable closure;
+    // everything else uses the shared [`binary_kernel_of`] function pointer
+    // (still one dispatch per node rather than per element). Both are pinned
+    // bit-identical to `apply_binary` (`binary_kernels_match_apply_binary`), and
+    // the element order/association is unchanged, so this is a pure dispatch
+    // hoist.
+    //
+    // `min`/`max` were NOT on the monomorphized list and should have been: they
+    // are the hot operators of a monotone PPM limiter, which is most of what
+    // simpleclimate's RHS is, and every element went through an indirect `fn`
+    // call. Giving them their own arms is measurably the WHOLE win of this
+    // change. Retired instructions, `--days 0.05 --samples 2` (878 RHS calls,
+    // 27360 state slots), each config built and run identically:
+    //
+    //     main                               332.93e9   (mean of 4)
+    //     op-code dispatch, no `min`/`max`    332.91e9   (neutral)
+    //     `min`/`max` monomorphized only      329.60e9   (-1.0%)
+    //     both (this commit)                  329.53e9   (-1.0%)
+    //
+    // `^` is monomorphized on the same principle — through the function-pointer
+    // arm every element paid an indirect call before reaching libm's `pow`
+    // (`vec_combine_with::{{closure}} -> Fn::call -> pow` in the profile), and
+    // `x.powf(y)` is the identical libm entry point, so it is exact — but here
+    // it measures NEUTRAL (329.61e9 / 329.52e9 with the arm removed). This
+    // model has few `^` NODES even though they cover many elements, so the
+    // per-node call overhead it removes is not where the time goes. Kept for
+    // the models where `^` is a hot operator, not because it pays on this one.
+    match op {
+        BinCode::Add => vec_combine_with(|x, y| x + y, a, b, pool),
+        BinCode::Sub => vec_combine_with(|x, y| x - y, a, b, pool),
+        BinCode::Mul => vec_combine_with(|x, y| x * y, a, b, pool),
+        BinCode::Div => vec_combine_with(|x, y| x / y, a, b, pool),
+        BinCode::Pow => vec_combine_with(|x: f64, y: f64| x.powf(y), a, b, pool),
+        BinCode::Min => vec_combine_with(|x: f64, y: f64| x.min(y), a, b, pool),
+        BinCode::Max => vec_combine_with(|x: f64, y: f64| x.max(y), a, b, pool),
+        other => vec_combine_with(binary_kernel_of(other), a, b, pool),
+    }
+}
+
+/// [`vec_combine`] with the elementwise kernel already resolved.
+fn vec_combine_with<'a, F: Fn(f64, f64) -> f64>(
+    f: F,
     a: VecValue<'a>,
     b: VecValue<'a>,
     pool: &mut Pool,
 ) -> Option<VecValue<'a>> {
     match (a, b) {
-        (VecValue::Scalar(x), VecValue::Scalar(y)) => {
-            Some(VecValue::Scalar(apply_binary(op, x, y)))
-        }
+        (VecValue::Scalar(x), VecValue::Scalar(y)) => Some(VecValue::Scalar(f(x, y))),
         // scalar ∘ array
         (VecValue::Scalar(x), barr) => {
             let (mut data, origin) = barr.into_owned(pool);
-            data.mapv_inplace(|y| apply_binary(op, x, y));
+            data.mapv_inplace(|y| f(x, y));
             Some(VecValue::Owned { data, origin })
         }
         // array ∘ scalar
         (aarr, VecValue::Scalar(y)) => {
             let (mut data, origin) = aarr.into_owned(pool);
-            data.mapv_inplace(|x| apply_binary(op, x, y));
+            data.mapv_inplace(|x| f(x, y));
             Some(VecValue::Owned { data, origin })
         }
         // array ∘ array
@@ -987,7 +1177,7 @@ pub(super) fn vec_combine<'a>(
                         let bv = b2.view().expect("array operand has a view");
                         ndarray::Zip::from(&mut data)
                             .and(&bv)
-                            .for_each(|x, &y| *x = apply_binary(op, *x, y));
+                            .for_each(|x, &y| *x = f(*x, y));
                     }
                     b2.release(pool);
                     Some(VecValue::Owned { data, origin })
@@ -998,7 +1188,7 @@ pub(super) fn vec_combine<'a>(
                     let av = a2.view().expect("array operand has a view");
                     ndarray::Zip::from(&mut data)
                         .and(&av)
-                        .for_each(|bslot, &aval| *bslot = apply_binary(op, aval, *bslot));
+                        .for_each(|bslot, &aval| *bslot = f(aval, *bslot));
                     Some(VecValue::Owned { data, origin })
                 }
                 // both Views: a fresh pooled buffer.
@@ -1006,11 +1196,12 @@ pub(super) fn vec_combine<'a>(
                     let origin: DimI = a2.origin().expect("array origin").iter().copied().collect();
                     let av = a2.view().expect("array operand has a view");
                     let bv = b2.view().expect("array operand has a view");
-                    let mut buf = pool.take_array(av.shape());
+                    // The `Zip` writes every element, so no zero-fill.
+                    let mut buf = pool.take_array_uninit(av.shape());
                     ndarray::Zip::from(&mut buf)
                         .and(&av)
                         .and(&bv)
-                        .for_each(|o, &x, &y| *o = apply_binary(op, x, y));
+                        .for_each(|o, &x, &y| *o = f(x, y));
                     Some(VecValue::Owned { data: buf, origin })
                 }
             }
@@ -1049,7 +1240,7 @@ pub(super) fn vec_select<'a>(
     let fill = |v: VecValue<'a>, pool: &mut Pool| -> ArrayD<f64> {
         match v {
             VecValue::Scalar(s) => {
-                let mut buf = pool.take_array(&shp);
+                let mut buf = pool.take_array_uninit(&shp);
                 buf.fill(s);
                 buf
             }
@@ -1058,7 +1249,8 @@ pub(super) fn vec_select<'a>(
     };
     let a_arr = fill(a, pool);
     let b_arr = fill(b, pool);
-    let mut out = pool.take_array(&shp);
+    // The 4-array `Zip` writes every element of `out`, so no zero-fill.
+    let mut out = pool.take_array_uninit(&shp);
     ndarray::Zip::from(&mut out)
         .and(&cond_data)
         .and(&a_arr)
@@ -1078,6 +1270,11 @@ pub(super) fn vec_select<'a>(
 /// is the fixed 1-based index; anything referencing an output symbol is not
 /// constant. This is what a conservative-regrid gather `index(A_ij, i, j)` uses
 /// for its source-cell axis `i`.
+///
+/// SUPERSEDED on the hot path by [`classify_axis_role`], which resolves the role
+/// and the symbol in one walk; retained as the reference the equivalence test
+/// [`axis_classifier_equivalence`] checks the single-walk classifier against.
+#[cfg(test)]
 fn const_index_value(e: &Expr, bx: &VecBox) -> Option<i64> {
     match affine_terms(e, "\u{0}", bx) {
         Some((0, k)) => Some(k),
@@ -1160,19 +1357,16 @@ pub(super) fn eval_vec_index<'a>(
     let mut any_fixed_oob = false;
     for d in 0..n {
         let e = &node.args[1 + d];
-        let claimed = (0..out_ndim).find_map(|a| {
-            if mapped[a].is_some() {
-                return None;
+        // ONE walk of the axis expression resolves both which output symbol it
+        // maps (if any) and the shift/wrap — see [`classify_axis_role`] for why
+        // that is arm-for-arm the same answer the former per-candidate-symbol
+        // search produced.
+        match classify_axis_role(e, bx) {
+            Some(AxisRole::Map { out_axis, ax }) if mapped[out_axis].is_none() => {
+                mapped[out_axis] = Some((d, ax));
+                n_mapped += 1;
             }
-            classify_axis_index(e, &bx.syms[a], bx).map(|ax| (a, ax))
-        });
-        if let Some((a, ax)) = claimed {
-            mapped[a] = Some((d, ax));
-            n_mapped += 1;
-            continue;
-        }
-        match const_index_value(e, bx) {
-            Some(idx1) => {
+            Some(AxisRole::Const(idx1)) => {
                 let i0 = idx1 - src_origin[d];
                 if i0 < 0 || i0 >= src_shape[d] as i64 {
                     any_fixed_oob = true;
@@ -1181,7 +1375,10 @@ pub(super) fn eval_vec_index<'a>(
                     fixed.push((d, i0));
                 }
             }
-            None => {
+            // Either unclassifiable, or affine in an output symbol another
+            // source axis already claimed (a repeated index — a diagonal
+            // gather, which is not a whole-array slice) → oracle.
+            _ => {
                 arg0.release(pool);
                 bail_vec!(
                     "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select",
@@ -1190,7 +1387,11 @@ pub(super) fn eval_vec_index<'a>(
                         describe_expr(e),
                         (0..out_ndim)
                             .filter(|a| mapped[*a].is_none())
-                            .map(|a| bx.syms[a].as_str())
+                            // `.get`, not `[a]`: a box with no output-index
+                            // symbols at all (a top-level `makearray`, whose
+                            // region values are self-contained arrays) is
+                            // legal, and a diagnostic must not panic on it.
+                            .map(|a| bx.syms.get(a).map(|s| s.as_str()).unwrap_or("<none>"))
                             .collect::<Vec<_>>()
                     )
                 );
@@ -1444,6 +1645,10 @@ pub(super) fn eval_vec_makearray<'a>(
             pool.give_array(result);
             return None;
         }
+        // ess-cse: a region has its own `lo`/extent, so a coordinate ramp and
+        // every shifted gather mean something different in it — a distinct box,
+        // and so a distinct CSE scope.
+        let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
         let rbx = VecBox {
             syms: bx.syms,
             lo: &r_lo[..],
@@ -1505,13 +1710,19 @@ pub(super) enum AxisIndex {
     /// positions stay ghost-0 (homogeneous Dirichlet).
     Affine(i64),
     /// Periodic wrap of base offset `k` over an axis of period `period`: a
-    /// cyclic roll, no ghost. See [`parse_wrap_axis`] for the recognized idiom.
+    /// cyclic roll, no ghost. See [`parse_wrap_axis_any`] for the recognized
+    /// idiom.
     Wrap { k: i64, period: i64 },
 }
 
-/// Classify one `index` axis expression: affine shift first (the common
-/// stencil/ghost case), then the periodic-wrap idiom. `None` for anything else,
-/// so the caller bails to the per-cell oracle.
+/// Classify one `index` axis expression AGAINST A GIVEN SYMBOL: affine shift
+/// first (the common stencil/ghost case), then the periodic-wrap idiom. `None`
+/// for anything else, so the caller bails to the per-cell oracle.
+///
+/// SUPERSEDED on the hot path by [`classify_axis_role`] (one walk for the whole
+/// box instead of one per candidate symbol); retained as the reference the
+/// equivalence test [`axis_classifier_equivalence`] checks against.
+#[cfg(test)]
 pub(super) fn classify_axis_index(expr: &Expr, sym: &str, bx: &VecBox) -> Option<AxisIndex> {
     if let Some(k) = affine_offset_in(expr, sym, bx) {
         return Some(AxisIndex::Affine(k));
@@ -1528,6 +1739,195 @@ pub(super) fn classify_axis_index(expr: &Expr, sym: &str, bx: &VecBox) -> Option
 pub(super) fn affine_offset_in(expr: &Expr, sym: &str, bx: &VecBox) -> Option<i64> {
     let (coeff, konst) = affine_terms(expr, sym, bx)?;
     if coeff == 1 { Some(konst) } else { None }
+}
+
+/// Equality for the short symbol names an index expression is resolved against
+/// (`i`, `j`, `k`, `_lp0`, …).
+///
+/// The generic `str` comparison emits a `memcmp` CALL, and axis classification
+/// performs one per variable leaf per candidate symbol — `__memcmp_evex` was
+/// 5% of a vectorized RHS profile, over half of it under `affine_terms`. The
+/// length test rejects almost every non-match without touching the bytes, and
+/// the residual byte loop is inline.
+#[inline(always)]
+fn sym_eq(a: &str, b: &str) -> bool {
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    x.len() == y.len() && x.iter().zip(y).all(|(p, q)| p == q)
+}
+
+/// Which role one `index(...)` axis expression plays, resolved in a SINGLE walk
+/// of that expression ([`classify_axis_role`]).
+pub(super) enum AxisRole {
+    /// Maps output axis `out_axis` through `ax` (affine shift or periodic wrap).
+    Map { out_axis: usize, ax: AxisIndex },
+    /// Output-index-independent: selects the fixed 1-based source index.
+    Const(i64),
+}
+
+/// Classify one `index(...)` axis expression against the WHOLE output box in a
+/// single walk: which output symbol (if any) it is affine in, and with what
+/// shift — or that it is a constant select.
+///
+/// [`eval_vec_index`] used to ask [`classify_axis_index`] once per (source axis
+/// × not-yet-claimed output symbol) pair and then [`const_index_value`] once
+/// more, so a rank-3 box re-walked the same axis expression up to four times,
+/// each walk comparing every variable leaf against one candidate name. That
+/// re-derivation was ~9% of a vectorized RHS profile (`affine_terms`), and it is
+/// the same answer every RHS call. Resolving the symbol *from* the expression
+/// instead of guessing it does one walk regardless of rank.
+///
+/// Equivalent to the old search, arm for arm:
+///   * an expression affine in `syms[a]` with unit coefficient mentions no other
+///     output symbol (the old walk returned `None` the moment it met an unbound
+///     one), so the old search could only ever have claimed `a` — and it stopped
+///     at the first success, which is that one;
+///   * an expression affine in an ALREADY-claimed symbol failed for every other
+///     candidate and then failed `const_index_value` too (a bare output symbol
+///     is not a bound contraction index), i.e. it bailed — as it does here;
+///   * a wrap expression is an `ifelse`, for which the affine walk returns
+///     `None`, so trying affine first and wrap second is order-independent;
+///   * a constant / bound-contraction axis has coefficient 0 in every symbol, so
+///     it never classified as a map under either rule.
+pub(super) fn classify_axis_role(expr: &Expr, bx: &VecBox) -> Option<AxisRole> {
+    if let Some((sym, coeff, konst)) = affine_terms_any(expr, bx) {
+        return match (sym, coeff) {
+            (Some(out_axis), 1) => Some(AxisRole::Map {
+                out_axis,
+                ax: AxisIndex::Affine(konst),
+            }),
+            // No output symbol and no coefficient: a fixed source slice.
+            (None, 0) => Some(AxisRole::Const(konst)),
+            // Affine in a symbol but not with unit coefficient (`2i`, `i - i`):
+            // not a shifted slice and not a constant → oracle.
+            _ => None,
+        };
+    }
+    parse_wrap_axis_any(expr, bx).map(|(out_axis, ax)| AxisRole::Map { out_axis, ax })
+}
+
+/// [`affine_terms`] with the symbol RESOLVED FROM the expression rather than
+/// supplied: reduce `expr` to `(output-symbol axis, coeff, constant)` over the
+/// integers, folding bound contraction indices and integer literals. A variable
+/// leaf resolves to an output symbol if it names one, else to its bound
+/// contraction value, else the whole expression is not affine (`None`).
+///
+/// `None` also for any non-integer, nonlinear (sym·sym) or MULTI-symbol
+/// construct (`i + j`) — the per-symbol walk it replaces likewise returned
+/// `None` for every candidate there, because the other symbol was unbound.
+pub(super) fn affine_terms_any(expr: &Expr, bx: &VecBox) -> Option<(Option<usize>, i64, i64)> {
+    // Merge two sub-results: at most one distinct output symbol may appear.
+    #[inline]
+    fn join(a: Option<usize>, b: Option<usize>) -> Option<Option<usize>> {
+        match (a, b) {
+            (None, s) | (s, None) => Some(s),
+            (Some(x), Some(y)) if x == y => Some(Some(x)),
+            _ => None, // two different output symbols — not affine in one axis
+        }
+    }
+    match expr {
+        Expr::Integer(n) => Some((None, 0, *n)),
+        Expr::Number(n) if n.fract() == 0.0 => Some((None, 0, *n as i64)),
+        Expr::Number(_) => None,
+        Expr::Variable(v) => {
+            if let Some(a) = bx.syms.iter().position(|s| sym_eq(s, v)) {
+                Some((Some(a), 1, 0))
+            } else {
+                bx.cbind(v).map(|k| (None, 0, k))
+            }
+        }
+        Expr::Operator(node) => match node.op.as_str() {
+            "+" => {
+                let mut sym = None;
+                let mut coeff = 0i64;
+                let mut konst = 0i64;
+                for a in &node.args {
+                    let (s, c, k) = affine_terms_any(a, bx)?;
+                    sym = join(sym, s)?;
+                    coeff = coeff.checked_add(c)?;
+                    konst = konst.checked_add(k)?;
+                }
+                Some((sym, coeff, konst))
+            }
+            "-" if node.args.len() == 2 => {
+                let (s0, c0, k0) = affine_terms_any(&node.args[0], bx)?;
+                let (s1, c1, k1) = affine_terms_any(&node.args[1], bx)?;
+                Some((join(s0, s1)?, c0.checked_sub(c1)?, k0.checked_sub(k1)?))
+            }
+            "-" | "neg" if node.args.len() == 1 => {
+                let (s, c, k) = affine_terms_any(&node.args[0], bx)?;
+                Some((s, c.checked_neg()?, k.checked_neg()?))
+            }
+            "*" => {
+                // Linear ⇒ at most one factor carries a symbol; the others must
+                // be integer constants. `(c·sym + k)·M = (c·M)·sym + (k·M)`.
+                let mut sym_factor: Option<(Option<usize>, i64, i64)> = None;
+                let mut m: i64 = 1;
+                for a in &node.args {
+                    let (s, c, k) = affine_terms_any(a, bx)?;
+                    if c != 0 {
+                        if sym_factor.is_some() {
+                            return None; // sym·sym — nonlinear
+                        }
+                        sym_factor = Some((s, c, k));
+                    } else {
+                        // A coefficient factor that itself mentions a symbol
+                        // (`(i - i)·u`) is not linear in that symbol; the
+                        // per-symbol walk folded it to the constant 0 with the
+                        // symbol already accounted, so keep the same reading:
+                        // only its constant part multiplies.
+                        if s.is_some() {
+                            return None;
+                        }
+                        m = m.checked_mul(k)?;
+                    }
+                }
+                match sym_factor {
+                    Some((s, c, k)) => Some((s, c.checked_mul(m)?, k.checked_mul(m)?)),
+                    None => Some((None, 0, m)),
+                }
+            }
+            _ => None,
+        },
+    }
+}
+
+/// [`parse_wrap_axis`] with the symbol resolved from the expression: the wrapped
+/// `inner` decides which output axis the roll applies to, and every other branch
+/// of the idiom must agree with it. See [`classify_axis_role`] for why deriving
+/// the symbol matches the old per-candidate search exactly.
+pub(super) fn parse_wrap_axis_any(expr: &Expr, bx: &VecBox) -> Option<(usize, AxisIndex)> {
+    /// `expr` must be `1·syms[a] + k`; returns `k`. Mirrors
+    /// [`affine_offset_in`]'s unit-coefficient requirement.
+    fn offset_in_axis(expr: &Expr, a: usize, bx: &VecBox) -> Option<i64> {
+        match affine_terms_any(expr, bx)? {
+            (Some(s), 1, k) if s == a => Some(k),
+            _ => None,
+        }
+    }
+    let outer = as_op(expr, "ifelse", 3)?;
+    // cond1: inner < lo  →  then1: inner + P
+    let (lt_lhs, lo_bound) = as_cmp_const(&outer.args[0], "<")?;
+    let (sym, coeff, k) = affine_terms_any(lt_lhs, bx)?;
+    let a = sym?;
+    if coeff != 1 {
+        return None;
+    }
+    let p1 = offset_in_axis(&outer.args[1], a, bx)?.checked_sub(k)?;
+    // else1: ifelse(inner > hi, inner − P, inner)
+    let inner_if = as_op(&outer.args[2], "ifelse", 3)?;
+    let (gt_lhs, hi_bound) = as_cmp_const(&inner_if.args[0], ">")?;
+    if offset_in_axis(gt_lhs, a, bx)? != k {
+        return None;
+    }
+    let p2 = k.checked_sub(offset_in_axis(&inner_if.args[1], a, bx)?)?;
+    if offset_in_axis(&inner_if.args[2], a, bx)? != k {
+        return None; // the fall-through branch must be the bare `inner`
+    }
+    let period = hi_bound.checked_sub(lo_bound)?.checked_add(1)?;
+    if p1 != period || p2 != period || period <= 0 {
+        return None;
+    }
+    Some((a, AxisIndex::Wrap { k, period }))
 }
 
 /// Reduce `expr` to `(coeff_of_sym, constant)` over the integers, folding bound
@@ -1592,6 +1992,10 @@ pub(super) fn affine_terms(expr: &Expr, sym: &str, bx: &VecBox) -> Option<(i64, 
 /// where `inner = sym + k` is affine, `lo`/`hi` are the integer axis bounds and
 /// `P = hi − lo + 1`. Both wrap branches must use the same `P`. This is the
 /// shape emitted by the lat-lon (periodic-longitude) discretization.
+///
+/// SUPERSEDED on the hot path by [`parse_wrap_axis_any`]; retained as the
+/// reference for [`axis_classifier_equivalence`].
+#[cfg(test)]
 pub(super) fn parse_wrap_axis(expr: &Expr, sym: &str, bx: &VecBox) -> Option<AxisIndex> {
     let outer = as_op(expr, "ifelse", 3)?;
     // cond1: inner < lo  →  then1: inner + P
@@ -1633,4 +2037,339 @@ pub(super) fn as_cmp_const<'e>(expr: &'e Expr, op: &str) -> Option<(&'e Expr, i6
         _ => return None,
     };
     Some((&node.args[0], c))
+}
+
+#[cfg(test)]
+mod axis_classifier_equivalence {
+    //! [`classify_axis_role`] resolves an `index(...)` axis expression's role in
+    //! ONE walk, where [`eval_vec_index`] used to try [`classify_axis_index`]
+    //! against each not-yet-claimed output symbol in turn and then
+    //! [`const_index_value`]. The replacement rests on an argument (an
+    //! expression affine in one output symbol cannot classify against any
+    //! other), not on the compiler — so pin it: over a corpus of axis
+    //! expressions and every subset of already-claimed output axes, the two
+    //! classifiers must agree exactly.
+    use super::*;
+    use serde_json::json;
+
+    fn ex(v: serde_json::Value) -> Expr {
+        serde_json::from_value(v).expect("axis expression deserializes")
+    }
+
+    /// A comparable rendering of a classification outcome.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Role {
+        Affine(usize, i64),
+        Wrap(usize, i64, i64),
+        Const(i64),
+        Bail,
+    }
+
+    fn from_axis(a: usize, ax: &AxisIndex) -> Role {
+        match ax {
+            AxisIndex::Affine(k) => Role::Affine(a, *k),
+            AxisIndex::Wrap { k, period } => Role::Wrap(a, *k, *period),
+        }
+    }
+
+    /// The superseded search: try each UNCLAIMED output symbol in order
+    /// (affine, then wrap), then fall back to a constant select.
+    fn old_role(e: &Expr, bx: &VecBox, claimed: &[bool]) -> Role {
+        let hit = (0..bx.syms.len()).find_map(|a| {
+            if claimed[a] {
+                return None;
+            }
+            classify_axis_index(e, &bx.syms[a], bx).map(|ax| from_axis(a, &ax))
+        });
+        match hit {
+            Some(r) => r,
+            None => match const_index_value(e, bx) {
+                Some(k) => Role::Const(k),
+                None => Role::Bail,
+            },
+        }
+    }
+
+    /// The single-walk classifier, read through [`eval_vec_index`]'s own
+    /// acceptance rule (a map onto an already-claimed axis is a bail).
+    fn new_role(e: &Expr, bx: &VecBox, claimed: &[bool]) -> Role {
+        match classify_axis_role(e, bx) {
+            Some(AxisRole::Map { out_axis, ax }) if !claimed[out_axis] => from_axis(out_axis, &ax),
+            Some(AxisRole::Const(k)) => Role::Const(k),
+            _ => Role::Bail,
+        }
+    }
+
+    /// `ifelse(inner < lo, inner + P, ifelse(inner > hi, inner - P, inner))`.
+    fn wrap(inner: serde_json::Value, lo: i64, hi: i64) -> serde_json::Value {
+        let p = hi - lo + 1;
+        json!({"op": "ifelse", "args": [
+            {"op": "<", "args": [inner, lo]},
+            {"op": "+", "args": [inner, p]},
+            {"op": "ifelse", "args": [
+                {"op": ">", "args": [inner, hi]},
+                {"op": "-", "args": [inner, p]},
+                inner
+            ]}
+        ]})
+    }
+
+    #[test]
+    fn single_walk_classifier_matches_the_per_symbol_search() {
+        let syms: Vec<String> = ["i", "j", "k"].iter().map(|s| s.to_string()).collect();
+        let cnames: Vec<String> = ["m", "n"].iter().map(|s| s.to_string()).collect();
+        let lo = [1i64, 1, 1];
+        let shape = [4usize, 5, 6];
+        let cvals = [2i64, -1];
+        let bx = VecBox {
+            syms: &syms,
+            lo: &lo,
+            shape: &shape,
+            cnames: &cnames,
+            cvals: &cvals,
+        };
+
+        let cases: Vec<serde_json::Value> = vec![
+            // Bare output symbols, each axis.
+            json!("i"),
+            json!("j"),
+            json!("k"),
+            // Affine shifts, both signs, both spellings of the offset.
+            json!({"op": "+", "args": ["i", 1]}),
+            json!({"op": "-", "args": ["i", 1]}),
+            json!({"op": "+", "args": ["j", 3]}),
+            json!({"op": "-", "args": ["k", 2]}),
+            json!({"op": "+", "args": ["k", -2]}),
+            json!({"op": "+", "args": [{"op": "-", "args": ["j", 1]}, 4]}),
+            json!({"op": "neg", "args": [{"op": "neg", "args": ["j"]}]}),
+            // Bound contraction indices: constants, and folded into a shift.
+            json!("m"),
+            json!("n"),
+            json!({"op": "+", "args": ["i", "m"]}),
+            json!({"op": "+", "args": [{"op": "+", "args": ["k", 1]}, "n"]}),
+            json!({"op": "*", "args": ["m", 3]}),
+            json!({"op": "-", "args": ["m", "n"]}),
+            // Literal selects.
+            json!(1),
+            json!(7),
+            json!(2.0),
+            json!({"op": "+", "args": [2, 3]}),
+            json!({"op": "*", "args": [2, {"op": "+", "args": [3, 1]}]}),
+            // Non-unit coefficient / cancelling / multi-symbol / nonlinear.
+            json!({"op": "*", "args": [2, "i"]}),
+            json!({"op": "-", "args": ["i", "i"]}),
+            json!({"op": "+", "args": ["i", "j"]}),
+            json!({"op": "-", "args": ["k", "i"]}),
+            json!({"op": "*", "args": ["i", "j"]}),
+            json!({"op": "*", "args": ["i", "m"]}),
+            // Not integer-affine at all.
+            json!(2.5),
+            json!("q"),
+            json!({"op": "+", "args": ["i", "q"]}),
+            json!({"op": "/", "args": ["i", 2]}),
+            json!({"op": "sin", "args": ["i"]}),
+            // Periodic wrap, on each axis, plus malformed variants.
+            wrap(json!({"op": "-", "args": ["i", 1]}), 1, 4),
+            wrap(json!({"op": "+", "args": ["i", 1]}), 1, 4),
+            wrap(json!("j"), 1, 5),
+            wrap(json!({"op": "+", "args": ["k", 2]}), 1, 6),
+            wrap(json!({"op": "+", "args": ["i", "m"]}), 1, 4),
+            wrap(json!({"op": "*", "args": [2, "i"]}), 1, 4),
+            wrap(json!({"op": "+", "args": ["i", "j"]}), 1, 4),
+            wrap(json!(3), 1, 4),
+            // A wrap whose two branches disagree on the period.
+            json!({"op": "ifelse", "args": [
+                {"op": "<", "args": ["i", 1]},
+                {"op": "+", "args": ["i", 4]},
+                {"op": "ifelse", "args": [
+                    {"op": ">", "args": ["i", 4]},
+                    {"op": "-", "args": ["i", 3]},
+                    "i"
+                ]}
+            ]}),
+            // A wrap whose fall-through branch is not the bare inner.
+            json!({"op": "ifelse", "args": [
+                {"op": "<", "args": ["i", 1]},
+                {"op": "+", "args": ["i", 4]},
+                {"op": "ifelse", "args": [
+                    {"op": ">", "args": ["i", 4]},
+                    {"op": "-", "args": ["i", 4]},
+                    {"op": "+", "args": ["i", 1]}
+                ]}
+            ]}),
+        ];
+
+        for case in &cases {
+            let e = ex(case.clone());
+            // Every subset of already-claimed output axes, so the "claimed
+            // symbol ⇒ bail" reading is exercised in both directions.
+            for mask in 0u32..8 {
+                let claimed = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0];
+                let old = old_role(&e, &bx, &claimed);
+                let new = new_role(&e, &bx, &claimed);
+                assert_eq!(
+                    old, new,
+                    "axis expression {case} with claimed={claimed:?}: \
+                     per-symbol search says {old:?}, single walk says {new:?}"
+                );
+            }
+        }
+    }
+
+    /// The same corpus against a rank-1 box with no contraction binds — the
+    /// shape the 1-D stencil fixtures use, where the search had only one
+    /// candidate symbol and so was already minimal.
+    #[test]
+    fn single_walk_classifier_matches_on_a_rank_1_box() {
+        let syms: Vec<String> = vec!["i".to_string()];
+        let lo = [1i64];
+        let shape = [8usize];
+        let bx = VecBox {
+            syms: &syms,
+            lo: &lo,
+            shape: &shape,
+            cnames: &[],
+            cvals: &[],
+        };
+        let cases: Vec<serde_json::Value> = vec![
+            json!("i"),
+            json!({"op": "+", "args": ["i", 1]}),
+            json!({"op": "-", "args": ["i", 1]}),
+            json!(3),
+            json!("k"),
+            json!({"op": "*", "args": [2, "i"]}),
+            wrap(json!({"op": "-", "args": ["i", 1]}), 1, 8),
+        ];
+        for case in &cases {
+            let e = ex(case.clone());
+            for mask in 0u32..2 {
+                let claimed = [mask & 1 != 0];
+                assert_eq!(
+                    old_role(&e, &bx, &claimed),
+                    new_role(&e, &bx, &claimed),
+                    "axis expression {case} with claimed={claimed:?}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod op_dispatch_equivalence {
+    //! [`eval_vec_op`] used to select its arm by matching the operator NAME
+    //! against a chain of string patterns; it now resolves the name once with
+    //! [`vec_op_code`] and matches on the resulting [`VecOp`]. An
+    //! operator-dispatch rework is exactly the kind of change that silently
+    //! drops an arm — a dropped operator would not fail loudly, it would merely
+    //! bail to the per-cell oracle and make the model slower — so pin the
+    //! mapping against a literal transcription of the pattern lists the match
+    //! arms used to carry.
+    use super::*;
+
+    /// The `match node.op.as_str()` arm lists, verbatim from the pre-refactor
+    /// `eval_vec_op` (git 1a96da9a), in arm order.
+    #[rustfmt::skip]
+    const ARITH: &[&str] = &["+", "-", "*", "/", "^", "min", "max", "atan2", "and", "or"];
+    #[rustfmt::skip]
+    const CMP: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
+    #[rustfmt::skip]
+    const UNARY: &[&str] = &[
+        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin",
+        "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh",
+        "acosh", "atanh", "not",
+    ];
+
+    /// Every operator the old arm list routed somewhere lands in the same arm
+    /// now, and its kernel code resolves to the same element kernel the per-cell
+    /// oracle uses (`binary_kernel`/`unary_kernel` delegate to the `*_of`
+    /// tables, which `binary_kernels_match_apply_binary` /
+    /// `unary_kernels_match_apply_unary` pin to `apply_binary`/`apply_unary`).
+    #[test]
+    fn vec_op_code_matches_the_dispatch_arms() {
+        for op in ARITH {
+            assert_eq!(
+                vec_op_code(op),
+                VecOp::Arith(BinCode::of(op)),
+                "arithmetic operator `{op}` lost its arm"
+            );
+            assert_ne!(BinCode::of(op), BinCode::Unknown, "`{op}` has no kernel");
+        }
+        for op in CMP {
+            assert_eq!(
+                vec_op_code(op),
+                VecOp::Cmp(BinCode::of(op)),
+                "comparison operator `{op}` lost its arm"
+            );
+            assert_ne!(BinCode::of(op), BinCode::Unknown, "`{op}` has no kernel");
+        }
+        for op in UNARY {
+            assert_eq!(
+                vec_op_code(op),
+                VecOp::Unary(UnCode::of(op)),
+                "unary operator `{op}` lost its arm"
+            );
+            assert_ne!(UnCode::of(op), UnCode::Unknown, "`{op}` has no kernel");
+        }
+        assert_eq!(vec_op_code("neg"), VecOp::Neg);
+        assert_eq!(vec_op_code("index"), VecOp::Index);
+        assert_eq!(vec_op_code("aggregate"), VecOp::Aggregate);
+        assert_eq!(vec_op_code("makearray"), VecOp::Makearray);
+        assert_eq!(vec_op_code("const"), VecOp::Const);
+        assert_eq!(vec_op_code("ifelse"), VecOp::Ifelse);
+        assert_eq!(vec_op_code("broadcast"), VecOp::Broadcast);
+    }
+
+    /// The catch-all arm: everything the overlay never vectorized must still
+    /// bail, so the per-cell oracle stays in charge of it. A code accidentally
+    /// added here would route an unsupported construct into a kernel arm.
+    #[test]
+    fn unvectorized_operators_still_bail() {
+        #[rustfmt::skip]
+        const OTHERS: &[&str] = &[
+            "D", "Pre", "fn", "arrayop", "reshape", "transpose", "concat",
+            "intersect_polygon", "polygon_intersection_area", "integral", "grad",
+            "skolem", "rank", "ic", "table_lookup", "apply_expression_template",
+            "", " ", "PLUS", "Log", "expp",
+        ];
+        for op in OTHERS {
+            assert_eq!(
+                vec_op_code(op),
+                VecOp::Unsupported,
+                "operator `{op}` must fall back to the per-cell oracle"
+            );
+        }
+    }
+
+    /// The CSE classifier's box-transparency allowlist is documented as being
+    /// "kept in lockstep with `eval_vec_op`". Make that mechanical: every op it
+    /// declares transparent must actually have a dispatch arm here, or the CSE
+    /// pass would keep a node's children in the enclosing scope for a node the
+    /// evaluator never even descends into.
+    #[test]
+    fn cse_box_transparent_ops_all_have_a_dispatch_arm() {
+        for op in super::super::cse::BOX_TRANSPARENT_OPS {
+            assert_ne!(
+                vec_op_code(op),
+                VecOp::Unsupported,
+                "`{op}` is CSE-box-transparent but has no `eval_vec_op` arm"
+            );
+        }
+    }
+
+    /// Both directions: the two ops `eval_vec_op` handles that OPEN a box
+    /// (`aggregate`, `makearray`) must stay off the transparency list, and
+    /// nothing else with an arm may be missing from it.
+    #[test]
+    fn every_box_transparent_dispatch_arm_is_listed() {
+        let listed = |op: &str| super::super::cse::BOX_TRANSPARENT_OPS.contains(&op);
+        for op in ARITH.iter().chain(CMP).chain(UNARY) {
+            assert!(listed(op), "`{op}` has a dispatch arm but is not CSE-transparent");
+        }
+        for op in ["neg", "index", "ifelse", "broadcast"] {
+            assert!(listed(op), "`{op}` has a dispatch arm but is not CSE-transparent");
+        }
+        for op in ["aggregate", "makearray"] {
+            assert!(!listed(op), "`{op}` rebinds the box and must not be CSE-transparent");
+        }
+    }
 }

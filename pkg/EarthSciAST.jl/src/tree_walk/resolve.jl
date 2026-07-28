@@ -402,6 +402,72 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{AS
                             pgather, memo, bound_syms)
 end
 
+# ── Runtime contraction loop gate (ess-runtime-contraction) ─────────────────
+# Depth of the array-equation per-cell resolve (`_compile_arrayop_percell!`). A
+# scalar aggregate nested INSIDE an array-equation cell body must keep unrolling:
+# its compiled node flows into the stencil / access-kernel merge (acc_merge.jl,
+# stencil_affine.jl, oop_merge.jl), which model unrolled scalar terms — so the
+# loop node is confined to SCALAR contexts (rhs_list / scalar observeds), where the
+# eval-time consumers are exactly `_eval_node` / `_oop_eval` (both handle it) and
+# the CSE keyer (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
+const _ARRAY_CELL_DEPTH = Ref(0)
+
+# Opt-in / kill-switch and coverage floor. Default ON, but only for reductions at
+# least `_contraction_loop_min()` long — small reductions keep unrolling so the
+# vast existing small-aggregate test surface (and its CSE / stencil interactions)
+# is byte-for-byte unchanged. `ESS_CONTRACTION_LOOP=0` forces the pure-unroll
+# reference everywhere.
+_contraction_loop_enabled() = get(ENV, "ESS_CONTRACTION_LOOP", "1") != "0"
+function _contraction_loop_min()
+    v = get(ENV, "ESS_CONTRACTION_LOOP_MIN", "")
+    n = tryparse(Int, v)
+    return (n === nothing || n < 1) ? 8 : n
+end
+
+# Try to compile a uniform contraction to a single runtime loop node instead of
+# unrolling it (ess-runtime-contraction). Returns a `__contract_loop` marker-op
+# ASTExpr (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) on success, or
+# `nothing` to fall back to the exact unroll. Keeps the contracted index SYMBOLIC
+# (a reserved bound-sym `VarExpr`) and resolves the body ONCE: a loop var reaching
+# a const-array subscript lowers to a runtime `_NK_CONST_GATHER` (existing Phase-C
+# machinery); a loop var reaching a STATE index or a ragged bound throws
+# `E_TREEWALK_UNBOUND_LOOP_VAR` here — caught, and we unroll (correctness first).
+function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{String},
+        ranges::AbstractVector, oplus::String, zerobar::Float64,
+        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+    names = String[_fresh_loopvar_name() for _ in contract_names]
+    refs  = Base.RefValue{Int}[Ref(0) for _ in contract_names]
+    subs  = Dict{String,ASTExpr}(contract_names[d] => VarExpr(names[d])
+                                 for d in eachindex(contract_names))
+    subbed = _sub_preserving(body, subs)
+    bsyms  = Set{String}(names)
+    resolved = try
+        # memo=nothing: the symbolic (bound-sym) resolution must never share the
+        # concrete RHS-build memo (same invariant the compile-once path relies on).
+        _resolve_indices(subbed, array_var_info, var_map, const_arrays,
+                         pgather, nothing, bsyms)
+    catch
+        return nothing
+    end
+    # Publish the refs so `_compile` lowers each surviving loop-var `VarExpr` to an
+    # `_NK_LOOPVAR` reading that ref. (Registered only after a clean resolve.)
+    for d in eachindex(names)
+        _LOOPVAR_REFS[Symbol(names[d])] = refs[d]
+    end
+    oplus_sym = Symbol(oplus)
+    node::ASTExpr = resolved
+    # Nest innermost-first: `contract_names[1]` varies FASTEST in the unroll's
+    # `Iterators.product` order, so it is the INNERMOST loop — the fold order then
+    # matches the unrolled `_combine_with_reducer` accumulation.
+    for d in eachindex(contract_names)
+        r = ranges[d]
+        node = OpExpr("__contract_loop", ASTExpr[node];
+                      value=_ContractLoopBuild(refs[d], first(r), last(r), step(r),
+                                               oplus_sym, zerobar))
+    end
+    return node
+end
+
 # Expand a scalar arrayop (empty output_idx) to a plain scalar ASTExpr by
 # unrolling all contracted indices at build time and combining them with the
 # declared reducer. This is the build-time equivalent of an einsum over a
@@ -436,6 +502,31 @@ function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, 
     if isempty(contract_names) && gates === nothing && filt0 === nothing
         return _resolve_indices(body, array_var_info, var_map, const_arrays,
                                 pgather, memo, bound_syms)
+    end
+    # ── Runtime contraction loop opt-in (ess-runtime-contraction) ──────────────
+    # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else keeps
+    # unrolling exactly as before. Gated conservatively (correctness first):
+    #   * enabled (env), and NOT already inside an array-equation cell resolve
+    #     (loop node is confined to scalar-walker contexts — see `_ARRAY_CELL_DEPTH`);
+    #   * NOT the symbolic compile-once cellwise path (`bound_syms` empty) — that
+    #     path binds its own reserved symbols and runs a separate evaluator;
+    #   * a plain arithmetic reducer ∈ {+,*,max,min}, no join gates / filter;
+    #   * every contracted range a CONSTANT integer range (ragged bounds keep
+    #     unrolling — they already resolve to a per-cell concrete bound);
+    #   * total reduction length ≥ the coverage floor;
+    #   * the body resolves with the index symbolic (`_try_build_contraction_loop`
+    #     returns `nothing` otherwise → unroll).
+    if _contraction_loop_enabled() && _ARRAY_CELL_DEPTH[] == 0 &&
+       isempty(bound_syms) && gates === nothing && filt0 === nothing &&
+       (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+       all(n -> _is_const_int_range(ranges_dict[n]), contract_names)
+        ranges = [_expand_int_range(ranges_dict[n]) for n in contract_names]
+        total = isempty(ranges) ? 0 : prod(length(r) for r in ranges)
+        if total >= _contraction_loop_min() && all(!isempty, ranges)
+            looped = _try_build_contraction_loop(body, contract_names, ranges,
+                        oplus, zerobar, array_var_info, var_map, const_arrays, pgather)
+            looped === nothing || return looped
+        end
     end
     terms = ASTExpr[]
     _foreach_aggregate_term(body, contract_names, contract_iters,
@@ -574,6 +665,58 @@ function _intern_inline_const(cexpr::OpExpr, const_arrays::AbstractDict)
     name = string(_INLINE_CONST_PREFIX, hash(vals))
     const_arrays === _EMPTY_CONST_ARRAYS || (const_arrays[name] = vals)
     return vals, name
+end
+
+# True iff `e` references a runtime contraction LOOP variable (a reserved
+# `__esm_lv_*` name — `_LOOPVAR_PREFIX`). This is the SOLE trigger for lowering a
+# state-array read to a runtime `_NK_STATE_GATHER` (ess-runtime-contraction):
+# those names appear ONLY when `_try_build_contraction_loop` keeps a contracted
+# index symbolic, so a state gather is never emitted on the normal RHS build or the
+# compile-once cellwise path (whose bound symbols use different names). Distinct
+# from `_refs_bound_sym`, which fires for ANY symbol in a caller-supplied set.
+_refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
+_refs_loopvar(e::OpExpr) = any(_refs_loopvar, e.args)
+_refs_loopvar(::ASTExpr) = false
+
+# Lower a STATE-array read whose subscripts depend on a contraction loop variable
+# (`q[donor(i,k)]`, ess-runtime-contraction) to a runtime `_NK_STATE_GATHER`. The
+# frozen slot table maps every in-bounds state cell to its flat `u` slot (built
+# once per state var per build, shared across output cells via `_STATE_SLOT_TABLES`);
+# the subscript expressions resolve normally (a loop var → `_NK_LOOPVAR`; an indirect
+# `index(conn,i,k)` → a nested `_NK_CONST_GATHER`) and become the node's children,
+# evaluated + bounds-checked at eval time. A missing state cell (sparse layout)
+# throws, which the loop-build try/catch converts to a fall-back to the exact unroll.
+function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
+        idx_args::Vector{ASTExpr}, array_var_info, var_map::Dict{String,Int},
+        const_arrays::AbstractDict, pgather::AbstractDict, memo::_MaybeMemo,
+        bound_syms::Set{String})
+    nd = length(lo)
+    sub_nodes = ASTExpr[_resolve_indices(a, array_var_info, var_map, const_arrays,
+                                         pgather, memo, bound_syms) for a in idx_args]
+    slot_flat, strides = get!(_STATE_SLOT_TABLES, vname) do
+        dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
+        strd = Vector{Int}(undef, nd)
+        strd[1] = 1
+        for d in 2:nd
+            strd[d] = strd[d-1] * dims[d-1]
+        end
+        total = prod(dims)
+        sf = Vector{Int}(undef, total)
+        cur = Vector{Int}(undef, nd)
+        for lin in 0:total-1
+            rem = lin
+            for d in 1:nd
+                cur[d] = lo[d] + (rem % dims[d]); rem ÷= dims[d]
+            end
+            cname = _cell_key(vname, cur)
+            haskey(var_map, cname) ||
+                throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
+            sf[lin+1] = var_map[cname]
+        end
+        (sf, strd)
+    end
+    return OpExpr("__state_gather", sub_nodes;
+                  value=_StateGatherRef(slot_flat, strides, copy(lo), copy(hi)))
 end
 
 # Resolve each expression in `args`, returning `(resolved, changed)`. When no
@@ -740,6 +883,15 @@ function _resolve_indices_op(expr::OpExpr,
             length(idx_args) == length(lo) ||
                 throw(TreeWalkError("E_TREEWALK_INDEX_NDIM",
                       "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"))
+            # Runtime state gather (ess-runtime-contraction): a subscript depends on
+            # a contraction loop variable, so the slot is not a build-time constant.
+            # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
+            # the loop-build path (`__esm_lv_*` names); the concrete path below is
+            # untouched otherwise.
+            if any(a -> _refs_loopvar(a), idx_args)
+                return _resolve_state_gather(vname, lo, hi, idx_args, array_var_info,
+                                             var_map, const_arrays, pgather, memo, bound_syms)
+            end
             # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
             # resolved: _eval_const_int will look up conn[c,k] as an integer.
             indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]

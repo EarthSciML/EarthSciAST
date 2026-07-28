@@ -10,7 +10,9 @@ use crate::flatten::FlattenedSystem;
 use crate::op_registry::OpError;
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
-use crate::value_invention::{materialize_value_invention, rewrite_derived_index_sets};
+use crate::value_invention::{
+    ValueInventionResult, materialize_value_invention, rewrite_derived_index_sets,
+};
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 
@@ -486,6 +488,28 @@ impl ArrayCompiled {
         model: &Model,
         index_sets: &HashMap<String, IndexSet>,
     ) -> Result<Self, CompileError> {
+        Self::from_model_with_arrays(model, index_sets, None)
+    }
+
+    /// [`from_model`](Self::from_model) with a caller-supplied factor-array
+    /// channel for the build-time value-invention engine.
+    ///
+    /// `vi_arrays` is overlaid on the `const`-literal factors the document
+    /// carries (caller wins on a name collision — see `vi_factor_arrays`) and
+    /// handed to the relational engine. Supply it whenever a producer's factors
+    /// arrive from OUTSIDE the document: ISRM's overlap gate reads its envelopes
+    /// from `type: "parameter"` variables that data loaders fill through
+    /// `coupling` `param_to_var` edges, which the `const` scan cannot see, so
+    /// without this channel the gate has no envelopes to build and the producer
+    /// invents nothing.
+    ///
+    /// `None` is exactly [`from_model`](Self::from_model) — every existing
+    /// caller is unaffected.
+    pub fn from_model_with_arrays(
+        model: &Model,
+        index_sets: &HashMap<String, IndexSet>,
+        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    ) -> Result<Self, CompileError> {
         // Resolve `{ "from": <index set> }` range references (RFC
         // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
         // before any shape inference or rule building. Operates on an owned
@@ -513,7 +537,7 @@ impl ArrayCompiled {
         // intact when the buffer is computed. A NO-OP (byte-identical) for every
         // model without an arg-witness op — the conservative-regrid skolem/distinct
         // path is left entirely to `strip_value_invention` below.
-        materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned)?;
+        materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned, vi_arrays)?;
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
@@ -1800,6 +1824,37 @@ fn collect_const_factor_arrays(model: &Model) -> HashMap<String, ArrayD<f64>> {
     out
 }
 
+/// The value-invention engine's factor arrays for `model`: the `const`-literal
+/// variables [`collect_const_factor_arrays`] finds, OVERLAID with the caller's
+/// arrays (caller wins on a name collision).
+///
+/// The overlay exists because a real model's factors do not live in the
+/// document. In ISRM the overlap gate's envelope factors — `X`/`Y` (emission
+/// points) and `W`/`S`/`E`/`N` (cell rectangles) — are declared
+/// `type: "parameter"` and filled by data loaders through `coupling`
+/// `param_to_var` edges. They carry no `const` expression, so the scan finds
+/// nothing for them, the gate cannot build an envelope, and the producer
+/// invents no members. Only the caller holds those arrays, and before this
+/// there was no way to hand them over on the in-tree build path.
+///
+/// Caller-wins (rather than const-wins) is the deliberate direction: a caller
+/// that supplies an array is asserting the value it loaded, and a document
+/// `const` — typically a small placeholder or a default — must not silently
+/// override real data. It also makes the channel usable for OVERRIDES, matching
+/// the Julia reference's `const_arrays=` kwarg.
+fn vi_factor_arrays(
+    model: &Model,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+) -> HashMap<String, ArrayD<f64>> {
+    let mut arrays = collect_const_factor_arrays(model);
+    if let Some(extra) = caller_arrays {
+        for (name, arr) in extra {
+            arrays.insert(name.clone(), arr.clone());
+        }
+    }
+    arrays
+}
+
 /// Scalar parameter defaults, the value-invention engine's scalar `params` map
 /// (e.g. the bin width of a broad-phase skolem quantization). Only 0-D
 /// parameters with a `default` contribute — an array parameter carries no inline
@@ -1853,6 +1908,65 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
     }
 }
 
+/// Run the build-time value-invention engine over a TYPED [`Model`] plus the
+/// document-scoped `index_sets` registry, with a caller-supplied factor-array
+/// channel — the front door a Rust runner needs, and the one the in-tree build
+/// path (`materialize_vi_outputs_to_data`) uses internally.
+///
+/// [`materialize_value_invention`] itself takes a raw `serde_json::Value` and a
+/// finished array map, which leaves a caller holding a typed model with two
+/// chores it has no library support for: assembling the JSON view the engine
+/// expects (model + registry merged as a sibling), and gathering the factor
+/// arrays. This does both. Concretely it is what turns an ISRM document plus
+/// loaded `X`/`Y`/`W`/`S`/`E`/`N` into
+/// [`ValueInventionResult::extents`](crate::ValueInventionResult::extents) — the
+/// map that then sizes every `emis_src_cells` axis through
+/// [`crate::aggregate::resolve_aggregate_ranges_with_extents`] and
+/// [`crate::simulate_array::eval_expression_with_extents`].
+///
+/// `caller_arrays` overlays the document's `const` factors (caller wins; see
+/// `vi_factor_arrays`). Scalar `params` come from the model's own 0-D
+/// parameter defaults.
+///
+/// A model with no `skolem`/`distinct`/`rank` producer yields an empty result
+/// rather than an error — the engine's own no-op contract.
+///
+/// # Errors
+///
+/// [`CompileError::InterpreterBuildError`] if the model or registry cannot be
+/// serialized to the engine's JSON view, or if the engine rejects the document
+/// (e.g. a producer that classifies CONTINUOUS, §5.7 guard 2).
+pub fn run_value_invention(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+) -> Result<ValueInventionResult, CompileError> {
+    let const_arrays = vi_factor_arrays(model, caller_arrays);
+    let params = collect_scalar_param_defaults(model);
+
+    // The engine walks the RAW `serde_json::Value` document (it preserves the
+    // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
+    // `index_sets` registry merged down as a sibling — mirroring the engine's own
+    // `model_json` fixture helper and `crate::cadence`.
+    let mut model_json =
+        serde_json::to_value(model).map_err(|e| CompileError::InterpreterBuildError {
+            details: format!("value-invention: could not serialize model: {e}"),
+        })?;
+    if let JsonValue::Object(m) = &mut model_json {
+        let is_json =
+            serde_json::to_value(index_sets).map_err(|e| CompileError::InterpreterBuildError {
+                details: format!("value-invention: could not serialize index_sets: {e}"),
+            })?;
+        m.insert("index_sets".to_string(), is_json);
+    }
+
+    materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
+        CompileError::InterpreterBuildError {
+            details: format!("value-invention materialize failed: {}", e.0),
+        }
+    })
+}
+
 /// Wire the value-invention front door into the array run path: run the
 /// byte-conformant [`materialize_value_invention`] engine over the raw-JSON model
 /// and rewrite each materialized relational OUTPUT to constant data
@@ -1863,37 +1977,20 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 /// model without an arg-witness op (gated by [`model_contains_arg_witness`]), so
 /// the conservative-regrid skolem/distinct path handled by
 /// [`strip_value_invention`] is untouched.
+///
+/// `caller_arrays` is the caller-supplied factor-array channel (see
+/// [`vi_factor_arrays`]): loader-fed envelope/connectivity factors that are not
+/// `const` literals in the document. `None` reproduces the previous behaviour
+/// exactly.
 fn materialize_vi_outputs_to_data(
     model: &mut Model,
     index_sets: &mut HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
 ) -> Result<(), CompileError> {
     if !model_contains_arg_witness(model) {
         return Ok(());
     }
-    let const_arrays = collect_const_factor_arrays(model);
-    let params = collect_scalar_param_defaults(model);
-
-    // The engine walks the RAW `serde_json::Value` document (it preserves the
-    // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
-    // `index_sets` registry merged down as a sibling — mirroring the engine's own
-    // `model_json` fixture helper and `crate::cadence`.
-    let mut model_json = serde_json::to_value(&*model).map_err(|e| {
-        CompileError::InterpreterBuildError {
-            details: format!("value-invention: could not serialize model: {e}"),
-        }
-    })?;
-    if let JsonValue::Object(m) = &mut model_json {
-        let is_json =
-            serde_json::to_value(&*index_sets).map_err(|e| CompileError::InterpreterBuildError {
-                details: format!("value-invention: could not serialize index_sets: {e}"),
-            })?;
-        m.insert("index_sets".to_string(), is_json);
-    }
-
-    let result = materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new())
-        .map_err(|e| CompileError::InterpreterBuildError {
-            details: format!("value-invention materialize failed: {}", e.0),
-        })?;
+    let result = run_value_invention(model, index_sets, caller_arrays)?;
 
     // Densify any derived index set named by a materialized producer (§8.1 handoff).
     rewrite_derived_index_sets(index_sets, &result.extents);

@@ -19,9 +19,13 @@
 //!   `offsets` backing-factor name, which the evaluator expands to the dynamic
 //!   per-parent bound `[1, offsets[of…]]` per output tuple (the gather through
 //!   the `values` factor is authored in the node body). `derived`
-//!   (FAQ-materialized) sets are resolved by the build-time relational layer,
-//!   not the per-timestep evaluator (mirroring the Julia reference), so they
-//!   still produce a clear error here.
+//!   (FAQ-materialized) sets are sized by the build-time relational layer, not
+//!   the per-timestep evaluator (mirroring the Julia reference): pass its
+//!   materialized extents to [`resolve_aggregate_ranges_with_extents`] and a
+//!   derived reference resolves to the dense `[1, n]` on either an output or a
+//!   contracted axis. Without them a derived set is still only admissible as a
+//!   contracted axis, whose bound the geometry clip-ring registry supplies at
+//!   eval time (RFC §8.1); a derived *output* axis errors clearly.
 //! - **§5.6 Op tag.** [`is_aggregate_op`] accepts the canonical `"aggregate"`
 //!   tag. (The legacy `"arrayop"` alias was removed in ESM v0.8.0.)
 
@@ -192,19 +196,62 @@ pub fn resolve_aggregate_ranges(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
+    resolve_aggregate_ranges_with_extents(model, index_sets, empty_derived_extents())
+}
+
+/// The shared empty value-invention extent map.
+///
+/// Handed to every resolver / evaluator seam that has no extents to offer, so
+/// the no-value-invention path allocates nothing and reads *byte-identically*
+/// to the pre-extent code: an empty map's `get` always misses, so every arm
+/// falls straight through to the behaviour it had before.
+pub(crate) fn empty_derived_extents() -> &'static HashMap<String, i64> {
+    static EMPTY: std::sync::OnceLock<HashMap<String, i64>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(HashMap::new)
+}
+
+/// [`resolve_aggregate_ranges`] with the build-time **value-invention derived
+/// extents** in hand.
+///
+/// `derived_extents` maps a *producing aggregate's* `id` — the thing a
+/// `kind:"derived"` index set names in its `from_faq` — to the cardinality of
+/// the distinct member set that producer materialized
+/// ([`crate::value_invention::ValueInventionResult::extents`]). A derived set
+/// whose `from_faq` is present resolves to the dense interval `[1, n]` and is
+/// therefore legal as an **output** index too, exactly as in the Julia
+/// (`_resolve_one_index_set_ref`) and Python (`_resolve_range_spec`) references:
+/// once the relational engine has run, that axis has a statically-known extent
+/// like any interval set.
+///
+/// This is what lets a real ISRM-shaped document evaluate. Its emission factors
+/// (`E_VOC`, `E_NOx`, …) are *shaped on* the invented set `emis_src_cells` and
+/// its concentration observeds *contract over* it; without the extents both the
+/// output-axis and the contracted-axis references dead-end — the output axis on
+/// the "derived output index" rejection below, the contracted axis on an
+/// unmaterialized runtime ring (extent `0`, i.e. a silently empty reduction).
+///
+/// Pass an empty map (or use [`resolve_aggregate_ranges`]) for the
+/// no-value-invention case; a derived set then keeps its prior treatment — a
+/// dynamic [`RangeSpec::DerivedDyn`] contracted bound resolved per-eval from the
+/// geometry clip-ring registry (RFC §8.1).
+pub fn resolve_aggregate_ranges_with_extents(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+    derived_extents: &HashMap<String, i64>,
+) -> Result<(), CompileError> {
     for eq in &mut model.equations {
-        resolve_expr_ranges(&mut eq.lhs, index_sets)?;
-        resolve_expr_ranges(&mut eq.rhs, index_sets)?;
+        resolve_expr_ranges_with_extents(&mut eq.lhs, index_sets, derived_extents)?;
+        resolve_expr_ranges_with_extents(&mut eq.rhs, index_sets, derived_extents)?;
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            resolve_expr_ranges(&mut eq.lhs, index_sets)?;
-            resolve_expr_ranges(&mut eq.rhs, index_sets)?;
+            resolve_expr_ranges_with_extents(&mut eq.lhs, index_sets, derived_extents)?;
+            resolve_expr_ranges_with_extents(&mut eq.rhs, index_sets, derived_extents)?;
         }
     }
     for var in model.variables.values_mut() {
         if let Some(expr) = &mut var.expression {
-            resolve_expr_ranges(expr, index_sets)?;
+            resolve_expr_ranges_with_extents(expr, index_sets, derived_extents)?;
         }
     }
     Ok(())
@@ -219,6 +266,22 @@ pub fn resolve_aggregate_ranges(
 pub(crate) fn resolve_expr_ranges(
     expr: &mut Expr,
     index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
+    resolve_expr_ranges_with_extents(expr, index_sets, empty_derived_extents())
+}
+
+/// [`resolve_expr_ranges`] with the value-invention derived extents in hand —
+/// see [`resolve_aggregate_ranges_with_extents`] for what `derived_extents`
+/// means and why an ISRM-shaped document needs it.
+///
+/// `pub` (not `pub(crate)`) because a Rust *runner* that drives value invention
+/// itself — rather than through [`crate::simulate_array::ArrayCompiled`] — holds
+/// a bare [`Expr`] and the engine's extents, and has no other way to turn the
+/// document's `{ "from": <derived set> }` references into evaluable bounds.
+pub fn resolve_expr_ranges_with_extents(
+    expr: &mut Expr,
+    index_sets: &HashMap<String, IndexSet>,
+    derived_extents: &HashMap<String, i64>,
 ) -> Result<(), CompileError> {
     let Expr::Operator(node) = expr else {
         return Ok(());
@@ -245,9 +308,14 @@ pub(crate) fn resolve_expr_ranges(
                 | RangeSpec::Strided(_)
                 | RangeSpec::RaggedDyn { .. }
                 | RangeSpec::DerivedDyn { .. } => continue,
-                RangeSpec::IndexSetRef { from, of } => {
-                    resolve_index_set_ref(from, of.as_deref(), idx_name, is_output, index_sets)?
-                }
+                RangeSpec::IndexSetRef { from, of } => resolve_index_set_ref(
+                    from,
+                    of.as_deref(),
+                    idx_name,
+                    is_output,
+                    index_sets,
+                    derived_extents,
+                )?,
             };
             *spec = match resolved {
                 ResolvedRange::Static(iv) => RangeSpec::Interval(iv),
@@ -266,7 +334,7 @@ pub(crate) fn resolve_expr_ranges(
     let mut err: Option<CompileError> = None;
     node.for_each_child_mut(&mut |child| {
         if err.is_none()
-            && let Err(e) = resolve_expr_ranges(child, index_sets)
+            && let Err(e) = resolve_expr_ranges_with_extents(child, index_sets, derived_extents)
         {
             err = Some(e);
         }
@@ -310,18 +378,28 @@ enum ResolvedRange {
 /// from the set definition; the member gather through `values` is authored in
 /// the node body, so it is not consulted here.
 ///
-/// A `derived` (FAQ-materialized) set resolves to a [`ResolvedRange::Derived`]
-/// dynamic bound carrying its `from_faq` producer id — but, like a ragged set,
-/// only as a contracted (inner) index: a derived *output* index is rejected
-/// (`is_output`), since the result array's extent must be statically known. The
-/// per-eval upper bound is the vertex count of the ring the `from_faq` node
-/// materializes at runtime (RFC §8.1).
+/// A `derived` (FAQ-materialized) set resolves one of two ways, in this order:
+///
+/// 1. **Value-invention extent known** — its `from_faq` producer id is a key of
+///    `derived_extents`, so the relational engine has already materialized the
+///    distinct member set and its cardinality `n` is a build-time constant. The
+///    reference resolves to the dense [`ResolvedRange::Static`] `[1, n]`, and is
+///    legal as an OUTPUT index as well: the axis is no less statically sized
+///    than an `interval` set's. (Julia `_resolve_one_index_set_ref`, Python
+///    `_resolve_range_spec`.)
+/// 2. **Not materialized** — the geometry clip-ring case (RFC §8.1). It resolves
+///    to a [`ResolvedRange::Derived`] dynamic bound carrying its `from_faq`
+///    producer id, and, like a ragged set, only as a contracted (inner) index: a
+///    derived *output* index is rejected (`is_output`), since the result array's
+///    extent must be statically known. The per-eval upper bound is the vertex
+///    count of the ring the `from_faq` node materializes at runtime.
 fn resolve_index_set_ref(
     from: &str,
     of: Option<&[String]>,
     idx_name: &str,
     is_output: bool,
     index_sets: &HashMap<String, IndexSet>,
+    derived_extents: &HashMap<String, i64>,
 ) -> Result<ResolvedRange, CompileError> {
     let set = index_sets
         .get(from)
@@ -392,24 +470,11 @@ fn resolve_index_set_ref(
             })
         }
         "derived" => {
-            // A FAQ-materialized derived set (RFC §5.5 / §8.1) sizes itself from
-            // the ring its producer node materializes at runtime (the
-            // `intersect_polygon` clip-ring case): `from_faq` names that producer's
-            // `id`, and the derived set's extent is the count of distinct vertices
-            // of the registered ring, read per-eval. Like a ragged set it has no
-            // statically-known extent, so it may size a reduction (contracted
-            // index) but not an output array (`is_output`).
-            if is_output {
-                return Err(CompileError::UnsupportedFeatureError {
-                    feature: "derived output index".to_string(),
-                    message: format!(
-                        "aggregate output index '{idx_name}' references derived index set '{from}'; \
-                         a derived (FAQ-materialized) set's extent is data-dependent and may only \
-                         be a contracted (reduction) index, not an output index (RFC \
-                         semiring-faq-unified-ir §5.5 / §8.1)"
-                    ),
-                });
-            }
+            // A FAQ-materialized derived set (RFC §5.5 / §8.1) is sized by the
+            // producer named in its `from_faq`. Which producer that is decides
+            // *when* the extent is known, and hence which of the two arms below
+            // applies — so read the id first, and fail loudly if it is absent
+            // (an unnamed producer can be resolved by neither arm).
             let from_faq =
                 set.from_faq
                     .clone()
@@ -419,6 +484,33 @@ fn resolve_index_set_ref(
                              `from_faq` naming its producing FAQ node (RFC semiring-faq-unified-ir §5.5)"
                         ),
                     })?;
+            // (1) The BUILD-TIME relational producer: the value-invention engine
+            //     (skolem/distinct/rank, RFC §6.1) already enumerated the distinct
+            //     member set and handed us its cardinality, keyed by the producing
+            //     aggregate's `id`. That is a constant by the time any evaluation
+            //     happens, so the axis is dense `[1, n]` — and, unlike the runtime
+            //     ring below, it is a legal OUTPUT extent: this is what lets an
+            //     ISRM emission factor be *shaped on* the invented cell set.
+            if let Some(&n) = derived_extents.get(&from_faq) {
+                return Ok(ResolvedRange::Static([1, n]));
+            }
+            // (2) The RUNTIME geometry producer (the `intersect_polygon` clip):
+            //     the extent is the registered ring's distinct-vertex count, read
+            //     per-eval. Like a ragged set it has no statically-known extent,
+            //     so it may size a reduction (contracted index) but not an output
+            //     array (`is_output`).
+            if is_output {
+                return Err(CompileError::UnsupportedFeatureError {
+                    feature: "derived output index".to_string(),
+                    message: format!(
+                        "aggregate output index '{idx_name}' references derived index set '{from}'; \
+                         a derived (FAQ-materialized) set's extent is data-dependent and may only \
+                         be a contracted (reduction) index, not an output index, unless its \
+                         `from_faq` producer '{from_faq}' has a build-time value-invention extent \
+                         (RFC semiring-faq-unified-ir §5.5 / §8.1)"
+                    ),
+                });
+            }
             Ok(ResolvedRange::Derived { from_faq })
         }
         other => Err(CompileError::InterpreterBuildError {
@@ -453,6 +545,26 @@ mod tests {
             offsets: offsets.map(str::to_string),
             values: Some("edgesOnCell".into()),
         }
+    }
+
+    /// [`resolve_index_set_ref`] with NO value-invention extents — the shape
+    /// every case below but [`derived_set_with_a_value_invention_extent_is_dense`]
+    /// exercises, and the one [`resolve_aggregate_ranges`] itself uses.
+    fn resolve_ref(
+        from: &str,
+        of: Option<&[String]>,
+        idx_name: &str,
+        is_output: bool,
+        index_sets: &HashMap<String, IndexSet>,
+    ) -> Result<ResolvedRange, CompileError> {
+        resolve_index_set_ref(
+            from,
+            of,
+            idx_name,
+            is_output,
+            index_sets,
+            empty_derived_extents(),
+        )
     }
 
     /// Unwrap a [`ResolvedRange::Static`] in tests, panicking otherwise.
@@ -551,19 +663,18 @@ mod tests {
             },
         );
         assert_eq!(
-            static_bounds(resolve_index_set_ref("cells", None, "i", false, &index_sets).unwrap()),
+            static_bounds(resolve_ref("cells", None, "i", false, &index_sets).unwrap()),
             [1, 5]
         );
         assert_eq!(
-            static_bounds(resolve_index_set_ref("county", None, "c", false, &index_sets).unwrap()),
+            static_bounds(resolve_ref("county", None, "c", false, &index_sets).unwrap()),
             [1, 3]
         );
         // An `of` on a reference to a *static* set is ignored (its extent is
         // static), mirroring the Julia reference — it no longer errors.
         assert_eq!(
             static_bounds(
-                resolve_index_set_ref("cells", Some(&["i".into()]), "i", false, &index_sets)
-                    .unwrap()
+                resolve_ref("cells", Some(&["i".into()]), "i", false, &index_sets).unwrap()
             ),
             [1, 5]
         );
@@ -572,7 +683,7 @@ mod tests {
     #[test]
     fn undeclared_from_errors_naming_the_set() {
         let index_sets: HashMap<String, IndexSet> = HashMap::new();
-        let err = resolve_index_set_ref("nonesuch", None, "i", false, &index_sets).unwrap_err();
+        let err = resolve_ref("nonesuch", None, "i", false, &index_sets).unwrap_err();
         let msg = format!("{err:?}");
         assert!(msg.contains("nonesuch"), "error should name the set: {msg}");
     }
@@ -584,8 +695,7 @@ mod tests {
         // parents — the per-output-tuple bound `[1, offsets[of…]]`.
         let mut index_sets = HashMap::new();
         index_sets.insert("edges".to_string(), ragged(Some("nEdgesOnCell")));
-        let resolved =
-            resolve_index_set_ref("edges", Some(&["i".into()]), "k", false, &index_sets).unwrap();
+        let resolved = resolve_ref("edges", Some(&["i".into()]), "k", false, &index_sets).unwrap();
         match resolved {
             ResolvedRange::Ragged { offsets, of } => {
                 assert_eq!(offsets, "nEdgesOnCell");
@@ -604,8 +714,7 @@ mod tests {
         // must be statically known.
         let mut index_sets = HashMap::new();
         index_sets.insert("edges".to_string(), ragged(Some("nEdgesOnCell")));
-        let err = resolve_index_set_ref("edges", Some(&["i".into()]), "k", true, &index_sets)
-            .unwrap_err();
+        let err = resolve_ref("edges", Some(&["i".into()]), "k", true, &index_sets).unwrap_err();
         let msg = format!("{err:?}");
         assert!(msg.contains("ragged"), "error should mention ragged: {msg}");
     }
@@ -616,8 +725,8 @@ mod tests {
         // without an `of` parent index is rejected.
         let mut index_sets = HashMap::new();
         index_sets.insert("edges".to_string(), ragged(Some("nEdgesOnCell")));
-        assert!(resolve_index_set_ref("edges", None, "k", false, &index_sets).is_err());
-        assert!(resolve_index_set_ref("edges", Some(&[]), "k", false, &index_sets).is_err());
+        assert!(resolve_ref("edges", None, "k", false, &index_sets).is_err());
+        assert!(resolve_ref("edges", Some(&[]), "k", false, &index_sets).is_err());
     }
 
     #[test]
@@ -625,9 +734,7 @@ mod tests {
         // A ragged set with no `offsets` backing factor cannot produce a bound.
         let mut index_sets = HashMap::new();
         index_sets.insert("edges".to_string(), ragged(None));
-        assert!(
-            resolve_index_set_ref("edges", Some(&["i".into()]), "k", false, &index_sets).is_err()
-        );
+        assert!(resolve_ref("edges", Some(&["i".into()]), "k", false, &index_sets).is_err());
     }
 
     #[test]
@@ -650,17 +757,62 @@ mod tests {
             },
         );
         // Contracted (is_output=false): resolves, carrying the producer id.
-        match resolve_index_set_ref("clip_ring", None, "v", false, &index_sets).unwrap() {
+        match resolve_ref("clip_ring", None, "v", false, &index_sets).unwrap() {
             ResolvedRange::Derived { from_faq } => assert_eq!(from_faq, "overlap_clip"),
             other => panic!("expected Derived, got {other:?}"),
         }
         // Output (is_output=true): rejected.
-        let err = resolve_index_set_ref("clip_ring", None, "v", true, &index_sets).unwrap_err();
+        let err = resolve_ref("clip_ring", None, "v", true, &index_sets).unwrap_err();
         let msg = format!("{err:?}");
         assert!(
             msg.contains("derived output index"),
             "error should reject a derived output index: {msg}"
         );
+    }
+
+    #[test]
+    fn derived_set_with_a_value_invention_extent_is_dense() {
+        // Once the relational engine has materialized the producer, its distinct-set
+        // cardinality makes the axis as statically sized as an `interval` — so it
+        // resolves to `[1, n]` and is admissible as an OUTPUT index too (the shape
+        // an ISRM emission factor takes over the invented source-cell set).
+        let mut index_sets = HashMap::new();
+        index_sets.insert(
+            "emis_src_cells".to_string(),
+            IndexSet {
+                kind: "derived".into(),
+                size: None,
+                members: None,
+                from_faq: Some("emis_src_cells_faq".into()),
+                of: None,
+                offsets: None,
+                values: None,
+            },
+        );
+        let extents: HashMap<String, i64> = HashMap::from([("emis_src_cells_faq".to_string(), 4)]);
+
+        for is_output in [false, true] {
+            let r = resolve_index_set_ref(
+                "emis_src_cells",
+                None,
+                "s",
+                is_output,
+                &index_sets,
+                &extents,
+            )
+            .unwrap_or_else(|e| panic!("is_output={is_output} should resolve: {e:?}"));
+            assert_eq!(static_bounds(r), [1, 4]);
+        }
+
+        // A producer the engine did NOT materialize keeps the runtime-ring
+        // treatment: the extents map is consulted by producer id, not by set name.
+        let other: HashMap<String, i64> = HashMap::from([("some_other_faq".to_string(), 7)]);
+        match resolve_index_set_ref("emis_src_cells", None, "s", false, &index_sets, &other)
+            .unwrap()
+        {
+            ResolvedRange::Derived { from_faq } => assert_eq!(from_faq, "emis_src_cells_faq"),
+            other => panic!("expected the deferred Derived bound, got {other:?}"),
+        }
     }
 
     #[test]
@@ -679,7 +831,7 @@ mod tests {
                 values: None,
             },
         );
-        let err = resolve_index_set_ref("bad_set", None, "e", false, &index_sets).unwrap_err();
+        let err = resolve_ref("bad_set", None, "e", false, &index_sets).unwrap_err();
         let msg = format!("{err:?}");
         assert!(
             msg.contains("from_faq"),
