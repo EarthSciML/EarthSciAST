@@ -167,8 +167,14 @@ def discover(esd: Path, category: str, which: str = "included"):
             out.append((m["case"], problem, m["model"], "pde-tests", [], excl))
         elif category == "convergence":
             at = str(m.get("assert_time", 0.1))
+            # Trace the COARSEST resolution only: a bail verdict is a property
+            # of the discretized expression, not of N, and the finest grids in
+            # this corpus cost minutes each.
+            res = sorted(m["resolutions"], key=lambda r: r["n"])[:1]
             out.append((m["case"], problem, m["model"], "convergence",
-                        ["--assert-time", at], excl))
+                        ["--assert-time", at,
+                         "--norms", ",".join(m.get("norms", ["L2_error"])),
+                         "--resolutions", json.dumps(res)], excl))
     return out
 
 
