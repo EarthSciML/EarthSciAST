@@ -2638,6 +2638,7 @@ function _build_evaluator_impl(model::Model;
     # prior build so it never accumulates across builds. Loop-var names are
     # globally unique, so this only drops dead entries.
     empty!(_LOOPVAR_REFS)
+    empty!(_STATE_SLOT_TABLES)   # build-scoped state-gather slot tables (ess-runtime-contraction)
     # ---- Compile-once template tier: expand references at the entry, keeping
     # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
     # every fallback path below sees exactly the fused expanded tree Option A

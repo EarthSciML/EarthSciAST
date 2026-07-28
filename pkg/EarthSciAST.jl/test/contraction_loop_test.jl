@@ -258,12 +258,12 @@ end
         @test min(tl(big), tl(big)) < min(tu(big), tu(big)) / 10   # ≥10× at M=40 (~1681 terms/cell)
     end
 
-    # A contraction that indexes STATE at a contracted index (`src[k,l]`) has no
-    # static per-k slot for the loop — the probe fails and the einsum takes the
-    # existing affine/unroll path, unchanged. Confirm it does NOT loop and stays
-    # correct even with the loop enabled (the realistic state-source shape).
-    @testset "state-source contraction falls back to unroll, still correct" begin
-        N = 4    # total contraction N² = 16 ≥ floor, so the gate/probe actually runs
+    # A contraction that indexes STATE at a contracted index (`src[k,l]`) now
+    # loops too: the loop body reads `u` at a slot computed from the loop counter
+    # at eval time (`_NK_STATE_GATHER`), so the reduction no longer unrolls one
+    # `_NK_STATE` per (k,l). Confirm loop == unroll reference, exact.
+    @testset "state-source contraction (src[k,l]) loops and matches unroll" begin
+        N = 4    # total contraction N² = 16 ≥ floor
         W = [ [ [ [ Float64((i+2j+3k+5l) % 7) for l in 1:N ] for k in 1:N ] for j in 1:2 ] for i in 1:2 ]
         agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","args"=>Any[],
             "output_idx"=>Any["i","j"],"ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2],"k"=>Any[1,N],"l"=>Any[1,N]),
@@ -294,8 +294,91 @@ end
         Wf(i,j,k,l)=Float64((i+2j+3k+5l)%7)
         for i in 1:2, j in 1:2
             key="out[$i,$j]"
-            @test dl[vml[key]] == dr[vmr[key]]     # loop-enabled == reference (no loop taken)
+            @test dl[vml[key]] == dr[vmr[key]]     # loop (state-gather) == unroll reference
             @test dl[vml[key]] == sum(Wf(i,j,k,l)*(k+l) for k in 1:N for l in 1:N)
         end
+    end
+end
+
+# ── State-source halo tent (ess-runtime-contraction): out[i,j]=Σ_{k,l} W·q[donor]
+# The loop body reads LIVE STATE at a loop-var-dependent slot `q[i+k-1, j+l-1]`
+# via `_NK_STATE_GATHER` — the reduction no longer bakes one `_NK_STATE` per (k,l).
+# Covers an in-bounds donor, a GHOST donor (out-of-bounds → 0), and AD through the
+# gathered state.
+function _cl_halo(M::Int; ghost::Bool=false)
+    NI, NJ = 2, 2
+    NQ = ghost ? M : (max(NI, NJ) + M - 1)   # ghost: q smaller than donor range ⇒ OOB reads → 0
+    W = [ [ [ [ Float64((i+2j+3k+5l) % 7) for l in 1:M ] for k in 1:M ] for j in 1:NJ ] for i in 1:NI ]
+    donor(a, b) = Dict("op"=>"-","args"=>Any[Dict("op"=>"+","args"=>Any[a,b]),1])   # a+b-1
+    agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","args"=>Any[],
+        "output_idx"=>Any["i","j"],"ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ],"k"=>Any[1,M],"l"=>Any[1,M]),
+        "expr"=>Dict("op"=>"*","args"=>Any[
+            Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
+            Dict("op"=>"index","args"=>Any["q", donor("i","k"), donor("j","l")])]))
+    doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_halo"),
+      "models"=>Dict("R"=>Dict{String,Any}(
+        "variables"=>Dict("q"=>Dict("type"=>"state","shape"=>Any["a","b"]),
+                          "out"=>Dict("type"=>"state","shape"=>Any["i","j"])),
+        "equations"=>Any[
+          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
+                 "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),
+                 "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["q","a","b"])],"wrt"=>"t")),
+               "rhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
+                 "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),"expr"=>0.0)),
+          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+                 "ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ]),
+                 "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["out","i","j"])],"wrt"=>"t")),
+               "rhs"=>agg)])))
+    (doc, NI, NJ, NQ, M)
+end
+_cl_qval(a, b) = Float64(10a + b)
+function _cl_halo_ics(NQ)
+    d = Dict{String,Any}("out[1,1]"=>0.0,"out[1,2]"=>0.0,"out[2,1]"=>0.0,"out[2,2]"=>0.0)
+    for a in 1:NQ, b in 1:NQ; d["q[$a,$b]"] = _cl_qval(a, b); end
+    d
+end
+function _cl_halo_du(doc, ics; loop::Bool, form=:inplace)
+    withenv("ESS_CONTRACTION_LOOP"=>(loop ? "1" : "0"),"ESS_CONTRACTION_LOOP_MIN"=>"8") do
+        f!,u0,p,_,vm = build_evaluator(doc; initial_conditions=ics, form=form)
+        (f!,u0,p,vm)
+    end
+end
+function _cl_halo_expected(M, NI, NJ, NQ)
+    W(i,j,k,l)=Float64((i+2j+3k+5l)%7)
+    q(a,b) = (1<=a<=NQ && 1<=b<=NQ) ? _cl_qval(a,b) : 0.0
+    [ sum(W(i,j,k,l)*q(i+k-1,j+l-1) for k in 1:M for l in 1:M) for i in 1:NI, j in 1:NJ ]
+end
+
+@testset "runtime contraction loop — state-source halo tent (ess-runtime-contraction)" begin
+    @testset "$(ghost ? "ghost" : "in-bounds") donor: loop == unroll == exact" for ghost in (false, true)
+        doc, NI, NJ, NQ, M = _cl_halo(8; ghost=ghost)
+        ics = _cl_halo_ics(NQ)
+        fl,u0l,pl,vml = _cl_halo_du(doc, ics; loop=true)
+        fr,u0r,pr,vmr = _cl_halo_du(doc, ics; loop=false)
+        dl = similar(u0l); fl(dl,u0l,pl,0.0)
+        dr = similar(u0r); fr(dr,u0r,pr,0.0)
+        exp = _cl_halo_expected(M, NI, NJ, NQ)
+        for i in 1:NI, j in 1:NJ
+            key = "out[$i,$j]"
+            @test dl[vml[key]] == dr[vmr[key]]
+            @test dl[vml[key]] == exp[i, j]
+        end
+    end
+
+    @testset "state-source loop: zero-alloc, :oop == :iip, AD through the gather" begin
+        doc, NI, NJ, NQ, M = _cl_halo(8)
+        ics = _cl_halo_ics(NQ)
+        fl,u0,p,vml = _cl_halo_du(doc, ics; loop=true)
+        dl = similar(u0); fl(dl,u0,p,0.0)
+        fl(dl,u0,p,0.0)
+        @test (@allocated fl(dl,u0,p,0.0)) == 0
+        fo,u0o,po,vmo = _cl_halo_du(doc, ics; loop=true, form=:oop)
+        duo = fo(u0o,po,0.0)
+        @test all(duo[vmo["out[$i,$j]"]] == dl[vml["out[$i,$j]"]] for i in 1:NI, j in 1:NJ)
+        # out[1,1] = Σ_{k,l} W(1,1,k,l)·q[k,l], so ∂/∂q[a,b] = W(1,1,a,b) for a,b∈1..M.
+        g(u) = (d = similar(u, eltype(u)); fl(d,u,p,0.0); d[vml["out[1,1]"]])
+        J = ForwardDiff.gradient(g, u0)
+        W11(a,b) = Float64((1+2+3a+5b) % 7)
+        @test all(J[vml["q[$a,$b]"]] == ((1<=a<=M && 1<=b<=M) ? W11(a,b) : 0.0) for a in 1:3, b in 1:3)
     end
 end

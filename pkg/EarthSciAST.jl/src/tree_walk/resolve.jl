@@ -667,6 +667,58 @@ function _intern_inline_const(cexpr::OpExpr, const_arrays::AbstractDict)
     return vals, name
 end
 
+# True iff `e` references a runtime contraction LOOP variable (a reserved
+# `__esm_lv_*` name — `_LOOPVAR_PREFIX`). This is the SOLE trigger for lowering a
+# state-array read to a runtime `_NK_STATE_GATHER` (ess-runtime-contraction):
+# those names appear ONLY when `_try_build_contraction_loop` keeps a contracted
+# index symbolic, so a state gather is never emitted on the normal RHS build or the
+# compile-once cellwise path (whose bound symbols use different names). Distinct
+# from `_refs_bound_sym`, which fires for ANY symbol in a caller-supplied set.
+_refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
+_refs_loopvar(e::OpExpr) = any(_refs_loopvar, e.args)
+_refs_loopvar(::ASTExpr) = false
+
+# Lower a STATE-array read whose subscripts depend on a contraction loop variable
+# (`q[donor(i,k)]`, ess-runtime-contraction) to a runtime `_NK_STATE_GATHER`. The
+# frozen slot table maps every in-bounds state cell to its flat `u` slot (built
+# once per state var per build, shared across output cells via `_STATE_SLOT_TABLES`);
+# the subscript expressions resolve normally (a loop var → `_NK_LOOPVAR`; an indirect
+# `index(conn,i,k)` → a nested `_NK_CONST_GATHER`) and become the node's children,
+# evaluated + bounds-checked at eval time. A missing state cell (sparse layout)
+# throws, which the loop-build try/catch converts to a fall-back to the exact unroll.
+function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
+        idx_args::Vector{ASTExpr}, array_var_info, var_map::Dict{String,Int},
+        const_arrays::AbstractDict, pgather::AbstractDict, memo::_MaybeMemo,
+        bound_syms::Set{String})
+    nd = length(lo)
+    sub_nodes = ASTExpr[_resolve_indices(a, array_var_info, var_map, const_arrays,
+                                         pgather, memo, bound_syms) for a in idx_args]
+    slot_flat, strides = get!(_STATE_SLOT_TABLES, vname) do
+        dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
+        strd = Vector{Int}(undef, nd)
+        strd[1] = 1
+        for d in 2:nd
+            strd[d] = strd[d-1] * dims[d-1]
+        end
+        total = prod(dims)
+        sf = Vector{Int}(undef, total)
+        cur = Vector{Int}(undef, nd)
+        for lin in 0:total-1
+            rem = lin
+            for d in 1:nd
+                cur[d] = lo[d] + (rem % dims[d]); rem ÷= dims[d]
+            end
+            cname = _cell_key(vname, cur)
+            haskey(var_map, cname) ||
+                throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
+            sf[lin+1] = var_map[cname]
+        end
+        (sf, strd)
+    end
+    return OpExpr("__state_gather", sub_nodes;
+                  value=_StateGatherRef(slot_flat, strides, copy(lo), copy(hi)))
+end
+
 # Resolve each expression in `args`, returning `(resolved, changed)`. When no
 # element changes under resolution the ORIGINAL `args` vector is returned (no
 # allocation) and `changed` is false, letting the caller keep its node verbatim;
@@ -831,6 +883,15 @@ function _resolve_indices_op(expr::OpExpr,
             length(idx_args) == length(lo) ||
                 throw(TreeWalkError("E_TREEWALK_INDEX_NDIM",
                       "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"))
+            # Runtime state gather (ess-runtime-contraction): a subscript depends on
+            # a contraction loop variable, so the slot is not a build-time constant.
+            # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
+            # the loop-build path (`__esm_lv_*` names); the concrete path below is
+            # untouched otherwise.
+            if any(a -> _refs_loopvar(a), idx_args)
+                return _resolve_state_gather(vname, lo, hi, idx_args, array_var_info,
+                                             var_map, const_arrays, pgather, memo, bound_syms)
+            end
             # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
             # resolved: _eval_const_int will look up conn[c,k] as an integer.
             indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]

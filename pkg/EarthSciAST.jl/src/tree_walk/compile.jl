@@ -40,6 +40,7 @@ const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: paylo
 const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an EVAL-TIME-computed offset (wall2 Phase B)
 const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter (ess-runtime-contraction)
 const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
+const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
 
 # One compiled scalar-IR node. `kind` selects which fields are live. The
 # catch-all `payload::Any` slot carries a KIND-DEPENDENT runtime payload,
@@ -174,7 +175,47 @@ end
 # with a fresh one within a build. Build is single-threaded, so no locking.
 const _LOOPVAR_REFS = Dict{Symbol,Base.RefValue{Int}}()
 const _LOOPVAR_COUNTER = Ref(0)
-_fresh_loopvar_name() = (_LOOPVAR_COUNTER[] += 1; "__esm_lv_$(_LOOPVAR_COUNTER[])")
+const _LOOPVAR_PREFIX = "__esm_lv_"
+_fresh_loopvar_name() = (_LOOPVAR_COUNTER[] += 1; "$(_LOOPVAR_PREFIX)$(_LOOPVAR_COUNTER[])")
+
+# ── Runtime STATE gather in a contraction-loop body (ess-runtime-contraction) ──
+# The state-source case: a loop body reads STATE at a slot that depends on the
+# (symbolic) contracted index — `q[donor(i,k)]`, where `donor` may be plain
+# arithmetic in the loop var OR an indirect const-connectivity gather
+# `index(conn, i, k)`. The unroll bakes a distinct `_NK_STATE` per k; the loop
+# instead computes the slot AT EVAL TIME from the current loop counter and reads
+# `u` there. `_StateGather` is the eval-time payload of an `_NK_STATE_GATHER` node
+# (analogous to `_ConstGatherArray`, but the frozen table holds STATE SLOTS and
+# the final read hits `u`, so the value carries a derivative). `slot_flat[off+1]`
+# is the flat `u` index of the state cell whose per-dim subscript is
+# `lo[d] + local_d` (column-major `off`); a subscript outside `[lo,hi]` is a ghost
+# cell and yields 0̄ (the state-array ghost convention, matching the unroll's
+# out-of-bounds → `NumExpr(0.0)`). The subscript expressions are the node's
+# `children` (loop-var-dependent `_Node`s), evaluated and bounds-checked here.
+struct _StateGather
+    slot_flat::Vector{Int}
+    strides::Vector{Int}
+    lo::Vector{Int}
+    hi::Vector{Int}
+    len::Int
+end
+
+# Build→compile side channel (like `_ConstGatherRef`): carries the resolved state
+# slot table on a `__state_gather` marker op's `.value`; `_compile` compiles the
+# subscript `args` as children and lowers the node to `_NK_STATE_GATHER`.
+struct _StateGatherRef
+    slot_flat::Vector{Int}
+    strides::Vector{Int}
+    lo::Vector{Int}
+    hi::Vector{Int}
+end
+
+# Build-scoped cache of a state array's flat slot table (vname → (slot_flat,
+# strides)). The table maps a state cell's per-dim logical index to its flat `u`
+# slot; it depends ONLY on the state array's `var_map` layout, so it is built once
+# per state var per build and shared across every output cell's loop node. Cleared
+# at the top of every build (`_build_evaluator_impl`).
+const _STATE_SLOT_TABLES = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
 
 # ── Per-equation build memo (ess-perf: compile one representative per group) ──
 # Within one array equation's cell loop every cell resolves/compiles against the
@@ -446,6 +487,18 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         return _mknode(kind=_NK_CONTRACTION_LOOP, op=lb.oplus, literal=lb.zerobar,
                        payload=_ContractLoop(lb.ref, lb.lo, lb.hi, lb.step),
                        children=_Node[body])
+    end
+    # Runtime state gather (ess-runtime-contraction): a state read at a
+    # loop-var-dependent slot. The subscript `args` compile as children (a loop
+    # var → `_NK_LOOPVAR`, an indirect const-connectivity subscript → a nested
+    # `_NK_CONST_GATHER`); the slot table + bounds ride on `.value`.
+    if op_sym === :__state_gather
+        ref = expr.value::_StateGatherRef
+        subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        return _mknode(kind=_NK_STATE_GATHER,
+                       payload=_StateGather(ref.slot_flat, ref.strides, ref.lo, ref.hi,
+                                            length(ref.slot_flat)),
+                       children=subs)
     end
 
     children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
@@ -1552,9 +1605,31 @@ end
         return T((n.payload::Base.RefValue{Int})[])
     elseif k === _NK_CONTRACTION_LOOP
         return _eval_contraction_loop(n, u, p, t, T)
+    elseif k === _NK_STATE_GATHER
+        return _eval_state_gather(n, u, p, t, T)
     else
         return _eval_node_op(n, u, p, t, T)
     end
+end
+
+# Runtime state read at a loop-var-dependent slot (ess-runtime-contraction).
+# Evaluates the subscript children to integers, bounds-checks each against the
+# state array's `[lo,hi]` (an out-of-range subscript is a ghost cell → 0̄, matching
+# the unroll), computes the column-major offset into the frozen slot table, and
+# reads `u` at that flat slot. Returns `eltype(u)` on both arms exactly as the
+# `_NK_STATE` leaf does (so the state axis stays derivative-carrying under
+# ForwardDiff and the arm is type-stable); zero per-call allocation.
+function _eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T}
+    sg = n.payload::_StateGather
+    children = n.children
+    off = 0
+    @inbounds for d in eachindex(children)
+        sub = round(Int, _eval_node(children[d], u, p, t, T))
+        (sg.lo[d] <= sub <= sg.hi[d]) || return zero(eltype(u))   # ghost cell
+        off += (sub - sg.lo[d]) * sg.strides[d]
+    end
+    slot = @inbounds sg.slot_flat[off + 1]
+    @inbounds return u[slot]
 end
 
 # Compile-once runtime ⊕-reduction (ess-runtime-contraction). Iterates the static

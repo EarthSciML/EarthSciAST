@@ -628,9 +628,48 @@ function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)
         return convert(T, (n.payload::Base.RefValue{Int})[])
     elseif k === _NK_CONTRACTION_LOOP
         return _oop_contraction_loop(n, u, p, t, cache, fb)
+    elseif k === _NK_CONST_GATHER
+        return _oop_const_gather(n, u, p, t, cache, fb)
+    elseif k === _NK_STATE_GATHER
+        return _oop_state_gather(n, u, p, t, cache, fb)
     else
         return _oop_eval_op(n, u, p, t, cache, fb)
     end
+end
+
+# OOP twin of the `_NK_CONST_GATHER` arm of `_eval_node` (wall2 Phase B): a
+# runtime-indexed read of a frozen const/provider array. The scalar walker gained
+# this via the compile-once cellwise path; the OOP form had no arm because that
+# path never traces — but a runtime contraction loop (ess-runtime-contraction) can
+# put a const-gather (a loop-var-subscripted weight) on the traced `:oop` RHS, so
+# it needs the same lowering here to stay bit-identical to `f!`.
+function _oop_const_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+    cg = n.payload::_ConstGatherArray
+    children = n.children
+    strides = cg.strides
+    off = 1
+    @inbounds for d in eachindex(children)
+        sub = round(Int, _oop_eval(children[d], u, p, t, cache, fb))
+        off += (sub - 1) * strides[d]
+    end
+    (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
+    return convert(T, @inbounds cg.flat[off])
+end
+
+# OOP twin of `_eval_state_gather` (ess-runtime-contraction). Same slot computation
+# and ghost convention; reads the state through `_oop_read_state` so a tracing
+# backend sees the real input, and returns `T` on both arms.
+function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+    sg = n.payload::_StateGather
+    children = n.children
+    off = 0
+    @inbounds for d in eachindex(children)
+        sub = round(Int, _oop_eval(children[d], u, p, t, cache, fb))
+        (sg.lo[d] <= sub <= sg.hi[d]) || return zero(T)   # ghost cell
+        off += (sub - sg.lo[d]) * sg.strides[d]
+    end
+    slot = @inbounds sg.slot_flat[off + 1]
+    return convert(T, _oop_read_state(u, slot))
 end
 
 # OOP twin of `_eval_contraction_loop` (ess-runtime-contraction). Same static-range
