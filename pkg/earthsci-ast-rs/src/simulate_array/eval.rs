@@ -1508,6 +1508,33 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let origin: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
 
+    // Hoist cell-independent (all-static) contraction bounds out of the per-cell
+    // loop; ragged/derived dims are re-derived per output tuple inside.
+    let static_ranges = static_contract_ranges(&contract_dims);
+
+    // ---- Forward prefix scan (O(N) instead of the O(N²) triangle) -----------
+    // A cumulative reduction (esm-spec §4.3.1) reaches here as a full triangular
+    // double loop: N output cells × N contracted terms, each re-summing a window
+    // the previous cell already summed. Recognized, it becomes one sweep with a
+    // running accumulator — bit-identical, because both fold the window ascending
+    // in the same association (see [`PrefixScan`]).
+    //
+    // Detected BEFORE the whole-array overlay is tried, because the two race and
+    // the scan must win: the overlay would evaluate a cumulative aggregate as an
+    // N-tuple fold of N-element arrays — correct, and bit-identical, but O(N²)
+    // where the scan is O(N). (A widening of the overlay's index coverage made it
+    // start accepting these, which regressed
+    // `forward_scan_work_grows_linearly_not_quadratically`.) A non-cumulative
+    // aggregate returns `None` here and goes to the overlay as before.
+    let scan = detect_prefix_scan(
+        idx_names,
+        &ranges,
+        &contract_names,
+        static_ranges.as_deref(),
+        body,
+        filter,
+    );
+
     // ---- Vectorized fast path (whole-array) --------------------------------
     // Evaluate the aggregate with the same verified `eval_vec` overlay the
     // compiled-RHS stencil path uses, instead of walking the body once per cell:
@@ -1522,7 +1549,7 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // functions and ghost-0 convention, so the result is bit-identical to the
     // per-cell oracle below; any op / ragged-bound the overlay does not handle
     // returns `None` and we fall through. A local `Pool` recycles intermediates.
-    if !shape.is_empty() {
+    if !shape.is_empty() && scan.is_none() {
         let mut pool = Pool::default();
         if let Some((vv, _ops)) = try_eval_arrayop_vectorized(
             idx_names,
@@ -1550,24 +1577,6 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .chain(contract_names.iter())
         .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
         .collect();
-    // Hoist cell-independent (all-static) contraction bounds out of the per-cell
-    // loop; ragged/derived dims are re-derived per output tuple inside.
-    let static_ranges = static_contract_ranges(&contract_dims);
-
-    // ---- Forward prefix scan (O(N) instead of the O(N²) triangle) -----------
-    // A cumulative reduction (esm-spec §4.3.1) reaches here as a full triangular
-    // double loop: N output cells × N contracted terms, each re-summing a window
-    // the previous cell already summed. Recognized, it becomes one sweep with a
-    // running accumulator — bit-identical, because both fold the window ascending
-    // in the same association (see [`PrefixScan`]).
-    let scan = detect_prefix_scan(
-        idx_names,
-        &ranges,
-        &contract_names,
-        static_ranges.as_deref(),
-        body,
-        filter,
-    );
     if let Some(scan) = scan {
         let (scan_lo, scan_hi) = ranges[scan.axis];
         // Sweep the scanned axis inside; every OTHER output axis is an

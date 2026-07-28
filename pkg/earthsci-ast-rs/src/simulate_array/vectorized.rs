@@ -1308,7 +1308,10 @@ pub(super) fn eval_vec_index<'a>(
     // aligned with the output box.
     let mut mapped_src: SmallVec<[usize; 4]> = mapped.iter().flatten().map(|(d, _)| *d).collect();
     mapped_src.sort_unstable();
-    let perm: Vec<usize> = (0..out_ndim)
+    // A `SmallVec` (and `IxDyn` over its slice, whose repr inlines up to 4 axes),
+    // not a `Vec` — this runs once per `index(...)` node of every RHS evaluation
+    // and the steady-state RHS must not allocate (ess-mro, `pde_zero_alloc`).
+    let perm: SmallVec<[usize; 4]> = (0..out_ndim)
         .filter_map(|a| mapped[a].as_ref())
         .map(|(d, _)| {
             mapped_src
@@ -1317,7 +1320,7 @@ pub(super) fn eval_vec_index<'a>(
                 .expect("mapped source axis is in mapped_src")
         })
         .collect();
-    let mut rv = rv.permuted_axes(perm);
+    let mut rv = rv.permuted_axes(IxDyn(&perm[..]));
     for a in 0..out_ndim {
         if mapped[a].is_none() {
             rv = rv.insert_axis(ndarray::Axis(a));
