@@ -448,25 +448,30 @@ pub(super) fn materialize_observeds_append(
                             derived_rings,
                             forcing,
                         };
-                        let mut pool = Pool::default();
-                        try_eval_arrayop_vectorized(
-                            output_idx_names,
-                            output_ranges,
-                            body,
-                            &[],
-                            &[],
-                            ReduceKind::Sum,
-                            None,
-                            &ctx,
-                            &mut pool,
-                        )
-                        .map(|(val, _ops)| {
-                            let arr = val
-                                .view()
-                                .expect("vectorized observed value has a view")
-                                .to_owned();
-                            val.release(&mut pool);
-                            arr
+                        // The THREAD's persistent pool, not a fresh one per
+                        // observed: a model with dozens of array observeds
+                        // re-materialized every step got an empty pool on each
+                        // one, so every kernel intermediate hit the allocator.
+                        with_arrayop_pool(|pool| {
+                            try_eval_arrayop_vectorized(
+                                output_idx_names,
+                                output_ranges,
+                                body,
+                                &[],
+                                &[],
+                                ReduceKind::Sum,
+                                None,
+                                &ctx,
+                                pool,
+                            )
+                            .map(|(val, _ops)| {
+                                let arr = val
+                                    .view()
+                                    .expect("vectorized observed value has a view")
+                                    .to_owned();
+                                val.release(pool);
+                                arr
+                            })
                         })
                     };
                     if let Some(arr) = materialized {

@@ -927,17 +927,23 @@ pub(super) fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
 /// Lets a stencil whose speed/flux uses `sqrt`/`abs`/`exp`/… (e.g. the level-set
 /// Godunov `|∇φ|`) stay on the whole-array fast path instead of scalarizing.
 pub(super) fn vec_unary<'a>(op: &str, v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
+    // Resolve the operator NAME once per AST node instead of once per element:
+    // the element loop below runs over the whole output box, and
+    // `apply_unary(op, x)` re-matched the name string on every one of those
+    // elements. `unary_kernel` is pinned bit-identical to `apply_unary`
+    // (`unary_kernels_match_apply_unary`), so this is a pure dispatch hoist.
+    let f = unary_kernel(op);
     match v {
-        VecValue::Scalar(s) => VecValue::Scalar(apply_unary(op, s)),
+        VecValue::Scalar(s) => VecValue::Scalar(f(s)),
         VecValue::Owned { mut data, origin } => {
-            data.mapv_inplace(|x| apply_unary(op, x));
+            data.mapv_inplace(f);
             VecValue::Owned { data, origin }
         }
         VecValue::View { data, origin } => {
             let mut buf = pool.take_array(data.shape());
             ndarray::Zip::from(&mut buf)
                 .and(data)
-                .for_each(|o, &x| *o = apply_unary(op, x));
+                .for_each(|o, &x| *o = f(x));
             VecValue::Owned { data: buf, origin }
         }
     }
@@ -956,20 +962,46 @@ pub(super) fn vec_combine<'a>(
     b: VecValue<'a>,
     pool: &mut Pool,
 ) -> Option<VecValue<'a>> {
+    // Resolve the operator NAME once per AST node, then run an `f64`-only
+    // element loop. `apply_binary(op, …)` was called inside the whole-array
+    // `Zip`s below, so every element of every kernel node re-matched the name
+    // string — `apply_binary` + `__memcmp_evex` were 14% of a vectorized RHS
+    // profile, and the string compare also kept the loop scalar.
+    //
+    // The four arithmetic ops that dominate a stencil get a monomorphized,
+    // inlinable closure; everything else uses the shared [`binary_kernel`]
+    // function pointer (still one dispatch per node rather than per element).
+    // Both are pinned bit-identical to `apply_binary`
+    // (`binary_kernels_match_apply_binary`), and the element order/association
+    // is unchanged, so this is a pure dispatch hoist.
+    match op {
+        "+" => vec_combine_with(|x, y| x + y, a, b, pool),
+        "-" => vec_combine_with(|x, y| x - y, a, b, pool),
+        "*" => vec_combine_with(|x, y| x * y, a, b, pool),
+        "/" => vec_combine_with(|x, y| x / y, a, b, pool),
+        other => vec_combine_with(binary_kernel(other), a, b, pool),
+    }
+}
+
+/// [`vec_combine`] with the elementwise kernel already resolved.
+fn vec_combine_with<'a, F: Fn(f64, f64) -> f64>(
+    f: F,
+    a: VecValue<'a>,
+    b: VecValue<'a>,
+    pool: &mut Pool,
+) -> Option<VecValue<'a>> {
     match (a, b) {
-        (VecValue::Scalar(x), VecValue::Scalar(y)) => {
-            Some(VecValue::Scalar(apply_binary(op, x, y)))
-        }
+        (VecValue::Scalar(x), VecValue::Scalar(y)) => Some(VecValue::Scalar(f(x, y))),
         // scalar ∘ array
         (VecValue::Scalar(x), barr) => {
             let (mut data, origin) = barr.into_owned(pool);
-            data.mapv_inplace(|y| apply_binary(op, x, y));
+            data.mapv_inplace(|y| f(x, y));
             Some(VecValue::Owned { data, origin })
         }
         // array ∘ scalar
         (aarr, VecValue::Scalar(y)) => {
             let (mut data, origin) = aarr.into_owned(pool);
-            data.mapv_inplace(|x| apply_binary(op, x, y));
+            data.mapv_inplace(|x| f(x, y));
             Some(VecValue::Owned { data, origin })
         }
         // array ∘ array
@@ -987,7 +1019,7 @@ pub(super) fn vec_combine<'a>(
                         let bv = b2.view().expect("array operand has a view");
                         ndarray::Zip::from(&mut data)
                             .and(&bv)
-                            .for_each(|x, &y| *x = apply_binary(op, *x, y));
+                            .for_each(|x, &y| *x = f(*x, y));
                     }
                     b2.release(pool);
                     Some(VecValue::Owned { data, origin })
@@ -998,7 +1030,7 @@ pub(super) fn vec_combine<'a>(
                     let av = a2.view().expect("array operand has a view");
                     ndarray::Zip::from(&mut data)
                         .and(&av)
-                        .for_each(|bslot, &aval| *bslot = apply_binary(op, aval, *bslot));
+                        .for_each(|bslot, &aval| *bslot = f(aval, *bslot));
                     Some(VecValue::Owned { data, origin })
                 }
                 // both Views: a fresh pooled buffer.
@@ -1010,7 +1042,7 @@ pub(super) fn vec_combine<'a>(
                     ndarray::Zip::from(&mut buf)
                         .and(&av)
                         .and(&bv)
-                        .for_each(|o, &x, &y| *o = apply_binary(op, x, y));
+                        .for_each(|o, &x, &y| *o = f(x, y));
                     Some(VecValue::Owned { data: buf, origin })
                 }
             }
@@ -1078,6 +1110,11 @@ pub(super) fn vec_select<'a>(
 /// is the fixed 1-based index; anything referencing an output symbol is not
 /// constant. This is what a conservative-regrid gather `index(A_ij, i, j)` uses
 /// for its source-cell axis `i`.
+///
+/// SUPERSEDED on the hot path by [`classify_axis_role`], which resolves the role
+/// and the symbol in one walk; retained as the reference the equivalence test
+/// [`axis_classifier_equivalence`] checks the single-walk classifier against.
+#[cfg(test)]
 fn const_index_value(e: &Expr, bx: &VecBox) -> Option<i64> {
     match affine_terms(e, "\u{0}", bx) {
         Some((0, k)) => Some(k),
@@ -1160,19 +1197,16 @@ pub(super) fn eval_vec_index<'a>(
     let mut any_fixed_oob = false;
     for d in 0..n {
         let e = &node.args[1 + d];
-        let claimed = (0..out_ndim).find_map(|a| {
-            if mapped[a].is_some() {
-                return None;
+        // ONE walk of the axis expression resolves both which output symbol it
+        // maps (if any) and the shift/wrap — see [`classify_axis_role`] for why
+        // that is arm-for-arm the same answer the former per-candidate-symbol
+        // search produced.
+        match classify_axis_role(e, bx) {
+            Some(AxisRole::Map { out_axis, ax }) if mapped[out_axis].is_none() => {
+                mapped[out_axis] = Some((d, ax));
+                n_mapped += 1;
             }
-            classify_axis_index(e, &bx.syms[a], bx).map(|ax| (a, ax))
-        });
-        if let Some((a, ax)) = claimed {
-            mapped[a] = Some((d, ax));
-            n_mapped += 1;
-            continue;
-        }
-        match const_index_value(e, bx) {
-            Some(idx1) => {
+            Some(AxisRole::Const(idx1)) => {
                 let i0 = idx1 - src_origin[d];
                 if i0 < 0 || i0 >= src_shape[d] as i64 {
                     any_fixed_oob = true;
@@ -1181,7 +1215,10 @@ pub(super) fn eval_vec_index<'a>(
                     fixed.push((d, i0));
                 }
             }
-            None => {
+            // Either unclassifiable, or affine in an output symbol another
+            // source axis already claimed (a repeated index — a diagonal
+            // gather, which is not a whole-array slice) → oracle.
+            _ => {
                 arg0.release(pool);
                 bail_vec!(
                     "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select",
@@ -1505,13 +1542,19 @@ pub(super) enum AxisIndex {
     /// positions stay ghost-0 (homogeneous Dirichlet).
     Affine(i64),
     /// Periodic wrap of base offset `k` over an axis of period `period`: a
-    /// cyclic roll, no ghost. See [`parse_wrap_axis`] for the recognized idiom.
+    /// cyclic roll, no ghost. See [`parse_wrap_axis_any`] for the recognized
+    /// idiom.
     Wrap { k: i64, period: i64 },
 }
 
-/// Classify one `index` axis expression: affine shift first (the common
-/// stencil/ghost case), then the periodic-wrap idiom. `None` for anything else,
-/// so the caller bails to the per-cell oracle.
+/// Classify one `index` axis expression AGAINST A GIVEN SYMBOL: affine shift
+/// first (the common stencil/ghost case), then the periodic-wrap idiom. `None`
+/// for anything else, so the caller bails to the per-cell oracle.
+///
+/// SUPERSEDED on the hot path by [`classify_axis_role`] (one walk for the whole
+/// box instead of one per candidate symbol); retained as the reference the
+/// equivalence test [`axis_classifier_equivalence`] checks against.
+#[cfg(test)]
 pub(super) fn classify_axis_index(expr: &Expr, sym: &str, bx: &VecBox) -> Option<AxisIndex> {
     if let Some(k) = affine_offset_in(expr, sym, bx) {
         return Some(AxisIndex::Affine(k));
@@ -1528,6 +1571,195 @@ pub(super) fn classify_axis_index(expr: &Expr, sym: &str, bx: &VecBox) -> Option
 pub(super) fn affine_offset_in(expr: &Expr, sym: &str, bx: &VecBox) -> Option<i64> {
     let (coeff, konst) = affine_terms(expr, sym, bx)?;
     if coeff == 1 { Some(konst) } else { None }
+}
+
+/// Equality for the short symbol names an index expression is resolved against
+/// (`i`, `j`, `k`, `_lp0`, …).
+///
+/// The generic `str` comparison emits a `memcmp` CALL, and axis classification
+/// performs one per variable leaf per candidate symbol — `__memcmp_evex` was
+/// 5% of a vectorized RHS profile, over half of it under `affine_terms`. The
+/// length test rejects almost every non-match without touching the bytes, and
+/// the residual byte loop is inline.
+#[inline(always)]
+fn sym_eq(a: &str, b: &str) -> bool {
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    x.len() == y.len() && x.iter().zip(y).all(|(p, q)| p == q)
+}
+
+/// Which role one `index(...)` axis expression plays, resolved in a SINGLE walk
+/// of that expression ([`classify_axis_role`]).
+pub(super) enum AxisRole {
+    /// Maps output axis `out_axis` through `ax` (affine shift or periodic wrap).
+    Map { out_axis: usize, ax: AxisIndex },
+    /// Output-index-independent: selects the fixed 1-based source index.
+    Const(i64),
+}
+
+/// Classify one `index(...)` axis expression against the WHOLE output box in a
+/// single walk: which output symbol (if any) it is affine in, and with what
+/// shift — or that it is a constant select.
+///
+/// [`eval_vec_index`] used to ask [`classify_axis_index`] once per (source axis
+/// × not-yet-claimed output symbol) pair and then [`const_index_value`] once
+/// more, so a rank-3 box re-walked the same axis expression up to four times,
+/// each walk comparing every variable leaf against one candidate name. That
+/// re-derivation was ~9% of a vectorized RHS profile (`affine_terms`), and it is
+/// the same answer every RHS call. Resolving the symbol *from* the expression
+/// instead of guessing it does one walk regardless of rank.
+///
+/// Equivalent to the old search, arm for arm:
+///   * an expression affine in `syms[a]` with unit coefficient mentions no other
+///     output symbol (the old walk returned `None` the moment it met an unbound
+///     one), so the old search could only ever have claimed `a` — and it stopped
+///     at the first success, which is that one;
+///   * an expression affine in an ALREADY-claimed symbol failed for every other
+///     candidate and then failed `const_index_value` too (a bare output symbol
+///     is not a bound contraction index), i.e. it bailed — as it does here;
+///   * a wrap expression is an `ifelse`, for which the affine walk returns
+///     `None`, so trying affine first and wrap second is order-independent;
+///   * a constant / bound-contraction axis has coefficient 0 in every symbol, so
+///     it never classified as a map under either rule.
+pub(super) fn classify_axis_role(expr: &Expr, bx: &VecBox) -> Option<AxisRole> {
+    if let Some((sym, coeff, konst)) = affine_terms_any(expr, bx) {
+        return match (sym, coeff) {
+            (Some(out_axis), 1) => Some(AxisRole::Map {
+                out_axis,
+                ax: AxisIndex::Affine(konst),
+            }),
+            // No output symbol and no coefficient: a fixed source slice.
+            (None, 0) => Some(AxisRole::Const(konst)),
+            // Affine in a symbol but not with unit coefficient (`2i`, `i - i`):
+            // not a shifted slice and not a constant → oracle.
+            _ => None,
+        };
+    }
+    parse_wrap_axis_any(expr, bx).map(|(out_axis, ax)| AxisRole::Map { out_axis, ax })
+}
+
+/// [`affine_terms`] with the symbol RESOLVED FROM the expression rather than
+/// supplied: reduce `expr` to `(output-symbol axis, coeff, constant)` over the
+/// integers, folding bound contraction indices and integer literals. A variable
+/// leaf resolves to an output symbol if it names one, else to its bound
+/// contraction value, else the whole expression is not affine (`None`).
+///
+/// `None` also for any non-integer, nonlinear (sym·sym) or MULTI-symbol
+/// construct (`i + j`) — the per-symbol walk it replaces likewise returned
+/// `None` for every candidate there, because the other symbol was unbound.
+pub(super) fn affine_terms_any(expr: &Expr, bx: &VecBox) -> Option<(Option<usize>, i64, i64)> {
+    // Merge two sub-results: at most one distinct output symbol may appear.
+    #[inline]
+    fn join(a: Option<usize>, b: Option<usize>) -> Option<Option<usize>> {
+        match (a, b) {
+            (None, s) | (s, None) => Some(s),
+            (Some(x), Some(y)) if x == y => Some(Some(x)),
+            _ => None, // two different output symbols — not affine in one axis
+        }
+    }
+    match expr {
+        Expr::Integer(n) => Some((None, 0, *n)),
+        Expr::Number(n) if n.fract() == 0.0 => Some((None, 0, *n as i64)),
+        Expr::Number(_) => None,
+        Expr::Variable(v) => {
+            if let Some(a) = bx.syms.iter().position(|s| sym_eq(s, v)) {
+                Some((Some(a), 1, 0))
+            } else {
+                bx.cbind(v).map(|k| (None, 0, k))
+            }
+        }
+        Expr::Operator(node) => match node.op.as_str() {
+            "+" => {
+                let mut sym = None;
+                let mut coeff = 0i64;
+                let mut konst = 0i64;
+                for a in &node.args {
+                    let (s, c, k) = affine_terms_any(a, bx)?;
+                    sym = join(sym, s)?;
+                    coeff = coeff.checked_add(c)?;
+                    konst = konst.checked_add(k)?;
+                }
+                Some((sym, coeff, konst))
+            }
+            "-" if node.args.len() == 2 => {
+                let (s0, c0, k0) = affine_terms_any(&node.args[0], bx)?;
+                let (s1, c1, k1) = affine_terms_any(&node.args[1], bx)?;
+                Some((join(s0, s1)?, c0.checked_sub(c1)?, k0.checked_sub(k1)?))
+            }
+            "-" | "neg" if node.args.len() == 1 => {
+                let (s, c, k) = affine_terms_any(&node.args[0], bx)?;
+                Some((s, c.checked_neg()?, k.checked_neg()?))
+            }
+            "*" => {
+                // Linear ⇒ at most one factor carries a symbol; the others must
+                // be integer constants. `(c·sym + k)·M = (c·M)·sym + (k·M)`.
+                let mut sym_factor: Option<(Option<usize>, i64, i64)> = None;
+                let mut m: i64 = 1;
+                for a in &node.args {
+                    let (s, c, k) = affine_terms_any(a, bx)?;
+                    if c != 0 {
+                        if sym_factor.is_some() {
+                            return None; // sym·sym — nonlinear
+                        }
+                        sym_factor = Some((s, c, k));
+                    } else {
+                        // A coefficient factor that itself mentions a symbol
+                        // (`(i - i)·u`) is not linear in that symbol; the
+                        // per-symbol walk folded it to the constant 0 with the
+                        // symbol already accounted, so keep the same reading:
+                        // only its constant part multiplies.
+                        if s.is_some() {
+                            return None;
+                        }
+                        m = m.checked_mul(k)?;
+                    }
+                }
+                match sym_factor {
+                    Some((s, c, k)) => Some((s, c.checked_mul(m)?, k.checked_mul(m)?)),
+                    None => Some((None, 0, m)),
+                }
+            }
+            _ => None,
+        },
+    }
+}
+
+/// [`parse_wrap_axis`] with the symbol resolved from the expression: the wrapped
+/// `inner` decides which output axis the roll applies to, and every other branch
+/// of the idiom must agree with it. See [`classify_axis_role`] for why deriving
+/// the symbol matches the old per-candidate search exactly.
+pub(super) fn parse_wrap_axis_any(expr: &Expr, bx: &VecBox) -> Option<(usize, AxisIndex)> {
+    /// `expr` must be `1·syms[a] + k`; returns `k`. Mirrors
+    /// [`affine_offset_in`]'s unit-coefficient requirement.
+    fn offset_in_axis(expr: &Expr, a: usize, bx: &VecBox) -> Option<i64> {
+        match affine_terms_any(expr, bx)? {
+            (Some(s), 1, k) if s == a => Some(k),
+            _ => None,
+        }
+    }
+    let outer = as_op(expr, "ifelse", 3)?;
+    // cond1: inner < lo  →  then1: inner + P
+    let (lt_lhs, lo_bound) = as_cmp_const(&outer.args[0], "<")?;
+    let (sym, coeff, k) = affine_terms_any(lt_lhs, bx)?;
+    let a = sym?;
+    if coeff != 1 {
+        return None;
+    }
+    let p1 = offset_in_axis(&outer.args[1], a, bx)?.checked_sub(k)?;
+    // else1: ifelse(inner > hi, inner − P, inner)
+    let inner_if = as_op(&outer.args[2], "ifelse", 3)?;
+    let (gt_lhs, hi_bound) = as_cmp_const(&inner_if.args[0], ">")?;
+    if offset_in_axis(gt_lhs, a, bx)? != k {
+        return None;
+    }
+    let p2 = k.checked_sub(offset_in_axis(&inner_if.args[1], a, bx)?)?;
+    if offset_in_axis(&inner_if.args[2], a, bx)? != k {
+        return None; // the fall-through branch must be the bare `inner`
+    }
+    let period = hi_bound.checked_sub(lo_bound)?.checked_add(1)?;
+    if p1 != period || p2 != period || period <= 0 {
+        return None;
+    }
+    Some((a, AxisIndex::Wrap { k, period }))
 }
 
 /// Reduce `expr` to `(coeff_of_sym, constant)` over the integers, folding bound
@@ -1592,6 +1824,10 @@ pub(super) fn affine_terms(expr: &Expr, sym: &str, bx: &VecBox) -> Option<(i64, 
 /// where `inner = sym + k` is affine, `lo`/`hi` are the integer axis bounds and
 /// `P = hi − lo + 1`. Both wrap branches must use the same `P`. This is the
 /// shape emitted by the lat-lon (periodic-longitude) discretization.
+///
+/// SUPERSEDED on the hot path by [`parse_wrap_axis_any`]; retained as the
+/// reference for [`axis_classifier_equivalence`].
+#[cfg(test)]
 pub(super) fn parse_wrap_axis(expr: &Expr, sym: &str, bx: &VecBox) -> Option<AxisIndex> {
     let outer = as_op(expr, "ifelse", 3)?;
     // cond1: inner < lo  →  then1: inner + P
@@ -1633,4 +1869,219 @@ pub(super) fn as_cmp_const<'e>(expr: &'e Expr, op: &str) -> Option<(&'e Expr, i6
         _ => return None,
     };
     Some((&node.args[0], c))
+}
+
+#[cfg(test)]
+mod axis_classifier_equivalence {
+    //! [`classify_axis_role`] resolves an `index(...)` axis expression's role in
+    //! ONE walk, where [`eval_vec_index`] used to try [`classify_axis_index`]
+    //! against each not-yet-claimed output symbol in turn and then
+    //! [`const_index_value`]. The replacement rests on an argument (an
+    //! expression affine in one output symbol cannot classify against any
+    //! other), not on the compiler — so pin it: over a corpus of axis
+    //! expressions and every subset of already-claimed output axes, the two
+    //! classifiers must agree exactly.
+    use super::*;
+    use serde_json::json;
+
+    fn ex(v: serde_json::Value) -> Expr {
+        serde_json::from_value(v).expect("axis expression deserializes")
+    }
+
+    /// A comparable rendering of a classification outcome.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Role {
+        Affine(usize, i64),
+        Wrap(usize, i64, i64),
+        Const(i64),
+        Bail,
+    }
+
+    fn from_axis(a: usize, ax: &AxisIndex) -> Role {
+        match ax {
+            AxisIndex::Affine(k) => Role::Affine(a, *k),
+            AxisIndex::Wrap { k, period } => Role::Wrap(a, *k, *period),
+        }
+    }
+
+    /// The superseded search: try each UNCLAIMED output symbol in order
+    /// (affine, then wrap), then fall back to a constant select.
+    fn old_role(e: &Expr, bx: &VecBox, claimed: &[bool]) -> Role {
+        let hit = (0..bx.syms.len()).find_map(|a| {
+            if claimed[a] {
+                return None;
+            }
+            classify_axis_index(e, &bx.syms[a], bx).map(|ax| from_axis(a, &ax))
+        });
+        match hit {
+            Some(r) => r,
+            None => match const_index_value(e, bx) {
+                Some(k) => Role::Const(k),
+                None => Role::Bail,
+            },
+        }
+    }
+
+    /// The single-walk classifier, read through [`eval_vec_index`]'s own
+    /// acceptance rule (a map onto an already-claimed axis is a bail).
+    fn new_role(e: &Expr, bx: &VecBox, claimed: &[bool]) -> Role {
+        match classify_axis_role(e, bx) {
+            Some(AxisRole::Map { out_axis, ax }) if !claimed[out_axis] => from_axis(out_axis, &ax),
+            Some(AxisRole::Const(k)) => Role::Const(k),
+            _ => Role::Bail,
+        }
+    }
+
+    /// `ifelse(inner < lo, inner + P, ifelse(inner > hi, inner - P, inner))`.
+    fn wrap(inner: serde_json::Value, lo: i64, hi: i64) -> serde_json::Value {
+        let p = hi - lo + 1;
+        json!({"op": "ifelse", "args": [
+            {"op": "<", "args": [inner, lo]},
+            {"op": "+", "args": [inner, p]},
+            {"op": "ifelse", "args": [
+                {"op": ">", "args": [inner, hi]},
+                {"op": "-", "args": [inner, p]},
+                inner
+            ]}
+        ]})
+    }
+
+    #[test]
+    fn single_walk_classifier_matches_the_per_symbol_search() {
+        let syms: Vec<String> = ["i", "j", "k"].iter().map(|s| s.to_string()).collect();
+        let cnames: Vec<String> = ["m", "n"].iter().map(|s| s.to_string()).collect();
+        let lo = [1i64, 1, 1];
+        let shape = [4usize, 5, 6];
+        let cvals = [2i64, -1];
+        let bx = VecBox {
+            syms: &syms,
+            lo: &lo,
+            shape: &shape,
+            cnames: &cnames,
+            cvals: &cvals,
+        };
+
+        let cases: Vec<serde_json::Value> = vec![
+            // Bare output symbols, each axis.
+            json!("i"),
+            json!("j"),
+            json!("k"),
+            // Affine shifts, both signs, both spellings of the offset.
+            json!({"op": "+", "args": ["i", 1]}),
+            json!({"op": "-", "args": ["i", 1]}),
+            json!({"op": "+", "args": ["j", 3]}),
+            json!({"op": "-", "args": ["k", 2]}),
+            json!({"op": "+", "args": ["k", -2]}),
+            json!({"op": "+", "args": [{"op": "-", "args": ["j", 1]}, 4]}),
+            json!({"op": "neg", "args": [{"op": "neg", "args": ["j"]}]}),
+            // Bound contraction indices: constants, and folded into a shift.
+            json!("m"),
+            json!("n"),
+            json!({"op": "+", "args": ["i", "m"]}),
+            json!({"op": "+", "args": [{"op": "+", "args": ["k", 1]}, "n"]}),
+            json!({"op": "*", "args": ["m", 3]}),
+            json!({"op": "-", "args": ["m", "n"]}),
+            // Literal selects.
+            json!(1),
+            json!(7),
+            json!(2.0),
+            json!({"op": "+", "args": [2, 3]}),
+            json!({"op": "*", "args": [2, {"op": "+", "args": [3, 1]}]}),
+            // Non-unit coefficient / cancelling / multi-symbol / nonlinear.
+            json!({"op": "*", "args": [2, "i"]}),
+            json!({"op": "-", "args": ["i", "i"]}),
+            json!({"op": "+", "args": ["i", "j"]}),
+            json!({"op": "-", "args": ["k", "i"]}),
+            json!({"op": "*", "args": ["i", "j"]}),
+            json!({"op": "*", "args": ["i", "m"]}),
+            // Not integer-affine at all.
+            json!(2.5),
+            json!("q"),
+            json!({"op": "+", "args": ["i", "q"]}),
+            json!({"op": "/", "args": ["i", 2]}),
+            json!({"op": "sin", "args": ["i"]}),
+            // Periodic wrap, on each axis, plus malformed variants.
+            wrap(json!({"op": "-", "args": ["i", 1]}), 1, 4),
+            wrap(json!({"op": "+", "args": ["i", 1]}), 1, 4),
+            wrap(json!("j"), 1, 5),
+            wrap(json!({"op": "+", "args": ["k", 2]}), 1, 6),
+            wrap(json!({"op": "+", "args": ["i", "m"]}), 1, 4),
+            wrap(json!({"op": "*", "args": [2, "i"]}), 1, 4),
+            wrap(json!({"op": "+", "args": ["i", "j"]}), 1, 4),
+            wrap(json!(3), 1, 4),
+            // A wrap whose two branches disagree on the period.
+            json!({"op": "ifelse", "args": [
+                {"op": "<", "args": ["i", 1]},
+                {"op": "+", "args": ["i", 4]},
+                {"op": "ifelse", "args": [
+                    {"op": ">", "args": ["i", 4]},
+                    {"op": "-", "args": ["i", 3]},
+                    "i"
+                ]}
+            ]}),
+            // A wrap whose fall-through branch is not the bare inner.
+            json!({"op": "ifelse", "args": [
+                {"op": "<", "args": ["i", 1]},
+                {"op": "+", "args": ["i", 4]},
+                {"op": "ifelse", "args": [
+                    {"op": ">", "args": ["i", 4]},
+                    {"op": "-", "args": ["i", 4]},
+                    {"op": "+", "args": ["i", 1]}
+                ]}
+            ]}),
+        ];
+
+        for case in &cases {
+            let e = ex(case.clone());
+            // Every subset of already-claimed output axes, so the "claimed
+            // symbol ⇒ bail" reading is exercised in both directions.
+            for mask in 0u32..8 {
+                let claimed = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0];
+                let old = old_role(&e, &bx, &claimed);
+                let new = new_role(&e, &bx, &claimed);
+                assert_eq!(
+                    old, new,
+                    "axis expression {case} with claimed={claimed:?}: \
+                     per-symbol search says {old:?}, single walk says {new:?}"
+                );
+            }
+        }
+    }
+
+    /// The same corpus against a rank-1 box with no contraction binds — the
+    /// shape the 1-D stencil fixtures use, where the search had only one
+    /// candidate symbol and so was already minimal.
+    #[test]
+    fn single_walk_classifier_matches_on_a_rank_1_box() {
+        let syms: Vec<String> = vec!["i".to_string()];
+        let lo = [1i64];
+        let shape = [8usize];
+        let bx = VecBox {
+            syms: &syms,
+            lo: &lo,
+            shape: &shape,
+            cnames: &[],
+            cvals: &[],
+        };
+        let cases: Vec<serde_json::Value> = vec![
+            json!("i"),
+            json!({"op": "+", "args": ["i", 1]}),
+            json!({"op": "-", "args": ["i", 1]}),
+            json!(3),
+            json!("k"),
+            json!({"op": "*", "args": [2, "i"]}),
+            wrap(json!({"op": "-", "args": ["i", 1]}), 1, 8),
+        ];
+        for case in &cases {
+            let e = ex(case.clone());
+            for mask in 0u32..2 {
+                let claimed = [mask & 1 != 0];
+                assert_eq!(
+                    old_role(&e, &bx, &claimed),
+                    new_role(&e, &bx, &claimed),
+                    "axis expression {case} with claimed={claimed:?}"
+                );
+            }
+        }
+    }
 }
