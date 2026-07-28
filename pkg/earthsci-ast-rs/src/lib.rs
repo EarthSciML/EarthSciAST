@@ -115,6 +115,13 @@ pub mod area_faq;
 // rank) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
 pub mod value_invention;
 
+// OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
+// `Provider`. Behind the `esio` feature so the default build does not link
+// EarthSciIO — the two rigs stay decoupled, exactly as on the Python side
+// (`earthsci_ast.data_loaders.esio_provider`), and a caller opts in.
+#[cfg(feature = "esio")]
+pub mod esio_provider;
+
 // Re-export main types
 pub use cadence::{
     Cadence, CadenceError, ClassSummary, MaterializationPoint, Partition, classify, compute_fold,
