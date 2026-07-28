@@ -14,15 +14,34 @@ use crate::types::ExpressionNode;
 /// evaluation ([`ArrayOpSpec`]), so it does not reach the allocator.
 pub(super) type RangeVec = SmallVec<[(i64, i64); 4]>;
 
-/// The distinct-vertex extent of the FAQ-materialized ring registered under
-/// `from_faq` (RFC §8.1): the producing `intersect_polygon` clip stores the
-/// **closed** ring (`n+1` rows, first vertex repeated so the `polygon_area`
-/// shoelace can read the wrap edge as an ordinary `index(ring, v+1, …)`), so the
-/// number of distinct vertices is `rows − 1`. An unmaterialized producer or an
-/// empty (disjoint) clip yields `0` — an empty contraction reducing to the
-/// additive identity 0̄, matching the evaluator's ghost-read convention and the
-/// Python reference (`numpy_interpreter._resolve_range_spec`).
-pub(super) fn derived_ring_extent(from_faq: &str, ctx: &EvalCtx) -> i64 {
+/// The extent of the derived index set produced by the FAQ node `from_faq`.
+///
+/// Two producers can size a `kind:"derived"` set, and they are consulted in the
+/// order the Python reference (`numpy_interpreter._resolve_range_spec`) fixes:
+///
+/// 1. **Value invention** (RFC §6.1 / §5.5) — the build-time relational engine
+///    enumerated a distinct member set and recorded its cardinality under the
+///    producing aggregate's `id`. It runs once at setup, off the per-step hot
+///    path, so the extent is constant for the whole run; this is what sizes an
+///    ISRM emission axis (`emis_src_cells`, invented by the point-in-cell
+///    overlap producer).
+/// 2. **Geometry** (RFC §8.1) — the producing `intersect_polygon` clip stores
+///    the **closed** ring (`n+1` rows, first vertex repeated so the
+///    `polygon_area` shoelace can read the wrap edge as an ordinary
+///    `index(ring, v+1, …)`), so the number of distinct vertices is `rows − 1`.
+///
+/// A producer materialized by NEITHER — an unevaluated clip, or an empty
+/// (disjoint) one — yields `0`: an empty contraction reducing to the additive
+/// identity 0̄, matching the evaluator's ghost-read convention. That leniency is
+/// specific to a *contraction* bound, where an empty range is a well-defined
+/// answer. A derived range that has to size an OUTPUT axis never reaches here:
+/// it is resolved far earlier, and much more strictly, by
+/// `crate::aggregate::resolve_index_set_ref`, which errors rather than invent a
+/// zero-length axis.
+pub(super) fn derived_extent(from_faq: &str, ctx: &EvalCtx) -> i64 {
+    if let Some(&n) = ctx.derived_extents.get(from_faq) {
+        return n;
+    }
     match ctx.derived_rings.borrow().get(from_faq) {
         Some(ring) if ring.ndim() >= 1 => (ring.shape()[0] as i64 - 1).max(0),
         _ => 0,
@@ -1080,7 +1099,7 @@ pub(super) fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -
             // Self-register the closed ring under the node `id` (RFC §8.1) so a
             // downstream `aggregate` over a `kind:"derived"` index set
             // (`from_faq: <id>`) sizes its contraction from this ring's
-            // distinct-vertex count (`rows − 1`); see [`derived_ring_extent`].
+            // distinct-vertex count (`rows − 1`); see [`derived_extent`].
             if let Some(id) = &node.id {
                 ctx.derived_rings
                     .borrow_mut()
@@ -1191,6 +1210,59 @@ pub fn eval_expression(
     param_names: &[String],
     t: f64,
 ) -> Result<Value, CompileError> {
+    eval_expression_with_extents(
+        expr,
+        inputs,
+        params,
+        param_names,
+        t,
+        crate::aggregate::empty_derived_extents(),
+    )
+}
+
+/// [`eval_expression`] with the build-time **value-invention derived extents**
+/// in hand — the standalone evaluator's counterpart of
+/// [`crate::aggregate::resolve_aggregate_ranges_with_extents`].
+///
+/// `derived_extents` maps a producing aggregate's `id` (what a `kind:"derived"`
+/// index set names in its `from_faq`) to the cardinality of the distinct member
+/// set that producer materialized — i.e.
+/// [`crate::value_invention::ValueInventionResult::extents`], verbatim.
+///
+/// Use this when `expr` still carries a [`RangeSpec::DerivedDyn`] bound, which
+/// is what a range over a value-invented set looks like once it has been
+/// resolved *without* the engine's results. Only the relational engine knows
+/// how many members it invented, and `expr` alone cannot say; supplying the map
+/// is the only way that contraction gets a non-empty range instead of silently
+/// folding to the additive identity.
+///
+/// A runner wanting the reference wiring end to end:
+///
+/// ```ignore
+/// // 1. invent the members from the loader-fed factor arrays
+/// let vi = run_value_invention(&model, &index_sets, Some(&loaded))?;
+/// // 2. size every `{ "from": <derived set> }` axis from the invented members
+/// resolve_expr_ranges_with_extents(&mut expr, &index_sets, &vi.extents)?;
+/// // 3. evaluate, with the extents still available to any `DerivedDyn` bound
+/// eval_expression_with_extents(&expr, &inputs, &[], &[], 0.0, &vi.extents)?;
+/// ```
+///
+/// Pass an empty map (or call [`eval_expression`]) for the geometry-only case:
+/// a derived range then resolves from the runtime clip-ring registry exactly as
+/// before.
+///
+/// # Errors
+///
+/// As [`eval_expression`] — an operator the interpreter cannot evaluate is
+/// reported rather than silently producing `NaN`.
+pub fn eval_expression_with_extents(
+    expr: &Expr,
+    inputs: &HashMap<String, ArrayD<f64>>,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    derived_extents: &HashMap<String, i64>,
+) -> Result<Value, CompileError> {
     check_evaluable(expr)?;
     let empty: ArrMap = ArrMap::default();
     // Cold public boundary: the standalone evaluator's `inputs` arrive as a std
@@ -1212,6 +1284,7 @@ pub fn eval_expression(
         loop_binds: IdxMap::default(),
         t,
         derived_rings: &derived_rings,
+        derived_extents,
         forcing: &forcing,
         // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
         // structural analysis over), so this path is unchanged.

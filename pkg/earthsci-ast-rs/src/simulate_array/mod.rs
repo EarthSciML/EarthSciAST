@@ -76,8 +76,8 @@ mod vectorized;
 // native-only, so gate it to avoid an unused-import warning on wasm.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::eval_buildtime_field;
-pub use compile::{file_has_array_ops, file_has_spatial_model};
-pub use eval::eval_expression;
+pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_invention};
+pub use eval::{eval_expression, eval_expression_with_extents};
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
 // the vectorized overlay); re-exported crate-wide so the scalar interpreter
 // `crate::simulate::eval_op` routes through the SAME definition instead of
@@ -92,7 +92,7 @@ use layout::*;
 use rhs::*;
 use vectorized::*;
 
-use crate::aggregate::ReduceKind;
+use crate::aggregate::{ReduceKind, empty_derived_extents};
 use crate::types::{Expr, IndexSet, RangeSpec};
 use indexmap::IndexMap;
 use ndarray::{ArrayD, IxDyn};
@@ -197,10 +197,11 @@ enum ContractDim {
     /// Ragged `[1, offsets[of…]]` — `offsets` names the per-parent length
     /// factor; `of` names the parent index variables that address it.
     Ragged { offsets: String, of: Vec<String> },
-    /// Derived `[1, |ring(from_faq)|]` — `from_faq` names the FAQ producer node
-    /// (the `intersect_polygon` clip) whose materialized overlap ring sizes this
-    /// contraction. The upper bound is the ring's distinct-vertex count, read at
-    /// eval time from the runtime ring registry (RFC §8.1).
+    /// Derived `[1, n]` — `from_faq` names the FAQ producer node whose
+    /// materialized output sizes this contraction, resolved at eval time by
+    /// [`derived_extent`]: the value-invention engine's distinct-set cardinality
+    /// (RFC §6.1 / §5.5) if it materialized this producer, else the
+    /// `intersect_polygon` clip ring's distinct-vertex count (RFC §8.1).
     Derived { from_faq: String },
 }
 
@@ -235,7 +236,7 @@ impl ContractDim {
         match self {
             ContractDim::Static(lo, hi) => (*lo, *hi),
             ContractDim::Ragged { offsets, of } => (1, ragged_upper_bound(offsets, of, ctx)),
-            ContractDim::Derived { from_faq } => (1, derived_ring_extent(from_faq, ctx)),
+            ContractDim::Derived { from_faq } => (1, derived_extent(from_faq, ctx)),
         }
     }
 
@@ -506,10 +507,32 @@ struct EvalCtx<'a> {
     /// `intersect_polygon` clip self-registers its closed overlap ring here
     /// under its node `id`, so a downstream `aggregate` over a `kind:"derived"`
     /// index set (`from_faq: <id>`) resolves its extent (the distinct-vertex
-    /// count) via [`derived_ring_extent`]. Interior-mutable so the producer can
+    /// count) via [`derived_extent`]. Interior-mutable so the producer can
     /// register while the same borrow chain reads it; empty for models with no
     /// derived sets (byte-identical to the pre-geometry path).
     derived_rings: &'a RefCell<HashMap<String, ArrayD<f64>>>,
+    /// Build-time value-invention derived-index-set extents (RFC §6.1 / §5.5),
+    /// keyed by the PRODUCING aggregate's `id` — the same key a
+    /// `kind:"derived"` index set names in its `from_faq`, and the same keying
+    /// the Python `EvalContext.derived_extents` and the Julia
+    /// `_declared_shape_extents` use.
+    ///
+    /// This is the relational counterpart of `derived_rings`. A clip ring is
+    /// materialized *during* evaluation (the producer node runs, then the
+    /// consumer reads its ring); the value-invention engine instead runs ONCE at
+    /// setup, off the per-step hot path, and hands its distinct-set cardinality
+    /// here. A derived range consults this first ([`derived_extent`]) and falls
+    /// back to the ring, so the two producers coexist in one model.
+    ///
+    /// NOT interior-mutable, unlike `derived_rings`: nothing produces into it
+    /// during evaluation. Empty on the compiled-RHS path, where
+    /// [`crate::value_invention::rewrite_derived_index_sets`] has already
+    /// densified every materialized derived set to an `interval` *before* ranges
+    /// were resolved — those axes therefore arrive as plain static bounds and
+    /// this map is never consulted. It carries the weight on the standalone
+    /// [`eval_expression_with_extents`] entry point, where a runner evaluates an
+    /// expression that still holds a [`RangeSpec::DerivedDyn`] bound.
+    derived_extents: &'a HashMap<String, i64>,
     /// External refreshable forcing-array channel (PR-1, ess-14f.7). Unlike
     /// `derived_rings` (rebuilt fresh every RHS call), this borrows the
     /// model-lifetime [`ArrayCompiled::forcing`] buffer a driver refreshes
