@@ -80,6 +80,14 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, "C:", n.op, '(')
         _sig_children!(io, n.children)
         print(io, ')')
+    elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR
+        # Defensive: a runtime contraction loop (ess-runtime-contraction) is
+        # CONFINED to scalar contexts and never reaches the array-equation merge.
+        # Should one ever arrive, key it by object identity so DISTINCT loops can
+        # never be wrongly merged into one kernel (fail-safe: no merge, not a
+        # silent miscompile). The access-plan builder then declines it
+        # (`_AccPlanDecline`) and the cell falls back to the per-cell scalar walk.
+        print(io, "CL:", objectid(n))
     else  # _NK_OP (including closed `fn`)
         print(io, "O:", n.op)
         pl = n.payload

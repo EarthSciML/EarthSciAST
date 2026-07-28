@@ -590,24 +590,95 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
 /// IEEE bit equality over every op name and a spread of operands (±0, ±inf,
 /// NaN, subnormals), so a divergence is a test failure, not a silent one.
 pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
+    binary_kernel_of(BinCode::of(op))
+}
+
+/// A binary/elementwise operator resolved to a compact code.
+///
+/// The overlay used to carry the operator around as a `&str` and re-match the
+/// NAME at every dispatch point: once in `eval_vec_op`, again in `vec_combine`,
+/// and a third time inside [`binary_kernel`] — and the comparison arms matched a
+/// FOURTH time, per element, inside `scalar_compare`. A perf profile of the
+/// solve attributed ~2.5% to that (`__memcmp_evex_movbe` plus the inlined
+/// `str PartialEq::eq` chain under `eval_vec_op`). Resolving the name ONCE per
+/// AST node into this code and dispatching on the code afterwards removes every
+/// downstream string compare.
+///
+/// [`BinCode::Unknown`] is the "not a binary kernel" code; its kernel is the NaN
+/// sentinel, matching `apply_binary`'s catch-all arm.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BinCode {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Pow,
+    Atan2,
+    Min,
+    Max,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    Unknown,
+}
+
+impl BinCode {
+    /// Resolve an operator name. The arms are exactly [`apply_binary`]'s.
+    pub(crate) fn of(op: &str) -> BinCode {
+        match op {
+            "+" => BinCode::Add,
+            "-" => BinCode::Sub,
+            "*" => BinCode::Mul,
+            "/" => BinCode::Div,
+            "^" => BinCode::Pow,
+            "atan2" => BinCode::Atan2,
+            "min" => BinCode::Min,
+            "max" => BinCode::Max,
+            "==" => BinCode::Eq,
+            "!=" => BinCode::Ne,
+            "<" => BinCode::Lt,
+            "<=" => BinCode::Le,
+            ">" => BinCode::Gt,
+            ">=" => BinCode::Ge,
+            "and" => BinCode::And,
+            "or" => BinCode::Or,
+            _ => BinCode::Unknown,
+        }
+    }
+}
+
+/// [`binary_kernel`] with the name already resolved to a [`BinCode`].
+///
+/// The comparison arms inline the relop rather than calling `scalar_compare(op,
+/// …)` — which would re-match the operator NAME once per element — but compute
+/// the identical value: `scalar_compare` is itself `if a <relop> b { 1.0 } else
+/// { 0.0 }`. `binary_kernel` delegates here, so
+/// `binary_kernels_match_apply_binary` pins this table to `apply_binary` bit for
+/// bit over every op name and a spread of operands.
+pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
     match op {
-        "+" => |x, y| x + y,
-        "-" => |x, y| x - y,
-        "*" => |x, y| x * y,
-        "/" => |x, y| x / y,
-        "^" => |x: f64, y: f64| x.powf(y),
-        "atan2" => |x: f64, y: f64| x.atan2(y),
-        "min" => |x: f64, y: f64| x.min(y),
-        "max" => |x: f64, y: f64| x.max(y),
-        "==" => |x, y| scalar_compare("==", x, y),
-        "!=" => |x, y| scalar_compare("!=", x, y),
-        "<" => |x, y| scalar_compare("<", x, y),
-        "<=" => |x, y| scalar_compare("<=", x, y),
-        ">" => |x, y| scalar_compare(">", x, y),
-        ">=" => |x, y| scalar_compare(">=", x, y),
-        "and" => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
-        "or" => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
-        _ => |_, _| f64::NAN,
+        BinCode::Add => |x, y| x + y,
+        BinCode::Sub => |x, y| x - y,
+        BinCode::Mul => |x, y| x * y,
+        BinCode::Div => |x, y| x / y,
+        BinCode::Pow => |x: f64, y: f64| x.powf(y),
+        BinCode::Atan2 => |x: f64, y: f64| x.atan2(y),
+        BinCode::Min => |x: f64, y: f64| x.min(y),
+        BinCode::Max => |x: f64, y: f64| x.max(y),
+        BinCode::Eq => |x: f64, y: f64| (x == y) as i32 as f64,
+        BinCode::Ne => |x: f64, y: f64| (x != y) as i32 as f64,
+        BinCode::Lt => |x: f64, y: f64| (x < y) as i32 as f64,
+        BinCode::Le => |x: f64, y: f64| (x <= y) as i32 as f64,
+        BinCode::Gt => |x: f64, y: f64| (x > y) as i32 as f64,
+        BinCode::Ge => |x: f64, y: f64| (x >= y) as i32 as f64,
+        BinCode::And => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
+        BinCode::Or => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
+        BinCode::Unknown => |_, _| f64::NAN,
     }
 }
 
@@ -731,13 +802,79 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
 /// overlay applied it inside an N-element loop). Arms mirror [`apply_unary`]
 /// exactly; `unary_kernels_match_apply_unary` pins them to bit equality.
 pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
+    unary_kernel_of(UnCode::of(op))
+}
+
+/// A unary operator resolved to a compact code — the counterpart of
+/// [`BinCode`], for the same reason (see its docs).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum UnCode {
+    Exp,
+    Ln,
+    Log10,
+    Sqrt,
+    Abs,
+    Sign,
+    Floor,
+    Ceil,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Sinh,
+    Cosh,
+    Tanh,
+    Asinh,
+    Acosh,
+    Atanh,
+    Not,
+    Unknown,
+}
+
+impl UnCode {
+    /// Resolve an operator name. The arms are exactly [`apply_unary`]'s
+    /// (including the `log`/`ln` alias).
+    pub(crate) fn of(op: &str) -> UnCode {
+        match op {
+            "exp" => UnCode::Exp,
+            "log" | "ln" => UnCode::Ln,
+            "log10" => UnCode::Log10,
+            "sqrt" => UnCode::Sqrt,
+            "abs" => UnCode::Abs,
+            "sign" => UnCode::Sign,
+            "floor" => UnCode::Floor,
+            "ceil" => UnCode::Ceil,
+            "sin" => UnCode::Sin,
+            "cos" => UnCode::Cos,
+            "tan" => UnCode::Tan,
+            "asin" => UnCode::Asin,
+            "acos" => UnCode::Acos,
+            "atan" => UnCode::Atan,
+            "sinh" => UnCode::Sinh,
+            "cosh" => UnCode::Cosh,
+            "tanh" => UnCode::Tanh,
+            "asinh" => UnCode::Asinh,
+            "acosh" => UnCode::Acosh,
+            "atanh" => UnCode::Atanh,
+            "not" => UnCode::Not,
+            _ => UnCode::Unknown,
+        }
+    }
+}
+
+/// [`unary_kernel`] with the name already resolved to a [`UnCode`]. Arms mirror
+/// [`apply_unary`] exactly; `unary_kernels_match_apply_unary` pins them to bit
+/// equality through [`unary_kernel`], which delegates here.
+pub(crate) fn unary_kernel_of(op: UnCode) -> fn(f64) -> f64 {
     match op {
-        "exp" => |x: f64| x.exp(),
-        "log" | "ln" => |x: f64| x.ln(),
-        "log10" => |x: f64| x.log10(),
-        "sqrt" => |x: f64| x.sqrt(),
-        "abs" => |x: f64| x.abs(),
-        "sign" => |x: f64| {
+        UnCode::Exp => |x: f64| x.exp(),
+        UnCode::Ln => |x: f64| x.ln(),
+        UnCode::Log10 => |x: f64| x.log10(),
+        UnCode::Sqrt => |x: f64| x.sqrt(),
+        UnCode::Abs => |x: f64| x.abs(),
+        UnCode::Sign => |x: f64| {
             if x > 0.0 {
                 1.0
             } else if x < 0.0 {
@@ -746,22 +883,22 @@ pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
                 0.0
             }
         },
-        "floor" => |x: f64| x.floor(),
-        "ceil" => |x: f64| x.ceil(),
-        "sin" => |x: f64| x.sin(),
-        "cos" => |x: f64| x.cos(),
-        "tan" => |x: f64| x.tan(),
-        "asin" => |x: f64| x.asin(),
-        "acos" => |x: f64| x.acos(),
-        "atan" => |x: f64| x.atan(),
-        "sinh" => |x: f64| x.sinh(),
-        "cosh" => |x: f64| x.cosh(),
-        "tanh" => |x: f64| x.tanh(),
-        "asinh" => |x: f64| x.asinh(),
-        "acosh" => |x: f64| x.acosh(),
-        "atanh" => |x: f64| x.atanh(),
-        "not" => |x: f64| (x == 0.0) as i32 as f64,
-        _ => |_| f64::NAN,
+        UnCode::Floor => |x: f64| x.floor(),
+        UnCode::Ceil => |x: f64| x.ceil(),
+        UnCode::Sin => |x: f64| x.sin(),
+        UnCode::Cos => |x: f64| x.cos(),
+        UnCode::Tan => |x: f64| x.tan(),
+        UnCode::Asin => |x: f64| x.asin(),
+        UnCode::Acos => |x: f64| x.acos(),
+        UnCode::Atan => |x: f64| x.atan(),
+        UnCode::Sinh => |x: f64| x.sinh(),
+        UnCode::Cosh => |x: f64| x.cosh(),
+        UnCode::Tanh => |x: f64| x.tanh(),
+        UnCode::Asinh => |x: f64| x.asinh(),
+        UnCode::Acosh => |x: f64| x.acosh(),
+        UnCode::Atanh => |x: f64| x.atanh(),
+        UnCode::Not => |x: f64| (x == 0.0) as i32 as f64,
+        UnCode::Unknown => |_| f64::NAN,
     }
 }
 
@@ -1934,6 +2071,45 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     }
 }
 
+/// Would the per-cell [`eval_arrayop`] path recognize this `makearray` region
+/// value as a forward prefix scan (esm-spec §4.3.1)?
+///
+/// The whole-array overlay evaluates a region value through
+/// `eval_vec_nested_aggregate` → `try_eval_arrayop_vectorized`, which does NOT
+/// consult [`detect_prefix_scan`]: a cumulative aggregate would come out
+/// bit-identical but as an O(N²) triangular fold where the scan is O(N) — the
+/// exact regression `forward_scan_work_grows_linearly_not_quadratically` pins.
+/// So the overlay is declined for a `makearray` whose region value the scan
+/// would have claimed. Only the region values themselves need this test: an
+/// aggregate nested DEEPER already reaches the overlay's nested arm on the
+/// existing paths, scan-detection included or not, and this change does not
+/// alter that.
+///
+/// The check is one field test (`detect_prefix_scan` needs a `filter`) for the
+/// unfiltered region values that make up every stencil template, so the
+/// expensive spec build never runs on the hot path.
+fn region_value_is_prefix_scan(value: &Expr) -> bool {
+    let Expr::Operator(n) = value else {
+        return false;
+    };
+    if n.filter.is_none() {
+        return false;
+    }
+    let Some(spec) = arrayop_spec(n) else {
+        return false;
+    };
+    let static_ranges = static_contract_ranges(&spec.contract_dims);
+    detect_prefix_scan(
+        spec.idx_names,
+        &spec.ranges,
+        &spec.contract_names,
+        static_ranges.as_deref(),
+        spec.body,
+        spec.filter,
+    )
+    .is_some()
+}
+
 pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // Borrow (don't clone) the region boxes and their value exprs — a boundary
     // `makearray` is rebuilt on every observed materialization, and its `values`
@@ -1970,6 +2146,74 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         .map(|d| (hi[d] - lo[d] + 1).max(0) as usize)
         .collect();
     let origin = lo.clone();
+
+    // ---- Vectorized fast path (whole-array region writes) ------------------
+    // A `makearray` used as an observed's whole body — every boundary-dispatch
+    // stencil a discretization template expands to — reaches the evaluator HERE,
+    // not through `eval_arrayop`, so it had no overlay entry at all: its region
+    // values vectorized (they are `aggregate`s, which try the overlay
+    // themselves) but the assembly around them stayed a per-cell
+    // `CartesianTuples` walk writing through bounds-checked dynamic-stride
+    // `ArrayD` indexing. `ESS_VEC_DEBUG` reported these observeds as
+    // "vectorized" precisely because nothing bailed — there was no bail site.
+    //
+    // `eval_vec_makearray` is the same region-sub-range-write assembly the
+    // compiled-rule path already uses (pinned bit-identical by
+    // `covered_makearray_region_dispatch`), so routing to it keeps the answer
+    // identical while making the work N-independent and pool-backed.
+    //
+    // Gated on `loop_binds` being empty: inside a per-cell loop the nested
+    // aggregates depend on the enclosing bindings and the overlay would bail
+    // anyway — once per cell, which is pure loss.
+    //
+    // The box carries NO output-index symbols, because a `makearray` reached
+    // here is not a cell of an enclosing `arrayop`: nothing is bound around it,
+    // and each region value is evaluated exactly once (not once per cell), so
+    // `eval_vec_nested_aggregate`'s hoisting precondition — "the nested body
+    // must not depend on an enclosing bound index" — is vacuously satisfied and
+    // its `expr_mentions` scan has nothing to test. That is not cosmetic:
+    // placeholder names cost one full walk of the region body PER AXIS PER
+    // REGION, and on a 7-region PPM template that scan alone was 43% of the run.
+    if !vec_disabled()
+        && ctx.loop_binds.is_empty()
+        && !shape.contains(&0)
+        && !values.iter().any(region_value_is_prefix_scan)
+    {
+        let bx = VecBox {
+            syms: &[],
+            lo: &lo,
+            shape: &shape,
+            cnames: &[],
+            cvals: &[],
+        };
+        let materialized = with_arrayop_pool(|pool| {
+            let mut ops = 0usize;
+            eval_vec_makearray(node, &bx, &*ctx, pool, &mut ops).map(|vv| {
+                let out = vv.view().expect("vectorized makearray has a view").to_owned();
+                vv.release(pool);
+                out
+            })
+        });
+        if let Some(out) = materialized {
+            return Value::Array(Box::new(out));
+        }
+        // `eval_vec_makearray` records its own bail site, so the log already
+        // names the offending region value.
+    } else if !vec_disabled() {
+        // Declined before the overlay ran, so nothing else recorded a reason.
+        // Without this, a `makearray` observed that took the per-cell path
+        // reported as "vectorized" under `ESS_VEC_DEBUG` — an empty bail log —
+        // and was invisible to exactly the tracing built to find it.
+        note_bail(|| {
+            format!(
+                "makearray: overlay not attempted (loop_binds={}, empty axis={}, prefix-scan region={})",
+                ctx.loop_binds.len(),
+                shape.contains(&0),
+                values.iter().any(region_value_is_prefix_scan),
+            )
+        });
+    }
+
     let mut arr = ArrayD::<f64>::zeros(IxDyn(&shape));
     for (region, value_expr) in regions.iter().zip(values.iter()) {
         let v = eval(value_expr, ctx);
@@ -2000,37 +2244,49 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
             if a.shape() != region_shape.as_slice() {
                 return Value::Scalar(f64::NAN);
             }
-            let mut tuples = CartesianTuples::new(&ranges);
-            while let Some(tuple) = tuples.next() {
-                let out_ix: Vec<usize> = tuple
-                    .iter()
-                    .enumerate()
-                    .map(|(d, x)| (x - origin[d]) as usize)
-                    .collect();
-                let src_ix: Vec<usize> = tuple
-                    .iter()
-                    .enumerate()
-                    .map(|(d, x)| (x - ranges[d].0) as usize)
-                    .collect();
-                arr[IxDyn(&out_ix)] = a[IxDyn(&src_ix)];
+            // The legal EMPTY region spelling (`stop == start - 1`, §4.3.2)
+            // writes nothing — and its `start` may sit one past the bounding
+            // box, which is not a slicable offset. The per-cell walk produced no
+            // tuples here; skip explicitly.
+            if region_shape.contains(&0) {
+                continue;
             }
+            // Whole-region slice assign. This used to be a `CartesianTuples`
+            // walk that built TWO `Vec<usize>` index tuples per cell and wrote
+            // through `ArrayD`'s bounds-checked, dynamic-stride `Index`/
+            // `IndexMut` — two heap allocations and two `stride_offset_checked`
+            // computations per element, for what is a straight sub-block copy.
+            // `assign` moves the same values to the same places (both arrays are
+            // in the evaluator's row-major layout and the shapes were just
+            // checked equal), so the result is bit-identical.
+            arr.slice_each_axis_mut(|ax| {
+                let d = ax.axis.index();
+                let s0 = (ranges[d].0 - origin[d]) as usize;
+                ndarray::Slice::from(s0..s0 + region_shape[d])
+            })
+            .assign(a);
             continue;
         }
-        let mut tuples = CartesianTuples::new(&ranges);
-        while let Some(tuple) = tuples.next() {
-            let indices: Vec<usize> = tuple
-                .iter()
-                .enumerate()
-                .map(|(d, x)| (x - origin[d]) as usize)
-                .collect();
-            let ix = IxDyn(&indices);
-            let scalar = match &v {
-                Value::Scalar(s) => *s,
-                Value::Array(a) if a.ndim() == 0 => a[IxDyn(&[])],
-                _ => continue,
-            };
-            arr[ix] = scalar;
+        let scalar = match &v {
+            Value::Scalar(s) => *s,
+            Value::Array(a) if a.ndim() == 0 => a[IxDyn(&[])],
+            // Unreachable: the `ndim() > 0` array case returned/continued above.
+            _ => continue,
+        };
+        // Whole-region fill (was the same per-cell `Vec`-building walk).
+        let region_shape: Vec<usize> = ranges
+            .iter()
+            .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+            .collect();
+        if region_shape.contains(&0) {
+            continue;
         }
+        arr.slice_each_axis_mut(|ax| {
+            let d = ax.axis.index();
+            let s0 = (ranges[d].0 - origin[d]) as usize;
+            ndarray::Slice::from(s0..s0 + region_shape[d])
+        })
+        .fill(scalar);
     }
     Value::Array(Box::new(arr))
 }

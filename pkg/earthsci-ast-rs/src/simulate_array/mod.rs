@@ -453,10 +453,29 @@ pub struct ArrayCompiled {
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.
-/// `take`/`give` recycle buffers by capacity; after a warm-up call the pool
+/// `take_array*`/`give_array` recycle buffers; after a warm-up call the pool
 /// holds enough output-box-sized buffers that no further allocation occurs.
+///
+/// Recycling is **shape-bucketed**: [`Pool::give_array`] parks the whole
+/// [`ArrayD`] (buffer *plus* its already-built `IxDyn` dim and strides) in the
+/// bucket for its exact shape, and [`Pool::take_array_uninit`] pops it straight
+/// back out. In a steady-state RHS the same handful of output-box shapes repeat
+/// on every call, so the common checkout is a hash lookup and a `Vec::pop` —
+/// neither the `memset` that a `Vec::resize`-based refill costs nor the
+/// `IxDyn(shape)` / `from_shape_vec` shape+stride reconstruction that a
+/// buffer-only pool has to redo per checkout (both were measurable shares of
+/// the solve: ~9.5% and ~8.3% respectively on the simpleclimate PPM core).
+///
+/// `free` is the spill list for the cases the buckets cannot serve: a
+/// first-of-its-shape checkout, and a returned array that is not in standard
+/// layout (so its buffer, but not its shape, is reusable).
 #[derive(Default)]
 struct Pool {
+    /// Whole recycled arrays, bucketed by exact shape. Keyed by [`DimU`], which
+    /// hashes and compares as a `[usize]` slice, so the hot lookup borrows the
+    /// caller's `&[usize]` with no key materialization.
+    shaped: HashMap<DimU, Vec<ArrayD<f64>>, FxBuildHasher>,
+    /// Bare buffers with no usable shape attached.
     free: Vec<Vec<f64>>,
 }
 
@@ -479,18 +498,51 @@ impl Pool {
         }
     }
 
-    /// Check out a zero-filled owned `ArrayD` of the given row-major `shape`,
-    /// backed by a pooled buffer.
-    fn take_array(&mut self, shape: &[usize]) -> ArrayD<f64> {
+    /// Check out an owned `ArrayD` of the given row-major `shape` whose element
+    /// contents are **unspecified** — whatever the previous holder of the
+    /// recycled buffer left there.
+    ///
+    /// For kernels that write every element of the box before anything reads it
+    /// (an elementwise `Zip`, a `fill`, a coordinate ramp, an `assign` of a
+    /// same-shape source). A caller that writes only PART of the box — a
+    /// Dirichlet-ghost gather, a reduction accumulator seeded with the identity,
+    /// a region-tiled `makearray` — must use [`Pool::take_array`] instead, or it
+    /// will read the previous kernel's data.
+    fn take_array_uninit(&mut self, shape: &[usize]) -> ArrayD<f64> {
+        if let Some(bucket) = self.shaped.get_mut(shape) {
+            if let Some(arr) = bucket.pop() {
+                // Recycled whole: right shape, right strides, right length —
+                // nothing to rebuild and nothing to refill.
+                return arr;
+            }
+        }
         let len = shape.iter().copied().product::<usize>().max(1);
         let buf = self.take(len);
         ArrayD::from_shape_vec(IxDyn(shape), buf).expect("pool buffer length matches shape")
     }
 
-    /// Return an owned `ArrayD`'s backing buffer to the pool, preserving its
-    /// capacity. The array must be standard (contiguous, row-major) layout —
-    /// every buffer this module hands out is, and the in-place kernels keep it.
+    /// Check out a zero-filled owned `ArrayD` of the given row-major `shape`,
+    /// backed by a pooled buffer.
+    fn take_array(&mut self, shape: &[usize]) -> ArrayD<f64> {
+        let mut arr = self.take_array_uninit(shape);
+        arr.fill(0.0);
+        arr
+    }
+
+    /// Return an owned `ArrayD` to the pool, preserving its buffer capacity and
+    /// — when it is in standard (contiguous, row-major) layout, as every buffer
+    /// this module hands out is and the in-place kernels keep it — its built
+    /// shape and strides too, so the next same-shape checkout rebuilds nothing.
     fn give_array(&mut self, arr: ArrayD<f64>) {
+        if arr.is_standard_layout() {
+            if let Some(bucket) = self.shaped.get_mut(arr.shape()) {
+                bucket.push(arr);
+                return;
+            }
+            let shape: DimU = arr.shape().iter().copied().collect();
+            self.shaped.insert(shape, vec![arr]);
+            return;
+        }
         let (buf, _offset) = arr.into_raw_vec_and_offset();
         self.free.push(buf);
     }

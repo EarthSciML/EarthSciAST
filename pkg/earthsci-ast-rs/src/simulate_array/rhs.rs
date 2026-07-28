@@ -76,6 +76,10 @@ impl RhsScratch {
     /// the debug entry points never call it, so they clear + materialize the full
     /// rule set every call as before.
     pub(super) fn set_static(&mut self, static_observeds: ArrMap) {
+        // ess-lih: the persistent box-pure store may hold values derived from
+        // the PREVIOUS static observeds, and the CONST-name set is computed from
+        // their keys. Both are being replaced here, so drop both.
+        self.cse.invalidate_consts();
         self.static_keys = static_observeds.keys().cloned().collect();
         for (name, arr) in static_observeds {
             self.observed_arrays.insert(name, arr);
@@ -597,6 +601,51 @@ pub(super) fn evaluate_rhs_with_scratch(
             ^ ((rhs_rules.len() as u64) << 16)
             ^ (observed_rules.len() as u64),
     );
+
+    // ess-lih: a box-pure value may be built from CONST-tier leaves, so the
+    // persistent store is only valid while those hold still. `bind_params`
+    // discards it if the caller handed us a different parameter vector.
+    scratch.cse.bind_params(params);
+
+    // ess-lih: the CONST-tier leaf names for the box-pure analysis — everything
+    // whose value is already fixed for this scratch's whole lifetime:
+    //
+    //   * the hoisted static observeds (`static_keys`), seeded once by
+    //     `set_static` and retained in place across every call, and
+    //   * the scalar parameters, fixed by `simulate`'s parameter vector —
+    //     EXCEPT any name an observed or a state variable also carries, because
+    //     `eval_vec_variable` resolves those from the observed/state arrays
+    //     first and they are not constant.
+    //
+    // Both are re-established when the driver builds a fresh `RhsScratch` per
+    // integration segment, which is exactly when they can change. Built at most
+    // once per `retarget`.
+    scratch.cse.set_const_names(|| {
+        let mut all: rustc_hash::FxHashSet<String> =
+            scratch.static_keys.iter().cloned().collect();
+        let varying: HashSet<&str> = observed_rules
+            .iter()
+            .map(|r| observed_rule_var(r).as_str())
+            .collect();
+        for p in param_names {
+            if !varying.contains(p.as_str()) && !var_shapes.contains_key(p) && !all.contains(p) {
+                all.insert(p.clone());
+            }
+        }
+        // Only the ARRAY-valued CONSTs make a pure subtree worth a memo slot.
+        let arrays: rustc_hash::FxHashSet<String> = scratch
+            .static_keys
+            .iter()
+            .filter(|k| {
+                scratch
+                    .observed_arrays
+                    .get(*k)
+                    .is_some_and(|a| a.ndim() > 0)
+            })
+            .cloned()
+            .collect();
+        (all, arrays)
+    });
 
     // FAQ-materialized derived rings (RFC §8.1), keyed by producer node id. An
     // `intersect_polygon` clip self-registers its closed overlap ring here as it
