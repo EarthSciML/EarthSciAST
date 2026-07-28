@@ -271,4 +271,56 @@ end
         @test du_f == du_i
         @test [du_f[fac[5]["c[$j]"]] for j in 1:3] == vec(sum(Wm .* src; dims = 1))
     end
+
+    # ---- Intersection with the O(N) prefix scan (ess-scan, scan.jl) ----
+    # These two mechanisms meet in `_build_compile_evaluator`: the scan rewrite
+    # widened `_compile_derivative_equations`' return and `_make_rhs`' argument
+    # list, and the fills WRAP the state RHS. A merge that dropped either side
+    # compiles and runs, so pin both from the outside:
+    #
+    #   * a STATE equation that is itself a forward prefix reduction still takes
+    #     the O(N) accumulation (`n_scan_folds`, cascade `:scan`) in a model that
+    #     ALSO factors an array observed — i.e. the fold survives being wrapped;
+    #   * and its values are bit-identical to the inlining oracle, so the fold
+    #     is reading back terms the kernels wrote into the SAME `du` (it runs
+    #     inside the wrapped state RHS, not over the extended vector).
+    #
+    # The scanned body reads the factored observed `g`, so the fold's terms come
+    # through a buffer gather — the two mechanisms are genuinely composed here,
+    # not merely co-present.
+    @testset "prefix scan over a factored observed ≡ the inlining build" begin
+        Ns = 12
+        isetsS = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))
+        aggS(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+            output_idx = Any["i"], ranges = Dict("i" => Any[1, Ns]),
+            expr_body = body)
+        # c is a state whose RHS is Σ_{j<=i} g[j], and g is a factored observed.
+        scan_rhs = ESM_AOM.OpExpr("arrayop", ESM_AOM.ASTExpr[];
+            output_idx = Any["i"], reduce = "+",
+            ranges = Dict("i" => Any[1, Ns], "j" => Any[1, Ns]),
+            filter = _op("<=", _v("j"), _v("i")),
+            expr_body = _idx("g", _v("j")))
+        mS = ESM_AOM.Model(
+            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
+                 "c" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
+                 "g" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"])),
+            [ESM_AOM.Equation(_v("g"), aggS(_op("*", _n(2.0), _idx("u", _v("i"))))),
+             ESM_AOM.Equation(aggS(_Didx("c", _v("i"))), scan_rhs),
+             ESM_AOM.Equation(aggS(_Didx("u", _v("i"))), aggS(_n(0.0)))])
+        icsS = merge(Dict("u[$j]" => Float64(j) for j in 1:Ns),
+                     Dict("c[$j]" => 0.0 for j in 1:Ns))
+        facS, inlS = _aom_build_both(mS; index_sets = isetsS,
+                                     initial_conditions = icsS)
+        @test facS[6].n_mat_array_obs == 1        # g is factored
+        @test facS[6].n_scan_folds == 1           # ...and the scan STILL fires
+        @test inlS[6].n_mat_array_obs == 0
+        @test inlS[6].n_scan_folds == 1
+        for probe in (facS[2], fill(1.0, length(facS[2])),
+                      collect(range(-3.0, 3.0; length = length(facS[2]))))
+            @test _aom_du(facS, probe) == _aom_du(inlS, probe)
+        end
+        # g[j] = 2u[j], so D(c)[i] is 2·(the i-th triangular number) at u[j] = j.
+        du = _aom_du(facS, facS[2])
+        @test [du[facS[5]["c[$i]"]] for i in 1:Ns] == 2.0 .* cumsum(1.0:Ns)
+    end
 end
