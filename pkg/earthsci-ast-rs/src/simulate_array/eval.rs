@@ -1413,24 +1413,38 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
     arr.get(IxDyn(&idx)).map(|v| v.round() as i64).unwrap_or(0)
 }
 
-pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    // Standalone arrayop (embedded as an expression, not as the top-level
-    // of an equation LHS/RHS). Build the output array by iterating
-    // ranges, binding loop indices, evaluating the body.
-    //
-    // Supports generalized einsum: indices present in `ranges` but absent
-    // from `output_idx` are contracted (summed/reduced) per `reduce`.
+/// The evaluation parameters of a standalone `aggregate`/`arrayop` node.
+///
+/// Extracted in ONE place so the per-cell oracle ([`eval_arrayop`]) and the
+/// vectorized overlay's nested-aggregate arm ([`eval_vec_nested_aggregate`])
+/// derive them from the same code. A divergence here (a different contracted-
+/// index order, a different `reduce` default) would silently make the fast path
+/// compute a *different* array while both look correct in isolation.
+pub(super) struct ArrayOpSpec<'n> {
+    pub(super) idx_names: &'n [String],
+    pub(super) ranges: Vec<(i64, i64)>,
+    pub(super) body: &'n Expr,
+    pub(super) contract_names: Vec<String>,
+    pub(super) contract_dims: Vec<ContractDim>,
+    pub(super) reduce: ReduceKind,
+    pub(super) filter: Option<&'n Expr>,
+}
+
+/// Extract an aggregate node's evaluation parameters. `None` when the node
+/// carries no body (`expr`), which the oracle reports as `NaN`.
+pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
     // Borrow the node's index names / ranges / body rather than cloning them:
     // a standalone aggregate is re-evaluated on every observed materialization
     // (every RHS call), and the body can be a large stencil subtree — cloning it
     // per call was a leading source of allocation in the per-cell profile.
     let idx_names: &[String] = node.output_idx.as_deref().unwrap_or(&[]);
-    let empty_ranges: HashMap<String, crate::types::RangeSpec> = HashMap::new();
-    let ranges_map = node.ranges.as_ref().unwrap_or(&empty_ranges);
-    let body: &Expr = match node.expr.as_deref() {
-        Some(b) => b,
-        None => return Value::Scalar(f64::NAN),
-    };
+    static EMPTY_RANGES: std::sync::OnceLock<HashMap<String, crate::types::RangeSpec>> =
+        std::sync::OnceLock::new();
+    let ranges_map = node
+        .ranges
+        .as_ref()
+        .unwrap_or_else(|| EMPTY_RANGES.get_or_init(HashMap::new));
+    let body: &Expr = node.expr.as_deref()?;
     let ranges: Vec<(i64, i64)> = idx_names
         .iter()
         .map(|n| {
@@ -1456,6 +1470,36 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // contribute a ⊗-term. Absent ⇒ every combination contributes (byte-
     // identical to the no-filter form).
     let filter = node.filter.as_deref();
+    Some(ArrayOpSpec {
+        idx_names,
+        ranges,
+        body,
+        contract_names,
+        contract_dims,
+        reduce,
+        filter,
+    })
+}
+
+pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+    // Standalone arrayop (embedded as an expression, not as the top-level
+    // of an equation LHS/RHS). Build the output array by iterating
+    // ranges, binding loop indices, evaluating the body.
+    //
+    // Supports generalized einsum: indices present in `ranges` but absent
+    // from `output_idx` are contracted (summed/reduced) per `reduce`.
+    let ArrayOpSpec {
+        idx_names,
+        ranges,
+        body,
+        contract_names,
+        contract_dims,
+        reduce,
+        filter,
+    } = match arrayop_spec(node) {
+        Some(s) => s,
+        None => return Value::Scalar(f64::NAN),
+    };
 
     let shape: Vec<usize> = ranges
         .iter()
@@ -1463,6 +1507,33 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .collect();
     let origin: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
+
+    // Hoist cell-independent (all-static) contraction bounds out of the per-cell
+    // loop; ragged/derived dims are re-derived per output tuple inside.
+    let static_ranges = static_contract_ranges(&contract_dims);
+
+    // ---- Forward prefix scan (O(N) instead of the O(N²) triangle) -----------
+    // A cumulative reduction (esm-spec §4.3.1) reaches here as a full triangular
+    // double loop: N output cells × N contracted terms, each re-summing a window
+    // the previous cell already summed. Recognized, it becomes one sweep with a
+    // running accumulator — bit-identical, because both fold the window ascending
+    // in the same association (see [`PrefixScan`]).
+    //
+    // Detected BEFORE the whole-array overlay is tried, because the two race and
+    // the scan must win: the overlay would evaluate a cumulative aggregate as an
+    // N-tuple fold of N-element arrays — correct, and bit-identical, but O(N²)
+    // where the scan is O(N). (A widening of the overlay's index coverage made it
+    // start accepting these, which regressed
+    // `forward_scan_work_grows_linearly_not_quadratically`.) A non-cumulative
+    // aggregate returns `None` here and goes to the overlay as before.
+    let scan = detect_prefix_scan(
+        idx_names,
+        &ranges,
+        &contract_names,
+        static_ranges.as_deref(),
+        body,
+        filter,
+    );
 
     // ---- Vectorized fast path (whole-array) --------------------------------
     // Evaluate the aggregate with the same verified `eval_vec` overlay the
@@ -1478,7 +1549,7 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // functions and ghost-0 convention, so the result is bit-identical to the
     // per-cell oracle below; any op / ragged-bound the overlay does not handle
     // returns `None` and we fall through. A local `Pool` recycles intermediates.
-    if !shape.is_empty() {
+    if !shape.is_empty() && scan.is_none() {
         let mut pool = Pool::default();
         if let Some((vv, _ops)) = try_eval_arrayop_vectorized(
             idx_names,
@@ -1506,24 +1577,6 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .chain(contract_names.iter())
         .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
         .collect();
-    // Hoist cell-independent (all-static) contraction bounds out of the per-cell
-    // loop; ragged/derived dims are re-derived per output tuple inside.
-    let static_ranges = static_contract_ranges(&contract_dims);
-
-    // ---- Forward prefix scan (O(N) instead of the O(N²) triangle) -----------
-    // A cumulative reduction (esm-spec §4.3.1) reaches here as a full triangular
-    // double loop: N output cells × N contracted terms, each re-summing a window
-    // the previous cell already summed. Recognized, it becomes one sweep with a
-    // running accumulator — bit-identical, because both fold the window ascending
-    // in the same association (see [`PrefixScan`]).
-    let scan = detect_prefix_scan(
-        idx_names,
-        &ranges,
-        &contract_names,
-        static_ranges.as_deref(),
-        body,
-        filter,
-    );
     if let Some(scan) = scan {
         let (scan_lo, scan_hi) = ranges[scan.axis];
         // Sweep the scanned axis inside; every OTHER output axis is an

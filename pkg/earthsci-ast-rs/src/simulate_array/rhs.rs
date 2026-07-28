@@ -359,6 +359,10 @@ pub(super) fn materialize_observeds_append(
     for rule in observed_rules {
         match rule {
             AlgebraicRule::Scalar { var, body } => {
+                if vec_trace_on() {
+                    let _ = take_bail_log();
+                }
+                let t_start = std::time::Instant::now();
                 let mut ctx = EvalCtx {
                     state_arrays,
                     observed_arrays: &*dst,
@@ -373,6 +377,31 @@ pub(super) fn materialize_observeds_append(
                     Value::Array(a) => *a,
                     Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
                 };
+                // `ESS_VEC_DEBUG`: a scalar-shaped observed rule whose body is an
+                // `aggregate` is materialized by `eval_arrayop`, which tries the
+                // same overlay first. A non-empty bail log means it fell back to
+                // the per-cell walk — the dominant per-step cost for a model whose
+                // stencils live in observeds rather than in the `D(...)` rules.
+                if vec_trace_on() {
+                    let log = take_bail_log();
+                    let us = t_start.elapsed().as_micros();
+                    if log.is_empty() {
+                        eprintln!(
+                            "[vec-obs] {var}: vectorized, {us} us, {} node visits",
+                            take_op_count()
+                        );
+                    } else {
+                        eprintln!("[vec-obs] {var}: PER-CELL, {us} us");
+                        for (i, l) in log.iter().enumerate() {
+                            if i < 14 {
+                                eprintln!("[vec-obs]   {l}");
+                            }
+                        }
+                        if log.len() > 14 {
+                            eprintln!("[vec-obs]   … {} more frames", log.len() - 14);
+                        }
+                    }
+                }
                 dst.insert(var.clone(), arr);
             }
             AlgebraicRule::ArrayLoop {
@@ -448,6 +477,18 @@ pub(super) fn materialize_observeds_append(
                 }
 
                 // ---- Per-cell oracle (fallback) ----------------------------
+                if vec_trace_on() && !force_scalar {
+                    let log = take_bail_log();
+                    eprintln!("[vec-bail] observed {var} -> per-cell oracle:");
+                    for (i, l) in log.iter().enumerate() {
+                        if i < 24 {
+                            eprintln!("[vec-bail]   {l}");
+                        }
+                    }
+                    if log.len() > 24 {
+                        eprintln!("[vec-bail]   … {} more frames", log.len() - 24);
+                    }
+                }
                 stats.obs_scalar_rules += 1;
                 let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
                 let total = padded_shape.iter().copied().product::<usize>().max(1);
@@ -635,6 +676,10 @@ pub(super) fn evaluate_rhs_with_scratch(
                 // (`try_eval_arrayop_vectorized`); a ragged/derived-bound filter
                 // (dynamic contraction window) bails to the per-cell oracle.
                 let lhs_shifts = lhs_constant_shifts(lhs_idx_exprs, output_idx_names);
+                // Clear any stale trace so the log below belongs to THIS rule.
+                if vec_trace_on() {
+                    let _ = take_bail_log();
+                }
                 if !force_scalar {
                     if let Some(dest_lo) = lhs_shifts
                         .as_ref()
@@ -677,6 +722,31 @@ pub(super) fn evaluate_rhs_with_scratch(
                 }
 
                 // ---- Per-cell oracle (fallback / forced reference) ---------
+                // `ESS_VEC_DEBUG=1`: report *why* this rule is not vectorized.
+                // The log is deepest-first, so the first line names the actual
+                // unsupported construct and the rest are the enclosing nodes.
+                if vec_trace_on() && !force_scalar {
+                    let log = take_bail_log();
+                    if log.is_empty() {
+                        eprintln!(
+                            "[vec-bail] rule D({var_name}) fell back before the overlay ran                              (lhs_shifts={:?}, output_ranges={output_ranges:?})",
+                            lhs_shifts
+                        );
+                    } else {
+                        eprintln!(
+                            "[vec-bail] rule D({var_name}) -> per-cell oracle                              (output_idx={output_idx_names:?} contract={contract_names:?}                              reduce={reduce:?} filter={}):",
+                            filter.is_some()
+                        );
+                        for (i, l) in log.iter().enumerate() {
+                            if i < 24 {
+                                eprintln!("[vec-bail]   {l}");
+                            }
+                        }
+                        if log.len() > 24 {
+                            eprintln!("[vec-bail]   … {} more frames", log.len() - 24);
+                        }
+                    }
+                }
                 stats.scalar_rules += 1;
                 // Hoist the eval context and the static contraction bounds out of
                 // the per-cell loop: the bound key set (output_idx + contract

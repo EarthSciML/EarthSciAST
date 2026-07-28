@@ -25,6 +25,104 @@ use super::*;
 use crate::types::ExpressionNode;
 use ndarray::{ArrayViewD, Slice};
 
+// ---------------------------------------------------------------------------
+// Bail-out tracing (diagnostics only; off unless `ESS_VEC_DEBUG` is set).
+//
+// The vectorized overlay returns `None` from dozens of scattered sites and the
+// caller silently falls back to the per-cell oracle, so a model that never
+// vectorizes gives no clue *which* construct is responsible. With
+// `ESS_VEC_DEBUG=1` every bail records a short tag; because the AST walk
+// unwinds innermost-first, the FIRST entry in the log is the deepest — the
+// actual unsupported construct — and the rest are the enclosing nodes that
+// propagated the `None`.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static VEC_BAIL_LOG: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether bail tracing is enabled (`ESS_VEC_DEBUG` set to anything non-empty).
+pub(super) fn vec_trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ESS_VEC_DEBUG")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+/// Kill-switch for the whole vectorized overlay (`ESS_VEC_DISABLE=1`).
+///
+/// `RhsStats`'s `force_scalar` flag only gates the two *compiled-rule* call
+/// sites; an array observed whose body is a standalone `aggregate` reaches the
+/// overlay through `eval_arrayop`, which has no such flag. This switch turns the
+/// overlay off everywhere at once, so a run with it set is the pure per-cell
+/// oracle — the reference a bit-identity check needs.
+pub(super) fn vec_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| {
+        std::env::var("ESS_VEC_DISABLE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+/// Record one bail site (no-op unless tracing is on).
+pub(super) fn note_bail(site: impl FnOnce() -> String) {
+    if vec_trace_on() {
+        VEC_BAIL_LOG.with(|l| l.borrow_mut().push(site()));
+    }
+}
+
+thread_local! {
+    static VEC_OPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one vectorized AST-node visit (tracing only).
+fn note_op() {
+    VEC_OPS.with(|c| c.set(c.get() + 1));
+}
+
+/// Read and reset the visited-node counter (tracing only).
+pub(super) fn take_op_count() -> usize {
+    VEC_OPS.with(|c| c.replace(0))
+}
+
+/// Drain the recorded bail sites (deepest first).
+pub(super) fn take_bail_log() -> Vec<String> {
+    VEC_BAIL_LOG.with(|l| l.borrow_mut().drain(..).collect())
+}
+
+/// A one-line description of an AST node, for the bail log.
+fn describe_expr(e: &Expr) -> String {
+    match e {
+        Expr::Number(n) => format!("Number({n})"),
+        Expr::Integer(n) => format!("Integer({n})"),
+        Expr::Variable(v) => format!("Variable({v})"),
+        Expr::Operator(n) => {
+            let bf = n
+                .broadcast_fn
+                .as_deref()
+                .map(|f| format!("[fn={f}]"))
+                .unwrap_or_default();
+            format!("op {}{}/{}", n.op, bf, n.args.len())
+        }
+    }
+}
+
+/// `return None`, recording `$site` in the bail log first.
+macro_rules! bail_vec {
+    ($site:literal) => {{
+        note_bail(|| $site.to_string());
+        return None;
+    }};
+    ($site:literal, $fmt:expr) => {{
+        note_bail(|| format!(concat!($site, ": {}"), $fmt));
+        return None;
+    }};
+}
+
 /// A value produced by the vectorized evaluator. Array values carry their
 /// per-axis 1-based `origin` (the index value of the first element along each
 /// axis) so an enclosing `index(A, sym±k)` can align `A` to the output box with
@@ -192,13 +290,16 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     ctx: &EvalCtx<'a>,
     pool: &mut Pool,
 ) -> Option<(VecValue<'a>, usize)> {
+    if vec_disabled() {
+        return None;
+    }
     let lo: DimI = output_ranges.iter().map(|(l, _)| *l).collect();
     let shape: DimU = output_ranges
         .iter()
         .map(|(l, h)| (h - l + 1) as usize)
         .collect();
     if shape.contains(&0) {
-        return None;
+        bail_vec!("arrayop: empty output box");
     }
     let mut ops = 0usize;
     let v = if contract_names.is_empty() {
@@ -269,7 +370,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     // only fires on the pure-map path it targets.
     if matches!(v, VecValue::View { .. }) {
         v.release(pool);
-        return None;
+        bail_vec!("arrayop: body reduced to a bare whole-array view (oracle scalarizes it)");
     }
     // The top-level result must already cover the output box exactly. A bare
     // scalar is broadcast over the box.
@@ -279,7 +380,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     };
     if !matches_box {
         v.release(pool);
-        return None;
+        bail_vec!("arrayop: result box does not match the output box");
     }
     let out = match v {
         VecValue::Scalar(s) => {
@@ -334,14 +435,17 @@ pub(super) fn eval_vec_contracted<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    let combine_op = reduce_combine_op(reduce)?;
+    let combine_op = match reduce_combine_op(reduce) {
+        Some(op) => op,
+        None => bail_vec!("contracted: boolean reduction (or/and) not vectorized"),
+    };
     // Resolve each contracted dim to a static (lo, hi). A non-static dim
     // (ragged/derived — per-output-tuple extent) can't be a uniform whole-array
     // window, so bail to the oracle.
     const MAXC: usize = 4;
     let nc = contract_names.len();
     if nc == 0 || nc > MAXC {
-        return None;
+        bail_vec!("contracted: contraction rank out of range", nc);
     }
     let mut clo = [0i64; MAXC];
     let mut chi = [0i64; MAXC];
@@ -351,7 +455,12 @@ pub(super) fn eval_vec_contracted<'a>(
                 clo[i] = *l;
                 chi[i] = *h;
             }
-            _ => return None,
+            other => {
+                bail_vec!(
+                    "contracted: non-static contraction dim (ragged/derived)",
+                    format!("{other:?}")
+                )
+            }
         }
     }
 
@@ -463,18 +572,26 @@ pub(super) fn eval_vec<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     *ops += 1;
-    match expr {
+    if vec_trace_on() {
+        note_op();
+    }
+    let r = match expr {
         Expr::Number(n) => Some(VecValue::Scalar(*n)),
         Expr::Integer(n) => Some(VecValue::Scalar(*n as f64)),
-        Expr::Variable(name) => eval_vec_variable(name, bx, ctx),
+        Expr::Variable(name) => eval_vec_variable(name, bx, ctx, pool),
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
+    };
+    if r.is_none() {
+        note_bail(|| format!("  in {}", describe_expr(expr)));
     }
+    r
 }
 
 pub(super) fn eval_vec_variable<'a>(
     name: &str,
     bx: &VecBox,
     ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
 ) -> Option<VecValue<'a>> {
     if name == "t" {
         return Some(VecValue::Scalar(ctx.t));
@@ -485,9 +602,22 @@ pub(super) fn eval_vec_variable<'a>(
         return Some(VecValue::Scalar(v as f64));
     }
     // A bare output index symbol as a *value* (rather than inside `index(...)`
-    // addressing) is not part of the stencil fast path — bail to the oracle.
-    if bx.syms.iter().any(|s| s == name) {
-        return None;
+    // addressing) is the coordinate-ramp idiom every geometry observed uses:
+    // `phi = -90 + (j - 1)·dlat`, `sigma_c = (k - 0.5)/NZ`. The per-cell oracle
+    // resolves it to the bound integer for the cell, so the whole-array analogue
+    // is a RAMP over that axis: element `p` along output axis `a` holds
+    // `bx.lo[a] + p` as an `f64`, and every other axis is constant. That is
+    // exactly the value the oracle produces in each cell, so downstream
+    // arithmetic stays bit-identical.
+    if let Some(a) = bx.syms.iter().position(|s| s == name) {
+        let mut ramp = pool.take_array(bx.shape);
+        let lo = bx.lo[a];
+        ramp.indexed_iter_mut()
+            .for_each(|(idx, v)| *v = (lo + idx[a] as i64) as f64);
+        return Some(VecValue::Owned {
+            data: ramp,
+            origin: bx.lo.iter().copied().collect(),
+        });
     }
     // State/observed reads return a borrowed view of the persistent array — no
     // clone (ess-mro). The enclosing `index(...)` slices the view directly.
@@ -523,6 +653,7 @@ pub(super) fn eval_vec_variable<'a>(
     // would need the buffer restructured. Correctness holds (the oracle reads
     // the live buffer); only the whole-array fast path is forgone for a rule
     // that reads forcing. Optimizing that is a separate, optional follow-up.
+    note_bail(|| format!("variable: unresolved symbol (forcing/loop-bind?): {name}"));
     None
 }
 
@@ -565,11 +696,24 @@ pub(super) fn eval_vec_op<'a>(
             pool,
         )),
         "index" => eval_vec_index(node, bx, ctx, pool, ops),
+        // A nested `aggregate` used as an array-valued sub-expression — the
+        // shape every discretized primitive-equation tendency lowers to:
+        // `D(u[i,j,k]) = index(aggregate[i,j,k](…), i, j, k)`. Materialize it
+        // ONCE as a whole array over its own box (recursively through this same
+        // overlay) and let the enclosing `index(...)` align it. Without this arm
+        // the whole rule bailed at its outermost node and the per-cell oracle
+        // then re-materialized the ENTIRE nested array once per output cell —
+        // an O(N²) walk that dominated the RHS. See [`eval_vec_nested_aggregate`]
+        // for the binding-independence precondition that makes hoisting sound.
+        "aggregate" => eval_vec_nested_aggregate(node, bx, ctx, pool, ops),
         "makearray" => eval_vec_makearray(node, bx, ctx, pool, ops),
         "const" => match eval_const(node) {
             Value::Scalar(s) => Some(VecValue::Scalar(s)),
             // Array-valued constants are not part of the stencil fast path.
-            Value::Array(_) => None,
+            Value::Array(_) => {
+                note_bail(|| "op: array-valued `const`".to_string());
+                None
+            }
         },
         // Scalar comparisons and `ifelse` over *scalar* operands — the einsum
         // weight idiom `ifelse(k==0,-2,1)` folds to a constant per contraction
@@ -649,10 +793,95 @@ pub(super) fn eval_vec_op<'a>(
         }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
         // concat, `fn` closed-registry calls, atan2, D, …) falls back.
-        _ => None,
+        _ => {
+            note_bail(|| format!("op: unsupported operator `{}`/{}", node.op, node.args.len()));
+            None
+        }
     }
 }
 
+
+/// Whether `expr` mentions the variable `name` anywhere (including in an
+/// `index` axis position, a nested aggregate body, or a `makearray` region
+/// value). Used as a *conservative* dependence test: a false positive only
+/// costs the fast path, never correctness.
+fn expr_mentions(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Variable(v) => v == name,
+        Expr::Number(_) | Expr::Integer(_) => false,
+        Expr::Operator(n) => {
+            n.args.iter().any(|a| expr_mentions(a, name))
+                || n.expr.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.filter.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.lower.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.upper.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.values
+                    .as_ref()
+                    .is_some_and(|vs| vs.iter().any(|e| expr_mentions(e, name)))
+        }
+    }
+}
+
+/// Vectorized nested `aggregate`: materialize the sub-array once over the
+/// aggregate's OWN index box, through the same [`try_eval_arrayop_vectorized`]
+/// entry the per-cell oracle's [`eval_arrayop`] tries first. Because both paths
+/// call that one function with parameters derived from the shared
+/// [`arrayop_spec`], a success here returns the byte-identical array the oracle
+/// would have produced — and a failure returns `None`, leaving the oracle in
+/// charge exactly as before.
+///
+/// PRECONDITION (why hoisting out of the enclosing loop is sound): the oracle
+/// re-evaluates this node once per enclosing output tuple, with the enclosing
+/// output symbols and contracted indices bound in `ctx.loop_binds`. Evaluating
+/// it ONCE is therefore only equivalent when the nested node does not depend on
+/// any of those bindings. We bail if the body or filter mentions any enclosing
+/// index symbol, any bound contraction name, or any name already bound in
+/// `ctx.loop_binds` (a scalar `eval` walk that reached this overlay from inside
+/// a per-cell loop). The test is syntactic and conservative — a symbol shadowed
+/// by the aggregate's own `output_idx` is rejected rather than analysed.
+fn eval_vec_nested_aggregate<'a>(
+    node: &ExpressionNode,
+    bx: &VecBox,
+    ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
+    ops: &mut usize,
+) -> Option<VecValue<'a>> {
+    let spec = match arrayop_spec(node) {
+        Some(s) => s,
+        None => bail_vec!("aggregate: node carries no `expr` body"),
+    };
+    if spec.ranges.is_empty() {
+        bail_vec!("aggregate: rank-0 output (scalar reduction)");
+    }
+    for name in bx
+        .syms
+        .iter()
+        .chain(bx.cnames.iter())
+        .chain(ctx.loop_binds.keys())
+    {
+        if expr_mentions(spec.body, name)
+            || spec.filter.is_some_and(|f| expr_mentions(f, name))
+        {
+            bail_vec!(
+                "aggregate: nested body depends on an enclosing bound index",
+                name
+            );
+        }
+    }
+    let (v, sub_ops) = try_eval_arrayop_vectorized(
+        spec.idx_names,
+        &spec.ranges,
+        spec.body,
+        &spec.contract_names,
+        &spec.contract_dims,
+        spec.reduce,
+        spec.filter,
+        ctx,
+        pool,
+    )?;
+    *ops += sub_ops;
+    Some(v)
+}
 
 /// The shared scalar-comparison kernel: the per-cell oracle (`apply_binary`,
 /// eval.rs) and this vectorized overlay both route through it, so the two paths
@@ -876,7 +1105,7 @@ pub(super) fn eval_vec_index<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     if node.args.is_empty() {
-        return None;
+        bail_vec!("index: no arguments");
     }
     let arg0 = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
     let n = node.args.len() - 1;
@@ -885,13 +1114,19 @@ pub(super) fn eval_vec_index<'a>(
     if arg0.shape().is_none() {
         return match arg0 {
             VecValue::Scalar(s) if n == 0 => Some(VecValue::Scalar(s)),
-            _ => None,
+            _ => {
+                note_bail(|| format!("index: base is a scalar but {n} index args given"));
+                None
+            }
         };
     }
     let src_ndim = arg0.shape().expect("array").len();
     if n != src_ndim {
         arg0.release(pool);
-        return None;
+        bail_vec!(
+            "index: arg count != source rank",
+            format!("{n} args vs rank {src_ndim}")
+        );
     }
     let src_origin: DimI = arg0
         .origin()
@@ -902,20 +1137,39 @@ pub(super) fn eval_vec_index<'a>(
     let src_shape: DimU = arg0.shape().expect("array").iter().copied().collect();
     let out_ndim = bx.shape.len();
 
-    // Classify each source axis. `mapped[a] = (src_axis, AxisIndex)` fills output
-    // axis `a` (in order); `fixed = (src_axis, 0-based index)` is a consumed
-    // slice. A mapped axis is tried against the NEXT unfilled output symbol; a
-    // non-affine, non-wrap axis must be a constant fixed index or the gather bails.
-    let mut mapped: SmallVec<[(usize, AxisIndex); 4]> = SmallVec::new();
+    // Classify each source axis. `mapped[a] = Some((src_axis, AxisIndex))` says
+    // output axis `a` is filled by that source axis; `mapped[a] = None` says the
+    // source does not depend on output axis `a` at all and is BROADCAST along it.
+    // `fixed = (src_axis, 0-based index)` is a slice selected by a constant /
+    // bound-contraction index and consumed.
+    //
+    // Each source axis is tried against every not-yet-claimed output symbol, not
+    // just the next one in order, so `index(coslat, j)` inside an `(i, j, k)` box
+    // maps to output axis 1 (and broadcasts over 0 and 2), and `index(A, j, i)`
+    // is a transpose rather than a bail. The classification is unambiguous: a
+    // constant / bound-contraction axis has affine coefficient 0 in every symbol
+    // and so never classifies as a map, and an expression affine in `sym` with
+    // coefficient 1 mentions no other output symbol (`affine_terms` returns
+    // `None` for an unbound one) — so the search cannot claim the wrong symbol,
+    // and for an in-order gather it picks exactly the axes the previous
+    // next-symbol-only rule did.
+    let mut mapped: SmallVec<[Option<(usize, AxisIndex)>; 4]> =
+        (0..out_ndim).map(|_| None).collect();
+    let mut n_mapped = 0usize;
     let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
     let mut any_fixed_oob = false;
     for d in 0..n {
         let e = &node.args[1 + d];
-        if mapped.len() < out_ndim {
-            if let Some(ax) = classify_axis_index(e, &bx.syms[mapped.len()], bx) {
-                mapped.push((d, ax));
-                continue;
+        let claimed = (0..out_ndim).find_map(|a| {
+            if mapped[a].is_some() {
+                return None;
             }
+            classify_axis_index(e, &bx.syms[a], bx).map(|ax| (a, ax))
+        });
+        if let Some((a, ax)) = claimed {
+            mapped[a] = Some((d, ax));
+            n_mapped += 1;
+            continue;
         }
         match const_index_value(e, bx) {
             Some(idx1) => {
@@ -929,21 +1183,25 @@ pub(super) fn eval_vec_index<'a>(
             }
             None => {
                 arg0.release(pool);
-                return None;
+                bail_vec!(
+                    "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select",
+                    format!(
+                        "axis {d} = {} (unclaimed output syms = {:?})",
+                        describe_expr(e),
+                        (0..out_ndim)
+                            .filter(|a| mapped[*a].is_none())
+                            .map(|a| bx.syms[a].as_str())
+                            .collect::<Vec<_>>()
+                    )
+                );
             }
         }
-    }
-    // The result rank is the mapped-axis count: a scalar (all fixed, broadcast) or
-    // a full output-box array. A partial rank cannot broadcast — bail.
-    if !mapped.is_empty() && mapped.len() != out_ndim {
-        arg0.release(pool);
-        return None;
     }
 
     // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
     if any_fixed_oob {
         arg0.release(pool);
-        return Some(if mapped.is_empty() {
+        return Some(if n_mapped == 0 {
             VecValue::Scalar(0.0)
         } else {
             VecValue::Owned {
@@ -954,7 +1212,7 @@ pub(super) fn eval_vec_index<'a>(
     }
 
     // All-fixed ⇒ a single source element, broadcast as a scalar.
-    if mapped.is_empty() {
+    if n_mapped == 0 {
         let mut idx = DimU::from_elem(0usize, n);
         for &(d, i0) in &fixed {
             idx[d] = i0 as usize;
@@ -970,7 +1228,16 @@ pub(super) fn eval_vec_index<'a>(
     // release `arg0` without a live borrow.
     let mut axis_segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::new();
     for a in 0..out_ndim {
-        let (orig_d, ax) = &mapped[a];
+        // An output axis the source does not index is broadcast: one full-extent
+        // segment reading the same (length-1, stride-0) source position for every
+        // output position — exactly what the oracle does when the per-cell
+        // `index(...)` simply never mentions that loop symbol.
+        let Some((orig_d, ax)) = &mapped[a] else {
+            let mut segs = SmallVec::new();
+            segs.push((0usize, bx.shape[a], 0usize));
+            axis_segs.push(segs);
+            continue;
+        };
         let so = src_origin[*orig_d];
         let ssz = src_shape[*orig_d] as i64;
         match ax {
@@ -1002,7 +1269,13 @@ pub(super) fn eval_vec_index<'a>(
                 // A roll requires the source axis to be the full period.
                 if so != bx.lo[a] || ssz != period || bx.shape[a] as i64 != period {
                     arg0.release(pool);
-                    return None;
+                    bail_vec!(
+                        "index: periodic wrap axis is not a full-period roll",
+                        format!(
+                            "src_origin={so} src_extent={ssz} period={period}                              out_lo={} out_extent={}",
+                            bx.lo[a], bx.shape[a]
+                        )
+                    );
                 }
                 let p = period as usize;
                 let s = (((k % period) + period) % period) as usize; // shift in [0,period)
@@ -1021,8 +1294,7 @@ pub(super) fn eval_vec_index<'a>(
     }
 
     // Reduce the source to just the mapped axes: select each fixed axis at its
-    // index (descending axis order so the lower axis indices stay valid). `rv`
-    // then has `out_ndim` axes, in mapped order = output-axis order.
+    // index (descending axis order so the lower axis indices stay valid).
     let mut fixed_desc: SmallVec<[(usize, usize); 4]> =
         fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
     fixed_desc.sort_by(|a, b| b.0.cmp(&a.0));
@@ -1030,9 +1302,52 @@ pub(super) fn eval_vec_index<'a>(
     for (d, i0) in fixed_desc {
         rv = rv.index_axis_move(ndarray::Axis(d), i0);
     }
+    // `rv` now holds the mapped source axes in ascending SOURCE-axis order.
+    // Permute them into output-axis order (a transposing gather), then splice in
+    // a length-1 axis at each broadcast output axis, so `rv` has `out_ndim` axes
+    // aligned with the output box.
+    let mut mapped_src: SmallVec<[usize; 4]> = mapped.iter().flatten().map(|(d, _)| *d).collect();
+    mapped_src.sort_unstable();
+    // A `SmallVec` (and `IxDyn` over its slice, whose repr inlines up to 4 axes),
+    // not a `Vec` — this runs once per `index(...)` node of every RHS evaluation
+    // and the steady-state RHS must not allocate (ess-mro, `pde_zero_alloc`).
+    let perm: SmallVec<[usize; 4]> = (0..out_ndim)
+        .filter_map(|a| mapped[a].as_ref())
+        .map(|(d, _)| {
+            mapped_src
+                .iter()
+                .position(|s| s == d)
+                .expect("mapped source axis is in mapped_src")
+        })
+        .collect();
+    let mut rv = rv.permuted_axes(IxDyn(&perm[..]));
+    for a in 0..out_ndim {
+        if mapped[a].is_none() {
+            rv = rv.insert_axis(ndarray::Axis(a));
+        }
+    }
+    // Stretch the length-1 broadcast axes to the output extent. Every other axis
+    // keeps its own extent, so this only ever adds stride-0 axes.
+    let bshape: DimU = (0..out_ndim)
+        .map(|a| {
+            if mapped[a].is_some() {
+                rv.shape()[a]
+            } else {
+                bx.shape[a]
+            }
+        })
+        .collect();
+    let rvb = match rv.broadcast(IxDyn(&bshape[..])) {
+        Some(v) => v,
+        None => {
+            drop(rv);
+            arg0.release(pool);
+            bail_vec!("index: broadcast to the output box failed");
+        }
+    };
 
     // Copy every cartesian combination of per-axis segments from the reduced
-    // source `rv` into the zero-filled pooled buffer (ghost positions keep 0).
+    // source `rvb` into the zero-filled pooled buffer (ghost positions keep 0).
     let mut result = pool.take_array(bx.shape);
     {
         let mut pick = DimU::from_elem(0usize, out_ndim);
@@ -1043,7 +1358,7 @@ pub(super) fn eval_vec_index<'a>(
                     let (o, l, _) = axis_segs[d][pick[d]];
                     Slice::from(o..o + l)
                 });
-                let src_sub = rv.slice_each_axis(|ax| {
+                let src_sub = rvb.slice_each_axis(|ax| {
                     let d = ax.axis.index();
                     let (_, l, s) = axis_segs[d][pick[d]];
                     Slice::from(s..s + l)
@@ -1070,6 +1385,7 @@ pub(super) fn eval_vec_index<'a>(
             }
         }
     }
+    drop(rvb);
     drop(rv);
     arg0.release(pool);
     Some(VecValue::Owned {
@@ -1088,14 +1404,23 @@ pub(super) fn eval_vec_makearray<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    let regions = node.regions.as_ref()?;
-    let values = node.values.as_ref()?;
+    let regions = match node.regions.as_ref() {
+        Some(r) => r,
+        None => bail_vec!("makearray: no `regions`"),
+    };
+    let values = match node.values.as_ref() {
+        Some(v) => v,
+        None => bail_vec!("makearray: no `values`"),
+    };
     if regions.is_empty() || values.len() != regions.len() {
-        return None;
+        bail_vec!("makearray: empty or mismatched regions/values");
     }
     let ndim = regions[0].len();
     if ndim != bx.shape.len() {
-        return None;
+        bail_vec!(
+            "makearray: region rank != output box rank",
+            format!("{ndim} vs {}", bx.shape.len())
+        );
     }
     let mut lo_bb = DimI::from_elem(i64::MAX, ndim);
     let mut hi_bb = DimI::from_elem(i64::MIN, ndim);
