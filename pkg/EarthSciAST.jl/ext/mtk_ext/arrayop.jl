@@ -315,8 +315,32 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
         # friends — becomes `ifelse(j <= i, body, identity)` over the full
         # rectangular `i × j` range. The scalarizer substitutes concrete
         # positions for both pool vars, folding each `ifelse` to one branch,
-        # so cell `i` reduces exactly the admitted window in ascending `j` —
-        # the normative accumulation order of §4.3.1.
+        # so cell `i` reduces exactly the admitted WINDOW (which `j` values
+        # contribute), which is the part of §4.3.1 this path does honor.
+        #
+        # ORDER IS NOT HONORED — read this before trusting a low bit.
+        # §4.3.1 additionally makes the ascending-`j` LEFT FOLD normative:
+        # `((b_a ⊕ b_{a+1}) ⊕ b_{a+2}) ⊕ …`, lowest admitted `j` first. This
+        # path cannot deliver that. The gated terms are handed to SymbolicUtils
+        # as an n-ary `+`, which stores and emits them in ITS canonical term
+        # order, not ours; re-association is inherent to lowering a sum into a
+        # symbolic algebra and is not something a caller can switch off.
+        #
+        # The divergence is NOT confined to the last ulp. On a window whose
+        # partial sums cancel it is O(1) absolute — with u = [1e16, 1, -1e16, 1]
+        # the normative fold gives fwd_inc = [1e16, 1e16, 0, 1] (what the
+        # tree-walk evaluator produces) while this path gives [1e16, 1e16, 1, 2].
+        # Bit-agreement with the tree-walk holds only when the summands are
+        # exactly representable and no cancellation occurs — which is why the
+        # conformance fixtures (powers of two; 0.5/0.25/0.125) match bit-for-bit
+        # and are NOT evidence of a general guarantee.
+        #
+        # esm-spec §4.3.1 pins bit-exactness on the EXECUTING bindings; in Julia
+        # that is the tree-walk evaluator (`build_evaluator`, src/tree_walk/
+        # scan.jl, pinned by test/scan_prefix_test.jl), not this MTK export
+        # path. Callers who need the normative low bits must use it.
+        # Pinned by "Cumulative prefix reductions (MTK lowering)" in
+        # test/array_ops_test.jl, where the cancellation case is `@test_broken`.
         if expr.filter !== nothing
             pred = _esm_to_symbolic(expr.filter, var_dict, t_sym, dim_dict)
             b = _gate_by_filter(pred, b, _reduce_identity(expr.reduce))
