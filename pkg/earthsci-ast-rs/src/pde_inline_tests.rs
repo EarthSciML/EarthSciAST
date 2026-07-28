@@ -61,6 +61,43 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::simulate::{SimulateOptions, Solution, simulate_with_inspection};
+
+/// Qualify a test's override keys with the component that OWNS the test.
+///
+/// esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
+/// name — local to the ENCLOSING component, since a test "exercises one model in
+/// isolation" (§6.6). The runner hands them to `simulate`, which resolves against
+/// the WHOLE flattened document, where that locality is gone: two mounted
+/// components that each declare a `T` flatten to `M1.T` / `M2.T`, and the bare
+/// `T` in `M2`'s test is then AMBIGUOUS document-wide even though it is
+/// unambiguous where it was written.
+///
+/// So re-attach the scope the runner still knows: a key whose `<model>.<key>`
+/// form names a real variable of the flattened system is rewritten to it. A key
+/// that does not (already qualified, a scoped reference the prefix would double
+/// up, or simply wrong) passes through untouched, so `simulate` reports on it
+/// exactly as it would have.
+fn scope_to_component(
+    overrides: Option<&HashMap<String, f64>>,
+    model_name: &str,
+    file: &EsmFile,
+) -> HashMap<String, f64> {
+    let Some(overrides) = overrides.filter(|m| !m.is_empty()) else {
+        return HashMap::new();
+    };
+    let Ok(flat) = crate::flatten::flatten(file) else {
+        return overrides.clone(); // let `simulate` report the real failure
+    };
+    overrides
+        .iter()
+        .map(|(k, v)| {
+            let qualified = format!("{model_name}.{k}");
+            let known = flat.parameters.contains_key(&qualified)
+                || flat.state_variables.contains_key(&qualified);
+            (if known { qualified } else { k.clone() }, *v)
+        })
+        .collect()
+}
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
 use crate::types::{
     AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, Model, Tolerance, VariableType,
@@ -853,8 +890,12 @@ fn run_model_tests(
         times.dedup();
         let mut run_opts = opts.clone();
         run_opts.output_times = Some(times);
-        let params = t.parameter_overrides.clone().unwrap_or_default();
-        let ics = t.initial_conditions.clone().unwrap_or_default();
+        let params = scope_to_component(
+            t.parameter_overrides.as_ref(),
+            model_name,
+            run_file,
+        );
+        let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
         // Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
         // slot) read their state-free materialized field from here
         // (`observed_field`).

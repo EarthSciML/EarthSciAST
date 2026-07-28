@@ -908,16 +908,16 @@ fn classify_equations(
     // was dropped and the state silently started at its declared `default`.
     // (The ARRAY runtime in `simulate_array` already consumes `field_ics`;
     // only this pathway ignored them.)
+    // A target that is not a state of this system is SKIPPED rather than
+    // rejected: `ic` is also written against a discrete parameter that events
+    // mutate (`ic(EventSystem.dose_counter)` in tests/simulation/event_chain.esm),
+    // which has no u0 slot to seed. That has always been inert here and in
+    // Julia, whose `_build_u0` simply never looks such a key up; making it an
+    // error would be a separate, structural-validation decision.
     for (target, rhs) in &flat.field_ics {
-        let idx = state_index
-            .get(target)
-            .ok_or_else(|| CompileError::InterpreterBuildError {
-                details: format!(
-                    "Equation declares ic({target}) but '{target}' is not in \
-                     flat.state_variables"
-                ),
-            })?;
-        state_ic_raw[*idx] = Some(rhs.clone());
+        if let Some(&idx) = state_index.get(target) {
+            state_ic_raw[idx] = Some(rhs.clone());
+        }
     }
     for eq in &flat.equations {
         if let Some(state_name) = state_lhs_name(&eq.lhs) {

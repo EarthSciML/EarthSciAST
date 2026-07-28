@@ -932,13 +932,15 @@ def _fold_scalar_ics(
 ) -> None:
     """Fold every 0-D ``ic`` equation into its ``y0`` slot (esm-spec §11.4).
 
-    An ``ic`` naming something that is not a state of the flattened system is a
-    hard error, matching :func:`_fold_field_ics`."""
+    A target that is not a state of this system is SKIPPED rather than rejected:
+    ``ic`` is also written against a discrete parameter that events mutate
+    (``ic(EventSystem.dose_counter)`` in ``tests/simulation/event_chain.esm``),
+    which has no ``y0`` slot to seed. That has always been inert here and in
+    Julia, whose ``_build_u0`` simply never looks such a key up; making it an
+    error would be a separate, structural-validation decision."""
     for target, rhs in scalar_ic_eqs:
         if target not in state_layout:
-            raise SimulationError(
-                f"ic({target}): target is not a state variable of the flattened system"
-            )
+            continue
         y0[state_layout[target]] = resolve_scalar_ic(
             target, rhs, param_values=param_values, index_sets=index_sets
         )
@@ -949,8 +951,11 @@ def scalar_ic_equations(flat: FlattenedSystem) -> list[tuple[str, Expr]]:
     (esm-spec §11.4), as ``(target_state_name, rhs)`` pairs in document order.
 
     Array-shaped / lifted targets (§11.4.1) are excluded — their per-cell field
-    RHS is folded by :func:`_fold_field_ics` once the grid shape is known. Used
-    by the scalar-SymPy pathway, which has no array machinery of its own."""
+    RHS is folded by :func:`_fold_field_ics` once the grid shape is known, and so
+    is a target that is not a state of this system at all (``ic`` is also written
+    against a discrete parameter that events mutate — see
+    :func:`_fold_scalar_ics`). Used by the scalar-SymPy pathway, which has no
+    array machinery of its own."""
     out: list[tuple[str, Expr]] = []
     for eq in flat.equations:
         lhs = eq.lhs
@@ -961,7 +966,7 @@ def scalar_ic_equations(flat: FlattenedSystem) -> list[tuple[str, Expr]]:
             and isinstance(lhs.args[0], str)
         ):
             var = flat.state_variables.get(lhs.args[0])
-            if var is not None and getattr(var, "shape", None):
+            if var is None or getattr(var, "shape", None):
                 continue
             out.append((lhs.args[0], eq.rhs))
     return out
