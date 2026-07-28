@@ -69,6 +69,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ ESS_XEQ_VARIANT_DISABLE=1 (differential)
     include("expand_memo_oracle_test.jl")          # A4 template-expansion memo ≡ ESS_EXPAND_MEMO_DISABLE=1 (differential)
     include("tree_walk_arrayop_test.jl")
+    include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target (fix/index-inline-const-array)
     include("tree_walk_vectorized_test.jl")
     include("access_kernel_foundation_test.jl")     # ess-affine IR foundation
     include("stencil_affine_lowering_test.jl")       # ess-affine _lower_to_access

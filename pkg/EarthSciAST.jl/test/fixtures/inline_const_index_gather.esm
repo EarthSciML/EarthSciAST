@@ -1,0 +1,146 @@
+{
+  "esm": "0.6.0",
+  "metadata": {
+    "name": "inline_const_index_gather",
+    "description": "Regression fixture for the tree-walk `index({op:const, value:[...]}, <loopvar>, ...)` gather (fix/index-inline-const-array). An INLINE non-scalar `const` array literal used as the TARGET of an `index()` inside an aggregate body used to survive `_resolve_indices` untouched and hit the `E_TREEWALK_UNSUPPORTED_OP: non-scalar const outside an array-consuming position` dead-end in `_compile`. It is now interned into the const-array registry and gathered through the same path a REGISTERED const-array observed already takes. Two constant-RHS ODEs from zero ICs, so du(u0) IS the value at t=1: a 1-D case a[i]=C1[i], and a multi-dim case b[gt]=Σ_{d=1..3} G[gt][d][1] mirroring the duo `index({const [n][3][3]}, gt, d, k)` usage (gt over a tile axis, d over a size-3 axis, k a literal).",
+    "authors": [
+      "EarthSciAST/fix/index-inline-const-array"
+    ],
+    "tags": [
+      "tree-walk",
+      "const",
+      "index",
+      "aggregate",
+      "regression"
+    ]
+  },
+  "index_sets": {
+    "tiles": {
+      "kind": "interval",
+      "size": 2
+    },
+    "dcomp": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "InlineConstIndex": {
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-09
+      },
+      "variables": {
+        "a": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        },
+        "b": {
+          "type": "state",
+          "shape": [
+            "gt"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "_comment": "1-D: D(a[i])/dt = index({const [10,20,30]}, i). a[i]=C1[i] at t=1.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [
+                { "op": "index", "args": ["a", "i"] }
+              ],
+              "wrt": "t"
+            },
+            "ranges": { "i": [1, 3] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": [1, 3] },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "const",
+                  "args": [],
+                  "value": [10.0, 20.0, 30.0]
+                },
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Multi-dim: D(b[gt])/dt = Σ_{d=1..3} index({const [2][3][3]}, gt, d, 1). G[gt][d][k]=100*gt+10*d+k; k=1 literal. b[1]=363, b[2]=663 at t=1.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["gt"],
+            "expr": {
+              "op": "D",
+              "args": [
+                { "op": "index", "args": ["b", "gt"] }
+              ],
+              "wrt": "t"
+            },
+            "ranges": { "gt": [1, 2] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["gt"],
+            "ranges": { "gt": [1, 2], "d": [1, 3] },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "const",
+                  "args": [],
+                  "value": [
+                    [[111.0, 112.0, 113.0], [121.0, 122.0, 123.0], [131.0, 132.0, 133.0]],
+                    [[211.0, 212.0, 213.0], [221.0, 222.0, 223.0], [231.0, 232.0, 233.0]]
+                  ]
+                },
+                "gt",
+                "d",
+                1
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "inline_const_index_t1",
+          "description": "Constant-RHS integration from zero ICs. a[i]=C1[i]; b[gt]=Σ_d G[gt][d][1] at t=1.",
+          "initial_conditions": {
+            "a[1]": 0.0,
+            "a[2]": 0.0,
+            "a[3]": 0.0,
+            "b[1]": 0.0,
+            "b[2]": 0.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            { "variable": "a[1]", "time": 1.0, "expected": 10.0 },
+            { "variable": "a[2]", "time": 1.0, "expected": 20.0 },
+            { "variable": "a[3]", "time": 1.0, "expected": 30.0 },
+            { "variable": "b[1]", "time": 1.0, "expected": 363.0 },
+            { "variable": "b[2]", "time": 1.0, "expected": 663.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

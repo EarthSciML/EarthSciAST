@@ -506,6 +506,76 @@ _refs_bound_sym(e::OpExpr, bound_syms::Set{String}) =
     any(a -> _refs_bound_sym(a, bound_syms), e.args)
 _refs_bound_sym(::ASTExpr, ::Set{String}) = false
 
+# Gather from a build-time-constant Float64 array `vals` (registry `name`, used
+# only for CSE identity / diagnostics) at the subscript expressions
+# `idx_args_expr`. This is the ONE spelling of the const-array read, shared by
+# the registered-const-array `index(name, …)` branch and the INLINE
+# `index({op:const, value:[…]}, …)` branch below. Fully-constant subscripts fold
+# to the scalar element (a `NumExpr` literal, the byte-identical frozen path); a
+# subscript that references a bound output-index symbol kept symbolic (the
+# compile-once `evaluate_cellwise` fast path, non-empty `bound_syms`) keeps the
+# read runtime-varying and lowers to a `_ConstGatherRef` (→ `_NK_CONST_GATHER`),
+# with the constant dims still folded to `IntExpr`s under the same
+# `_resolve_const_index` boundary policy.
+function _resolve_const_array_gather(vals::AbstractArray, name::String,
+        idx_args_expr::Vector{ASTExpr},
+        array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
+        var_map::Dict{String,Int}, const_arrays::AbstractDict,
+        pgather::AbstractDict, memo::_MaybeMemo, bound_syms::Set{String})
+    length(idx_args_expr) == ndims(vals) ||
+        throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
+              "const array '$(name)' is $(ndims(vals))D " *
+              "but got $(length(idx_args_expr)) indices"))
+    if any(a -> _refs_bound_sym(a, bound_syms), idx_args_expr)
+        sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
+        for d in 1:ndims(vals)
+            a = idx_args_expr[d]
+            if _refs_bound_sym(a, bound_syms)
+                sub_nodes[d] = _resolve_indices(a, array_var_info, var_map,
+                                                const_arrays, pgather, memo, bound_syms)
+            else
+                ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+                ci = _resolve_const_index(vals, name, d, ci, size(vals, d))
+                sub_nodes[d] = IntExpr(Int64(ci))
+            end
+        end
+        return OpExpr("index", sub_nodes; value=_ConstGatherRef(vals, name))
+    end
+    # Fully-constant subscripts: inline the value as a NumExpr literal.
+    int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+                   for a in idx_args_expr]
+    for d in 1:ndims(vals)
+        int_indices[d] = _resolve_const_index(vals, name, d, int_indices[d], size(vals, d))
+    end
+    return NumExpr(Float64(vals[int_indices...]))
+end
+
+# Name prefix reserved for INTERNED inline-`const` array literals (below). Kept
+# distinct from any authored variable name so a synthetic entry can never shadow
+# a real const-array observed, and so the dedup scan can cheaply skip non-inline
+# registry rows.
+const _INLINE_CONST_PREFIX = "__inline_const#"
+
+# Materialize an inline `const`-op array literal (a nested-vector `value`) into a
+# dense Float64 array and INTERN it into the const-array registry so it gathers
+# through the exact same path a registered const-array observed takes
+# (`_resolve_const_array_gather`). Deduped BY VALUE: an identical literal resolves
+# to one registry name, so its symbolic gathers share a CSE identity (a
+# content-hashed name makes this deterministic even across separately-built
+# equations). The gather captures `vals` directly, so registration is not needed
+# for correctness — it is the task's "intern into `const_arrays`" contract plus a
+# single shared array object; it is skipped for the read-only empty sentinel.
+function _intern_inline_const(cexpr::OpExpr, const_arrays::AbstractDict)
+    vals = _const_op_to_array(cexpr.value)
+    for (k, v) in const_arrays
+        (startswith(k, _INLINE_CONST_PREFIX) && size(v) == size(vals) && v == vals) &&
+            return v, k
+    end
+    name = string(_INLINE_CONST_PREFIX, hash(vals))
+    const_arrays === _EMPTY_CONST_ARRAYS || (const_arrays[name] = vals)
+    return vals, name
+end
+
 # Resolve each expression in `args`, returning `(resolved, changed)`. When no
 # element changes under resolution the ORIGINAL `args` vector is returned (no
 # allocation) and `changed` is false, letting the caller keep its node verbatim;
@@ -646,6 +716,23 @@ function _resolve_indices_op(expr::OpExpr,
             return _resolve_index_of_makearray(first_arg::OpExpr, expr.args[2:end],
                                                array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
+        # Expression-position INLINE `const` array literal:
+        # index({op:const, value:[…]}, k1, …). A non-scalar `const` used as an
+        # index target (e.g. the duo's `index({const [n][3][3]}, gt, d, k)`) is
+        # build-time literal data — the same shape as a REGISTERED const-array
+        # observed, only authored inline. Intern it (dedup by value) and gather it
+        # through the shared const-array path so a constant index folds to the
+        # element and a symbolic loop var lowers to a `_ConstGatherRef`. Without
+        # this the literal survives untouched to `_compile` and hits the
+        # `non-scalar const outside an array-consuming position` dead-end. A SCALAR
+        # `const` (a `Real` value) is not an array target — it falls through to the
+        # generic recurse and const-folds in `_compile` as before.
+        if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" &&
+           (first_arg::OpExpr).value isa AbstractVector
+            vals, cname = _intern_inline_const(first_arg::OpExpr, const_arrays)
+            return _resolve_const_array_gather(vals, cname, expr.args[2:end],
+                array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+        end
         if first_arg isa VarExpr && haskey(array_var_info, first_arg.name)
             vname = first_arg.name
             lo, hi = array_var_info[vname]
@@ -699,45 +786,13 @@ function _resolve_indices_op(expr::OpExpr,
                           value=_PGatherRef(pg.flat, lin, first_arg.name))
         end
         # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays).
+        # RUNTIME-VARYING vs. fully-constant subscripts are handled uniformly by
+        # `_resolve_const_array_gather` (see there); with an empty `bound_syms`
+        # this is byte-identical to the pre-Phase-C const-fold.
         if first_arg isa VarExpr && haskey(const_arrays, first_arg.name)
-            vals = const_arrays[first_arg.name]
-            idx_args_expr = expr.args[2:end]
-            length(idx_args_expr) == ndims(vals) ||
-                throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
-                      "const array '$(first_arg.name)' is $(ndims(vals))D " *
-                      "but got $(length(idx_args_expr)) indices"))
-            # RUNTIME-VARYING gather (wall2 Phase C): if ANY subscript references a
-            # bound output-index symbol kept symbolic, the offset is not known at
-            # build time. Emit a `_ConstGatherRef` (lowered to `_NK_CONST_GATHER` by
-            # `_compile`) instead of folding — the CONSTANT subscripts still fold to
-            # `IntExpr`s (with the same `_resolve_const_index` boundary policy the
-            # frozen path applies), the SYMBOLIC ones resolve in place and survive as
-            # the gather node's subscript children. With an empty `bound_syms` no
-            # subscript is ever symbolic, so this branch is dead and the fold below
-            # is byte-identical to pre-Phase-C.
-            if any(a -> _refs_bound_sym(a, bound_syms), idx_args_expr)
-                sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
-                for d in 1:ndims(vals)
-                    a = idx_args_expr[d]
-                    if _refs_bound_sym(a, bound_syms)
-                        sub_nodes[d] = _resolve_indices(a, array_var_info, var_map,
-                                                        const_arrays, pgather, memo, bound_syms)
-                    else
-                        ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                        ci = _resolve_const_index(vals, first_arg.name, d, ci, size(vals, d))
-                        sub_nodes[d] = IntExpr(Int64(ci))
-                    end
-                end
-                return OpExpr("index", sub_nodes;
-                              value=_ConstGatherRef(vals, first_arg.name))
-            end
-            # Fully-constant subscripts: inline the value as a NumExpr literal.
-            int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                           for a in idx_args_expr]
-            for d in 1:ndims(vals)
-                int_indices[d] = _resolve_const_index(vals, first_arg.name, d, int_indices[d], size(vals, d))
-            end
-            return NumExpr(Float64(vals[int_indices...]))
+            return _resolve_const_array_gather(const_arrays[first_arg.name],
+                first_arg.name, expr.args[2:end], array_var_info, var_map,
+                const_arrays, pgather, memo, bound_syms)
         end
         # scalar or unknown variable inside index — recurse on sub-exprs only
         new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
