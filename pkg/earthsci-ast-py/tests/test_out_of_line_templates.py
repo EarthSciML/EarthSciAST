@@ -220,6 +220,41 @@ def test_flatten_registry_merge():
 
 
 # ---------------------------------------------------------------------------
+# flatten_registry_merge_transitive (§9.6.4 rule 7, §10.7): TWO models in ONE
+# document import the same rule library. `interior_stencil` folds differently
+# per model (B rebinds its free `inv_dx`) and collides; the byte-identical
+# `outer_stencil` that REFERENCES it must collide too — a single deduped
+# `outer_stencil` would carry a reference the merged registry no longer holds,
+# and expansion would fail with `apply_expression_template_unknown_template`
+# naming a transitively imported stencil no model ever mentioned.
+# ---------------------------------------------------------------------------
+def test_flatten_registry_merge_transitive_collisions_propagate():
+    from earthsci_ast.template_imports import _collect_apply_names
+
+    loaded = _load("flatten_registry_merge_transitive")
+    root, merged = flatten_template_registries(loaded)
+    assert set(merged.keys()) == {
+        "A.interior_stencil",
+        "A.outer_stencil",
+        "B.interior_stencil",
+        "B.outer_stencil",
+    }
+    # Each owner's wrapper reaches its OWN leaf, never the other model's.
+    assert _collect_apply_names([], merged["A.outer_stencil"]["body"]) == ["A.interior_stencil"]
+    assert _collect_apply_names([], merged["B.outer_stencil"]["body"]) == ["B.interior_stencil"]
+    # Component reference sites follow in lockstep.
+    assert _collect_apply_names([], root["models"]["A"]["equations"]) == ["A.outer_stencil"]
+    assert _collect_apply_names([], root["models"]["B"]["equations"]) == ["B.outer_stencil"]
+    # Nothing dangles: every surviving reference resolves in the merged registry.
+    for decl in merged.values():
+        for ref in _collect_apply_names([], decl):
+            assert ref in merged, ref
+    for m in ("A", "B"):
+        for ref in _collect_apply_names([], root["models"][m]["equations"]):
+            assert ref in merged, ref
+
+
+# ---------------------------------------------------------------------------
 # Idempotency property over every new emit fixture (RFC §12 gate 2).
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(

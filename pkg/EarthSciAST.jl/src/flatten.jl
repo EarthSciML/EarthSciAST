@@ -430,13 +430,26 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
 
     file_domain = file.domain
 
+    # esm-spec §9.6.4 rule 7 / §10.7: the MERGED template registry (union of the
+    # component registries, deep-equal dedup + deterministic collision rename),
+    # with each body's free variable references COMPONENT-SCOPED first (see
+    # `_scope_component_templates`) so a body spliced after flatten resolves the
+    # same names the expand-at-load image does. Empty when no references survived
+    # load. Computed HERE, ahead of collection, because the collision rename it
+    # returns has to reach each component's reference sites while they are still
+    # attributable to their owner — `_collect_model!` applies it in lockstep with
+    # namespacing, which is the same per-component rewrite §10.7 describes.
+    template_registry, template_rename =
+        _merge_flat_registry(_scope_component_templates(file))
+
     # Step 1+2: Collect models.
     if file.models !== nothing
         for (name, model) in file.models
             push!(source_systems, name)
             _collect_model!(states, params, observeds, equations,
                             continuous_events, discrete_events,
-                            model, name)
+                            model, name;
+                            tpl_rename=get(template_rename, name, nothing))
         end
     end
 
@@ -491,15 +504,11 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         end
     end
 
-    # esm-spec §9.6.4 rule 7 / §10.7: the MERGED template registry (union of the
-    # component registries, deep-equal dedup + deterministic collision rename),
-    # with each body's free variable references COMPONENT-SCOPED first (see
-    # `_scope_component_templates`) so a body spliced after flatten resolves the
-    # same names the expand-at-load image does. Computed BEFORE the pointwise
-    # lift so the lift's loop-variable detection can peek through surviving
-    # references (analysis only); carried on the FlattenedSystem below. Empty
-    # when no references survived load.
-    template_registry = _merge_flat_registry(_scope_component_templates(file))
+    # (`template_registry` was computed before collection — see above — so its
+    # collision rename could reach the per-component reference sites. It is
+    # available here, ahead of the pointwise lift, so the lift's loop-variable
+    # detection can peek through surviving references (analysis only), and is
+    # carried on the FlattenedSystem below.)
 
     # Shadow-registry guard (the root cause behind the eager reaction-rate
     # expansion): `_apply_variable_map!` rewrote the VISIBLE equation ASTs, but

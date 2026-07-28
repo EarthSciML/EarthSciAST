@@ -2664,14 +2664,74 @@ fn rename_apply_refs(value: &mut Value, rename: &std::collections::HashMap<Strin
     }
 }
 
+/// The set of template names the flatten-time registry merge MUST owner-path
+/// rename (esm-spec §9.6.4 rule 7 / §10.7). `byname` maps a template name to its
+/// per-component occurrences `[(path, decl), …]`.
+///
+/// A name collides directly when its occurrences are not all deep-equal. The set
+/// is then closed under the reference DAG: **if a declaration references a
+/// colliding name, that declaration collides too**, in every component carrying
+/// it. That propagation is what makes the rename total.
+///
+/// Without it the common multi-model shape silently breaks. Two components
+/// import one rule library; the leaf stencil folds differently per component (a
+/// rebind, a metaparameter, or the §10.7 component-scoping of its free
+/// variables) and renames to `A.leaf` / `B.leaf`, while the intermediate wrapper
+/// that REFERENCES the leaf is byte-identical and would dedup under its bare
+/// name. That single deduped body then carries a reference the registry no
+/// longer holds, and expansion fails with
+/// `apply_expression_template_unknown_template` naming a template no component
+/// ever mentioned. Renaming the wrapper per owner lets each copy's nested
+/// reference be rewritten to its own owner's leaf.
+///
+/// A consequence worth relying on: a name left OUT of the returned set never
+/// references a name inside it, so deduped entries need no reference rewriting.
+///
+/// Mirrors the Julia reference `_registry_collision_names`.
+fn registry_collision_names(
+    byname: &[(String, Vec<(String, Value)>)],
+) -> std::collections::HashSet<String> {
+    let mut collide: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut refs: Vec<std::collections::HashSet<String>> = Vec::with_capacity(byname.len());
+    for (name, occ) in byname {
+        if !occ.iter().all(|o| o.1 == occ[0].1) {
+            collide.insert(name.clone());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (_path, decl) in occ {
+            let mut names = Vec::new();
+            collect_apply_names(decl, &mut names);
+            seen.extend(names);
+        }
+        refs.push(seen);
+    }
+    // Close under the reference edges (monotone; <= byname.len() rounds).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (i, (name, _)) in byname.iter().enumerate() {
+            if collide.contains(name) {
+                continue;
+            }
+            if refs[i].iter().any(|r| collide.contains(r)) {
+                collide.insert(name.clone());
+                changed = true;
+            }
+        }
+    }
+    collide
+}
+
 /// The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
 /// esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
 /// document `loaded`, merge every component's `expression_templates` registry
 /// into a single document-scoped merged registry: deep-equal same-name entries
-/// dedupe at first occurrence; a non-deep-equal same-name collision renames
-/// BOTH entries to `<ComponentPath>.<name>` and rewrites their references in
-/// lockstep. Returns the rewritten document (component reference sites updated,
-/// per-component blocks dropped) and the merged registry (order-preserving).
+/// dedupe at first occurrence; a colliding name (see
+/// [`registry_collision_names`] — non-deep-equal, or reaching one that is)
+/// renames its entry in EVERY owning component to `<ComponentPath>.<name>` and
+/// rewrites their references in lockstep. Returns the rewritten document
+/// (component reference sites updated, per-component blocks dropped) and the
+/// merged registry (order-preserving).
 /// Mirrors the Julia reference `flatten_template_registries`.
 pub fn flatten_template_registries(loaded: &Value) -> (Value, Map<String, Value>) {
     let mut root = loaded.clone();
@@ -2716,11 +2776,9 @@ pub fn flatten_template_registries(loaded: &Value) -> (Value, Map<String, Value>
     // path => (old => new)
     let mut rename: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
         std::collections::HashMap::new();
+    let collide = registry_collision_names(&byname);
     for (name, occ) in &byname {
-        let alleq = occ.iter().all(|o| o.1 == occ[0].1);
-        if alleq {
-            merged.insert(name.clone(), occ[0].1.clone()); // deep-equal dedup
-        } else {
+        if collide.contains(name) {
             for (path, decl) in occ {
                 let newname = format!("{path}.{name}");
                 merged.insert(newname.clone(), decl.clone());
@@ -2729,6 +2787,8 @@ pub fn flatten_template_registries(loaded: &Value) -> (Value, Map<String, Value>
                     .or_default()
                     .insert(name.clone(), newname);
             }
+        } else {
+            merged.insert(name.clone(), occ[0].1.clone()); // deep-equal dedup
         }
     }
 

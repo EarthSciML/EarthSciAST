@@ -273,6 +273,72 @@ fn flatten_registry_merge_dedup_and_collision_rename() {
     assert!(root["models"]["B"].get("expression_templates").is_none());
 }
 
+/// The `name` of every `apply_expression_template` node in `v`, document order.
+/// Local twin of the crate-private `collect_apply_names`.
+fn apply_names(v: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            Value::Object(o) => {
+                if o.get("op").and_then(|x| x.as_str()) == Some("apply_expression_template")
+                    && let Some(n) = o.get("name").and_then(|x| x.as_str())
+                {
+                    out.push(n.to_string());
+                }
+                o.values().for_each(|x| walk(x, out));
+            }
+            _ => {}
+        }
+    }
+    walk(v, &mut out);
+    out
+}
+
+// ---------------------------------------------------------------------------
+// flatten_registry_merge_transitive (§9.6.4 rule 7, §10.7): TWO models in ONE
+// document import the same rule library. `interior_stencil` folds differently
+// per model (B rebinds its free `inv_dx`) and collides; the byte-identical
+// `outer_stencil` that REFERENCES it must collide too — a single deduped
+// `outer_stencil` would carry a reference the merged registry no longer holds,
+// and expansion would fail with `apply_expression_template_unknown_template`
+// naming a transitively imported stencil no model ever mentioned.
+// ---------------------------------------------------------------------------
+#[test]
+fn flatten_registry_merge_transitive_collisions_propagate() {
+    let loaded = load_b("flatten_registry_merge_transitive", "fixture.esm").unwrap();
+    let (root, merged) = oob::flatten_template_registries(&loaded);
+    let keys: std::collections::HashSet<&str> = merged.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        [
+            "A.interior_stencil",
+            "A.outer_stencil",
+            "B.interior_stencil",
+            "B.outer_stencil"
+        ]
+        .into_iter()
+        .collect()
+    );
+    // Each owner's wrapper reaches its OWN leaf, never the other model's.
+    assert_eq!(apply_names(&merged["A.outer_stencil"]["body"]), ["A.interior_stencil"]);
+    assert_eq!(apply_names(&merged["B.outer_stencil"]["body"]), ["B.interior_stencil"]);
+    // Component reference sites follow in lockstep.
+    assert_eq!(apply_names(&root["models"]["A"]["equations"]), ["A.outer_stencil"]);
+    assert_eq!(apply_names(&root["models"]["B"]["equations"]), ["B.outer_stencil"]);
+    // Nothing dangles: every surviving reference resolves in the merged registry.
+    for decl in merged.values() {
+        for r in apply_names(decl) {
+            assert!(merged.contains_key(&r), "dangling registry reference {r}");
+        }
+    }
+    for m in ["A", "B"] {
+        for r in apply_names(&root["models"][m]["equations"]) {
+            assert!(merged.contains_key(&r), "dangling component reference {r}");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Idempotency property (RFC §12 gate 2): emit ∘ load is a byte-wise fixed
 // point. Runs over EVERY conformance `fixture*.esm` that emits successfully

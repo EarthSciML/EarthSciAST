@@ -2172,17 +2172,77 @@ function _materialize_components!(root, authored::Dict{String,Vector{String}})
 end
 
 """
-    _merge_flat_registry(component_templates) -> Dict{String,Any}
+    _registry_collision_names(byname) -> Set{String}
+
+The set of template names that MUST be owner-path renamed by the flatten-time
+registry merge (esm-spec §9.6.4 rule 7 / §10.7). `byname` maps a template name
+to its per-component occurrences `[(path, decl), …]`.
+
+A name collides directly when its occurrences are not all deep-equal. The set is
+then closed under the reference DAG: **if a declaration references a colliding
+name, that declaration collides too**, in every component that carries it. This
+propagation is what makes the rename total.
+
+Without it, the common multi-model shape silently breaks. Two components import
+one rule library; the leaf stencil folds differently per component (a rebind, a
+metaparameter, or — in `flatten` — the §10.7 component-scoping of its free
+variables) so it renames to `A.leaf` / `B.leaf`, while the intermediate wrapper
+that REFERENCES the leaf is byte-identical and would dedup under its bare name.
+The single deduped body then carries a reference to a name no longer in the
+registry, and expansion fails with
+`apply_expression_template_unknown_template` naming a template no component ever
+mentioned. Renaming the wrapper per owner too lets each copy's nested reference
+be rewritten to its own owner's leaf.
+
+A consequence worth relying on: a name left OUT of the returned set never
+references a name inside it, so deduped entries need no reference rewriting.
+"""
+function _registry_collision_names(byname::AbstractDict)::Set{String}
+    collide = Set{String}()
+    refs = Dict{String,Set{String}}()
+    for (name, occ) in byname
+        all(o -> _json_equal(occ[1][2], o[2]), occ) || push!(collide, name)
+        s = Set{String}()
+        for (_, decl) in occ
+            union!(s, _collect_apply_names!(String[], decl))
+        end
+        refs[name] = s
+    end
+    # Close under the reference edges (monotone; terminates in ≤ |byname| rounds).
+    changed = true
+    while changed
+        changed = false
+        for (name, _) in byname
+            name in collide && continue
+            if any(r -> r in collide, refs[name])
+                push!(collide, name)
+                changed = true
+            end
+        end
+    end
+    return collide
+end
+
+"""
+    _merge_flat_registry(component_templates) -> (Dict{String,Any}, Dict{String,Dict{String,String}})
 
 Merge the per-component materialized registries (compkey → block) into the
 single document-scoped registry the flattened representation carries (esm-spec
 §9.6.4 rule 7 / §10.7 / esm-libraries-spec §4.7.5 step 4): deep-equal same-name
-entries dedupe at first occurrence; a non-deep-equal same-name collision renames
-BOTH entries to `<ComponentPath>.<name>`. `nothing` in ⇒ empty out.
+entries dedupe at first occurrence; a colliding name (see
+[`_registry_collision_names`](@ref)) renames its entry in EVERY owning component
+to `<ComponentPath>.<name>`, with nested references inside the renamed bodies
+rewritten in lockstep.
+
+Returns the merged registry AND the per-component rename map
+(`path → (old name => new name)`). The caller MUST apply that map to the owning
+component's reference sites — `flatten` does so alongside namespacing — or the
+renamed entries become unreachable. `nothing` in ⇒ empty out.
 """
-function _merge_flat_registry(component_templates)::Dict{String,Any}
+function _merge_flat_registry(component_templates)
     merged = Dict{String,Any}()
-    component_templates === nothing && return merged
+    rename = Dict{String,Dict{String,String}}()
+    component_templates === nothing && return (merged, rename)
     byname = OrderedDict{String,Vector{Tuple{String,Any}}}()
     # Deterministic component order (sorted compkey) so dedup "first occurrence"
     # and collision rename are reproducible.
@@ -2194,16 +2254,25 @@ function _merge_flat_registry(component_templates)::Dict{String,Any}
             push!(get!(byname, name, Tuple{String,Any}[]), (path, _raw_get(block, name)))
         end
     end
+    collide = _registry_collision_names(byname)
     for (name, occ) in byname
-        if all(o -> _json_equal(occ[1][2], o[2]), occ)
-            merged[name] = occ[1][2]
-        else
+        if name in collide
             for (path, decl) in occ
-                merged["$path.$name"] = decl
+                newname = "$path.$name"
+                merged[newname] = decl
+                get!(rename, path, Dict{String,String}())[name] = newname
             end
+        else
+            merged[name] = occ[1][2]
         end
     end
-    return merged
+    # Nested references inside the renamed bodies follow their owner's map.
+    for (_, rn) in rename
+        for (_, new) in rn
+            haskey(merged, new) && (merged[new] = _rename_apply_refs(merged[new], rn))
+        end
+    end
+    return (merged, rename)
 end
 
 """
@@ -2355,6 +2424,27 @@ function _rename_apply_refs(node, rename::AbstractDict{String,String})
 end
 
 """
+    _rename_expr_apply_refs(e, rename) -> ASTExpr
+
+Typed-AST twin of [`_rename_apply_refs`](@ref): rewrite the `name` of every
+`apply_expression_template` `OpExpr` in `e` according to `rename` (old → new),
+in lockstep with the flatten-time registry rename (esm-spec §10.7). Recurses via
+`map_children`, which descends `bindings` values too, so a nested reference
+passed as a binding is renamed as well. Returns `e` unchanged when nothing hits.
+"""
+_rename_expr_apply_refs(e::VarExpr, ::AbstractDict{String,String}) = e
+_rename_expr_apply_refs(e::NumExpr, ::AbstractDict{String,String}) = e
+_rename_expr_apply_refs(e::IntExpr, ::AbstractDict{String,String}) = e
+function _rename_expr_apply_refs(e::OpExpr, rename::AbstractDict{String,String})
+    r = map_children(c -> _rename_expr_apply_refs(c, rename), e)::OpExpr
+    if r.op == APPLY_EXPRESSION_TEMPLATE_OP && r.name !== nothing &&
+       haskey(rename, r.name::String)
+        return reconstruct(r; name=rename[r.name::String])
+    end
+    return r
+end
+
+"""
     flatten_template_registries(loaded) -> (root, merged_registry)
 
 The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
@@ -2369,6 +2459,11 @@ a single document-scoped merged registry:
   deterministically to `<ComponentPath>.<name>` and their
   `apply_expression_template` references are rewritten in lockstep (total,
   deterministic; no new diagnostic).
+- **Collisions propagate along the reference DAG** — a declaration that
+  references a colliding name collides too (see
+  [`_registry_collision_names`](@ref)), so a byte-identical wrapper over a
+  per-component leaf is renamed per owner rather than deduped into a single body
+  whose nested reference no longer resolves.
 
 Returns the rewritten document `root` (component reference sites updated) and
 the merged registry as an `OrderedDict` (the FlattenedSystem's first-class
@@ -2408,17 +2503,17 @@ function flatten_template_registries(loaded)
 
     merged = OrderedDict{String,Any}()
     rename = Dict{String,Dict{String,String}}()   # path => (old => new)
+    collide = _registry_collision_names(byname)
     for name in sort(collect(keys(byname)))
         occ = byname[name]
-        alleq = all(o -> _json_equal(occ[1][2], o[2]), occ)
-        if alleq
-            merged[name] = occ[1][2]                # deep-equal dedup
-        else
+        if name in collide
             for (path, decl) in occ                 # collision: owner-path rename
                 newname = "$path.$name"
                 merged[newname] = decl
                 get!(rename, path, Dict{String,String}())[name] = newname
             end
+        else
+            merged[name] = occ[1][2]                # deep-equal dedup
         end
     end
 

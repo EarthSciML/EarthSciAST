@@ -209,6 +209,77 @@ include("testutils.jl")
     end
 
     # -----------------------------------------------------------------------
+    # flatten_registry_merge_transitive (§9.6.4 rule 7, §10.7): TWO models in
+    # ONE document import the same rule library. `interior_stencil` folds
+    # differently per model (B rebinds its free `inv_dx`) and collides; the
+    # byte-identical `outer_stencil` that REFERENCES it must collide too — a
+    # single deduped `outer_stencil` would carry a reference to a name the
+    # merged registry no longer holds, and expansion would fail with
+    # `apply_expression_template_unknown_template` naming a transitively
+    # imported stencil no model ever mentioned.
+    # -----------------------------------------------------------------------
+    @testset "flatten_registry_merge_transitive: collisions propagate along refs" begin
+        dir = "flatten_registry_merge_transitive"
+        _names(x) = EarthSciAST._collect_apply_names!(String[], x)
+        loaded = _load(dir)
+        root, merged = flatten_template_registries(loaded)
+        @test Set(keys(merged)) == Set(["A.interior_stencil", "A.outer_stencil",
+                                        "B.interior_stencil", "B.outer_stencil"])
+        # Each owner's wrapper reaches its OWN leaf, never the other model's.
+        @test _names(merged["A.outer_stencil"]["body"]) == ["A.interior_stencil"]
+        @test _names(merged["B.outer_stencil"]["body"]) == ["B.interior_stencil"]
+        # Component reference sites follow in lockstep.
+        @test _names(root["models"]["A"]["equations"]) == ["A.outer_stencil"]
+        @test _names(root["models"]["B"]["equations"]) == ["B.outer_stencil"]
+
+        # The executing path: the typed FlattenedSystem's registry agrees, and
+        # every surviving reference resolves against it — `expand_flattened_refs`
+        # is the call that threw before the fix.
+        flat = EarthSciAST.flatten(EarthSciAST.load(conf(dir, "fixture.esm")))
+        @test Set(keys(flat.template_registry)) == Set(keys(merged))
+        @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem
+    end
+
+    # -----------------------------------------------------------------------
+    # The plain multi-model regression: N IDENTICAL models in one document.
+    # Nothing collides in the authored registries, but `flatten` COMPONENT-SCOPES
+    # each carried body's free variables (§10.7), so every body mentioning a
+    # component variable becomes per-component distinct and renames. Before the
+    # fix the reference sites did not follow and even the FIRST model's
+    # references dangled — though that same model loaded and ran on its own.
+    # Also asserts the two models stay independent: no equation of one reaches
+    # into the other's namespace.
+    # -----------------------------------------------------------------------
+    @testset "multi-model: identical models each resolve their own registry" begin
+        dir = "flatten_registry_merge_transitive"
+        raw = JSON3.read(read(conf(dir, "fixture.esm"), String))
+        mktempdir() do d
+            for lib in ("stencil_lib.esm", "rule_lib.esm")
+                cp(conf(dir, lib), joinpath(d, lib))
+            end
+            doc = Dict{String,Any}(String(k) => v for (k, v) in pairs(raw))
+            # B becomes a byte-identical twin of A: nothing distinguishes the two
+            # registries until component scoping runs.
+            doc["models"] = Dict{String,Any}("A" => raw["models"]["A"],
+                                             "B" => raw["models"]["A"])
+            path = joinpath(d, "twins.esm")
+            open(io -> JSON3.write(io, doc), path, "w")
+            flat = EarthSciAST.flatten(EarthSciAST.load(path))
+            @test Set(keys(flat.template_registry)) ==
+                  Set(["A.interior_stencil", "A.outer_stencil",
+                       "B.interior_stencil", "B.outer_stencil"])
+            expanded = EarthSciAST.expand_flattened_refs(flat)
+            # Twin models ⇒ twin equation sets, modulo the namespace prefix.
+            _ser(eq) = JSON3.write(EarthSciAST.serialize_expression(eq.lhs)) * "~" *
+                       JSON3.write(EarthSciAST.serialize_expression(eq.rhs))
+            eqs = Set(_ser(eq) for eq in expanded.equations)
+            a_eqs = [s for s in eqs if occursin("A.", s)]
+            @test !isempty(a_eqs)
+            @test all(replace(s, "A." => "B.") in eqs for s in a_eqs)
+        end
+    end
+
+    # -----------------------------------------------------------------------
     # Idempotency property over every new emit fixture (RFC §12 gate 2).
     # -----------------------------------------------------------------------
     @testset "emit ∘ load byte-wise fixed point (all emit fixtures)" begin

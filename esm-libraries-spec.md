@@ -587,7 +587,10 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      first-class field of the flattened representation: the union of the component registries
      (post-step-2 scoping), with deep-equal same-name entries deduplicated at first occurrence
      and any non-deep-equal same-name collision resolved by deterministically renaming **both**
-     entries to `<ComponentPath>.<name>` and rewriting their references in lockstep. Downstream
+     entries to `<ComponentPath>.<name>` and rewriting their references in lockstep. A collision
+     propagates along the reference DAG: an entry whose body references a colliding name is
+     renamed per owner too, so no deduplicated entry is left holding a reference the merged
+     registry cannot resolve. Downstream
      consumers — graph construction, simulation backends, emit — resolve surviving
      `apply_expression_template` references against this registry; a consumer MAY evaluate them
      natively or via `Expand` (esm-spec §9.6.4 rule 2), whose observable behavior is identical.

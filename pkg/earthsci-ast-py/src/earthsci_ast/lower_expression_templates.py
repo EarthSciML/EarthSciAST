@@ -1616,6 +1616,52 @@ def _rename_apply_refs(node: Any, rename: dict[str, str]) -> Any:
     return _rewrite_json(node, on_value=_item, share=True)
 
 
+def _registry_collision_names(byname: dict[str, list[tuple[str, Any]]]) -> set[str]:
+    """The set of template names the flatten-time registry merge MUST owner-path
+    rename (esm-spec §9.6.4 rule 7 / §10.7). ``byname`` maps a template name to
+    its per-component occurrences ``[(path, decl), …]``.
+
+    A name collides directly when its occurrences are not all deep-equal. The set
+    is then closed under the reference DAG: **if a declaration references a
+    colliding name, that declaration collides too**, in every component carrying
+    it. That propagation is what makes the rename total.
+
+    Without it the common multi-model shape silently breaks. Two components
+    import one rule library; the leaf stencil folds differently per component (a
+    rebind, a metaparameter, or the §10.7 component-scoping of its free
+    variables) and renames to ``A.leaf`` / ``B.leaf``, while the intermediate
+    wrapper that REFERENCES the leaf is byte-identical and would dedup under its
+    bare name. That single deduped body then carries a reference the registry no
+    longer holds, and expansion fails with
+    ``apply_expression_template_unknown_template`` naming a template no component
+    ever mentioned. Renaming the wrapper per owner lets each copy's nested
+    reference be rewritten to its own owner's leaf.
+
+    A consequence worth relying on: a name left OUT of the returned set never
+    references a name inside it, so deduped entries need no reference rewriting.
+    """
+    collide: set[str] = set()
+    refs: dict[str, set[str]] = {}
+    for name, occ in byname.items():
+        if not all(_json_equal(occ[0][1], o[1]) for o in occ):
+            collide.add(name)
+        seen: set[str] = set()
+        for _path, decl in occ:
+            seen.update(_collect_apply_names([], decl))
+        refs[name] = seen
+    # Close under the reference edges (monotone; ≤ len(byname) rounds).
+    changed = True
+    while changed:
+        changed = False
+        for name in byname:
+            if name in collide:
+                continue
+            if refs[name] & collide:
+                collide.add(name)
+                changed = True
+    return collide
+
+
 def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
     """The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
     esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
@@ -1628,6 +1674,11 @@ def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
       deterministically to ``<ComponentPath>.<name>`` and their
       ``apply_expression_template`` references are rewritten in lockstep (total,
       deterministic; no new diagnostic).
+    - **Collisions propagate along the reference DAG** — a declaration that
+      references a colliding name collides too (see
+      :func:`_registry_collision_names`), so a byte-identical wrapper over a
+      per-component leaf is renamed per owner rather than deduped into one body
+      whose nested reference no longer resolves.
 
     Returns the rewritten document ``root`` (component reference sites updated)
     and the merged registry as a dict (the FlattenedSystem's first-class
@@ -1660,16 +1711,16 @@ def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
 
     merged: dict[str, Any] = {}
     rename: dict[str, dict[str, str]] = {}  # path => (old => new)
+    collide = _registry_collision_names(byname)
     for name in sorted(byname.keys()):
         occ = byname[name]
-        alleq = all(_json_equal(occ[0][1], o[1]) for o in occ)
-        if alleq:
-            merged[name] = occ[0][1]  # deep-equal dedup
-        else:
+        if name in collide:
             for path, decl in occ:  # collision: owner-path rename
                 newname = f"{path}.{name}"
                 merged[newname] = decl
                 rename.setdefault(path, {})[name] = newname
+        else:
+            merged[name] = occ[0][1]  # deep-equal dedup
 
     # Rewrite reference sites in lockstep (component expression positions and the
     # carried bodies of the renamed entries).

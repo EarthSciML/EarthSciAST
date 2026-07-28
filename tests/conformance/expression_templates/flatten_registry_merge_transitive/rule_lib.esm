@@ -1,0 +1,23 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "rule_lib",
+    "description": "Rule layer: a match-less `outer_stencil` whose body REFERENCES the imported leaf stencil, and the complete `match` rule on D(f, wrt: x) that invokes it. A consumer imports only `d_x_rule`; both `outer_stencil` and `interior_stencil` arrive as the §9.7.2 transitive reference closure."
+  },
+  "expression_template_imports": [ { "ref": "./stencil_lib.esm" } ],
+  "expression_templates": {
+    "outer_stencil": {
+      "params": ["f"],
+      "body": { "op": "*", "args": [
+        2.5,
+        { "op": "apply_expression_template", "args": [],
+          "name": "interior_stencil", "bindings": { "f": "f" } } ] }
+    },
+    "d_x_rule": {
+      "params": ["f"],
+      "match": { "op": "D", "args": ["f"], "wrt": "x" },
+      "body": { "op": "apply_expression_template", "args": [],
+                "name": "outer_stencil", "bindings": { "f": "f" } }
+    }
+  }
+}

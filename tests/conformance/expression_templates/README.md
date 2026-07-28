@@ -239,6 +239,37 @@ rule register; the §9.6.3 equal-priority tie breaks by the §9.7.4 effective
 order (DFS post-order over the edges), so the first instance wins:
 `y = 6 * x`, and the registry carries `a.cells` (6) and `b.cells` (9).
 
+## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
+
+Both fixtures are consumed through the shared `flatten_template_registries`
+surface (Julia / Python / Rust / TypeScript / Go): load Option-B, merge the
+per-component registries, compare merged keys and the rewritten reference sites.
+
+### `flatten_registry_merge/` (fixture.esm only)
+
+Two models each carry an identical match-less `sten` (deep-equal → dedup at
+first occurrence) and a same-name `s` with different bodies (collision → `A.s` /
+`B.s`, references rewritten in lockstep). The baseline dedup + rename case.
+
+### `flatten_registry_merge_transitive/` (fixture.esm + two library files)
+
+The multi-model shape a real discretization library produces, and the reason the
+rename has to **propagate**. Two models in ONE document import the same
+`rule_lib.esm` naming only its `match` rule; `outer_stencil` and the leaf
+`interior_stencil` arrive as the §9.7.2 transitive reference closure. Model B
+rebinds the leaf's free `inv_dx`, so `interior_stencil` is non-deep-equal and
+renames to `A.interior_stencil` / `B.interior_stencil` — while `outer_stencil`,
+which merely *references* it, is byte-identical in both models and would dedup
+under its bare name. That single deduped body would then hold a reference the
+merged registry no longer contains, and expansion would fail with
+`apply_expression_template_unknown_template` naming a stencil no model ever
+mentioned. All four entries must therefore be owner-path renamed
+(`A.outer_stencil` → `A.interior_stencil`, `B.outer_stencil` →
+`B.interior_stencil`) with the component reference sites following. The same
+collision arises without any `rebind` once flatten applies the §10.7
+component-scoping to a body's free variables — which is why a document that
+loads and runs as a single model can break the moment a second model is added.
+
 ## Scope-directed template injection (esm-spec §9.7.10)
 
 These fixtures exercise the assembler- or test-chosen discretization for a

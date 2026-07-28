@@ -142,6 +142,17 @@ Index sets (RFC §5.2) are document-scoped as of esm-spec v0.8.0 — a single
 shared registry seeded once by `flatten` — so their references inside
 equations (`shape`, `ranges` `from`, producer `id` / `from_faq`) keep their
 plain document-level names and are NOT namespaced here.
+
+`tpl_rename` is this component's slice of the flatten-time template-registry
+collision rename (esm-spec §9.6.4 rule 7 / §10.7; `_merge_flat_registry`): when
+a template name resolves to a different body per component, the merged registry
+keys that entry `<ComponentPath>.<name>` and every `apply_expression_template`
+reference the component authored must follow, or it resolves against nothing.
+The rewrite rides alongside namespacing because this is the one pass that still
+knows which component an expression came from — the "same renaming map …
+applies identically to … references" §10.7 mandates — and is threaded unchanged
+into subsystems, whose templates merged into their owner's registry at load.
+`nothing` (the common case: no collision) skips the rewrite entirely.
 """
 function _collect_model!(states::OrderedDict{String, ModelVariable},
                          params::OrderedDict{String, ModelVariable},
@@ -149,13 +160,18 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
                          equations::Vector{Equation},
                          continuous_events::Vector{ContinuousEvent},
                          discrete_events::Vector{DiscreteEvent},
-                         model::Model, prefix::String)
+                         model::Model, prefix::String;
+                         tpl_rename::Union{Nothing,AbstractDict{String,String}}=nothing)
     local_names = Set{String}(keys(model.variables))
     # Also include subsystem-qualified names from this level's subsystems so
     # that references inside the model to subsystem variables get namespaced.
     for (sub_name, _) in model.subsystems
         push!(local_names, sub_name)
     end
+
+    # Namespace, then follow the registry rename (identity when there is none).
+    _ns(e) = tpl_rename === nothing ? namespace_expr(e, prefix, local_names) :
+             _rename_expr_apply_refs(namespace_expr(e, prefix, local_names), tpl_rename)
 
     # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
     # once by `flatten` from the top-level object) with plain names shared by every
@@ -179,8 +195,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         # the prefixed variable keys — rewrite it here so the flattened observed
         # is self-consistent with its key, shape, and equation form.
         if v.expression !== nothing
-            v = reconstruct(v;
-                expression=namespace_expr(v.expression, prefix, local_names))
+            v = reconstruct(v; expression=_ns(v.expression))
         end
         if v.type == StateVariable
             states[namespaced] = v
@@ -202,8 +217,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
 
     explicit_lhs_names = Set{String}()
     for eq in model.equations
-        lhs = namespace_expr(eq.lhs, prefix, local_names)
-        rhs = namespace_expr(eq.rhs, prefix, local_names)
+        lhs = _ns(eq.lhs)
+        rhs = _ns(eq.rhs)
         push!(equations, Equation(lhs, rhs; _comment=eq._comment))
         if lhs isa VarExpr
             push!(explicit_lhs_names, lhs.name)
@@ -222,15 +237,15 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         namespaced = "$(prefix).$(name)"
         namespaced in explicit_lhs_names && continue
         lhs = VarExpr(namespaced)
-        rhs = namespace_expr(var.expression, prefix, local_names)
+        rhs = _ns(var.expression)
         push!(equations, Equation(lhs, rhs))
     end
 
     for ev in model.continuous_events
-        new_conds = ASTExpr[namespace_expr(c, prefix, local_names) for c in ev.conditions]
+        new_conds = ASTExpr[_ns(c) for c in ev.conditions]
         new_affects = AffectEquation[
             AffectEquation(startswith(a.lhs, prefix * ".") || occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
-                           namespace_expr(a.rhs, prefix, local_names))
+                           _ns(a.rhs))
             for a in ev.affects
         ]
         push!(continuous_events,
@@ -241,11 +256,11 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         new_affects = AffectEquation[
             AffectEquation(
                 occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
-                namespace_expr(a.rhs, prefix, local_names))
+                _ns(a.rhs))
             for a in ev.affects
         ]
         new_trigger = if ev.trigger isa ConditionTrigger
-            ConditionTrigger(namespace_expr(ev.trigger.expression, prefix, local_names))
+            ConditionTrigger(_ns(ev.trigger.expression))
         else
             ev.trigger
         end
@@ -281,7 +296,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         sub_model isa Model || continue
         _collect_model!(states, params, observeds, equations,
                         continuous_events, discrete_events,
-                        sub_model, "$(prefix).$(sub_name)")
+                        sub_model, "$(prefix).$(sub_name)";
+                        tpl_rename=tpl_rename)
     end
 end
 

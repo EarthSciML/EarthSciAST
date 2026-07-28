@@ -1,0 +1,19 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "stencil_lib",
+    "description": "Leaf stencil library: a match-less interior stencil over the document index set `x`, scaled by the FREE name `inv_dx` the consuming component supplies."
+  },
+  "metaparameters": { "N": { "type": "integer", "default": 4 } },
+  "index_sets": { "x": { "kind": "interval", "size": "N" } },
+  "expression_templates": {
+    "interior_stencil": {
+      "params": ["f"],
+      "body": {
+        "op": "aggregate", "output_idx": ["i"], "args": ["f"],
+        "ranges": { "i": { "from": "x" } },
+        "expr": { "op": "*", "args": ["inv_dx", { "op": "index", "args": ["f", "i"] }] }
+      }
+    }
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "flatten_registry_merge_transitive",
+    "description": "esm-spec \u00a79.6.4 rule 7 / \u00a710.7: TWO models in ONE document import the same rule library. `d_x_rule` (a `match` rule, never merged) fires in both, leaving a surviving reference to `outer_stencil`, whose body in turn references the transitively imported `interior_stencil`. Model B rebinds the leaf stencil's free `inv_dx` to `inv_dx_b`, so `interior_stencil` is NON-deep-equal across the two components (collision \u2192 `A.interior_stencil` / `B.interior_stencil`) while `outer_stencil` is byte-identical. Deduping `outer_stencil` under its bare name would leave its body referencing the now-renamed `interior_stencil` \u2014 `apply_expression_template_unknown_template` on a template no model ever named. The collision must PROPAGATE through the reference DAG: `outer_stencil` is renamed per owner too, and every reference site is rewritten in lockstep.",
+    "authors": [
+      "multi-model template registry conformance"
+    ]
+  },
+  "models": {
+    "A": {
+      "expression_template_imports": [
+        {
+          "ref": "./rule_lib.esm",
+          "only": [
+            "d_x_rule"
+          ],
+          "bindings": {
+            "N": 4
+          }
+        }
+      ],
+      "variables": {
+        "c": {
+          "type": "state",
+          "units": "kg/m^3",
+          "shape": [
+            "x"
+          ],
+          "description": "tracer"
+        },
+        "inv_dx": {
+          "type": "parameter",
+          "units": "1/m",
+          "default": 2.0,
+          "description": "inverse grid spacing"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "x"
+          }
+        }
+      ]
+    },
+    "B": {
+      "expression_template_imports": [
+        {
+          "ref": "./rule_lib.esm",
+          "only": [
+            "d_x_rule"
+          ],
+          "bindings": {
+            "N": 4
+          },
+          "rebind": {
+            "inv_dx": "inv_dx_b"
+          }
+        }
+      ],
+      "variables": {
+        "c": {
+          "type": "state",
+          "units": "kg/m^3",
+          "shape": [
+            "x"
+          ],
+          "description": "tracer"
+        },
+        "inv_dx_b": {
+          "type": "parameter",
+          "units": "1/m",
+          "default": 2.0,
+          "description": "inverse grid spacing"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "x"
+          }
+        }
+      ]
+    }
+  }
+}
