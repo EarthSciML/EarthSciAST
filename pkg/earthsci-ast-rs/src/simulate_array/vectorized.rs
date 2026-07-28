@@ -542,7 +542,7 @@ pub(super) fn eval_vec<'a>(
     let r = match expr {
         Expr::Number(n) => Some(VecValue::Scalar(*n)),
         Expr::Integer(n) => Some(VecValue::Scalar(*n as f64)),
-        Expr::Variable(name) => eval_vec_variable(name, bx, ctx),
+        Expr::Variable(name) => eval_vec_variable(name, bx, ctx, pool),
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
     };
     if r.is_none() {
@@ -555,6 +555,7 @@ pub(super) fn eval_vec_variable<'a>(
     name: &str,
     bx: &VecBox,
     ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
 ) -> Option<VecValue<'a>> {
     if name == "t" {
         return Some(VecValue::Scalar(ctx.t));
@@ -565,9 +566,22 @@ pub(super) fn eval_vec_variable<'a>(
         return Some(VecValue::Scalar(v as f64));
     }
     // A bare output index symbol as a *value* (rather than inside `index(...)`
-    // addressing) is not part of the stencil fast path — bail to the oracle.
-    if bx.syms.iter().any(|s| s == name) {
-        bail_vec!("variable: bare output index symbol used as a value", name);
+    // addressing) is the coordinate-ramp idiom every geometry observed uses:
+    // `phi = -90 + (j - 1)·dlat`, `sigma_c = (k - 0.5)/NZ`. The per-cell oracle
+    // resolves it to the bound integer for the cell, so the whole-array analogue
+    // is a RAMP over that axis: element `p` along output axis `a` holds
+    // `bx.lo[a] + p` as an `f64`, and every other axis is constant. That is
+    // exactly the value the oracle produces in each cell, so downstream
+    // arithmetic stays bit-identical.
+    if let Some(a) = bx.syms.iter().position(|s| s == name) {
+        let mut ramp = pool.take_array(bx.shape);
+        let lo = bx.lo[a];
+        ramp.indexed_iter_mut()
+            .for_each(|(idx, v)| *v = (lo + idx[a] as i64) as f64);
+        return Some(VecValue::Owned {
+            data: ramp,
+            origin: bx.lo.iter().copied().collect(),
+        });
     }
     // State/observed reads return a borrowed view of the persistent array — no
     // clone (ess-mro). The enclosing `index(...)` slices the view directly.
