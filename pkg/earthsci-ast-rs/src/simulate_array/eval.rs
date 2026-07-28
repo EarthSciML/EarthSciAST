@@ -1213,6 +1213,9 @@ pub fn eval_expression(
         t,
         derived_rings: &derived_rings,
         forcing: &forcing,
+        // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
+        // structural analysis over), so this path is unchanged.
+        cse: None,
     };
     Ok(eval(expr, &mut ctx))
 }

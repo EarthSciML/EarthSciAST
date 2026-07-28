@@ -301,6 +301,18 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     if shape.contains(&0) {
         bail_vec!("arrayop: empty output box");
     }
+    // ess-cse: this box is one CSE scope. Analysing the body is idempotent (it
+    // runs once per distinct body root per scratch); the scope guard closes on
+    // every path, including the `?`/`bail_vec!` early returns below. At the
+    // OUTERMOST entry the guard also recycles the previous evaluation's memo
+    // arrays into `pool` — safe there because no `VecValue` from the previous
+    // top-level evaluation can still be alive (each caller consumes its result
+    // before returning). A nested aggregate re-enters here and gets its own
+    // scope, so a subtree under a different box never shares a memo entry.
+    if let Some(rt) = ctx.cse {
+        rt.analyse(body);
+    }
+    let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
     let mut ops = 0usize;
     let v = if contract_names.is_empty() {
         let bx = VecBox {
@@ -485,6 +497,10 @@ pub(super) fn eval_vec_contracted<'a>(
     let mut cvals = [0i64; MAXC];
     cvals[..nc].copy_from_slice(&clo[..nc]);
     loop {
+        // ess-cse: each contraction tuple binds `cvals` differently, so it is a
+        // DISTINCT box and therefore a distinct CSE scope — a subtree memoized
+        // at tuple k must not be served at tuple k+1.
+        let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
         let bx = VecBox {
             syms: output_idx_names,
             lo,
@@ -575,11 +591,30 @@ pub(super) fn eval_vec<'a>(
     if vec_trace_on() {
         note_op();
     }
+    // ---- CSE (ess-cse) -----------------------------------------------------
+    // A discretization template is expanded at every reference site, so one
+    // lowered tendency body evaluates the SAME subtree dozens of times under the
+    // same box (482,961 operator-node evaluations collapse to 14,208 distinct
+    // ones for simpleclimate.esm). `class_of` yields a class id only for a node
+    // whose class repeats inside its own scope, and the memo is keyed by
+    // (scope, class) — a fresh scope per `VecBox` — so a hit is the value this
+    // node WOULD have computed, not merely a syntactic twin. See `cse.rs` for
+    // the scoping argument.
+    let cse_class = ctx.cse.and_then(|c| c.class_of(expr));
+    if let (Some(rt), Some(class)) = (ctx.cse, cse_class)
+        && let Some(hit) = rt.get(class)
+    {
+        return Some(hit);
+    }
     let r = match expr {
         Expr::Number(n) => Some(VecValue::Scalar(*n)),
         Expr::Integer(n) => Some(VecValue::Scalar(*n as f64)),
         Expr::Variable(name) => eval_vec_variable(name, bx, ctx, pool),
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
+    };
+    let r = match (ctx.cse, cse_class, r) {
+        (Some(rt), Some(class), Some(v)) => Some(rt.put(class, v)),
+        (_, _, r) => r,
     };
     if r.is_none() {
         note_bail(|| format!("  in {}", describe_expr(expr)));
@@ -1481,6 +1516,10 @@ pub(super) fn eval_vec_makearray<'a>(
             pool.give_array(result);
             return None;
         }
+        // ess-cse: a region has its own `lo`/extent, so a coordinate ramp and
+        // every shifted gather mean something different in it — a distinct box,
+        // and so a distinct CSE scope.
+        let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
         let rbx = VecBox {
             syms: bx.syms,
             lo: &r_lo[..],
