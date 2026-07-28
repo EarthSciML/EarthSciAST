@@ -89,6 +89,38 @@ end
 # - `_build_index` type-checks (`ctx isa _GatherCtx`) before use.
 const _GATHER_CTX_KEY = "__esm_arrayop_gather_ctx__"
 
+# Second reserved `dim_dict` key, same side-channel rationale as above: the
+# document-scoped index-set extent table (`name => size`) needed to decode an
+# `IndexSetRef` range (`{"from": "x"}`) into concrete bounds. Written once by
+# `_build_var_dict` from `flat.index_sets`, read by `_build_arrayop_sym`.
+# Absent ⇒ empty ⇒ any `IndexSetRef` range raises a descriptive
+# `ArgumentError` from `_range_bounds_int`.
+const _INDEX_EXTENTS_KEY = "__esm_index_set_extents__"
+
+_extents(dim_dict::Dict{String,Any}) =
+    get(dim_dict, _INDEX_EXTENTS_KEY, _NO_EXTENTS)::AbstractDict
+
+# The reduce semiring's additive identity — what a combination REJECTED by an
+# aggregate's `filter` contributes (esm-spec §4.3.1: "a combination for which
+# the predicate is false contributes the additive identity"; an all-rejected
+# window therefore yields the identity itself and is not an error).
+function _reduce_identity(name::Union{Nothing,AbstractString})
+    n = name === nothing ? "+" : String(name)
+    n == "+"   && return 0.0
+    n == "*"   && return 1.0
+    n == "max" && return -Inf
+    n == "min" && return Inf
+    throw(ArgumentError("Unsupported arrayop reduce: $n"))
+end
+
+# Gate a per-combination body value by an aggregate `filter` predicate.
+# A predicate over CONCRETE integer indices already folds to a `Bool` (the
+# `_arrayop_scalar_reduce` path); a predicate over symbolic pool index vars
+# stays symbolic and becomes an `ifelse`, which the ArrayOp scalarizer folds
+# away once it substitutes concrete positions for the pool vars.
+_gate_by_filter(pred::Bool, body, identity_val) = pred ? body : identity_val
+_gate_by_filter(pred, body, identity_val) = ifelse(pred, body, identity_val)
+
 # Pure-integer evaluation of an ESM index-argument expression given concrete
 # integer values for the output index vars (`binding`). Returns the resolved
 # Int, or `nothing` if the expression is not resolvable to a concrete integer
@@ -193,9 +225,13 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     expr.ranges === nothing && throw(ArgumentError(
         "arrayop without explicit 'ranges' is not supported — all index " *
         "variables must declare a concrete range"))
+    expr.join === nothing && expr.join_gates === nothing || throw(ArgumentError(
+        "relational `join` clauses on an aggregate are not supported by the " *
+        "MTK evaluator path — use the tree-walk evaluator (`build_evaluator`)"))
+    extents = _extents(dim_dict)
     ranges = Dict{String,UnitRange{Int}}()
     for (name, r) in expr.ranges
-        lo, hi = _range_bounds_int(r)
+        lo, hi = _range_bounds_int(r, extents)
         ranges[name] = lo:hi
     end
 
@@ -215,7 +251,9 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     # Pure scalar output (empty output_idx or all singletons): pre-scalarize
     # via integer iteration (rare path, not in current simulation fixtures).
     if isempty(output_names)
-        return _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges, reduce_fn)
+        return _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges,
+                                      reduce_fn, expr.filter,
+                                      _reduce_identity(expr.reduce))
     end
 
     # Draw symbolic integer index vars from the shared pool.
@@ -270,7 +308,20 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     saved_ctx = get(dim_dict, _GATHER_CTX_KEY, nothing)
     dim_dict[_GATHER_CTX_KEY] = gather_ctx
     body_sym = try
-        _esm_to_symbolic(body, var_dict, t_sym, dim_dict)
+        b = _esm_to_symbolic(body, var_dict, t_sym, dim_dict)
+        # `filter` gate (RFC semiring-faq-unified-ir §5.3, esm-spec §4.3.1).
+        # The predicate is built under the SAME index bindings as the body, so
+        # a cumulative/prefix reduction — `filter: {"<=": ["j", "i"]}` and
+        # friends — becomes `ifelse(j <= i, body, identity)` over the full
+        # rectangular `i × j` range. The scalarizer substitutes concrete
+        # positions for both pool vars, folding each `ifelse` to one branch,
+        # so cell `i` reduces exactly the admitted window in ascending `j` —
+        # the normative accumulation order of §4.3.1.
+        if expr.filter !== nothing
+            pred = _esm_to_symbolic(expr.filter, var_dict, t_sym, dim_dict)
+            b = _gate_by_filter(pred, b, _reduce_identity(expr.reduce))
+        end
+        b
     finally
         for k in keys(idx_body)
             if haskey(saved, k); var_dict[k] = saved[k]; else; delete!(var_dict, k); end
@@ -318,7 +369,8 @@ end
 
 # Scalar-output fallback: iterate all ranges and reduce. Used only when
 # output_idx is empty or all-singleton (no named output dimensions).
-function _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges, reduce_fn)
+function _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges, reduce_fn,
+                                filt=nothing, identity_val=0.0)
     all_names = collect(keys(ranges))
     range_tuple = Tuple(ranges[n] for n in all_names)
     acc = nothing
@@ -329,7 +381,12 @@ function _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges, reduce_
             var_dict[k] = Int(v)
         end
         contrib = try
-            _esm_to_symbolic(body, var_dict, t_sym, dim_dict)
+            b = _esm_to_symbolic(body, var_dict, t_sym, dim_dict)
+            if filt !== nothing
+                pred = _esm_to_symbolic(filt, var_dict, t_sym, dim_dict)
+                b = _gate_by_filter(pred, b, identity_val)
+            end
+            b
         finally
             for k in all_names
                 if haskey(saved, k); var_dict[k] = saved[k]; else; delete!(var_dict, k); end
@@ -352,7 +409,8 @@ end
 #   3. index(u, k1, k2, ...) — direct indexed LHS
 #
 # The resulting shape is the union of all such contributions per variable.
-function _lhs_arrayop_shapes(equations::Vector{Equation})
+function _lhs_arrayop_shapes(equations::Vector{Equation},
+                             extents::AbstractDict=_NO_EXTENTS)
     shapes = Dict{String,Vector{UnitRange{Int}}}()
     for eq in equations
         lhs = eq.lhs
@@ -381,7 +439,7 @@ function _lhs_arrayop_shapes(equations::Vector{Equation})
                 entry isa AbstractString || continue
                 r = get(lhs.ranges, String(entry), nothing)
                 if r === nothing; all_found = false; break; end
-                lo, hi = _range_bounds_int(r)
+                lo, hi = _range_bounds_int(r, extents)
                 push!(axis_ranges, lo:hi)
             end
             (!all_found || isempty(axis_ranges)) && continue
@@ -439,8 +497,21 @@ function _merge_lhs_shape!(shapes::Dict{String,Vector{UnitRange{Int}}},
     end
 end
 
-# Decode a range field `[lo, hi]` or `[lo, step, hi]` to integer bounds.
-function _range_bounds_int(r::AbstractVector)
+# Decode a `ranges` entry to integer bounds.
+#
+# Two spellings reach here (src/parse.jl `_parse_ranges`):
+#   1. a dense array `[lo, hi]` / `[lo, step, hi]`;
+#   2. an `IndexSetRef` — `{ "from": <index_sets key>, "of"?: [...] }` (RFC
+#      semiring-faq-unified-ir §5.2) — whose extent lives in the DOCUMENT-scoped
+#      index-set registry, not in the node. `extents` is that registry reduced to
+#      name => size (see `_index_set_extents` in variables.jl); it arrives here
+#      through the `_INDEX_EXTENTS_KEY` side channel on `dim_dict`.
+#
+# Anything else is rejected with an `ArgumentError` naming the offending form —
+# never a `MethodError`.
+const _NO_EXTENTS = Dict{String,Int}()
+
+function _range_bounds_int(r::AbstractVector, extents::AbstractDict=_NO_EXTENTS)
     all(x -> x isa Integer, r) || throw(ArgumentError(
         "expression-valued range bounds are not supported by the MTK evaluator path"))
     if length(r) == 2
@@ -450,3 +521,26 @@ function _range_bounds_int(r::AbstractVector)
     end
     throw(ArgumentError("range must have 2 or 3 entries, got $(length(r))"))
 end
+
+function _range_bounds_int(r::EarthSciAST.IndexSetRef,
+                           extents::AbstractDict=_NO_EXTENTS)
+    isempty(r.of) || throw(ArgumentError(
+        "ragged index-set range `{from: \"$(r.from)\", of: $(r.of)}` is not " *
+        "supported by the MTK evaluator path — its extent varies with its " *
+        "parent index, so it has no single rectangular bound"))
+    n = get(extents, r.from, nothing)
+    n === nothing && throw(ArgumentError(
+        "cannot resolve the extent of index set '$(r.from)' in the MTK " *
+        "evaluator path: it is not in the flattened system's index-set " *
+        "registry. Build the system from a `FlattenedSystem` whose " *
+        "`index_sets` carry it (`flatten(::EsmFile)`); `flatten(::Model)` " *
+        "wraps the model in a synthetic file with an EMPTY registry"))
+    n < 1 && throw(ArgumentError(
+        "index set '$(r.from)' has non-positive size $(n)"))
+    return 1, Int(n)
+end
+
+_range_bounds_int(r, extents::AbstractDict=_NO_EXTENTS) = throw(ArgumentError(
+    "unsupported `ranges` entry of type $(typeof(r)): the MTK evaluator path " *
+    "accepts a dense `[lo, hi]`/`[lo, step, hi]` array or an index-set " *
+    "reference `{from: <index set>}`"))

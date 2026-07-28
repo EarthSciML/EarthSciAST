@@ -94,6 +94,40 @@ end
 # (The ODE-vs-PDE predicate `_has_spatial_ivs` lives in src/flatten.jl,
 # next to `FlattenedSystem`.)
 
+# Reduce the flattened system's index-set registry to `name => extent`.
+# Only sets whose extent is a concrete positive `size` land here; ragged /
+# derived sets (whose size is `nothing`) are simply absent, so a range that
+# needs one fails with `_range_bounds_int`'s descriptive error rather than
+# silently taking a wrong bound.
+function _index_set_extents(flat::FlattenedSystem)
+    extents = Dict{String,Int}()
+    for (name, iset) in flat.index_sets
+        sz = hasproperty(iset, :size) ? getproperty(iset, :size) : nothing
+        (sz isa Integer && sz > 0) || continue
+        extents[String(name)] = Int(sz)
+    end
+    return extents
+end
+
+# Resolve a variable's DECLARED `shape` (an ordered list of index-set names,
+# esm-spec §4.7) against the index-set extents. This is the shape of last
+# resort: `infer_array_shapes` and the LHS-arrayop shapes both win over it,
+# and it can only fire for documents that actually declare an index-set
+# registry. Returns `nothing` when the variable is scalar or when any axis
+# names a set with no concrete extent.
+function _declared_array_shape(mvar, extents::AbstractDict)
+    sh = mvar.shape
+    (sh === nothing || isempty(sh)) && return nothing
+    isempty(extents) && return nothing
+    out = UnitRange{Int}[]
+    for axis in sh
+        n = get(extents, String(axis), nothing)
+        n === nothing && return nothing
+        push!(out, 1:Int(n))
+    end
+    return out
+end
+
 """
 Create Symbolics.jl variable/parameter symbols for every state, parameter, and
 observed variable in a flattened system. Returns `(var_dict, t_sym, dim_dict,
@@ -120,6 +154,14 @@ function _build_var_dict(flat::FlattenedSystem)
     t_sym = _get_or_make_dim(Dict{String,Any}(), "t")
     dim_dict = Dict{String,Any}("t" => t_sym)
 
+    # Document-scoped index-set extents (`name => size`), the only place an
+    # `IndexSetRef` range (`{"from": "x"}`) or an index-set-named variable
+    # `shape` can get a concrete length. Empty for documents that declare no
+    # index sets, which leaves every pre-existing path byte-for-byte unchanged.
+    # Published on `dim_dict` for `_build_arrayop_sym` (see `_INDEX_EXTENTS_KEY`).
+    extents = _index_set_extents(flat)
+    isempty(extents) || (dim_dict[_INDEX_EXTENTS_KEY] = extents)
+
     spatial_syms = Any[]
     if is_pde
         for iv in flat.independent_variables
@@ -134,7 +176,7 @@ function _build_var_dict(flat::FlattenedSystem)
     # they define the actual grid (e.g. 1:N × 1:N), while infer_array_shapes
     # can widen the shape to cover stencil ghost-cell offsets (e.g. 0:N+1).
     inferred_shapes = infer_array_shapes(flat.equations)
-    lhs_shapes = _lhs_arrayop_shapes(flat.equations)
+    lhs_shapes = _lhs_arrayop_shapes(flat.equations, extents)
     merge!(inferred_shapes, lhs_shapes)  # LHS definition takes precedence
 
     var_dict = Dict{String,Any}()
@@ -168,6 +210,7 @@ function _build_var_dict(flat::FlattenedSystem)
     for (vname, mvar) in flat.state_variables
         sym_name = _san(vname)
         shape = get(inferred_shapes, vname, nothing)
+        shape === nothing && (shape = _declared_array_shape(mvar, extents))
         desc_text = _build_description(mvar.description, mvar.units)
         if shape === nothing
             v_num = _with_description(
@@ -197,13 +240,27 @@ function _build_var_dict(flat::FlattenedSystem)
         var_dict[pname] = p_num
     end
 
-    # Observed variables — same shape as states
+    # Observed variables — shaped exactly like states. An array-valued observed
+    # (e.g. a `makearray` source field, or a cumulative-reduction result) must
+    # be a `Symbolics.Arr`, or the `index` reads of it in an arrayop body hit
+    # `getindex(::Num, …)`.
     for (oname, mvar) in flat.observed_variables
-        ov_num = _with_description(
-            _with_default(_make_dep_var(_san(oname), iv_syms_any), mvar.default),
-            _build_description(mvar.description, mvar.units))
-        push!(observed, ov_num)
-        var_dict[oname] = ov_num
+        shape = get(inferred_shapes, oname, nothing)
+        shape === nothing && (shape = _declared_array_shape(mvar, extents))
+        desc_text = _build_description(mvar.description, mvar.units)
+        if shape === nothing
+            ov_num = _with_description(
+                _with_default(_make_dep_var(_san(oname), iv_syms_any), mvar.default),
+                desc_text)
+            push!(observed, ov_num)
+            var_dict[oname] = ov_num
+        else
+            array_var = _make_array_dep_var(_san(oname), iv_syms_any, shape)
+            var_dict[oname] = array_var
+            for idx in Iterators.product(shape...)
+                push!(observed, _with_description(Num(array_var[idx...]), desc_text))
+            end
+        end
     end
 
     return var_dict, t_sym, dim_dict, states, parameters, observed, spatial_syms

@@ -145,13 +145,30 @@ function _run_fixture_test(simp, model_name::Symbol,
     end
 end
 
+# Build the MTK system for ONE model of a fixture file.
+#
+# Not `MTK2.System(model)`: that convenience method wraps the bare `Model` in a
+# synthetic `EsmFile` with an EMPTY index-set registry (src/flatten.jl
+# `flatten(::Model)`), so an aggregate range spelled as an index-set reference
+# — `"ranges": {"i": {"from": "x"}}` — has no extent to resolve against. The
+# registry is document-scoped, so re-wrap the model in a single-model file that
+# CARRIES the real one. Namespacing is unchanged (`<model name>.<var>`), so
+# every `_arr` lookup below resolves exactly as before.
+function _fixture_system(file, mname::AbstractString, model)
+    one_model = EarthSciAST.EsmFile(file.esm, file.metadata;
+        models=Dict{String,EarthSciAST.Model}(String(mname) => model),
+        index_sets=file.index_sets,
+        function_tables=file.function_tables)
+    return MTK2.System(EarthSciAST.flatten(one_model); name=Symbol(mname))
+end
+
 # Run every inline test inside every model found in the given .esm file.
 function _run_fixture(path::AbstractString)
     file = EarthSciAST.load(path)
     models_dict = file.models
     @assert models_dict !== nothing "Fixture $path has no models"
     for (mname, model) in models_dict
-        sys = MTK2.System(model; name=Symbol(mname))
+        sys = _fixture_system(file, String(mname), model)
         simp = MTK2.mtkcompile(sys)
         for t in model.tests
             @testset "$(mname)/$(t.id)" begin
