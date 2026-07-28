@@ -1,0 +1,458 @@
+{
+    "esm": "0.8.0",
+    "metadata": {
+        "name": "pde_inline_ic_param_override",
+        "description": "esm-spec 6.6.5 'Build-time evaluation scope': the model parameters an inline test resolves before the run -- for a coordinate-expression `ic` (11.4.1) and for an analytic assertion `reference` -- are bound to their `parameter_overrides`-or-default values. Parameter `A` (default 1.0) appears ONLY inside `ic(u)` and inside assertion references, nowhere in the equations, so a test that overrides `A` can only change the answer through the build-time scope. State `v` is seeded by the parameter-FREE `ic(v) = cos(pi x)` and serves as the independent anchor the parameter-dependent `reference` is measured against, so a binding that ignored the override in BOTH the ic and the reference cannot cancel out and still pass.",
+        "authors": [
+            "EarthSciAST"
+        ],
+        "tags": [
+            "pde-inline-test",
+            "esm-spec-6.6.5",
+            "esm-spec-11.4.1",
+            "parameter-overrides",
+            "coordinate-expression-ic",
+            "analytic-reference"
+        ]
+    },
+    "index_sets": {
+        "x": {
+            "kind": "interval",
+            "size": 5
+        }
+    },
+    "models": {
+        "M": {
+            "tolerance": {
+                "abs": 1e-12,
+                "rel": 1e-09
+            },
+            "variables": {
+                "A": {
+                    "type": "parameter",
+                    "units": "1",
+                    "default": 1.0,
+                    "description": "Amplitude of the initial profile. Referenced ONLY by ic(u) and by assertion references -- never by an equation."
+                },
+                "u": {
+                    "type": "state",
+                    "units": "1",
+                    "shape": [
+                        "x"
+                    ],
+                    "description": "Seeded by the parameter-dependent coordinate-expression ic A*cos(pi x); held constant by D(u)/dt = 0."
+                },
+                "v": {
+                    "type": "state",
+                    "units": "1",
+                    "shape": [
+                        "x"
+                    ],
+                    "description": "Seeded by the parameter-FREE ic cos(pi x); the anchor an A-dependent reference is compared against."
+                }
+            },
+            "equations": [
+                {
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "u"
+                        ]
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [
+                            "A",
+                            {
+                                "op": "cos",
+                                "args": [
+                                    {
+                                        "op": "*",
+                                        "args": [
+                                            3.141592653589793,
+                                            {
+                                                "op": "aggregate",
+                                                "args": [],
+                                                "output_idx": [
+                                                    "i"
+                                                ],
+                                                "ranges": {
+                                                    "i": {
+                                                        "from": "x"
+                                                    }
+                                                },
+                                                "expr": {
+                                                    "op": "*",
+                                                    "args": [
+                                                        {
+                                                            "op": "-",
+                                                            "args": [
+                                                                "i",
+                                                                0.5
+                                                            ]
+                                                        },
+                                                        {
+                                                            "op": "/",
+                                                            "args": [
+                                                                1,
+                                                                5
+                                                            ]
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "v"
+                        ]
+                    },
+                    "rhs": {
+                        "op": "cos",
+                        "args": [
+                            {
+                                "op": "*",
+                                "args": [
+                                    3.141592653589793,
+                                    {
+                                        "op": "aggregate",
+                                        "args": [],
+                                        "output_idx": [
+                                            "i"
+                                        ],
+                                        "ranges": {
+                                            "i": {
+                                                "from": "x"
+                                            }
+                                        },
+                                        "expr": {
+                                            "op": "*",
+                                            "args": [
+                                                {
+                                                    "op": "-",
+                                                    "args": [
+                                                        "i",
+                                                        0.5
+                                                    ]
+                                                },
+                                                {
+                                                    "op": "/",
+                                                    "args": [
+                                                        1,
+                                                        5
+                                                    ]
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i"
+                        ],
+                        "ranges": {
+                            "i": [
+                                1,
+                                5
+                            ]
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "u",
+                                        "i"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i"
+                        ],
+                        "ranges": {
+                            "i": [
+                                1,
+                                5
+                            ]
+                        },
+                        "expr": 0
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i"
+                        ],
+                        "ranges": {
+                            "i": [
+                                1,
+                                5
+                            ]
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "v",
+                                        "i"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i"
+                        ],
+                        "ranges": {
+                            "i": [
+                                1,
+                                5
+                            ]
+                        },
+                        "expr": 0
+                    }
+                }
+            ],
+            "tests": [
+                {
+                    "id": "ic_param_default",
+                    "description": "No parameter_overrides: A takes its default 1.0, so u(0) = cos(pi x). Non-vacuity anchor -- proves the ic is genuinely nonzero when the override is absent.",
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "x": 1
+                            },
+                            "expected": 0.9510565162951535
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "x": 5
+                            },
+                            "expected": -0.9510565162951535
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "max",
+                            "expected": 0.9510565162951535
+                        }
+                    ]
+                },
+                {
+                    "id": "ic_param_zero",
+                    "description": "parameter_overrides {A: 0} must reach the BUILD-TIME ic scope: u(0) is identically zero. The final assertion measures the parameter-dependent reference A*cos(pi x) (= 0 under the override) against the parameter-free field v = cos(pi x), so its Linf_error is max|cos(pi x)|; a reference that ignored the override would read 0 instead.",
+                    "parameter_overrides": {
+                        "A": 0.0
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "x": 1
+                            },
+                            "expected": 0.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "max",
+                            "expected": 0.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "min",
+                            "expected": 0.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 1.0,
+                            "coords": {
+                                "x": 1
+                            },
+                            "expected": 0.0
+                        },
+                        {
+                            "variable": "v",
+                            "time": 0.0,
+                            "reduce": "Linf_error",
+                            "reference": {
+                                "op": "*",
+                                "args": [
+                                    "A",
+                                    {
+                                        "op": "cos",
+                                        "args": [
+                                            {
+                                                "op": "*",
+                                                "args": [
+                                                    3.141592653589793,
+                                                    {
+                                                        "op": "aggregate",
+                                                        "args": [],
+                                                        "output_idx": [
+                                                            "i"
+                                                        ],
+                                                        "ranges": {
+                                                            "i": {
+                                                                "from": "x"
+                                                            }
+                                                        },
+                                                        "expr": {
+                                                            "op": "*",
+                                                            "args": [
+                                                                {
+                                                                    "op": "-",
+                                                                    "args": [
+                                                                        "i",
+                                                                        0.5
+                                                                    ]
+                                                                },
+                                                                {
+                                                                    "op": "/",
+                                                                    "args": [
+                                                                        1,
+                                                                        5
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            "expected": 0.9510565162951535
+                        }
+                    ]
+                },
+                {
+                    "id": "ic_param_double",
+                    "description": "parameter_overrides {A: 2} -- the override must be READ, not merely defaulted to zero. u(0) = 2 cos(pi x); the reference A*cos(pi x) = 2 cos(pi x) sits one |cos| away from the parameter-free v.",
+                    "parameter_overrides": {
+                        "A": 2.0
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "x": 1
+                            },
+                            "expected": 1.902113032590307
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "min",
+                            "expected": -1.902113032590307
+                        },
+                        {
+                            "variable": "v",
+                            "time": 0.0,
+                            "reduce": "Linf_error",
+                            "reference": {
+                                "op": "*",
+                                "args": [
+                                    "A",
+                                    {
+                                        "op": "cos",
+                                        "args": [
+                                            {
+                                                "op": "*",
+                                                "args": [
+                                                    3.141592653589793,
+                                                    {
+                                                        "op": "aggregate",
+                                                        "args": [],
+                                                        "output_idx": [
+                                                            "i"
+                                                        ],
+                                                        "ranges": {
+                                                            "i": {
+                                                                "from": "x"
+                                                            }
+                                                        },
+                                                        "expr": {
+                                                            "op": "*",
+                                                            "args": [
+                                                                {
+                                                                    "op": "-",
+                                                                    "args": [
+                                                                        "i",
+                                                                        0.5
+                                                                    ]
+                                                                },
+                                                                {
+                                                                    "op": "/",
+                                                                    "args": [
+                                                                        1,
+                                                                        5
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            "expected": 0.9510565162951535
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

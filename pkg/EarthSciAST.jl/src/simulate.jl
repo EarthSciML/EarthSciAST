@@ -336,7 +336,10 @@ mutating `input` after `prepare` returns does not affect the prepared model
 Keyword arguments (the BUILD-time subset of `simulate`'s keywords):
 * `parameters::AbstractDict` — parameter overrides (→ `build_evaluator`'s
   `parameter_overrides`). Baked into the build (they feed build-time constant
-  folding), which is why they belong here and not on the per-run call.
+  folding), which is why they belong here and not on the per-run call. Keys may
+  be spelled LOCALLY (`pert_amp`, the form esm-spec §6.6 pins for a test's
+  `parameter_overrides`) or with the flattener's namespacing (`Chem.pert_amp`);
+  both resolve to the same parameter.
 * `const_arrays`, `param_arrays` — forwarded to `build_evaluator` (the regridder
   source polygons and the live forcing buffers).
 * `providers::AbstractDict` — `<Loader>.<var> => data Provider`. CONST providers
@@ -626,7 +629,12 @@ Keyword arguments
 * `alg` — the ODE algorithm, e.g. `Tsit5()`. REQUIRED (the solve runs in the
   SciMLBase extension; EarthSciAST itself carries no solver, `[[library-exposes-rhs-not-solver]]`).
 * `parameters::AbstractDict` — parameter overrides (→ `build_evaluator`'s
-  `parameter_overrides`).
+  `parameter_overrides`). Keys may be spelled LOCALLY (`pert_amp`, the form
+  esm-spec §6.6 pins for a test's `parameter_overrides`) or with the
+  flattener's namespacing (`Chem.pert_amp`); both resolve. The resolved values
+  also bind the BUILD-TIME evaluation scope (esm-spec §6.6.5): a
+  coordinate-expression `ic` and an inline assertion `reference` see the
+  override, not the declared default.
 * `initial_conditions::AbstractDict` — per-element or broadcast IC overrides,
   applied first.
 * `seed_ic!` — optional `(u0, var_map) -> nothing` for array ICs that need grid

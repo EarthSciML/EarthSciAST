@@ -482,6 +482,72 @@ function _partition_variables(model::Model;
     return param_names, observed_names, state_var_names
 end
 
+# ---- Stage: canonicalize the caller's `parameter_overrides` keys ----
+# esm-spec §6.6 pins `parameter_overrides` as "keyed by LOCAL parameter name"
+# (`pert_amp`), but every document front-door reaches the build through
+# `flatten`, which renames each parameter after its owning component
+# (`SimpleClimate.pert_amp`). An exact-key lookup therefore MISSES the very
+# spelling the spec tells authors to write, and — because the resolved scope
+# feeds the coordinate-expression `ic` seed, the parameter NamedTuple, and
+# `inspect.params` (the §6.6.5 reference / observed assertion scope) — the
+# override was silently dropped: the run used the DEFAULT and the inline test
+# still reported a verdict. A quiet wrong answer in the test runner, not a
+# loud failure.
+#
+# So rewrite each caller key onto the name the build actually resolves, once,
+# before any consumer sees it:
+#   1. an exact parameter-name hit wins;
+#   2. else a DOTTED key whose trailing segment is itself a parameter name
+#      resolves to that parameter (`M.A` against a bare-named `Model`);
+#   3. else a BARE key that is the trailing segment of exactly ONE parameter
+#      resolves to it (`A` against the flattened `M.A`);
+#   4. else the key is left verbatim — an unknown override stays as inert as
+#      it was before, and an AMBIGUOUS bare name (the same local parameter in
+#      two mounted components) is never silently bound to one of them.
+# This is the Julia counterpart of Python's `_resolve_override` (exact key,
+# then bare trailing segment) and Rust's `normalize_override_keys` (strip the
+# single-model `<namespace>.` prefix), so one authored test behaves identically
+# in all three executing bindings.
+function _normalize_param_override_keys(model::Model, overrides::AbstractDict)
+    isempty(overrides) && return overrides
+    param_names = Set{String}(n for (n, v) in model.variables
+                              if v.type == ParameterVariable)
+    isempty(param_names) && return overrides
+    # Bare trailing segment → the unique parameter carrying it (ambiguous bare
+    # names are dropped from the alias table, never guessed at).
+    bare_counts = Dict{String,Int}()
+    for n in param_names
+        b = _bare_param_name(n)
+        bare_counts[b] = get(bare_counts, b, 0) + 1
+    end
+    bare_alias = Dict{String,String}()
+    for n in param_names
+        b = _bare_param_name(n)
+        (b == n || bare_counts[b] != 1 || b in param_names) && continue
+        bare_alias[b] = n
+    end
+    # Two passes so precedence is DETERMINISTIC when a caller supplies both
+    # spellings of one parameter (`A` and `M.A`): the alias-resolved keys land
+    # first, the exact-name keys overwrite them. Same order as Python's
+    # `_resolve_override` (exact key checked before the bare segment).
+    normalized = Dict{String,Float64}()
+    for (rawk, v) in overrides
+        k = String(rawk)
+        k in param_names && continue
+        bare = _bare_param_name(k)
+        key = bare in param_names ? bare : get(bare_alias, k, k)
+        normalized[key] = Float64(v)
+    end
+    for (rawk, v) in overrides
+        k = String(rawk)
+        k in param_names && (normalized[k] = Float64(v))
+    end
+    return normalized
+end
+
+_bare_param_name(name::AbstractString) =
+    (i = findlast('.', name)) === nothing ? String(name) : String(name[nextind(name, i):end])
+
 # ---- Stage: scalar parameter scope (load-time constants) ----
 # Each scalar parameter's RESOLVED value: `parameter_overrides` if given,
 # else the model default (else 0.0). These are load-time CONSTANTS, so they
@@ -1974,6 +2040,14 @@ function _build_evaluator_impl(model::Model;
         end
     end
     _has_value_invention = !isempty(_vi_vars)
+    # ---- Caller-key canonicalization (esm-spec §6.6) ----
+    # A spec-spelled LOCAL override key (`pert_amp`) is rewritten onto the
+    # flattening-qualified parameter name the build resolves (`M.pert_amp`)
+    # BEFORE any consumer reads it, so the same map binds the parameter
+    # NamedTuple, the coordinate-expression `ic` seed, the setup env, and
+    # `inspect.params`. Idempotent — the AbstractDict front-door normalizes
+    # too, and a document whose parameters are already bare is unchanged.
+    parameter_overrides = _normalize_param_override_keys(model, parameter_overrides)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
         const_arrays=const_arrays, param_arrays=param_arrays, vi_vars=_vi_vars,
@@ -2554,7 +2628,16 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
 * `initial_conditions::Dict{String,<:Real}` — override the default
   values in `model.variables` for specific state variables.
 * `parameter_overrides::Dict{String,<:Real}` — override the default
-  values for specific parameters.
+  values for specific parameters. Keys may be spelled either LOCALLY
+  (`pert_amp`, the form esm-spec §6.6 pins for a test's
+  `parameter_overrides`) or with the flattening qualification the run
+  document carries (`SimpleClimate.pert_amp`); both resolve to the same
+  parameter, and an ambiguous local name (the same parameter in two
+  mounted components) is left unbound rather than guessed at. The
+  resolved values are load-time constants, so they bind the build-time
+  evaluation scope too — the coordinate-expression `ic` seed and the
+  §6.6.5 reference / observed assertion scope reported via `inspect` —
+  not just the runtime parameter NamedTuple.
 * `tspan::Union{Nothing,Tuple{Real,Real}}` — explicit time span. If
   `nothing`, the first inline `tests` block's `time_span` is used; if
   the model has no tests, the null default `(0.0, 1.0)` is returned.
@@ -2846,6 +2929,18 @@ function build_evaluator(esm::AbstractDict;
     # into the typed path. A no-op (and byte-identical) for models without a
     # skolem/distinct/rank node.
     model = _select_model_or_nothing(file, model_name)
+
+    # ---- Caller-key canonicalization (esm-spec §6.6) ----
+    # Rewrite the caller's LOCAL-named `parameter_overrides` onto this
+    # document's (flattening-qualified) parameter names once, at the front
+    # door, so the setup env, the binning-coordinate derivation, the
+    # value-invention materialisation, and the typed impl below all read the
+    # SAME resolved values. Without this a spec-spelled `{"pert_amp": 0}`
+    # missed every one of them and the run silently used the default.
+    if model !== nothing && haskey(kwd, :parameter_overrides)
+        kwd[:parameter_overrides] =
+            _normalize_param_override_keys(model, kwd[:parameter_overrides])
+    end
 
     # ---- Build-time binning-coordinate derivation (RFC §8.6.1 purity) ----
     # A broad-phase binning coordinate declared INLINE as a reduce aggregate over the

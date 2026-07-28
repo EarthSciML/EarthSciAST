@@ -1,0 +1,70 @@
+{
+    "category": "pde_inline_ic_param_override",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec §6.6.5 'Build-time evaluation scope': every reference resolved BEFORE the simulation runs — a coordinate-expression `ic` (§11.4.1) and an inline analytic assertion `reference` — binds the model's parameters to their `parameter_overrides`-or-default values, with the overrides keyed by LOCAL parameter name (§6.6). Parameter `A` (default 1.0) appears ONLY inside `ic(u)` and inside assertion references, never in an equation, so a test that overrides `A` can change the answer through the build-time scope and nowhere else. State `v` is seeded by the parameter-FREE `ic(v) = cos(pi x)` and is the independent anchor the parameter-dependent `reference` is measured against, so a binding that ignored the override in BOTH the ic and the reference cannot have the two errors cancel and still pass. Julia's tree-walk build previously resolved `parameter_overrides` by EXACT key against the flattening-qualified parameter name (`M.A`), so the spec-spelled local key (`A`) missed: the run silently used the default and the inline test still reported a verdict. Python (`_resolve_override`: exact key, then bare trailing segment) and Rust (`normalize_override_keys`: strip the single-model `<namespace>.` prefix) already honoured the local spelling. Julia is the reference binding: its `run_pde_tests` minted golden/ic_param_override.json.",
+    "reference_binding": "julia",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+        "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+    },
+    "integrators": {
+        "julia": {
+            "algorithm": "Tsit5",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        },
+        "python": {
+            "method": "RK45",
+            "rtol": 1e-12,
+            "atol": 1e-14
+        },
+        "rust": {
+            "solver": "Erk",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        }
+    },
+    "tolerances": {
+        "assertion_rtol": 1e-09,
+        "assertion_atol": 1e-11
+    },
+    "fixtures": [
+        {
+            "id": "ic_param_override",
+            "path": "fixtures/ic_param_override.esm",
+            "model": "M",
+            "tags": [
+                "pde-inline-test",
+                "esm-spec-6.6",
+                "esm-spec-6.6.5",
+                "esm-spec-11.4.1",
+                "parameter-overrides",
+                "coordinate-expression-ic",
+                "analytic-reference",
+                "build-time-evaluation-scope"
+            ],
+            "shape": {
+                "x": 5
+            },
+            "assertions": [
+                { "test_id": "ic_param_default", "assertion_idx": 1, "variable": "u", "reduce": null,          "expected": 0.9510565162951535 },
+                { "test_id": "ic_param_default", "assertion_idx": 2, "variable": "u", "reduce": null,          "expected": -0.9510565162951535 },
+                { "test_id": "ic_param_default", "assertion_idx": 3, "variable": "u", "reduce": "max",         "expected": 0.9510565162951535 },
+                { "test_id": "ic_param_zero",    "assertion_idx": 1, "variable": "u", "reduce": null,          "expected": 0.0 },
+                { "test_id": "ic_param_zero",    "assertion_idx": 2, "variable": "u", "reduce": "max",         "expected": 0.0 },
+                { "test_id": "ic_param_zero",    "assertion_idx": 3, "variable": "u", "reduce": "min",         "expected": 0.0 },
+                { "test_id": "ic_param_zero",    "assertion_idx": 4, "variable": "u", "reduce": null,          "expected": 0.0 },
+                { "test_id": "ic_param_zero",    "assertion_idx": 5, "variable": "v", "reduce": "Linf_error",  "expected": 0.9510565162951535 },
+                { "test_id": "ic_param_double",  "assertion_idx": 1, "variable": "u", "reduce": null,          "expected": 1.902113032590307 },
+                { "test_id": "ic_param_double",  "assertion_idx": 2, "variable": "u", "reduce": "min",         "expected": -1.902113032590307 },
+                { "test_id": "ic_param_double",  "assertion_idx": 3, "variable": "v", "reduce": "Linf_error",  "expected": 0.9510565162951535 }
+            ],
+            "golden": "golden/ic_param_override.json"
+        }
+    ]
+}
