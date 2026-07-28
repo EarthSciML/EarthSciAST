@@ -80,8 +80,33 @@
 //! per hit would eat the win. Entries therefore live in boxed slabs whose
 //! addresses are stable, and a hit is served as a borrowed
 //! [`VecValue::View`] — the same zero-copy shape a state-array read already
-//! takes, so every downstream kernel handles it unchanged. See [`CseRt::get`]
-//! for the aliasing argument.
+//! takes, so every downstream kernel handles it unchanged. See
+//! [`CseRt::slab_view`] for the aliasing argument.
+//!
+//! ## Lookup
+//!
+//! Both of the overlay's per-node questions — "is this node memoizable, and
+//! under what class?" and "is that class already evaluated in this scope?" —
+//! are asked once per node VISIT, ~483k times per RHS call and ~1.9e9 times
+//! over a 0.25-day solve of `simpleclimate.esm`. Asking them of a `HashMap` put
+//! the answer behind a hash and two cache misses, which measured at 8.6% of the
+//! solve (7.1% of it in `class_of` alone) — a third of what the overlay had left
+//! per node visit.
+//!
+//! Neither question needs a hash, because both key spaces are fixed once the
+//! analysis has run:
+//!
+//! * node → class is fixed for a rule set (that is exactly what
+//!   [`CseRt::retarget`] guarantees), so it is resolved, at [`CseRt::analyse`]
+//!   time, into [`AddrClasses`] — a flat open-addressed table keyed by a 32-bit
+//!   node ordinal, one cache line per probe.
+//! * class ids are DENSE (6,734 of them here against 662k classified nodes), so
+//!   the memo is a dense row of class-indexed cells per open scope, stamped with
+//!   the scope that wrote it. See [`Inner::memo`].
+//!
+//! Both structures are exact re-encodings, not approximations: they answer what
+//! the maps answered, and `ESS_CSE_PARANOID=1` asserts that node-visit by
+//! node-visit over a whole solve.
 
 use super::*;
 use crate::types::{Expr, ExpressionNode};
@@ -114,6 +139,18 @@ pub(super) fn cse_disabled() -> bool {
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| {
         std::env::var("ESS_CSE_DISABLE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+/// `true` when `ESS_CSE_PARANOID=1` asks [`CseRt::class_of`] to cross-check the
+/// resolved class table against the map on every node visit.
+fn cse_paranoid() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ESS_CSE_PARANOID")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     })
@@ -158,7 +195,16 @@ struct ClassTable {
     strs: FxHashMap<Box<str>, u32>,
     /// Node address → class id, restricted to nodes whose class occurs ≥ 2×
     /// within their own static scope. A node absent here is never memoized.
+    ///
+    /// This is the AUTHORITATIVE classification, but it is not what the hot
+    /// path reads: [`CseRt::class_of`] probes [`AddrClasses`], which is this map
+    /// resolved into a flat array. The map stays as the source those
+    /// resolutions are built from and as the fallback when they are impossible.
     memoizable: FxHashMap<usize, u32>,
+    /// Entries added to `memoizable` since the last drain, so [`CseRt::analyse`]
+    /// can extend the resolved table incrementally instead of rebuilding it once
+    /// per body (113 bodies for `simpleclimate.esm`, 662k entries).
+    pending: Vec<(usize, u32)>,
     /// Body roots already analysed, so the walk runs once per body per scratch.
     analysed_roots: FxHashSet<usize>,
     /// Scratch reused across `analyse` calls: (static scope, class) → count.
@@ -189,8 +235,19 @@ impl ClassTable {
             // scalarizes a bare whole-array body, so returning one would diverge)
             // — so memoizing the root could silently push a rule off the
             // vectorized path. It is a singleton in every real body anyway.
-            if addr != key && self.counts.get(&(scope, class)).copied().unwrap_or(0) >= 2 {
-                self.memoizable.insert(addr, class);
+            if addr != key
+                && self.counts.get(&(scope, class)).copied().unwrap_or(0) >= 2
+                // An address can be RE-classified: the trees handed to
+                // `analyse` are not all long-lived (a lowered aggregate body is
+                // rebuilt per call on the `eval_arrayop` path), so a later root
+                // can occupy storage an earlier one was analysed in. The map
+                // resolves that by last-writer-wins — the live tree is always
+                // the one that wrote last — so `pending` must carry an update,
+                // not just a first insert, or the resolved table goes stale
+                // against it.
+                && self.memoizable.insert(addr, class) != Some(class)
+            {
+                self.pending.push((addr, class));
             }
         }
     }
@@ -405,6 +462,173 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
 }
 
 // ============================================================================
+// The resolved node → class table (the hot-path lookup).
+// ============================================================================
+
+/// Free-slot marker, and therefore the one ordinal [`AddrClasses`] cannot
+/// represent. See [`AddrClasses::add`].
+const EMPTY_KEY: u32 = u32::MAX;
+
+/// Every `Expr` is 8-byte aligned (it holds `f64`/`i64`/pointer fields), so the
+/// low bits of a node address carry no information and are shifted out of the
+/// key. Written as a const so the shift is a compile-time constant.
+const ADDR_SHIFT: u32 = std::mem::align_of::<Expr>().trailing_zeros();
+
+/// The base address is rounded down to a 4 GiB boundary, so a body analysed
+/// later at a *lower* address almost never forces a rehash.
+const BASE_ALIGN_MASK: usize = 0xFFFF_FFFF;
+
+/// [`ClassTable::memoizable`] resolved into a flat open-addressed table.
+///
+/// This is the hottest lookup in the whole program: `eval_vec` probes it once
+/// per node visit — ~483k times per RHS call on `simpleclimate.esm`, ~1.9e9
+/// times over a 0.25-day solve. Reading `memoizable` directly costs a
+/// `HashMap` probe over 662k entries (~17 MB, so two DRAM round-trips: the
+/// control-byte group, then the bucket). The class assignment is FIXED for a
+/// rule set — that is exactly what [`CseRt::retarget`] guarantees — so it is
+/// worth resolving it once into a shape that probes in one:
+///
+/// * the key is a 32-bit node ORDINAL, `(addr - base) >> 3`, not the 64-bit
+///   address, so key and class share a single 8-byte word and the table is
+///   less than half the size of the map it replaces (~7.6 MB here);
+/// * open addressing with linear probing: no control bytes, no SIMD group
+///   load, and a collision costs the next word — usually the same cache line.
+///
+/// The stored key is the address, bijectively re-encoded, so this is EXACT: it
+/// cannot hand back another node's class the way a fingerprint scheme could.
+#[derive(Default)]
+struct AddrClasses {
+    /// `(key, class)`, with `key == EMPTY_KEY` marking a free slot.
+    slots: Box<[(u32, u32)]>,
+    /// Address the ordinals are relative to; 4 GiB-aligned.
+    base: usize,
+    /// Occupied slots, i.e. the live entry count.
+    count: usize,
+    /// Lowest / highest address ever added, kept so a rebase can tell whether
+    /// the whole set still fits a `u32` ordinal.
+    lo: usize,
+    hi: usize,
+}
+
+impl AddrClasses {
+    /// Multiply-shift into `[0, len)`. `len` carries no power-of-two
+    /// constraint, so the table is sized to the key set rather than rounded up
+    /// to the next power of two (which at 662k entries would waste ~4 MB).
+    #[inline(always)]
+    fn bucket(key: u32, len: usize) -> usize {
+        let h = key.wrapping_mul(0x9E37_79B1);
+        ((h as u64 * len as u64) >> 32) as usize
+    }
+
+    /// The class recorded for the node at `addr`, or `None`.
+    #[inline]
+    fn get(&self, addr: usize) -> Option<u32> {
+        let len = self.slots.len();
+        if len == 0 {
+            return None;
+        }
+        // `wrapping_sub` folds an address below `base` into a huge ordinal,
+        // which the range check rejects along with anything past a `u32`.
+        let ord = addr.wrapping_sub(self.base) >> ADDR_SHIFT;
+        if ord >= EMPTY_KEY as usize {
+            return None;
+        }
+        let key = ord as u32;
+        let mut i = Self::bucket(key, len);
+        loop {
+            let (k, class) = self.slots[i];
+            if k == key {
+                return Some(class);
+            }
+            if k == EMPTY_KEY {
+                return None;
+            }
+            i += 1;
+            if i == len {
+                i = 0;
+            }
+        }
+    }
+
+    /// Record `entries` (addresses not already present). Returns `false` when
+    /// the address set cannot be indexed by a `u32` ordinal — i.e. the analysed
+    /// trees are spread over more than ~34 GB of address space, which no
+    /// allocator does for one model's rule bodies (`simpleclimate.esm`'s 662k
+    /// nodes span 1.05 GB). The caller then abandons the resolved table and
+    /// reads the map, so this is a performance fallback, never a correctness
+    /// one.
+    fn add(&mut self, entries: &[(usize, u32)]) -> bool {
+        if entries.is_empty() {
+            return true;
+        }
+        let (min_new, max_new) = entries
+            .iter()
+            .fold((usize::MAX, 0usize), |(lo, hi), &(a, _)| (lo.min(a), hi.max(a)));
+        // `count == 0` means nothing is stored, so the recorded bounds say
+        // nothing and the new batch defines them outright.
+        let (lo, hi) = if self.count == 0 {
+            (min_new, max_new)
+        } else {
+            (self.lo.min(min_new), self.hi.max(max_new))
+        };
+        let new_base = lo & !BASE_ALIGN_MASK;
+        if (hi - new_base) >> ADDR_SHIFT >= EMPTY_KEY as usize {
+            return false;
+        }
+        let want = self.count + entries.len();
+        // Grow geometrically: a hundred-body model then pays a handful of
+        // rehashes rather than one full rebuild per body.
+        if new_base != self.base || self.slots.len() * 7 < want * 10 {
+            let cap = (want * 10 / 7 + 16).max(self.slots.len() * 2);
+            // Addresses are recoverable from the keys, so a rebase does not
+            // need the map.
+            let carried: Vec<(usize, u32)> = self
+                .slots
+                .iter()
+                .filter(|(k, _)| *k != EMPTY_KEY)
+                .map(|&(k, c)| (self.base + ((k as usize) << ADDR_SHIFT), c))
+                .collect();
+            self.slots = vec![(EMPTY_KEY, 0u32); cap].into_boxed_slice();
+            self.base = new_base;
+            self.count = 0;
+            for (addr, class) in carried {
+                self.insert(addr, class);
+            }
+        }
+        self.lo = lo;
+        self.hi = hi;
+        for &(addr, class) in entries {
+            self.insert(addr, class);
+        }
+        true
+    }
+
+    /// Insert into a table already known to have room and range for `addr`.
+    fn insert(&mut self, addr: usize, class: u32) {
+        let len = self.slots.len();
+        let key = ((addr - self.base) >> ADDR_SHIFT) as u32;
+        let mut i = Self::bucket(key, len);
+        loop {
+            if self.slots[i].0 == EMPTY_KEY {
+                self.slots[i] = (key, class);
+                self.count += 1;
+                return;
+            }
+            if self.slots[i].0 == key {
+                // A re-classified address (see `ClassTable::analyse`): update in
+                // place, and do NOT count it — the slot was already occupied.
+                self.slots[i].1 = class;
+                return;
+            }
+            i += 1;
+            if i == len {
+                i = 0;
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Runtime memo.
 // ============================================================================
 
@@ -426,16 +650,60 @@ impl Slab {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Slot {
     Scalar(f64),
     Arr(usize),
 }
 
+/// One memo cell: the value recorded for a class at one scope level.
+///
+/// `stamp` is the evaluation scope the value belongs to. Scope ids are minted
+/// monotonically and NEVER reused, so a stamp mismatch is a miss and the table
+/// needs no clearing pass — which matters, because a scope is opened per
+/// contraction tuple and per `makearray` region.
+#[derive(Clone, Copy)]
+struct MemoCell {
+    stamp: u64,
+    slot: Slot,
+}
+
+impl Default for MemoCell {
+    fn default() -> Self {
+        // 0 is not a scope id (`next_scope` is pre-incremented), so a default
+        // cell is a guaranteed miss.
+        MemoCell { stamp: 0, slot: Slot::Scalar(0.0) }
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     classes: ClassTable,
-    /// Live memo for the CURRENT top-level evaluation: (scope, class) → slot.
-    memo: FxHashMap<(u32, u32), Slot>,
+    /// `classes.memoizable`, resolved for the hot path.
+    addrs: AddrClasses,
+    /// Set when the analysed addresses could not be resolved (see
+    /// [`AddrClasses::add`]); `class_of` then reads `classes.memoizable`.
+    addrs_unusable: bool,
+    /// Set from `ESS_CSE_PARANOID`; see [`CseRt::verify_class`]. Kept as a field
+    /// rather than read from the environment in `class_of` so the hot path pays
+    /// one perfectly-predicted branch on a byte it already has in cache.
+    verify: bool,
+    /// Live memo, indexed `memo[depth - 1][class]`: one dense row per OPEN
+    /// scope, stamped with the scope that wrote it.
+    ///
+    /// This replaces a `HashMap<(scope, class), Slot>` and reproduces it
+    /// exactly. The stack of open scopes is precisely levels `1..=depth`, and a
+    /// scope id belongs to exactly one level (each `enter_scope` mints one id
+    /// at one depth), so "the cell at this level whose stamp is the current
+    /// scope" IS the `(scope, class)` entry. Returning from a nested scope
+    /// finds the enclosing scope's row untouched, as the map did; a closed
+    /// sibling's leftovers at the same level carry its own — now unreachable —
+    /// scope id and so cannot be mistaken for a hit.
+    ///
+    /// Rows are dense over the class space (6,734 classes for
+    /// `simpleclimate.esm`, ~160 KB a row), so a probe is an array index into
+    /// something that stays resident, not a hash.
+    memo: Vec<Vec<MemoCell>>,
     // `Box` is load-bearing, not incidental: a memo hit hands out a reference
     // INTO a slab, so the slab's address must not move when this `Vec` grows.
     #[allow(clippy::vec_box)]
@@ -449,9 +717,12 @@ struct Inner {
     /// Nesting depth of `enter_scope`. Zero means no vectorized evaluation is
     /// in flight, which is the only point at which the memo may be recycled.
     depth: u32,
-    next_scope: u32,
-    scope: u32,
-    scope_stack: SmallVec<[u32; 8]>,
+    /// Monotonic scope-id source. Deliberately NOT reset between evaluations:
+    /// these ids are the memo's staleness stamps, so reusing one would make a
+    /// previous evaluation's cell look live.
+    next_scope: u64,
+    scope: u64,
+    scope_stack: SmallVec<[u64; 8]>,
 }
 
 /// Per-`RhsScratch` CSE state: the structural class table (built once per body)
@@ -484,6 +755,13 @@ impl CseRt {
         if i.tag != tag {
             i.tag = tag;
             i.classes = ClassTable::default();
+            // The resolved table is keyed by the SAME addresses and must go
+            // with it; keeping it would be exactly the stale-classification bug
+            // this guard exists to prevent. The memo rows are indexed by class
+            // id, and class ids restart from 0, so they go too.
+            i.addrs = AddrClasses::default();
+            i.addrs_unusable = false;
+            i.memo.clear();
         }
     }
 
@@ -493,7 +771,20 @@ impl CseRt {
         if cse_disabled() {
             return;
         }
-        self.inner.borrow_mut().classes.analyse(body);
+        let mut i = self.inner.borrow_mut();
+        i.verify = cse_paranoid();
+        i.classes.analyse(body);
+        if i.classes.pending.is_empty() {
+            return;
+        }
+        // Fold whatever the walk just classified into the resolved table, so
+        // `class_of` never has to consult the map. Only what is new is added,
+        // so the cost over a whole model is one pass plus a few rehashes.
+        let pending = std::mem::take(&mut i.classes.pending);
+        if !i.addrs_unusable && !i.addrs.add(&pending) {
+            i.addrs_unusable = true;
+            i.addrs = AddrClasses::default();
+        }
     }
 
     /// Open a fresh evaluation scope (a new [`VecBox`]) for as long as the
@@ -507,8 +798,8 @@ impl CseRt {
     }
 
     /// Open a fresh evaluation scope (a new [`VecBox`]). At the outermost entry
-    /// the previous evaluation's memo is recycled into `pool`.
-    fn enter_scope(&self, pool: &mut Pool) -> u32 {
+    /// the previous evaluation's slabs are recycled into `pool`.
+    fn enter_scope(&self, pool: &mut Pool) {
         let mut i = self.inner.borrow_mut();
         if i.depth == 0 {
             // SOUNDNESS: recycling here is safe precisely because `depth == 0`
@@ -516,13 +807,15 @@ impl CseRt {
             // `try_eval_arrayop_vectorized` consumes its result (copies the view
             // into an owned array, or scatters it into `dy`) before returning —
             // so no `VecValue` borrowing a slab can still be alive.
-            i.memo.clear();
+            //
+            // The memo itself needs no clearing: its cells are stamped with
+            // scope ids, and `next_scope` never rewinds, so every cell left
+            // over from the evaluation just finished is already a miss.
             for idx in 0..i.used {
                 let old = std::mem::replace(&mut *i.slabs[idx], Slab::empty());
                 pool.give_array(old.data);
             }
             i.used = 0;
-            i.next_scope = 0;
             i.scope_stack.clear();
             i.scope = 0;
         }
@@ -532,7 +825,17 @@ impl CseRt {
         let prev = i.scope;
         i.scope_stack.push(prev);
         i.scope = s;
-        s
+        // Size this level's row to the classes known so far. `resize_with`
+        // keeps the cells already there, whose stamps belong to scopes closed
+        // at this level and are therefore already misses.
+        let level = i.depth as usize - 1;
+        let classes = i.classes.next_class as usize;
+        if i.memo.len() <= level {
+            i.memo.resize_with(level + 1, Vec::new);
+        }
+        if i.memo[level].len() < classes {
+            i.memo[level].resize_with(classes, MemoCell::default);
+        }
     }
 
     /// Close the scope opened by the matching [`Self::scope`].
@@ -543,6 +846,11 @@ impl CseRt {
     }
 
     /// The class id of `expr` if it is worth memoizing here, else `None`.
+    ///
+    /// This runs once per node visit and is the single hottest lookup in the
+    /// vectorized RHS, so it is a flat-array probe rather than a hash-map one;
+    /// see [`AddrClasses`] for what was resolved and when.
+    #[inline]
     pub(super) fn class_of(&self, expr: &Expr) -> Option<u32> {
         if cse_disabled() {
             return None;
@@ -551,34 +859,89 @@ impl CseRt {
         if i.depth == 0 {
             return None;
         }
-        i.classes
-            .memoizable
-            .get(&(expr as *const Expr as usize))
-            .copied()
+        let addr = expr as *const Expr as usize;
+        if i.verify {
+            return Self::verify_class(&i, addr);
+        }
+        if i.addrs_unusable {
+            // The analysed trees could not be indexed by a 32-bit ordinal; the
+            // map is still authoritative, so fall back to it rather than lose
+            // the overlay.
+            return i.classes.memoizable.get(&addr).copied();
+        }
+        i.addrs.get(addr)
+    }
+
+    /// `ESS_CSE_PARANOID=1`: assert on EVERY node visit that the resolved table
+    /// answers exactly what the map it was resolved from would, and answer from
+    /// the map. That equality is the entire correctness basis of the resolved
+    /// table, so being able to assert it over a real solve — rather than over
+    /// fixtures — is worth a switch; it makes the solve several times slower.
+    #[cold]
+    #[inline(never)]
+    fn verify_class(i: &Inner, addr: usize) -> Option<u32> {
+        let want = i.classes.memoizable.get(&addr).copied();
+        assert_eq!(
+            i.addrs.get(addr),
+            want,
+            "resolved CSE class table disagrees with the map at {addr:#x}"
+        );
+        want
+    }
+
+    /// Borrow the array in slab `idx` for the caller's `'a`.
+    ///
+    /// SAFETY: the array lives in a `Box<Slab>` whose address does not move
+    /// when `slabs` grows, and slabs below `used` are never written again for
+    /// the duration of the evaluation — [`Self::put`] only ever writes slabs at
+    /// index `>= used`, and recycling only happens in [`Self::enter_scope`] at
+    /// `depth == 0`, where no value can still be alive. So the reference is
+    /// valid for as long as the caller can observe it.
+    ///
+    /// This is the ONLY place the memo extends a borrow out of the `RefCell`;
+    /// both [`Self::get`] and [`Self::put`] route through it, so the argument
+    /// above is made once rather than restated per call site.
+    fn slab_view<'a>(&'a self, i: &Inner, idx: usize) -> VecValue<'a> {
+        let slab: &Slab = &i.slabs[idx];
+        let origin = slab.origin.clone();
+        let ptr: *const ArrayD<f64> = &slab.data;
+        VecValue::View {
+            data: unsafe { &*ptr },
+            origin,
+        }
     }
 
     /// Serve a memoized value for `class` in the current scope.
-    ///
-    /// SAFETY of the borrow extension: the array lives in a `Box<Slab>` whose
-    /// address does not move when `slabs` grows, and slabs below `used` are
-    /// never written again for the duration of the evaluation — [`Self::put`]
-    /// only ever writes slabs at index `>= used`, and recycling only happens in
-    /// [`Self::enter_scope`] at `depth == 0`, where no value can still be alive.
-    /// So the reference is valid for as long as the caller can observe it.
     pub(super) fn get<'a>(&'a self, class: u32) -> Option<VecValue<'a>> {
         let i = self.inner.borrow();
-        match i.memo.get(&(i.scope, class))? {
-            Slot::Scalar(s) => Some(VecValue::Scalar(*s)),
-            Slot::Arr(idx) => {
-                let slab: &Slab = &i.slabs[*idx];
-                let origin = slab.origin.clone();
-                let ptr: *const ArrayD<f64> = &slab.data;
-                Some(VecValue::View {
-                    data: unsafe { &*ptr },
-                    origin,
-                })
-            }
+        let level = (i.depth as usize).checked_sub(1)?;
+        let cell = *i.memo.get(level)?.get(class as usize)?;
+        if cell.stamp != i.scope {
+            return None;
         }
+        match cell.slot {
+            Slot::Scalar(s) => Some(VecValue::Scalar(s)),
+            Slot::Arr(idx) => Some(self.slab_view(&i, idx)),
+        }
+    }
+
+    /// Record `slot` for `class` in the current scope.
+    fn store(&self, class: u32, slot: Slot) {
+        let mut i = self.inner.borrow_mut();
+        let Some(level) = (i.depth as usize).checked_sub(1) else {
+            return;
+        };
+        let stamp = i.scope;
+        if i.memo.len() <= level {
+            i.memo.resize_with(level + 1, Vec::new);
+        }
+        let row = &mut i.memo[level];
+        // A body analysed *inside* an open scope can mint classes past the row
+        // length this scope was sized to, so grow on demand as well.
+        if row.len() <= class as usize {
+            row.resize_with(class as usize + 1, MemoCell::default);
+        }
+        row[class as usize] = MemoCell { stamp, slot };
     }
 
     /// Record `v` for `class` in the current scope and return the value the
@@ -589,14 +952,11 @@ impl CseRt {
     pub(super) fn put<'a>(&'a self, class: u32, v: VecValue<'a>) -> VecValue<'a> {
         match v {
             VecValue::Scalar(s) => {
-                let mut i = self.inner.borrow_mut();
-                let scope = i.scope;
-                i.memo.insert((scope, class), Slot::Scalar(s));
+                self.store(class, Slot::Scalar(s));
                 VecValue::Scalar(s)
             }
             VecValue::View { data, origin } => VecValue::View { data, origin },
             VecValue::Owned { data, origin } => {
-                let out_origin = origin.clone();
                 let idx = {
                     let mut i = self.inner.borrow_mut();
                     let idx = i.used;
@@ -605,27 +965,19 @@ impl CseRt {
                     }
                     *i.slabs[idx] = Slab { data, origin };
                     i.used += 1;
-                    let scope = i.scope;
-                    i.memo.insert((scope, class), Slot::Arr(idx));
                     idx
                 };
-                // The exclusive borrow above has been released; derive the
+                self.store(class, Slot::Arr(idx));
+                // The exclusive borrows above have been released; derive the
                 // returned reference from a fresh SHARED borrow so no `&mut` to
-                // this slab is ever live at the same time as it.
+                // this slab is ever live at the same time as it. The origin
+                // comes back off the slab, so what the writer propagates is by
+                // construction what a later hit will see.
                 let i = self.inner.borrow();
-                let ptr: *const ArrayD<f64> = &i.slabs[idx].data;
-                // SAFETY: see `get` — the slab is boxed (its address is stable
-                // as `slabs` grows), it is below `used` from here on so no
-                // further write can reach it, and recycling only happens in
-                // `enter_scope` at `depth == 0`, where no value can be alive.
-                VecValue::View {
-                    data: unsafe { &*ptr },
-                    origin: out_origin,
-                }
+                self.slab_view(&i, idx)
             }
         }
     }
-
 }
 
 /// RAII scope handle: closes the evaluation scope on every exit path, including
@@ -749,5 +1101,189 @@ mod tests {
         let a = t.intern(CseKey::Num(0.0f64.to_bits()));
         let b = t.intern(CseKey::Num((-0.0f64).to_bits()));
         assert_ne!(a, b);
+    }
+
+    /// A body with several repeated subexpressions, named so that bodies do not
+    /// collapse into one another's classes.
+    fn repeats_body(k: usize) -> Expr {
+        let a = format!("a{k}");
+        let dup = || {
+            op(
+                "-",
+                vec![Expr::Variable(a.clone()), Expr::Variable("b".into())],
+            )
+        };
+        let sq = || op("*", vec![dup(), dup()]);
+        op(
+            "+",
+            vec![
+                op("*", vec![sq(), sq()]),
+                op("min", vec![op("abs", vec![dup()]), sq()]),
+                Expr::Variable("c".into()),
+            ],
+        )
+    }
+
+    /// The resolved table is what `class_of` actually reads, so it must agree
+    /// with the map it was resolved from on EVERY analysed address — a
+    /// disagreement is a wrong class, i.e. a wrong number. Several bodies are
+    /// analysed one at a time so the incremental `add` path and its geometric
+    /// rehash are both exercised.
+    #[test]
+    fn the_resolved_table_agrees_with_the_map() {
+        if cse_disabled() {
+            return;
+        }
+        let bodies: Vec<Expr> = (0..24).map(repeats_body).collect();
+        let rt = CseRt::default();
+        for b in &bodies {
+            rt.analyse(b);
+        }
+        let i = rt.inner.borrow();
+        assert!(!i.addrs_unusable, "these addresses are resolvable");
+        assert!(!i.classes.memoizable.is_empty(), "something was classified");
+        assert_eq!(
+            i.addrs.count,
+            i.classes.memoizable.len(),
+            "every memoizable address is in the resolved table exactly once"
+        );
+        for (&addr, &class) in &i.classes.memoizable {
+            assert_eq!(
+                i.addrs.get(addr),
+                Some(class),
+                "resolved table disagrees at {addr:#x}"
+            );
+        }
+        // A body root is never memoizable, so it must miss in both.
+        for b in &bodies {
+            let root = b as *const Expr as usize;
+            assert!(!i.classes.memoizable.contains_key(&root));
+            assert_eq!(i.addrs.get(root), None, "the root must not resolve");
+        }
+    }
+
+    /// A rule-set change must discard the RESOLVED table too, not just the map:
+    /// a stale resolution would keep answering for an address that is no longer
+    /// classified, which is exactly the silent-wrong-answer failure mode.
+    #[test]
+    fn retarget_discards_the_resolved_table() {
+        if cse_disabled() {
+            return;
+        }
+        let body = repeats_body(0);
+        let Expr::Operator(root) = &body else {
+            unreachable!()
+        };
+        let Expr::Operator(mul) = &root.args[0] else {
+            unreachable!()
+        };
+        let shared = &mul.args[0];
+
+        let rt = CseRt::default();
+        let mut pool = Pool::default();
+        rt.retarget(1);
+        rt.analyse(&body);
+        {
+            let _s = rt.scope(&mut pool);
+            assert!(rt.class_of(shared).is_some(), "the repeat is classified");
+        }
+        rt.retarget(2);
+        {
+            let _s = rt.scope(&mut pool);
+            assert!(
+                rt.class_of(shared).is_none(),
+                "a different rule set must invalidate the resolved table"
+            );
+        }
+        rt.analyse(&body);
+        {
+            let _s = rt.scope(&mut pool);
+            assert!(
+                rt.class_of(shared).is_some(),
+                "re-analysis under the new tag repopulates it"
+            );
+        }
+    }
+
+    /// The address set must be representable as a 32-bit ordinal; when it is
+    /// not, `add` refuses (and leaves what it already held intact) so the
+    /// caller can fall back to the map rather than answer wrongly.
+    #[test]
+    fn the_resolved_table_refuses_an_unrepresentable_span() {
+        let mut t = AddrClasses::default();
+        assert!(t.add(&[(0x5000_0000_1000, 7), (0x5000_0000_2000, 9)]));
+        assert_eq!(t.get(0x5000_0000_1000), Some(7));
+        assert_eq!(t.get(0x5000_0000_2000), Some(9));
+        assert_eq!(t.get(0x5000_0000_3000), None);
+        // 64 TB apart: no `u32` ordinal spans that.
+        assert!(!t.add(&[(0x1000, 11)]));
+        assert_eq!(t.get(0x5000_0000_1000), Some(7), "the refusal is non-destructive");
+    }
+
+    /// Exhaustive round trip over a dense, collision-heavy address run: every
+    /// key must come back, and nothing else may.
+    #[test]
+    fn the_resolved_table_round_trips_a_dense_run() {
+        let base = 0x7f00_0000_0000usize;
+        let stride = std::mem::size_of::<Expr>();
+        let entries: Vec<(usize, u32)> =
+            (0..5000).map(|k| (base + k * stride, k as u32)).collect();
+        let mut t = AddrClasses::default();
+        // Fed in chunks, so the table grows and rehashes mid-stream.
+        for chunk in entries.chunks(97) {
+            assert!(t.add(chunk));
+        }
+        assert_eq!(t.count, entries.len());
+        for &(addr, class) in &entries {
+            assert_eq!(t.get(addr), Some(class));
+        }
+        for k in 0..5000usize {
+            // Halfway between two nodes: never an `Expr` address, never a hit.
+            assert_eq!(t.get(base + k * stride + stride / 2 + 8), None);
+        }
+        assert_eq!(t.get(base - stride), None);
+        assert_eq!(t.get(base + 5000 * stride), None);
+    }
+
+    /// The per-depth memo rows exist so that a nested scope does not evict the
+    /// enclosing one — the property the old `(scope, class)` map had for free.
+    #[test]
+    fn a_nested_scope_does_not_evict_the_enclosing_one() {
+        let rt = CseRt::default();
+        let mut pool = Pool::default();
+        let outer = rt.scope(&mut pool);
+        rt.put(3, VecValue::Scalar(1.0));
+        {
+            let _inner = rt.scope(&mut pool);
+            assert!(rt.get(3).is_none(), "a fresh scope starts empty");
+            rt.put(3, VecValue::Scalar(2.0));
+            assert!(matches!(rt.get(3), Some(VecValue::Scalar(v)) if v == 2.0));
+        }
+        assert!(
+            matches!(rt.get(3), Some(VecValue::Scalar(v)) if v == 1.0),
+            "the enclosing scope's entry must survive the nested one"
+        );
+        drop(outer);
+    }
+
+    /// Sibling scopes are different binding environments and must never share,
+    /// even though they reuse the same memo row.
+    #[test]
+    fn sibling_scopes_do_not_share() {
+        let rt = CseRt::default();
+        let mut pool = Pool::default();
+        let outer = rt.scope(&mut pool);
+        {
+            let _a = rt.scope(&mut pool);
+            rt.put(5, VecValue::Scalar(1.0));
+        }
+        {
+            let _b = rt.scope(&mut pool);
+            assert!(rt.get(5).is_none(), "a sibling scope must not see the entry");
+        }
+        drop(outer);
+        // …nor may the next top-level evaluation.
+        let _next = rt.scope(&mut pool);
+        assert!(rt.get(5).is_none(), "a new evaluation must not see it either");
     }
 }
