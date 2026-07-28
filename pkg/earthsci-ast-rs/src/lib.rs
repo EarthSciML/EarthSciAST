@@ -218,7 +218,7 @@ pub use performance::{CompactExpr, PerformanceError};
 pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
     Compiled, ResolvedExpr, SimulateError, SimulateOptions, Solution, SolutionMetadata,
-    SolverChoice, fold_constant_expr, interpret, simulate,
+    SolverChoice, compile_array, fold_constant_expr, interpret, simulate,
 };
 pub use units::{
     Dimension, Rational, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,

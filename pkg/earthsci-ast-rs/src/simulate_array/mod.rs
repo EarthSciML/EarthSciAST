@@ -323,17 +323,29 @@ pub struct RhsStats {
 /// Eliminated algebraic-variable definition. Evaluated once per RHS call
 /// into a transient ndarray (or scalar) that the `observed_values` map
 /// exposes to downstream expressions.
+///
+/// The body is an `Rc<Expr>`, not a `Box<Expr>`: the driver derives several
+/// cadence-filtered rule lists from `observed_rules` (CONST / DISCRETE /
+/// CONTINUOUS subsets, the per-closure RHS/Jacobian captures, the
+/// output-pass dependency cones), and the expanded discretization bodies are
+/// by far the model's largest allocation (~1 GiB for `simpleclimate.esm` at
+/// the production grid). Cloning a rule now shares the immutable body
+/// instead of deep-copying it, collapsing what used to be five simultaneous
+/// full copies at solve time into one. Sharing also keeps every `Expr` node
+/// address stable for the whole run, which the address-keyed CSE overlay
+/// ([`CseRt`] / `AddrClasses`) relies on; bodies are never mutated after
+/// compile, so no copy-on-write can move them mid-solve.
 #[derive(Debug, Clone)]
 enum AlgebraicRule {
     /// `var := body` — pure scalar algebraic.
-    Scalar { var: String, body: Box<Expr> },
+    Scalar { var: String, body: Rc<Expr> },
     /// `var[i...] := body` — array algebraic defined via an arrayop over
     /// the full shape of `var`.
     ArrayLoop {
         var: String,
         output_idx_names: Vec<String>,
         output_ranges: Vec<(i64, i64)>,
-        body: Box<Expr>,
+        body: Rc<Expr>,
     },
 }
 
